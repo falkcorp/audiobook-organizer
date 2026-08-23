@@ -6,9 +6,13 @@
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
 // approved AI suggestions, and the db-health stats endpoint. Dependencies that
-// would otherwise require importing package server (the AI batch parser, the
-// diagnostics + merge services) arrive as constructor params behind narrow
-// interfaces, so package handlers stays free of any import on package server.
+// would otherwise require importing package server (the merge service) arrive as
+// constructor params behind narrow interfaces, so package handlers stays free of
+// any import on package server.
+//
+// The export and AI flows hold no such dependency at all any more: both are
+// registered OperationDefs, so the handler enqueues and the op — which already
+// lives in package server — reaches the services it needs directly.
 
 package handlers
 
@@ -19,7 +23,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
@@ -31,13 +34,12 @@ import (
 
 // --- narrow dependency interfaces ---
 
-// DiagnosticsService is the narrow interface DiagnosticsHandler requires from
-// the diagnostics service. Only CollectAllBooks is called by the handlers; the
-// concrete *diagnostics.Service satisfies it.
-type DiagnosticsService interface {
-	CollectAllBooks() ([]database.BookCore, error)
-}
-
+// DiagnosticsService stood here: a one-method interface (CollectAllBooks) whose
+// only consumer was SubmitAI's inline goroutine. Collecting books is now the
+// diagnostics.ai-analyze op's job, and the op reaches the service directly, so
+// the interface, its field and its mock were deleted rather than narrowed —
+// with the last caller gone there was nothing left for it to decouple.
+//
 // MergeService is the narrow interface DiagnosticsHandler requires from the
 // merge service. Only MergeBooks is called by the handlers; the concrete
 // *merge.Service satisfies it.
@@ -133,10 +135,6 @@ type dbHealthMetadataCache struct {
 	ExpiredEntries int64 `json:"expired_entries"`
 }
 
-// DiagnosticsHandler hosts the diagnostics HTTP endpoints. Fields are narrow
-// dependency interfaces (plus clean concrete database stores and the AI batch
-// parser) so the handler is mockable and package handlers never imports package
-// server.
 // diagnosticsStore is everything the diagnostics endpoints need from the store.
 // Was database.Store (398 methods) until 2026-08-19, on a comment claiming a
 // "db-health type switch" required the full surface. Verified before believing:
@@ -178,36 +176,34 @@ type diagnosticsOperationStore interface {
 
 type DiagnosticsHandler struct {
 	store          diagnosticsStore         // see diagnosticsStore
-	diagService    DiagnosticsService       // diagnostics service (CollectAllBooks); may be nil
 	mergeService   MergeService             // merge service (MergeBooks); may be nil
 	embeddingStore *database.EmbeddingStore // embeddings health stats; may be nil
 	aiScanStore    *database.AIScanStore    // ai-scan health stats; may be nil
 	registry       OperationsRegistry       // shared ops registry (EnqueueOp only)
-	batchParser    *ai.OpenAIParser         // resolved from server.batchPoller.parser; may be nil
 }
 
 // NewDiagnosticsHandler constructs a DiagnosticsHandler. Field/param order:
-// store, diagService, mergeService, embeddingStore, aiScanStore, registry,
-// batchParser. diagService/mergeService may be nil — the handlers replicate the
-// server-side lazy construction fallback. batchParser may be nil — the submit-AI
-// flow falls back to preparing batch data without submission.
+// store, mergeService, embeddingStore, aiScanStore, registry. mergeService may
+// be nil — ApplySuggestions replicates the server-side lazy construction
+// fallback.
+//
+// The diagService and batchParser params are gone: both existed only for
+// SubmitAI's inline goroutine, which is now the diagnostics.ai-analyze op. The
+// op constructs its own parser and reaches the diagnostics service directly, so
+// neither had to be threaded through the handler to get there.
 func NewDiagnosticsHandler(
 	store diagnosticsStore,
-	diagService DiagnosticsService,
 	mergeService MergeService,
 	embeddingStore *database.EmbeddingStore,
 	aiScanStore *database.AIScanStore,
 	registry OperationsRegistry,
-	batchParser *ai.OpenAIParser,
 ) *DiagnosticsHandler {
 	return &DiagnosticsHandler{
 		store:          store,
-		diagService:    diagService,
 		mergeService:   mergeService,
 		embeddingStore: embeddingStore,
 		aiScanStore:    aiScanStore,
 		registry:       registry,
-		batchParser:    batchParser,
 	}
 }
 

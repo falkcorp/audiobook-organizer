@@ -64,7 +64,7 @@ func callDBHealth(t *testing.T, store diagnosticsStore) []byte {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/db-health", nil)
 
-	NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil).GetDBHealth(c)
+	NewDiagnosticsHandler(store, nil, nil, nil, nil).GetDBHealth(c)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200 — body %s", w.Code, w.Body.String())

@@ -67,7 +67,7 @@ func TestDiagnosticsHandler_StartExport_ReturnsEnqueuedOpID(t *testing.T) {
 	reg.EXPECT().EnqueueOp(mock.Anything, "diagnostics.export", mock.Anything).
 		Return(enqueuedID, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, reg)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/export", `{"category":"general"}`, nil)
 	h.StartExport(c)
 
@@ -93,7 +93,7 @@ func TestDiagnosticsHandler_StartExport_EnqueueFailureIs500(t *testing.T) {
 	reg.EXPECT().EnqueueOp(mock.Anything, "diagnostics.export", mock.Anything).
 		Return("", assert.AnError)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, reg)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/export", `{"category":"general"}`, nil)
 	h.StartExport(c)
 
@@ -102,7 +102,7 @@ func TestDiagnosticsHandler_StartExport_EnqueueFailureIs500(t *testing.T) {
 
 func TestDiagnosticsHandler_StartExport_InvalidCategory_400(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/export", `{"category":"bogus"}`, nil)
 	h.StartExport(c)
 
@@ -121,7 +121,7 @@ func TestDiagnosticsHandler_DownloadExport_AbsentRowIs404(t *testing.T) {
 	// lookup here would miss every export this endpoint is ever asked for.
 	store.EXPECT().GetOperationV2("missing").Return(nil, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/missing/download", "",
 		gin.Params{{Key: "operationId", Value: "missing"}})
 	h.DownloadExport(c)
@@ -133,7 +133,7 @@ func TestDiagnosticsHandler_DownloadExport_StoreErrorIs500(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("boom").Return(nil, assert.AnError)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/boom/download", "",
 		gin.Params{{Key: "operationId", Value: "boom"}})
 	h.DownloadExport(c)
@@ -159,7 +159,7 @@ func TestDiagnosticsHandler_DownloadExport_TerminalFailureIsNot202(t *testing.T)
 				ErrorMessage:    &msg,
 			}, nil)
 
-			h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+			h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 			c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-x/download", "",
 				gin.Params{{Key: "operationId", Value: "op-x"}})
 			h.DownloadExport(c)
@@ -176,7 +176,7 @@ func TestDiagnosticsHandler_DownloadExport_NotCompleted_202(t *testing.T) {
 	store.EXPECT().GetOperationV2("op-1").
 		Return(&database.OperationV2Row{ID: "op-1", Status: "running", ProgressMessage: "still going"}, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-1/download", "",
 		gin.Params{{Key: "operationId", Value: "op-1"}})
 	h.DownloadExport(c)
@@ -199,7 +199,7 @@ func TestDiagnosticsHandler_DownloadExport_Completed_ServesZipFromV2Result(t *te
 	store.EXPECT().GetOperationV2("op-done").
 		Return(&database.OperationV2Row{ID: "op-done", Status: "completed", ResultData: &result}, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-done/download", "",
 		gin.Params{{Key: "operationId", Value: "op-done"}})
 	h.DownloadExport(c)
@@ -217,7 +217,7 @@ func TestDiagnosticsHandler_SubmitAI_NoAPIKey_400(t *testing.T) {
 	config.AppConfig.OpenAIAPIKey = ""
 
 	store := databasemocks.NewMockStore(t)
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai", `{}`, nil)
 	h.SubmitAI(c)
 
@@ -247,7 +247,7 @@ func TestDiagnosticsHandler_SubmitAI_ReturnsEnqueuedOpID(t *testing.T) {
 			return ok && params.Category == "metadata" && params.Description == "why so many dupes"
 		})).Return(enqueuedID, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, reg)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai",
 		`{"category":"metadata","description":"why so many dupes"}`, nil)
 	h.SubmitAI(c)
@@ -282,7 +282,7 @@ func TestDiagnosticsHandler_SubmitAI_EmptyCategoryDefaultsToGeneral(t *testing.T
 			return ok && params.Category == "general"
 		})).Return("op-1", nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, reg)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai", `{}`, nil)
 	h.SubmitAI(c)
 
@@ -302,7 +302,7 @@ func TestDiagnosticsHandler_SubmitAI_EnqueueFailureIs500(t *testing.T) {
 	reg.EXPECT().EnqueueOp(mock.Anything, handlers.DiagnosticsAIDefID, mock.Anything).
 		Return("", assert.AnError)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, reg)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai", `{"category":"general"}`, nil)
 	h.SubmitAI(c)
 
@@ -315,7 +315,7 @@ func TestDiagnosticsHandler_GetAIResults_NotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("missing").Return(nil, assert.AnError)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/missing", "",
 		gin.Params{{Key: "operationId", Value: "missing"}})
 	h.GetAIResults(c)
@@ -333,7 +333,7 @@ func TestDiagnosticsHandler_GetAIResults_ReadsTheV2Row(t *testing.T) {
 		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
 	store.AssertNotCalled(t, "GetOperationByID", mock.Anything)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",
 		gin.Params{{Key: "operationId", Value: "op-1"}})
 	h.GetAIResults(c)
@@ -353,7 +353,7 @@ func TestDiagnosticsHandler_GetAIResults_NotCompleted_200(t *testing.T) {
 			ID: "op-1", Status: "running", ProgressMessage: "Batch b-9: in_progress (poll 3/288)",
 		}, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",
 		gin.Params{{Key: "operationId", Value: "op-1"}})
 	h.GetAIResults(c)
@@ -374,7 +374,7 @@ func TestDiagnosticsHandler_GetAIResults_CompletedWithNoResult_IsEmptyNot500(t *
 	store.EXPECT().GetOperationV2("op-1").
 		Return(&database.OperationV2Row{ID: "op-1", Status: "completed"}, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",
 		gin.Params{{Key: "operationId", Value: "op-1"}})
 	h.GetAIResults(c)
@@ -387,7 +387,7 @@ func TestDiagnosticsHandler_GetAIResults_CompletedWithNoResult_IsEmptyNot500(t *
 
 func TestDiagnosticsHandler_ApplySuggestions_MissingFields_400(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	// Missing required operation_id / approved_suggestion_ids.
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions", `{}`, nil)
 	h.ApplySuggestions(c)
@@ -399,7 +399,7 @@ func TestDiagnosticsHandler_ApplySuggestions_OperationNotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("op-x").Return(nil, assert.AnError)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
 		`{"operation_id":"op-x","approved_suggestion_ids":["s1"]}`, nil)
 	h.ApplySuggestions(c)
@@ -416,7 +416,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersions(t *testing.T) {
 		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
 	mergeSvc.EXPECT().MergeBooks([]string{"b1", "b2"}, "b1").Return(nil, nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, mergeSvc, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, mergeSvc, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
 		`{"operation_id":"op-1","approved_suggestion_ids":["s1"]}`, nil)
 	h.ApplySuggestions(c)
@@ -429,7 +429,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersions(t *testing.T) {
 
 // TestDiagnosticsHandler_GetDBHealth_NilStore_500 covers the nil-store guard.
 func TestDiagnosticsHandler_GetDBHealth_NilStore_500(t *testing.T) {
-	h := handlers.NewDiagnosticsHandler(nil, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/db-health", "", nil)
 	h.GetDBHealth(c)
 
@@ -451,7 +451,7 @@ func TestDiagnosticsHandler_GetDBHealth_MockStore(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().CountPrefix("metadata_fetch_cache:").Return(int64(7), nil)
 
-	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/db-health", "", nil)
 	h.GetDBHealth(c)
 

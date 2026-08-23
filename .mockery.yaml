@@ -226,7 +226,6 @@ packages:
       AIScanStore:
       AIPipeline:
       AudiobookUpdater:
-      DiagnosticsService:
       MergeService:
       Scheduler:
   github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities:
