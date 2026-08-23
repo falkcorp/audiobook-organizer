@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.25.0
+// version: 3.26.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -27,7 +27,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -283,63 +282,32 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 		_ = store.UpdateOperationError(opID, fmt.Sprintf("interrupted during %s, please retry", opType))
 		_ = operations.ClearState(store, opID)
 	default:
-		// Try to resume as a maintenance job via v2 registry (maintenance.job).
-		jobID := strings.TrimPrefix(opType, "maintenance:")
-		if j, jobErr := maintenance.Get(jobID); jobErr == nil && j.CanResume() {
-			if s.opRegistry != nil {
-				// Resume with the dry_run the operator actually chose.
-				//
-				// database.Operation carries no params field, so this branch used
-				// to have no record of that choice and left DryRun at Go's zero
-				// value — every resume resolved to false. An operator who asked
-				// for a PREVIEW and then hit a restart got a real mutation on the
-				// way back up, under the original operation's own ID. Seven jobs
-				// are both CanResume() and advertise dry_run:true —
-				// bulk-deluge-import, cleanup-empty-folders,
-				// recompute-book-aggregates, refetch-missing-authors,
-				// repair-missing-files, retention-and-hygiene, scan-composer-tags
-				// — and cleanup-empty-folders removes directories from disk.
-				//
-				// runMaintenanceJob now persists the resolved value via
-				// operations.SaveParams, the same way bulk_write_back above does,
-				// so the usual case is an exact resume.
-				//
-				// The fallback covers ops enqueued before this shipped and any
-				// save failure: use what the job ADVERTISES rather than false.
-				// That trades an unrequested mutation for an incomplete one — if
-				// the interrupted run was a real apply, the resumed run previews
-				// and reports what it would have done, and the operator re-runs
-				// it. That direction is recoverable; the other is not.
-				enqParams := maintenanceJobOpParams{
-					LegacyOpID: opID,
-					JobID:      jobID,
-					DryRun:     advertisedDryRunDefault(j),
-				}
-				if saved, perr := operations.LoadParams[maintenanceJobOpParams](store, opID); perr != nil {
-					metrics.RecordMaintenanceResumeParamsFallback(jobID, "load_error")
-					slog.Warn("Could not load saved params for interrupted maintenance job; resuming with the advertised dry_run default",
-						"opID", opID, "jobID", jobID, "dryRun", enqParams.DryRun, "err", perr)
-				} else if saved != nil {
-					enqParams.DryRun = saved.DryRun
-				} else {
-					// runMaintenanceJob has persisted resolved params on every
-					// enqueue since #2419, so once pre-#2419 rows age out of the
-					// interrupted set, any fire here means a save failed (C511).
-					metrics.RecordMaintenanceResumeParamsFallback(jobID, "no_saved_params")
-					slog.Info("No saved params for interrupted maintenance job; resuming with the advertised dry_run default",
-						"opID", opID, "jobID", jobID, "dryRun", enqParams.DryRun)
-				}
-				if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), maintenanceOpID(jobID), enqParams); enqErr != nil {
-					slog.Warn("Failed to re-enqueue maintenance job () via v2", "opID", opID, "jobID", jobID, "enqErr", enqErr)
-					_ = store.UpdateOperationError(opID, "failed to resume: "+enqErr.Error())
-				}
-			} else {
-				_ = store.UpdateOperationError(opID, "operation registry not available")
-			}
-		} else {
-			_ = store.UpdateOperationError(opID, "interrupted, cannot resume")
-			_ = operations.ClearState(store, opID)
-		}
+		// A v1 row whose type this switch does not name. Since the v1 maintenance
+		// minter was retired that means one thing: a "maintenance:<job>" row from
+		// before the deploy.
+		//
+		// This branch used to RE-ENQUEUE those, and that was the second of two
+		// resume paths firing for a single logical run. Every maintenance dispatch
+		// created a v1 row AND a v2 op, so resumeAfterStartup (via container.Start)
+		// already resumed the v2 row per the job's own declared ResumePolicy before
+		// this function ran at all; the enqueue here was absorbed only by
+		// EnqueueOp's ConcurrencyKey dedupe. Retiring the minter deletes the first
+		// half of that pairing, so the re-enqueue has nothing left to add -- the v2
+		// twin of any such row is still the thing that resumes it.
+		//
+		// The elaborate dry_run reconstruction that lived here goes with it. It
+		// existed only because database.Operation has no params field, so an
+		// interrupted PREVIEW resumed as a real mutation under Go's zero value; it
+		// was worked around by persisting params to a side table and falling back
+		// to the job's advertised default. The v2 row stores params natively and
+		// both registry resume paths carry them across verbatim, so the operator's
+		// actual choice survives a restart with nothing to reconstruct.
+		//
+		// Close the row out rather than leaving it mid-flight. Its results and
+		// summary log are keyed by id in tables with no foreign key to it, so they
+		// stay readable.
+		_ = store.UpdateOperationError(opID, "interrupted, cannot resume")
+		_ = operations.ClearState(store, opID)
 	}
 }
 

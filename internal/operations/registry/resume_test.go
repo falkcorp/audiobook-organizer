@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
-// last-edited: 2026-05-06
+// last-edited: 2026-08-23
 
 package registry_test
 
@@ -203,5 +203,100 @@ func TestResume_ReconcileScanAlwaysDropped(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if store.statusOf(opID) != "interrupted_dropped" {
 		t.Errorf("reconcile_scan: expected interrupted_dropped, got %s", store.statusOf(opID))
+	}
+}
+
+// insertRunningOpWithParams is insertRunningOp with a caller-chosen params blob,
+// for the preservation tests below.
+func insertRunningOpWithParams(store *fakeStore, defID, plugin, params string) string {
+	opID := ulid.Make().String()
+	store.InsertOperationV2(database.OperationV2Row{ //nolint:errcheck
+		ID:       opID,
+		DefID:    defID,
+		Plugin:   plugin,
+		TraceID:  ulid.Make().String(),
+		SpanID:   ulid.Make().String(),
+		Status:   "running",
+		Priority: 1,
+		Params:   params,
+		QueuedAt: time.Now().UTC(),
+	})
+	return opID
+}
+
+// TestResume_PreservesParamsAcrossRestartAndRequeue pins the guarantee that lets
+// an operation carry a destructive-by-default choice across a restart.
+//
+// dry_run is the sharp case. Its zero value is the DESTRUCTIVE one, so an op
+// resumed with EMPTY params does not merely lose a setting — an operator who
+// asked for a PREVIEW gets a real mutation on the way back up, under the
+// original run's own id. Seven maintenance jobs are both resumable and advertise
+// dry_run:true, and one of them removes directories from disk.
+//
+// This used to be worked around one layer up: the v1 operations row has no params
+// field at all, so internal/server persisted a side-table blob on every enqueue
+// and, when that blob was missing, fell back to whatever the job ADVERTISED. All
+// of that was deleted when the v1 maintenance minter was retired, on the claim
+// that both resume paths carry the v2 row's params across verbatim. This test is
+// that claim, checked rather than assumed.
+func TestResume_PreservesParamsAcrossRestartAndRequeue(t *testing.T) {
+	const params = `{"job_id":"cleanup-empty-folders","dry_run":true}`
+
+	for _, tc := range []struct {
+		name   string
+		defID  string
+		policy registry.ResumePolicy
+	}{
+		{"restart resumes the same row", "test.params-restart", registry.ResumeRestart},
+		{"requeue copies onto the new row", "test.params-requeue", registry.ResumeRequeue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+				WatchdogInterval: 30 * time.Second,
+			})
+
+			seen := make(chan string, 4)
+			def := makeValidDef(tc.defID)
+			def.ResumePolicy = tc.policy
+			def.Run = func(_ context.Context, raw json.RawMessage, _ registry.Reporter) error {
+				select {
+				case seen <- string(raw):
+				default:
+				}
+				return nil
+			}
+			_ = r.RegisterOp(def)
+
+			insertRunningOpWithParams(store, tc.defID, "test", params)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r.Start(ctx)
+
+			var got string
+			select {
+			case got = <-seen:
+			case <-time.After(5 * time.Second):
+				t.Fatal("resumed op did not run within 5s")
+			}
+
+			// Compare decoded, not byte-for-byte: resumeRestart may merge a
+			// checkpoint into params, which is allowed to reorder keys.
+			var want, have struct {
+				JobID  string `json:"job_id"`
+				DryRun bool   `json:"dry_run"`
+			}
+			if err := json.Unmarshal([]byte(params), &want); err != nil {
+				t.Fatalf("decode want: %v", err)
+			}
+			if err := json.Unmarshal([]byte(got), &have); err != nil {
+				t.Fatalf("the resumed run received params that do not decode (%s): %v", got, err)
+			}
+			if have != want {
+				t.Fatalf("resumed run received %+v, want %+v (raw %s); an op resumed "+
+					"without its params falls back to dry_run=false and applies for real", have, want, got)
+			}
+		})
 	}
 }
