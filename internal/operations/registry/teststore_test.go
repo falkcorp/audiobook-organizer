@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package registry_test
 
@@ -333,6 +333,13 @@ func (f *fakeStore) UpdateOpProgressV2(id string, current, total int, message st
 	op.ProgressCurrent = current
 	op.ProgressTotal = total
 	op.ProgressMessage = message
+	if current > op.HighWaterProgress {
+		// Mirrors PebbleStore.UpdateOpProgressV2. The two implementations must
+		// agree here: checkInfiniteRestart force-drops on HighWaterProgress==0,
+		// so a fake that leaves the HWM behind would let a test pass while the
+		// real store force-drops the op in production.
+		op.HighWaterProgress = current
+	}
 	f.ops[id] = op
 	return nil
 }

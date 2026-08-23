@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.38.0 -->
+<!-- version: 10.39.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -5998,6 +5998,17 @@ jobs~~ — **RESOLVED 2026-08-23.** All five (`bulk-deluge-import`, `cleanup-emp
 in the same change, because its skip-set is keyed on the op id and requeue was moving its own
 resume anchor. `gatedByDryRun` in `internal/maintenance/jobs/policy_declaration_test.go` is now
 empty.
+
+Two source-level defects were fixed alongside, because `ResumeRestart` was otherwise
+knowingly wrong for these jobs. The watchdog's `uncheckpointed` strike gated on
+`ResumePolicy` while its own comment claimed it gated on `MinCheckpointInterval`, so
+it fired against every `ResumeRestart` op forever — including the nine maintenance
+jobs and `metadata.candidate-fetch`, none of which can checkpoint at all
+(`maintenance.ProgressReporter` has no `Checkpoint` method) — into a strike table
+that has an `InsertOpStrikeV2` and **no reader anywhere**. And `high_water_progress`
+was written only by `UpdateOpCheckpointV2`, so it stayed 0 for those same ops and
+`checkInfiniteRestart` force-dropped them at `resume_count>=3` regardless of work
+done. Both now gate on what the def actually declared.
 
 ⚠️ **Scope bound, measured while making the above change:** a correct `ResumePolicy` is
 only consulted on one path. `resumeAfterStartup` takes its candidates from

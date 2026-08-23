@@ -30,3 +30,12 @@
   `ResumeRequeue` policy issued a new id on every resume, so a resumed run
   re-fetched the entire library over the network. It now resumes in place, subject
   to the same scope note above.
+- Long-running operations are no longer force-abandoned after three restarts
+  despite having done real work. An operation's high-water progress mark only
+  advanced when a job called `Checkpoint`, and maintenance jobs have no way to
+  call it, so the mark sat at zero permanently and the infinite-restart guard
+  concluded they had accomplished nothing. Progress reports now advance the mark.
+- Stopped logging a spurious "uncheckpointed" warning every five minutes against
+  every long-running maintenance job. The check now applies only to operations
+  that declared a checkpoint interval and then missed it, instead of to every
+  operation that merely resumes in place.

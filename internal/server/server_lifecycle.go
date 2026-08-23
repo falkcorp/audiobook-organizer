@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.27.0
+// version: 3.28.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-23
 
@@ -295,15 +295,16 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 		// half of that pairing, so the re-enqueue has nothing left to add for any
 		// job whose declared ResumePolicy actually resumes.
 		//
-		// BUT NOT FOR EVERY JOB, and the difference is load-bearing. Five jobs --
-		// bulk-deluge-import, cleanup-empty-folders, refetch-missing-authors,
-		// repair-missing-files and scan-composer-tags -- declare CanResume() true
-		// while still returning maintenance.DefaultPolicy(), whose ResumePolicy is
-		// ResumeDrop. For those five the re-enqueue deleted here was NOT redundant:
-		// it was their only resume, and they no longer resume at all. That is a
-		// deliberate, recorded state and not an oversight; making them resume for
-		// real means giving them RestartPolicy/RequeuePolicy, which is tracked in
-		// todo.d/20260823-five-maintenance-jobs-declare-canresume-but-drop.md.
+		// That was NOT true when this branch was first deleted, and the gap is
+		// worth recording. Five jobs -- bulk-deluge-import, cleanup-empty-folders,
+		// refetch-missing-authors, repair-missing-files and scan-composer-tags --
+		// declared CanResume() true while returning maintenance.DefaultPolicy(),
+		// whose ResumePolicy is ResumeDrop. For those five the re-enqueue deleted
+		// here was their ONLY resume, so deleting it stopped them resuming at all;
+		// the declared policy had never had to be correct because this branch
+		// resumed them regardless of it. All five now declare RestartPolicy(), so
+		// the statement above holds for every job and this branch is redundant for
+		// the reason it claims to be.
 		//
 		// The elaborate dry_run reconstruction that lived here goes with it. It
 		// existed only because database.Operation has no params field, so an
