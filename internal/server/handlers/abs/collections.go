@@ -7,6 +7,7 @@ package abs
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -247,7 +248,7 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 	}
 
 	if err := h.collections.UpdateCollection(col); err != nil {
-		if strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "version conflict") {
+		if errors.Is(err, database.ErrCollectionVersionConflict) || strings.Contains(err.Error(), "already in use") {
 			respondError(c, http.StatusConflict, err.Error())
 			return
 		}
@@ -328,7 +329,7 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 		// read-modify-write clobber the Version compare-and-swap exists to
 		// catch. Surface it as a 409 so the client re-reads and retries rather
 		// than getting a 500 for what is really "try again."
-		if strings.Contains(err.Error(), "version conflict") {
+		if errors.Is(err, database.ErrCollectionVersionConflict) {
 			respondError(c, http.StatusConflict, err.Error())
 			return
 		}
@@ -375,7 +376,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 	if err := h.collections.UpdateCollection(col); err != nil {
 		// Same race as AddBookToCollection above: surface a stale-Version
 		// conflict as 409 rather than a generic 500.
-		if strings.Contains(err.Error(), "version conflict") {
+		if errors.Is(err, database.ErrCollectionVersionConflict) {
 			respondError(c, http.StatusConflict, err.Error())
 			return
 		}
