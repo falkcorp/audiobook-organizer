@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -110,6 +110,8 @@ func TestHandler_GetOperationResult_WithData(t *testing.T) {
 
 	resultData := `{"files_processed":10}`
 	op := &database.Operation{ID: "op-1", Status: "completed", ResultData: &resultData}
+	// No v2 twin: this pins the v1 arm of the two-keyspace result lookup.
+	mockStore.EXPECT().GetOperationV2("op-1").Return(nil, nil)
 	mockStore.EXPECT().GetOperationByID("op-1").Return(op, nil)
 
 	router.GET("/operations/:id/result", newOperationsHandler(srv).GetOperationResult)
@@ -129,6 +131,8 @@ func TestHandler_GetOperationResult_NoData(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
 	op := &database.Operation{ID: "op-1", Status: "completed", ResultData: nil}
+	// No v2 twin: this pins the v1 arm of the two-keyspace result lookup.
+	mockStore.EXPECT().GetOperationV2("op-1").Return(nil, nil)
 	mockStore.EXPECT().GetOperationByID("op-1").Return(op, nil)
 
 	router.GET("/operations/:id/result", newOperationsHandler(srv).GetOperationResult)
@@ -143,6 +147,7 @@ func TestHandler_GetOperationResult_NoData(t *testing.T) {
 func TestHandler_GetOperationResult_NotFound(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
+	mockStore.EXPECT().GetOperationV2("nope").Return(nil, nil)
 	mockStore.EXPECT().GetOperationByID("nope").Return(nil, nil)
 
 	router.GET("/operations/:id/result", newOperationsHandler(srv).GetOperationResult)

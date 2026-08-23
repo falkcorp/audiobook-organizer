@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -24,7 +24,6 @@ import (
 
 // aiReviewOpParams holds the serializable parameters for the ai.author-review op.
 type aiReviewOpParams struct {
-	LegacyOpID  string                   `json:"legacy_op_id"`
 	Mode        string                   `json:"mode"`
 	DedupGroups []dedup.AuthorDedupGroup `json:"dedup_groups,omitempty"`
 }
@@ -43,14 +42,13 @@ type aiMergeApplySuggestion struct {
 
 // aiMergeApplyOpParams holds the serializable parameters for the ai.author-merge-apply op.
 type aiMergeApplyOpParams struct {
-	LegacyOpID  string                   `json:"legacy_op_id"`
 	Suggestions []aiMergeApplySuggestion `json:"suggestions"`
 }
 
 // RegisterAIAuthorReviewOp registers the "ai.author-review" v2 OperationDef.
 func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "ai.author-review",
+		ID:              handlers.AIAuthorReviewDefID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Author Duplicate Review",
@@ -60,7 +58,7 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 		Isolate:         false,
 		Timeout:         2 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "ai.author-review",
+		ConcurrencyKey:  handlers.AIAuthorReviewDefID,
 		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
@@ -70,9 +68,6 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("ai.author-review: decode params: %w", err)
 				}
 			}
-			if p.LegacyOpID == "" {
-				return fmt.Errorf("ai.author-review: legacy_op_id is required")
-			}
 			if p.Mode == "" {
 				p.Mode = "groups"
 			}
@@ -81,11 +76,19 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 			store := s.Ops()
 			progress := registryProgressAdapter{r: reporter}
 
+			// The suggestions land on this run's own v2 row. They used to be
+			// written onto a v1 row the handler minted, which GET
+			// /operations/:id/result then read back — that route is now
+			// two-keyspace aware, so the id the caller holds resolves either way.
+			saveResult := func(payload any) error {
+				return opsregistry.ReporterSetResult(reporter, payload)
+			}
+
 			switch p.Mode {
 			case "groups":
-				return handlers.AIReviewGroupsMode(ctx, progress, parser, store, p.LegacyOpID, p.DedupGroups)
+				return handlers.AIReviewGroupsMode(ctx, progress, parser, store, saveResult, p.DedupGroups)
 			case "full":
-				return handlers.AIReviewFullMode(ctx, progress, parser, store, p.LegacyOpID)
+				return handlers.AIReviewFullMode(ctx, progress, parser, store, saveResult)
 			default:
 				return fmt.Errorf("ai.author-review: unknown mode: %s", p.Mode)
 			}
@@ -96,7 +99,7 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 // RegisterAIAuthorMergeApplyOp registers the "ai.author-merge-apply" v2 OperationDef.
 func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "ai.author-merge-apply",
+		ID:              handlers.AIAuthorMergeApplyDefID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Author Merge Apply",
@@ -106,7 +109,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 		Isolate:         false,
 		Timeout:         1 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "ai.author-merge-apply",
+		ConcurrencyKey:  handlers.AIAuthorMergeApplyDefID,
 		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
@@ -116,10 +119,6 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("ai.author-merge-apply: decode params: %w", err)
 				}
 			}
-			if p.LegacyOpID == "" {
-				return fmt.Errorf("ai.author-merge-apply: legacy_op_id is required")
-			}
-
 			store := s.Ops()
 			progress := registryProgressAdapter{r: reporter}
 			suggestions := p.Suggestions

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/interfaces.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 37502068-5061-401b-841e-0b191567f0bf
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // Narrow dependency interfaces for the operations domain handlers (scan /
 // organize / optimize / transcode triggers, operation status / logs / result /
@@ -50,6 +50,13 @@ type operationsContributorStore interface {
 
 type operationsRecordStore interface {
 	GetOperationByID(id string) (*database.Operation, error)
+	// GetOperationV2 backs GetOperationResult's v2 lookup. The result route is
+	// the only place a completed run's payload is readable — rowToResponse
+	// (operations_v2_handlers.go) deliberately omits ResultData because the same
+	// function renders the LIST, where result blobs would balloon every row — so
+	// an op that writes its result to the v2 row and not here has no reader at
+	// all. Adding this is what lets a def stop minting a v1 row.
+	GetOperationV2(id string) (*database.OperationV2Row, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	GetRecentOperations(limit int) ([]database.Operation, error)
 	UpdateOperationStatus(id, status string, progress, total int, message string) error

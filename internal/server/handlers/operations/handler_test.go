@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (cancel not-found fallback,
@@ -246,22 +246,105 @@ func TestListStaleOperations_UsesInjectedCollector(t *testing.T) {
 
 // --- GetOperationResult ---
 
-func TestGetOperationResult_WithData(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	rd := `{"files":10}`
-	store.EXPECT().GetOperationByID("op-1").Return(&database.Operation{ID: "op-1", ResultData: &rd}, nil)
-	w := run(http.MethodGet, "/operations/:id/result", "/operations/op-1/result", nil, func(r *gin.Engine) {
+// GetOperationResult serves two keyspaces. Ops that still mint a v1 row store
+// their payload with UpdateOperationResultData; ops that have gone v2-native
+// store it on the v2 row via ReporterSetResult. Nothing else serves ResultData
+// — rowToResponse omits it — so if this route reads only one keyspace, half the
+// ops' output is written and never readable. Each test below pins one arm.
+
+func getResult(t *testing.T, h *operations.Handler, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	return run(http.MethodGet, "/operations/:id/result", "/operations/"+id+"/result", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/result", h.GetOperationResult)
 	})
-	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestGetOperationResult_NotFound(t *testing.T) {
+// resultData digs the payload out of the {"data":{"result_data":…}} envelope.
+func resultData(t *testing.T, w *httptest.ResponseRecorder) any {
+	t.Helper()
+	var resp struct {
+		Data struct {
+			ResultData any `json:"result_data"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	return resp.Data.ResultData
+}
+
+// The v2 arm: the id belongs to a v2-native op and there is no v1 twin at all.
+// Before this route learned the v2 keyspace, this 404'd.
+func TestGetOperationResult_ReadsTheV2Row(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
+	rd := `{"suggestions":[{"group_index":3}]}`
+	store.EXPECT().GetOperationV2("op-v2").Return(&database.OperationV2Row{ID: "op-v2", ResultData: &rd}, nil)
+
+	w := getResult(t, h, "op-v2")
+	require.Equal(t, http.StatusOK, w.Code)
+	got, ok := resultData(t, w).(map[string]any)
+	require.True(t, ok, "result_data must be structured JSON, got %T", resultData(t, w))
+	require.Contains(t, got, "suggestions")
+}
+
+// The v1 arm. Five callers were still writing v1 result data on 2026-08-23
+// (maintenance dedup/reconcile, itunes path-repair, batch_poller, diagnostics),
+// so the fallback is load-bearing, not legacy politeness.
+func TestGetOperationResult_FallsBackToV1WhenNoV2Row(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	rd := `{"files":10}`
+	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
+	store.EXPECT().GetOperationByID("op-1").Return(&database.Operation{ID: "op-1", ResultData: &rd}, nil)
+
+	w := getResult(t, h, "op-1")
+	require.Equal(t, http.StatusOK, w.Code)
+	got, ok := resultData(t, w).(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, float64(10), got["files"])
+}
+
+// A v2 row that exists but has not stored a result yet answers null — it must
+// NOT fall through to v1. A twinned op mid-run would otherwise serve the stale
+// result of its v1 mirror as if it were this run's output.
+func TestGetOperationResult_V2RowWithNoResultDoesNotFallThroughToV1(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().GetOperationV2("op-running").Return(&database.OperationV2Row{ID: "op-running"}, nil)
+
+	w := getResult(t, h, "op-running")
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Nil(t, resultData(t, w))
+	store.AssertNotCalled(t, "GetOperationByID", "op-running")
+}
+
+// A v2 lookup error is not fatal: the id may be a v1 id, and failing the whole
+// request would make a v2 store hiccup take the v1 ops down with it.
+func TestGetOperationResult_V2LookupErrorStillTriesV1(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	rd := `{"files":2}`
+	store.EXPECT().GetOperationV2("op-1").Return(nil, errors.New("pebble closed"))
+	store.EXPECT().GetOperationByID("op-1").Return(&database.Operation{ID: "op-1", ResultData: &rd}, nil)
+
+	w := getResult(t, h, "op-1")
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
+// Whatever the op stored is what comes back. A payload that is not valid JSON
+// is echoed as a raw string rather than 500'd — a caller holding a mangled
+// result is better off than one holding an error.
+func TestGetOperationResult_UnparseablePayloadIsEchoedRaw(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	rd := `not json at all`
+	store.EXPECT().GetOperationV2("op-v2").Return(&database.OperationV2Row{ID: "op-v2", ResultData: &rd}, nil)
+
+	w := getResult(t, h, "op-v2")
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, rd, resultData(t, w))
+}
+
+func TestGetOperationResult_NotFoundInEitherKeyspace(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().GetOperationV2("nope").Return(nil, nil)
 	store.EXPECT().GetOperationByID("nope").Return(nil, nil)
-	w := run(http.MethodGet, "/operations/:id/result", "/operations/nope/result", nil, func(r *gin.Engine) {
-		r.GET("/operations/:id/result", h.GetOperationResult)
-	})
+
+	w := getResult(t, h, "nope")
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
