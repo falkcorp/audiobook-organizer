@@ -3896,14 +3896,39 @@ Measured by a full 63,870-book census against production, correcting the figures
       is good: 472 of 7,154 `vg-` groups have no primary versus 7 of 17,635 unprefixed —
       a ~166x enrichment. Note `vg-` groups are NOT mostly singletons (12,877 books across
       7,154 groups; 1,905 singletons), so a repair that assumes singleton-ness is unsafe.
-- [ ] **`is_primary_version` in the payload disagrees with the filter for 5,731 books.**
+- [ ] **`is_primary_version` in the payload disagrees with the filter for 2,776 books.**
       Books with no `version_group_id` are returned by `is_primary_version=true` while
-      their own serialized field says `false`. Nothing is hidden by this, but any client
-      reading the field instead of calling the filter will disagree with the server about
-      5,731 books. It is why two independent counts of "primary books" differed
-      (40,839 vs 35,108).
-- [ ] **41 ungrouped books are hidden anyway** and do not fit the rule above. Small
-      concrete sample; unexplained.
+      their own serialized field is **ABSENT** — not `false`. Nothing is hidden by this,
+      but any client reading the field instead of calling the filter will disagree with
+      the server about those books. It is why two independent counts of "primary books"
+      differed (40,839 vs 35,108).
+
+      *(Corrected 2026-08-23 against production, full-library page-through. **Two fixes
+      to this entry.** (1) The field is **absent**, not `false`: `Book`/`BookSummary` tag
+      it `json:",omitempty"`, so a nil `*bool` omits the KEY ENTIRELY rather than
+      emitting `false` — which is a different bug with a different client-side fix, since
+      a client reading `body.is_primary_version` gets `undefined`, not a wrong boolean.
+      (2) The population is **2,776**, not 5,731 — it was 5,702 on 2026-08-14 and has
+      roughly halved. The core claim is unchanged and now has an arithmetic proof:
+      explicit-true is 37,613 (grouped) + 1,352 (ungrouped) = 38,965, and
+      `?is_primary_version=true&show_quarantined=true` returns **41,741** =
+      38,965 + 2,776, so the nils are provably inside the filter's answer.
+      ⚠️ **PR #2805 changes this contract to serialize the effective value, i.e. absent
+      → `true`. When it merges, this entry closes for clients but the underlying store
+      divergence does NOT — see the `is_primary_version` divergence note; #2805 makes the
+      API stop reporting it, not stop happening.)*
+- [ ] **116 ungrouped books are hidden anyway** and do not fit the rule above.
+      Unexplained.
+
+      *(Re-measured 2026-08-23: **116**, not 41 — and it is GROWING. The 41 was a
+      correct measurement on 2026-08-14; the same cross-tab nine days later gives 116,
+      while the library itself shrank by 7,112 books. This is no longer a "small
+      concrete sample" — it nearly tripled and warrants finding the writer. The census
+      tool that produces it landed in #2809: `tools/cmd/orphan-nonprimary-census`,
+      which emits the per-book CSV with `created_at`/`updated_at` for correlating
+      against job runs. Verified by three independent instruments (different paging
+      param, different termination condition, different population), 0 duplicate ids
+      across 56,727 rows.)*
 - [ ] **`version_group_id` is silently ignored as a filter** on `/api/v1/audiobooks` —
       both `?filter=version_group_id:X` and `?version_group_id=X` return the entire
       library (count=63,870) rather than erroring. Same silent-filter family as the bare
