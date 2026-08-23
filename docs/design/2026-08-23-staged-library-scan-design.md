@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-23-staged-library-scan-design.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 4c1e8b73-2a9f-4d06-b5e1-7f3a90c2d846 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -463,6 +463,37 @@ large slice of the library out of dedup inside a scan PR. That is the shape of
 change this repo has been bitten by before.
 
 **So: ship untouched, and add a diagnostic that counts hash-less books and why.**
+
+> **How that diagnostic must page — measured 2026-08-23, do not skip this.**
+>
+> `GET /api/v1/audiobooks` returns `data.count` and `data.items`, and **they do not
+> measure the same population.** `internal/server/audiobooks_helpers.go:117` picks the
+> counter on `hasFilters`, and `:58` sets `ExcludeQuarantined = true` whenever
+> `show_quarantined` is absent — so `ExcludeQuarantined`, itself a disjunct of
+> `hasFilters`, is what keeps the bare call honest. **Asking to see more books
+> (`show_quarantined=true`) removes the only filter holding the count to the stream**,
+> and `count` drops to `CountPrimaryBooks()`:
+>
+> | query | `count` |
+> |---|---|
+> | *(none)* | 56,727 |
+> | `show_quarantined=true` | 41,743 |
+> | `is_primary_version=true` | 41,741 |
+>
+> `CountPrimaryBooks` is also **TTL-cached** (`pebble_store.go:2950`) and its own doc
+> says the value "may lag a write by up to that window, which is fine for a metrics
+> gauge / health probe." It is a gauge, not a ceiling.
+>
+> So a pager bound on `len(all) >= count` inherits three defects at once: the wrong
+> predicate, a stale value, and a bound a concurrent write can move. **Terminate on an
+> EMPTY PAGE.** Verified the stream really does run past the count: `offset=50000` with
+> the flag still returns items, against an alleged ceiling of 41,743.
+>
+> This is not hypothetical for this diagnostic. A `TODO.md` entry claiming
+> `show_quarantined=true` "SHRINKS the list" was produced by exactly this bound — the
+> instrument stopped at the count and the short stream was read as a short list. The bug
+> report was produced by the bug. Found by peer session `ao-here-there`; reproduced here.
+
 Decide in a follow-up, against a number rather than an estimate. This is a
 deliverable of this work, not an afterthought — without the count the follow-up has
 nothing to reason from.
