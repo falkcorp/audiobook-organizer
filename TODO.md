@@ -1863,7 +1863,18 @@ step 4 propagates to the server package with no edit there.
       `EmbedCoverArt`, etc.) listed in the report so users stop being able to
       flip a switch that does nothing.
 
-- [ ] **SCORE-REC** Route `ScoreOneResultWithBreakdown` through `scoreRecorder`
+- [x] **SCORE-REC** *(DONE 2026-08-23 — TASK-079, PR #2806. Both "Done means"
+      clauses below were verified, not assumed: (1) `ScoreStep{` composite
+      literals outside `score_breakdown.go` = **0** at `b9ccfc4a8` (the two
+      remaining hits are test fixtures constructing expected values, which is
+      not what this criterion targets); (2) the factors ARE pinned by mutation,
+      not just green — halving `service_scoring.go`'s `score *= 1.5` to `0.75`
+      failed `TestPickBestMatchFromScored/author_match_boosts`, then restored
+      to a clean tree. Note the fix shipped differs from what this entry
+      implies: routing through the recorder while returning a hardcoded `0`
+      alongside `*rec.breakdown()` lets the two return values diverge silently
+      — proven by mutation — so both now derive from one `bd := rec.breakdown()`.)*
+      Route `ScoreOneResultWithBreakdown` through `scoreRecorder`
       like `ApplyNonBaseAdjustmentsWithBreakdown` now is. It still hand-builds
       its own `ScoreOpBase` step at `internal/metafetch/service_scoring.go:724`,
       duplicating what `newScoreRecorder` does. This is the last hand-rolled
