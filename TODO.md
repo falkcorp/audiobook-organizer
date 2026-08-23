@@ -3911,8 +3911,16 @@ Measured by a full 63,870-book census against production, correcting the figures
       (2) The population is **2,776**, not 5,731 — it was 5,702 on 2026-08-14 and has
       roughly halved. The core claim is unchanged and now has an arithmetic proof:
       explicit-true is 37,613 (grouped) + 1,352 (ungrouped) = 38,965, and
-      `?is_primary_version=true&show_quarantined=true` returns **41,741** =
-      38,965 + 2,776, so the nils are provably inside the filter's answer.
+      `?is_primary_version=true` returns **41,741** = 38,965 + 2,776, so the nils
+      are provably inside the filter's answer.
+      ⚠️ **The proof is that exact call — do NOT add `show_quarantined=true` to it.**
+      With the flag the same query returns **41,743**, because `hasFilters` is true
+      either way (`IsPrimaryVersion != nil`) and the only thing the flag changes is
+      `ExcludeQuarantined`. The 2-book delta is not drift: there are exactly two
+      quarantined primary books. An earlier draft of this entry cited the
+      `show_quarantined=true` variant for the 41,741 figure, which does not return
+      it — caught in review of PR #2813 and reproduced on two independent
+      instruments before correcting.
       ⚠️ **PR #2805 changes this contract to serialize the effective value, i.e. absent
       → `true`. When it merges, this entry closes for clients but the underlying store
       divergence does NOT — see the `is_primary_version` divergence note; #2805 makes the
