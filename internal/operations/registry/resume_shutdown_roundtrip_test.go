@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume_shutdown_roundtrip_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b5c4a19-7e2d-4f83-9a61-3c8d5e7f012a
 // last-edited: 2026-08-23
 
@@ -30,16 +30,27 @@ func newRoundtripRegistry(store *fakeStore, workers int) *registry.Registry {
 // Every case in resume_test.go begins at insertRunningOp (resume_test.go:22),
 // which writes Status:"running" directly and then calls Start. That fixture
 // encodes the very assumption the suite exists to check -- that an interrupted
-// run is left in the store as "running". It is not. A graceful Shutdown cancels
-// the run, executeRun classifies it ctxCanceled and writes "canceled"
-// (worker.go:412), and UpdateOperationV2Status deletes the opv2:act: key for any
-// status that is not running|queued (pebble_store_ops_v2.go:277). The next
-// startup's resumeAfterStartup reads ListActiveOperationsV2, so it sees nothing
-// at all and no ResumePolicy is ever consulted.
+// run is left in the store as "running". It is not.
 //
-// The final assertion is INVERTED on purpose: it asserts the op does NOT come
-// back, which is the current behaviour, so this test runs and passes today
-// rather than skipping. See OPS-V2-RESUME-BLIND in
+// This test pins the PR1/PR2 BOUNDARY, and each half is deliberate:
+//
+//   - RECORDED CORRECTLY (PR1, this branch). A graceful Shutdown cancels the
+//     run. Before this branch executeRun classified that as an ordinary
+//     ctxCanceled and wrote "canceled", losing the fact that the server -- not a
+//     user -- ended the run. finalStatusForCanceledRun now distinguishes the two
+//     and writes interruptedStatus(resumePolicy), so a ResumeRestart op shuts
+//     down as "interrupted_quiesced".
+//
+//   - STILL INVISIBLE (PR2, not this branch). UpdateOperationV2Status deletes
+//     the opv2:act: key for any status that is not running|queued
+//     (pebble_store_ops_v2.go:277), and resumeAfterStartup reads only
+//     ListActiveOperationsV2. So the correctly-labelled row is STILL not seen by
+//     the sweep and no ResumePolicy is consulted. Assertions (2) and (3) below
+//     are INVERTED on purpose to pin that: they assert the op does NOT come
+//     back, which is still the behaviour, so this test runs and passes today
+//     rather than skipping.
+//
+// When PR2 lands, (2) and (3) are what must flip. See OPS-V2-RESUME-BLIND in
 // todo.d/20260823-v2-resume-sweep-is-blind-to-interrupted-rows.md.
 func TestResume_RealShutdownLeavesNothingForTheSweep(t *testing.T) {
 	store := newFakeStore()
@@ -81,14 +92,20 @@ func TestResume_RealShutdownLeavesNothingForTheSweep(t *testing.T) {
 	}
 
 	// (1) A graceful shutdown does not leave the row "running" -- which is the
-	//     only state insertRunningOp ever produces.
-	if got := store.statusOf(opID); got != "canceled" {
+	//     only state insertRunningOp ever produces -- and it no longer flattens
+	//     the run to a plain "canceled" either. The def declares ResumeRestart,
+	//     so interruptedStatus maps it to interrupted_quiesced. A "canceled"
+	//     here means finalStatusForCanceledRun stopped distinguishing a server
+	//     shutdown from a user cancel, which is the whole point of this branch.
+	if got := store.statusOf(opID); got != "interrupted_quiesced" {
 		t.Errorf("after a graceful Shutdown status=%q, want %q "+
 			"(if this changed, re-check whether the resume suite's fixture is now realistic)",
-			got, "canceled")
+			got, "interrupted_quiesced")
 	}
 
-	// (2) ...so the row has left the set resumeAfterStartup reads.
+	// (2) ...but it has STILL left the set resumeAfterStartup reads, because
+	//     interrupted_quiesced is neither running nor queued. This is the PR2
+	//     gap, asserted here so it stays visible rather than assumed fixed.
 	active, err := store.ListActiveOperationsV2()
 	if err != nil {
 		t.Fatalf("ListActiveOperationsV2: %v", err)
