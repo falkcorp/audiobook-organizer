@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -244,6 +244,11 @@ type serverOperationV2Store interface {
 	// GetRecentOperations/ListOperations scans only see rows the handlers no
 	// longer write. Removing either consumer does not make this method dead.
 	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
+	// ListActiveOperationsV2 backs the AI author-review's same-mode guard, which
+	// used to scan v1 rows for a "pending"/"running" twin. Status-scoped by the
+	// store, so callers cannot drift out of sync with the registry's own notion
+	// of which statuses count as active.
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 	UpdateOperationV2Status(id string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) error
 }
 

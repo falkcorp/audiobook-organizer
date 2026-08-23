@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -30,7 +30,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/gin-gonic/gin"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // aiHandlerStore is what this handler calls, measured by emptying it and reading
@@ -39,7 +38,6 @@ import (
 type aiHandlerStore interface {
 	GetAllAuthors() ([]database.Author, error)
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
-	UpdateOperationResultData(id string, resultData string) error
 }
 
 // --- narrow dependency interfaces ---
@@ -109,7 +107,6 @@ type AudiobookUpdater interface {
 // server-side definitions, even though the Go types live in two packages.
 
 type aiReviewOpParams struct {
-	LegacyOpID  string                   `json:"legacy_op_id"`
 	Mode        string                   `json:"mode"`
 	DedupGroups []dedup.AuthorDedupGroup `json:"dedup_groups,omitempty"`
 }
@@ -134,7 +131,6 @@ type AIMergeApplySuggestion struct {
 }
 
 type aiMergeApplyOpParams struct {
-	LegacyOpID  string                   `json:"legacy_op_id"`
 	Suggestions []AIMergeApplySuggestion `json:"suggestions"`
 }
 
@@ -159,7 +155,6 @@ type aiStore interface {
 // stating exactly -- probed independently, not assumed to be a subset.
 type aiReviewGroupsStore interface {
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
-	UpdateOperationResultData(id string, resultData string) error
 }
 
 // aiAuthorReviewStore is the author/book reads behind the author-review paths.
@@ -170,10 +165,73 @@ type aiAuthorReviewStore interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
-// aiOperationStore is the operation bookkeeping the AI review runs do.
+// AIAuthorReviewDefID and AIAuthorMergeApplyDefID are the registered
+// OperationDef ids for the two AI author operations.
+//
+// They are exported so internal/server/ai_ops.go registers each op under the
+// same string this package enqueues and compares against. The review id in
+// particular must not drift: activeAuthorReview matches rows by DefID, so a
+// mismatch would not fail a build, and a unit test written with the same
+// literal would not see it either — the guard would simply match nothing,
+// forever, and every request would start a second concurrent review.
+const (
+	AIAuthorReviewDefID     = "ai.author-review"
+	AIAuthorMergeApplyDefID = "ai.author-merge-apply"
+)
+
+// SaveResultFunc persists an operation's result payload.
+//
+// The two review-mode functions used to call store.UpdateOperationResultData
+// with the id of a v1 row the handler had minted. They now take this instead, so
+// the result lands wherever the CALLER's operations system keeps it — for the v2
+// ops in ai_ops.go, that is the run's own v2 row via ReporterSetResult. The
+// error is returned rather than logged: the payload IS the review's output, and
+// a run whose suggestions were never stored has not succeeded.
+type SaveResultFunc func(payload any) error
+
+// activeAuthorReview returns the in-flight ai.author-review of the given mode,
+// or nil if none is running.
+//
+// The mode lives in the run's params rather than in its def id — there is one
+// def for both modes — so this decodes Params to compare. ListActiveOperationsV2
+// is already scoped to non-terminal statuses, which is why no status list
+// appears here: the v1 version hard-coded {"pending","running"} and would have
+// silently stopped matching if the registry ever added a third active status.
+func (h *AIHandler) activeAuthorReview(mode string) *database.OperationV2Row {
+	if h.store == nil {
+		return nil
+	}
+	rows, err := h.store.ListActiveOperationsV2()
+	if err != nil {
+		// A failed lookup must not block the user from starting a review; the
+		// worst case is two concurrent runs of the same mode, which is what the
+		// v1 scan also did when ListOperations errored (it discarded the error).
+		slog.Warn("ai author review: active-op lookup failed, not deduping", "err", err)
+		return nil
+	}
+	for i := range rows {
+		if rows[i].DefID != AIAuthorReviewDefID {
+			continue
+		}
+		var p aiReviewOpParams
+		if err := json.Unmarshal([]byte(rows[i].Params), &p); err != nil {
+			continue
+		}
+		if p.Mode == mode {
+			return &rows[i]
+		}
+	}
+	return nil
+}
+
+// aiOperationStore is the operation bookkeeping the AI review paths do.
+//
+// CreateOperation and ListOperations are deliberately ABSENT. The handlers used
+// to mint a v1 row and scan v1 rows for an in-flight run of the same mode; both
+// now go through the v2 keyspace, and leaving the methods off makes a
+// reintroduction a compile error rather than something a reviewer has to catch.
 type aiOperationStore interface {
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
-	ListOperations(limit, offset int) ([]database.Operation, int, error)
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
 
 type AIHandler struct {
@@ -672,14 +730,26 @@ func (h *AIHandler) ReviewDuplicateAuthors(c *gin.Context) {
 
 	store := h.store
 
-	// Check for an already-running ai-author-review of the same mode — block concurrent same-mode runs
-	opType := "ai-author-review-" + mode
-	recentOps, _, _ := store.ListOperations(50, 0)
-	for _, existing := range recentOps {
-		if existing.Type == opType && (existing.Status == "pending" || existing.Status == "running") {
-			httputil.RespondWithSuccess(c, 202, existing)
-			return
-		}
+	// Block concurrent same-mode runs by answering with the run already in
+	// flight. This used to scan ListOperations(50, 0) for a v1 row of type
+	// "ai-author-review-<mode>"; it now asks the v2 keyspace, which is where the
+	// run actually lives.
+	//
+	// Not ConcurrencyKey: that gate is per-DEF and makes the second op WAIT in
+	// the queue, where this contract is per-MODE and hands the caller back the
+	// running op immediately. Those are different behaviours, and the caller's
+	// is the one clients depend on.
+	//
+	// ListActiveOperationsV2 is already status-scoped, so unlike the v1 scan
+	// there is no status list here to drift out of sync with the registry's own
+	// idea of "active".
+	if existing := h.activeAuthorReview(mode); existing != nil {
+		httputil.RespondWithSuccess(c, 202, gin.H{
+			"operation_id": existing.ID,
+			"status":       existing.Status,
+			"mode":         mode,
+		})
+		return
 	}
 
 	// For groups mode, we need dedup groups — use cache if available, otherwise compute inline
@@ -719,20 +789,23 @@ func (h *AIHandler) ReviewDuplicateAuthors(c *gin.Context) {
 		}
 	}
 
-	opID := ulid.Make().String()
-	op, err := store.CreateOperation(opID, opType, nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	reviewParams := aiReviewOpParams{LegacyOpID: op.ID, Mode: mode, DedupGroups: dedupGroups}
-	if _, enqErr := h.registry.EnqueueOp(c.Request.Context(), "ai.author-review", reviewParams); enqErr != nil {
+	// No v1 row is minted. The id handed back is the one EnqueueOp keyed the run
+	// under, so it resolves at GET /operations/v2/:id — the only place a client
+	// can poll it. Returning a separately-minted id here is the defect that made
+	// the diagnostics export undownloadable (#2747) and the folder scan's
+	// progress unpollable (#2762).
+	reviewParams := aiReviewOpParams{Mode: mode, DedupGroups: dedupGroups}
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), AIAuthorReviewDefID, reviewParams)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
 
-	httputil.RespondWithSuccess(c, 202, op)
+	httputil.RespondWithSuccess(c, 202, gin.H{
+		"operation_id": opID,
+		"status":       "queued",
+		"mode":         mode,
+	})
 }
 
 // ApplyAuthorReview enqueues an AI author merge-apply operation.
@@ -755,21 +828,19 @@ func (h *AIHandler) ApplyAuthorReview(c *gin.Context) {
 		return
 	}
 
-	store := h.store
-	opID := ulid.Make().String()
-	op, err := store.CreateOperation(opID, "ai-author-merge-apply", nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	applyParams := aiMergeApplyOpParams{LegacyOpID: op.ID, Suggestions: req.Suggestions}
-	if _, enqErr := h.registry.EnqueueOp(c.Request.Context(), "ai.author-merge-apply", applyParams); enqErr != nil {
+	// See ReviewDuplicateAuthors: the returned id is EnqueueOp's, and no v1 row
+	// is minted alongside it.
+	applyParams := aiMergeApplyOpParams{Suggestions: req.Suggestions}
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), AIAuthorMergeApplyDefID, applyParams)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
 
-	httputil.RespondWithSuccess(c, 202, op)
+	httputil.RespondWithSuccess(c, 202, gin.H{
+		"operation_id": opID,
+		"status":       "queued",
+	})
 }
 
 // ListAIJobs serves GET /api/v1/ai-jobs with optional type/status filters.
@@ -813,7 +884,7 @@ func UnwrapAIJobsStore(s any) (database.AIJobsStore, bool) {
 // (was *Server.aiReviewGroupsMode); the op executor in package server
 // (ai_ops.go) calls it as a package-level function. Receiver-free — every
 // dependency arrives as a parameter.
-func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store aiReviewGroupsStore, opID string, dedupGroups []dedup.AuthorDedupGroup) error {
+func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store aiReviewGroupsStore, saveResult SaveResultFunc, dedupGroups []dedup.AuthorDedupGroup) error {
 	_ = progress.Log("info", fmt.Sprintf("Starting AI review (groups mode) of %d duplicate author groups", len(dedupGroups)), nil)
 	// Schedule: 1 setup + N input rows + 1 send + 1 done = len+3 steps.
 	totalSteps := len(dedupGroups) + 3
@@ -870,7 +941,7 @@ func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporte
 	if err != nil {
 		return fmt.Errorf("failed to marshal suggestions: %w", err)
 	}
-	if err := store.UpdateOperationResultData(opID, string(resultJSON)); err != nil {
+	if err := saveResult(json.RawMessage(resultJSON)); err != nil {
 		return fmt.Errorf("failed to store results: %w", err)
 	}
 
@@ -881,7 +952,7 @@ func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporte
 // AIReviewFullMode sends all authors to AI for duplicate discovery. Relocated
 // from the server package (was *Server.aiReviewFullMode); called by the op
 // executor in package server (ai_ops.go) as a package-level function.
-func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store aiHandlerStore, opID string) error {
+func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store aiHandlerStore, saveResult SaveResultFunc) error {
 	_ = progress.Log("info", "Starting AI review (full mode) — discovering duplicates from all authors", nil)
 	// Pre-load total is unknown; use a placeholder (0/1) Start so we never emit 0/0.
 	_ = progress.UpdateProgress(0, 1, "Loading all authors... (0/1 0.00%)")
@@ -986,7 +1057,7 @@ func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter,
 	if err != nil {
 		return fmt.Errorf("failed to marshal results: %w", err)
 	}
-	if err := store.UpdateOperationResultData(opID, string(resultJSON)); err != nil {
+	if err := saveResult(json.RawMessage(resultJSON)); err != nil {
 		return fmt.Errorf("failed to store results: %w", err)
 	}
 

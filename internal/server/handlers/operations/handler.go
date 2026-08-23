@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -407,8 +407,28 @@ func (h *Handler) ListStaleOperations(c *gin.Context) {
 }
 
 // GetOperationResult implements GET /operations/:id/result.
+//
+// Two keyspaces hold result payloads and the id alone does not say which. Ops
+// that still mint a v1 row write theirs with UpdateOperationResultData
+// ("operation:<id>"); ops that have gone v2-native write theirs with
+// ReporterSetResult, which lands on the v2 row ("opv2:op:<id>"). v2 is checked
+// first because for a twinned op — one that wrote both — the v2 row is the
+// authority; the v1 twin is a mirror that the retirement lane is removing.
+//
+// A v1-only read here is what made a v2-native op's output unreachable: nothing
+// else serves ResultData, since rowToResponse omits it (it also renders the op
+// LIST, where result blobs would balloon every row). Do not narrow this back to
+// one keyspace until the last UpdateOperationResultData caller is gone —
+// maintenance/dedup_ops.go, maintenance/reconcile.go, itunes/path_repair.go,
+// batch_poller.go and diagnostics.go were all still writing v1 on 2026-08-23.
 func (h *Handler) GetOperationResult(c *gin.Context) {
 	id := c.Param("id")
+
+	if row, err := h.store.GetOperationV2(id); err == nil && row != nil {
+		h.respondWithResult(c, row.ResultData)
+		return
+	}
+
 	op, err := h.store.GetOperationByID(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get operation", err)
@@ -418,19 +438,23 @@ func (h *Handler) GetOperationResult(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "operation", id)
 		return
 	}
+	h.respondWithResult(c, op.ResultData)
+}
 
-	if op.ResultData == nil {
+// respondWithResult renders a stored result payload, which is a *string of JSON
+// in both keyspaces. Unparseable data is echoed as the raw string rather than
+// erroring: the payload is whatever the op chose to store, and a caller that
+// can read a mangled result is better off than one that gets a 500.
+func (h *Handler) respondWithResult(c *gin.Context, stored *string) {
+	if stored == nil {
 		httputil.RespondWithOK(c, gin.H{"result_data": nil})
 		return
 	}
-
-	// Parse the JSON result data to return as structured JSON
 	var resultData json.RawMessage
-	if err := json.Unmarshal([]byte(*op.ResultData), &resultData); err != nil {
-		httputil.RespondWithOK(c, gin.H{"result_data": *op.ResultData})
+	if err := json.Unmarshal([]byte(*stored), &resultData); err != nil {
+		httputil.RespondWithOK(c, gin.H{"result_data": *stored})
 		return
 	}
-
 	httputil.RespondWithOK(c, gin.H{"result_data": resultData})
 }
 
