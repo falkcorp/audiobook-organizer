@@ -1,13 +1,11 @@
 // file: internal/server/handlers/entities/author_refcount.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2bde50e3-abc9-4f90-ba06-db303a3776f2
 // last-edited: 2026-08-23
 
 package entities
 
 import (
-	"fmt"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -31,12 +29,10 @@ import (
 // success. Exact mirror of seriesRefCounts, which fixed the identical defect on
 // the series side after it had stranded 13,322 books behind 6,893 deleted
 // series IDs in production.
+// The body lives in database.AuthorRefCounts so the maintenance plugin's bulk
+// purge -- which cannot import internal/server -- shares this exact guard rather
+// than carrying a copy that drifts. This wrapper is kept because the handlers
+// read better for it and the package's tests name it.
 func authorRefCounts(store any) (map[int]int, error) {
-	refCounter := database.AsAuthorBookRefStore(store)
-	if refCounter == nil {
-		return nil, fmt.Errorf("store cannot count unfiltered author references (got %T); "+
-			"refusing to delete from a filtered count, which silently strands "+
-			"books whose author is trashed, non-primary, or a junction-only co-author", store)
-	}
-	return refCounter.GetAllAuthorBookRefCounts()
+	return database.AuthorRefCounts(store)
 }

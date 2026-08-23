@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
 // last-edited: 2026-08-23
 
@@ -180,8 +180,14 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 	}
 	for jIter.First(); jIter.Valid(); jIter.Next() {
 		var authors []BookAuthor
-		if json.Unmarshal(jIter.Value(), &authors) != nil {
-			continue
+		if err := json.Unmarshal(jIter.Value(), &authors); err != nil {
+			// FATAL, not skippable. A credit list we cannot decode may hold the
+			// ONLY reference to an author -- authors 2..n of a book live here and
+			// nowhere else. Skipping it undercounts, and undercounting is
+			// fail-OPEN for every caller: the delete proceeds and strands the
+			// very row we could not read.
+			_ = jIter.Close()
+			return nil, fmt.Errorf("author ref scan: undecodable book_authors row %q: %w", string(jIter.Key()), err)
 		}
 		bookID := strings.TrimPrefix(string(jIter.Key()), "book_authors:")
 		for _, a := range authors {
@@ -193,8 +199,16 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 			counts[a.AuthorID]++
 		}
 	}
+	// The loop exits on end-of-range OR on an iteration error, and the two are
+	// indistinguishable without this check. A truncated map with a nil error
+	// answers "nothing else references anything" -- the permissive answer -- to
+	// a caller that deletes on the strength of it.
+	if err := jIter.Error(); err != nil {
+		_ = jIter.Close()
+		return nil, fmt.Errorf("author ref scan truncated over book_authors, refusing to answer from a partial count: %w", err)
+	}
 	if cErr := jIter.Close(); cErr != nil {
-		return nil, cErr
+		return nil, fmt.Errorf("author ref scan: closing book_authors iterator: %w", cErr)
 	}
 
 	// Pass 2: every book row, for the legacy AuthorID field.
@@ -205,7 +219,6 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
@@ -219,7 +232,10 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+			// FATAL for the same reason as the junction pass above: an
+			// undecodable book row may carry a legacy author_id.
+			_ = iter.Close()
+			return nil, fmt.Errorf("author ref scan: undecodable book row %q: %w", key, err)
 		}
 		if b.AuthorID == nil {
 			continue
@@ -235,5 +251,42 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 		seen[k] = true
 		counts[*b.AuthorID]++
 	}
+	if err := iter.Error(); err != nil {
+		_ = iter.Close()
+		return nil, fmt.Errorf("author ref scan truncated over books, refusing to answer from a partial count: %w", err)
+	}
+	if err := iter.Close(); err != nil {
+		return nil, fmt.Errorf("author ref scan: closing book iterator: %w", err)
+	}
 	return counts, nil
+}
+
+// AuthorRefCounts returns, per author ID, how many books reference it in ANY
+// state -- including books in the trash, non-primary (duplicate) versions, and
+// co-authors credited only through the book_authors junction. An author ID
+// absent from the map is referenced by nothing and is the only thing safe to
+// delete.
+//
+// It is the exported twin of SeriesRefCounts, promoted here for the same reason:
+// the packages that cannot import internal/server (the maintenance plugin that
+// owns the bulk purge, and any future caller) must reach the same guard instead
+// of growing inline copies of it that drift apart.
+//
+// It fails CLOSED. If the store cannot answer the unfiltered question, the
+// caller must refuse to delete rather than fall back to the filtered count,
+// because that fallback is precisely the bug: it deletes rows while reporting
+// success. See the file comment above for the damage that causes.
+//
+// Resolution goes through AsAuthorBookRefStore, and therefore AsCapability, so
+// it looks THROUGH the decorator chain. A bare type assertion against
+// *PebbleStore is wrong in production, where the Bleve search-index decorator
+// always wraps the store.
+func AuthorRefCounts(store any) (map[int]int, error) {
+	refCounter := AsAuthorBookRefStore(store)
+	if refCounter == nil {
+		return nil, fmt.Errorf("store cannot count unfiltered author references (got %T); "+
+			"refusing to delete from a filtered count, which silently strands "+
+			"books whose author is trashed, non-primary, or a junction-only co-author", store)
+	}
+	return refCounter.GetAllAuthorBookRefCounts()
 }

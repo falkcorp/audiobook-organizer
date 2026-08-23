@@ -217,3 +217,71 @@ func TestAsAuthorBookRefStore_ResolvesPebbleStore(t *testing.T) {
 	// must fail closed rather than guess.
 	require.Nil(t, AsAuthorBookRefStore(&decoratorNoUnwrap{Store: store}))
 }
+
+// ---------------------------------------------------------------------------
+// An UNREADABLE row must make the scan REFUSE, not undercount.
+//
+// Both of these fixtures write garbage directly into the keyspace with p.db.Set
+// — nothing that goes through CreateBook can produce a malformed row, so the
+// rest of the suite cannot reach this path at all. Undercounting is fail-OPEN
+// for a delete guard: the count comes back short, the author looks unreferenced,
+// and the delete strands exactly the row that could not be read. Mirrors the
+// same fix made to getAllSeriesBookRefCountsPebble.
+// ---------------------------------------------------------------------------
+
+func TestGetAllAuthorBookRefCountsPebble_UndecodableJunctionRowIsFatal(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	mkAuthorRefBook(t, store, "Readable", 1, true, false)
+
+	require.NoError(t, store.db.Set([]byte("book_authors:corrupt-book"), []byte("{not json"), nil))
+
+	_, err := store.getAllAuthorBookRefCountsPebble()
+	require.Error(t, err, "an undecodable credit list must abort the scan; authors 2..n "+
+		"live ONLY in this table, so skipping the row can make a referenced author deletable")
+	require.Contains(t, err.Error(), "undecodable book_authors row")
+}
+
+func TestGetAllAuthorBookRefCountsPebble_UndecodableBookRowIsFatal(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	mkAuthorRefBook(t, store, "Readable", 1, true, false)
+
+	// The key must satisfy BOTH range conditions or the test would pass
+	// vacuously by never being visited: exactly one colon (so it is not skipped
+	// as a secondary index like book:path:), and a leading digit so it sorts
+	// inside the book:0 .. book:; bounds. Real book IDs are ULIDs, which begin
+	// with a digit for any timestamp this side of the year 10889.
+	require.NoError(t, store.db.Set([]byte("book:01CORRUPTROWZZZZZZZZZZZZZZ"), []byte("{not json"), nil))
+
+	_, err := store.getAllAuthorBookRefCountsPebble()
+	require.Error(t, err, "an undecodable book row may carry a legacy author_id; "+
+		"skipping it undercounts, which is fail-open for a delete guard")
+	require.Contains(t, err.Error(), "undecodable book row")
+}
+
+// The corrupt row must NOT be reachable only through the fatal path — a healthy
+// store must still answer. Positive control for the two tests above: without it
+// they would pass against a scan that always errored.
+func TestGetAllAuthorBookRefCountsPebble_HealthyStoreStillAnswers(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	mkAuthorRefBook(t, store, "Trashed", 9, true, true)
+
+	counts, err := store.getAllAuthorBookRefCountsPebble()
+	require.NoError(t, err)
+	require.Equal(t, 1, counts[9], "a trashed book still references its author")
+}
+
+// TestAuthorRefCounts_SharedGuard pins the exported helper both delete paths
+// use: it fails closed on a store that cannot answer, and resolves through a
+// decorator on one that can.
+func TestAuthorRefCounts_SharedGuard(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	mkAuthorRefBook(t, store, "Trashed", 4, true, true)
+
+	counts, err := AuthorRefCounts(&decoratorStore{Store: store})
+	require.NoError(t, err, "must resolve through the Bleve-style decorator")
+	require.Equal(t, 1, counts[4])
+
+	_, err = AuthorRefCounts(struct{}{})
+	require.Error(t, err, "a store that cannot answer must make the caller refuse, never fall back")
+	require.Contains(t, err.Error(), "refusing to delete from a filtered count")
+}
