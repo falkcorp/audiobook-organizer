@@ -1,5 +1,5 @@
 // file: internal/database/memdb_integrity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e4b90-2d63-4a85-9f27-e0b3a5c48d61
 // last-edited: 2026-08-23
 
@@ -23,30 +23,57 @@ import (
 // leave the service with no memdb at all. The rows it drops are dropped
 // SILENTLY: they are logged, and then the memdb is published as if complete.
 //
-// For almost every read that is the right trade. For the unfiltered reference
-// counters (series_bookref.go, author_bookref.go) it is not, because those
-// counters answer "is anything still pointing at this row?" and a delete guard
-// acts on the answer. A dropped row makes the counter answer "referenced by
-// nothing" when the truth is "could not read" — the permissive answer, handed
-// to a caller that deletes on the strength of it. That is fail-OPEN, and it is
-// the exact bug those two files were written to close on the Pebble path:
-// PR #2782 hardened the Pebble scan to abort on an undecodable row, but
-// UseMemDB is hardcoded true (pebble_store.go), so in production the hardened
-// scan never ran and the memdb branch answered from a short map with a nil
-// error.
+// For almost every read that is the right trade. For the unfiltered series
+// reference counter (series_bookref.go) it is not, because that counter answers
+// "is anything still pointing at this row?" and a delete guard acts on the
+// answer. A dropped row makes the counter answer "referenced by nothing" when
+// the truth is "could not read" — the permissive answer, handed to a caller
+// that deletes on the strength of it. That is fail-OPEN, and it is the exact
+// bug that file was written to close on the Pebble path: PR #2782 hardened the
+// Pebble scan to abort on an undecodable row, but UseMemDB is hardcoded true
+// (pebble_store.go), so in production the hardened scan never ran and the memdb
+// branch answered from a short map with a nil error.
 //
-// So MemStore carries a per-table "I know I am missing rows" flag. Warmup sets
-// it at the two places a row can be lost (an undecodable Pebble value, and an
-// insert the schema rejects). It is deliberately settable at RUNTIME, not just
-// during warmup, because warmup is not the only way memdb loses a row:
-// applyMemSync aborts its transaction when an index rule rejects a write and
-// the write still succeeds in Pebble, which leaves the same divergence with no
-// warmup involved. That path records here too rather than growing a second,
-// parallel mechanism.
+// (An author-side twin of that counter is in flight on PR #2787 and will use
+// this same mechanism. It does not exist in this package yet — do not go
+// looking for author_bookref.go.)
+//
+// So MemStore carries a per-table "I know I am missing rows" flag, set at every
+// place a row can go missing. There are THREE, and they are not all in warmup:
+//
+//  1. warmup cannot decode a Pebble value,
+//  2. warmup's insert is rejected by a schema/index rule,
+//  3. applyMemSync's transaction aborts at RUNTIME — a write that succeeded in
+//     Pebble and was then rejected by a memdb index rule. No warmup involved,
+//     and it leaves exactly the same divergence.
+//
+// (3) is the one that keeps the delete guard fail-open in steady state, and it
+// is recorded against memTableUnknown, because applyMemSync is handed an opaque
+// `fn func(txn memTxn) error` and genuinely cannot know which table the failed
+// insert was for. See memTableUnknown for why that is the safe direction.
 //
 // The signal is deliberately coarse — "this table is known-incomplete" — not a
 // list of which rows were lost. Knowing WHICH rows were lost would require
 // keeping the rows we could not read, which is the thing we could not do.
+
+// memTableUnknown records a lost row whose table could not be determined.
+//
+// It taints EVERY table, not none. applyMemSync runs a caller-supplied closure
+// against the transaction, so when that closure fails there is no way to
+// attribute the loss; the only two options are "assume nothing was lost" and
+// "assume anything could have been". The first is the fail-open bug this file
+// exists to close, so it is the second.
+//
+// The consequence of over-refusing here is bounded and cheap: PebbleStore falls
+// through to the authoritative Pebble scan, so the answer stays CORRECT and
+// only gets slower. The consequence of under-refusing is a deleted row.
+//
+// It also means a future op author cannot silently reopen the hole by adding a
+// memSync op nobody remembered to map to a table — an unattributable failure
+// is conservative by construction rather than by anyone's diligence.
+//
+// The angle brackets keep it from colliding with a real memdb table name.
+const memTableUnknown = "<unknown>"
 
 // ErrMemdbIncomplete reports that a read was refused because the memdb table it
 // would have scanned is known to be missing rows, so any count derived from it
@@ -79,16 +106,29 @@ func (m *MemStore) recordLostRows(table string, n int) {
 	m.lostRows[table] += n
 }
 
-// resetLostRows clears the known-incomplete state.
+// publishLostRows installs the losses a warmup accumulated, replacing whatever
+// was there before.
 //
-// Called at the START of a warmup, because a warmup rebuilds every table from
-// Pebble — the authoritative source — and so supersedes whatever was known to
-// be missing before it ran. Clearing at the END would instead erase the losses
-// the warmup itself just recorded.
-func (m *MemStore) resetLostRows() {
+// Called immediately after the warmup's txn.Commit(), NOT at the start of the
+// warmup, so the flag and the data it describes become visible together. A
+// warmup rebuilds every table from the authoritative source, so replacing is
+// correct: any divergence recorded earlier has just been resolved by the
+// rebuild.
+//
+// Clearing at the START instead would look equivalent and is not. go-memdb is
+// MVCC, so during an in-place re-warm readers keep seeing the OLD committed
+// rows — which are still short — while the flag has already been cleared. That
+// window is exactly the fail-open this file exists to close, reintroduced.
+// `WarmFromPebble` advertises itself as "safe to re-run", so the window has to
+// be closed by construction rather than by no caller currently re-running it.
+func (m *MemStore) publishLostRows(lost map[string]int) {
 	m.lostMu.Lock()
 	defer m.lostMu.Unlock()
-	m.lostRows = nil
+	if len(lost) == 0 {
+		m.lostRows = nil
+		return
+	}
+	m.lostRows = maps.Clone(lost)
 }
 
 // LostRows returns a copy of the per-table count of rows known to be missing
@@ -118,6 +158,11 @@ func (m *MemStore) requireTablesComplete(what string, tables ...string) error {
 		return nil
 	}
 	var hits []string
+	// An unattributable loss taints every table — see memTableUnknown. Checked
+	// first so it reports even when none of the named tables has its own count.
+	if n := m.lostRows[memTableUnknown]; n > 0 {
+		hits = append(hits, fmt.Sprintf("%s=%d", memTableUnknown, n))
+	}
 	for _, t := range tables {
 		if n := m.lostRows[t]; n > 0 {
 			hits = append(hits, fmt.Sprintf("%s=%d", t, n))

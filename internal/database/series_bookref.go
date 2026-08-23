@@ -115,8 +115,11 @@ func (m *MemStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 // Any other error is propagated unchanged. Falling back to a full scan on an
 // unrecognized failure would be guessing at its cause.
 func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		counts, err := p.mem().GetAllSeriesBookRefCounts()
+	// Loaded ONCE. Reset can swap memPtr underneath us, and reading it three
+	// times could report a refusal from one MemStore next to the (empty) loss
+	// map of its freshly-reset replacement -- a log line contradicting itself.
+	if m := p.mem(); p.UseMemDB && m != nil {
+		counts, err := m.GetAllSeriesBookRefCounts()
 		if err == nil {
 			return counts, nil
 		}
@@ -124,7 +127,7 @@ func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 			return nil, err
 		}
 		slog.Warn("series ref count: memdb is missing rows, falling through to the authoritative Pebble scan",
-			"error", err, "lost_rows", p.mem().LostRows())
+			"error", err, "lost_rows", m.LostRows())
 	}
 	return p.getAllSeriesBookRefCountsPebble()
 }

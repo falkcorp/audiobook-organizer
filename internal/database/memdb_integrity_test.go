@@ -1,5 +1,5 @@
 // file: internal/database/memdb_integrity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b8f61d4-9c07-4e3a-a154-8d29f0b7e3c6
 // last-edited: 2026-08-23
 
@@ -184,8 +184,9 @@ func TestRequireTablesComplete_OnlyFiresForTheNamedTables(t *testing.T) {
 	require.Contains(t, err.Error(), memTableBlockedHashes+"=3",
 		"the error must name the table and count so the log says what was untrusted")
 
-	// And a reset -- what a fresh warmup does -- clears it.
-	mem.resetLostRows()
+	// And a warmup publishing a clean result -- a rebuild from the
+	// authoritative source -- clears it.
+	mem.publishLostRows(map[string]int{})
 	require.NoError(t, mem.requireTablesComplete("series reference count", memTableBlockedHashes))
 	require.Empty(t, mem.LostRows())
 }
@@ -213,4 +214,99 @@ func TestWarmupCountsDecodeFailuresInSkippedTotal(t *testing.T) {
 	// sentinel every caller matches on.
 	require.True(t, errors.Is(
 		mem.requireTablesComplete("x", memTableBooks), ErrMemdbIncomplete))
+}
+
+// TestApplyMemSyncFailureTaintsTheRefCount closes the hole a review of the
+// first cut of this fix found: warmup is NOT the only way memdb loses a row.
+//
+// applyMemSync is the ONLY runtime mutation path into memdb. When its
+// transaction aborts — an index rule rejecting a write that already succeeded
+// in Pebble — the row is in Pebble and absent from memdb, with no warmup
+// involved. Before this, that logged a warning and nothing else, so the series
+// ref counter kept answering confidently from a projection it had no reason to
+// trust. That is the same fail-open in steady state, which is where the
+// service actually spends its life.
+//
+// Attribution is memTableUnknown because applyMemSync gets an opaque closure
+// and cannot know which table failed. That must taint EVERY table, not none.
+func TestApplyMemSyncFailureTaintsTheRefCount(t *testing.T) {
+	store := setupTestPebbleStore(t)
+	store.WaitForWarmup()
+
+	_, seriesID := seedSeriesBook(t, store, 5)
+
+	mem, err := NewMemStore()
+	require.NoError(t, err)
+	require.NoError(t, mem.WarmFromPebble(context.Background(), store))
+	require.Empty(t, mem.LostRows(), "precondition: warmup is clean")
+
+	counts, err := mem.GetAllSeriesBookRefCounts()
+	require.NoError(t, err, "precondition: the memdb answers before the failure")
+	require.Equal(t, 1, counts[seriesID])
+
+	// A sync whose closure fails: exactly what a rejected index write does.
+	applyMemSync(mem, "test.failing-op", func(memTxn) error {
+		return errors.New("simulated index rejection")
+	})
+
+	require.Positive(t, mem.LostRows()[memTableUnknown],
+		"an aborted runtime sync leaves memdb short and MUST be recorded; "+
+			"logging it and moving on is the bug this test exists for")
+
+	_, err = mem.GetAllSeriesBookRefCounts()
+	require.ErrorIs(t, err, ErrMemdbIncomplete,
+		"an unattributable loss must taint the books table too -- there is no "+
+			"way to know it was not a book that was dropped")
+	require.Contains(t, err.Error(), memTableUnknown)
+
+	// And the store still answers correctly, from Pebble.
+	store.memPtr.Store(mem)
+	counts, err = store.GetAllSeriesBookRefCounts()
+	require.NoError(t, err)
+	require.Equal(t, 1, counts[seriesID],
+		"over-refusing at the memdb is bounded: Pebble is authoritative and "+
+			"still has the row, so the answer stays correct and only slows")
+}
+
+// TestApplyMemSyncSuccessDoesNotTaint is the positive control for the above.
+// If a SUCCESSFUL sync recorded a loss, every write in the system would taint
+// the ref count and the guard would refuse permanently -- inert, while looking
+// like safety.
+func TestApplyMemSyncSuccessDoesNotTaint(t *testing.T) {
+	mem, err := NewMemStore()
+	require.NoError(t, err)
+
+	applyMemSync(mem, "test.succeeding-op", func(memTxn) error { return nil })
+
+	require.Empty(t, mem.LostRows(),
+		"a sync that COMMITTED lost nothing; recording here would make every "+
+			"write taint the ref count and refuse forever")
+	require.NoError(t, mem.requireTablesComplete("series reference count", memTableBooks))
+}
+
+// TestWarmupPublishesLossesAtomicallyWithCommit pins that a re-warm cannot
+// clear the flag while MVCC readers still see the old, still-short rows.
+// WarmFromPebble advertises "safe to re-run", so this has to hold by
+// construction, not because no caller re-runs it today.
+func TestWarmupPublishesLossesAtomicallyWithCommit(t *testing.T) {
+	store := setupTestPebbleStore(t)
+	store.WaitForWarmup()
+
+	bookID, _ := seedSeriesBook(t, store, 6)
+	require.NoError(t, store.db.Set([]byte("book:"+bookID), []byte("{not json"), pebble.Sync))
+
+	mem, err := NewMemStore()
+	require.NoError(t, err)
+	require.NoError(t, mem.WarmFromPebble(context.Background(), store))
+	require.Positive(t, mem.LostRows()[memTableBooks])
+
+	// Re-warm in place against a now-REPAIRED Pebble: the rebuild supersedes
+	// the old divergence, so the flag must clear -- but only once the data it
+	// describes has been committed.
+	require.NoError(t, store.db.Set([]byte("book:"+bookID),
+		[]byte(`{"id":"`+bookID+`","title":"repaired"}`), pebble.Sync))
+	require.NoError(t, mem.WarmFromPebble(context.Background(), store))
+	require.Empty(t, mem.LostRows(),
+		"a clean rebuild from the authoritative source clears the flag")
+	require.NoError(t, mem.requireTablesComplete("series reference count", memTableBooks))
 }
