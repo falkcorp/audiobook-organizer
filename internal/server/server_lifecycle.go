@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.24.0
+// version: 3.24.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-22
 
@@ -1406,8 +1406,13 @@ func (s *Server) setupRoutes() {
 	uploadLimitBytes := int64(config.AppConfig.UploadBodyLimitMB) * 1024 * 1024
 
 	// Rate limiting is opt-in. Default 0 means disabled (local/single-user server).
+	// EnableRateLimit is the master switch and APIRateLimitPerMinute is the
+	// threshold: both must hold for the real limiter to be installed, so
+	// EnableRateLimit=false always yields the passthrough handler regardless
+	// of what APIRateLimitPerMinute is set to.
 	apiRateLimiter := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
-	if rpm := config.AppConfig.APIRateLimitPerMinute; rpm > 0 {
+	if config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
+		rpm := config.AppConfig.APIRateLimitPerMinute
 		burst := rpm / 5
 		if burst < 10 {
 			burst = 10
@@ -1423,8 +1428,8 @@ func (s *Server) setupRoutes() {
 	} else {
 		slog.Warn("authentication is disabled (enable_authfalse) — do not expose this server to untrusted networks")
 	}
-	if !config.AppConfig.EnableRateLimit {
-		slog.Warn("rate limiting is disabled (enable_rate_limitfalse) — the API is vulnerable to abuse. Set enable_rate_limit true in config.yaml for production deployments")
+	if !config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
+		slog.Warn("rate limiting is disabled (enable_rate_limitfalse) despite api_rate_limit_per_minute being set — the API is vulnerable to abuse. Set enable_rate_limit true in config.yaml for production deployments")
 	}
 
 	// oauthH and cfMW were built earlier, before the /api/events route that also
