@@ -7,6 +7,7 @@ package metabatch_test
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -340,5 +341,112 @@ func TestResolveCandidateFetch_UnknownIDResolvesToNil(t *testing.T) {
 	store := &fetchIndexStore{}
 	if op := metabatch.ResolveCandidateFetch(store, "nope"); op != nil {
 		t.Fatalf("an unknown id must resolve to nil so the caller 404s, got %+v", op)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The limit must bound the ANSWER, not the store scan
+// ---------------------------------------------------------------------------
+
+// listCapStore models ListOperationsV2Since faithfully on the point that
+// matters: it sorts StartedAt DESC NULLS LAST and truncates to `limit` BEFORE
+// the caller can filter by DefID. A queued op has StartedAt == nil, so it sorts
+// last and is the first row dropped.
+type listCapStore struct {
+	database.MockStore
+	rows       []database.OperationV2Row
+	gotV2Limit int
+}
+
+func (s *listCapStore) GetRecentOperations(int) ([]database.Operation, error) { return nil, nil }
+
+func (s *listCapStore) ListOperationsV2Since(_ time.Time, limit int) ([]database.OperationV2Row, error) {
+	s.gotV2Limit = limit
+	all := append([]database.OperationV2Row(nil), s.rows...)
+	sort.SliceStable(all, func(i, j int) bool {
+		si, sj := all[i].StartedAt, all[j].StartedAt
+		if si == nil && sj == nil {
+			return all[i].QueuedAt.After(all[j].QueuedAt)
+		}
+		if si == nil {
+			return false
+		}
+		if sj == nil {
+			return true
+		}
+		return si.After(*sj)
+	})
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// THE BUG: passing the caller's small limit straight through meant that once
+// enough unrelated ops had STARTED, a just-queued candidate fetch fell off the
+// bottom of the store's sort and the per-book dedup guard stopped seeing it —
+// so a second request re-requested every book the first had queued. That is the
+// precise failure the guard exists to prevent.
+func TestCandidateFetchOps_QueuedRunSurvivesACrowdedOpsTable(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-time.Minute)
+
+	var rows []database.OperationV2Row
+	// 300 unrelated ops that have already STARTED, so they sort above anything queued.
+	for i := 0; i < 300; i++ {
+		rows = append(rows, database.OperationV2Row{
+			ID: fmt.Sprintf("other-%d", i), DefID: "library.scan",
+			Status: "running", QueuedAt: now, StartedAt: &started,
+		})
+	}
+	// One candidate fetch that is QUEUED — StartedAt nil, so it sorts dead last.
+	rows = append(rows, database.OperationV2Row{
+		ID: "queued-fetch", DefID: metabatch.CandidateFetchDefID,
+		Status: "queued", QueuedAt: now,
+	})
+
+	store := &listCapStore{rows: rows}
+	got := metabatch.CandidateFetchOps(store, 200)
+
+	if len(got) != 1 || got[0].ID != "queued-fetch" {
+		t.Fatalf("a queued fetch must survive a crowded ops table; got %+v (store was asked for limit=%d)",
+			got, store.gotV2Limit)
+	}
+	if !metabatch.IsActiveFetchStatus(got[0].Status) {
+		t.Errorf("the queued fetch must read as active, got %q", got[0].Status)
+	}
+}
+
+// The caller's limit still bounds what comes back — it just applies to candidate
+// fetches rather than to the raw scan.
+func TestCandidateFetchOps_LimitBoundsTheResult(t *testing.T) {
+	now := time.Now()
+	var rows []database.OperationV2Row
+	for i := 0; i < 10; i++ {
+		rows = append(rows, database.OperationV2Row{
+			ID: fmt.Sprintf("f-%d", i), DefID: metabatch.CandidateFetchDefID,
+			Status: "completed", QueuedAt: now.Add(-time.Duration(i) * time.Minute),
+		})
+	}
+	got := metabatch.CandidateFetchOps(&listCapStore{rows: rows}, 3)
+	if len(got) != 3 {
+		t.Fatalf("limit must bound the returned fetches, got %d", len(got))
+	}
+	if got[0].ID != "f-0" {
+		t.Errorf("the limit must keep the NEWEST, got %s first", got[0].ID)
+	}
+}
+
+// A non-fetch op id must not resolve as a fetch. GET /operations/:id/results is
+// a generic route, so without a DefID guard a library.scan id would come back
+// 200 with an empty result set and a fabricated type.
+func TestResolveCandidateFetch_RejectsANonFetchV2Op(t *testing.T) {
+	store := &fetchIndexStore{
+		v2ByID: map[string]*database.OperationV2Row{
+			"scan-op": {ID: "scan-op", DefID: "library.scan", Status: "running"},
+		},
+	}
+	if op := metabatch.ResolveCandidateFetch(store, "scan-op"); op != nil {
+		t.Fatalf("a library.scan id must not resolve as a candidate fetch, got %+v", op)
 	}
 }

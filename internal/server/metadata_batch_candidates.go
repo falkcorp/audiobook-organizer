@@ -364,12 +364,18 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 	})
 }
 
-// handleListMetadataFetchOperations returns recent completed
-// metadata_candidate_fetch operations that have persisted results.
+// handleGetLatestMetadataFetch returns recent metadata candidate-fetch
+// operations that have persisted results.
+//
+// The name in this comment used to be handleListMetadataFetchOperations, which
+// exists nowhere in the repo — the same phantom-reader defect as the
+// handleGetPendingReview one removed from this file.
 //
 // Returns up to the last 10 operations where:
-//   - type = metadata_candidate_fetch
-//   - status = completed
+//   - it is a metadata candidate fetch, in either keyspace
+//   - status is completed OR running (the bullet here said "completed" only,
+//     which the code below has contradicted deliberately since partial-review
+//     was added)
 //   - at least one persisted result row exists
 //
 // The frontend Resume Review dialog displays these so the user can

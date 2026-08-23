@@ -79,6 +79,15 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 			// takes an arbitrary string key, so it keys on the id every reader
 			// already has.
 			opID := opsregistry.ReporterOpID(reporter)
+			// ReporterOpID documents "" as a legitimate return that callers must
+			// treat as unknown. Every result row keys on this, so an empty id would
+			// file the whole run under one blank key and make its results
+			// unreadable by every reader — a silent total loss. The old code took
+			// the id from params, where it was structurally non-empty; this is the
+			// guard that trade needs.
+			if opID == "" {
+				return fmt.Errorf("metadata-candidate-fetch: reporter returned no operation id")
+			}
 
 			// SKIP WHAT IS ALREADY FETCHED. This is what makes the op idempotent,
 			// and it is load-bearing for ResumePolicy=ResumeRestart: resumeRestart
@@ -155,12 +164,16 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 
 			finalCount := atomic.LoadInt64(&completed)
 
-			// Cancellation is REPORTED, not swallowed. This used to return nil after
-			// writing "canceled" to the v1 row; with that row gone, returning nil
-			// would have the v2 worker derive "completed" from a run that stopped
-			// early — a partial fetch indistinguishable from a full one. The worker
-			// derives terminal status from this return value, so a canceled run has
-			// to say so here.
+			// Cancellation is REPORTED, not swallowed.
+			//
+			// This does NOT change the recorded status, and an earlier version of
+			// this comment claiming otherwise was wrong: worker.go evaluates
+			// `case ctxCanceled:` FIRST when classifying a finished run, reading
+			// the run context rather than this return value, so returning nil on a
+			// canceled context already persisted "canceled". What returning
+			// ctx.Err() changes is the finish log, which now carries the error
+			// instead of reading like a clean completion — and it stops the next
+			// reader from concluding that a partial fetch reported success.
 			if ctx.Err() != nil {
 				slog.Info("metadata-candidate-fetch canceled",
 					"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks)
