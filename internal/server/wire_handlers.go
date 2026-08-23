@@ -1,12 +1,11 @@
 // file: internal/server/wire_handlers.go
-// version: 2.24.0
+// version: 2.25.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -468,26 +467,16 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// controller reads parser here and passes it in. Guard typed-nil boxing of
 	// the diagnostics/merge services so the handler's nil-fallback (lazy
 	// construction) fires correctly.
-	var diagParser *ai.OpenAIParser
-	if s.batchPoller != nil {
-		diagParser = s.batchPoller.parser
-	}
-	var diagSvc handlers.DiagnosticsService
-	if s.diagnosticsService != nil {
-		diagSvc = s.diagnosticsService
-	}
 	var diagMergeSvc handlers.MergeService
 	if s.mergeService != nil {
 		diagMergeSvc = s.mergeService
 	}
 	diagH := handlers.NewDiagnosticsHandler(
 		s.storeForWiring(),
-		diagSvc,
 		diagMergeSvc,
 		s.embeddingStore,
 		s.aiScanStore,
 		opReg,
-		diagParser,
 	)
 
 	// Audiobooks domain handler (main library list / CRUD: list, count, facets,
