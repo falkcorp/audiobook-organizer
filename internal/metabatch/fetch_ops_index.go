@@ -159,6 +159,35 @@ func CandidateFetchBookIDs(store CandidateFetchParamsReader, op CandidateFetchOp
 	return p.BookIDs
 }
 
+// RemainingBooksToFetch returns the entries of want that have no result row in
+// existing, preserving want's order.
+//
+// This is what makes metadata.candidate-fetch idempotent, and it is load-bearing
+// for ResumePolicy=ResumeRestart: the registry re-enters Run from the top with
+// the ORIGINAL book list, so without this filter every restart re-fetches every
+// book — up to ~10K external API calls for a full-library run.
+//
+// It is a free function, and pure, so that guarantee can be tested without
+// standing up a Server, a registry and a store. It previously lived inline in a
+// startup-only helper, where nothing exercised it.
+func RemainingBooksToFetch(existing []database.OperationResult, want []string) []string {
+	if len(existing) == 0 {
+		return want
+	}
+	fetched := make(map[string]bool, len(existing))
+	for _, r := range existing {
+		fetched[r.BookID] = true
+	}
+	remaining := make([]string, 0, len(want))
+	for _, id := range want {
+		if fetched[id] {
+			continue
+		}
+		remaining = append(remaining, id)
+	}
+	return remaining
+}
+
 // IsActiveFetchStatus reports whether a CandidateFetchOp status means the run is
 // still going to produce results.
 //

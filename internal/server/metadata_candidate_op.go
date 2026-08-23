@@ -93,17 +93,7 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 			// so any other resume trigger silently refetched.
 			alreadyDone := 0
 			if existing, rerr := store.GetOperationResults(opID); rerr == nil && len(existing) > 0 {
-				fetched := make(map[string]bool, len(existing))
-				for _, r := range existing {
-					fetched[r.BookID] = true
-				}
-				remaining := make([]string, 0, len(p.BookIDs))
-				for _, id := range p.BookIDs {
-					if fetched[id] {
-						continue
-					}
-					remaining = append(remaining, id)
-				}
+				remaining := metabatch.RemainingBooksToFetch(existing, p.BookIDs)
 				alreadyDone = len(p.BookIDs) - len(remaining)
 				p.BookIDs = remaining
 				if alreadyDone > 0 {
