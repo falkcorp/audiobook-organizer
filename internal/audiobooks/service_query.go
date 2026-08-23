@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-08-23
 
@@ -200,6 +200,11 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			summaries, didPushdown, sErr := svc.summariesPushdown(storeLimit, storeOffset, f.IsPrimaryVersion, f.SortBy, sortAsc, f.ExcludeQuarantined)
 			if sErr == nil && summaries != nil {
 				books = bookSummariesToBooks(summaries)
+				// Normalize BEFORE caching. The cache-hit branch above returns
+				// early and never reaches the tail normalization, so caching
+				// the raw projection would make the same request answer
+				// differently on a hit than on a miss.
+				normalizeEffectivePrimaryVersion(books)
 				svc.listCache.Set(cacheKey, books)
 			}
 			// When the store applied the filter AND paginated, the page is
@@ -343,10 +348,10 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 				}
 			}
 			if f.IsPrimaryVersion != nil {
-				// nil counts as primary, matching pebble_store.go's filter and
-				// the memdb index default (memdb_schema.go Default: true) --
-				// see TODO.md is_primary_version investigation.
-				bPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
+				// nil counts as primary. Routed through the shared helper so
+				// this post-filter, the pushdown, and the serialized DTO all
+				// compute the SAME boolean from the same nil input.
+				bPrimary := database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion)
 				if *f.IsPrimaryVersion != bPrimary {
 					continue
 				}
@@ -467,6 +472,13 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 		books = []database.Book{}
 	}
 
+	// Serialize the SAME effective boolean the filters above used. Covers all
+	// three producers feeding this return — the Bleve search branch, the
+	// author/series BookCore.ToBook() branches, and the generic
+	// bookSummariesToBooks pushdown — which is why it lives here at the
+	// boundary rather than inside any one of them.
+	normalizeEffectivePrimaryVersion(books)
+
 	return books, resultTotal, nil
 }
 
@@ -531,10 +543,10 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 	count := 0
 	for _, b := range books {
 		if filters.IsPrimaryVersion != nil {
-			// nil counts as primary, matching pebble_store.go's filter and
-			// the memdb index default (memdb_schema.go Default: true) --
-			// see TODO.md is_primary_version investigation.
-			bPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
+			// nil counts as primary — same shared helper as the GetAudiobooks
+			// post-filter above, so a count and a listing can never disagree
+			// about the same nil-flagged book.
+			bPrimary := database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion)
 			if *filters.IsPrimaryVersion != bPrimary {
 				continue
 			}
