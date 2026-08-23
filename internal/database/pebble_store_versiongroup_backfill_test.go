@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_versiongroup_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b8e1d07-9a3c-4f52-8e61-7d0c2a9f4b13
-// last-edited: 2026-08-10
+// last-edited: 2026-08-23
 
 package database
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -226,5 +227,57 @@ func TestBackfillVersionGroupIndex_IgnoresSecondaryIndexRows(t *testing.T) {
 		if strings.Contains(string(iter.Key()), "NOT-A-REAL-BOOK") {
 			t.Fatalf("backfill indexed a secondary-index row: %s", iter.Key())
 		}
+	}
+}
+
+// The old iterator bounds ([]byte("book:0")..[]byte("book:;")) only covered
+// book IDs whose first byte is an ASCII digit (0x30-0x39). Every ULID minted
+// by CreateBook happens to start with a digit today, but CreateBook only
+// mints a ULID when book.ID == "" — a caller-supplied, letter-leading ID is
+// constructible and would have sorted entirely outside the old range,
+// silently skipped with no error. This seeds a primary book row directly
+// under a letter-leading key (bypassing CreateBook's conditional minting, the
+// same way a caller-supplied ID would) and asserts the widened
+// []byte("book:")..[]byte("book;") prefix scan actually reaches it.
+//
+// This test FAILS against the old book:0..book:; bounds — that is the whole
+// point: 'A' (0x41) sorts after ';' (0x3B), so the old upper bound excludes
+// this row entirely.
+func TestBackfillVersionGroupIndex_IncludesLetterLeadingBookID(t *testing.T) {
+	s, err := NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+	s.WaitForWarmup()
+
+	gid := "vg-backfill-letter-id"
+	const letterID = "A01H8N6Z9QRZJ8X3K2M5T7VW1Y" // non-digit-leading, ULID-shaped
+
+	book := &Book{
+		ID:             letterID,
+		Title:          "Letter-Leading ID Book",
+		VersionGroupID: &gid,
+	}
+	data, err := json.Marshal(book)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := s.db.Set([]byte("book:"+letterID), data, pebble.Sync); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	if err := s.BackfillVersionGroupIndex(); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	indexKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", gid, letterID))
+	val, closer, err := s.db.Get(indexKey)
+	if err != nil {
+		t.Fatalf("letter-leading book ID was not indexed (bounds bug not fixed): %v", err)
+	}
+	defer closer.Close()
+	if string(val) != letterID {
+		t.Fatalf("index row holds %q, want %q", string(val), letterID)
 	}
 }
