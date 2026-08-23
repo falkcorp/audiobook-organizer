@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-08-16
+// last-edited: 2026-08-23
 
 package registry
 
@@ -15,7 +15,6 @@ const (
 	defaultWatchdogInterval      = 30 * time.Second
 	defaultProgressTimeout       = 5 * time.Minute
 	defaultMinCheckpointTimeout  = 5 * time.Minute // window before uncheckpointed strike
-	defaultMinCheckpointInterval = 60 * time.Second
 )
 
 // runWatchdog runs every watchdogInterval and inspects all in-flight ops.
@@ -151,15 +150,31 @@ func (r *Registry) watchdogCycle() {
 		}
 
 		// --- Strike: uncheckpointed ---
-		// Only applies to ResumeRestart ops that have MinCheckpointInterval set
-		// (non-zero after applying the default).
-		if def.ResumePolicy != ResumeRestart {
+		// Gate on the DECLARATION, not on ResumePolicy. This implements the rule
+		// the comment here has always stated and the code never did: it said the
+		// strike applies to ops "that have MinCheckpointInterval set", then
+		// supplied a default whenever it was unset, so the condition could never
+		// be false and every ResumeRestart op was eligible.
+		//
+		// A strike is a declaration-vs-behaviour check, so it is only meaningful
+		// against a def that promised a checkpoint cadence and missed it.
+		// ResumePolicy is the wrong proxy, because ResumeRestart also covers ops
+		// whose resume anchor is their OPERATION ID rather than a checkpoint blob
+		// — they resume correctly by re-entering Run and filtering against
+		// GetOperationResults(id). Those cannot checkpoint even in principle:
+		// maintenance.ProgressReporter (internal/maintenance/job.go) declares only
+		// SetTotal/Increment/Log, with no Checkpoint method to call. So the strike
+		// fired once per threshold on every run of all nine maintenance
+		// ResumeRestart jobs and of metadata.candidate-fetch, forever, into a table
+		// that has an InsertOpStrikeV2 and no reader anywhere.
+		//
+		// This SHARPENS the strike rather than silencing it: a def that DOES
+		// declare MinCheckpointInterval and then never checkpoints still strikes,
+		// which is precisely the defect the strike exists to report.
+		if def.ResumePolicy != ResumeRestart || def.MinCheckpointInterval == 0 {
 			continue
 		}
 		minInterval := def.MinCheckpointInterval
-		if minInterval == 0 {
-			minInterval = defaultMinCheckpointInterval
-		}
 		// C-4: the strike threshold honors the def's own MinCheckpointInterval,
 		// with defaultMinCheckpointTimeout as the floor. The old code compared
 		// against the 5m constant alone, striking long-interval defs spuriously.

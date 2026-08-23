@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.10.0
+// version: 3.11.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -424,6 +424,22 @@ func (p *PebbleStore) UpdateOpProgressV2(id string, current, total int, message 
 	row.ProgressTotal = total
 	row.ProgressMessage = message
 	row.LastProgressAt = &now
+	if current > row.HighWaterProgress {
+		// high_water_progress is the high-water mark of PROGRESS -- what its name
+		// says, and how checkInfiniteRestart (registry/worker.go) reads it when
+		// deciding whether a repeatedly-resumed op has accomplished anything.
+		//
+		// Until 2026-08-23 its only writer was UpdateOpCheckpointV2 below, so it
+		// actually meant "progress as of the last Checkpoint call" and stayed
+		// permanently 0 for every op that reports progress without checkpointing.
+		// That is every maintenance job -- maintenance.ProgressReporter has no
+		// Checkpoint method to call -- plus metadata.candidate-fetch. All of them
+		// were therefore force-dropped at resume_count>=3 no matter how many
+		// thousands of items they had actually completed.
+		//
+		// The row is already being written here, so this costs nothing.
+		row.HighWaterProgress = current
+	}
 	return p.pebbleSetJSON(opv2OpKey(id), &row)
 }
 

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-08-16
+// last-edited: 2026-08-23
 
 package database
 
@@ -224,4 +224,44 @@ func TestListOperationsV2Since_KeepsLiveOpsOutsideTheWindow(t *testing.T) {
 	require.False(t, ids["op-finished"],
 		"a finished operation outside the window is history and must stay filtered — "+
 			"without this the test would also pass if the window were simply deleted")
+}
+
+// TestUpdateOpProgressV2_AdvancesHighWaterProgress pins that high_water_progress
+// tracks reported PROGRESS, not merely the last Checkpoint call.
+//
+// registry.checkInfiniteRestart force-drops an op at resume_count>=3 whose
+// high_water_progress is still 0, on the reasoning that it has accomplished
+// nothing across three restarts. Until 2026-08-23 the only writer of that column
+// was UpdateOpCheckpointV2, so it stayed permanently 0 for every op that reports
+// progress without checkpointing -- which is every maintenance job, because
+// maintenance.ProgressReporter declares only SetTotal/Increment/Log and has no
+// Checkpoint method to call. Those ops were force-dropped no matter how many
+// thousands of items they had genuinely completed.
+func TestUpdateOpProgressV2_AdvancesHighWaterProgress(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-hwm-1", "running")))
+
+	row, err := s.GetOperationV2("op-hwm-1")
+	require.NoError(t, err)
+	require.Equal(t, 0, row.HighWaterProgress, "fresh row should start at 0")
+
+	require.NoError(t, s.UpdateOpProgressV2("op-hwm-1", 42, 100, "working"))
+	row, err = s.GetOperationV2("op-hwm-1")
+	require.NoError(t, err)
+	require.Equal(t, 42, row.HighWaterProgress,
+		"progress must advance the high-water mark; checkInfiniteRestart reads this "+
+			"to decide whether a resumed op has done any work at all")
+
+	// A HIGH-WATER mark, not a mirror of current progress. A resumed run restarts
+	// its counter from zero, and that must not erase the evidence of prior work --
+	// which is exactly the state checkInfiniteRestart force-drops on.
+	require.NoError(t, s.UpdateOpProgressV2("op-hwm-1", 5, 100, "resumed from the top"))
+	row, err = s.GetOperationV2("op-hwm-1")
+	require.NoError(t, err)
+	require.Equal(t, 42, row.HighWaterProgress,
+		"high-water mark must not regress when a resumed run reports a lower current")
+	require.Equal(t, 5, row.ProgressCurrent, "current progress should still track the live value")
 }

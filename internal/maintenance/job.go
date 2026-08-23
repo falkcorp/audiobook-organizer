@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-08-18
+// last-edited: 2026-08-23
 
 package maintenance
 
@@ -137,13 +137,32 @@ func DefaultPolicy() ExecutionPolicy {
 	}
 }
 
-// RestartPolicy is DefaultPolicy with ResumeRestart — "reload last checkpoint and
-// call Run again".
+// RestartPolicy is DefaultPolicy with ResumeRestart — "resume this run in place":
+// resumeRestart increments resume_count and re-dispatches the SAME row, so the
+// operation id, its params and its per-item results all survive.
 //
-// ⚠️ Correct ONLY for a job that actually checkpoints. The watchdog writes an
-// `uncheckpointed` strike against every ResumeRestart op that goes quiet, and
-// checkInfiniteRestart force-drops one whose HighWaterProgress never leaves 0.
-// Use RequeuePolicy for a job that re-runs from scratch.
+// Choose this when the OPERATION ID is the anchor. For a maintenance job it always
+// is: maintenance_job_op.go keys the activity summary and GetOperationSummaryLog
+// off the run's own v2 id, and the 202 response hands that id to the operator.
+// Three jobs additionally rebuild their skip-set from GetOperationResults(id) —
+// scan-composer-tags, repair-missing-files and bulk-fetch-metadata — which is the
+// same shape metadata.candidate-fetch uses, and whose comment there calls the
+// filter "load-bearing for ResumePolicy=ResumeRestart". ResumeRequeue mints a
+// fresh ULID and moves all of that.
+//
+// This does NOT require the job to checkpoint. It said so until 2026-08-23, on two
+// consequences that have both since been fixed at their source:
+//
+//   - the watchdog's `uncheckpointed` strike now gates on the def's declared
+//     MinCheckpointInterval rather than on ResumePolicy, so it fires only against a
+//     def that promised a cadence and missed it; and
+//   - high_water_progress now advances on every progress report rather than only at
+//     a Checkpoint call, so checkInfiniteRestart no longer force-drops a job that
+//     reported real progress.
+//
+// A maintenance job could never have complied with the old rule anyway:
+// ProgressReporter above declares only SetTotal/Increment/Log and has no Checkpoint
+// method to call.
 func RestartPolicy() ExecutionPolicy {
 	p := DefaultPolicy()
 	p.ResumePolicy = opsregistry.ResumeRestart
@@ -152,16 +171,22 @@ func RestartPolicy() ExecutionPolicy {
 
 // RequeuePolicy is DefaultPolicy with ResumeRequeue — "re-run from zero".
 //
-// ⚠️ Restricted to jobs that are BOTH idempotent AND free of a dry_run parameter.
-// The second condition is not theoretical: the two requeue implementations
-// disagree about params. registry.resumeRequeue (resume.go) carries
-// Params: row.Params forward, but server.resumeV2Op (server_lifecycle.go:122-127)
-// re-enqueues with literal nil — under which DryRun unmarshals to Go's zero value,
-// false, silently turning an interrupted PREVIEW into a real mutation. That is the
-// exact bug maintenance_dispatcher.go:180 already exists to prevent.
+// ⚠️ Restricted to jobs that are idempotent AND whose operation id is not an
+// anchor — requeue mints a fresh ULID, so any skip-set keyed on
+// GetOperationResults(id), and the id handed back to the operator, are both lost.
 //
-// Until that divergence is resolved (todo.d/20260817-resumerequeue-two-divergent-implementations.md),
-// a job advertising dry_run keeps DefaultPolicy's ResumeDrop.
+// HISTORY, because the reason recorded here was overtaken. This used to add "and
+// free of a dry_run parameter", because server.resumeV2Op re-enqueues with literal
+// nil params, under which DryRun unmarshals to false and an interrupted PREVIEW
+// resumes as a real mutation. Two things retired that argument: resumeV2Op is
+// unreachable for maintenance (it dispatches only when opRegistry.Def(op.Type)
+// resolves, and v1 maintenance rows are typed "maintenance:<job>" while v2 defs are
+// "maintenance.<job>" — RegisterOp rejects ids containing ':'), and retiring the v1
+// op minter means no v1 row is created to reach it with. registry.resumeRequeue
+// itself carries Params forward, which TestResume_PreservesParamsAcrossRestartAndRequeue
+// pins for both arms including dry_run:true. The underlying divergence between the
+// two requeue implementations is still recorded in TODO.md, but it no longer gates
+// this choice.
 func RequeuePolicy() ExecutionPolicy {
 	p := DefaultPolicy()
 	p.ResumePolicy = opsregistry.ResumeRequeue

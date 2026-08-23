@@ -312,24 +312,30 @@ func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 	}
 }
 
-// TestMaintenancePolicy_RestartNeverCheckpoints is the missing coverage for the
-// consequence side of this PR, and it is deliberately expressed against the
-// registry rather than the job list so it cannot drift.
+// TestMaintenancePolicy_RestartWithoutCheckpointing pins the two fixes that make
+// ResumeRestart correct for an op whose resume anchor is its OPERATION ID rather
+// than a checkpoint blob.
 //
-// maintenance.ProgressReporter is {SetTotal, Increment, Log} -- it has no
-// Checkpoint method, so no maintenance job can call one. LastCheckpointAt and
-// HighWaterProgress are written ONLY by UpdateOpCheckpointV2, whose only caller
-// is dbReporter.Checkpoint. A maintenance op on ResumeRestart therefore sits at
-// HighWaterProgress==0 with LastCheckpointAt==nil forever, which is exactly the
-// state checkInfiniteRestart (worker.go:525) force-drops at ResumeCount>=3 and
-// the watchdog (watchdog.go:154) strikes as uncheckpointed every 5 minutes.
+// maintenance.ProgressReporter is {SetTotal, Increment, Log} -- no Checkpoint
+// method exists for a job to call. Before 2026-08-23 that meant two things fired
+// against every such op forever: the watchdog's `uncheckpointed` strike (gated on
+// ResumePolicy, so unavoidable) and checkInfiniteRestart's force-drop at
+// resume_count>=3 (gated on HighWaterProgress, which only Checkpoint could move).
 //
-// This models a maintenance job by reporting progress WITHOUT checkpointing --
-// the only thing a maintenance job can do.
-func TestMaintenancePolicy_RestartNeverCheckpoints(t *testing.T) {
-	t.Run("uncheckpointed strike fires for a progress-only ResumeRestart op", func(t *testing.T) {
+// Both are now gated on what the def actually DECLARED, so the checks stay sharp
+// for defs that promised a cadence and stay silent for defs that never could.
+//
+// The high_water_progress half is pinned at the store level, where the change
+// lives, by TestUpdateOpProgressV2_AdvancesHighWaterProgress in internal/database
+// -- asserting it through the reporter here would race its async flush loop.
+func TestMaintenancePolicy_RestartWithoutCheckpointing(t *testing.T) {
+	// runProgressOnlyOp starts a ResumeRestart op that reports progress and never
+	// checkpoints -- the only thing a maintenance job can do -- backdates its
+	// StartedAt past the 5m floor, and returns the store and op id.
+	runProgressOnlyOp := func(t *testing.T, defID string, minCheckpoint time.Duration) (*fakeStore, string) {
+		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		t.Cleanup(cancel)
 
 		store := newFakeStore()
 		r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -337,13 +343,14 @@ func TestMaintenancePolicy_RestartNeverCheckpoints(t *testing.T) {
 		})
 
 		started := make(chan struct{})
-		def := makeValidDef("test.maint-progress-only")
+		def := makeValidDef(defID)
 		def.ResumePolicy = registry.ResumeRestart
 		def.ProgressTimeout = 30 * time.Minute
+		def.MinCheckpointInterval = minCheckpoint
 		def.Run = func(runCtx context.Context, _ json.RawMessage, rep registry.Reporter) error {
-			// Exactly what maintenance.ProgressAdapter.Increment does. Note it
-			// does NOT and CANNOT call rep.Checkpoint.
-			_ = rep.UpdateProgress(1, 100, "")
+			// Exactly what maintenance.ProgressAdapter.Increment does. It does
+			// not and cannot call rep.Checkpoint.
+			_ = rep.UpdateProgress(7, 100, "")
 			close(started)
 			<-runCtx.Done()
 			return runCtx.Err()
@@ -353,34 +360,47 @@ func TestMaintenancePolicy_RestartNeverCheckpoints(t *testing.T) {
 		}
 		r.Start(ctx)
 
-		opID, err := r.EnqueueOp(ctx, "test.maint-progress-only", nil)
+		opID, err := r.EnqueueOp(ctx, defID, nil)
 		if err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 		<-started
 
-		// A maintenance job with a 4h timeout trivially exceeds the 5m floor.
 		stale := time.Now().UTC().Add(-6 * time.Minute)
 		store.setStartedAt(opID, &stale)
 		_ = store.UpdateOperationV2Status(opID, "running", nil, nil, nil)
+		return store, opID
+	}
 
-		deadline := time.Now().Add(2 * time.Second)
+	t.Run("no uncheckpointed strike when the def declares no checkpoint cadence", func(t *testing.T) {
+		store, opID := runProgressOnlyOp(t, "test.no-cadence-declared", 0)
+
+		// MinCheckpointInterval==0 means "this def never promised to checkpoint".
+		// Striking it is a check against a contract it never entered.
+		time.Sleep(1 * time.Second)
+		if got := store.strikesOfKind(opID, "uncheckpointed"); len(got) > 0 {
+			t.Fatalf("got %d uncheckpointed strikes for a def declaring no "+
+				"MinCheckpointInterval; the strike is gated on the declaration, so a "+
+				"maintenance job (whose reporter has no Checkpoint method) must never "+
+				"accrue one", len(got))
+		}
+	})
+
+	t.Run("strike STILL fires when the def declared a cadence and missed it", func(t *testing.T) {
+		// The sharpening half. Silencing the strike for everything would have been
+		// the easy fix and the wrong one: a def that promised a cadence and never
+		// checkpoints is exactly the defect the strike exists to report.
+		store, opID := runProgressOnlyOp(t, "test.cadence-declared-and-missed", 30*time.Second)
+
+		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
 			if len(store.strikesOfKind(opID, "uncheckpointed")) > 0 {
-				// Reporting progress did not clear it: only Checkpoint can, and
-				// maintenance jobs have no way to call it.
-				row, _ := store.GetOperationV2(opID)
-				if row != nil && row.HighWaterProgress != 0 {
-					t.Fatalf("high_water_progress=%d without a Checkpoint call; "+
-						"if progress now advances the HWM, checkInfiniteRestart no longer "+
-						"force-drops maintenance jobs and this test should be revisited",
-						row.HighWaterProgress)
-				}
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		t.Fatal("no uncheckpointed strike within 2s; the six jobs this PR moved to " +
-			"ResumeRestart were expected to start accruing these")
+		t.Fatal("no uncheckpointed strike for a def that declared " +
+			"MinCheckpointInterval=30s and never checkpointed; the gate has been " +
+			"loosened too far and the check is now dead for every def")
 	})
 }
