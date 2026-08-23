@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package database
 
@@ -446,11 +446,54 @@ func (m *MemStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookC
 // BookSigV1, BookSigV1Mask, BookSigSegments, BookSigBuiltAt,
 // BookSigCoveragePct, Author, Series) in the first place, so projecting via
 // .Core() here just makes that guarantee visible in the type system. Unlike
-// GetBooksByAuthorID (kept []Book because it is shared by two PebbleStore
-// callers), this method has exactly one caller
-// (PebbleStore.GetBooksBySeriesIDCore), so retyping it directly is the
-// smaller change. See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+// GetBooksByAuthorID (kept []Book because its two PebbleStore callers project
+// at their own boundary), BOTH PebbleStore callers of the shared series body
+// below — GetBooksBySeriesIDCore and GetBooksBySeriesIDAllVersions — return
+// []BookCore, so retyping here rather than at each caller is still the smaller
+// change. See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]BookCore, error) {
+	return m.getBooksBySeriesID(seriesID, limit, offset, true)
+}
+
+// GetBooksBySeriesIDAllVersions is GetBooksBySeriesIDCore without the
+// primary-version filter: it returns EVERY live book attached to the series,
+// including non-primary versions.
+//
+// This is the series twin of GetBooksByAuthorIDAllVersions, and it exists for
+// the same reason — two callers want two different sets, and conflating them
+// strands rows:
+//
+//   - GetBooksBySeriesIDCore is a listing view. A non-primary version is a
+//     duplicate of a book already in the list, so it excludes them.
+//   - GetBooksBySeriesIDAllVersions is what the series MERGE path consults to
+//     find the rows it must repoint at the kept series before deleting the one
+//     being merged away. For that caller a missed book is data loss — the
+//     series is deleted while a live book still holds its ID — while an extra
+//     book is at worst a redundant write. It needs completeness, not tidiness.
+//
+// series_bookref.go records the damage this shape already did on production:
+// 6,893 phantom series IDs held by 13,322 live books, from a merge loop that
+// reassigned only what the FILTERED getter could see and then deleted the
+// series anyway.
+//
+// Soft-deleted books are still excluded here — see getBooksBySeriesID. That is
+// deliberate and it means AllVersions closes only the non-primary half of the
+// orphaning hazard; the unfiltered SeriesRefCounts guard is still load-bearing
+// for the trashed half. See internal/database/series_getter_conformance_test.go.
+func (m *MemStore) GetBooksBySeriesIDAllVersions(seriesID int, limit, offset int) ([]BookCore, error) {
+	return m.getBooksBySeriesID(seriesID, limit, offset, false)
+}
+
+// getBooksBySeriesID is the shared body. primaryOnly selects the listing view
+// (true) or the complete set (false); see GetBooksBySeriesIDAllVersions for why
+// both are needed.
+//
+// Soft-deleted books are excluded EITHER WAY. Neither caller wants the trash:
+// the listing view must not show it, and the merge path cannot repoint it
+// (UpdateBook on a trashed row is not what "rescue this book" means). Callers
+// that need to account for trashed rows holding a series must use the
+// unfiltered SeriesRefCounts counter instead.
+func (m *MemStore) getBooksBySeriesID(seriesID int, limit, offset int, primaryOnly bool) ([]BookCore, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -465,7 +508,7 @@ func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]Bo
 		if bookIsSoftDeleted(b) {
 			continue
 		}
-		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+		if primaryOnly && b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 			continue
 		}
 		all = append(all, *b)
