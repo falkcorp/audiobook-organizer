@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
@@ -137,32 +136,23 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		return
 	}
 
-	opID := ulid.Make().String()
-	_, err := store.CreateOperation(opID, "metadata_candidate_fetch", nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
 	totalBooks := len(bookIDs)
 
-	// Save book IDs as operation params for recovery on restart
-	if paramsJSON, err := json.Marshal(bookIDs); err == nil {
-		_ = store.SaveOperationParams(opID, paramsJSON)
-	}
-
-	// Enqueue via v2 opRegistry. The Run func in metadata_candidate_op.go
-	// handles all fetch work and writes OperationResult rows under opID so that
-	// all existing v1 readers (handleGetPendingReview, handleGetOperationResults,
-	// handleGetLatestMetadataFetch) continue working without changes.
-	// The v2 run ID returned by EnqueueOp is intentionally discarded — clients
-	// track progress via the v1 opID returned in the response below.
+	// Return the id EnqueueOp minted. This used to mint a v1 operations row,
+	// stamp its id into the params, and DISCARD the v2 id — on a comment saying
+	// three v1 readers depended on it. One of the three, handleGetPendingReview,
+	// did not exist anywhere in the repo; the real readers are below and they all
+	// take whichever id the response carries.
+	//
+	// SaveOperationParams went with it. It existed so the restart path could
+	// recover the book list, and the v2 row already persists these params — Run
+	// receives them on a resumed run without anyone writing them twice.
 	params := metadataCandidateFetchOpParams{
-		LegacyOpID: opID,
 		BookIDs:    bookIDs,
 		TotalBooks: totalBooks,
 	}
-	if _, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "metadata.candidate-fetch", params); enqErr != nil {
+	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "metadata.candidate-fetch", params)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
@@ -763,87 +753,6 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 	httputil.RespondWithOK(c, struct {
 		Unrejected int `json:"unrejected"`
 	}{Unrejected: unrejected})
-}
-
-// resumeInterruptedMetadataFetch checks for metadata_candidate_fetch operations
-// that were interrupted (status=running) and re-enqueues the remaining books.
-func (s *Server) resumeInterruptedMetadataFetch() {
-	store := s.Ops()
-	if store == nil {
-		return
-	}
-
-	interrupted, err := store.GetInterruptedOperations()
-	if err != nil {
-		return
-	}
-
-	for _, op := range interrupted {
-		if op.Type != "metadata_candidate_fetch" {
-			continue
-		}
-
-		// Load the original book IDs from saved params
-		paramsJSON, err := store.GetOperationParams(op.ID)
-		if err != nil || len(paramsJSON) == 0 {
-			slog.Warn("no saved params for interrupted metadata fetch , marking failed", "op", op.ID)
-			_ = store.UpdateOperationStatus(op.ID, "failed", op.Progress, op.Total, "interrupted, no params to resume")
-			continue
-		}
-
-		var allBookIDs []string
-		if err := json.Unmarshal(paramsJSON, &allBookIDs); err != nil {
-			slog.Warn("invalid params for interrupted metadata fetch", "op", op.ID, "err", err)
-			_ = store.UpdateOperationStatus(op.ID, "failed", op.Progress, op.Total, "interrupted, invalid params")
-			continue
-		}
-
-		// Find which books already have results
-		existingResults, _ := store.GetOperationResults(op.ID)
-		completed := make(map[string]bool, len(existingResults))
-		for _, r := range existingResults {
-			completed[r.BookID] = true
-		}
-
-		// Filter to remaining books
-		var remaining []string
-		for _, id := range allBookIDs {
-			if !completed[id] {
-				remaining = append(remaining, id)
-			}
-		}
-
-		if len(remaining) == 0 {
-			slog.Info("interrupted metadata fetch has all results, marking completed", "op", op.ID)
-			_ = store.UpdateOperationStatus(op.ID, "completed", len(allBookIDs), len(allBookIDs), "recovered — all books fetched")
-			continue
-		}
-
-		slog.Info("resuming metadata fetch / books remaining", "op", op.ID, "remaining_count", len(remaining), "allBookIDs_count", len(allBookIDs))
-
-		// Re-enqueue the remaining books via v2 opRegistry as a continuation of the
-		// same v1 operation. The Run func in metadata_candidate_op.go handles all
-		// fetch work and writes OperationResult rows under the original opID.
-		opID := op.ID
-		totalBooks := len(allBookIDs)
-		alreadyDone := len(allBookIDs) - len(remaining)
-
-		// Mark the v1 record as running so handleGetLatestMetadataFetch can surface
-		// it during the resume window before the Run func transitions it itself.
-		_ = store.UpdateOperationStatus(opID, "running", alreadyDone, totalBooks,
-			fmt.Sprintf("resuming: %d/%d already fetched", alreadyDone, totalBooks))
-
-		resumeParams := metadataCandidateFetchOpParams{
-			LegacyOpID:  opID,
-			BookIDs:     remaining,
-			TotalBooks:  totalBooks,
-			AlreadyDone: alreadyDone,
-		}
-		if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "metadata.candidate-fetch", resumeParams); enqErr != nil {
-			slog.Warn("failed to re-enqueue metadata fetch", "opID", opID, "enqErr", enqErr)
-			_ = store.UpdateOperationStatus(opID, "failed", alreadyDone, totalBooks, "failed to resume")
-		}
-	}
 }
 
 // latestMetadataResultsByBook scans the recent metadata_candidate_fetch

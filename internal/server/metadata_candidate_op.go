@@ -29,24 +29,33 @@ import (
 type metadataCandidateFetchOpParams = metabatch.FetchOpParams
 
 // RegisterMetadataCandidateFetchOp registers the "metadata.candidate-fetch"
-// v2 OperationDef. The HTTP handler creates a v1 op record for backward
-// compatibility, then enqueues this def. The Run func writes OperationResult
-// rows under the v1 opID so that all existing readers work without changes.
+// v2 OperationDef. The HTTP handler enqueues this def and returns the id
+// EnqueueOp minted; Run writes OperationResult rows under that same id.
+//
+// It used to mint a separate v1 operations row first and key results on that,
+// which meant the id the client held resolved at one endpoint and not the
+// other.
 func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.candidate-fetch",
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "metadata",
 		DisplayName:     "Fetch Metadata Candidates",
-		Description:     "Fetch and cache metadata candidates for a set of audiobooks (rate-limited, parallel). Results are stored in v1 OperationResult rows for review.",
+		Description:     "Fetch and cache metadata candidates for a set of audiobooks (rate-limited, parallel). Results are stored as OperationResult rows for review.",
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         8 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "metadata.candidate-fetch",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
+		// ResumeRestart, not ResumeDrop. Dropping was only ever survivable because
+		// resumeInterruptedMetadataFetch re-enqueued the remainder by hand off the
+		// v1 interrupted-ops list; with the v1 row gone that hand-rolled path goes
+		// with it, and leaving ResumeDrop would mean an 8-hour fetch interrupted by
+		// a restart silently never resumes. Run skips books that already have
+		// result rows, so re-entry is idempotent and costs no repeat API calls.
+		ResumePolicy:   opsregistry.ResumeRestart,
+		ConcurrencyKey: "metadata.candidate-fetch",
+		Permissions:    []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p metadataCandidateFetchOpParams
 			if len(rawParams) > 0 {
@@ -65,14 +74,49 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 			if totalBooks == 0 {
 				totalBooks = len(p.BookIDs)
 			}
-			opID := p.LegacyOpID
+			// This op's OWN v2 id. Results used to be keyed on a v1 row minted
+			// separately by the handler; that row is gone, and the result keyspace
+			// takes an arbitrary string key, so it keys on the id every reader
+			// already has.
+			opID := opsregistry.ReporterOpID(reporter)
 
-			// Transition v1 op record to running so that handleGetLatestMetadataFetch
-			// can surface it and the dedup scan in handleBatchFetchCandidates sees it
-			// as an active fetch. This mirrors what the legacy v1 queue did automatically.
-			_ = store.UpdateOperationStatus(opID, "running", p.AlreadyDone, totalBooks,
-				fmt.Sprintf("starting: %d books to fetch", len(p.BookIDs)))
-			_ = progress.UpdateProgress(p.AlreadyDone, totalBooks, fmt.Sprintf("starting: %d books to fetch", len(p.BookIDs)))
+			// SKIP WHAT IS ALREADY FETCHED. This is what makes the op idempotent,
+			// and it is load-bearing for ResumePolicy=ResumeRestart: resumeRestart
+			// re-enters Run from the top with the ORIGINAL BookIDs (checkpoint state
+			// is merged into params, but nothing prunes the work list). Without this
+			// filter a restart re-fetches every book — up to ~10K external API calls
+			// for a full-library run.
+			//
+			// It lives here rather than in a restart-time helper because Run is the
+			// one place every trigger passes through. The previous arrangement put it
+			// in resumeInterruptedMetadataFetch, which only the startup path called,
+			// so any other resume trigger silently refetched.
+			alreadyDone := 0
+			if existing, rerr := store.GetOperationResults(opID); rerr == nil && len(existing) > 0 {
+				fetched := make(map[string]bool, len(existing))
+				for _, r := range existing {
+					fetched[r.BookID] = true
+				}
+				remaining := make([]string, 0, len(p.BookIDs))
+				for _, id := range p.BookIDs {
+					if fetched[id] {
+						continue
+					}
+					remaining = append(remaining, id)
+				}
+				alreadyDone = len(p.BookIDs) - len(remaining)
+				p.BookIDs = remaining
+				if alreadyDone > 0 {
+					slog.Info("metadata-candidate-fetch resuming, skipping already-fetched books",
+						"opID", opID, "skipped", alreadyDone, "remaining", len(p.BookIDs))
+				}
+				if len(p.BookIDs) == 0 {
+					_ = progress.UpdateProgress(totalBooks, totalBooks, "completed")
+					return nil
+				}
+			}
+
+			_ = progress.UpdateProgress(alreadyDone, totalBooks, fmt.Sprintf("starting: %d books to fetch", len(p.BookIDs)))
 
 			// Rate limiter: 10 requests per second globally across all workers.
 			limiter := rate.NewLimiter(rate.Limit(10), 1)
@@ -83,7 +127,7 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 			}
 			close(workCh)
 
-			var completed int64 = int64(p.AlreadyDone)
+			var completed int64 = int64(alreadyDone)
 			var wg sync.WaitGroup
 			numWorkers := 8
 			if numWorkers > len(p.BookIDs) {
@@ -120,14 +164,21 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 			wg.Wait()
 
 			finalCount := atomic.LoadInt64(&completed)
-			// Transition v1 op record to its terminal state.
-			finalStatus := "completed"
+
+			// Cancellation is REPORTED, not swallowed. This used to return nil after
+			// writing "canceled" to the v1 row; with that row gone, returning nil
+			// would have the v2 worker derive "completed" from a run that stopped
+			// early — a partial fetch indistinguishable from a full one. The worker
+			// derives terminal status from this return value, so a canceled run has
+			// to say so here.
 			if ctx.Err() != nil {
-				finalStatus = "canceled"
+				slog.Info("metadata-candidate-fetch canceled",
+					"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks)
+				return ctx.Err()
 			}
-			_ = store.UpdateOperationStatus(opID, finalStatus, int(finalCount), totalBooks, finalStatus)
 			_ = progress.UpdateProgress(int(finalCount), totalBooks, "completed")
-			slog.Info("metadata-candidate-fetch done — / books, status", "opID", opID, "finalCount", finalCount, "totalBooks", totalBooks, "finalStatus", finalStatus)
+			slog.Info("metadata-candidate-fetch done",
+				"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks)
 			return nil
 		},
 	})
