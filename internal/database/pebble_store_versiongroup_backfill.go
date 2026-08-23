@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_versiongroup_backfill.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9f3b7c21-6d84-4a5e-b0c9-2e7fa1d85b36
 // last-edited: 2026-08-23
 // PERF-VERSIONS: one-time backfill that writes the
@@ -162,13 +162,26 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		// Only the primary `book:<id>` rows carry full JSON payloads. Book IDs
-		// are ULIDs and contain no colons, so a primary row is exactly
-		// "book:<id>" — one colon. Every secondary index has more. Counting is
-		// exact where the previous substring blacklist was not: it had to
-		// enumerate every index prefix, listed ":organizedhash:" twice, and
-		// would have silently started unmarshalling rows for any index prefix
-		// added later and forgotten here.
+		// Only the primary `book:<id>` rows carry full JSON payloads. This
+		// filter REQUIRES exactly one colon: every book ID minted by
+		// CreateBook is a ULID and contains no colon, so a primary row is
+		// exactly "book:<id>" — one colon — while every secondary index has
+		// more. Counting is exact where the previous substring blacklist was
+		// not: it had to enumerate every index prefix, listed
+		// ":organizedhash:" twice, and would have silently started
+		// unmarshalling rows for any index prefix added later and forgotten
+		// here.
+		//
+		// Pre-existing limitation, unchanged by the bound widening above:
+		// CreateBook only mints a ULID `if book.ID == ""`, so a
+		// caller-supplied ID is accepted verbatim and could in principle
+		// contain a colon (e.g. "book:my:id" — two colons). Such a row would
+		// be silently skipped here, same as it is today. The wider iterator
+		// bounds fix the byte-range exclusion for non-digit-leading IDs;
+		// they do not close this separate colon-count gap, which predates
+		// this change and is not addressed by it. See TODO.md /
+		// todo.d for the tracked follow-up (enforce no-colon IDs at
+		// CreateBook rather than assuming it at every scan site).
 		if strings.Count(key, ":") != 1 {
 			continue
 		}
