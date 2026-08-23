@@ -163,7 +163,7 @@ test.describe('Diagnostics', () => {
           body: JSON.stringify({
             data: {
               operation_id: 'op-1',
-              status: 'generating',
+              status: 'queued',
             },
           }),
         });
@@ -171,19 +171,33 @@ test.describe('Diagnostics', () => {
       return route.fallback();
     });
 
-    // Mock operation polling
-    await page.route('**/api/v1/operations/op-1', async (route) => {
+    // Mock operation polling.
+    //
+    // This has to be the v2 route and the v2 body shape. It used to mock
+    // `**/api/v1/operations/op-1`, which the client has not called since the v1
+    // routes were retired -- it polls /operations/v2/:id via getOperationV2, and
+    // that helper throws unless the row sits under `data.operation`. The mock
+    // could never match, so the poll threw, and the assertions below were loose
+    // enough to pass anyway. That is the same blindness that let the bug this
+    // whole flow exists to catch live for six days.
+    await page.route('**/api/v1/operations/v2/op-1', async (route) => {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          id: 'op-1',
-          type: 'diagnostics_export',
-          status: 'completed',
-          progress: 1,
-          total: 1,
-          message: 'Complete',
-          created_at: new Date().toISOString(),
+          data: {
+            operation: {
+              id: 'op-1',
+              def_id: 'diagnostics.export',
+              status: 'completed',
+              progress_current: 11,
+              progress_total: 11,
+              progress_message: 'Export complete',
+              error_message: null,
+              queued_at: new Date().toISOString(),
+            },
+            logs: [],
+          },
         }),
       });
     });
@@ -210,20 +224,17 @@ test.describe('Diagnostics', () => {
     const downloadButton = page.getByRole('button', { name: /Download ZIP/i });
     await expect(downloadButton).toBeVisible();
 
-    // Listen for download event
-    const downloadPromise = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
+    // The download must actually happen. The previous version swallowed the
+    // timeout with .catch(() => null) and fell back to asserting that text
+    // matching /generating|complete|download|success/ was visible -- which the
+    // "Download ZIP" button it had just clicked satisfies on its own. The
+    // assertion could not fail, so it never did.
+    const downloadPromise = page.waitForEvent('download', { timeout: 10000 });
     await downloadButton.click();
 
-    // Either a download is triggered or a progress/success indicator appears
     const download = await downloadPromise;
-    if (download) {
-      expect(download.suggestedFilename()).toContain('diagnostics');
-    } else {
-      // If no download event, check for a success/progress indicator
-      await expect(
-        page.getByText(/generating|complete|download|success/i).first()
-      ).toBeVisible({ timeout: 5000 });
-    }
+    expect(download.suggestedFilename()).toContain('diagnostics');
+    expect(download.suggestedFilename()).toContain('op-1');
   });
 
   // -------------------------------------------------------------------
