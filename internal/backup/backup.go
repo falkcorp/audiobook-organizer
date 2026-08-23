@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package backup
 
@@ -223,25 +223,6 @@ func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType
 	}
 
 	return CreateBackup(tmpDir, databaseType, config)
-}
-
-// isPathWithinTarget reports whether entryPath, when joined with targetPath,
-// stays inside targetPath. Used by unit tests to verify zipslip-rejection
-// logic; RestoreBackup uses safepath.Join for the same guarantee.
-func isPathWithinTarget(targetPath, entryPath string) (bool, error) {
-	absTarget, err := filepath.Abs(targetPath)
-	if err != nil {
-		return false, err
-	}
-	candidate := filepath.Clean(filepath.Join(absTarget, entryPath))
-	rel, err := filepath.Rel(absTarget, candidate)
-	if err != nil {
-		return false, err
-	}
-	if filepath.IsAbs(rel) || strings.Contains(rel, "..") {
-		return false, nil
-	}
-	return true, nil
 }
 
 // RestoreBackup restores a database from a backup file

@@ -1,6 +1,7 @@
 // file: internal/backup/backup_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-08-23
 
 package backup
 
@@ -17,130 +18,35 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// TestIsPathWithinTargetAllowsValidPath tests that valid paths are allowed
-func TestIsPathWithinTargetAllowsValidPath(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	targetPath := filepath.Join(tempDir, "extract")
-	entryPath := "file.txt"
+// assertNothingEscaped fails the test if restoring into restoreDir created any
+// entry in its PARENT directory other than the ones named in allowed.
+//
+// WHY A DIRECTORY LISTING AND NOT A filepath.Join(...)+os.Stat: a targeted stat
+// only fails if the escaped file lands exactly where the test author guessed.
+// Three assertions in this file previously stat'ed a path the escape could
+// never reach (one of them a path INSIDE restoreDir), so they passed whether or
+// not the containment guard existed. Listing the parent catches every escape
+// name, including ones the test did not predict.
+//
+// restoreDir itself is allowed but not required: RestoreBackup does not
+// pre-create the target, so an archive whose only entry is malicious leaves no
+// directory behind.
+func assertNothingEscaped(t *testing.T, parentDir string, allowed ...string) {
+	t.Helper()
 
-	// Act
-	within, err := isPathWithinTarget(targetPath, entryPath)
+	permitted := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		permitted[name] = true
+	}
 
-	// Assert
+	entries, err := os.ReadDir(parentDir)
 	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+		t.Fatalf("Failed to list %s: %v", parentDir, err)
 	}
-	if !within {
-		t.Error("Expected path to be within target")
-	}
-}
-
-// TestIsPathWithinTargetAllowsSubdirectory tests that subdirectory entries are allowed
-func TestIsPathWithinTargetAllowsSubdirectory(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	targetPath := filepath.Join(tempDir, "extract")
-	entryPath := "subdir/file.txt"
-
-	// Act
-	within, err := isPathWithinTarget(targetPath, entryPath)
-
-	// Assert
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	if !within {
-		t.Error("Expected subdirectory path to be within target")
-	}
-}
-
-// TestIsPathWithinTargetRejectsTraversal tests that path traversal attempts are rejected
-func TestIsPathWithinTargetRejectsTraversal(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	targetPath := filepath.Join(tempDir, "extract")
-	entryPath := "../../../etc/passwd"
-
-	// Act
-	within, err := isPathWithinTarget(targetPath, entryPath)
-
-	// Assert
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	if within {
-		t.Error("Expected traversal path to be rejected (outside target)")
-	}
-}
-
-// TestIsPathWithinTargetRejectsAbsolutePath tests that absolute entry paths are handled safely.
-// On all Go platforms, filepath.Join("/base", "/etc/passwd") returns "/base/etc/passwd" —
-// the base is preserved, so the absolute entry is redirected inside the target directory.
-// The function therefore returns true (safe), not false.
-func TestIsPathWithinTargetRejectsAbsolutePath(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	targetPath := filepath.Join(tempDir, "extract")
-	entryPath := "/etc/passwd"
-
-	// Act
-	within, err := isPathWithinTarget(targetPath, entryPath)
-
-	// Assert
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	// filepath.Join keeps the base: Join("/base", "/etc/passwd") → "/base/etc/passwd"
-	// so the absolute entry lands safely inside the target directory (within == true).
-	if !within {
-		t.Error("Expected absolute path to be redirected inside target (filepath.Join keeps base)")
-	}
-}
-
-// TestIsPathWithinTargetRejectsDoubleSlashTraversal tests .. sequences
-func TestIsPathWithinTargetRejectsDoubleSlashTraversal(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	targetPath := filepath.Join(tempDir, "extract")
-	// Try multiple ways to write traversal
-	testCases := []string{
-		"..",
-		"../..",
-		"subdir/../../..",
-		"a/../../../b",
-	}
-
-	for _, entryPath := range testCases {
-		// Act
-		within, err := isPathWithinTarget(targetPath, entryPath)
-
-		// Assert
-		if err != nil {
-			t.Errorf("Unexpected error for %q: %v", entryPath, err)
+	for _, entry := range entries {
+		if !permitted[entry.Name()] {
+			t.Errorf("Archive entry escaped the restore directory: %s was created in %s", entry.Name(), parentDir)
 		}
-		if within {
-			t.Errorf("Expected traversal path %q to be rejected", entryPath)
-		}
-	}
-}
-
-// TestIsPathWithinTargetHandlesDotSlash tests that ./ paths work
-func TestIsPathWithinTargetHandlesDotSlash(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	targetPath := filepath.Join(tempDir, "extract")
-	entryPath := "./file.txt"
-
-	// Act
-	within, err := isPathWithinTarget(targetPath, entryPath)
-
-	// Assert
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	if !within {
-		t.Error("Expected ./ path to be within target")
 	}
 }
 
@@ -173,9 +79,12 @@ func TestRestoreBackupRejectsZipslipAttack(t *testing.T) {
 		t.Fatalf("Failed to write legitimate file: %v", err)
 	}
 
-	// Add a malicious file that tries to escape
+	// Add a malicious file that tries to escape. One level of "../" from
+	// restoreDir lands in tempDir, which t.TempDir() cleans up — so when the
+	// containment guard is removed for a mutation test the escape is real and
+	// observable without writing outside the test's own sandbox.
 	maliciousHeader := &tar.Header{
-		Name: "../../../../tmp/escaped.txt",
+		Name: "../escaped.txt",
 		Mode: 0644,
 		Size: 7,
 	}
@@ -203,13 +112,10 @@ func TestRestoreBackupRejectsZipslipAttack(t *testing.T) {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
 
-	// Verify the escaped file was NOT created outside restoreDir
-	// This would be at the root or in /tmp - we can't safely check from test
-	// But we can verify the restore failed early enough not to create it
-	escapedPath := filepath.Join(tempDir, "escaped.txt")
-	if _, err := os.Stat(escapedPath); !os.IsNotExist(err) {
-		t.Error("Malicious file was created outside restore directory")
-	}
+	// Verify — at the filesystem level — that nothing appeared alongside
+	// restoreDir. Only the archive itself and (optionally) the restore
+	// directory may exist in tempDir.
+	assertNothingEscaped(t, tempDir, "malicious.tar.gz", "extract")
 }
 
 // TestRestoreBackupAllowsNormalExtraction tests normal extraction works
@@ -363,9 +269,12 @@ func TestRestoreBackupRejectsDotDotInPath(t *testing.T) {
 	gzipWriter := gzip.NewWriter(backupFile)
 	tarWriter := tar.NewWriter(gzipWriter)
 
-	// Add entry with .. in the middle
+	// Add entry with .. in the middle. "a/../../b" is inside restoreDir until
+	// filepath.Clean collapses it to tempDir/b — the class of escape a
+	// strings.Contains(name, "..") check would catch by accident and a
+	// prefix check on the UNCLEANED join would miss entirely.
 	traversalHeader := &tar.Header{
-		Name: "a/../../../b",
+		Name: "a/../../b",
 		Mode: 0644,
 		Size: 1,
 	}
@@ -391,6 +300,8 @@ func TestRestoreBackupRejectsDotDotInPath(t *testing.T) {
 	if !strings.Contains(err.Error(), "escapes target directory") {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
+
+	assertNothingEscaped(t, tempDir, "dotdot.tar.gz", "extract")
 }
 
 // TestRestoreBackupValidatesAllEntries tests that all entries in archive are validated
@@ -423,7 +334,7 @@ func TestRestoreBackupValidatesAllEntries(t *testing.T) {
 
 	// Second entry is malicious (comes after valid entry)
 	maliciousHeader := &tar.Header{
-		Name: "../../escape",
+		Name: "../escape",
 		Mode: 0644,
 		Size: 3,
 	}
@@ -450,49 +361,98 @@ func TestRestoreBackupValidatesAllEntries(t *testing.T) {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
 
-	// Verify that the valid file from the first entry was NOT created
-	// (because restore failed on the malicious second entry)
-	// The important thing is that the second file definitely doesn't escape
-	if _, err := os.Stat(filepath.Join(tempDir, "extract", "escape")); !os.IsNotExist(err) {
-		t.Error("Malicious file was created during extraction")
+	// The previous version of this assertion stat'ed tempDir/extract/escape —
+	// a path INSIDE the restore directory, i.e. the one place "../escape"
+	// provably cannot land. It could not fail. Assert on the parent instead.
+	assertNothingEscaped(t, tempDir, "mixed.tar.gz", "extract")
+
+	// The valid first entry is still extracted before the failure; restore is
+	// not transactional. Assert that explicitly so a future change to
+	// fail-fast-and-clean-up semantics is noticed rather than absorbed.
+	if _, statErr := os.Stat(filepath.Join(restoreDir, "valid.txt")); statErr != nil {
+		t.Errorf("Expected the valid entry preceding the malicious one to have been extracted: %v", statErr)
 	}
 }
 
-// TestIsPathWithinTargetNormalizesPath tests that paths are properly normalized
-func TestIsPathWithinTargetNormalizesPath(t *testing.T) {
-	// Arrange
+// TestRestoreBackupIgnoresSymlinkEntries pins the fact that this restore path
+// does not materialise link entries at all. tar.TypeSymlink and tar.TypeLink
+// fall through to the default branch in RestoreBackup, which logs and skips —
+// so an archive cannot plant a symlink pointing outside the restore directory
+// and then write through it on a later entry. If someone adds link support,
+// this test fails and the containment check must be extended to Linkname.
+func TestRestoreBackupIgnoresSymlinkEntries(t *testing.T) {
 	tempDir := t.TempDir()
-	targetPath := filepath.Join(tempDir, "extract")
+	backupPath := filepath.Join(tempDir, "links.tar.gz")
+	restoreDir := filepath.Join(tempDir, "extract")
 
-	testCases := []struct {
-		name     string
-		path     string
-		expected bool
-	}{
-		{"simple file", "file.txt", true},
-		{"dir/file", "dir/file.txt", true},
-		{"dot slash", "./file.txt", true},
-		{"nested dir", "a/b/c/file.txt", true},
-		{"parent traversal", "../file.txt", false},
-		{"parent in middle", "a/../../../etc/passwd", false},
-		{"double parent", "..", false},
-		{"triple parent", "../../..", false},
+	backupFile, err := os.Create(backupPath)
+	if err != nil {
+		t.Fatalf("Failed to create backup file: %v", err)
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Act
-			within, err := isPathWithinTarget(targetPath, tc.path)
+	gzipWriter := gzip.NewWriter(backupFile)
+	tarWriter := tar.NewWriter(gzipWriter)
 
-			// Assert
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			if within != tc.expected {
-				t.Errorf("Expected %v, got %v for path %q", tc.expected, within, tc.path)
-			}
-		})
+	// A symlink whose target is outside the restore directory entirely.
+	symlinkHeader := &tar.Header{
+		Name:     "escape-link",
+		Linkname: "/etc/passwd",
+		Mode:     0777,
+		Typeflag: tar.TypeSymlink,
 	}
+	if err := tarWriter.WriteHeader(symlinkHeader); err != nil {
+		t.Fatalf("Failed to write symlink header: %v", err)
+	}
+
+	// A hardlink entry pointing at the same place.
+	hardlinkHeader := &tar.Header{
+		Name:     "escape-hardlink",
+		Linkname: "../../../../etc/passwd",
+		Mode:     0644,
+		Typeflag: tar.TypeLink,
+	}
+	if err := tarWriter.WriteHeader(hardlinkHeader); err != nil {
+		t.Fatalf("Failed to write hardlink header: %v", err)
+	}
+
+	// A benign regular file so the archive still has real content to extract.
+	regularHeader := &tar.Header{
+		Name: "real.txt",
+		Mode: 0644,
+		Size: 4,
+	}
+	if err := tarWriter.WriteHeader(regularHeader); err != nil {
+		t.Fatalf("Failed to write regular header: %v", err)
+	}
+	if _, err := io.WriteString(tarWriter, "data"); err != nil {
+		t.Fatalf("Failed to write regular file: %v", err)
+	}
+
+	tarWriter.Close()
+	gzipWriter.Close()
+	backupFile.Close()
+
+	if err := RestoreBackup(backupPath, restoreDir, false); err != nil {
+		t.Fatalf("RestoreBackup failed: %v", err)
+	}
+
+	// Neither link may exist on disk, as a link or as anything else.
+	for _, name := range []string{"escape-link", "escape-hardlink"} {
+		if _, statErr := os.Lstat(filepath.Join(restoreDir, name)); !os.IsNotExist(statErr) {
+			t.Errorf("Link entry %q was materialised in the restore directory; RestoreBackup must skip link entries", name)
+		}
+	}
+
+	// The regular entry after the link entries must still extract.
+	content, err := os.ReadFile(filepath.Join(restoreDir, "real.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read regular entry extracted after the link entries: %v", err)
+	}
+	if string(content) != "data" {
+		t.Errorf("Regular entry content mismatch: got %q, want \"data\"", content)
+	}
+
+	assertNothingEscaped(t, tempDir, "links.tar.gz", "extract")
 }
 
 // TestDefaultBackupConfig tests the default backup configuration
