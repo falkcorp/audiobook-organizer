@@ -1,7 +1,7 @@
 // file: web/src/theme.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-20
+// last-edited: 2026-08-23
 
 import { createTheme } from '@mui/material/styles';
 
@@ -346,6 +346,34 @@ export const appTheme = createTheme({
     //     --project=chromium -g "clears all filters" --repeat-each=20 --workers=12
     MuiMenu: {
       defaultProps: {
+        // ⚠️ 2026-08-23: `exit: 0` alone was NEVER the fix here, exactly as the
+        // MuiDrawer block above already records for itself. The comment above
+        // this one says so in its own words ("Zeroing the exit removes the
+        // window the race needs, rather than claiming to have fixed the race
+        // itself") -- it narrows the race, it does not close it. Menus were
+        // left on the weaker mitigation only because MuiDrawer got the proven
+        // one first; there was never a reason for the two to differ.
+        //
+        // `exit: false` takes react-transition-group's SYNCHRONOUS
+        // `performExit` branch: with no timeout to wait on, there is no window
+        // in which the completion callback can fail to run, so the Modal
+        // unmounts in the same tick. That is what stops a `position: fixed;
+        // inset: 0` backdrop from surviving a stalled exit and swallowing
+        // every click on the page until a reload.
+        //
+        // Measured on the Drawer (see above): 'auto' 0/20 passed, 250ms 8/20,
+        // 0ms 20/20 -- and 0ms STILL stalled 12/20 in the instrumented probe
+        // that supplied RTG its own fallback timeout. Zero is not false.
+        //
+        // Pinned by theme.slot-merge.test.ts, which feeds these real defaults
+        // through MUI's real resolveProps: the mitigation only reaches a Menu
+        // if MUI keeps merging `slotProps` per-slot rather than replacing the
+        // whole object, and that is MUI's contract to change, not ours.
+        slotProps: { transition: { exit: false } },
+        // Kept for the enter animation, which was never implicated -- only the
+        // exit path stalls. `exit: 0` is retained alongside `exit: false` so a
+        // call site that overrides slotProps.transition back to a real exit
+        // still gets a fast one rather than the ~280ms 'auto'.
         transitionDuration: { enter: 225, exit: 0 },
       },
     },
