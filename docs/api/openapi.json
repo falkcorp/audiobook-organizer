@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.218.1",
+    "version": "0.219.0",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -4577,34 +4577,6 @@
         }
       }
     },
-    "/books": {
-      "get": {
-        "operationId": "handleListITunesBooks",
-        "summary": "List I Tunes Books",
-        "tags": [
-          "reading"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/books/{id}/position": {
       "parameters": [
         {
@@ -5825,34 +5797,6 @@
         }
       }
     },
-    "/import": {
-      "post": {
-        "operationId": "handleITunesImport",
-        "summary": "I Tunes Import",
-        "tags": [
-          "import"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/import-paths": {
       "get": {
         "operationId": "listImportPaths",
@@ -5922,73 +5866,6 @@
       "delete": {
         "operationId": "removeImportPath",
         "summary": "remove Import Path",
-        "tags": [
-          "import"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/import-status/bulk": {
-      "post": {
-        "operationId": "handleITunesImportStatusBulk",
-        "summary": "I Tunes Import Status Bulk",
-        "tags": [
-          "import"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/import-status/{id}": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "get": {
-        "operationId": "handleITunesImportStatus",
-        "summary": "I Tunes Import Status",
         "tags": [
           "import"
         ],
@@ -6603,82 +6480,6 @@
         }
       }
     },
-    "/library-status": {
-      "get": {
-        "operationId": "handleITunesLibraryStatus",
-        "summary": "I Tunes Library Status",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/login": {
-      "post": {
-        "operationId": "login",
-        "summary": "login",
-        "tags": [
-          "general"
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/logout": {
-      "post": {
-        "operationId": "logout",
-        "summary": "logout",
-        "tags": [
-          "general"
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/maintenance-window/run": {
       "post": {
         "operationId": "runMaintenanceWindowNow",
@@ -7111,30 +6912,6 @@
             "session": []
           }
         ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/me": {
-      "get": {
-        "operationId": "me",
-        "summary": "me",
-        "tags": [
-          "reading"
-        ],
-        "security": [],
         "responses": {
           "200": {
             "description": "Success"
@@ -9577,121 +9354,10 @@
         }
       }
     },
-    "/sessions": {
-      "get": {
-        "operationId": "listMySessions",
-        "summary": "list My Sessions",
-        "tags": [
-          "general"
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/sessions/{id}": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "delete": {
-        "operationId": "revokeMySession",
-        "summary": "revoke My Session",
-        "tags": [
-          "general"
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/setup": {
-      "post": {
-        "operationId": "setupInitialAdmin",
-        "summary": "setup Initial Admin",
-        "tags": [
-          "general"
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/status": {
       "get": {
         "operationId": "handleDelugeStatus",
         "summary": "Deluge Status",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/sync": {
-      "post": {
-        "operationId": "handleITunesSync",
-        "summary": "I Tunes Sync",
         "tags": [
           "general"
         ],
@@ -10074,34 +9740,6 @@
         }
       }
     },
-    "/test-mapping": {
-      "post": {
-        "operationId": "handleITunesTestMapping",
-        "summary": "I Tunes Test Mapping",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/update/apply": {
       "post": {
         "operationId": "applyUpdate",
@@ -10162,34 +9800,6 @@
       "get": {
         "operationId": "getUpdateStatus",
         "summary": "get Update Status",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/validate": {
-      "post": {
-        "operationId": "handleITunesValidate",
-        "summary": "I Tunes Validate",
         "tags": [
           "general"
         ],
@@ -10493,209 +10103,10 @@
         }
       }
     },
-    "/write-back": {
-      "post": {
-        "operationId": "handleITunesWriteBack",
-        "summary": "I Tunes Write Back",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/write-back-all": {
       "post": {
         "operationId": "handleITunesWriteBackAll",
         "summary": "I Tunes Write Back All",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/write-back/preview": {
-      "post": {
-        "operationId": "handleITunesWriteBackPreview",
-        "summary": "I Tunes Write Back Preview",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/{id}": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "get": {
-        "operationId": "getAIScan",
-        "summary": "get A I Scan",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      },
-      "delete": {
-        "operationId": "deleteAIScan",
-        "summary": "delete A I Scan",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/{id}/apply": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "post": {
-        "operationId": "applyAIScanResults",
-        "summary": "apply A I Scan Results",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/{id}/cancel": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "post": {
-        "operationId": "cancelAIScan",
-        "summary": "cancel A I Scan",
         "tags": [
           "general"
         ],
@@ -10813,45 +10224,6 @@
       "post": {
         "operationId": "handleResetPassword",
         "summary": "Reset Password",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/{id}/results": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "get": {
-        "operationId": "getAIScanResults",
-        "summary": "get A I Scan Results",
         "tags": [
           "general"
         ],
