@@ -1,12 +1,13 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-08-18
+// last-edited: 2026-08-23
 
 package handlers
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/gin-gonic/gin"
 )
 
@@ -430,6 +432,72 @@ func (h *PlaylistHandler) ReorderPlaylist(c *gin.Context) {
 	httputil.RespondWithOK(c, pl)
 }
 
+// ExportPlaylistM3U — GET /api/v1/playlists/:id/export.m3u
+// Writes the playlist's resolved membership as a standard #EXTM3U file: a
+// #EXTINF duration+title comment followed by the file's path, one pair per
+// book, in playlist order.
+//
+// Static playlists use BookIDs; smart playlists use MaterializedBookIDs —
+// the last evaluation, not a live re-query — matching the read-mostly
+// convention playlistDTO already uses in abs/playlists.go. A smart playlist
+// that has never been materialized therefore exports a header-only file
+// (just "#EXTM3U") rather than erroring.
+//
+// Paths are emitted as Book.FilePath, i.e. absolute, matching the scanner's
+// own M3U importer: parseM3UFile in internal/scanner/scanner.go takes an
+// absolute entry as-is and only resolves a relative one against the .m3u
+// file's own directory. Emitting relative paths would only round-trip if the
+// exported file were saved back into that exact source directory, which a
+// downloaded file cannot guarantee — so this trades "opens on any machine"
+// for "round-trips through this repo's own importer and resolves without
+// the client having to know the library root."
+//
+// A book ID that no longer resolves, or whose FilePath is empty, is dropped
+// rather than written as a blank/placeholder line — the same "stale
+// reference" handling playlistItems already applies in abs/playlists.go.
+func (h *PlaylistHandler) ExportPlaylistM3U(c *gin.Context) {
+	id := c.Param("id")
+	pl, err := h.store.GetUserPlaylist(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to load playlist", err)
+		return
+	}
+	if pl == nil {
+		httputil.RespondWithNotFound(c, "playlist", id)
+		return
+	}
+	if !ownedByCaller(c, pl) {
+		httputil.RespondWithNotFound(c, "playlist", id)
+		return
+	}
+
+	bookIDs := pl.BookIDs
+	if pl.Type == database.UserPlaylistTypeSmart {
+		bookIDs = pl.MaterializedBookIDs
+	}
+
+	var buf strings.Builder
+	buf.WriteString("#EXTM3U\n")
+	for _, bid := range bookIDs {
+		book, err := h.store.GetBookByID(bid)
+		if err != nil || book == nil || book.FilePath == "" {
+			continue // stale/unresolved reference — dropped, not a placeholder line
+		}
+		duration := 0
+		if book.Duration != nil {
+			duration = *book.Duration
+		}
+		fmt.Fprintf(&buf, "#EXTINF:%d,%s\n%s\n", duration, extinfTitle(book.Title), book.FilePath)
+	}
+
+	// filename= comes from the user-chosen playlist name — sanitize it so a
+	// name like `../../etc/passwd`, or one containing quotes or CRLF, cannot
+	// escape the attachment filename or inject extra response headers.
+	filename := pathvalidation.SanitizeFilename(pl.Name) + ".m3u"
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Data(http.StatusOK, "audio/x-mpegurl; charset=utf-8", []byte(buf.String()))
+}
+
 // MaterializePlaylist — POST /api/v1/playlists/:id/materialize
 // Evaluates a smart playlist and creates a new static playlist
 // from the snapshot. The source smart playlist is left unchanged.
@@ -518,6 +586,18 @@ func validatePlaylistCreate(req *PlaylistCreateReq) error {
 		return fmt.Errorf("type must be static or smart")
 	}
 	return nil
+}
+
+// extinfTitle returns title with any CR/LF stripped so it cannot inject an
+// extra line into the #EXTINF/path pair it is written into. Commas are left
+// untouched: the #EXTINF format is "#EXTINF:<duration>,<title>", parsed by
+// splitting on the FIRST comma only, so an embedded comma in the title
+// cannot be mistaken for the duration/title separator or break the format.
+func extinfTitle(title string) string {
+	title = strings.ReplaceAll(title, "\r\n", " ")
+	title = strings.ReplaceAll(title, "\n", " ")
+	title = strings.ReplaceAll(title, "\r", " ")
+	return title
 }
 
 // stringSlicesEqual reports whether a and b are equal element-by-element.
