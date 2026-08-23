@@ -1,6 +1,6 @@
 // file: internal/itunes/register.go
-// version: 1.1.1
-// last-edited: 2026-06-23
+// version: 1.2.0
+// last-edited: 2026-08-23
 
 package itunes
 
@@ -15,7 +15,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			if cfg.ITunes.LibraryReadPath == "" {
 				return nil, nil
 			}

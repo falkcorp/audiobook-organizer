@@ -1,6 +1,6 @@
 // file: internal/server/batch_poller_register.go
-// version: 1.1.0
-// last-edited: 2026-08-19
+// version: 1.2.0
+// last-edited: 2026-08-23
 
 package server
 
@@ -19,7 +19,7 @@ func init() {
 		Needs: []string{serviceregistry.KeyStore, serviceregistry.KeyConfig},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[database.OperationStore](c, serviceregistry.KeyStore)
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 
 			// Pre-condition: OpenAI API key and AI parsing must be enabled
 			if cfg.OpenAIAPIKey == "" || !cfg.EnableAIParsing {
