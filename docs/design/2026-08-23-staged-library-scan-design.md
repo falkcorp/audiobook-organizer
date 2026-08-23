@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-23-staged-library-scan-design.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 4c1e8b73-2a9f-4d06-b5e1-7f3a90c2d846 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -7,9 +7,10 @@
 
 **Status:** DRAFT, awaiting review. Nothing here is implemented.
 **Author:** drafted 2026-08-23 from a brainstorming session; three decisions were
-made by the owner and are marked **[OWNER]**. Six were taken as defaults while the
-owner was unavailable and are marked **[DEFAULT]** — each is a real decision point
-and any of them can be reversed without redesigning the rest.
+made by the owner and are marked **[OWNER]**. Six more were taken as defaults while
+the owner was unavailable; **all six have since been re-asked directly and are now
+[OWNER] too** — four confirmed as taken, one narrowed, and one (the count endpoint)
+reversed. Six review rounds are recorded at the end of this document, newest last.
 
 ## The problem
 
@@ -60,29 +61,71 @@ minutes**. **[OWNER]**
 
 ### Four stages
 
+> Reflects all six review rounds. Where a stage below and a round-N section
+> disagree, the later round wins — but they should not disagree; report it if they do.
+
 1. **Discover** — walk the tree, `os.Stat` only. Compare `(path, size, mtime)`
-   against known rows. Emit the set of new/changed paths. No file contents read.
-2. **Shallow ingest** — for each new path, read the embedded tag header and create
-   the `book` / `book_file` rows with title, author, series, track/disc numbers.
-   Mark them provisional. No hash, no `ffprobe`.
+   against known rows. No file contents read. Emits three sets, not one:
+   **new**, **changed**, and **moved**. Move matching (a vanished path and a new
+   path sharing `(size, mtime)`) runs *after* the walk completes, because a path is
+   only known to be gone once the whole tree has been seen — so Discover is
+   two-phase. An ambiguous match, where two or more vanished rows fit, is **not**
+   treated as a move.
+2. **Shallow ingest** — behaviour differs by set, and the difference is the whole
+   metadata-safety story:
+   - **New path** → read the embedded tag header; create the `book` / `book_file`
+     rows with title, author, series, track/disc numbers, **and duration if the
+     header carries it**. Mark provisional. No hash, no `ffprobe`. An unparseable
+     header still produces a row, titled from the path and flagged `HeaderBad`.
+   - **Changed path** → set `NeedsDeep` and `HashStale` and **write no metadata at
+     all**. The existing hash is kept. The deep pass is the only thing that writes
+     metadata to a book that already exists.
+   - **Moved path** → repoint the existing row, keeping its hash, chapters and
+     metadata. `NeedsDeep` stays `false`; nothing is re-read or re-hashed.
 3. **Promote** — the rows are in the normal tables from the moment stage 2 writes
    them; "promotion" is not a copy step, it is simply that stage 2 writes to the
    real tables with a provisional marker set. See *Data model* for why there is no
    separate holding table.
-4. **Deepen** — a background op walks provisional rows and does the expensive work:
-   full hash, `ffprobe` chapters, fingerprinting. Clears the marker per file.
+4. **Deepen** — a background op walks provisional rows **newest first** and does the
+   expensive work: full hash, `ffprobe` chapters, fingerprinting. Clears the marker
+   per file. Bounded concurrency, with a separate smaller limit for `ffprobe`
+   spawns. A row that fails three attempts stops retrying, records its last error
+   and is surfaced.
 
-Stages 1–3 are the fast scan. Stage 4 is a separate, independently resumable op.
+Stages 1–3 are **`library.scan.staged`** — short, bounded, the op a user waits on.
+Stage 4 is **`library.scan.deepen`** — long-running, checkpointed, low priority,
+independently cancellable. Cancelling the deepen op never discards the ingest.
 
-### Data model **[DEFAULT]**
+### Data model **[OWNER]**
 
-Add one field to `BookFile`:
+Add one field to `BookFile`, a struct holding the whole scan state:
 
 ```go
-// NeedsDeepScan marks a row created by the shallow ingest pass: its tags have
-// been read but its content has not. FileHash, chapters and fingerprints are
-// absent until the deep pass clears this.
-NeedsDeepScan bool `json:"needs_deep_scan,omitempty"`
+// ScanState is everything the staged scan knows about a file's completeness.
+// Grouped rather than spread across BookFile as five loose fields: it is one
+// coherent concept, and BookFile is constructed at many call sites.
+type ScanState struct {
+    // NeedsDeep marks a row whose tags have been read but whose content has
+    // not. FileHash, chapters and fingerprints are absent or stale until the
+    // deep pass clears this.
+    NeedsDeep bool `json:"needs_deep,omitempty"`
+    // HashStale means FileHash predates the current bytes: the file changed and
+    // the deep pass has not caught up. The old hash is deliberately KEPT so a
+    // failed deep pass does not leave the row with nothing.
+    HashStale bool `json:"hash_stale,omitempty"`
+    // HeaderBad means the tag header could not be parsed, so the title is
+    // derived from the path. Flagged so it is distinguishable from a curated
+    // title -- an unflagged path-derived title is how junk-title debt accrues.
+    HeaderBad bool `json:"header_bad,omitempty"`
+    // Attempts counts deep-pass tries. At 3 the row stops retrying, is marked
+    // failed and is surfaced. Silence is the failure mode to avoid.
+    Attempts int `json:"attempts,omitempty"`
+    // LastError is why the most recent deep-pass attempt failed.
+    LastError string `json:"last_error,omitempty"`
+}
+
+// On BookFile:
+Scan ScanState `json:"scan,omitempty"`
 ```
 
 **No new table, and no migration.** `BookFile.FileHash` is already
@@ -142,7 +185,7 @@ unsafe, because stage 4 is by definition a scan running while users are working.
 implemented, it should be this, and it is worth shipping on its own ahead of
 everything else.
 
-### Deep-pass scope and ordering **[DEFAULT]**
+### Deep-pass scope and ordering **[OWNER]**
 
 - **New/changed files only.** The existing ~63,000 books already have hashes and
   chapters; sweeping them all would recreate the multi-hour job being removed. A
@@ -392,8 +435,9 @@ on the book response the UI already fetches. No second request, and no separate
 list that can drift out of sync with the library view it annotates.
 
 A dedicated count endpoint was considered for a global "N pending" indicator and
-deferred — it can be added later without changing this shape, and is only worth it
-if the indicator turns out to need it.
+deferred here — **superseded in round 6 below.** The owner subsequently chose a
+global pending view, which needs that endpoint, so it is back in scope. The
+book-payload half of this decision stands unchanged.
 
 ## Resolved in review — round 4, 2026-08-23 **[OWNER]**
 
@@ -451,7 +495,90 @@ moot. Restarting it beforehand would re-do the 8,367 already scanned, cost the f
 hours again, and do it while the metadata-clobber hazard is still live — the
 `OverrideLocked` predicate lands as part of this work, not before it.
 
+## Resolved in review — round 5, 2026-08-23 **[OWNER]**
+
+### No holding table — the default taken in absence was the right one
+
+Worth stating plainly because the owner's original framing said *"add them to db in
+holding area"* and then *"add them to the general library from the holding area"*,
+and this design does not build one. Re-asked directly and confirmed.
+
+The reason is that the other choice forces it: a book that is **"fully visible and
+playable"** the moment it is found cannot be sitting in a side table. So new files
+are inserted straight into `books` / `book_files` with `Scan.NeedsDeep` set, and
+"promote" is clearing that flag rather than copying rows between tables.
+
+What this buys: no new table, no migration, no copy step that can half-fail, and no
+second read path for the UI. The staging concept survives as a *state on the row*
+rather than a *place*.
+
+### Scan state is one struct, not five loose fields
+
+The review rounds grew the marker from one boolean to five related values. They go
+in a single `ScanState` on `BookFile` (above) rather than being added flat: it is
+one concept, `BookFile` is constructed at many call sites, and five independent
+booleans on a wide type drift apart. Deferring the fields whose features are
+already decided was rejected — they would come straight back.
+
+### Three deep-pass attempts, then stop and surface
+
+Enough to survive a transient cause — a briefly locked file, a full disk, an
+`ffprobe` timeout under load — without burning cycles on a genuinely bad file. A
+file that fails three separate passes will not succeed on the fourth unless
+something external changes, and at that point a human needs to see it.
+
+### The count endpoint comes back — this REVERSES a round-3 deferral
+
+Round 3 put provisional state on the existing book payload and deferred a dedicated
+count endpoint as "only worth it if the indicator needs it". Round 5 chose a
+**global pending view** listing every provisional book and every failed one with its
+error. That view needs exactly the endpoint that was deferred, so the deferral is
+withdrawn:
+
+- `needs_deep` and the other markers stay on the book payload (round 3 stands) — the
+  per-book badge renders from data the UI already fetches.
+- A pending/failed listing endpoint is **in scope** after all, backing the global
+  view and the count.
+
+UI surface, in full: a per-book "pending full scan" badge, a per-book **Scan now**
+action promoting that book's deep pass to normal priority, and a global pending view
+for the backlog and its failures.
+
+## Resolved in review — round 6, 2026-08-23 **[OWNER]**
+
+### Newest first, confirmed — and this was the last unconfirmed default
+
+Re-asked rather than assumed. The deep pass deepens the most recently added books
+first: the provisional window is shortest exactly where the user is looking, which
+is the point of the redesign. Strict FIFO was rejected because it puts a fresh
+import at the back of the queue — the worst latency in the place it is most
+visible. An age-based escape hatch to stop old rows starving was considered and
+not taken: it adds a second ordering rule to tune, and the attempt counter plus the
+failed-row surface already prevent a row from being silently forgotten.
+
+**Provenance note.** This section was still marked `[DEFAULT]` after five rounds,
+while the summary above was about to claim every default had been confirmed. It had
+not been. Re-asked and confirmed rather than left to ride on the claim — the
+neighbouring trigger decision having been confirmed in round 2 is not evidence about
+this one.
+
+### Concurrency: two independent limits
+
+- **Hashing** — `errgroup` with `SetLimit(runtime.NumCPU())`.
+- **`ffprobe`** — a *separate*, smaller fixed semaphore for subprocess spawns.
+
+Two limits rather than one because the two costs differ in kind: hashing is
+CPU/IO-bound work in-process, `ffprobe` is process creation. A single shared pool
+ties the subprocess spawn rate to the CPU pool size, so whichever turns out to be
+the real bottleneck on a NAS-backed library cannot be tuned without moving the
+other. Model on `internal/plugins/acoustid/backfill.go`'s `registry.RunItems`
+rather than writing a new sequential loop, per `CLAUDE.md`.
+
+Making both configurable was considered and deferred: fixed defaults first, and a
+config knob only if measurement shows the right numbers differ between libraries.
+
 ## Open questions for review
 
-1. Does the "pending full scan" state need a UI affordance beyond a badge — e.g. a
-   count, or a way to prioritise one book's deep pass on demand?
+None outstanding. Every **[DEFAULT]** taken while the owner was unavailable has been
+re-asked and confirmed or replaced; the four **[OWNER]** decisions and the five
+review rounds above cover the design surface. This document is ready for approval.
