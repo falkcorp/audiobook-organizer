@@ -1,5 +1,5 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
 // last-edited: 2026-08-23
 
@@ -35,6 +35,19 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	started := time.Now()
+
+	// Runtime losses (applyMemSync aborts) recorded from here on must SURVIVE
+	// this warmup's publish. This scan works from an iterator snapshot, so a
+	// row lost after that snapshot was taken is genuinely not rebuilt by it,
+	// and clobbering the flag would re-open the fail-open for exactly that row.
+	// Losses recorded BEFORE now are superseded by the rebuild and are dropped.
+	//
+	// Zero in production today -- warmup runs once, on a fresh unpublished
+	// MemStore that no writer can reach -- but WarmFromPebble advertises itself
+	// as "safe to re-run", so this is closed by construction rather than by
+	// nobody currently re-running it.
+	unknownAtStart := m.LostRows()[memTableUnknown]
+
 	txn := m.db.Txn(true)
 	defer txn.Abort()
 
@@ -352,8 +365,37 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		scanned[memTableImportPaths] = keys
 	}
 
-	// AuthorAliases: author_alias:<id>
+	// AuthorAliases: author_alias:<id>, skipping the two index families that
+	// share the prefix.
+	//
+	// This filter was MISSING until 2026-08-23, and every sibling phase has one
+	// ("author:" skips :name:, "import_path:" skips :path:). The prefix holds
+	// three key families (pebble_store_authors.go):
+	//
+	//	author_alias:<id>                  the record         -- want
+	//	author_alias:author:<aID>:<id>     index, row JSON    -- skip
+	//	author_alias:name:<normalized>     index, strconv.Itoa(id)
+	//
+	// The consequences were invisible while a failed decode was silently
+	// dropped, and both are real: the :name: value is a bare integer that
+	// cannot decode into AuthorAlias, and the :author: value IS valid row JSON
+	// that re-inserted over the unique ID index and inflated the phase's row
+	// count. GetAuthorAliases already filters to `author_alias:<digits>` for
+	// exactly this reason; warmup simply never did.
+	//
+	// It matters now because an undecodable row is no longer silent -- it flags
+	// the table known-incomplete. Without this filter, ANY library containing a
+	// single author alias would flag author_aliases on EVERY warmup, and the
+	// author-side reference counter (PR #2787) would refuse forever the moment
+	// it is wired to requireTablesComplete. A guard that always refuses looks
+	// like safety and is the job silently turned off.
+	//
+	// Colon count is the discriminator, as in the "author:" phase above: the
+	// record has exactly one, both index families have two or more.
 	if n, keys, err := warm("author_alias:", memTableAuthorAliases, func(key string, val []byte) (bool, error) {
+		if strings.Count(key, ":") != 1 {
+			return false, nil
+		}
 		var aa AuthorAlias
 		if err := json.Unmarshal(val, &aa); err != nil {
 			lose(memTableAuthorAliases, key, "undecodable row", err)
@@ -402,7 +444,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// flag while MVCC readers still see the OLD, still-short committed rows --
 	// reintroducing the exact fail-open this tracking exists to close. See
 	// MemStore.publishLostRows.
-	m.publishLostRows(lost)
+	m.publishLostRows(lost, unknownAtStart)
 	commitDur := time.Since(commitStart)
 	commitMS := commitDur.Milliseconds()
 
@@ -415,6 +457,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	m.lastWarmBytes = maps.Clone(bytesScanned)
 	m.lastWarmDiscarded = maps.Clone(bytesDiscarded)
 	m.lastWarmDiscardedByField = maps.Clone(byField)
+	m.lastWarmSkips = maps.Clone(skips)
 	m.warmCountsMu.Unlock()
 
 	slog.Info("memdb warmup complete",
@@ -449,8 +492,16 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		"discarded_field_mb", bytesMegabytes(byField),
 	)
 	if len(skips) > 0 {
-		slog.Warn("memdb warmup: rows skipped by table",
-			"skipped_by_table", skips)
+		// Keyed "<table>/<reason>", not by table alone -- an operator needs to
+		// know whether 12 losses were undecodable rows (corrupt data on disk)
+		// or rejected inserts (a schema rule the data does not satisfy),
+		// because those call for opposite fixes. The field NAME says so: it
+		// used to say "by_table" while the map was table-keyed, and quietly
+		// renaming the keys underneath a field an operator greps is how a
+		// counter starts lying.
+		slog.Warn("memdb warmup: rows skipped by table and reason",
+			"skipped_by_table_and_reason", skips,
+			"lost_by_table", lost)
 	}
 
 	// Emit sampled memdb size telemetry post-warmup.
