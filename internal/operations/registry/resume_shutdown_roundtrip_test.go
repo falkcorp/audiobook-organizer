@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume_shutdown_roundtrip_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b5c4a19-7e2d-4f83-9a61-3c8d5e7f012a
 // last-edited: 2026-08-23
 
@@ -197,8 +197,8 @@ func TestResume_ShutdownTimeoutLeavesQuiescedAndStillInvisible(t *testing.T) {
 	}
 }
 
-// TestResume_QueuedAtShutdownIsRestartedNotDropped is the POSITIVE half, and the
-// only test in this file that the PR's policy change actually makes pass.
+// TestResume_QueuedAtShutdownIsRestartedNotDropped is the POSITIVE half: it pins
+// that a QUEUED op survives a restart and is re-run under ResumeRestart.
 //
 // Shutdown walks r.running only. An op that was enqueued but never dispatched to
 // a worker is still status="queued", still carries its opv2:act: key, and IS
@@ -207,12 +207,51 @@ func TestResume_ShutdownTimeoutLeavesQuiescedAndStillInvisible(t *testing.T) {
 // clean restart -- and it is the common shape for a scheduled job enqueued just
 // before a deploy.
 //
-// Under the old ResumeDrop this row was written interrupted_dropped and thrown
-// away. Under ResumeRestart it is re-queued with resume_count incremented and
-// runs. This test therefore FAILS at b3bf412f6 and PASSES at HEAD.
+// Under ResumeDrop this row is written interrupted_dropped and thrown away.
+// Under ResumeRestart it is re-queued with resume_count incremented and runs.
+//
+// WHAT THIS TEST DOES AND DOES NOT PIN (measured 2026-08-23). An earlier version
+// of this comment claimed the test "FAILS at b3bf412f6 and PASSES at HEAD" -- it
+// does not, and never did. Measured both ways: with watchdog.go reverted to the
+// merge-base (49819eb44, the only product file in this package the PR touches),
+// BOTH this fixture and the original enqueue-based one still pass. The test
+// declares its own def with ResumePolicy=ResumeRestart, so the six maintenance
+// job files this PR re-policies cannot reach it either.
+//
+// It is kept because nothing else covers the queued-at-shutdown resume path at
+// all -- resume_test.go starts every case at insertRunningOp. But the PR's own
+// two fixes are pinned elsewhere, and those DO fail against the merge-base:
+// TestMaintenancePolicy_RestartWithoutCheckpointing for the watchdog gate, and
+// TestUpdateOpProgressV2_AdvancesHighWaterProgress (internal/database) for the
+// high-water mark. Do not cite this test as evidence for either.
+//
+// FIXTURE NOTE (2026-08-23): the queued row is PLANTED after r1.Shutdown returns
+// rather than produced by enqueuing against the live r1. The obvious fixture --
+// occupy the single worker with a blocker, enqueue the target behind it, then
+// shut down -- is irreducibly racy. Shutdown cancels the blocker, the blocker's
+// `<-runCtx.Done()` returns at once, slot 0 frees, and a dispatchCycle that had
+// already passed its shuttingDown check (dispatcher.go:36 reads the flag once,
+// then does a store list plus a dispatch loop -- check-then-act) picks the target
+// up and runs it to completion AFTER shutdown has been entered. That is exactly
+// how this test failed on CI at 6da3e9dcb:
+//
+//	target status="completed" after shutdown, want "queued"
+//
+// No blocker tuning closes that window: anything holding the slot through
+// shutdown lands on the timeout path, which
+// TestResume_ShutdownTimeoutLeavesQuiescedAndStillInvisible already covers.
+//
+// Planting is sound because Shutdown calls r.cancelFn and then JOINS
+// goroutineWG before returning (registry.go, "all goroutines exited"), so r1's
+// dispatcher is dead and nothing can touch the row between the plant and
+// r2.Start. A real shutdown is still exercised here by the blocker, and
+// end-to-end by TestResume_RealShutdownLeavesNothingForTheSweep.
+//
+// The dispatcher's check-then-act window is a real defect in its own right --
+// it starts brand-new runs after Shutdown begins, each then recorded interrupted
+// -- but it is not what this PR set out to fix. Filed as OPS-V2-DISPATCH-RACE.
 func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 	store := newFakeStore()
-	// One worker, so the second op cannot be picked up while the first blocks.
 	r1 := newRoundtripRegistry(store, 1)
 
 	blockerStarted := make(chan struct{})
@@ -228,13 +267,12 @@ func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 		t.Fatalf("register blocker: %v", err)
 	}
 
+	// Not registered on r1: r1 only has to perform a real shutdown. The def is
+	// built here because r2 needs it below.
 	target := makeValidDef("test.queued-target")
 	target.ResumePolicy = registry.ResumeRestart
 	target.ProgressTimeout = 30 * time.Minute
 	target.Run = func(context.Context, json.RawMessage, registry.Reporter) error { return nil }
-	if err := r1.RegisterOp(target); err != nil {
-		t.Fatalf("register target: %v", err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -249,23 +287,18 @@ func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 		t.Fatal("blocker never started; fixture invalid")
 	}
 
-	targetID, err := r1.EnqueueOp(ctx, "test.queued-target", nil)
-	if err != nil {
-		t.Fatalf("enqueue target: %v", err)
-	}
-	// LOAD-BEARING: the target must still be QUEUED at shutdown. If the single
-	// worker ever picked it up, this test would be measuring the running path.
-	if got := store.statusOf(targetID); got != "queued" {
-		t.Fatalf("target status=%q before shutdown, want %q; fixture invalid", got, "queued")
-	}
-
 	if err := r1.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 
-	// The queued row survives the shutdown untouched and stays in the active set.
+	// r1 is fully stopped (dispatcher joined), so nothing can race this plant.
+	targetID := insertQueuedOp(store, "test.queued-target", target.Plugin, 1)
+
+	// LOAD-BEARING: the row must be QUEUED going into r2. If it were anything
+	// else this test would be measuring a different resume path than the one
+	// the maintenance jobs' declared ResumePolicy is consulted on.
 	if got := store.statusOf(targetID); got != "queued" {
-		t.Fatalf("target status=%q after shutdown, want %q", got, "queued")
+		t.Fatalf("target status=%q before restart, want %q; fixture invalid", got, "queued")
 	}
 
 	// Second registry over the same store: the sweep must see it and restart it.

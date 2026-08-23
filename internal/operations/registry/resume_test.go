@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
 // last-edited: 2026-08-23
 
@@ -18,9 +18,12 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// insertRunningOp pre-loads the store with a running op so resumeAfterStartup
-// can find it. Returns the op ID.
-func insertRunningOp(store *fakeStore, defID, plugin string, priority int) string {
+// insertOpV2 pre-loads the store with one operation_v2 row in a caller-chosen
+// status, and is the single planter the resume tests build on. The three
+// wrappers below name the shapes the resume paths actually distinguish; keep new
+// variants as wrappers rather than fresh copies, so a change to the row layout
+// lands in one place.
+func insertOpV2(store *fakeStore, defID, plugin string, priority int, status, params string) string {
 	opID := ulid.Make().String()
 	store.InsertOperationV2(database.OperationV2Row{ //nolint:errcheck
 		ID:       opID,
@@ -28,12 +31,26 @@ func insertRunningOp(store *fakeStore, defID, plugin string, priority int) strin
 		Plugin:   plugin,
 		TraceID:  ulid.Make().String(),
 		SpanID:   ulid.Make().String(),
-		Status:   "running",
+		Status:   status,
 		Priority: priority,
-		Params:   "{}",
+		Params:   params,
 		QueuedAt: time.Now().UTC(),
 	})
 	return opID
+}
+
+// insertRunningOp pre-loads the store with a running op so resumeAfterStartup
+// can find it. Returns the op ID.
+func insertRunningOp(store *fakeStore, defID, plugin string, priority int) string {
+	return insertOpV2(store, defID, plugin, priority, "running", "{}")
+}
+
+// insertQueuedOp pre-loads the store with a QUEUED op -- the shape a shutdown
+// leaves behind for an op that was enqueued but never dispatched to a worker.
+// Shutdown walks r.running only, so such a row is never rewritten and is still
+// carrying its opv2:act: key when the next process starts.
+func insertQueuedOp(store *fakeStore, defID, plugin string, priority int) string {
+	return insertOpV2(store, defID, plugin, priority, "queued", "{}")
 }
 
 // TestResume_DropLeavesInterruptedDropped verifies that ResumeDrop ops found
@@ -209,19 +226,7 @@ func TestResume_ReconcileScanAlwaysDropped(t *testing.T) {
 // insertRunningOpWithParams is insertRunningOp with a caller-chosen params blob,
 // for the preservation tests below.
 func insertRunningOpWithParams(store *fakeStore, defID, plugin, params string) string {
-	opID := ulid.Make().String()
-	store.InsertOperationV2(database.OperationV2Row{ //nolint:errcheck
-		ID:       opID,
-		DefID:    defID,
-		Plugin:   plugin,
-		TraceID:  ulid.Make().String(),
-		SpanID:   ulid.Make().String(),
-		Status:   "running",
-		Priority: 1,
-		Params:   params,
-		QueuedAt: time.Now().UTC(),
-	})
-	return opID
+	return insertOpV2(store, defID, plugin, 1, "running", params)
 }
 
 // TestResume_PreservesParamsAcrossRestartAndRequeue pins the guarantee that lets
