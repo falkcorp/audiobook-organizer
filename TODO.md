@@ -4751,8 +4751,21 @@ audit nobody reopens:
 - [ ] **TOOL-1** — `testdata` is 2.2G tracked; decide fetched-dataset split.
 - [ ] **FE-2/FE-3/FE-4** — the three stale-deps findings' line anchors have
       moved; re-anchor and verify (one sitting, all in web/src/pages).
-- [ ] ARCH-3/4/5/7/8 remain structural programs; ARCH-8's panicking string
-      lookups (`serviceregistry/container.go:248,:255`) is the smallest.
+- [ ] ARCH-3/4/5/7/8 remain structural programs. **ARCH-8 is DONE
+      (2026-08-23, TASK-087, PR #2804)** — ARCH-3/4/5/7 are still open, which
+      is why this entry stays unchecked. `config.GetConfig(c)` and
+      `plugin.GetEventBus(c)` now own the two services that were read with one
+      consistent type; 18 call sites across 12 files converted. Note what the
+      accessors actually buy: a *misspelled* key was already a compile error
+      (every site used a `Key*` constant), but a **valid key paired with the
+      wrong type** — `Get[*plugin.EventBus](c, KeyConfig)` — used to
+      type-check and panic at the assertion inside `Get`, and is now
+      inexpressible. `serviceregistry.Get[T](c, KeyStore)` was deliberately
+      NOT converted: it is consumed through ~15–20 narrowed interface types by
+      design, and collapsing it would undo the store-decoupling work.
+      `TestNoRawGetForAccessorOwnedTypes` guards against a raw
+      `Get[*config.Config]` / `Get[*plugin.EventBus]` reappearing (escape
+      hatch: a `serviceregistry-guard:allow-raw-get` comment on the line).
 
 (SEC-9 is already filed; PERF-4 has its own fragment; PERF-2's remainder is
 the aggregate-coalescing task; PERF-7 is the BookSig/memdb program.)
