@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package database
 
@@ -132,4 +132,33 @@ func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 		counts[*b.SeriesID]++
 	}
 	return counts, nil
+}
+
+// SeriesRefCounts returns, per series ID, how many books reference it in ANY
+// state — including books in the trash and non-primary (duplicate) versions.
+// A series ID absent from the map is referenced by nothing and is the only
+// thing safe to delete.
+//
+// It is the exported twin of the entities package's private seriesRefCounts,
+// promoted here so the packages that cannot import internal/server (dedup and
+// maintenance/jobs) reach the same guard instead of growing a third and fourth
+// inline copy of it.
+//
+// It fails CLOSED. If the store cannot answer the unfiltered question, the
+// caller must refuse to delete rather than fall back to the filtered count,
+// because that fallback is precisely the bug: it deletes rows while reporting
+// success. See the file comment above for the production damage that caused.
+//
+// Resolution goes through AsSeriesBookRefStore, and therefore through
+// AsCapability, so it looks THROUGH the decorator chain. A bare type assertion
+// against *PebbleStore is wrong in production, where the Bleve search-index
+// decorator always wraps the store.
+func SeriesRefCounts(store any) (map[int]int, error) {
+	refCounter := AsSeriesBookRefStore(store)
+	if refCounter == nil {
+		return nil, fmt.Errorf("store cannot count unfiltered series references (got %T); "+
+			"refusing to delete from a filtered count, which silently strands "+
+			"books whose series is trashed or non-primary", store)
+	}
+	return refCounter.GetAllSeriesBookRefCounts()
 }
