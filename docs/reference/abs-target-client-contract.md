@@ -1,7 +1,7 @@
 <!-- file: docs/reference/abs-target-client-contract.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: e7f16330-0b27-42fe-a669-fa3bc539748a -->
-<!-- last-edited: 2026-08-11 -->
+<!-- last-edited: 2026-08-22 -->
 
 # ABS Target-Client Contract — what our server MUST do today
 
@@ -502,9 +502,80 @@ Do not file them as work, and do not let a diff against upstream ABS resurrect t
 Also out of scope, client-side by nature: playback speed, sleep timers, skip intervals.
 `POST /api/me/sync-local-progress` is deprecated — skip it.
 
-**Safe to stub** (`[]`/`{}`/404 per §6.6): playlists, collections, series detail, authors
-detail, tasks, sessions/listening-sessions, all stats endpoints, users, backups,
-search/match/tools/upload/filesystem, api-keys, emails.
+### 11.1 Re-verification, 2026-08-22 — why the list below replaced the old one
+
+The 2026-08-11 list above was audited once against the fixture corpus and never touched
+again. The corpus proves only what the fixtures happen to contain — **zero playlist
+requests in the fixtures never meant zero playlist requests from the client**, and that
+exact gap let a real, shipped bug ("safe to stub: playlists") reach production as an
+empty screen. That failure mode generalizes to every entry below, so this re-check used
+three different oracles instead of the fixture corpus: the registered route table
+(`internal/server/wire_abs_routes.go`, `handler.go`'s `Register`), this document's own
+other sections (§9, Appendix A), and — where it exists — an actual production request
+log (`TODO.md`). An empty fixture corpus is absence-of-evidence for a claim, never
+evidence-of-absence; only one of the three oracles above can falsify a claim.
+
+**Falsified — implemented, not stubs.** Remove from any "safe to leave empty" reasoning:
+
+- **Playlists** — `GET /api/playlists/:id` (`absCollisionDetailRoutes`,
+  `handlers/abs/playlists.go`), implemented 2026-08-13 after a user opened a playlist
+  in the app and got an empty screen.
+- **Collections** — six routes in `absCollisionDetailRoutes`
+  (`handlers/abs/collections.go`), implemented 2026-08-16.
+- **`GET /api/me/sessions`, `GET /api/me/listening-sessions`,
+  `GET /api/me/listening-stats`, `GET /api/me/stats/year/:year`,
+  `GET /api/me/item/listening-sessions/:id`** — all answer **200 with truthful data**
+  today (`handlers/abs/stats.go`, `handler.go` `Register`), not a stub of any kind. This
+  isn't a new finding: §9 above already says "all four are served as 200 with truthful
+  zeros, never 404," and Appendix A already records "prefer 404 for the listening-stats
+  family" as **refuted twice over**. §11 had simply drifted out of sync with the rest of
+  this same document.
+
+**Falsified — NOT "out of scope by decision"; these are open, unfixed gaps, and
+re-listing them here would repeat the exact playlist mistake:**
+
+- **`GET /api/series/:id`** and **`GET /api/authors/:id`** (series/author *detail*,
+  distinct from the implemented *list* routes `GET /api/libraries/:id/series` and
+  `GET /api/libraries/:id/authors`). Neither is registered in `handler.go`, so both
+  fall through to the generic `/api/*` → `/api/v1/*` redirect, which 301s into
+  `/api/v1/authors/:id` / `/api/v1/series/:id` — routes that themselves don't exist,
+  so the client lands on 404. That is not evidence of a deliberate decision: `TODO.md`
+  ("ABS author and series detail routes are unimplemented and redirect into a 404")
+  found this by enumerating **actual production request logs**, not the fixture corpus
+  — 3 real `GET /api/authors/:id` requests and their 1:2 redirect-log signature,
+  captioned "the ABS author page asks for an author and gets a 404 … **Same failure
+  the playlist detail route had.**" `TODO.md`'s "Series DETAIL is still not served"
+  item is still open (unchecked) and scopes the actual fix
+  (`absCollisionDetailRoutes` entries, per the playlist precedent). Do not stub or
+  re-close either as "by decision" without doing that work.
+
+**Still genuinely unimplemented, and the current behavior really is `[]`/`{}`/404 (no
+live `/api/v1` twin for the redirect to land on):** `GET /api/backups`, `GET /api/match`,
+`GET /api/upload`, `GET /api/search` (the bare, non-library-scoped form — distinct from
+the implemented `GET /api/libraries/:id/search`), `GET /api/emails`. Verified against
+`internal/server/wire_*_routes.go`: no route exists under any of these paths, so a
+client hitting them 301s into `/api/v1/…` and gets an honest 404 there too.
+
+**Still genuinely unimplemented, but the current behavior is a 301 into a *live*,
+permission-gated app-API route — not a 404 — so the `[]`/`{}`/404 stub-shape claim is
+false for these even though "don't build this" still holds:** `GET /api/sessions`
+(admin session history — distinct from the implemented `GET /api/me/sessions`),
+`GET /api/tasks` (`wire_operations_routes.go`), `GET /api/tools`
+(`wire_media_routes.go`), `GET /api/filesystem` (`wire_library_routes.go`),
+`GET /api/api-keys` (`wire_auth_routes.go`), `GET /api/users` (`wire_library_routes.go`,
+7 routes, see `absAppAPICollisions`). Each has a live `/api/v1` twin gated on
+`PermSettingsManage` or similar, so this is the identical "301 into a foreign shape"
+defect class the playlist bug was (`TODO.md` N-4). It has not caused a client-visible
+incident **only because**, per §1, both target clients are playback apps with no admin
+surface and (per the coverage-gap audit, `docs/audits/2026-08-11-abs-coverage-gap-audit.md:385`)
+these namespaces were dropped by the same 2026-07-30 scope narrowing that dropped
+everything else in this section — a claim about upstream *feature category*, not
+about AudioBooth/Absorb request traffic. **Could not verify against a request log** —
+unlike the series/authors finding above, no in-repo evidence (production log or
+otherwise) confirms neither target client ever calls these. Treat as "believed unused,
+not observed unused" until someone captures traffic the way the series/authors finding
+did, and do not add a route-table check to this bucket claiming it settles the
+question — see the note at the top of this section for why it can't.
 
 ---
 
