@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package database
 
@@ -91,7 +91,20 @@ func applyMemSync(m *MemStore, op string, fn func(txn memTxn) error) {
 	txn := m.db.Txn(true)
 	if err := fn(txn); err != nil {
 		txn.Abort()
-		slog.Warn("memdb sync failed (pebble still authoritative)",
+		// The write SUCCEEDED in Pebble and is now absent from memdb: memdb is
+		// short by at least one row until the next warmup rebuilds it. Logging
+		// that and moving on is what left the unfiltered reference counters
+		// answering "referenced by nothing" from a projection they had no
+		// reason to trust -- the same divergence warmup row-drops cause, with
+		// no warmup involved, so it is recorded through the same mechanism.
+		//
+		// Attributed to memTableUnknown because fn is an opaque closure and
+		// there is genuinely no way to tell which table's insert failed. That
+		// taints every table rather than none; see memTableUnknown for why over-
+		// refusing is the bounded direction here (PebbleStore falls through to
+		// the authoritative scan, so the answer stays correct and only slows).
+		m.recordLostRows(memTableUnknown, 1)
+		slog.Warn("memdb sync failed (pebble still authoritative); memdb is now known-incomplete until the next warmup",
 			"op", op, "error", err)
 		return
 	}

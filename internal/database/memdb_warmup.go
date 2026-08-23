@@ -35,19 +35,16 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	started := time.Now()
-
-	// Clear any known-incomplete state up front: this warmup rebuilds every
-	// table from Pebble, the authoritative source, and so supersedes whatever
-	// was previously known to be missing. Clearing at the END would erase the
-	// losses this warmup is about to record.
-	m.resetLostRows()
-
 	txn := m.db.Txn(true)
 	defer txn.Abort()
 
 	counts := map[string]int{}
 	scanned := map[string]int{}
 	skips := map[string]int{}
+	// lost accumulates the same failures keyed by TABLE, to be published onto the
+	// MemStore atomically with txn.Commit below. Kept local until then so the
+	// flag and the data it describes become visible together.
+	lost := map[string]int{}
 	durations := map[string]time.Duration{}
 	bytesScanned := map[string]int64{}
 	bytesDiscarded := map[string]int64{}
@@ -163,15 +160,21 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// value loses an unknown number of rows and this counts 1 — conservative in
 	// the count, exact in the condition. See MemStore.recordLostRows.
 	lose := func(table, keyForLog, reason string, err error) {
-		skips[table]++
-		m.recordLostRows(table, 1)
-		// Don't spam: log first 10 per table, then mute.
-		if skips[table] <= 10 {
+		// Counted by table+reason, not by table alone. "12 undecodable rows"
+		// and "12 rejected inserts" call for opposite fixes -- one is corrupt
+		// data on disk, the other a schema rule the data does not satisfy --
+		// and this package has already paid for one conflated counter (see
+		// warmIter on rows-vs-keys, which cost a false P0).
+		rk := table + "/" + reason
+		skips[rk]++
+		lost[table]++
+		// Don't spam: log first 10 per table+reason, then mute.
+		if skips[rk] <= 10 {
 			slog.Warn("memdb warmup: skipping row",
 				"table", table, "key", keyForLog, "reason", reason, "error", err)
-		} else if skips[table] == 11 {
+		} else if skips[rk] == 11 {
 			slog.Warn("memdb warmup: further skips muted",
-				"table", table, "muting_after", 10)
+				"table", table, "reason", reason, "muting_after", 10)
 		}
 	}
 
@@ -394,6 +397,12 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// one txn across all of them" turns on this number.
 	commitStart := time.Now()
 	txn.Commit()
+	// Publish the known-incomplete flags in the same breath as the data they
+	// describe. Doing this at the START of the warmup instead would clear the
+	// flag while MVCC readers still see the OLD, still-short committed rows --
+	// reintroducing the exact fail-open this tracking exists to close. See
+	// MemStore.publishLostRows.
+	m.publishLostRows(lost)
 	commitDur := time.Since(commitStart)
 	commitMS := commitDur.Milliseconds()
 
