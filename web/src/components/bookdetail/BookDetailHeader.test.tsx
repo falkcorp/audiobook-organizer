@@ -36,7 +36,7 @@ vi.mock('../../services/readingApi', async () => {
 });
 
 function makeBook(over: Partial<Book> = {}): Book {
-  return { id: 1, title: 'A Book', ...over } as Book;
+  return { id: 'bk-1', title: 'A Book', ...over } as Book;
 }
 
 function renderHeader(book: Book, versions: Book[] = []) {
@@ -66,7 +66,7 @@ describe('the version-group chip', () => {
 
   it('carries the number of versions, not a bare "Linked"', () => {
     const book = makeBook({ version_group_id: 'grp-1' });
-    renderHeader(book, [book, makeBook({ id: 2 }), makeBook({ id: 3 })]);
+    renderHeader(book, [book, makeBook({ id: 'bk-2' }), makeBook({ id: 'bk-3' })]);
     expect(screen.getByText('Version Group (3)')).toBeTruthy();
     expect(screen.queryByText('Version Group Linked')).toBeNull();
   });
