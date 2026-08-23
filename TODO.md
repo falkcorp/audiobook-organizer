@@ -3175,7 +3175,13 @@ Whatever is chosen, (1) is non-negotiable: a queue that drops data must say how 
         `internal/audiobooks/service_mutation.go:63` (#1104).
       - `go/disabled-certificate-check` ×3 — two are in `tools/cmd/` one-offs
         (`merge-split-books`, `reconcile-paths`), one is in
-        `internal/mtls/provisioning.go:142` and matters more.
+        `internal/mtls/provisioning.go:142` and matters more. **Resolved
+        2026-08-23 (TASK-084, PR #2800):** all 3 (alerts #379, #974, #959)
+        dismissed via the code-scanning API with `dismissed_reason: "won't
+        fix"`, each justification re-verified clause-by-clause at HEAD before
+        dismissal. Dismissed, not fixed — the `InsecureSkipVerify` calls
+        remain in the code, intentionally, with their in-code justifications
+        unchanged.
       - `go/weak-sensitive-data-hashing` — `internal/database/apikey_token.go:33`
         (alert #1466). API-token hashing.
 
