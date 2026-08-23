@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupSeriesTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 import { useState, useEffect, useCallback } from 'react';
 import {
   Box,
@@ -229,7 +229,11 @@ export function SeriesDedupTab() {
     setMergeSuccess(null);
     setError(null);
     await runOperationWithPolling(
-      () => api.deduplicateSeries(),
+      // Explicitly false: this is the "Merge All" confirm action, whose dialog
+      // says the merge cannot be undone. The server treats an absent dry_run as
+      // true, so omitting it here would confirm a destructive action and then
+      // only preview it.
+      () => api.deduplicateSeries(false),
       setActiveOp,
       (final) => {
         if (final.status === 'failed') {
