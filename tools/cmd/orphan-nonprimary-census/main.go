@@ -1,5 +1,5 @@
 // file: tools/cmd/orphan-nonprimary-census/main.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e02ce63c-3475-470d-a2c4-a8766769d3c6
 // last-edited: 2026-08-23
 //
@@ -10,9 +10,22 @@
 // IsPrimaryVersion == nil, which the rest of the codebase treats as primary
 // (visible) — see internal/audiobooks/service_filtering.go's
 // `eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion` convention.
-// Conflating the two populations would inflate this census roughly 140x
-// (~5,731 nil-flagged books measured in production vs. a sampled ~41
-// explicitly-false ones).
+// Conflating the two populations would inflate this census roughly 24x.
+// Full-library page-through on production 2026-08-23 (56,727 rows):
+//
+//	flag  has-VG  count
+//	true    yes   37,613
+//	false   yes   14,870
+//	false   no       116  <- the target anomaly
+//	nil     no     2,776
+//	nil     yes         0
+//	true    no      1,352
+//
+// Against the same cross-tab taken 2026-08-14 (63,839 rows) the anomaly grew
+// 41 -> 116 while the library shrank by 7,112. Two structural claims recorded
+// then: "every nil book is a groupless singleton" still holds (nil/yes = 0),
+// but "true + no VG = 0" has BROKEN — 1,352 books now sit there. Re-measure
+// rather than trusting either figure; this population is not stable.
 //
 // No DB writes. No mutating API calls. Output is a CSV report (book ID,
 // title, created_at, updated_at, version_group_id, is_primary_version) plus a
@@ -78,8 +91,9 @@ type listResponse struct {
 // treats a nil flag as primary/visible (`eff := s.IsPrimaryVersion == nil ||
 // *s.IsPrimaryVersion`), so an ungrouped book with no stored flag is not
 // evidence of this anomaly — it is the much larger, already-understood
-// "no flag ever set" population (~5,731 books in production). Only an
-// explicit false, set by something, is the target population.
+// "no flag ever set" population (2,776 books measured in production
+// 2026-08-23). Only an explicit false, set by something, is the target
+// population.
 //
 // database.Book/BookSummary tag both fields `omitempty`, so a nil
 // VersionGroupID or IsPrimaryVersion is indistinguishable from an absent key
@@ -174,6 +188,22 @@ func countFieldPresence(books []book) fieldPresenceCounts {
 // VersionGroupID is NOT checked the same way: most books legitimately have
 // no version group, so "0 books have one" is not on its own evidence of a
 // wire problem the way "0 books have any is_primary_version value" is.
+//
+// KNOWN BLIND SPOT — this guard is one-sided. It catches the field
+// DISAPPEARING (100% nil); it cannot catch the field COLLAPSING TO A
+// CONSTANT. PR #2805 serializes the effective flag rather than the raw
+// nullable, so a nil becomes an explicit `true` on the wire and
+// withPrimaryFlag goes to 100% permanently, retiring this guard rather than
+// tripping it.
+//
+// That does not move the census itself: the predicate keys on explicit
+// FALSE, and #2805 changes only absent -> true. It does invalidate one
+// downstream use. TODO.md's C111 entry nominates this census as the
+// post-fix verification that "the expected end state is exactly two
+// populations (true, false+VG)" — but once nils render as `true`, the API
+// reports that end state whether or not the backfill ever ran. After #2805
+// deploys, that specific verification has to read the store directly; the
+// API can no longer distinguish a backfilled true from a nil.
 func checkFieldPresence(c fieldPresenceCounts) error {
 	if c.examined == 0 {
 		return nil // checkPositiveControl's job
@@ -227,12 +257,24 @@ func main() {
 	// the server's own ?is_primary_version=false query filter: this tool
 	// exists to independently verify that population, not to re-report
 	// whatever the API's own (already-tested-elsewhere) filter says.
-	books, err := fetchAllBooks(client, *apiURL, key, *pageSize, *limit, *pageDelayMs, *verbose)
+	books, dupes, err := fetchAllBooks(client, *apiURL, key, *pageSize, *limit, *pageDelayMs, *verbose)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "orphan-nonprimary-census: fetch books: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "Fetched %d books from API\n", len(books))
+	fmt.Fprintf(os.Stderr, "Fetched %d distinct books from API\n", len(books))
+
+	// A duplicate is not a harmless double-count. Offset paging over a live
+	// sorted list shifts rows across page boundaries, and a row that moves
+	// backwards is served twice while some other row is skipped entirely. So
+	// duplicates > 0 means rows were probably MISSED, and the anomaly count
+	// below is a lower bound rather than a census. Not fatal — re-running
+	// against a quiet library is the fix — but it must never be silent.
+	if dupes > 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: the server returned %d duplicate book rows during paging. "+
+			"The library changed underneath this scan, so rows were likely MISSED too: treat every "+
+			"number below as a LOWER BOUND, not a census. Re-run when the library is idle.\n", dupes)
+	}
 
 	presence := countFieldPresence(books)
 	fmt.Fprintf(os.Stderr, "Field presence: %d/%d books have a version_group_id, %d/%d have an is_primary_version flag\n",
@@ -278,6 +320,7 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "\n=== SUMMARY ===\n")
 	fmt.Fprintf(os.Stderr, "Total books inspected:                    %d\n", len(books))
+	fmt.Fprintf(os.Stderr, "Duplicate rows served during paging:      %d\n", dupes)
 	fmt.Fprintf(os.Stderr, "Books with a version_group_id set:        %d\n", presence.withVersionGroup)
 	fmt.Fprintf(os.Stderr, "Books with an is_primary_version flag:    %d\n", presence.withPrimaryFlag)
 	fmt.Fprintf(os.Stderr, "Ungrouped AND explicitly non-primary:     %d\n", len(matches))
@@ -285,30 +328,54 @@ func main() {
 
 // ----- API pagination -----
 
-func fetchAllBooks(client *http.Client, apiURL, key string, pageSize, limit, pageDelayMs int, verbose bool) ([]book, error) {
+// fetchAllBooks pages the whole library and returns the de-duplicated books
+// plus the number of duplicate rows the server handed back.
+//
+// Duplicates are counted rather than tolerated because this is offset-based
+// paging over a live, sorted collection: a concurrent insert or a re-sort
+// between two requests shifts rows across the page boundary, so the same book
+// can arrive twice while another is never returned at all. That inflates the
+// row count while silently dropping rows, which is exactly the failure a
+// census must not report as a clean scan. Measured 0 duplicates over 56,727
+// rows on production 2026-08-23, but that is a lucky quiet library, not a
+// property of the algorithm.
+func fetchAllBooks(client *http.Client, apiURL, key string, pageSize, limit, pageDelayMs int, verbose bool) ([]book, int, error) {
 	var all []book
+	seen := make(map[string]struct{})
+	duplicates := 0
 	offset := 0
 	for {
-		url := fmt.Sprintf("%s/api/v1/audiobooks?page_size=%d&offset=%d", apiURL, pageSize, offset)
+		// `limit`, not `page_size`: the handler reads `limit` and ignores
+		// `page_size` entirely. Measured against production 2026-08-23 —
+		// `page_size=5` returned 50 items (the server default) while
+		// `limit=5` returned 5. Sending `page_size` made the -page-size flag
+		// inert and pinned every run to 50 rows/request.
+		//
+		// `show_quarantined=true` so the census sees the whole library. The
+		// default path sets ExcludeQuarantined and hides quarantined rows; a
+		// quarantined book is still a real row that can carry the anomaly.
+		// Measured 2026-08-23 this cost nothing (both quarantined books were
+		// primary), but that is a property of today's data, not a guarantee.
+		url := fmt.Sprintf("%s/api/v1/audiobooks?limit=%d&offset=%d&show_quarantined=true", apiURL, pageSize, offset)
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("GET %s: %w", url, err)
+			return nil, 0, fmt.Errorf("GET %s: %w", url, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, body)
+			return nil, 0, fmt.Errorf("API returned %d: %s", resp.StatusCode, body)
 		}
 
 		var lr listResponse
 		if err := json.Unmarshal(body, &lr); err != nil {
-			return nil, fmt.Errorf("decode response: %w", err)
+			return nil, 0, fmt.Errorf("decode response: %w", err)
 		}
 		// Unwrap data envelope if present.
 		items := lr.Items
@@ -320,14 +387,34 @@ func fetchAllBooks(client *http.Client, apiURL, key string, pageSize, limit, pag
 		if verbose {
 			fmt.Fprintf(os.Stderr, "Page offset=%d: got %d items (total count=%d)\n", offset, len(items), count)
 		}
-		all = append(all, items...)
+		for _, b := range items {
+			if _, dup := seen[b.ID]; dup {
+				duplicates++
+				continue
+			}
+			seen[b.ID] = struct{}{}
+			all = append(all, b)
+		}
 
 		if limit > 0 && len(all) >= limit {
 			all = all[:limit]
 			break
 		}
-		// Server may cap page size below requested value; trust count and stop only when empty or count reached.
-		if len(items) == 0 || (count > 0 && len(all) >= count) {
+		// Terminate on an EMPTY PAGE ONLY. Deliberately NOT on
+		// `len(all) >= count`.
+		//
+		// `count` is not the size of this result set. When no other filter is
+		// set, buildAudiobookListResponse's `hasFilters` test is false and the
+		// count comes from CountAudiobooks -> CountPrimaryBooks(), which
+		// counts PRIMARY, NON-DELETED books only, while the item stream is not
+		// primary-filtered at all. Measured against production 2026-08-23:
+		// count reported 41,741 while the stream held 56,727, and the first
+		// page of 250 was 240 non-primary books. Breaking on `count` here
+		// would have silently truncated this census by 14,986 books — and
+		// -min-expected, which only guards the low end, would have passed it.
+		//
+		// An empty page is the only honest end-of-stream signal available.
+		if len(items) == 0 {
 			break
 		}
 		offset += len(items)
@@ -337,7 +424,7 @@ func fetchAllBooks(client *http.Client, apiURL, key string, pageSize, limit, pag
 			time.Sleep(time.Duration(pageDelayMs) * time.Millisecond)
 		}
 	}
-	return all, nil
+	return all, duplicates, nil
 }
 
 // ----- CSV output -----
