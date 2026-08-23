@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.35.0 -->
+<!-- version: 10.35.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-22 -->
+<!-- last-edited: 2026-08-23 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,463 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-052-UNDOC** `docs/api/openapi.json` has no entry at all for two
+      live, permission-gated routes discovered while TASK-052 triaged the 15
+      stale `POST /maintenance/{job-name}` paths (PR for TODO L296):
+      `GET /maintenance/jobs` (the maintenance job catalogue —
+      `internal/server/maintenance_dispatcher.go`'s `listMaintenanceJobs`,
+      wired in `internal/server/server_lifecycle.go`) and
+      `POST /maintenance/wipe` (admin-only, `s.handleWipe`, same file). Neither
+      was ever documented, so unlike the 15 deleted paths there is no stale
+      entry blocking this — it is pure addition. `POST /maintenance/jobs/{job_id}`
+      (added by TASK-052) references `GET /maintenance/jobs` in its
+      description as the live source of truth for the job_id enum; that
+      cross-reference is currently undocumented itself.
+
+- [ ] **TODO-REVERTDEDUPE** `auto-revert.yml`'s own "File the bug" step
+      (`.github/workflows/auto-revert.yml` ~L305, `gh issue create`) has no
+      pre-check against an already-open issue for the same failing SHA —
+      unlike the new `auto-revert-backstop.yml`, which gained a `gh issue
+      list --state open --search` dedupe check specifically because this gap
+      exists. A flapping CI failure that `auto-revert.yml` handles repeatedly
+      (e.g. `workflow_run` firing more than once for the same commit, or a
+      revert that does not fix the build) could already be filing duplicate
+      issues today, independent of the backstop. Add the same dedupe check to
+      `auto-revert.yml`'s issue-filing step.
+
+- [ ] **TODO-051-UNDOC** `docs/api/openapi.json` is missing correctly-prefixed
+      entries for 11 live routes that TASK-051 found undocumented while
+      deleting group-relative duplicate paths (PR for TODO L296): `/users/invite`,
+      `/users/invites`, `/users/invites/{token}`, `/auth/accept-invite`,
+      `/deluge/status`, `/deluge/test-connection`, `/itunes/rebuild`,
+      `/itunes/write-back-all`, `/users/{id}/deactivate`,
+      `/users/{id}/reactivate`, `/users/{id}/reset-password`. Each has a bogus
+      group-relative stub at the wrong (bare) path today — do not delete those
+      stubs until a correctly-prefixed replacement is written, per
+      `.claude/skills/api-doc/SKILL.md`.
+
+- [ ] **SCAN-PHASE** Restructure the library scan into discrete, resumable phases —
+      owner report 2026-08-22: the scan "seems way too slow", and the proposal is
+      that it "should just go in phases so it can easily resume at a phase".
+
+  **Why phases, specifically.** The complaint is duration, but the fix asked for is
+  *resumability*, and those are different problems that happen to share a cause. A
+  scan that is one long uninterruptible pass has to be re-run from zero after any
+  interruption — a deploy, a restart, a crash, a timeout — so its effective cost is
+  not its runtime but its runtime times the number of times it gets interrupted.
+  Phase checkpoints attack that multiplier without needing any single phase to get
+  faster. Note this also removes the "never deploy mid-scan" constraint that
+  currently gates every production restart (`docs/operations/`, and the handoff
+  runbook), which is a second, separate win.
+
+  **Measure before designing.** Do not assume the slow part. `scheduled.library_scan`
+  runs every 360 min, so there is real production timing to pull from
+  `journalctl -u audiobook-organizer` rather than guess. The phase boundaries are
+  only useful if they fall where the time actually goes, and a phase split chosen
+  from intuition will checkpoint in the wrong places.
+
+  **Design notes / open questions:**
+  - What are the phases? Candidate split: discover files → parse/probe metadata →
+    resolve contributors → write/index → post-scan maintenance. Confirm against
+    measured timings, not this list.
+  - Where does phase state live, and what makes a phase idempotent enough to resume
+    into rather than restart? A phase that is resumable only from its start is still
+    a large win over a scan that is resumable only from its start.
+  - Interaction with the existing checkpoint machinery — `internal/plugins/maintenance/`
+    already has a `pipeline_checkpoint.go` with `checkpointPrefix`/`checkpointTTLDays`
+    consts currently flagged as **unused**. Check whether that is a half-built version
+    of this idea before writing a second one.
+  - Resume must never re-apply metadata or re-write tags for work a prior phase
+    already committed; the apply pipeline has a history of double-writing
+    (`dedupe-book-file-rows`, the 42-rows/21-paths incident).
+
+  **Not scoped here:** making any individual phase faster. That is a separate
+  optimization task and should be filed from the measurements above.
+
+- [ ] **`internal/ai/retry.go`'s `isPermanentAIError` HTTP-429 branch checks
+      the wrong JSON field for OpenAI's real quota-exhaustion error.** Found
+      while wiring `internal/scanner/ai_failure.go`'s `isPermanentAIFailure`
+      to reuse this classifier (TODO L4852/L4961). The branch is
+      `case 429: return apiErr.Code == "insufficient_quota"`, and
+      `openai-go`'s `apierror.Error.Code` decodes the response JSON's `"code"`
+      field (`internal/apierror/apierror.go`:
+      `Code string \`json:"code" api:"required"\``). The production error
+      captured in `internal/scanner/ai_failure_test.go`'s `prodQuotaError` —
+      copied from the scanner's own incident journal, not composed — is a 429
+      with `"type": "insufficient_quota"` but `"code": "credit_balance_exhausted"`.
+      Against the real payload, `apiErr.Code` is `"credit_balance_exhausted"`,
+      not `"insufficient_quota"`, so this branch returns `false` for the exact
+      error the scanner's test suite exists to catch: `DoWithRetry` retries it
+      as transient, burns `maxRetries` attempts with backoff, and only
+      `internal/scanner/ai_failure.go`'s substring-marker fallback (which
+      still checks for `"credit_balance_exhausted"` and `"insufficient_quota"`
+      as raw text) catches it after the fact. Fix is presumably to also accept
+      `apiErr.Type == "insufficient_quota"`, or to match on either field
+      depending on which one OpenAI's docs treat as stable API for this error
+      family — needs the same kind of primary-source check TASK-124 did
+      before changing retry.go's classification, since retry.go's own
+      `DoWithRetry` is used by other callers too.
+
+- [ ] **TODO-MOCKORDER** Decide whether to add a permanent guard against shadowed
+      branches in the `setupMockApi` dispatcher
+      (`web/tests/e2e/utils/test-helpers.ts`). TASK-093 audited the 10
+      `pathname.startsWith(...)` catch-alls by hand and found 0 shadowed
+      branches, but an audit decays the moment someone adds a new branch below a
+      catch-all — which is exactly how the `/api/v1/audiobooks/batch` POST bug
+      got in. **Caveat that makes this a decision, not a task:** the dispatcher
+      mixes three branch forms — 67 `pathname === '...'`, 10
+      `pathname.startsWith(...)`, and 24 `pathname.match(/.../)` — and a
+      literal-parsing guard reads the first two accurately but can only
+      approximate a regex by its leading literal prefix (one of the 24, at
+      ~L1584, is even split across lines and unreadable by a line-based parser).
+      A guard blind to a third of the branches would advertise more coverage than
+      it has. Either accept that limit explicitly, or restructure the dispatcher
+      into a route table that can be checked exactly.
+
+- [ ] **TODO-MOCKWORKS** `web/tests/e2e/utils/test-helpers.ts` ~L1750:
+      `pathname.startsWith('/api/v1/works')` has no trailing slash, so it also
+      matches any future sibling path with that prefix (`/api/v1/workspaces`,
+      `/api/v1/works-queue`, ...). Nothing is shadowed today; add the trailing
+      slash (plus a separate exact branch for bare `/api/v1/works`) before any
+      such endpoint is mocked. Same file ~L732: `/api/v1/backup/list` has no
+      HTTP-method guard, so it answers a `DELETE /api/v1/backup/list` ahead of
+      the `/api/v1/backup/` DELETE catch-all below it.
+
+- [ ] **COLLECTION-NAME-CONFLICT-SENTINEL** `PebbleStore.UpdateCollection`'s
+      duplicate-name rejection still signals with a bare
+      `fmt.Errorf("collection name %q already in use", ...)`, matched at call
+      sites via `strings.Contains(err.Error(), "already in use")`
+      (`internal/server/handlers/collections.go`,
+      `internal/server/handlers/abs/collections.go`). Give it a sentinel —
+      `var ErrCollectionNameInUse = errors.New(...)`, wrapped with `%w` — and
+      switch those call sites to `errors.Is`, the way
+      `ErrCollectionVersionConflict` now works in the same file.
+
+  **Why this is worth doing rather than leaving as-is.** The version-conflict
+  CAS was very nearly shipped with the same string match, on the argument that
+  it matched the existing convention. It does not: `internal/database` already
+  declares sentinels elsewhere (`ErrSettingNotFound` in `settings.go`,
+  `ErrNoHNSWSnapshot` in `hnsw_embedding_store.go`), so `already in use` is the
+  outlier, not the pattern. Converting the CAS turned up the concrete failure
+  mode too — a test fake in `abs/collections_test.go` was hand-building a
+  lookalike message, and would have gone on passing against a handler that had
+  stopped recognising the error at all. The name conflict has exactly the same
+  exposure today.
+
+### 🧹 DEAD-1 residue — `linkAsVersion` is dead production code
+
+- [ ] **Remove `Importer.linkAsVersion`** (`internal/itunes/service/importer.go:1780`) and the
+      two tests that are its only callers. Spun out of the 2026-05-01 re-audit close-out
+      (item 42), where it is the one DEAD-1 symbol that was never actually removed.
+
+  **Why it was missed.** DEAD-1 (= R-5 in `docs/archive/codebase-evaluation.md:107`) named
+  four unused symbols. The close-out grep covered three of them —
+  `legacySaveConfigToDatabase_REMOVED`, `bookTagKeyspace`,
+  `bookSummarySelectColumnsQualified` — got 0 hits, and treated that as the whole answer.
+  The fourth, `linkAsVersion`, was never in the grep and is still there. Re-verified at HEAD
+  `95d6db6ee`.
+
+  **Exact extent (`gopls references`, not a name grep).** `linkAsVersion` has **2**
+  references, total, and both are tests:
+
+  - `internal/itunes/service/importer.go:1780` — the declaration
+  - `internal/itunes/service/importer_error_paths_test.go:531` — direct call
+  - `internal/itunes/service/importer_error_paths_test.go:562` — direct call
+
+  Zero production callers on any path. It lost its last real caller somewhere after
+  `4207faf3b` moved the `Importer` into `itunesservice`, and `89cc3db1d` (TODO 4.13d error
+  and edge-case coverage) then wrote tests against the orphan.
+
+  **Why `staticcheck` will not find this for you.** U1000 counts in-package test usage as
+  usage, so an unexported function exercised only by its own package's tests is invisible to
+  it. `staticcheck -checks SA4006,U1000 ./internal/itunes/...` is clean at HEAD and that
+  proves nothing here. Only symbol resolution (`gopls references`) answers the question — do
+  not re-scope this task from a clean linter run.
+
+  **Removal is not free of judgement.** Deleting the function also deletes two passing tests
+  (`TestLinkAsVersion_CreatesVersionBook` and
+  `TestLinkAsVersion_ExistingHasNoVGID_CreatesVGID`) and will drop
+  `internal/itunes/service` coverage. That is correct — coverage of unreachable code is not
+  coverage — but confirm first that the *behaviour* it implements (version-linking an
+  imported book onto an existing primary's `VersionGroupID`) is genuinely reached by another
+  path, and not a feature that was silently dropped when the caller went away. If it turns
+  out to be a lost feature rather than dead code, this becomes a bug report, not a deletion.
+  Note `docs/AI-REFERENCE.md:457` still documents it as live behaviour.
+
+  **Before removing, re-run the reference check** — if a production caller has appeared since
+  2026-08-22, keep the function. Gate: `go build ./...` + `make test`.
+
+### 📋 `DECISIONS-PENDING.md` contradicts itself — settled decisions still listed as open
+
+- [ ] **Reconcile `docs/plans/DECISIONS-PENDING.md`'s open table with its own recorded-decisions
+      table.** Surfaced by TASK-058 (PR #2715) while verifying the execution-manifest gates.
+
+  The file carries both a "Decisions recorded 2026-08-21 (owner, via AskUserQuestion)" table
+  **and** an open/pending table that still lists the same rows 1–5 as awaiting a decision. It also
+  still says PR #1935 "stays open"; `gh pr view 1935` reports **MERGED**. So the document asserts
+  two contradictory states about the same five items, and a reader landing on the open table gets
+  the wrong one.
+
+  **Why this is worth fixing rather than ignoring:** the manifest at
+  `docs/plans/2026-07-10-execution-manifest.md` was just corrected to match the *recorded* table.
+  Leaving the stale open table in place recreates exactly the drift that correction removed, and
+  the next reader has no way to tell which table is authoritative.
+
+  **Two nuances to preserve when reconciling** — both were nearly lost once already:
+
+  - INIT-7 is **HOLD CONFIRMED**, not "parked". The owner answered "KEEP ON HOLD".
+    `SCOUT-INSTRUCTIONS.md:14`'s `ON HOLD → "parked"` is the scout package's classification
+    convention for excluding an item from briefing, **not** a decision the owner made.
+  - INIT-6's #1935 merged, but it was the plan doc *"for owner sign-off"*. The STOP-FOR-HUMAN
+    spec review was never held. Recording a bare "merged" reads as approved and would contradict
+    the item's own hold status.
+
+  Related: `TODO.md` item 33 still calls REPO-SIZE-1 STOP-FOR-HUMAN, though
+  `docs/plans/2026-07-10-repo-size-history-rewrite-plan.md:223` records "Adopt Option (d)…Do not
+  rewrite history." Same reconciliation pass should cover it.
+
+### Bulk book-merge shows "Merged all" even when individual merges failed
+
+`web/src/components/dedup/DedupBookTab.tsx` — `handleMergeSelected` (~:107) and
+`handleMergeAll` (~:129) both loop over groups, catch per-group failures into
+`setError(...)`, then unconditionally call `setMergeSuccess('Merged ...')` after
+the loop. A run where 4 of 10 groups failed shows a success banner and a stale
+error banner side by side, with no indication which groups actually merged.
+`fetchDuplicates()` then re-lists, so the failed groups silently reappear
+underneath the success message.
+
+- [ ] Track per-group outcomes in the loop and report "Merged N of M" (naming the
+      failures) instead of an unconditional success string.
+
+**Why this is worth doing now rather than later:** until #2736, `api.mergeBooks`
+returned the response envelope instead of `body.data`, so `initial.id` was
+`undefined` on *every* invocation and the catch fired every time. The
+success-after-error path was therefore permanently active and obvious to anyone
+using the tab. #2736 fixed the id, which turns an always-on bug into a rare
+latent one — less visible, not less wrong. Found by a silent-failure review of
+#2736; pre-existing, deliberately left out of that PR's scope.
+
+### 🧹 DEP-1e — drop the deprecated `Book.ITunesPath` field
+
+- [ ] **Remove `ITunesPath *string` from `database.Book`** and the `BookCore` round-trip that
+      carries it. Spun out of the 2026-05-01 re-audit close-out (item 42), where it was the one
+      sub-item that is genuinely still open.
+
+  **Correcting the record.** The prior close-out note called DEP-1e "moot (post-SQLite removal)".
+  It is not moot — the field is still declared and still copied at HEAD `629d5fa79`. Nothing
+  re-checked the claim after the SQLite store was deleted, so a stale justification outlived its
+  reason.
+
+  **Exact extent (measured with `gopls findReferences` on the field, not a name grep).**
+  `Book.ITunesPath` has **6 references, total**:
+
+  - `internal/database/store.go:220` — the declaration itself
+  - `internal/database/bookcore.go:207` — read in `func (b *Book) Core() BookCore`
+  - `internal/database/bookcore.go:321` — written in `func (c *BookCore) ToBook() Book`
+  - `internal/itunes/service/importer_mock_test.go:127, 152, 177` — test-only writes
+
+  So it is a **pure carrier**: written by tests, round-tripped through `BookCore`, and read by no
+  production logic on any path. Removal is mechanical — delete the field, delete
+  `BookCore.ITunesPath` (`bookcore.go:62`) and both copy lines, then fix the three test literals.
+
+  **Why a name grep is the wrong instrument here.** `grep 'book\.ITunesPath'` returns **0 hits**
+  and looks like proof the field is already dead. It is not: the two real call sites use receivers
+  named `b` and `c`. Meanwhile `grep '\bITunesPath\b'` returns **75** non-test hits, nearly all of
+  which are the *authoritative* `BookFile.ITunesPath` (a plain `string`) and are unrelated to this
+  task. Neither count answers the question; only symbol resolution does. Do not re-scope this task
+  from either number.
+
+  **Do not confuse the two fields.** `BookFile.ITunesPath` (`store.go:810`, a `string`) is live and
+  load-bearing — iTunes import, write-back, path repair and reconcile all use it. Only the
+  `Book`-struct `*string` is being removed.
+
+  **Before removing, re-run the reference check** — if a new production reader has appeared since
+  2026-08-22, keep the field and re-scope. Gate: `go build ./...` + `make test`.
+
+### 🐛 `LegacyOpID` defeats `EnqueueOp`'s dedupe for maintenance jobs (serialization fixed 2026-08-22)
+
+- [x] ~~**Decide whether the 37 maintenance jobs should serialize against themselves**, and if so
+      give each def a per-job `ConcurrencyKey` (the op ID is the natural key) **plus**
+      `DedupeQueuedRuns: true`.~~ — **decided and shipped 2026-08-22 (PR #2709).**
+      `registerMaintenanceJobOp` now derives `ConcurrencyKey` from the job's own op ID when the
+      job's policy leaves it empty (a job that declares its own key keeps it, so the field stays
+      meaningful). `DedupeQueuedRuns` was deliberately **NOT** set: `maintenanceJobOpParams`
+      carries `DryRun`, so "run for real" clicked during a dry run would be silently dropped —
+      the exact bug #2688 fixed. Mutation-verified: with the key reverted, two enqueues overlap
+      (`maxOverlap == 2`); with it, they run sequentially.
+
+- [x] ~~**Still open from this fragment:** `LegacyOpID` continues to defeat `EnqueueOp`'s
+      byte-equality dedupe, because every request mints a fresh ULID.~~ — **fixed 2026-08-22
+      (measured in PR #2717, fixed in the PR that closed this).**
+
+      **The claim that it "disappears with `maintenance_dispatcher.go` in the v1 kill" was
+      wrong, and re-measuring is what caught it.** `maintenanceJobOpParams` is constructed at
+      three sites, and deleting the dispatcher removes only two — `server_lifecycle.go:287`
+      (`resumeLegacyOp`) stamps a fresh `LegacyOpID` on the **restart** path with no dispatcher
+      involvement, and `resumeInterruptedOperations` has no per-job dedupe, so
+      restart-after-double-click reproduced the bug regardless. Repo-wide the field has ~30
+      construction sites across nine subsystems; it is the v1↔v2 bridge seam, not a dispatcher
+      artifact. The dedupe fix was therefore **independent of the v1 kill**, not gated on it.
+
+      **The stamp was excluded from the comparison, not dropped.** Dropping it would have
+      regressed two things: `propagateLegacyOpStatus` reads it to move the v1 row off
+      `pending` (TODO.md records that bridge as measured working on 2026-08-16), and
+      `maintenance_job_op.go:132,142-147` keys the activity log off it — the latter guarded on
+      `p.LegacyOpID != ""`, so it would have failed **silently**. `Run` decodes from
+      `rawParams`, not the `SaveParams` snapshot, so "keep it at :180" would not have helped.
+
+  **Where:** `internal/server/maintenance_job_op.go` — `registerMaintenanceJobOp` is the single
+  factory for all 37 defs, so both fields are set in one place. `internal/maintenance/job.go:131`
+  (`DefaultPolicy`) is where `ConcurrencyKey: ""` is hardcoded, and `job.go:123` explicitly defers
+  per-job keys to "PR-2".
+
+  **The state of things as originally found (fixed by #2709).** Two gates both test
+  `def.ConcurrencyKey != ""`: `EnqueueOp`'s dedupe block (`registry.go`) and dispatcher Gate 3
+  (`dispatcher.go:107`). Every maintenance job used `DefaultPolicy()`, whose `ConcurrencyKey` is
+  `""`. So **neither gate had ever applied to a maintenance job**: a double-click started two runs,
+  and they ran *concurrently*, not serialized. Both gates now apply.
+
+  **Correction to an earlier note (2026-08-22).** A previous version of this fragment claimed
+  PR #2688 (params-aware `EnqueueOp` dedupe) turned a silently-swallowed double-click into two
+  serialized runs, and that setting `DedupeQueuedRuns: true` would restore single-run behaviour.
+  **Both claims are wrong**, because they assume execution reaches a branch these defs never
+  enter. #2688 changed nothing for the maintenance family. `DedupeQueuedRuns` alone would be
+  inert. The error came from accepting a subagent's report without checking the gate condition it
+  depended on.
+
+  **What IS true about `LegacyOpID`.** `maintenance_dispatcher.go:153` generates a fresh
+  `opID := ulid.Make().String()` per request and puts it in `maintenanceJobOpParams.LegacyOpID`
+  (lines 181, 190), so two identical requests never marshal byte-equal. That defeats #2688's
+  byte-equality dedupe *for any def that reaches it* — so it must be dealt with as part of the
+  work above, not before it. Same shape at `reconcile.go:52`, `reconcile.go:131`,
+  `duplicates/handler.go:588`.
+
+  Do not simply drop `LegacyOpID` from the struct: the v2 op needs it to find the legacy
+  `operations` row to update, and `resumeLegacyOp` (`server_lifecycle.go`) reads it on restart.
+  `JobID` in the same struct is documented as retained-for-old-rows only; `LegacyOpID` is not.
+
+  **Why it matters:** `cleanup-empty-folders` removes directories from disk, and seven jobs are
+  both `CanResume()` and advertise `dry_run: true`. Two concurrent runs of a mutating job is the
+  failure mode worth closing.
+
+### 🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op
+
+Owner decision 2026-08-22: **do B now, then build this.**
+
+- [ ] **B (do first):** give each maintenance def a per-job `ConcurrencyKey` so a job can never run
+      concurrently with itself. One field in `registerMaintenanceJobOp`
+      (`internal/server/maintenance_job_op.go`): `ConcurrencyKey: maintenanceOpID(jobID)`. Do NOT
+      also set `DedupeQueuedRuns` — dropping a second request silently is the bug #2688 fixed, and
+      `maintenanceJobOpParams` carries `DryRun`, so a "run for real" clicked during a dry-run would
+      vanish and report success. Needs a test that two enqueues produce two SEQUENTIAL runs, and a
+      mutation check that removing the key lets them overlap.
+
+- [ ] **Then: the consolidator.** Once ~3–4 ops for the same def are QUEUED, open one new op whose
+      params are the merge of theirs, and close the originals. **Queued only — never touch a
+      RUNNING op**, which has already done work.
+
+#### Why this is not just `OperationDef.Batchable`
+
+The registry already has batching (`types.go:124-155`): `Batchable` buckets a call's *subject*
+before any row exists, returns `("", nil)`, and flushes on a debounce (`BatchWindow`) capped by
+`BatchMaxWait`. Close, but the wrong shape for this ask. Batching coalesces *before* the op is
+real; the consolidator coalesces rows the user has already seen in Active Operations. Whether the
+right build is "extend Batchable to a post-enqueue mode" or "a separate consolidator pass" is open
+— but the difference in visibility is the reason it cannot just be `Batchable: true`.
+
+#### The constraint that decides the design: op-ID identity
+
+`EnqueueOp` returns an ID and **callers retain it**: `internal/plugins/maintenance/optimize.go:148`
+captures `childID` and waits on it; `internal/scheduler/tasks.go` captures `v2ID` at :134, :173,
+:194, :253, :316, :337, :364. If a consolidator closes those rows, every holder is watching a dead
+op — a wait that never returns, a UI row that vanishes.
+
+`Batchable` dodges this honestly by returning `""` up front: "no ID yet." A consolidator cannot —
+it has already handed out IDs. So it needs one of:
+
+1. **A `superseded_by` pointer on the closed rows**, with the ops API and the activity feed
+   following it. Preferred: the waiter follows the redirect, and the UI can say "merged into op X"
+   instead of dropping a row. This is the honest version of the feature.
+2. Restricting consolidation to defs whose callers provably never retain the ID. Narrower, and the
+   proof rots the first time someone adds a caller.
+
+#### Merge semantics must be per-def. There is no safe generic default
+
+`book_ids: [...]` unions obviously. `dry_run: bool` does not — merging `true` and `false` is a
+policy choice, and choosing wrong turns a preview into a mutation. That is the same hazard
+`maintenance_dispatcher.go` already documents for resume (seven jobs are both `CanResume()` and
+advertise `dry_run: true`; `cleanup-empty-folders` removes directories from disk).
+
+So: the def supplies a merge function, and **a def with no merge function is not consolidatable**.
+Refuse rather than guess. A generic "last write wins" or "OR the booleans" default would be a
+data-loss bug wearing a convenience feature's clothes.
+
+#### Other things the build must settle
+
+- Trigger: a count threshold (3–4), a time window, or both? `BatchWindow`/`BatchMaxWait` already
+  model the time half — reuse the vocabulary rather than inventing a second one.
+- Every close must be journaled with the replacement ID. An op that disappears without a record is
+  the silently-discarded-request failure again, just later in the pipeline.
+- Interaction with `ConcurrencyKey` from B: consolidation operates on the queue that Gate 3 builds
+  up, so B is a prerequisite, not merely "first" — without a key there is no queue to consolidate,
+  because everything dispatches immediately.
+
+#### Update, same day: scope this down — most of it already exists
+
+Owner refinement: consolidate only ops whose **parameters are identical**, and otherwise just
+block so they run sequentially. That is a different, much smaller feature than the one sketched
+above, and **`EnqueueOp` already implements it** as of #2688: it reuses an active op when
+`bytes.Equal(rawParams, op.Params)`, and queues a second row otherwise, which Gate 3 then
+serializes. Identical params also dissolves the merge-function problem — if the params are the
+same, the merged op's params *are* the params; nothing needs merging.
+
+The only reason this does not work today is `LegacyOpID`: a fresh ULID per request that makes
+"same parameters" never true. That field exists solely to bridge back to v1, and
+`docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md` **Phase 1 step 3 deletes
+`maintenance_dispatcher.go`**, the only thing that writes it. That plan is IN PROGRESS (step 1
+landed as #2551).
+
+**Revised plan:**
+
+1. `ConcurrencyKey` per maintenance def (item B above) — still needed; without it nothing queues.
+2. Finish v1 retirement, Phase 1 steps 2–3. `LegacyOpID` disappears with the dispatcher.
+3. Re-measure. Same-params dedupe and different-params serialization should both work with no new
+   code.
+
+Only build a consolidator if step 3 shows a real gap. The `superseded_by` redirect and the per-def
+merge function above are **not** needed for the same-params-only version — do not build them
+speculatively. Keep the notes: they apply if a general merge is ever wanted, and they record why
+"just OR the booleans" is unsafe.
+
+- [ ] **Decide the fate of `api.startBulkMetadataFetch`, now caller-less.** Deleting
+      the unreachable Bulk Fetch Metadata dialog (TASK-092) removed
+      `Library.tsx:handleBulkFetchMetadata`, which was the helper's only production
+      caller. `web/src/services/api.ts:1928` now has zero callers in `web/src`
+      outside its own unit test in `api.test.ts`.
+
+  **Why this is being written down rather than fixed in TASK-092.** The helper is
+  `export`ed, so `noUnusedLocals` does not flag it and neither does the linter —
+  exactly the shape that let `linkAsVersion` survive a dead-code sweep with
+  test-only callers (see `WAVE-1-STATE.md`, "DEAD-1 is not resolved"). Left alone
+  it is invisible: not dead by any automated measure, not reachable by any user.
+
+  **What has to be decided, because the answer is not obvious.** The client helper
+  is gone from the UI but the backend v2 bulk-metadata-fetch operation it enqueues
+  is untouched and still works. So either:
+
+  - the feature was retired on purpose — the `REMOVED 2026-08-09` note in
+    `web/tests/e2e/batch-operations.spec.ts` says the e2e coverage was deliberately
+    deleted then, which points this way — and the helper plus its test should go
+    too, and possibly the backend op with them; or
+  - the dialog was collateral damage and a bulk metadata fetch is still wanted, in
+    which case the helper is the surviving half of a feature that needs re-wiring
+    to a reachable control, not deletion.
+
+  Do not resolve this by deleting the helper on the strength of "no callers" alone.
+  The live "Fetch Selected" flow (`handleFetchReview` -> `api.batchFetchCandidates`)
+  is a *different* operation, not a replacement for this one, so its existence does
+  not prove this feature was superseded.
 
 - [ ] Add a Settings panel for `path_aliases` (root / Windows prefix / UNC /
       smb URL). v1 is config-and-seed only, so changing an alias means editing
