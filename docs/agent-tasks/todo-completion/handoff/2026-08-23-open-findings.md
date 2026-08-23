@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3f9c0a71-5b28-4d6e-9a13-7c40e8b2d561 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -9,7 +9,32 @@ Blocking and near-blocking findings that outlived the session that found them.
 Every claim here was verified by running something; where a claim is inferred
 rather than run, it says so.
 
-## 1. BLOCKING, and it affects ALREADY-MERGED code
+## 1. RESOLVED 2026-08-23 — both halves shipped
+
+**Series half: PR #2794 (merged). Author half: PR #2787, commit `81612d4b3`.**
+
+`MemStore` now refuses via `requireTablesComplete` (`memdb_integrity.go`) and
+`PebbleStore` falls through to the authoritative Pebble scan on
+`ErrMemdbIncomplete`, so the answer is correct rather than merely safe.
+
+Three things the original finding did not anticipate, all now settled:
+
+- **The suggested fix would not have worked.** It proposed keying off warmup's
+  existing `skips` map, but that map is only incremented by `safeInsert`; a
+  `json.Unmarshal` failure returned `(false, nil)` and was never tallied — and
+  the finding's own repro (corrupt a value) goes down exactly that untracked
+  path. Both loss sites now funnel through one `lose()` helper.
+- **Warmup is not the only way a row goes missing.** `applyMemSync` aborting at
+  runtime leaves the identical gap with no restart involved, and that is the one
+  that keeps the guard fail-open in steady state. Recorded against
+  `memTableUnknown`, which taints every table because the failing closure is
+  opaque.
+- **The author guard must name BOTH tables it scans**, not just `books` the way
+  the series twin does. A lost `book_authors` row is a co-author credit that
+  exists nowhere else. Mutation-tested: naming only `memTableBooks` compiles,
+  reads as consistent with its sibling, and still fails open.
+
+*Original finding follows.*
 
 **The unfiltered ref-count guards are hardened on a code path production never
 takes.**
@@ -74,7 +99,16 @@ only, observable on the live library via `skipped_total` in the
   `PebbleStore` method fall through to the Pebble scan in that case. Fail
   closed, the way the Pebble scan now does.
 
-## 2. BLOCKING (PR #2787) — a live writer creates rows memdb structurally cannot hold
+## 2. RESOLVED 2026-08-23 (PR #2787, `cc81a92ec`) — a live writer created rows memdb structurally cannot hold
+
+Fixed at the call site (`handler.go` author-split now sets `BookID`) AND by a
+backfill in `ReplaceBookAuthorsInMemDB`, so the next caller cannot re-arm it.
+Regression test asserts memdb and Pebble AGREE rather than merely that no error
+was returned — the bug never produced an error. Mutation-tested both ways:
+neutralizing the backfill and making it overwrite instead of fill fail different
+tests.
+
+*Original finding follows.*
 
 `internal/server/handlers/operations/handler.go:273-276` (the author-split op)
 appends `database.BookAuthor{AuthorID: a.ID, Role: "author"}` and **never sets
@@ -98,7 +132,12 @@ Fix needs both halves: set `BookID: book.ID` at the call site, AND have
 `ReplaceBookAuthorsInMemDB` backfill `a.BookID = bookID` (it already has the
 argument) so no future caller can re-arm the trap.
 
-## 3. HIGH (PR #2787) — hand-written upper-bound sentinel the repo condemns in writing
+## 3. RESOLVED 2026-08-23 (PR #2787, `cc81a92ec`) — hand-written upper-bound sentinel
+
+Now `prefixUpperBound(jPrefix)`. Book IDs are caller-supplied, so the literal
+`~` (0x7E) excluded every non-ASCII ID's whole credit list.
+
+*Original finding follows.*
 
 `internal/database/author_bookref.go:175-176` uses
 `UpperBound: []byte("book_authors:~")`. `internal/database/pebble_store_authors.go:221-227`
@@ -112,7 +151,11 @@ restore paths can supply their own.
 Incidence on the live library was NOT measured — the mechanism is confirmed, the
 occurrence rate is unknown.
 
-## 4. IMPORTANT (PR #2787) — the abort message's only actionable field is always empty
+## 4. RESOLVED 2026-08-23 (PR #2787, `cc81a92ec`) — the abort message's key field was always empty
+
+`badKey` is now captured BEFORE `jIter.Close()`.
+
+*Original finding follows.*
 
 `internal/database/author_bookref.go:189-190` calls `jIter.Close()` and then
 `jIter.Key()` in the very next statement's format args. Probe output:
