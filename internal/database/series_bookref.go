@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
 // last-edited: 2026-08-23
 
@@ -110,8 +110,6 @@ func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
-
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
 		if !strings.HasPrefix(key, "book:") {
@@ -124,12 +122,31 @@ func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+			// FATAL, not skippable. A row we cannot decode may well carry a
+			// series_id; dropping it undercounts, and undercounting is
+			// fail-OPEN for every caller -- the delete proceeds and strands
+			// the very row we could not read.
+			_ = iter.Close()
+			return nil, fmt.Errorf("series ref scan: undecodable book row %q: %w", key, err)
 		}
 		if b.SeriesID == nil {
 			continue
 		}
 		counts[*b.SeriesID]++
+	}
+
+	// The loop above exits on end-of-range OR on an iteration error, and the
+	// two are indistinguishable without this check. Returning a truncated map
+	// with a nil error would answer "nothing else references anything" -- the
+	// permissive answer -- to callers that delete on the strength of it. Every
+	// other Pebble scan in this package checks iter.Error(); this one is the
+	// counter a delete guard consults, so it least of all may skip it.
+	if err := iter.Error(); err != nil {
+		_ = iter.Close()
+		return nil, fmt.Errorf("series ref scan truncated, refusing to answer from a partial count: %w", err)
+	}
+	if err := iter.Close(); err != nil {
+		return nil, fmt.Errorf("series ref scan: closing iterator: %w", err)
 	}
 	return counts, nil
 }
