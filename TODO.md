@@ -4299,21 +4299,93 @@ Measured on production 2026-08-14 (~10:30 EDT), every instrument controlled:
 
 Follow-up bugs found by the controls (route to C1/C3, do NOT fix here):
 
-- [ ] **`show_quarantined=true` SHRINKS the list.** A flag that can only
-      widen the set returned 41,319 books against the default 63,869.
-      41,319 = 41,317 (`is_primary_version=true` count) + the 2 quarantined
-      — i.e. with the quarantine exclusion off and no explicit
-      `is_primary_version` param, the scan path serves only primary-flagged
-      books and silently drops the 22,552-book nil-flag population. Same
-      family as the filed nil/false `is_primary_version` divergence
-      (`effectiveBoolFieldIndex{Default:true}` vs raw `*bool`); this is a
-      second concrete symptom, on the main list path. With an explicit
-      `is_primary_version=false` the flag behaves (22,552 with or without
-      quarantine).
-- [ ] `is_primary_version=false` answers 22,552 — exactly the known
+- [ ] **`show_quarantined=true` under-reports `count`.** The flag makes the
+      reported total collapse while the list itself is served correctly.
+      ⚠️ **RE-DIAGNOSED 2026-08-23 — this was previously filed as "SHRINKS the
+      list", a scan-path bug. That is wrong. The scan path is fine; only the
+      count is wrong.** It is a count bug, not a list-serving bug — do not
+      rewrite the scan path over it.
+
+      Measured on production, full page-through, **empty-page termination**,
+      distinct-id counted (0 duplicates in both runs):
+
+      | query | reported count | rows | distinct |
+      | --- | ---: | ---: | ---: |
+      | *(bare)* | 56,727 | 56,727 | 56,727 |
+      | `show_quarantined=true` | **41,743** | **56,729** | 56,729 |
+
+      The flag **widens** the stream by 2, exactly as a flag should, while the
+      count drops by 14,984 — understating the stream it accompanies by 14,986.
+      Reproduced independently at other offsets (5 items at offset 50,000 with
+      the flag on, against an alleged 41,743 ceiling; 0 at 60,000).
+
+      **Positive control closes the arithmetic exactly.** `is_primary_version=false`
+      returns **14,986** and is stable with or without the quarantine flag, so
+      the entry's own "the flag behaves with an explicit `is_primary_version`"
+      clause SURVIVES — only its number was stale. And
+      `56,729 − 14,986 = 41,743`, so `CountPrimaryBooks()` omits precisely the
+      explicit-false population and nothing else.
+
+      **This confirms the correction already recorded above** — the bug drops
+      the **explicit-false** books, NOT the nils. The two statements in this
+      document disagreed; the earlier one is right.
+
+      **Mechanism, read at source** (`internal/server/audiobooks_helpers.go`):
+      `:61` is the single item fetch and returns `matchTotal`; `:113` sets
+      `totalCount = matchTotal` — the correct total, from the same query that
+      produced the stream — and `:118–127` then **overwrites it** with
+      `CountAudiobooks()` → `CountPrimaryBooks()`. **The right answer is
+      computed and then discarded.**
+
+      Two aggravating details:
+      - **`:110–112` says of `matchTotal`: "anything >= 0 is a real match count
+        … *Prefer it*." The very next block does not prefer it.** And `:100–107`
+        documents the bug that preferring `matchTotal` was written to fix —
+        count tracking the limit, measured 2026-08-12 (`count=5` at `limit=5`,
+        `count=3` at `limit=3`). The unfiltered path re-breaks exactly that,
+        with the justification still in the source three lines up.
+      - **Bare is honest only by accident.** `:58` sets
+        `ExcludeQuarantined = true` when the flag is absent, and `:117` makes
+        `ExcludeQuarantined` itself a *disjunct* of `hasFilters`. So omitting
+        the flag silently SETS a filter, which routes to the honest counter;
+        passing `show_quarantined=true` REMOVES it. **The request that asks to
+        see more books is the one that makes the count smaller and wrong.**
+
+      **Proposed fix (narrow):** make the count queries the FALLBACK for
+      `matchTotal < 0` rather than an unconditional replacement — let
+      `if matchTotal >= 0` win, as the comment already says it should.
+
+      *(Not claimed: why the original 41,319 figure arose. It is not
+      reproducible at today's HEAD and no methodology was recorded, so the
+      cause is left blank rather than guessed. Also not claimed: that the +2 is
+      the two named quarantined books — offset paging over a live list can
+      reorder, so the magnitude is measured but the identity is not.
+      ⚠️ **Open question worth its own pass: what else in this file was measured
+      with a pager bounded on `count`?** Any such figure against this endpoint
+      is a lower bound, not a measurement.)*
+- [x] ~~`is_primary_version=false` answers 22,552 — exactly the known
       nil-flag population size. Establish whether explicit-false books are
-      currently 0 in prod or whether the false-filter is returning nils
-      (memory says the census counted ~765 explicit-false in one path).
+      currently 0 in prod or whether the false-filter is returning nils.~~
+      **ANSWERED 2026-08-23 by the same measurement run as the entry above.**
+      Both alternatives in the question are false. `is_primary_version=false`
+      answers **14,986** today (not 22,552 — the coincidence with the nil-flag
+      population size does not survive re-measurement), explicit-false books
+      are **not** 0 in prod, and the false-filter is **not** returning nils.
+
+      Proven by exact partition — the three populations tile the library with
+      nothing left over and nothing double-counted:
+
+      | population | count |
+      | --- | ---: |
+      | explicit `false` | 14,986 |
+      | nil (key absent) | 2,776 |
+      | explicit `true` | 38,965 |
+      | **sum** | **56,727** |
+      | bare stream (measured) | **56,727** |
+
+      If the false-filter were also returning nils, the sum would exceed the
+      stream by the overlap. It does not, so the three sets are disjoint and
+      exhaustive.
 
 - [ ] **CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`
       as CodeQL log-injection sanitizers via the model pack.** #2445 removed
