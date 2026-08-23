@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package config
 
@@ -453,6 +453,13 @@ func TestResetToDefaults(t *testing.T) {
 		t.Errorf("expected ChapterConsolidationThresholdMin to be reset to 10, got %d", AppConfig.ChapterConsolidationThresholdMin)
 	}
 
+	// Verify ai_backend.local_base_url resets to empty, not a hardcoded LAN IP
+	// (TASK-018). ResetToDefaults previously reinstated
+	// http://192.168.0.20:11434/v1 here independently of the viper default.
+	if AppConfig.AIBackend.LocalBaseURL != "" {
+		t.Errorf("expected AIBackend.LocalBaseURL to be reset to empty, got %q", AppConfig.AIBackend.LocalBaseURL)
+	}
+
 	// Restore original values
 	AppConfig.RootDir = originalRootDir
 	AppConfig.DatabasePath = originalDatabasePath
@@ -533,6 +540,21 @@ func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
 	assert.Equal(t, "bge-m3", snap.Embedding.Model)
 	assert.Equal(t, 1024, snap.Embedding.Dimensions)
 	assert.Equal(t, "hnsw", snap.Embedding.VectorBackend)
+}
+
+// TestInitConfig_AIBackendLocalBaseURLDefaultsEmpty locks the fresh-install
+// default for ai_backend.local_base_url at empty string. It previously
+// hardcoded one developer's own LAN Ollama host
+// (http://192.168.0.20:11434/v1), which every other install silently
+// inherited as a dead endpoint default (TASK-018). It must never be
+// reinstated as a shipped default; see the SetDefault call site and
+// ResetToDefaults in config.go for the full rationale.
+func TestInitConfig_AIBackendLocalBaseURLDefaultsEmpty(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	snap := Snapshot()
+
+	assert.Equal(t, "", snap.AIBackend.LocalBaseURL)
 }
 
 func TestInitConfig_MetadataScoringDefaults(t *testing.T) {

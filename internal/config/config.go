@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.83.2
+// version: 1.84.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package config
 
@@ -577,9 +577,22 @@ func (c *Config) EffectiveLLMMode() string {
 	if c.AIBackend.LocalBaseURL != "" || c.Embedding.BaseURL != "" {
 		return AIBackendModeLocal
 	}
-	if c.OpenAIAPIKey != "" && (c.EnableAIParsing || c.MetadataScoring.LLMEnabled) {
-		return AIBackendModeOpenAI
-	}
+	// DERIVATION NEVER YIELDS A PAID BACKEND.
+	//
+	// This used to return AIBackendModeOpenAI whenever a key was present and
+	// any LLM consumer was enabled (enable_ai_parsing defaults to TRUE), which
+	// is the exact shape of the incident described above. It survived that
+	// incident only because ai_backend.local_base_url shipped a hardcoded LAN
+	// address, so the local branch above always won and this branch was
+	// effectively unreachable on a default install. TASK-018 removed that
+	// address -- correctly, it was one developer's own host -- which would
+	// have re-armed this branch for every install that has a key and no local
+	// endpoint.
+	//
+	// Opting in to a paid backend is now explicit only: set
+	// ai_backend.llm_mode = "openai", which returns from the top of this
+	// function before any derivation runs. A bare API key is not consent to
+	// spend money.
 	return AIBackendModeDisabled
 }
 
@@ -1568,11 +1581,19 @@ func InitConfig() {
 	viper.SetDefault("metadata_scoring.write_back_workers", 4)
 
 	// AI backend-mode toggle. Modes default empty (resolved from legacy fields
-	// by EffectiveEmbeddingMode / EffectiveLLMMode). LocalBaseURL uses a
-	// placeholder host; real endpoints live in gitignored local config.
+	// by EffectiveEmbeddingMode / EffectiveLLMMode). LocalBaseURL defaults to
+	// empty, NOT a real endpoint: it previously hardcoded one developer's own
+	// LAN Ollama host (http://192.168.0.20:11434/v1), which every other
+	// install silently inherited as a dead default. An empty LocalBaseURL
+	// falls through cleanly in EffectiveLLMMode/EffectiveEmbeddingMode to the
+	// next mode (OpenAI if configured, else disabled) rather than selecting
+	// local mode against an unreachable address — see config.go's
+	// EffectiveLLMMode/EffectiveEmbeddingMode. Must never be reinstated as a
+	// shipped default; a real local endpoint belongs in gitignored local
+	// config or an explicit env var (AI_BACKEND_LOCAL_BASE_URL below).
 	viper.SetDefault("ai_backend.embedding_mode", "")
 	viper.SetDefault("ai_backend.llm_mode", "")
-	viper.SetDefault("ai_backend.local_base_url", "http://192.168.0.20:11434/v1")
+	viper.SetDefault("ai_backend.local_base_url", "")
 	viper.SetDefault("ai_backend.local_embedding_model", "bge-m3")
 	viper.SetDefault("ai_backend.local_llm_model", "qwen2.5:7b-instruct")
 	viper.BindEnv("ai_backend.embedding_mode", "AI_BACKEND_EMBEDDING_MODE")               //nolint:errcheck
@@ -2425,12 +2446,18 @@ func ResetToDefaults() {
 
 			// AI backend-mode toggle. Modes empty at rest (derived from legacy
 			// fields by EffectiveEmbeddingMode / EffectiveLLMMode); local
-			// endpoint coordinates carry Ollama defaults. LocalBaseURL uses a
-			// placeholder host — real endpoints live in gitignored local config.
+			// endpoint coordinates carry Ollama model-name defaults, but
+			// LocalBaseURL itself defaults to empty, NOT a real endpoint: it
+			// previously hardcoded one developer's own LAN Ollama host
+			// (http://192.168.0.20:11434/v1) here too. An empty LocalBaseURL
+			// falls through cleanly to the next mode (OpenAI if configured,
+			// else disabled) rather than selecting local mode against an
+			// unreachable address. Must never be reinstated as a shipped
+			// default.
 			AIBackend: AIBackendConfig{
 				EmbeddingMode:       "",
 				LLMMode:             "",
-				LocalBaseURL:        "http://192.168.0.20:11434/v1",
+				LocalBaseURL:        "",
 				LocalEmbeddingModel: "bge-m3",
 				LocalLLMModel:       "qwen2.5:7b-instruct",
 			},

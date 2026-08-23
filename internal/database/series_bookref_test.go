@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package database
 
@@ -143,4 +143,25 @@ func TestAsSeriesBookRefStore_ResolvesPebbleStore(t *testing.T) {
 	require.NotNil(t, AsSeriesBookRefStore(store))
 	require.Nil(t, AsSeriesBookRefStore(nil))
 	require.Nil(t, AsSeriesBookRefStore(struct{}{}))
+
+	// THE CASE THIS TEST EXISTS FOR, and the one it was missing.
+	//
+	// The three assertions above all pass against a plain
+	// `s.(SeriesBookRefStore)` type assertion: a bare *PebbleStore satisfies
+	// the interface directly, and nil/struct{}{} fail either way. So none of
+	// them can tell AsCapability apart from the bare assertion this lookup
+	// exists to avoid -- verified by mutation, which printed `ok` with the
+	// assertion swapped in.
+	//
+	// Production never holds a bare *PebbleStore: it is wrapped in the Bleve
+	// indexedStore decorator, which embeds the Store INTERFACE and so does not
+	// promote SeriesBookRefStore. Against a decorator the bare assertion finds
+	// nothing and the guard silently no-ops -- exactly where it matters most.
+	require.NotNil(t, AsSeriesBookRefStore(&decoratorStore{Store: store}),
+		"capability lookup must see THROUGH the Bleve decorator; prod never holds a bare *PebbleStore")
+
+	// A decorator that has not opted in via Unwrap MUST NOT resolve: reaching
+	// around it would bypass whatever behaviour it was added to provide.
+	require.Nil(t, AsSeriesBookRefStore(&decoratorNoUnwrap{Store: store}),
+		"a decorator without Unwrap must not be reached around")
 }

@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
 // last-edited: 2026-08-23
 
@@ -7,7 +7,9 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -70,7 +72,16 @@ func AsSeriesBookRefStore(s any) SeriesBookRefStore {
 // with NO deletion or primary-version filtering. Contrast
 // GetAllSeriesBookCounts directly above, which scans only the
 // memIdxIsPrimaryVersion=true index and skips trashed rows.
+// It REFUSES rather than answering when the books table is known to be missing
+// rows. memdb is a lossy projection — warmup drops rows it cannot decode or
+// cannot insert — and a short scan here returns a map in which a still-
+// referenced series is simply absent, which every caller reads as "safe to
+// delete". See memdb_integrity.go.
 func (m *MemStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	if err := m.requireTablesComplete("series reference count", memTableBooks); err != nil {
+		return nil, err
+	}
+
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -91,9 +102,32 @@ func (m *MemStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 
 // GetAllSeriesBookRefCounts prefers the memdb when it is warm (the prod
 // default) and otherwise scans Pebble directly.
+//
+// When the memdb refuses because its books table is known-incomplete, this
+// falls through to the Pebble scan rather than propagating the refusal. Pebble
+// is the source of truth and its scan is hardened to abort on an undecodable
+// row, so the fall-through yields a CORRECT answer where the refusal would only
+// have yielded a safe one — the nightly prune keeps working instead of stalling
+// until the next restart. The fall-through is bounded: it happens only when
+// warmup actually lost a row, and no caller counts inside a loop (both handler
+// sites and all three job sites build the map once per operation).
+//
+// Any other error is propagated unchanged. Falling back to a full scan on an
+// unrecognized failure would be guessing at its cause.
 func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllSeriesBookRefCounts()
+	// Loaded ONCE. Reset can swap memPtr underneath us, and reading it three
+	// times could report a refusal from one MemStore next to the (empty) loss
+	// map of its freshly-reset replacement -- a log line contradicting itself.
+	if m := p.mem(); p.UseMemDB && m != nil {
+		counts, err := m.GetAllSeriesBookRefCounts()
+		if err == nil {
+			return counts, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		slog.Warn("series ref count: memdb is missing rows, falling through to the authoritative Pebble scan",
+			"error", err, "lost_rows", m.LostRows())
 	}
 	return p.getAllSeriesBookRefCountsPebble()
 }

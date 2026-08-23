@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.7.0
+// version: 1.9.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
-// last-edited: 2026-08-13
+// last-edited: 2026-08-23
 
 package database
 
@@ -35,12 +35,29 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	started := time.Now()
+
+	// Runtime losses (applyMemSync aborts) recorded from here on must SURVIVE
+	// this warmup's publish. This scan works from an iterator snapshot, so a
+	// row lost after that snapshot was taken is genuinely not rebuilt by it,
+	// and clobbering the flag would re-open the fail-open for exactly that row.
+	// Losses recorded BEFORE now are superseded by the rebuild and are dropped.
+	//
+	// Zero in production today -- warmup runs once, on a fresh unpublished
+	// MemStore that no writer can reach -- but WarmFromPebble advertises itself
+	// as "safe to re-run", so this is closed by construction rather than by
+	// nobody currently re-running it.
+	unknownAtStart := m.LostRows()[memTableUnknown]
+
 	txn := m.db.Txn(true)
 	defer txn.Abort()
 
 	counts := map[string]int{}
 	scanned := map[string]int{}
 	skips := map[string]int{}
+	// lost accumulates the same failures keyed by TABLE, to be published onto the
+	// MemStore atomically with txn.Commit below. Kept local until then so the
+	// flag and the data it describes become visible together.
+	lost := map[string]int{}
 	durations := map[string]time.Duration{}
 	bytesScanned := map[string]int64{}
 	bytesDiscarded := map[string]int64{}
@@ -141,20 +158,45 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		return description + signature
 	}
 
+	// lose records one row that Pebble holds and memdb will not, counting it,
+	// logging it, and flagging the table as known-incomplete.
+	//
+	// There are exactly TWO ways to lose a row here — a value that will not
+	// decode, and an insert the schema rejects — and until 2026-08-23 only the
+	// second was counted. `skipped_total` therefore read 0 through a warmup
+	// that had silently dropped every undecodable row in the library, and the
+	// unfiltered reference counters, which consult this state to decide whether
+	// their count can be trusted, saw an intact table. Both paths funnel through
+	// here so neither can be hardened without the other.
+	//
+	// For the list-valued phases one key holds a JSON array, so an undecodable
+	// value loses an unknown number of rows and this counts 1 — conservative in
+	// the count, exact in the condition. See MemStore.recordLostRows.
+	lose := func(table, keyForLog, reason string, err error) {
+		// Counted by table+reason, not by table alone. "12 undecodable rows"
+		// and "12 rejected inserts" call for opposite fixes -- one is corrupt
+		// data on disk, the other a schema rule the data does not satisfy --
+		// and this package has already paid for one conflated counter (see
+		// warmIter on rows-vs-keys, which cost a false P0).
+		rk := table + "/" + reason
+		skips[rk]++
+		lost[table]++
+		// Don't spam: log first 10 per table+reason, then mute.
+		if skips[rk] <= 10 {
+			slog.Warn("memdb warmup: skipping row",
+				"table", table, "key", keyForLog, "reason", reason, "error", err)
+		} else if skips[rk] == 11 {
+			slog.Warn("memdb warmup: further skips muted",
+				"table", table, "reason", reason, "muting_after", 10)
+		}
+	}
+
 	// safeInsert tries to insert an object, logging+counting failures rather
 	// than aborting the warmup. Returns whether the row actually landed in
 	// memdb (never an error, so warmIter keeps going).
 	safeInsert := func(table string, obj interface{}, keyForLog string) (bool, error) {
 		if err := txn.Insert(table, obj); err != nil {
-			skips[table]++
-			// Don't spam: log first 10 per table, then drop to debug.
-			if skips[table] <= 10 {
-				slog.Warn("memdb warmup: skipping row",
-					"table", table, "key", keyForLog, "error", err)
-			} else if skips[table] == 11 {
-				slog.Warn("memdb warmup: further skips muted",
-					"table", table, "muting_after", 10)
-			}
+			lose(table, keyForLog, "insert rejected", err)
 			return false, nil
 		}
 		return true, nil
@@ -172,6 +214,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var b Book
 		if err := json.Unmarshal(val, &b); err != nil {
+			lose(memTableBooks, key, "undecodable row", err)
 			return false, nil
 		}
 		bytesDiscarded[memTableBooks] += discardBook(&b)
@@ -193,6 +236,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var a Author
 		if err := json.Unmarshal(val, &a); err != nil {
+			lose(memTableAuthors, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableAuthors, &a, key)
@@ -210,6 +254,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var s Series
 		if err := json.Unmarshal(val, &s); err != nil {
+			lose(memTableSeries, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableSeries, &s, key)
@@ -229,6 +274,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var bf BookFile
 		if err := json.Unmarshal(val, &bf); err != nil {
+			lose(memTableBookFiles, key, "undecodable row", err)
 			return false, nil
 		}
 		bytesDiscarded[memTableBookFiles] += discardBookFile(&bf)
@@ -247,6 +293,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if _, keys, err := warm("book_authors:", memTableBookAuthors, func(key string, val []byte) (bool, error) {
 		var list []BookAuthor
 		if err := json.Unmarshal(val, &list); err != nil {
+			lose(memTableBookAuthors, key, "undecodable row", err)
 			return false, nil
 		}
 		for i := range list {
@@ -268,6 +315,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if _, keys, err := warm("book_narrators:", memTableBookNarrators, func(key string, val []byte) (bool, error) {
 		var list []BookNarrator
 		if err := json.Unmarshal(val, &list); err != nil {
+			lose(memTableBookNarrators, key, "undecodable row", err)
 			return false, nil
 		}
 		for i := range list {
@@ -288,6 +336,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if n, keys, err := warm("narrator:", memTableNarrators, func(key string, val []byte) (bool, error) {
 		var nrt Narrator
 		if err := json.Unmarshal(val, &nrt); err != nil {
+			lose(memTableNarrators, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableNarrators, &nrt, key)
@@ -305,6 +354,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var ip ImportPath
 		if err := json.Unmarshal(val, &ip); err != nil {
+			lose(memTableImportPaths, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableImportPaths, &ip, key)
@@ -315,10 +365,40 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		scanned[memTableImportPaths] = keys
 	}
 
-	// AuthorAliases: author_alias:<id>
+	// AuthorAliases: author_alias:<id>, skipping the two index families that
+	// share the prefix.
+	//
+	// This filter was MISSING until 2026-08-23, and every sibling phase has one
+	// ("author:" skips :name:, "import_path:" skips :path:). The prefix holds
+	// three key families (pebble_store_authors.go):
+	//
+	//	author_alias:<id>                  the record         -- want
+	//	author_alias:author:<aID>:<id>     index, row JSON    -- skip
+	//	author_alias:name:<normalized>     index, strconv.Itoa(id)
+	//
+	// The consequences were invisible while a failed decode was silently
+	// dropped, and both are real: the :name: value is a bare integer that
+	// cannot decode into AuthorAlias, and the :author: value IS valid row JSON
+	// that re-inserted over the unique ID index and inflated the phase's row
+	// count. GetAuthorAliases already filters to `author_alias:<digits>` for
+	// exactly this reason; warmup simply never did.
+	//
+	// It matters now because an undecodable row is no longer silent -- it flags
+	// the table known-incomplete. Without this filter, ANY library containing a
+	// single author alias would flag author_aliases on EVERY warmup, and the
+	// author-side reference counter (PR #2787) would refuse forever the moment
+	// it is wired to requireTablesComplete. A guard that always refuses looks
+	// like safety and is the job silently turned off.
+	//
+	// Colon count is the discriminator, as in the "author:" phase above: the
+	// record has exactly one, both index families have two or more.
 	if n, keys, err := warm("author_alias:", memTableAuthorAliases, func(key string, val []byte) (bool, error) {
+		if strings.Count(key, ":") != 1 {
+			return false, nil
+		}
 		var aa AuthorAlias
 		if err := json.Unmarshal(val, &aa); err != nil {
+			lose(memTableAuthorAliases, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableAuthorAliases, &aa, key)
@@ -333,6 +413,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if n, keys, err := warm("blocked:hash:", memTableBlockedHashes, func(key string, val []byte) (bool, error) {
 		var bh DoNotImport
 		if err := json.Unmarshal(val, &bh); err != nil {
+			lose(memTableBlockedHashes, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableBlockedHashes, &bh, key)
@@ -358,6 +439,12 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// one txn across all of them" turns on this number.
 	commitStart := time.Now()
 	txn.Commit()
+	// Publish the known-incomplete flags in the same breath as the data they
+	// describe. Doing this at the START of the warmup instead would clear the
+	// flag while MVCC readers still see the OLD, still-short committed rows --
+	// reintroducing the exact fail-open this tracking exists to close. See
+	// MemStore.publishLostRows.
+	m.publishLostRows(lost, unknownAtStart)
 	commitDur := time.Since(commitStart)
 	commitMS := commitDur.Milliseconds()
 
@@ -370,6 +457,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	m.lastWarmBytes = maps.Clone(bytesScanned)
 	m.lastWarmDiscarded = maps.Clone(bytesDiscarded)
 	m.lastWarmDiscardedByField = maps.Clone(byField)
+	m.lastWarmSkips = maps.Clone(skips)
 	m.warmCountsMu.Unlock()
 
 	slog.Info("memdb warmup complete",
@@ -404,8 +492,16 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		"discarded_field_mb", bytesMegabytes(byField),
 	)
 	if len(skips) > 0 {
-		slog.Warn("memdb warmup: rows skipped by table",
-			"skipped_by_table", skips)
+		// Keyed "<table>/<reason>", not by table alone -- an operator needs to
+		// know whether 12 losses were undecodable rows (corrupt data on disk)
+		// or rejected inserts (a schema rule the data does not satisfy),
+		// because those call for opposite fixes. The field NAME says so: it
+		// used to say "by_table" while the map was table-keyed, and quietly
+		// renaming the keys underneath a field an operator greps is how a
+		// counter starts lying.
+		slog.Warn("memdb warmup: rows skipped by table and reason",
+			"skipped_by_table_and_reason", skips,
+			"lost_by_table", lost)
 	}
 
 	// Emit sampled memdb size telemetry post-warmup.

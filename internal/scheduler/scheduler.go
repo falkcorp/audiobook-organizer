@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-18
+// last-edited: 2026-08-23
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -25,14 +25,18 @@ import (
 // Pass this to NewTaskScheduler instead of a *Server pointer so the scheduler
 // package does not import the server package.
 // SchedulerStore is what the scheduler actually calls, measured by emptying the
-// interface and reading the compiler's enumeration: seven methods. The field was
+// interface and reading the compiler's enumeration: FIVE methods. The field was
 // func() database.Store — all 398.
+//
+// It said seven until 2026-08-23. CreateOperation and UpdateOperationError were
+// declared here and called from nowhere in this package; re-running the probe
+// after the last v1 operation minter was retired enumerated five. Note the probe
+// reports only the FIRST missing method per call site, so it has to be run to
+// convergence rather than once — a single pass would have stopped at seven again.
 type SchedulerStore interface {
 	GetSetting(key string) (*database.Setting, error)
 	SetSetting(key, value, typ string, isSecret bool) error
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
 	GetOperationByID(id string) (*database.Operation, error)
-	UpdateOperationError(id, errorMessage string) error
 	GetOperationV2(id string) (*database.OperationV2Row, error)
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
