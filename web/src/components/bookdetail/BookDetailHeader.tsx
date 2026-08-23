@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailHeader.tsx
-// version: 1.0.3
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 import { useEffect, useState } from 'react';
 import {
@@ -29,6 +29,13 @@ export interface BookDetailHeaderProps {
   segments: BookSegment[];
   itunesLinked: boolean;
   itunesPidCount: number;
+  /**
+   * Every book in this book's version group, as passed to
+   * BookDetailVersionGroup below. Used only for the count on the "Version
+   * Group" chip -- deliberately the SAME array the tray renders, so the two
+   * can never disagree. See versionCount for the empty-array case.
+   */
+  versions: Book[];
   activeTab: 'info' | 'files';
   onBack: () => void;
   onSetActiveTab: (tab: 'info' | 'files') => void;
@@ -40,9 +47,18 @@ export const BookDetailHeader = ({
   segments,
   itunesLinked,
   itunesPidCount,
+  versions,
   onBack,
   onSetActiveTab,
 }: BookDetailHeaderProps) => {
+  // Match BookDetailVersionGroup's own fallback exactly: it renders
+  // `versions.length > 0 ? versions : [book]`, so an empty array still shows
+  // one row (this book). Counting versions.length here would print "0" above
+  // a tray listing one entry. A header count that disagrees with the list
+  // underneath it is worse than no count at all, so this mirrors the fallback
+  // rather than counting the raw prop.
+  const versionCount = versions.length > 0 ? versions.length : 1;
+
   const [coverError, setCoverError] = useState(false);
   const [coverLightboxOpen, setCoverLightboxOpen] = useState(false);
 
@@ -195,7 +211,7 @@ export const BookDetailHeader = ({
                   return (
                     <Chip
                       icon={<CompareIcon />}
-                      label="Version Group Linked"
+                      label={`Version Group (${versionCount})`}
                       color={anyMissing ? 'error' : 'success'}
                       variant="outlined"
                       size="small"
