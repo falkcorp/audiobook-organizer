@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/find_spurious_stranded_book_rows.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 7c90e537-566f-4c72-ae73-033055c31c4a
 # last-edited: 2026-08-23
 """REPORT-ONLY scan for Book rows the .tmp-rename path-construction bug may
@@ -172,10 +172,20 @@ def fetch_all_books(base: str, token: str, insecure: bool, page_size: int = DEFA
     add complexity without a measurable win.
     """
     offset = 0
-    seen = 0
-    total = None
-    while total is None or offset < total:
-        url = f"{base.rstrip('/')}/api/v1/audiobooks?limit={page_size}&offset={offset}"
+    while True:
+        # show_quarantined=true is REQUIRED, not optional: the default is
+        # false (handlers/audiobooks/handler.go:595 `showQuarantined :=
+        # c.Query("show_quarantined") == "true"`), and false makes
+        # audiobooks_helpers.go:58 set filters.ExcludeQuarantined = true,
+        # which drops quarantined rows from BOTH items and count
+        # (audiobooks_helpers.go:69-77). Quarantined-but-not-yet-purged rows
+        # (a file missing on disk) are exactly the shape this scan exists to
+        # find, so omitting this parameter would silently exclude them from
+        # every run -- a false "clean" result, not an error.
+        url = (
+            f"{base.rstrip('/')}/api/v1/audiobooks"
+            f"?limit={page_size}&offset={offset}&show_quarantined=true"
+        )
         body = _http_get_json(url, token, insecure)
         payload = body.get("data") if isinstance(body, dict) and "data" in body else body
         if not isinstance(payload, dict) or "items" not in payload:
@@ -193,17 +203,19 @@ def fetch_all_books(base: str, token: str, insecure: bool, page_size: int = DEFA
                 f"'data' envelope), got: {got}"
             )
         items = payload.get("items", [])
-        total = payload.get("count", len(items))
         if not items:
             break
-        for book in items:
-            seen += 1
-            yield book
+        yield from items
         offset += len(items)
         if len(items) < page_size:
-            # Short page: the server has nothing more, regardless of what
-            # `count` claims (defensive -- avoids an infinite loop on a
-            # miscounted total).
+            # Short page: the server has nothing more. This is the SOLE
+            # pagination terminator -- `count` is deliberately never
+            # consulted. audiobooks_helpers.go:100-115 documents `count`
+            # falling back to the PAGE length whenever the server-side
+            # CountAudiobooks[Filtered] call errors, which ran in production
+            # until 2026-08-12; trusting count-derived totals here would
+            # silently truncate the scan to one page on that same failure
+            # mode. A short page is the only signal this loop needs.
             break
 
 
@@ -318,10 +330,6 @@ def build_report(books, affected_dirs: set, library_root: str, api_base: str) ->
         matches=matches,
         notes=notes
         + [
-            "REPORT-ONLY: no row was modified, restored, or deleted. This "
-            "script has no --fix/--apply flag and never will (owner "
-            "decision #9 / #12: report counts before proposing any "
-            "restore; never mass-restore).",
             "A numeric title outside an affected directory is a LOW "
             "confidence signal only -- a real book can genuinely be titled "
             "a bare number (e.g. '1984', '2001'); it is reported separately "
@@ -351,6 +359,20 @@ def write_report(report: Report, path: str) -> None:
         json.dump(asdict(report), fh, indent=2)
 
 
+# Printed alongside each bucket in print_summary -- the HIGH/LOW split lives
+# in the CATEGORIES docstring and the JSON notes, neither of which a
+# terminal user reads; the summary table is what they actually see.
+CATEGORY_CONFIDENCE = {
+    "in_affected_dir_numeric_title_only": "HIGH",
+    "in_affected_dir_path_segment_only": "HIGH",
+    "in_affected_dir_both_heuristics": "HIGH",
+    "in_affected_dir_neither_heuristic": "worth a look",
+    "numeric_title_outside_affected_dir": "LOW",
+    "path_segment_outside_affected_dir": "LOW",
+    "no_signal": "-",
+}
+
+
 def print_summary(report: Report) -> None:
     print("\n=== spurious stranded book row scan ===")
     print(f"  library root:            {report.library_root}")
@@ -358,7 +380,8 @@ def print_summary(report: Report) -> None:
     print(f"  books scanned:           {report.total_books_scanned}")
     print()
     for key in CATEGORY_KEYS:
-        print(f"  {key:38} {report.counts.get(key, 0)}")
+        confidence = CATEGORY_CONFIDENCE.get(key, "-")
+        print(f"  [{confidence:12}] {key:38} {report.counts.get(key, 0)}")
     for note in report.notes:
         if note.startswith("WARNING:"):
             print(f"\n{note}", file=sys.stderr)
