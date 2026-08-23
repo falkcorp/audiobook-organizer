@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package entities_test
 
@@ -41,27 +41,40 @@ type deps struct {
 	// is what every test that does not care about deletion wants. Set it to
 	// assert that a referenced series survives.
 	seriesRefCounts map[int]int
+	// authorRefCounts is the author-side twin, backing the counter DeleteAuthor
+	// and BulkDeleteAuthors guard on. Same nil semantics.
+	authorRefCounts map[int]int
 }
 
-// entitiesStoreWithSeriesRefs adds GetAllSeriesBookRefCounts to the generated
-// EntitiesStore mock. SeriesBookRefStore is deliberately kept out of the store
-// interfaces so widening it does not force every implementation and generated
-// mock to grow, and the delete handlers reach it via
-// database.AsSeriesBookRefStore and FAIL CLOSED when it is missing — so a bare
-// generated mock cannot exercise them at all.
+// entitiesStoreWithRefs adds GetAllSeriesBookRefCounts and
+// GetAllAuthorBookRefCounts to the generated EntitiesStore mock.
+// SeriesBookRefStore and AuthorBookRefStore are deliberately kept out of the
+// store interfaces so widening them does not force every implementation and
+// generated mock to grow, and the delete handlers reach them via
+// database.AsSeriesBookRefStore / database.AsAuthorBookRefStore and FAIL CLOSED
+// when they are missing — so a bare generated mock cannot exercise them at all
+// (which is exactly what TestDeleteAuthor_FailsClosedWhenStoreLacksRefCounter
+// and its bulk twin rely on).
 //
 // It reads through to deps so a test can set seriesRefCounts after the handler
 // has already been constructed.
-type entitiesStoreWithSeriesRefs struct {
+type entitiesStoreWithRefs struct {
 	*entitiesmocks.MockEntitiesStore
 	d *deps
 }
 
-func (s entitiesStoreWithSeriesRefs) GetAllSeriesBookRefCounts() (map[int]int, error) {
+func (s entitiesStoreWithRefs) GetAllSeriesBookRefCounts() (map[int]int, error) {
 	if s.d.seriesRefCounts == nil {
 		return map[int]int{}, nil
 	}
 	return s.d.seriesRefCounts, nil
+}
+
+func (s entitiesStoreWithRefs) GetAllAuthorBookRefCounts() (map[int]int, error) {
+	if s.d.authorRefCounts == nil {
+		return map[int]int{}, nil
+	}
+	return s.d.authorRefCounts, nil
 }
 
 // newHandler builds a Handler backed by fresh mocks and real (non-nil) caches.
@@ -87,7 +100,7 @@ func newHandler(t *testing.T) (*entities.Handler, *deps) {
 		return out
 	}
 	h := entities.New(
-		entitiesStoreWithSeriesRefs{MockEntitiesStore: d.store, d: d},
+		entitiesStoreWithRefs{MockEntitiesStore: d.store, d: d},
 		d.workSvc,
 		d.authorSeries,
 		d.registry,
@@ -95,6 +108,36 @@ func newHandler(t *testing.T) (*entities.Handler, *deps) {
 		d.seriesCache,
 		d.dedupCache,
 		enrich,
+	)
+	return h, d
+}
+
+// newHandlerWithoutRefCounters builds a Handler over the BARE generated mock,
+// i.e. a store that implements neither SeriesBookRefStore nor
+// AuthorBookRefStore. That is the shape a narrow test double or an
+// unsupported backend presents in production behind the Bleve decorator, and
+// the delete handlers must FAIL CLOSED on it rather than fall back to the
+// filtered getter. newHandler cannot express this: it always wraps the mock.
+func newHandlerWithoutRefCounters(t *testing.T) (*entities.Handler, *deps) {
+	t.Helper()
+	d := &deps{
+		store:        entitiesmocks.NewMockEntitiesStore(t),
+		workSvc:      entitiesmocks.NewMockWorkService(t),
+		authorSeries: entitiesmocks.NewMockAuthorSeriesService(t),
+		registry:     entitiesmocks.NewMockOperationsRegistry(t),
+		authorsCache: cache.NewWithLimit[*audiobooks.AuthorWithCountListResponse]("authors-test", time.Hour, 1),
+		seriesCache:  cache.NewWithLimit[*audiobooks.SeriesWithCountsResponse]("series-test", time.Hour, 1),
+		dedupCache:   cache.NewWithLimit[gin.H]("dedup-test", time.Hour, 16),
+	}
+	h := entities.New(
+		d.store,
+		d.workSvc,
+		d.authorSeries,
+		d.registry,
+		d.authorsCache,
+		d.seriesCache,
+		d.dedupCache,
+		func(books []database.Book) []any { return make([]any, len(books)) },
 	)
 	return h, d
 }
@@ -320,9 +363,13 @@ func TestMergeAuthors_EmptyMergeIDs(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestDeleteAuthor is the POSITIVE CONTROL for the unfiltered guard: an author
+// referenced by nothing must STILL be deletable. Without it, a guard that
+// refuses every delete would pass every negative test below while silently
+// turning DELETE /authors/:id into a no-op.
 func TestDeleteAuthor(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksByAuthorIDCore(5).Return([]database.BookCore{}, nil)
+	// Referenced by nothing in any state.
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 	c, w := newCtx(http.MethodDelete, "/authors/5", "", idParam("5"))
 	h.DeleteAuthor(c)
@@ -331,20 +378,67 @@ func TestDeleteAuthor(t *testing.T) {
 
 func TestDeleteAuthor_HasBooks(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksByAuthorIDCore(5).Return([]database.BookCore{{ID: "b1"}}, nil)
+	// One reference refuses the delete. It deliberately does not matter whether
+	// that book is live, trashed, a non-primary version, or attached only
+	// through the book_authors junction — blindness to those is the whole bug:
+	// the author's name lives only in the row being deleted.
+	// No DeleteAuthor expectation: calling it at all fails the mock.
+	d.authorRefCounts = map[int]int{5: 1}
 	c, w := newCtx(http.MethodDelete, "/authors/5", "", idParam("5"))
 	h.DeleteAuthor(c)
 	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
+// TestDeleteAuthor_FailsClosedWhenStoreLacksRefCounter pins the fail-closed
+// contract. A store that cannot answer the UNFILTERED question must make the
+// delete refuse — never fall back to the filtered getter, because that fallback
+// IS the bug and it fails silently, reporting success while stranding books.
+//
+// It is built WITHOUT the entitiesStoreWithRefs wrapper on purpose: newHandler
+// always supplies the capability, so a test written through it could never
+// reach this path.
+func TestDeleteAuthor_FailsClosedWhenStoreLacksRefCounter(t *testing.T) {
+	h, _ := newHandlerWithoutRefCounters(t)
+	// No DeleteAuthor expectation: a fallback to the filtered count would call
+	// it and fail the mock.
+	c, w := newCtx(http.MethodDelete, "/authors/5", "", idParam("5"))
+	h.DeleteAuthor(c)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestBulkDeleteAuthors_FailsClosedWhenStoreLacksRefCounter — the bulk path is
+// an independent call site and gets its own assertion.
+func TestBulkDeleteAuthors_FailsClosedWhenStoreLacksRefCounter(t *testing.T) {
+	h, _ := newHandlerWithoutRefCounters(t)
+	c, w := newCtx(http.MethodPost, "/authors/bulk-delete", `{"ids":[1,2]}`, nil)
+	h.BulkDeleteAuthors(c)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
 func TestBulkDeleteAuthors(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBooksByAuthorIDCore(1).Return([]database.BookCore{}, nil)
+	d.authorRefCounts = map[int]int{2: 1} // author 1 unreferenced, author 2 referenced
 	d.store.EXPECT().DeleteAuthor(1).Return(nil)
-	d.store.EXPECT().GetBooksByAuthorIDCore(2).Return([]database.BookCore{{ID: "b"}}, nil) // skipped
+	// No DeleteAuthor(2) expectation: calling it at all fails the mock.
 	c, w := newCtx(http.MethodPost, "/authors/bulk-delete", `{"ids":[1,2]}`, nil)
 	h.BulkDeleteAuthors(c)
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"deleted":1`)
+	assert.Contains(t, w.Body.String(), `"skipped":1`)
+}
+
+// TestBulkDeleteAuthors_SkipsReferencedAuthor is the regression case: an author
+// the display counter calls empty because its only book is trashed,
+// non-primary, or a junction-only co-author credit must NOT be deleted.
+func TestBulkDeleteAuthors_SkipsReferencedAuthor(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorRefCounts = map[int]int{1: 1}
+	// No DeleteAuthor expectation: calling it at all fails the mock.
+	c, w := newCtx(http.MethodPost, "/authors/bulk-delete", `{"ids":[1]}`, nil)
+	h.BulkDeleteAuthors(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"skipped":1`)
+	assert.Contains(t, w.Body.String(), `"deleted":0`)
 }
 
 func TestBulkDeleteAuthors_BadJSON(t *testing.T) {
