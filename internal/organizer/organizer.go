@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-23
 
@@ -776,13 +776,34 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 				pathMap[srcPath] = dstPath
 			case srcErr == nil && destinationIsSameContent(srcPath, dstPath, srcInfo.Size(), dstInfo.Size()):
 				// Interrupted copy/reflink from an earlier run: same content,
-				// different inode. Adopt it rather than re-copying. Evaluated
-				// lazily, after os.SameFile: the hardlink/reflink strategies hit
-				// the case above on every re-organize and must not pay for a
-				// hash to do it.
+				// different inode. Adopt it rather than re-copying.
+				//
+				// Evaluated lazily, after os.SameFile, but be precise about who
+				// that actually spares. HARDLINK re-organizes short-circuit
+				// above: os.Link shares the inode, so os.SameFile is true.
+				// SYMLINK too, since os.Stat follows the link. REFLINK DOES
+				// NOT. reflink_unix.go opens the destination with
+				// os.O_CREATE|os.O_EXCL, which allocates a NEW inode, and the
+				// FICLONE ioctl only shares extents into it -- os.SameFile
+				// compares dev+ino and returns false for every successful
+				// reflink pair.
+				//
+				// So on btrfs/XFS, where FICLONE succeeds and the default
+				// "auto" strategy reaches for reflink first, a re-organize
+				// whose rows still point at the pre-organize path DOES pay two
+				// full reads here. That is the correct price for not adopting
+				// the wrong audio, but it is a price, not free.
 				pathMap[srcPath] = dstPath
 			default:
-				slog.Warn("organizeFile destination already occupied by a different file — leaving this file's row unchanged",
+				// "not proven to be this book's file", NOT "a different file".
+				// This branch is now also where an UNDECIDABLE destination
+				// lands -- unreadable file, hash I/O error, size changed
+				// mid-read -- because destinationIsSameContent fails closed.
+				// Saying "different" here would contradict the warn that
+				// function already emitted about the same path, and would send
+				// an operator looking for a content mismatch that may not
+				// exist.
+				slog.Warn("organizeFile destination occupied by a file not proven to be this book's — leaving this file's row unchanged",
 					"book_id", book.ID, "book_title", book.Title,
 					"source_path", srcPath, "dest_path", dstPath,
 					"source_stat_error", srcErr)
@@ -833,8 +854,6 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 	return targetDir, pathMap, nil
 }
 
-// organizeFile copies/links a single file using the configured strategy.
-// Returns (method, error) where method is "reflink", "hardlink", "copy", or "symlink"
 // destinationIsSameContent reports whether srcPath and dstPath hold
 // byte-identical content. It is the adoption test for a destination that
 // already exists and is NOT the same inode as the source, and it replaced a
@@ -897,6 +916,8 @@ func destinationIsSameContent(srcPath, dstPath string, srcSize, dstSize int64) b
 	return srcHash == dstHash
 }
 
+// organizeFile copies/links a single file using the configured strategy.
+// Returns (method, error) where method is "reflink", "hardlink", "copy", or "symlink".
 func (o *Organizer) organizeFile(src, dst string) (string, error) {
 	strategy := o.config.OrganizationStrategy
 
