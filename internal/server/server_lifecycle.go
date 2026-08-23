@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.28.0
+// version: 3.29.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-23
 
@@ -1207,6 +1207,12 @@ func (s *Server) startBackfills() {
 			// under-reporting version-group index, and if the store is ever
 			// wrapped or decorated the assertion misses and NOTHING happens.
 			// That is indistinguishable from a completed run unless it says so.
+			// CodeQL go/clear-text-logging (alert #1595, drifted from the
+			// #1472 dismissal at this same log line's earlier location): %T
+			// renders only the dynamic type name (e.g. *database.PebbleStore),
+			// never a struct field value, so no credential reachable through
+			// s.Ops() can appear in this log record. Re-verified 2026-08-23 at
+			// this new location and dismissed via the code-scanning API.
 			slog.Warn("versiongroup-backfill: store does not implement BackfillVersionGroupIndex, index will NOT be rebuilt",
 				"store_type", fmt.Sprintf("%T", s.Ops()))
 			return

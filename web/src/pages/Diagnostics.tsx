@@ -1,5 +1,5 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.6.0
+// version: 1.7.0
 // last-edited: 2026-08-23
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
@@ -293,11 +293,16 @@ export function Diagnostics() {
         setError(result.errors.join('; '));
       }
       // Refresh results
-      if (operationId) {
-        const results = await api.getDiagnosticsAIResults(operationId);
-        setAiResults(results);
-        setSelectedSuggestions(new Set());
-      }
+      //
+      // CodeQL js/trivial-conditional (alert #976): the early `if
+      // (!operationId || ...) return;` guard at the top of this handler
+      // already guarantees operationId is truthy for the rest of this
+      // closure (it is React state captured at call time and never
+      // reassigned within this function). Genuine dead conditional, not a
+      // false positive — removed rather than dismissed.
+      const results = await api.getDiagnosticsAIResults(operationId);
+      setAiResults(results);
+      setSelectedSuggestions(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply suggestions');
     } finally {

@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-20
+// last-edited: 2026-08-23
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -173,6 +173,13 @@ func (s *Server) warmAudiobookListCache() {
 	// maxUnwrapDepth of 16.
 	checker, ok := database.AsCapability[memReadyChecker](s.Ops())
 	if !ok {
+		// CodeQL go/clear-text-logging (alert #1594): typeName wraps
+		// fmt.Sprintf("%T", v), which renders only the dynamic type name
+		// (e.g. *database.PebbleStore), never a struct field value — same
+		// reasoning as the dismissed #1472/#1595 pair on the s.Ops() logging
+		// in server_lifecycle.go. No credential reachable through s.Ops()
+		// can appear in this log record. Dismissed via the code-scanning API
+		// 2026-08-23.
 		slog.Warn("library list warm-up: store doesn't expose IsMemReady, skipping",
 			"store_type", typeName(s.Ops()))
 		return
