@@ -1,5 +1,5 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
 // last-edited: 2026-08-23
 //
@@ -979,10 +979,26 @@ func TestHandler_DeleteAuthorAlias_InvalidID(t *testing.T) {
 
 // =============== deleteAuthorHandler ===============
 
+// authorRefMockStore adds the unfiltered AUTHOR reference counter to the
+// generated mock, which cannot carry it on its own: AuthorBookRefStore is
+// deliberately kept OUT of database.Store so that widening the capability does
+// not force every implementation and generated mock to grow with it. The delete
+// handlers reach it through database.AsAuthorBookRefStore and fail closed when
+// it is absent, so a bare generated mock cannot exercise them.
+type authorRefMockStore struct {
+	*mocks.MockStore
+	refCounts map[int]int
+}
+
+func (s authorRefMockStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
+	return s.refCounts, nil
+}
+
 func TestHandler_DeleteAuthor_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksByAuthorIDCore(42).Return([]database.BookCore{}, nil)
+	// Referenced by nothing in ANY state — the only safe-to-delete condition.
+	srv.store = authorRefMockStore{MockStore: mockStore, refCounts: map[int]int{}}
 	mockStore.EXPECT().DeleteAuthor(42).Return(nil)
 
 	router.DELETE("/authors/:id", newEntitiesHandler(srv).DeleteAuthor)
@@ -997,7 +1013,11 @@ func TestHandler_DeleteAuthor_Success(t *testing.T) {
 func TestHandler_DeleteAuthor_HasBooks(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().GetBooksByAuthorIDCore(42).Return([]database.BookCore{{ID: "b1"}}, nil)
+	// One reference is enough to refuse, and it deliberately does not matter
+	// whether that book is live, trashed, a non-primary version, or attached
+	// only through the book_authors junction: the author's name lives only in
+	// the row this would delete.
+	srv.store = authorRefMockStore{MockStore: mockStore, refCounts: map[int]int{42: 1}}
 
 	router.DELETE("/authors/:id", newEntitiesHandler(srv).DeleteAuthor)
 
