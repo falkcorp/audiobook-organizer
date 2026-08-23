@@ -1,7 +1,7 @@
 // file: internal/server/openlibrary_ops.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c7e9a21-f4b5-4d68-8e2f-1a6c0b9d7f43
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 package server
 
@@ -18,13 +18,11 @@ import (
 )
 
 type olDownloadOpParams struct {
-	LegacyOpID string   `json:"legacy_op_id"`
 	Types      []string `json:"types"`
 	TargetDir  string   `json:"target_dir"`
 }
 
 type olImportOpParams struct {
-	LegacyOpID string   `json:"legacy_op_id"`
 	Types      []string `json:"types"`
 	TargetDir  string   `json:"target_dir"`
 }

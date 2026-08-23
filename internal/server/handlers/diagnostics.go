@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -55,8 +55,12 @@ type MergeService interface {
 // server json.Unmarshals them back into its own copy, so the wire shape (JSON
 // tags) must stay byte-identical to the server-side definition even though the
 // Go types live in two packages.
+//
+// Because the two definitions are in different packages, the compiler cannot
+// check them against each other: dropping a field on one side and not the other
+// is a silent wire-shape drift, not a build error. legacy_op_id was dropped from
+// both on 2026-08-22.
 type diagnosticsExportOpParams struct {
-	LegacyOpID  string `json:"legacy_op_id"`
 	Category    string `json:"category"`
 	Description string `json:"description"`
 }
@@ -140,7 +144,16 @@ type diagnosticsStore interface {
 
 // diagnosticsOperationStore is the operation bookkeeping the apply/export paths
 // do while a long diagnostics run is in flight.
+//
+// GetOperationV2 serves the export path, which is fully v2: its op is created by
+// EnqueueOp and its result is written by the op's own reporter.
+//
+// The legacy methods below it are all reached from one place — the submit-ai
+// handler, which is not a registered OperationDef at all but a bare goroutine
+// driving a legacy row by hand. They go when it becomes a real v2 op.
 type diagnosticsOperationStore interface {
+	GetOperationV2(id string) (*database.OperationV2Row, error)
+
 	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
 	GetOperationByID(id string) (*database.Operation, error)
 	UpdateOperationError(id, errorMessage string) error
@@ -215,26 +228,22 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 		return
 	}
 
-	opID := ulid.Make().String()
-	_, err := store.CreateOperation(opID, "diagnostics_export", nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
 	params := diagnosticsExportOpParams{
-		LegacyOpID:  opID,
 		Category:    req.Category,
 		Description: req.Description,
 	}
-	if _, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params); enqErr != nil {
+	// Return the id EnqueueOp minted. The client polls this against
+	// GET /operations/v2/:id and passes it back to DownloadExport, so it has to
+	// be the v2 run's own id — a separately-minted legacy id resolves at neither.
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue diagnostics export", enqErr)
 		return
 	}
 
 	httputil.RespondWithSuccess(c, 202, gin.H{
 		"operation_id": opID,
-		"status":       "generating",
+		"status":       "queued",
 	})
 }
 
@@ -248,7 +257,10 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 		return
 	}
 
-	op, err := store.GetOperationByID(opID)
+	// Reads the v2 row, because that is where ExportDiagnostics' op now lives and
+	// where its Run stores the zip path (via ReporterSetResult). The id in the URL
+	// came from EnqueueOp, so looking it up as a legacy row would always 404.
+	op, err := store.GetOperationV2(opID)
 	if err != nil || op == nil {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
@@ -258,7 +270,7 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 		httputil.RespondWithSuccess(c, 202, gin.H{
 			"operation_id": opID,
 			"status":       op.Status,
-			"message":      op.Message,
+			"message":      op.ProgressMessage,
 		})
 		return
 	}
