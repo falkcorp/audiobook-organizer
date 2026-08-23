@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dedupe_test.go
 // version: 2.0.0
 // guid: 9f2b6c41-7e30-4a58-b1d6-2c8e05f37a94
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -82,7 +82,7 @@ func TestMaintenanceDedupe(t *testing.T) {
 	}
 
 	t.Run("identical params collapse to one op", func(t *testing.T) {
-		p := maintenanceJobOpParams{LegacyOpID: "legacy-same", JobID: jobID}
+		p := maintenanceJobOpParams{JobID: jobID}
 
 		id1, id2 := enqueueTwice(t, p, p)
 
@@ -91,25 +91,23 @@ func TestMaintenanceDedupe(t *testing.T) {
 				"EnqueueOp's same-params dedupe is not reached on this path")
 	})
 
-	t.Run("differing only in LegacyOpID still merges", func(t *testing.T) {
-		base := maintenanceJobOpParams{JobID: jobID}
-		p1, p2 := base, base
-		p1.LegacyOpID = "legacy-1"
-		p2.LegacyOpID = "legacy-2"
-
-		id1, id2 := enqueueTwice(t, p1, p2)
-
-		require.Equal(t, id1, id2,
-			"two requests for the same job differ only in the v1 row each is twinned "+
-				"to, which is bookkeeping and not work identity; they must collapse to "+
-				"one run rather than running the same job over the same rows twice")
-	})
+	// The arm that used to sit here varied LegacyOpID and asserted the two
+	// requests merged anyway. maintenanceJobOpParams no longer has the field, so
+	// there is nothing left to vary: two requests for the same job with the same
+	// dry_run are now byte-identical, which is Arm A above. What that arm proved
+	// about the registry -- that a per-request v1 id is bookkeeping rather than
+	// work identity -- is still proved, by TestSameParamsIgnoringLegacyID in
+	// internal/operations/registry, alongside the enqueue sites that still stamp
+	// one.
+	//
+	// This is a strengthening, not a coverage loss: maintenance dedupe now rests
+	// on the plain byte-equality rule rather than on the key-wise exception.
 
 	t.Run("differing in dry_run queues a second op", func(t *testing.T) {
 		base := maintenanceJobOpParams{JobID: jobID}
 		preview, apply := base, base
-		preview.LegacyOpID, preview.DryRun = "legacy-1", true
-		apply.LegacyOpID, apply.DryRun = "legacy-2", false
+		preview.DryRun = true
+		apply.DryRun = false
 
 		id1, id2 := enqueueTwice(t, preview, apply)
 

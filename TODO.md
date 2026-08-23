@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.35.1 -->
+<!-- version: 10.36.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -345,9 +345,27 @@ latent one — less visible, not less wrong. Found by a silent-failure review of
   work above, not before it. Same shape at `reconcile.go:52`, `reconcile.go:131`,
   `duplicates/handler.go:588`.
 
-  Do not simply drop `LegacyOpID` from the struct: the v2 op needs it to find the legacy
-  `operations` row to update, and `resumeLegacyOp` (`server_lifecycle.go`) reads it on restart.
-  `JobID` in the same struct is documented as retained-for-old-rows only; `LegacyOpID` is not.
+  ~~Do not simply drop `LegacyOpID` from the struct: the v2 op needs it to find the legacy
+  `operations` row to update, and `resumeLegacyOp` (`server_lifecycle.go`) reads it on restart.~~
+  — **superseded 2026-08-23; the field is now gone from `maintenanceJobOpParams`.** Both reasons
+  were removed rather than worked around: there is no legacy `operations` row to find (the v1
+  minter in `runMaintenanceJob` is deleted, so a maintenance run mints a v2 row only), and
+  `resumeLegacyOp`'s `maintenance:` branch is deleted too — it was the SECOND resume path for a
+  single logical run, the v2 twin having already been resumed by `resumeAfterStartup`.
+
+  The activity log, the per-item results and the operation summary log are now keyed off
+  `opsregistry.ReporterOpID(reporter)`. That was safe because all three are keyed by an operation
+  id **string** with no foreign key to any `operations` row — the same shape that made the
+  `GetOperationSummaryLog` read a non-issue.
+
+  `JobID` stays, but its documented reason ("retained-for-old-rows", i.e. resume reading params
+  written by an older build) is now **false** — that path is deleted. It is read by nothing;
+  `EnqueueOp`'s dedupe is scoped per-def, so params cannot conflate two jobs. Removing it is a
+  candidate for a separate change.
+
+  `sameParamsIgnoringLegacyID` and the `legacy_op_status.go` bridge **stay**:
+  `server_lifecycle.go` still stamps a `LegacyOpID` on the `isbn-enrichment` and
+  `metadata-refresh` legacy-resume branches.
 
   **Why it matters:** `cleanup-empty-folders` removes directories from disk, and seven jobs are
   both `CanResume()` and advertise `dry_run: true`. Two concurrent runs of a mutating job is the

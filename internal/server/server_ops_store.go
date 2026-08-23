@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-08-23
 
@@ -198,40 +198,27 @@ type serverOperationReader interface {
 	ListOperations(limit int, offset int) ([]database.Operation, int, error)
 }
 
-// serverOperationWriter: Creates and advances v1 operation rows.
+// serverOperationWriter: Advances v1 operation rows and records the details that
+// hang off an operation id.
 //
-// Split into two leaves when DeleteOperationWithLogs made it the 9th method and
-// tripped the `interfacebloat` cap of 8. The name and its exact method set are
-// unchanged, so no consumer moved — the division is by lifetime: the row itself
-// versus the records that hang off one.
+// It does NOT create rows. CreateOperation left when runMaintenanceJob -- the
+// last non-test caller in this package -- stopped minting a v1 row alongside the
+// v2 one, and DeleteOperationWithLogs left with it: it existed solely to clean up
+// after that mint when the enqueue merged into an already-active run and left the
+// fresh row twinned to nothing. Nothing here creates a v1 operation any more; the
+// writers below only close out rows written by an older build.
+//
+// Losing those two also undoes the split this used to have. It was two leaves
+// because DeleteOperationWithLogs made it the 9th method and tripped
+// `interfacebloat`'s cap of 8; at 7 it is one leaf again.
 type serverOperationWriter interface {
-	serverOperationRowWriter
-	serverOperationDetailWriter
-}
-
-// serverOperationRowWriter: The v1 operation row's own lifecycle — create it,
-// advance its status, and (rarely) remove it again.
-type serverOperationRowWriter interface {
-	CreateOperation(id string, opType string, folderPath *string) (*database.Operation, error)
-	// DeleteOperationWithLogs removes a v1 row this server created and then found
-	// it did not need — see runMaintenanceJob, where an enqueue that merges into
-	// an already-active run leaves its freshly-created row twinned to nothing.
-	// Deleting it is what keeps that row from sitting at "pending" forever and
-	// being re-resumed on every restart.
-	DeleteOperationWithLogs(id string) error
-	UpdateOperationError(id string, errorMessage string) error
-	UpdateOperationResultData(id string, resultData string) error
-	UpdateOperationStatus(id string, status string, progress int, total int, message string) error
-}
-
-// serverOperationDetailWriter: Records attached to an operation — logs, per-entity
-// changes, per-book results, and the resumable params blob. All are keyed by an
-// operation id and outlive nothing that the row itself does not.
-type serverOperationDetailWriter interface {
 	AddOperationLog(operationID string, level string, message string, details *string) error
 	CreateOperationChange(change *database.OperationChange) error
 	CreateOperationResult(result *database.OperationResult) error
 	SaveOperationParams(opID string, params []byte) error
+	UpdateOperationError(id string, errorMessage string) error
+	UpdateOperationResultData(id string, resultData string) error
+	UpdateOperationStatus(id string, status string, progress int, total int, message string) error
 }
 
 // serverOperationV2Store: The v2 registry row. Kept apart from the v1 pair so the

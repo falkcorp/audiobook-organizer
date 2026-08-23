@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_job_op.go
-// version: 2.3.0
+// version: 3.0.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
 // last-edited: 2026-08-23
 
@@ -17,13 +17,29 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
+// maintenanceJobOpParams is what a maintenance run carries in its v2 row.
+//
+// legacy_op_id is GONE. It held the id of a v1 operations row the dispatcher
+// minted alongside the enqueue, and that row is no longer created. Dropping the
+// field changes the params byte-shape, which has one bounded effect across the
+// deploy: EnqueueOp's dedupe compares a fresh request against the params of any
+// ACTIVE op, and sameParamsIgnoringLegacyID takes its key-wise path only when
+// BOTH sides carry the key. A request arriving while a pre-deploy run is still
+// in flight therefore falls to the exact comparison, does not match, and queues a
+// second run instead of merging. The def's ConcurrencyKey still serializes the
+// two, so this costs a redundant run in a window that closes when the last
+// pre-deploy run finishes — the same safe direction the byte-equality rule
+// already chose.
+//
+// JobID is still written and is currently read by nothing: the job is captured in
+// the Run closure, and EnqueueOp's dedupe is scoped to a single def
+// (registry.go, `if op.DefID != defID { continue }`) so it cannot conflate two
+// jobs whatever the params say. It is kept as the human-readable record in a
+// params blob an operator reads while debugging, NOT for the reason previously
+// stated here — that comment justified it by resume reading params written by an
+// older build through operations.SaveParams / LoadParams, and both of those call
+// sites were deleted with the v1 minter.
 type maintenanceJobOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-	// JobID is redundant now that each job has its own OperationDef — the job is
-	// captured in the closure, not looked up from params. It is retained because
-	// resume reads params written by an older build (operations.SaveParams /
-	// LoadParams in maintenance_dispatcher.go and server_lifecycle.go), and
-	// dropping the field would silently discard it from those rows.
 	JobID  string `json:"job_id"`
 	DryRun bool   `json:"dry_run"`
 }
@@ -145,13 +161,8 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			// records now name an operation an operator can actually look up.
 			//
 			// Same shape as maintenance.window, which made this move first
-			// (scheduler_maintenance_window_op.go). The fallback covers rows still
-			// in flight across the deploy, whose params were written by the old
-			// dispatcher and do carry a legacy id.
+			// (scheduler_maintenance_window_op.go).
 			opID := opsregistry.ReporterOpID(reporter)
-			if opID == "" {
-				opID = p.LegacyOpID
-			}
 
 			ctx = maintenance.WithOperationID(ctx, opID)
 			progress := registryProgressAdapter{r: reporter}
