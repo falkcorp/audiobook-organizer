@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/WAVE-1-STATE.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 5b3c9e21-8f47-4a6d-b0c2-71e4d8a35f90 -->
 <!-- last-edited: 2026-08-22 -->
 
@@ -46,12 +46,12 @@ themselves at all. See the todo.d fragment.
 anyone checked the gate condition it depended on. A subagent's finding is a lead, not
 a result.
 
-## Haiku tier state as of 2026-08-22 20:20 EDT — 36 of 39 merged
+## Haiku tier state as of 2026-08-22 20:45 EDT — 37 of 39 merged
 
 **This section previously said "~13 Haiku wave-1 briefs remain unassigned" and listed
 TASK-007, 034, 055, 058, 059, 060, 089, 093, 097, 141, 145, 183, 204 as known-good
-candidates. Twelve of those thirteen were already merged when that was written**
-(#2698-#2715). Only TASK-059 was untouched. The list sent a later session looking for
+candidates. All thirteen were in fact already done when that was written** —
+twelve merged as #2698-#2715, and TASK-059 landed without a matching branch. The list sent a later session looking for
 work that did not exist; it is replaced here with a recomputed count rather than
 amended, because the shape of the claim was wrong, not just its numbers.
 
@@ -60,17 +60,49 @@ id to its branch and that branch's PR state:
 
 | State | Count | Tasks |
 |---|---|---|
-| Merged | 36 | everything not named below |
+| Merged | 37 | everything not named below |
 | Held — `review_critical` | 2 | TASK-046, TASK-086 |
-| Never dispatched | 1 | TASK-059 |
 
 TASK-046 and TASK-086 are held on the owner's instruction ("skip both for now"), not
-blocked. Per `BREAKDOWN-2026-08-21.md`, review-critical PRs stay open for the owner
-regardless.
+blocked, and both were re-checked at HEAD to confirm they are still genuinely open:
+`merge.AsExternalIDReassigner` is still a bare assertion (`internal/merge/service.go:34`)
+and `util.NormalizeAuthor` still does only `ToLower`+`TrimSpace`
+(`internal/util/normalize.go:27`) with no internal-whitespace collapse. Per
+`BREAKDOWN-2026-08-21.md`, review-critical PRs stay open for the owner regardless.
 
-TASK-059 (close out the 2026-05-01 re-audit block, TODO.md L10706) has no branch and
-no PR. It is a docs task with no dependencies and is not review-critical — it was
-simply missed.
+### ⚠️ How this table was computed, and where that method fails
+
+Each `tier=haiku` id was resolved to a branch matching its number, then that branch's
+PR state. **That inference is sound for "merged" and unsound for "not done."** A task
+whose work landed under a differently-named branch, or straight from the coordinator,
+leaves no matching branch and reads as untouched.
+
+It produced exactly that error once here. An earlier version of this table listed
+TASK-059 as "never dispatched" on the strength of an absent branch. Its work had in
+fact already landed: the re-audit bullet at `TODO.md:10865` was closed 2026-08-22 and
+the DEP-1e spin-out exists at `todo.d/20260822-drop-deprecated-book-itunespath.md`.
+Absence of a branch is not evidence of absence of work — check the artifact the task
+was supposed to produce.
+
+### TASK-059's close-out was wrong, and is being corrected
+
+Re-verifying the nine sub-items that bullet marks resolved found two that are not:
+
+- **DEAD-1 is not resolved.** The close-out greps three symbols
+  (`legacySaveConfigToDatabase_REMOVED`, `bookTagKeyspace`,
+  `bookSummarySelectColumnsQualified`) and reports 0 hits. The original DEAD-1
+  evidence at `docs/archive/codebase-evaluation.md:107` names a **fourth**:
+  `linkAsVersion`. It is still present at `internal/itunes/service/importer.go:1780`
+  with exactly two callers, **both tests** — which is also why no linter flags it, as
+  staticcheck's U1000 counts in-package test usage as usage.
+- **PERF-1 was superseded, not resolved.** The finding asked to paginate unbounded
+  `GetAllBooks(0,0)` calls; commit `19e129d48` deliberately moved eleven more ops *to*
+  the unbounded form to stop truncation. The prescribed direction was rejected, and
+  residual memory exposure is reduced rather than eliminated.
+
+This is the failure mode that matters most in a close-out: marking an item resolved
+removes it from everyone's view permanently, so a close-out asserted from a partial
+grep is worse than no close-out. Corrected in the TASK-059 PR.
 
 ### Wave 2 (2026-08-22): 9 merged
 
