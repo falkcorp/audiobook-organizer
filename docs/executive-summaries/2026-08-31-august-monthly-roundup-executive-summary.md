@@ -1,14 +1,14 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-20 -->
+<!-- last-edited: 2026-08-22 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
 **Period covered:** 2026-08-01 through 2026-08-20 (**month in progress** — this is
 updated as work lands, not a closed record).
-**Individual write-ups this consolidates:** the seven dated summaries in this directory
-from 2026-08-04 to 2026-08-09, linked inline below.
+**Individual write-ups this consolidates:** the 29 dated summaries in this directory
+from 2026-08-04 to 2026-08-19, linked inline below.
 
 This is a monthly roundup rather than a single-change summary: each theme groups an arc
 of related work instead of listing changes one by one. Everything below is written for a
@@ -563,6 +563,234 @@ tidying forty-three files at the same time as repairing two safety checks would 
 both harder to review. It is noted because three instances of the same oversight in a
 single day is no longer a coincidence: the project has no rule that a check must be
 reachable by the automated system in order to count as a check.
+
+---
+
+## 13. Two days, one dead page (Aug 10–11)
+
+**[The invisible sheet that made the page stop responding](2026-08-10-the-invisible-sheet-executive-summary.md)** (Aug 10)
+
+Closing a dropdown or the filter panel could leave the whole page dead — every click
+landing on a transparent, invisible sheet left behind by a closing animation that never
+finished. The bug had been investigated and dismissed twice before: once blamed on a slow
+test machine, once missed because the check only looked for the menu to become "hidden,"
+which it already was. Invisible and harmless are not the same thing.
+
+**[The fix that only moved the window](2026-08-11-the-fix-that-only-moved-the-window-executive-summary.md)** (Aug 11)
+
+The previous day's fix had been reported as complete. It was not. Removing the closing
+animation made the failure much rarer, not impossible — the software still scheduled a
+"finish closing" step for later, just later now meaning immediately instead of a fifth of
+a second, and the bug lived in that remaining gap. It is now demonstrably fixed rather
+than merely believed to be.
+
+---
+
+## 14. Requests that quietly went to the wrong place (Aug 11–14)
+
+**[The instructions that were thrown away](2026-08-11-instructions-that-were-thrown-away-executive-summary.md)** (Aug 11)
+
+Telling the organiser to scan, organise, or convert a specific set of books could
+silently run the job on **the entire library instead**, with no warning and success
+reported regardless. The fault was in how a request got packed and unpacked on its way to
+the code that does the work. It is fixed going forward — not confirmed as the *only*
+possible cause on the live server, and existing records were not repaired retroactively.
+
+**[The endpoints that answered anyway](2026-08-13-the-endpoints-that-answered-anyway-executive-summary.md)** (Aug 13)
+
+Opening a series could show books that had nothing to do with it while the series itself
+claimed zero books, and playlists opened empty every time. All three faults were requests
+the organiser accepted and answered confidently, but wrongly — none were caught by the
+existing conformance suite because none of its 28 recorded examples carried a search,
+filter, or page instruction to begin with.
+
+**[The preview button that was not a preview](2026-08-14-the-preview-button-that-was-not-a-preview-executive-summary.md)** (Aug 14)
+
+18 of the 34 maintenance jobs advertise "preview only" as their default, and the part of
+the server that actually starts a job had the opposite idea of the default — applying
+changes for real whenever the preview setting wasn't spelled out explicitly, which is
+exactly what happens when something trusts the published default. Fixed for all 18; a
+separate duplicate-series routine still has no preview option at all, though it has never
+been run against this library.
+
+---
+
+## 15. A day of checking our own claims (Aug 12)
+
+**[Checking our own homework](2026-08-12-checking-our-own-homework-executive-summary.md)** (Aug 12)
+
+A single day spent verifying claims — mostly the team's own — found a phone app told a
+feature existed when it didn't, two drifted specifications with 48 described features
+that don't actually exist, a maintenance script reporting success after doing nothing,
+and phone-app compatibility tests that checked the *shape* of an answer but never what
+was *in* it. Six of the day's own findings turned out to be wrong and were caught and
+corrected the same day — nothing described here was in production yet as of this write-up.
+
+---
+
+## 16. Zero results is not a neutral answer (Aug 12–14)
+
+**[The second page that was never there](2026-08-12-the-second-page-that-was-never-there-executive-summary.md)** (Aug 12)
+
+Every search's second page came back empty, always, because the code cut results into
+pages *before* applying your filters instead of after — and the "number of results" shown
+was really just the count of rows that happened to fit on the current page. Reversed and
+fixed; every earlier assessment of search quality had unknowingly been using this same
+broken count.
+
+**[The books search could not see](2026-08-13-the-books-search-could-not-see-executive-summary.md)** (Aug 13)
+
+The library's separate search catalogue is built in one pass, oldest book first; if the
+server restarts partway through, the pass stops where it is and never resumes — leaving
+16,738 books with no searchable "card" at all. Repaired and deployed on 2026-08-13, with
+the catalogue now finishing an interrupted pass automatically instead of stopping forever.
+
+**[Deleted, but not gone](2026-08-13-deleted-but-not-gone-executive-summary.md)** (Aug 13)
+
+Chasing eleven books that resisted an unrelated repair uncovered that **3,953 deleted
+books** — trashed, meant to be recoverable — had never actually stopped being processed,
+because the library's "give me all the books" function exists in two versions and only
+one of them excludes the trash; production used the wrong one. Along the way, an earlier
+report of a 14 TB "disk emergency" was corrected to zero actual reclaimable space, an
+error caught and corrected the same session. The fix is merged but, as of this write-up,
+**not yet run** against the live library. (This and [The Books Search Could Not
+See](2026-08-13-the-books-search-could-not-see-executive-summary.md) explain the same
+symptom — a search for *All Jobs and Classes* turning up nothing useful — two different
+ways; both faults are real and independent.)
+
+**[When quotes did not mean quotes](2026-08-13-when-quotes-did-not-mean-quotes-executive-summary.md)** (Aug 13)
+
+Three separate defects made search return far too much at once: a trailing `*` wildcard
+that only worked in lowercase, quotation marks stripped before the search ever saw them,
+and common words like *all* and *the* deleted in a way that broke the position-tracking
+quoted phrases depend on. All three are fixed; a matching capital-letter bug in fuzzy
+search and over-aggressive word-splitting on fields meant to be exact (genre, tags, ISBN)
+are known and filed separately.
+
+**[Thirteen search boxes that always said no](2026-08-14-thirteen-search-boxes-that-always-said-no-executive-summary.md)** (Aug 14)
+
+Thirteen ways to narrow your library — release year, ISBN, file size, and ten more —
+silently returned "no books found" instead of admitting the server didn't recognise the
+field, because the search box and the server kept separate lists of what could be
+searched that nobody had ever cross-checked. A test now reads both lists and fails the
+build the moment they disagree.
+
+---
+
+## 17. Records that said something that was not true (Aug 14–16)
+
+**[The series that vanished from under 13,322 books](2026-08-14-the-series-that-vanished-from-under-13322-books-executive-summary.md)** (Aug 14)
+
+A weekly cleanup job deleted series it believed had zero books, using a counter built for
+a website badge that deliberately ignores trashed and duplicate copies — the wrong test
+for "is anything still pointing at this series?" 13,322 books ended up filed under a
+series that no longer existed. The count is fixed going forward; undoing the existing
+damage is a separate, filed follow-up.
+
+**[The work that said it succeeded](2026-08-16-the-work-that-said-it-succeeded-executive-summary.md)** (Aug 16)
+
+Six unrelated places shared one mistake: a job failed and the program reported success
+anyway — file renames marked "applied: true" when nothing moved, organise operations left
+pointing at an empty folder, and three iTunes maintenance jobs that had done nothing since
+mid-July because an empty placeholder version silently won out over the real one.
+Reporting progress is now an enforced requirement rather than a convention; three
+scheduled jobs — including the one that applies this month's file-location fix — were
+separately found to be wired up but unable to ever run, and were left switched off
+deliberately pending a decision to run them under supervision.
+
+---
+
+## 18. What the audio files carried, and where they ended up (Aug 13–15)
+
+**[One chapter, twenty-four hours](2026-08-13-one-chapter-twenty-four-hours-executive-summary.md)** (Aug 13)
+
+Almost no audiobooks in the library had working chapter navigation — a 24-hour book
+opened showing a single chapter spanning the whole recording — because the organiser only
+reads embedded chapter data the first time it sees a file, a behaviour added in July 2026
+that permanently skipped every book already in the library at that point. Fixed for the
+whole library; multi-file books were deliberately left alone, since their existing
+one-chapter-per-file guess is already correct.
+
+**[The ampersand that became an author](2026-08-14-the-ampersand-that-became-an-author-executive-summary.md)** (Aug 14)
+
+46 people were filed twice in the author list — once correctly, once as "& Firstname
+Lastname" — because multi-narrator credit lines were split at commas before an existing
+ampersand rule ever got the chance to run. 145 books were affected out of roughly 9,350
+authors; nothing was deleted, only duplicated.
+
+**[The tag that was never written](2026-08-15-the-tag-that-was-never-written-executive-summary.md)** (Aug 15)
+
+Multi-file audiobooks were being completely rewritten on every metadata save, whether or
+not anything had changed, because the before/after comparison didn't know about the
+track-number tag and the code that writes files didn't save that tag either — each gap
+hid the other, so the same full rewrite ran forever for information that never once
+reached disk. Fixed and verified against a real file; how much time this saves across the
+whole library has not yet been measured.
+
+**[The tug-of-war over where books live](2026-08-15-the-tug-of-war-over-where-books-live-executive-summary.md)** (Aug 15)
+
+Books kept moving on their own because three different operations — organising, saving
+metadata, and organising a multi-file book — each computed a book's correct folder
+location a different way, and every individual move reported success while the library
+never settled. Unified to one answer; three related problems surfaced during the fix and
+were deliberately left for later, filed with their evidence rather than folded into an
+already-wide change.
+
+---
+
+## 19. Underneath: performance and infrastructure (Aug 12–19)
+
+**[The page nobody was looking at](2026-08-12-the-page-nobody-was-looking-at-executive-summary.md)** (Aug 12)
+
+Opening the Activity page started a job that read the whole activity history into memory,
+and closing the tab before it finished did not stop it — every reopen started another
+copy, and 30 of them running at once brought the server down with an out-of-memory kill,
+five separate times. Fixed and verified on 2026-08-12: the same page now answers in **55
+milliseconds**.
+
+**[The 580 megabytes read and thrown away](2026-08-13-the-580-megabytes-read-and-discarded-executive-summary.md)** (Aug 13)
+
+Every server restart spent about two minutes loading the library, roughly 80% of which —
+**580 megabytes** of book "signature" fingerprints — was read off disk and discarded
+within microseconds, by design, because it was stored in the same record as everything
+else the startup index needs. The code that stops reading it is merged and deployed; the
+one-off move of the existing signatures out of that shared record had **not yet been run**
+as of this write-up.
+
+**[Untangling the wiring](2026-08-19-untangling-the-wiring-executive-summary.md)** (Aug 19)
+
+Every part of the program used to reach the database through one shared connector with
+**398 operations** on it, whether a component needed two or two hundred — making it
+impossible to tell what a change might break, forcing tests to fake the entire database
+(one stand-in ran to 24,613 lines), and letting things silently come unplugged. Narrowing
+components down to what they actually use surfaced four features that had quietly stopped
+working — including the activity log's fast storage being switched off and a library
+warm-up step that sometimes skipped on startup — all now fixed. Splitting the underlying
+database object itself into pieces, so the giant connector can be deleted outright, is the
+work still ahead.
+
+---
+
+## 20. Files that were not where the database said (Aug 17–19)
+
+**[The books that would not download](2026-08-17-the-books-that-would-not-download-executive-summary.md)** (Aug 17)
+
+Measured directly, **41.8%** of a random sample's file entries pointed at files that were
+not there — every one of them in the folder tree the organiser manages itself, none in the
+iTunes tree, meaning most affected books still have a real, playable copy elsewhere. The
+author and narrator pages that showed no books are fixed and deployed; repairing the dead
+file entries is understood precisely but deliberately left as a decision for a person,
+since removing an entry is unsafe for the books where every entry is dead.
+
+**[The repair that would have deleted the evidence](2026-08-19-the-repair-that-would-have-deleted-the-evidence-executive-summary.md)** (Aug 19)
+
+A cleanup job meant to remove dead file-path entries was still waiting on approval that
+had never been given — which turned out to be what saved the underlying files. A
+five-and-a-half-month naming bug (a slash in a track-number template, which the filesystem
+reads as "make a folder") had left many of those entries pointing at a real file under a
+slightly different name rather than at nothing. **The actual repair does not exist yet**
+— this work only made the situation safe to measure, and the job now reports and waits for
+a person rather than deleting anything.
 
 ---
 
