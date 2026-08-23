@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/WAVE-1-STATE.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5b3c9e21-8f47-4a6d-b0c2-71e4d8a35f90 -->
 <!-- last-edited: 2026-08-22 -->
 
@@ -46,12 +46,70 @@ themselves at all. See the todo.d fragment.
 anyone checked the gate condition it depended on. A subagent's finding is a lead, not
 a result.
 
-## Not started
+## Haiku tier state as of 2026-08-22 20:20 EDT — 36 of 39 merged
 
-~13 Haiku wave-1 briefs remain unassigned. Eligible set = `skeleton.json` filtered to
-`tier=haiku`, `wave=1`, no `depends_on`, not `review_critical`, `exact_files` disjoint
-from anything in flight. Known-good candidates not yet touched: TASK-007, 034, 055,
-058, 059, 060, 089, 093, 097, 141, 145, 183, 204.
+**This section previously said "~13 Haiku wave-1 briefs remain unassigned" and listed
+TASK-007, 034, 055, 058, 059, 060, 089, 093, 097, 141, 145, 183, 204 as known-good
+candidates. Twelve of those thirteen were already merged when that was written**
+(#2698-#2715). Only TASK-059 was untouched. The list sent a later session looking for
+work that did not exist; it is replaced here with a recomputed count rather than
+amended, because the shape of the claim was wrong, not just its numbers.
+
+Recomputed from `skeleton.json` filtered to `tier=haiku` (39 tasks), resolving each
+id to its branch and that branch's PR state:
+
+| State | Count | Tasks |
+|---|---|---|
+| Merged | 36 | everything not named below |
+| Held — `review_critical` | 2 | TASK-046, TASK-086 |
+| Never dispatched | 1 | TASK-059 |
+
+TASK-046 and TASK-086 are held on the owner's instruction ("skip both for now"), not
+blocked. Per `BREAKDOWN-2026-08-21.md`, review-critical PRs stay open for the owner
+regardless.
+
+TASK-059 (close out the 2026-05-01 re-audit block, TODO.md L10706) has no branch and
+no PR. It is a docs task with no dependencies and is not review-critical — it was
+simply missed.
+
+### Wave 2 (2026-08-22): 9 merged
+
+TASK-015, 019, 033, 047, 123, 144, 151 (#2726-#2732), then TASK-146 (#2734) and
+TASK-139 (#2737). Close-out in #2735 and #2739; it retires **six** TODO items from
+seven PRs, because TASK-015's source line is the REPO-SIZE-1 stop-for-human entry,
+which it does not resolve.
+
+### What review caught that CI did not
+
+Reviewer agents ran over every PR in wave 2 after the workers' gates passed. Four
+defects survived a green gate, which is the argument for the pass existing:
+
+1. **TASK-146 hand-edited two ABS oracle captures** (`post_login.json`,
+   `post_auth_refresh.json`) from the captured 10/600000 to 15/900000. Those are
+   verbatim captures stored raw on purpose; `scripts/abs_capture_fixtures.py` writes
+   the captured values straight back, so the edit would have broken both conformance
+   tests later with nothing in the tree to explain why. CI could not catch it — the
+   gate compares against the file the change had just rewritten. Fixed by restoring
+   both captures and declaring the divergence as a named `allowance`.
+2. **TASK-146 fixed two of the three mismatches its source audit lists.** The third —
+   the throttle counts failures, not requests — was left, along with the comment
+   `docs/audits/2026-08-11-abs-coverage-gap-audit.md` explicitly calls out as false.
+3. **TASK-139 shipped with zero tests** though its brief required them; the gate
+   passed by running a pre-existing test over the already-existing underlying method.
+4. **TASK-144 fixed the less severe half of ABS §6.3** (omit `numBooks`) and left the
+   more severe half (the non-optional narrator `id`), then added a regression test
+   asserting only the half that was done — pinning the incomplete shape as correct.
+   Fixed in #2738.
+
+Two general lessons, both already paid for twice:
+
+- **An empty golden array pins nothing about its elements.** The search oracle records
+  `narrators: []`, so conformance passed vacuously over a missing required field. The
+  target-client contract records this same failure mode from an earlier occurrence.
+- **A per-endpoint shape test cannot see two endpoints disagreeing.** #2738's first
+  attempt gave the narrator id the right format over the wrong name source, so it
+  decoded cleanly and resolved to nothing. The shape test passed on that build; only
+  a cross-endpoint assertion caught it.
 
 ## Two gate holes found and fixed during wave 1
 
