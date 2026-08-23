@@ -1,5 +1,5 @@
 // file: internal/server/ratelimit_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: acf71ad4-2da2-41b4-9d39-0b1a3752cfa1
 // last-edited: 2026-08-22
 
@@ -73,5 +73,29 @@ func TestRateLimit_EnabledStillLimits(t *testing.T) {
 
 	if got := hitOperationsActive(srv, 40); got == 0 {
 		t.Fatalf("EnableRateLimit=true, APIRateLimitPerMinute=100: got 0 requests rate-limited (429) out of 40, want at least 1 once the burst of 20 is exceeded")
+	}
+}
+
+// TestRateLimit_EnabledZeroRateStaysNoop pins the edge case the fix
+// deliberately left unchanged: EnableRateLimit=true with
+// APIRateLimitPerMinute=0 must still be a no-op, since a limiter needs a
+// positive rate to exist at all. Unlike the two tests above, this one
+// passes on both the old and the fixed code — it is not a regression
+// discriminator for this bug, just a guardrail so a future change to the
+// EnableRateLimit guard doesn't accidentally start requiring rpm==0 to mean
+// "limit at rate 0" instead of "no limiter".
+func TestRateLimit_EnabledZeroRateStaysNoop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	origCfg := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = origCfg })
+	config.AppConfig.EnableRateLimit = true
+	config.AppConfig.APIRateLimitPerMinute = 0
+
+	srv := &Server{router: gin.New()}
+	srv.setupRoutes()
+
+	if got := hitOperationsActive(srv, 40); got != 0 {
+		t.Fatalf("EnableRateLimit=true, APIRateLimitPerMinute=0: got %d requests rate-limited (429), want 0 — a zero rate must stay a no-op", got)
 	}
 }
