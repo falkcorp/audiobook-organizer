@@ -1,5 +1,5 @@
 // file: internal/server/reconcile.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // HTTP adapters — all logic in internal/reconcile
 
