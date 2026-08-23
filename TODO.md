@@ -87,7 +87,7 @@ into one of the curated sections below, is a normal direct edit.
   **Not scoped here:** making any individual phase faster. That is a separate
   optimization task and should be filed from the measurements above.
 
-- [ ] **`internal/ai/retry.go`'s `isPermanentAIError` HTTP-429 branch checks
+- [x] **`internal/ai/retry.go`'s `isPermanentAIError` HTTP-429 branch checks
       the wrong JSON field for OpenAI's real quota-exhaustion error.** Found
       while wiring `internal/scanner/ai_failure.go`'s `isPermanentAIFailure`
       to reuse this classifier (TODO L4852/L4961). The branch is
@@ -110,6 +110,23 @@ into one of the curated sections below, is a normal direct edit.
       family — needs the same kind of primary-source check TASK-124 did
       before changing retry.go's classification, since retry.go's own
       `DoWithRetry` is used by other callers too.
+
+      *(FIXED 2026-08-23 by PR #2816, merged `2d6f993bd`. The entry's own
+      suggestion — "match on either field" — is what shipped:
+      `isPermanentQuota429` (`internal/ai/retry.go:57`) checks BOTH `Type`
+      and `Code` against {`insufficient_quota`, `credit_balance_exhausted`},
+      rather than swapping one single-field assumption for another.
+      Two things the entry did not anticipate. (1) The pre-existing test
+      asserted `&openai.Error{StatusCode: 429, Code: "insufficient_quota"}`
+      — a struct no real response produces — so it was green for months while
+      the classifier missed every genuine exhaustion. The fixture encoded the
+      same misunderstanding as the code, which is why re-running it could
+      never have surfaced this; only the captured production payload could.
+      (2) The warning about other callers was justified and under-counted:
+      there is a second production caller at
+      `internal/ai/embedding_client.go:378`, not just the scanner.
+      Mutation-tested with four mutants, all caught, including a revert to
+      the original bug.)*
 
 - [ ] **TODO-MOCKORDER** Decide whether to add a permanent guard against shadowed
       branches in the `setupMockApi` dispatcher
