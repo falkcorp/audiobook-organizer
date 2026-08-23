@@ -1,5 +1,5 @@
 // file: internal/audiobooks/isprimary_nil_agreement_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 69cb8a54-5f1e-4d77-a32a-38f6fe11cc10
 // last-edited: 2026-08-23
 
@@ -329,7 +329,12 @@ func TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown(t *testing.T)
 	}
 	// Exactly once: the second GetAudiobooks call must be served by the list
 	// cache, which is the whole point of the assertion.
-	mockStore.EXPECT().GetAllBookSummaries(100, 0).Return(summaries, nil).Once()
+	// TWICE, and that is the assertion. The no-pushdown arm no longer
+	// writes to listCache at all (service_query.go gates the Set on
+	// didPushdown), so the second request cannot be served from cache and
+	// must go back to the store. If this ever drops to Once again, the
+	// unfiltered page is being cached under a filtered key once more.
+	mockStore.EXPECT().GetAllBookSummaries(100, 0).Return(summaries, nil).Times(2)
 
 	svc := NewAudiobookService(mockStore)
 	primary := true
@@ -344,24 +349,23 @@ func TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown(t *testing.T)
 	require.ElementsMatch(t, []string{"explicit-true", "nil-flag"}, idsOf(miss),
 		"the in-Go post-filter must select exactly {explicit true, nil}")
 
-	// NOT asserted here, deliberately: idsOf(hit) is {explicit-true,
-	// explicit-false, nil-flag} -- the cache HIT returns a book the filter
-	// explicitly excluded. Measured, not inferred:
+	// NOW ASSERTED — this was the membership bug, and it is fixed.
+	// Before the fix, listCache.Set ran unconditionally right after
+	// bookSummariesToBooks while didPushdown was not consulted until
+	// several lines later, so the UNFILTERED projection was cached under a
+	// key encoding p=true and every later request for that key was served
+	// rows the filter excludes. Measured at the time:
 	//
-	//	extra elements in list B: "explicit-false"
-	//	listA: {"explicit-true", "nil-flag"}
-	//	listB: {"explicit-true", "explicit-false", "nil-flag"}
+	//	listA (miss): {"explicit-true", "nil-flag"}
+	//	listB (hit):  {"explicit-true", "explicit-false", "nil-flag"}
 	//
-	// That is a SEPARATE pre-existing bug and not the one this file is about.
-	// service_query.go's listCache.Set runs unconditionally right after
-	// bookSummariesToBooks, but didPushdown -- the flag that decides whether the
-	// filter was actually applied -- is not consulted until several lines later.
-	// So on the fallback path the UNFILTERED projection is cached under a key
-	// that encodes p=true, and the in-Go post-filter that fixes the returned
-	// slice runs too late to fix the cached one. It mis-serves explicit-false
-	// rows just as much as nil ones, so it is not a nil-semantics defect at all.
-	// Asserting it here would make this test fail for a reason it does not
-	// diagnose. Filed separately; see todo.d.
+	// It mis-served explicit-false rows as much as nil ones, so it was a
+	// membership defect, not a nil-semantics one.
+	require.ElementsMatch(t, idsOf(miss), idsOf(hit),
+		"second identical request returned a different set of books than the first")
+	require.NotContains(t, idsOf(hit), "explicit-false",
+		"a book the filter explicitly excludes was served to the second request")
+
 	missEff, missPresent := effectiveAtSerializationSite(t, miss, "nil-flag")
 	hitEff, hitPresent := effectiveAtSerializationSite(t, hit, "nil-flag")
 
