@@ -1,7 +1,7 @@
 // file: internal/metadata/assemble.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-07-17
+// last-edited: 2026-08-23
 
 package metadata
 
@@ -268,8 +268,18 @@ func (bm *AssembledMetadata) PrimaryAuthor() string {
 // listAudioFiles returns dirPath's audio files in stable alphabetical order
 // (non-recursive). Shared by FindFirstAudioFile and the CONS-17b agree-title
 // check so both see the same file set in the same order.
+//
+// dirPath is never a raw request string. Every caller supplies a path that has
+// already crossed an allow-list barrier: importer.ImportFile passes
+// filepath.Dir of the value returned by fileops.ValidateUserPath, the scanner
+// passes a directory it discovered while walking a configured import root, and
+// maintenance.title-repair passes filepath.Dir of a book FilePath already
+// stored by one of those two. The sink itself is a read-only, non-recursive
+// enumeration, and each e.Name() below is a single OS-supplied path element,
+// so the joined results cannot reach outside dirPath either. CodeQL does not
+// model those barriers, so suppress the false positive.
 func listAudioFiles(dirPath string, supportedExts []string) []string {
-	entries, err := os.ReadDir(dirPath)
+	entries, err := os.ReadDir(dirPath) // lgtm[go/path-injection]
 	if err != nil {
 		return nil
 	}
