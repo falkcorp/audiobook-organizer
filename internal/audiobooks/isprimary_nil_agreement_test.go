@@ -194,7 +194,10 @@ func TestIsPrimaryVersion_NilAgreesAcrossFilterAndSerialization(t *testing.T) {
 	postFilterEff := effectiveAtFilterSite(t, "in-Go post-filter", byAuthor, nilID)
 
 	// --- site 3: the serialized field -----------------------------------
-	serializedEff, present := effectiveAtSerializationSite(t, byAuthor(true), nilID)
+	// Read the row out of whichever arm site 2 put it in, so a site-2
+	// regression surfaces as the explicit site-disagreement failure below
+	// rather than as "the book wasn't in the response".
+	serializedEff, present := effectiveAtSerializationSite(t, byAuthor(postFilterEff), nilID)
 
 	require.True(t, present,
 		"is_primary_version key is absent from a row that is_primary_version=true just returned; "+
