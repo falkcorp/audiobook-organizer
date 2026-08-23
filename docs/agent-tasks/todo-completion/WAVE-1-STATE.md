@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/todo-completion/WAVE-1-STATE.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 5b3c9e21-8f47-4a6d-b0c2-71e4d8a35f90 -->
-<!-- last-edited: 2026-08-22 -->
+<!-- last-edited: 2026-08-23 -->
 
 # Wave 1 — execution state as of 2026-08-22 06:15 EDT
 
@@ -45,6 +45,46 @@ themselves at all. See the todo.d fragment.
 **Process note:** the claim was written into a PR body and a TODO fragment before
 anyone checked the gate condition it depended on. A subagent's finding is a lead, not
 a result.
+
+## Sonnet tier state as of 2026-08-23 — 22 merged, 2 open, 107 actionable
+
+Recomputed the same way the Haiku table below was, and carrying the same caveat: each
+`tier=sonnet` id was resolved to a merged `agent/*` branch matching its number. That is
+sound for "merged" and unsound for "not done."
+
+| State | Count |
+|---|---|
+| Merged | 22 |
+| Open PR | 2 (#2769 TASK-025, #2770 TASK-094) |
+| Already done, needs closing | 1 (TASK-036 — see below) |
+| Actionable | 107 |
+
+Full three-way breakdown (closed ledger / remaining Sonnet / priority ranking) is on the
+burndown board published 2026-08-23.
+
+### TASK-132 is already done — the branch-matching method missed it again
+
+**TASK-132** ("indexedStore.UpdateBook must enqueue a Bleve DELETE when the update is a
+soft-delete") reads as untouched: no branch carries its number. It is nevertheless fixed
+at HEAD. `internal/database/../server/indexed_store.go` line 83 reads:
+
+```go
+s.server.enqueueIndex(id, updated.IsSoftDeleted())
+```
+
+`git log -S'updated.IsSoftDeleted()' -- internal/server/indexed_store.go` attributes that
+line to `b5ad85ac8`, which is **TASK-133's** PR (#2750) — the brief that was only supposed
+to add the *regression test* for this behaviour. That PR shipped the fix alongside its
+test, which is the correct thing to have done (a regression test with nothing to pin is
+not a regression test) but it left TASK-132 looking open.
+
+This is the second occurrence of the failure mode this document already warns about one
+section down, and the warning did not prevent it — because the warning tells you absence
+of a branch is not evidence of absence of work, and the only way to act on that is to go
+read the artifact every time. The generalizable rule is narrower and cheaper: **when task
+B is "add a test for what task A fixes," check A before dispatching it.** A test-only
+brief whose subject is still broken is either about to fail or about to be written
+vacuously, and either way its author is likely to fix the subject in passing.
 
 ## Haiku tier state as of 2026-08-22 20:45 EDT — 37 of 39 merged
 
