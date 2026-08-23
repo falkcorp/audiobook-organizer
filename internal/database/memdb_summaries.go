@@ -1,5 +1,5 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
 // last-edited: 2026-08-23
 
@@ -147,11 +147,21 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		wantPrimary = *f.IsPrimaryVersion
 	}
 
-	// CodeQL go/uncontrolled-allocation-size (alert #966): cap0 is bounded to
-	// <= 4096 on BOTH sides regardless of the caller-supplied limit — limit<=0
-	// becomes 1_000_000 above, but that value is then clamped right here, so
-	// cap0 can never exceed 4096 elements. Re-verified 2026-08-23: dismissed
-	// as a false positive via the code-scanning API citing this clamp.
+	// CodeQL go/uncontrolled-allocation-size (alert #966): only the INITIAL
+	// capacity passed to make() is bounded here — cap0 is clamped to <= 4096
+	// regardless of the caller-supplied limit (limit<=0 becomes 1_000_000
+	// above, but that value is then clamped right here). The slice can still
+	// GROW past 4096 via append below: the loop's only stop condition is
+	// `len(out) >= limit` (see the `break` after the append), so the actual
+	// peak size is min(limit, matching rows in the corpus) — up to 1,000,000
+	// if the caller passes limit<=0 and that many rows match. That peak is
+	// bounded by the corpus size, not by any caller-supplied value, which is
+	// why this is a false positive: the allocation is data-bounded, not
+	// attacker-controlled — but it is NOT a hard 4096-element ceiling.
+	// Re-verified 2026-08-23: dismissed via the code-scanning API citing the
+	// cap0 clamp; this comment additionally documents the actual (larger)
+	// peak so a future reader does not mistake cap0's bound for a ceiling on
+	// len(out).
 	cap0 := limit
 	if cap0 > 4096 {
 		cap0 = 4096
