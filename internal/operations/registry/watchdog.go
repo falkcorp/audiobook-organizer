@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	defaultWatchdogInterval      = 30 * time.Second
-	defaultProgressTimeout       = 5 * time.Minute
-	defaultMinCheckpointTimeout  = 5 * time.Minute // window before uncheckpointed strike
+	defaultWatchdogInterval     = 30 * time.Second
+	defaultProgressTimeout      = 5 * time.Minute
+	defaultMinCheckpointTimeout = 5 * time.Minute // window before uncheckpointed strike
 )
 
 // runWatchdog runs every watchdogInterval and inspects all in-flight ops.
