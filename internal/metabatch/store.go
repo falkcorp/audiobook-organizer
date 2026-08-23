@@ -5,15 +5,24 @@
 
 package metabatch
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import (
+	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
 
 // Measured with an empty-interface compiler probe under -gcflags=-e: four
 // methods, no forwarding constraints. Was database.Store -- 398 methods --
 // until 2026-08-19.
 
 // operationResultReader is all LatestMatchedBookIDs reads.
+//
+// ListOperationsV2Since joined GetRecentOperations when candidate-fetch runs
+// stopped writing a v1 row: discovery now spans both keyspaces via
+// CandidateFetchOps, so this slice needs one listing method per keyspace.
 type operationResultReader interface {
 	GetRecentOperations(limit int) ([]database.Operation, error)
+	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 }
 

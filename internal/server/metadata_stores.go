@@ -6,6 +6,8 @@
 package server
 
 import (
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -61,6 +63,7 @@ type candidateFetchStore interface {
 // metadataResultsReader is the cache-refresh path: it only reads op history.
 type metadataResultsReader interface {
 	GetRecentOperations(limit int) ([]database.Operation, error)
+	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 }
 

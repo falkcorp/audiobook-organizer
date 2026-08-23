@@ -90,24 +90,21 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	}
 
 	// Exclude books already in an active metadata fetch to avoid duplicate API calls.
-	activeOps, _ := store.GetRecentOperations(50)
+	//
+	// This is a PER-BOOK guard and EnqueueOp's param dedup does not replace it:
+	// that merges byte-identical requests, so asking for {C,D,E} while {A,B,C} is
+	// running queues a second run that re-fetches C. This removes C instead and
+	// proceeds with {D,E}.
+	//
+	// The book list now comes off the v2 row's own params, so the separate
+	// GetOperationParams read the v1 path needed is gone.
 	alreadyFetching := make(map[string]bool)
-	for _, op := range activeOps {
-		if op.Type != "metadata_candidate_fetch" {
+	for _, op := range metabatch.CandidateFetchOps(store, 200) {
+		if !metabatch.IsActiveFetchStatus(op.Status) {
 			continue
 		}
-		if op.Status != "pending" && op.Status != "running" && op.Status != "queued" {
-			continue
-		}
-		params, err := store.GetOperationParams(op.ID)
-		if err != nil || len(params) == 0 {
-			continue
-		}
-		var ids []string
-		if err := json.Unmarshal(params, &ids); err == nil {
-			for _, id := range ids {
-				alreadyFetching[id] = true
-			}
+		for _, id := range metabatch.CandidateFetchBookIDs(store, op) {
+			alreadyFetching[id] = true
 		}
 	}
 
@@ -383,17 +380,16 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 	const maxOps = 10
 	store := s.Ops()
-	// Scan more than maxOps from recent history because the filter
-	// (type + completed + non-empty results) can reject many rows.
-	// Use a large limit: GetRecentOperations loads all ops into memory anyway
-	// (PebbleDB scans all keys, sorts, then slices), so increasing the cap is
-	// free. Without a high limit, background maintenance/organize/scan ops
-	// quickly push older metadata-fetch operations out of the top 200.
-	ops, err := store.GetRecentOperations(5000)
-	if err != nil {
-		httputil.InternalError(c, "failed to list recent operations", err)
-		return
-	}
+	// Scan more than maxOps from history because the filter (completed/running
+	// + non-empty results) can reject many rows. The limit is deliberately large:
+	// both listings load into memory and sort anyway, so raising the cap is free,
+	// and without it background maintenance/organize/scan ops push older
+	// metadata-fetch runs out of the window.
+	//
+	// CandidateFetchOps spans BOTH keyspaces. A v2-only scan here would empty this
+	// picker of every fetch that ran before the v1 row was retired — the exact
+	// "results are invisible" failure this endpoint was written to fix.
+	ops := metabatch.CandidateFetchOps(store, 5000)
 	type fetchOpSummary struct {
 		ID           string    `json:"id"`
 		Type         string    `json:"type"`
@@ -409,9 +405,6 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 	for _, op := range ops {
 		if len(out) >= maxOps {
 			break
-		}
-		if op.Type != "metadata_candidate_fetch" {
-			continue
 		}
 		// Include both completed AND running operations so the
 		// user can review partial results while a bulk fetch is
@@ -441,9 +434,11 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 				errCount++
 			}
 		}
+		// Type is still reported as the v1 string. The frontend keys the Resume
+		// Review dialog off it, and a run's kind did not change when its id did.
 		summary := fetchOpSummary{
 			ID:           op.ID,
-			Type:         op.Type,
+			Type:         "metadata_candidate_fetch",
 			Status:       op.Status,
 			CreatedAt:    op.CreatedAt,
 			ResultCount:  len(results),
@@ -764,20 +759,16 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 //
 // Returns (results-by-bookID, status-counts, error).
 func latestMetadataResultsByBook(store metadataResultsReader) (map[string]database.OperationResult, map[string]int, error) {
-	allOps, err := store.GetRecentOperations(5000)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	type bookEntry struct {
 		result    database.OperationResult
 		createdAt time.Time
 	}
 	latest := map[string]bookEntry{}
-	for _, op := range allOps {
-		if op.Type != "metadata_candidate_fetch" {
-			continue
-		}
+	// Spans both keyspaces — see metabatch.CandidateFetchOps. A v2-only scan
+	// would hide every result produced before the v1 row was retired, and this
+	// helper backs the review endpoints, so those books would read as never
+	// fetched and be re-fetched.
+	for _, op := range metabatch.CandidateFetchOps(store, 5000) {
 		results, err := store.GetOperationResults(op.ID)
 		if err != nil {
 			continue

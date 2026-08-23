@@ -238,6 +238,10 @@ type serverOperationDetailWriter interface {
 // kill-v1 migration can delete one without unpicking the other.
 type serverOperationV2Store interface {
 	GetOperationV2(id string) (*database.OperationV2Row, error)
+	// Added for metabatch.CandidateFetchOps: the metadata candidate-fetch
+	// readers discover runs by listing, and their v1 GetRecentOperations scan
+	// only sees rows the handler no longer writes.
+	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
 	UpdateOperationV2Status(id string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) error
 }
 

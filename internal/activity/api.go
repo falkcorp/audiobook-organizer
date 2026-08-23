@@ -153,7 +153,12 @@ func typeToAction(typeStr string) string {
 		return "dedup"
 	case "library.scan":
 		return "scan"
-	case "library.bulk-metadata-fetch", "metadata_fetch", "metadata_candidate_fetch":
+	// metadata.candidate-fetch is the v2 def id whose v1 twin is
+	// metadata_candidate_fetch. Every other entry here already pairs the two
+	// spellings; this one was missed, and it went unnoticed while the handler
+	// still minted a v1 row for each run. It no longer does, so without this the
+	// activity feed labels every candidate fetch from the default branch.
+	case "library.bulk-metadata-fetch", "metadata.candidate-fetch", "metadata_fetch", "metadata_candidate_fetch":
 		return "metadata-apply"
 	case "library.bulk-write-back", "bulk_write_back":
 		return "tag-write"
