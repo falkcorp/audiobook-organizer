@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package metrics
 
@@ -163,19 +163,6 @@ var (
 		Help:      "Total items expected for an in-flight operation (0 if not yet known), by op_id and op_type. Deleted once the op reaches a terminal state.",
 	}, []string{"op_id", "op_type"})
 
-	// maintenanceResumeParamsFallback counts interrupted maintenance jobs that
-	// resumed WITHOUT the operator's saved params — falling back to the job's
-	// advertised dry_run default (see resumeLegacyOp in internal/server).
-	// runMaintenanceJob persists resolved params on every enqueue since #2419,
-	// so once pre-#2419 rows age out, ANY fire means a SaveParams silently
-	// failed — that is the alert condition (C511). {job_id} is bounded by the
-	// maintenance job registry; {reason} is load_error|no_saved_params.
-	maintenanceResumeParamsFallback = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "audiobook_organizer",
-		Name:      "maintenance_resume_params_fallback_total",
-		Help:      "Interrupted maintenance jobs resumed on the advertised dry_run default because saved params were missing (no_saved_params) or unreadable (load_error). Any fire post-#2419-aging means a params save failed.",
-	}, []string{"job_id", "reason"})
-
 	// absListeningStatsReadFailures counts listening-stats read failures in the ABS
 	// handler. The read gracefully reports 0 total time instead of 5xx, so this counter
 	// makes the silent failure observable (ABS-N6). No labels: this counts one specific
@@ -197,7 +184,6 @@ func Register() {
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
-			maintenanceResumeParamsFallback,
 			absListeningStatsReadFailures)
 	})
 }
@@ -258,14 +244,6 @@ func SetOpProgress(opID, opType string, current, total int) {
 func ClearOpProgress(opID, opType string) {
 	opItemsProcessed.DeleteLabelValues(opID, opType)
 	opItemsTotal.DeleteLabelValues(opID, opType)
-}
-
-// RecordMaintenanceResumeParamsFallback counts an interrupted maintenance job
-// that resumed without the operator's saved params, on the advertised dry_run
-// default instead (C511). reason is a small enum: "no_saved_params" (LoadParams
-// found nothing) or "load_error" (LoadParams failed).
-func RecordMaintenanceResumeParamsFallback(jobID, reason string) {
-	maintenanceResumeParamsFallback.WithLabelValues(jobID, reason).Inc()
 }
 
 // Cache helpers
