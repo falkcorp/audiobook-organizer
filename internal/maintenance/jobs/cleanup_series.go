@@ -214,6 +214,7 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, book *database.BookCore, seri
 // hides trashed and non-primary rows. Deleting a series whose unfiltered count
 // exceeds what was reassigned strands those rows on a series ID that no longer
 // resolves.
+//
 // It returns (merged, refused, err): merged is the number of series rows
 // actually deleted, refused the number kept back by the reference guard. The
 // caller needs both -- a group in which every merge was refused is not a
