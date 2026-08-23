@@ -1,7 +1,7 @@
 // file: internal/scheduler/no_orphan_legacy_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e6d90b4-73af-4c25-8d10-b2c4f9a05e37
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 package scheduler
 
@@ -104,6 +104,36 @@ func TestScheduledTasksDoNotWriteOrphanLegacyRows(t *testing.T) {
 					"that was actually enqueued, or nothing can look it up")
 		})
 	}
+}
+
+// TestTranscodeTriggerFailsWithoutWritingARow covers the one task that cannot
+// enqueue anything: TriggerFn's only argument is the trigger source, so there is
+// no way to route a book_id through it.
+//
+// It used to express that by creating a legacy operations row purely to stamp an
+// error onto it and hand it back. That row was a different shape of the same
+// problem the tests above cover — it was written, never enqueued, and never
+// resolvable — and because RunTask answers 202 Accepted for any non-nil op, the
+// caller was told "accepted" for work that had already definitively failed, with
+// the reason buried inside the row instead of in the response.
+//
+// The mock store has no CreateOperation expectation, so mockery fails this test
+// if the row ever comes back.
+func TestTranscodeTriggerFailsWithoutWritingARow(t *testing.T) {
+	store := dbmocks.NewMockStore(t)
+	deps := testDeps()
+	deps.Store = func() SchedulerStore { return store }
+
+	ts := NewTaskScheduler(deps)
+	task, ok := ts.GetTask("transcode")
+	require.True(t, ok, "task must be registered")
+
+	op, err := task.TriggerFn("test")
+
+	require.Error(t, err, "a trigger that cannot proceed must report it as an error")
+	require.Nil(t, op, "returning a non-nil op makes RunTask answer 202 Accepted")
+	require.Contains(t, err.Error(), "requires parameters",
+		"the reason has to reach the caller — RunTask puts err.Error() in the 400 body")
 }
 
 // TestEveryEnqueueingTaskHasADefIDEntry is the other direction: taskV2DefIDs

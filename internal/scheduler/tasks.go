@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -17,7 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	ulid "github.com/oklog/ulid/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 
 // ---- param types -------------------------------------------------------
@@ -31,17 +31,12 @@ type libraryOrganizeParams struct{}
 
 type librarySizeRefreshParams struct{}
 
-type authorDedupScanOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
-
-type seriesPruneOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
-
-type seriesNormalizeOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
+// The three dedup ops below take their params types from internal/dedup
+// directly rather than mirroring them here. These used to be local copies
+// carrying a legacy_op_id the ops stopped reading on 2026-08-22, and nothing
+// could catch that: a mirror is coupled to the real type only by JSON tags, so
+// it drifts silently. seriesPruneOpParams had drifted twice over — it declared
+// legacy_op_id and omitted Detail, the field the real type actually has.
 
 // schedulerExtraOpParams carries the v1 operation ID into the Run func.
 type schedulerExtraOpParams struct {
@@ -207,21 +202,19 @@ func (ts *TaskScheduler) registerAllTasks() {
 		Name:        "transcode",
 		Description: "Transcode audiobooks to target format",
 		Category:    "library",
+		// TriggerFn always fails: its only argument is the trigger source, so
+		// there is no way to route a book_id through it, and transcoding without
+		// one is meaningless.
+		//
+		// It used to express that by creating a legacy operations row purely to
+		// stamp an error on it and hand it back. RunTask answers 202 Accepted for
+		// a non-nil op, so every caller got "accepted" for work that had already
+		// definitively failed, with the reason buried in the row. Returning the
+		// error instead takes the handler's error branch — 400 with the message
+		// where the caller can see it — and writes no row at all.
 		TriggerFn: func(source string) (*database.Operation, error) {
-			store := ts.deps.Store()
-			if store == nil {
-				return nil, fmt.Errorf("database not initialized")
-			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "transcode", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			// Transcode requires specific params — cannot be triggered from the scheduler
-			// without book_id. Mark the operation as failed immediately.
-			_ = store.UpdateOperationError(op.ID, "transcode requires parameters — use the operations API directly")
-			slog.Warn("transcode task triggered from scheduler () without params — use the operations API", "source", source)
-			return op, nil
+			slog.Warn("transcode task triggered without params — use the operations API", "source", source)
+			return nil, fmt.Errorf("transcode requires parameters — use the operations API directly")
 		},
 		// NOT enabled, and this is not a regression: the TriggerFn above fails
 		// by design because a scheduled trigger has no book_id to transcode.
@@ -250,7 +243,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.author-scan", authorDedupScanOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.author-scan", dedup.AuthorDedupScanParams{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue dedup.author-scan: %w", enqErr)
 			}
@@ -334,7 +327,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-prune", seriesPruneOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-prune", dedup.SeriesPruneParams{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue dedup.series-prune: %w", enqErr)
 			}
@@ -361,7 +354,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-normalize", seriesNormalizeOpParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-normalize", dedup.SeriesNormalizeParams{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue dedup.series-normalize: %w", enqErr)
 			}
