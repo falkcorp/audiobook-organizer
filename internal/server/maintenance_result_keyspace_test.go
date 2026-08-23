@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_result_keyspace_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b654171b-40ad-4ba9-88df-841c4d39c5cc
 // last-edited: 2026-08-23
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -116,8 +117,55 @@ func TestLookupMaintenanceResultOp_WrongJobIsNotNotFound(t *testing.T) {
 	t.Run("an id in neither keyspace", func(t *testing.T) {
 		_, err := server.lookupMaintenanceResultOp(ulid.Make().String(), "scan-composer-tags",
 			"composer_tag_scan", "maintenance:scan-composer-tags")
-		if err == nil || errors.Is(err, errMaintenanceOpWrongJob) {
-			t.Fatalf("an unknown id returned %v, want a not-found error", err)
+		// os.ErrNotExist specifically, not merely "some error": the routes now
+		// split 404 from 500 on exactly this sentinel, so an arm that accepted
+		// any non-nil error would pass just as happily if a genuine miss started
+		// reporting as a store failure.
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("an unknown id returned %v, want os.ErrNotExist", err)
 		}
 	})
+}
+
+// failingOperationV2Store poisons exactly one read -- GetOperationV2 -- and
+// delegates the other 397 methods to the real store, so the v1 fallback below
+// still behaves authentically and the arm cannot pass for the wrong reason.
+type failingOperationV2Store struct {
+	database.Store
+	err error
+}
+
+func (f *failingOperationV2Store) GetOperationV2(string) (*database.OperationV2Row, error) {
+	return nil, f.err
+}
+
+// A BROKEN STORE IS NOT A MISSING OPERATION. lookupMaintenanceResultOp reads two
+// keyspaces, and both stores report a miss as (nil, nil) and a failure as
+// (nil, err). The first cut of this function tested `err == nil && row != nil`,
+// which silently folded the second case into the first: a Pebble read failure
+// answered 404 "operation not found", telling an operator to go hunt for a bad
+// id while the database was the thing that had broken -- and logging nothing.
+//
+// This arm exists because nothing else covers it. Every other arm supplies a
+// healthy store, so the error branch was unreachable in the suite while being
+// entirely reachable in production.
+func TestLookupMaintenanceResultOp_StoreFailureIsNotNotFound(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	errBoom := errors.New("pebble: read failed")
+	server.store = &failingOperationV2Store{Store: server.store, err: errBoom}
+
+	_, err := server.lookupMaintenanceResultOp(ulid.Make().String(), "scan-composer-tags",
+		"composer_tag_scan", "maintenance:scan-composer-tags")
+
+	if err == nil {
+		t.Fatal("a failing v2 store returned no error at all")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a failing v2 store reported as not-found (%v); the route would answer 404 for a broken database", err)
+	}
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("the underlying store error was not wrapped: got %v, want it to wrap %v", err, errBoom)
+	}
 }

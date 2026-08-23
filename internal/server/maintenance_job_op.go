@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
 // last-edited: 2026-08-23
 
@@ -164,6 +164,21 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			// (scheduler_maintenance_window_op.go).
 			opID := opsregistry.ReporterOpID(reporter)
 
+			// Warn BEFORE the id is threaded into ctx, not merely before the
+			// activity summary. An empty id disables far more than the summary:
+			// the eight jobs that read maintenance.OperationIDFromCtx all guard
+			// their result writes with `if opID != ""`, so an empty id makes
+			// CreateOperationResult/GetOperationResults no-op, the operator-facing
+			// result routes return an empty set, and any job keying a resume
+			// skip-set off those results silently redoes its whole input. None of
+			// that surfaces as an error anywhere, which is precisely why it has to
+			// be said out loud here.
+			if opID == "" {
+				slog.Warn("maintenance job has no operation id; per-item results, "+
+					"the activity summary, and resume skip-sets are all disabled for this run",
+					"jobID", jobID)
+			}
+
 			ctx = maintenance.WithOperationID(ctx, opID)
 			progress := registryProgressAdapter{r: reporter}
 			adapter := &maintenance.ProgressAdapter{Ops: progress}
@@ -178,20 +193,15 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			// "" for a reporter that does not implement OpID(), and an entry written
 			// with an empty operation id does not merely go uncorrelated -- the
 			// activity feed groups by that id, so every such entry from every op
-			// piles into one bucket. Skipping is the better failure, but it must not
-			// be a SILENT one: an id this code could not obtain is exactly the
-			// condition that would blind the feed without anyone noticing, so say so.
-			if s.activityWriter != nil {
-				if opID == "" {
-					slog.Warn("maintenance job produced no operation id; skipping its activity summary",
-						"jobID", jobID)
+			// piles into one bucket. Skipping is the better failure; the WARN that
+			// keeps it from being a silent one is raised above, at the point the id
+			// is obtained, because an empty id disables more than this summary.
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				if sum, serr := store.GetOperationSummaryLog(opID); serr == nil && sum != nil && sum.Result != nil {
+					activity.EmitInfo(s.activityWriter, opID, jobID, jobID, *sum.Result, activity.AlwaysShow)
 				} else {
-					activity.FlushOperation(s.activityWriter, opID)
-					if sum, serr := store.GetOperationSummaryLog(opID); serr == nil && sum != nil && sum.Result != nil {
-						activity.EmitInfo(s.activityWriter, opID, jobID, jobID, *sum.Result, activity.AlwaysShow)
-					} else {
-						activity.EmitInfo(s.activityWriter, opID, jobID, jobID, job.Name(), activity.AlwaysShow)
-					}
+					activity.EmitInfo(s.activityWriter, opID, jobID, jobID, job.Name(), activity.AlwaysShow)
 				}
 			}
 
