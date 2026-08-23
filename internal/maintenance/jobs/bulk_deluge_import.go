@@ -270,7 +270,8 @@ func bdi_ioCopy(src, dest string) error {
 }
 
 // Policy: ResumeRestart. CanResume() is true and this job checkpoints nothing,
-// so a resume re-runs it; ResumeRestart is what allows that to happen at all.//
+// so a resume re-runs it; ResumeRestart is what allows that to happen at all.
+//
 // SCOPE: this makes the declaration correct, and correct is only consulted on
 // one path. resumeAfterStartup takes its candidates from ListActiveOperationsV2
 // (the opv2:act: index = queued|running), and every clean shutdown writes a
