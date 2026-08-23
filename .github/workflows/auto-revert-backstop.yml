@@ -1,0 +1,202 @@
+# file: .github/workflows/auto-revert-backstop.yml
+# version: 1.0.0
+# guid: e43efbad-f562-475b-9741-a921778a20c8
+# last-edited: 2026-08-22
+
+# Scheduled detect-only backstop for auto-revert.yml.
+#
+# auto-revert.yml normally reacts to the `Continuous Integration` gate via a
+# `workflow_run` event. That event can be missed — an Actions outage, a run
+# that never reaches `completed`, or the listener simply not firing — and a
+# missed event leaves main red with nothing watching it. This workflow polls
+# instead of listening: on a schedule it checks whether main's tip has a
+# failed gate run older than 30 minutes with no matching open issue, and if
+# so files a DETECT-ONLY issue. It never pushes, reverts, or decides what to
+# revert — that stays auto-revert.yml's job; this workflow only detects and
+# reports the fact that the normal path did not fire.
+#
+# Poll interval vs. staleness threshold: this runs every 15 minutes against a
+# 30-minute staleness threshold (half the threshold), so a missed event gets
+# at least one extra chance to be caught before it is a full threshold late.
+# `gh run list` / `gh issue list` calls here are read-mostly and cheap, so
+# polling this often is not a rate-limit concern — noted here so a future
+# editor does not need to re-derive why 15 minutes was chosen against the
+# TODO's 30-minute threshold.
+#
+# Manual validation: there is no unit-test framework for a workflow file
+# directly. Validate by hand with the `workflow_dispatch` trigger against a
+# deliberately-red test branch (mirroring how auto-revert.yml documents its
+# `dry_run` input): push a commit that fails `Continuous Integration`, run
+# `gh workflow run auto-revert-backstop.yml`, and confirm exactly one issue
+# is filed; run it again immediately and confirm no duplicate is filed.
+name: Auto-Revert Backstop (detect-only)
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  backstop:
+    name: Detect an unwatched red main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Find latest CI run for main
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # No `select_span`/`latest_conclusion_by_sha` call here: this
+          # workflow does not decide what to revert, only whether the most
+          # recent gate run for main's tip is red and stale — that is a
+          # single `gh run list` call, not a revert decision.
+          RUN_JSON=$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow 'Continuous Integration' --branch main --limit 1 \
+            --json conclusion,headSha,createdAt,url --jq '.[0]')
+
+          if [ -z "$RUN_JSON" ] || [ "$RUN_JSON" = "null" ]; then
+            # Brand-new repo/branch with no CI runs yet: nothing to check,
+            # not an error.
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no CI runs found for main yet — nothing to check."
+            exit 0
+          fi
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "conclusion=$(echo "$RUN_JSON" | jq -r '.conclusion // ""')" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo "$RUN_JSON" | jq -r '.headSha // ""')" >> "$GITHUB_OUTPUT"
+          echo "created_at=$(echo "$RUN_JSON" | jq -r '.createdAt // ""')" >> "$GITHUB_OUTPUT"
+          echo "url=$(echo "$RUN_JSON" | jq -r '.url // ""')" >> "$GITHUB_OUTPUT"
+
+      - name: Check age and conclusion
+        id: check
+        if: steps.latest.outputs.found == 'true'
+        env:
+          CONCLUSION: ${{ steps.latest.outputs.conclusion }}
+          CREATED_AT: ${{ steps.latest.outputs.created_at }}
+        run: |
+          set -euo pipefail
+
+          # Anything other than a definite 'failure' is not this workflow's
+          # business. In particular a null/empty conclusion means the run is
+          # still in progress — never treat that as a failure, just skip.
+          if [ "$CONCLUSION" != "failure" ]; then
+            echo "act=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::latest gate conclusion is '${CONCLUSION:-<none>}' — nothing to do."
+            exit 0
+          fi
+
+          if [ -z "$CREATED_AT" ]; then
+            echo "act=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::gate run has no createdAt — cannot age-check, skipping."
+            exit 0
+          fi
+
+          CREATED_TS=$(date -u -d "$CREATED_AT" +%s)
+          NOW_TS=$(date -u +%s)
+          AGE_MINUTES=$(( (NOW_TS - CREATED_TS) / 60 ))
+
+          if [ "$AGE_MINUTES" -lt 30 ]; then
+            echo "act=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::gate run is only ${AGE_MINUTES}m old — auto-revert.yml still has time to react."
+            exit 0
+          fi
+
+          echo "act=true" >> "$GITHUB_OUTPUT"
+          echo "::warning::gate has been red for ${AGE_MINUTES}m with no backstop action taken yet."
+
+      - name: Check for existing open issue
+        id: dedupe
+        if: steps.check.outputs.act == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FAILING_SHA: ${{ steps.latest.outputs.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${FAILING_SHA:0:8}"
+
+          # --state open is load-bearing, not decoration: it is what stops a
+          # CLOSED prior incident that happens to share this SHA prefix from
+          # suppressing a genuinely new one. Without it, --search alone would
+          # match resolved issues too.
+          COUNT=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label ci --label automation --state open \
+            --search "CI red on main at ${SHORT_SHA}" \
+            --json number --jq 'length')
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "act=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::an open issue already covers ${SHORT_SHA} (filed by auto-revert.yml or a prior backstop run) — not filing a duplicate."
+          else
+            echo "act=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: File backstop issue
+        if: steps.check.outputs.act == 'true' && steps.dedupe.outputs.act == 'true'
+        id: file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FAILING_SHA: ${{ steps.latest.outputs.sha }}
+          RUN_URL: ${{ steps.latest.outputs.url }}
+          CREATED_AT: ${{ steps.latest.outputs.created_at }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${FAILING_SHA:0:8}"
+
+          gh label create auto-revert-backstop --color D93F0B \
+            --description "Filed by the scheduled detect-only backstop when auto-revert.yml did not react" \
+            --force --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+
+          # The title deliberately carries "CI red on main at <sha>" — the
+          # same phrase auto-revert.yml's own issue title uses (and that the
+          # dedupe step above searches for) — so a repeat run of this
+          # workflow for the same SHA finds its own prior issue instead of
+          # filing a second one.
+          {
+            echo "**DETECT-ONLY alert.** This issue was filed by the scheduled"
+            echo "\`auto-revert-backstop.yml\` workflow, not by \`auto-revert.yml\`"
+            echo "itself. It never pushes, reverts, or decides what to revert —"
+            echo "it only noticed that \`auto-revert.yml\`'s normal \`workflow_run\`"
+            echo "listener did not act within 30 minutes of a failed gate run."
+            echo
+            echo "- failing commit: \`$FAILING_SHA\`"
+            echo "- gate run: $RUN_URL"
+            echo "- gate run created: $CREATED_AT"
+            echo
+            echo "Likely causes: an Actions outage, a run that never reached"
+            echo "\`completed\`, or the \`workflow_run\` event not firing."
+            echo "Check whether \`auto-revert.yml\` ran for this commit; if not,"
+            echo "trigger it manually via its \`workflow_dispatch\` input."
+          } > /tmp/backstop-issue.md
+
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "CI red on main at ${SHORT_SHA}, auto-revert did not fire (backstop)" \
+            --body-file /tmp/backstop-issue.md \
+            --label bug --label ci --label automation --label auto-revert-backstop
+
+      - name: Summary
+        if: always()
+        env:
+          FOUND: ${{ steps.latest.outputs.found }}
+          CONCLUSION: ${{ steps.latest.outputs.conclusion }}
+          SHA: ${{ steps.latest.outputs.sha }}
+          AGE_ACT: ${{ steps.check.outputs.act }}
+          DEDUPE_ACT: ${{ steps.dedupe.outputs.act }}
+        run: |
+          {
+            echo "### Auto-revert backstop"
+            echo
+            echo "- latest run found: \`${FOUND:-false}\`"
+            echo "- conclusion: \`${CONCLUSION:-n/a}\`"
+            echo "- sha: \`${SHA:-n/a}\`"
+            echo "- red and stale (>=30m): \`${AGE_ACT:-false}\`"
+            echo "- not a duplicate: \`${DEDUPE_ACT:-n/a}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
