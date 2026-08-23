@@ -30,6 +30,19 @@ Hard rules (repo policy, enforced by CI):
   agent that batched its work to the end lost nothing only because it happened to
   die after finishing. Do not rely on that.
   If you are ever unsure whether to commit, commit.
+- **PUSH every time you commit,** not once at the end. A commit that only exists in
+  a worktree on a dead agent's disk is recoverable but invisible: the coordinator
+  cannot see it, cannot review it, and cannot tell finished work from abandoned
+  work without going and looking. `git push -u origin <branch>` on the first
+  commit, plain `git push` after that.
+- **Name your scratch files uniquely -- include your TASK-ID.** The scratchpad
+  directory is NOT isolated per agent. On 2026-08-23 two agents running
+  concurrently both wrote a PR body to `<scratchpad>/pr.md`; the second overwrote
+  the first between its write and its edit, and one PR was briefly opened carrying
+  the other task's body entirely. It was caught only because that agent happened to
+  re-read the file. Use `pr-<TASK-ID>.md`, `notes-<TASK-ID>.md`, and so on. Better
+  still, pass PR bodies to `gh pr create --body "$(cat <<'"'"'EOF'"'"' ... EOF\n)"` via a
+  heredoc and skip the temp file.
 - Commit with the brief's commit message (conventional commit) and trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`; push with `git push -u origin <branch>`; open a PR with `gh pr create --title "<commit subject>" --body "<summary + test output + brief path>"`. Do NOT merge. Do NOT delete the worktree.
 - If blocked (brief anchor missing at HEAD, ambiguous step, gate failing for a reason you cannot fix within scope): stop, commit what compiles, push, open the PR as DRAFT with the blocker in the body.
 
