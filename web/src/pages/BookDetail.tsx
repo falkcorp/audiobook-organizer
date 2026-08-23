@@ -1,5 +1,5 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.56.0
+// version: 1.57.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
 // last-edited: 2026-08-23
 
@@ -706,6 +706,16 @@ export const BookDetail = () => {
   );
 
   // Keep current book's segments synced
+  //
+  // CodeQL js/remote-property-injection (alert #1597): `id` comes from
+  // useParams() — a URL route segment, so it is attacker-influenceable. The
+  // key here is COMPUTED (`[id]`), not a literal `__proto__` in the object
+  // literal grammar, so even id === "__proto__" only creates an own data
+  // property named "__proto__" on the fresh spread object — per the ES spec,
+  // the [[Prototype]]-setting special case applies ONLY to the literal,
+  // non-computed `__proto__: value` form, never to `[expr]: value`. No
+  // Object.prototype pollution is possible here. Dismissed via the
+  // code-scanning API 2026-08-23.
   useEffect(() => {
     if (id && segments.length > 0) {
       setVersionSegments((prev) => ({ ...prev, [id]: segments }));
@@ -717,6 +727,13 @@ export const BookDetail = () => {
     if (!id || versionFileTags[id] !== undefined) return;
     let cancelled = false;
     setVersionFileTagsLoading((prev) => new Set(prev).add(id));
+    // CodeQL js/remote-property-injection (alerts #1598, #1599): same `id`
+    // (URL route param) used as a COMPUTED object key below. Per the ES
+    // spec, only the literal, non-computed `__proto__: value` form triggers
+    // [[Prototype]] assignment in an object literal — `[id]: value` always
+    // creates a plain own property, even when id === "__proto__". No
+    // Object.prototype pollution is reachable from either branch. Dismissed
+    // via the code-scanning API 2026-08-23.
     api
       .getBookTags(id)
       .then((tags) => {

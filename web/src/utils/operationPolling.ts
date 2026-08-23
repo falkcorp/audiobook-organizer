@@ -1,7 +1,7 @@
 // file: web/src/utils/operationPolling.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d8c7b6a-5f4e-3d2c-1b0a-9e8d7c6b5a4f
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 import * as api from '../services/api';
 
@@ -62,7 +62,10 @@ export function pollOperation(
     }
   };
 
-  if (timeoutId) clearTimeout(timeoutId);
+  // CodeQL js/trivial-conditional (alert #981): timeoutId was just declared
+  // `null` above and nothing assigns it before this point, so the guard was
+  // always false — genuine dead code, not a false positive. Removed rather
+  // than dismissed.
   timeoutId = setTimeout(tick, intervalMs);
 
   // Return cleanup function to cancel polling

@@ -1,6 +1,6 @@
 // file: scripts/record_demo.js
-// version: 2.2.1
-// last-edited: 2026-05-15
+// version: 2.3.0
+// last-edited: 2026-08-23
 // Playwright script to automatically record end-to-end demo with video - Phase 2 (Interactive)
 //
 // Phase 2 Approach:
@@ -9,6 +9,7 @@
 // This approach ensures clean state while showing realistic user interactions.
 
 const path = require('path');
+const os = require('os');
 const { createRequire } = require('module');
 // Resolve playwright + axios from web/node_modules so we don't need a
 // separate root-level package.json/lock just for this script.
@@ -119,15 +120,17 @@ async function recordDemo() {
 
     console.log('\n📝 PHASE 2: SETUP - IMPORT FILES (API)\n');
 
-    // Create unique import path
-    const timestamp = Date.now();
-    const importPath = `/tmp/demo-audiobooks-${timestamp}`;
-
-    // Create test file
-    if (!fs.existsSync(importPath)) {
-      fs.mkdirSync(importPath, { recursive: true });
-    }
-    const testFilePath = `${importPath}/test_book.m4b`;
+    // Create a securely-created unique import directory.
+    //
+    // CodeQL js/insecure-temporary-file (alert #508): the previous
+    // `/tmp/demo-audiobooks-${Date.now()}` path was predictable and created
+    // with a plain mkdirSync, which is vulnerable to symlink-race /
+    // pre-creation attacks by another local user on a shared /tmp. Genuine
+    // finding, not a false positive — fixed by using fs.mkdtempSync, which
+    // atomically creates a directory with a random, unpredictable suffix
+    // (mkdir with O_EXCL semantics) rather than trusting a fixed path.
+    const importPath = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-audiobooks-'));
+    const testFilePath = path.join(importPath, 'test_book.m4b');
     fs.writeFileSync(testFilePath, Buffer.alloc(1024 * 100));
     console.log('✅ Created test audiobook file');
 

@@ -1,7 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package database
 
@@ -147,6 +147,11 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		wantPrimary = *f.IsPrimaryVersion
 	}
 
+	// CodeQL go/uncontrolled-allocation-size (alert #966): cap0 is bounded to
+	// <= 4096 on BOTH sides regardless of the caller-supplied limit — limit<=0
+	// becomes 1_000_000 above, but that value is then clamped right here, so
+	// cap0 can never exceed 4096 elements. Re-verified 2026-08-23: dismissed
+	// as a false positive via the code-scanning API citing this clamp.
 	cap0 := limit
 	if cap0 > 4096 {
 		cap0 = 4096
