@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.219.0",
+    "version": "0.219.1",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -6508,10 +6508,61 @@
         }
       }
     },
-    "/maintenance/backfill-book-files": {
+    "/maintenance/jobs/{job_id}": {
+      "parameters": [
+        {
+          "name": "job_id",
+          "in": "path",
+          "required": true,
+          "description": "Registered maintenance job identifier. GET /maintenance/jobs returns the live catalogue this enum is a snapshot of.",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "backfill-book-files",
+              "backfill-file-hashes",
+              "backfill-itunes-positions",
+              "backfill-metadata-source-hash",
+              "backfill-sync-ids",
+              "bulk-deluge-import",
+              "bulk-fetch-metadata",
+              "cleanup-backups",
+              "cleanup-empty-folders",
+              "cleanup-organize-mess",
+              "cleanup-series",
+              "dedup-books",
+              "enrich-book-files",
+              "fix-author-narrator-swap",
+              "fix-book-file-paths",
+              "fix-file-modes",
+              "fix-library-states",
+              "fix-read-by-narrator",
+              "fix-version-groups",
+              "generate-itl-tests",
+              "merge-chapter-groups",
+              "normalize-primary-flags",
+              "purge-unknown-author-duplicates",
+              "recompute-book-aggregates",
+              "recompute-itunes-paths",
+              "refetch-missing-authors",
+              "relink-missing-to-itunes",
+              "relink-report",
+              "repair-missing-files",
+              "retention-and-hygiene",
+              "revert-metadata-fetch",
+              "scan-chapter-groups",
+              "scan-composer-tags",
+              "scan-duplicate-files",
+              "scan-duration-mismatch",
+              "scan-metadata-hash-dups",
+              "sweep-pebble-metrics-ttl"
+            ]
+          }
+        }
+      ],
       "post": {
-        "operationId": "handleBackfillBookFiles",
-        "summary": "Backfill Book Files",
+        "operationId": "runMaintenanceJob",
+        "summary": "Run Maintenance Job",
+        "description": "Enqueues the named maintenance job as an async operation. Replaces the 15 individual POST /maintenance/{job-name} paths this spec previously (and incorrectly) advertised as separate endpoints: there is exactly one dispatch route, keyed by job_id, for every registered job. Omitting dry_run applies the job's own advertised default (see the default_params.dry_run field GET /maintenance/jobs returns for each job) rather than defaulting to false, so a client that trusts the catalogue and posts no body gets a preview, not a mutation, for jobs that default to dry_run true.",
         "tags": [
           "maintenance"
         ],
@@ -6520,410 +6571,52 @@
             "session": []
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dry_run": {
+                    "type": "boolean",
+                    "description": "Preview instead of apply. Omitted falls back to the job's advertised default, not to false."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
-            "description": "Success"
+          "202": {
+            "description": "Job enqueued, or merged into an already-active run of the same job with the same dry_run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "type": "string",
+                      "description": "ID of the enqueued (or merged-into) operation."
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
-            "description": "Bad request"
+            "description": "Bad request: malformed JSON body"
           },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/cleanup-backups": {
-      "post": {
-        "operationId": "handleCleanupBackups",
-        "summary": "Cleanup Backups",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
+          "403": {
+            "description": "Forbidden: caller lacks the job's required permission"
           },
           "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/cleanup-empty-folders": {
-      "post": {
-        "operationId": "handleCleanupEmptyFolders",
-        "summary": "Cleanup Empty Folders",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
+            "description": "Unknown job_id"
           },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/cleanup-organize-mess": {
-      "post": {
-        "operationId": "handleCleanupOrganizeMess",
-        "summary": "Cleanup Organize Mess",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/cleanup-series": {
-      "post": {
-        "operationId": "handleCleanupSeries",
-        "summary": "Cleanup Series",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/dedup-books": {
-      "post": {
-        "operationId": "handleDedupBooks",
-        "summary": "Dedup Books",
-        "tags": [
-          "dedup"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/enrich-book-files": {
-      "post": {
-        "operationId": "handleEnrichBookFiles",
-        "summary": "Enrich Book Files",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/fix-author-narrator-swap": {
-      "post": {
-        "operationId": "handleFixAuthorNarratorSwap",
-        "summary": "Fix Author Narrator Swap",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/fix-book-file-paths": {
-      "post": {
-        "operationId": "handleFixBookFilePaths",
-        "summary": "Fix Book File Paths",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/fix-library-states": {
-      "post": {
-        "operationId": "handleFixLibraryStates",
-        "summary": "Fix Library States",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/fix-read-by-narrator": {
-      "post": {
-        "operationId": "handleFixReadByNarrator",
-        "summary": "Fix Read By Narrator",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/fix-version-groups": {
-      "post": {
-        "operationId": "handleFixVersionGroups",
-        "summary": "Fix Version Groups",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/generate-itl-tests": {
-      "post": {
-        "operationId": "handleGenerateITLTests",
-        "summary": "Generate I T L Tests",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/recompute-itunes-paths": {
-      "post": {
-        "operationId": "handleRecomputeITunesPaths",
-        "summary": "Recompute I Tunes Paths",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/maintenance/refetch-missing-authors": {
-      "post": {
-        "operationId": "handleRefetchMissingAuthors",
-        "summary": "Refetch Missing Authors",
-        "tags": [
-          "maintenance"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
+          "409": {
+            "description": "Conflict enqueueing the operation"
           }
         }
       }
