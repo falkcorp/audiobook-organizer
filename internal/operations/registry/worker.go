@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-16
+// last-edited: 2026-08-23
 
 package registry
 
@@ -66,6 +66,19 @@ type runHandle struct {
 	// uncheckpointed strikes: at most one strike per threshold interval per op
 	// (C-4). Only the watchdog goroutine touches it; atomic for -race hygiene.
 	lastUncheckpointedStrike atomic.Int64
+	// userCanceled records that this run's context was canceled by a DELIBERATE
+	// decision -- Registry.Cancel, or the watchdog killing a stuck op -- rather
+	// than by shutdown.
+	//
+	// It exists because a canceled context alone cannot tell those apart, and the
+	// terminal status must. Once shutdown starts writing a resumable status, a run
+	// that was canceled just before shutdown began would otherwise be recorded as
+	// "interrupted by shutdown" and resurrected on the next boot. The race is not
+	// narrow: a cancel fires, the op is mid-item and takes seconds to return, and
+	// by the time it reaches its terminal switch the shutdown flag is already set.
+	// Recording the intent at the cancel site is the only ordering-independent
+	// answer.
+	userCanceled atomic.Bool
 	// queuedCancel is set by Registry.Cancel on a dispatcher STUB handle (nil
 	// cancel func) when the op is canceled while sitting in the buffered
 	// nextRun channel. The worker checks it — under Registry.mu, the same lock
@@ -260,13 +273,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		var errMsg *string
 		completedAt := time.Now().UTC()
 		if runCtx.Err() != nil {
-			finalStatus = "canceled"
-			// C-5: distinguish def.Timeout expiry from a user/watchdog cancel.
-			if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-				msg := fmt.Sprintf("timeout: run exceeded %s", timeout)
-				errMsg = &msg
-				r.logger.Warn("registry: subprocess run timed out", "op_id", qr.opID, "def_id", qr.defID, "timeout", timeout)
-			}
+			finalStatus, errMsg = r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 		} else if runErr != nil {
 			finalStatus = "failed"
 			msg := runErr.Error()
@@ -409,18 +416,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 
 	switch {
 	case ctxCanceled:
-		finalStatus = "canceled"
-		// C-5: def.Timeout expiry used to be recorded as a bare "canceled" —
-		// indistinguishable from a user cancel. The run context carries the
-		// timeout deadline, so DeadlineExceeded means the run timed out (user/
-		// watchdog cancels yield context.Canceled). Status stays "canceled"
-		// (no new schema/UI status value) but the reason is persisted in
-		// error_message and logged distinctly.
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			msg := fmt.Sprintf("timeout: run exceeded %s", timeout)
-			errMsg = &msg
-			r.logger.Warn("registry: run timed out", "op_id", qr.opID, "def_id", qr.defID, "timeout", timeout)
-		}
+		finalStatus, errMsg = r.finalStatusForCanceledRun(runCtx, h, qr, timeout)
 	case runErr != nil:
 		finalStatus = "failed"
 		msg := runErr.Error()
@@ -586,4 +582,49 @@ func (r *Registry) safeRun(ctx context.Context, def OperationDef, params json.Ra
 		span.SetAttributes(attribute.Bool("error", true))
 	}
 	return runErr
+}
+
+
+// finalStatusForCanceledRun decides the terminal status for a run whose context
+// was canceled, and is the single place that decision is made. Both terminal
+// switches call it -- the in-process one and the subprocess (Isolate) one -- so
+// the two cannot drift. They already had drifted once: each carried its own copy
+// of the C-5 timeout logic.
+//
+// The precedence is load-bearing and the order is not arbitrary:
+//
+//  1. DEADLINE FIRST. A def.Timeout expiry is a failure of the op, not an
+//     interruption of the server, and C-5 exists to make it distinguishable from
+//     a user cancel. Checking shutdown before this would silently undo C-5 for
+//     any op whose timeout happens to expire during a shutdown.
+//  2. USER INTENT NEXT. A run canceled by Registry.Cancel or by the watchdog
+//     killing a stuck op must stay canceled. Deciding this from the shutdown flag
+//     alone would resurrect deliberately-killed work on the next boot -- and for
+//     the watchdog case would produce a stuck -> cancel -> resume -> stuck loop.
+//  3. SHUTDOWN. Only now is a resumable status correct: the run was making
+//     progress and the server stopped it.
+//  4. Otherwise a plain cancel, which is the pre-existing behaviour.
+//
+// Note what this does NOT do: it records a resumable status, it does not make
+// anything resume. resumeAfterStartup still reads only the queued|running active
+// index, so an interrupted_* row remains invisible to it. Turning that into an
+// actual resume is deliberately a separate change.
+func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandle, qr *queuedRun, timeout time.Duration) (string, *string) {
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		msg := fmt.Sprintf("timeout: run exceeded %s", timeout)
+		r.logger.Warn("registry: run timed out",
+			"op_id", qr.opID, "def_id", qr.defID, "timeout", timeout)
+		return "canceled", &msg
+	}
+	if h != nil && h.userCanceled.Load() {
+		return "canceled", nil
+	}
+	if r.shuttingDown.Load() {
+		status := interruptedStatus(qr.resumePolicy)
+		msg := "interrupted: server shutdown during run"
+		r.logger.Info("registry: run interrupted by shutdown",
+			"op_id", qr.opID, "def_id", qr.defID, "status", status)
+		return status, &msg
+	}
+	return "canceled", nil
 }
