@@ -4354,7 +4354,27 @@ export async function updateMaintenanceWindowConfig(cfg: MaintenanceWindowConfig
 // AI Author Review
 export type AIReviewMode = 'full' | 'groups';
 
-export async function requestAIAuthorReview(mode: AIReviewMode = 'groups'): Promise<Operation> {
+// Both AI author endpoints answer 202 with the id of the enqueued v2 run, not
+// a legacy Operation record. Poll it with getOperationStatus (/operations/v2/
+// :id) and read its output with getOperationResult once it completes.
+//
+// requestAIAuthorReview may answer with a run that was ALREADY in flight: the
+// server blocks a second review of the same mode by handing back the running
+// one, so `status` can be 'running' rather than 'queued' on a fresh call.
+export interface EnqueuedAIReview {
+  operation_id: string;
+  status: string;
+  mode: AIReviewMode;
+}
+
+export interface EnqueuedOperation {
+  operation_id: string;
+  status: string;
+}
+
+export async function requestAIAuthorReview(
+  mode: AIReviewMode = 'groups'
+): Promise<EnqueuedAIReview> {
   const response = await apiFetch(`${API_BASE}/authors/duplicates/ai-review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -4367,15 +4387,20 @@ export async function requestAIAuthorReview(mode: AIReviewMode = 'groups'): Prom
   return body.data;
 }
 
+// result_data is whatever the operation stored: parsed JSON when it is valid,
+// otherwise the raw string the op wrote. null while the run has not finished.
 export async function getOperationResult(id: string): Promise<{ result_data: unknown }> {
   const response = await apiFetch(`${API_BASE}/operations/${id}/result`);
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to get operation result');
   }
-  return response.json();
+  const body = await response.json();
+  return body.data;
 }
 
-export async function applyAIAuthorReview(suggestions: ApplyAISuggestion[]): Promise<Operation> {
+export async function applyAIAuthorReview(
+  suggestions: ApplyAISuggestion[]
+): Promise<EnqueuedOperation> {
   const response = await apiFetch(`${API_BASE}/authors/duplicates/ai-review/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
