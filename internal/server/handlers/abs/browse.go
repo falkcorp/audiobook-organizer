@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-22
 
@@ -1333,14 +1333,27 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 			}
 		}
 	}
-	if narrators, err := h.library.ListNarrators(); err == nil {
-		for _, n := range narrators {
-			if strings.Contains(strings.ToLower(n.Name), lower) {
-				// §6.3: the client's Narrator.id is non-optional, and ONE element without
-				// it throws the whole list -- so /search must derive it exactly as the
-				// narrator list does. NumBooks stays nil and omitempty drops it.
+	if idx, err := h.contributorsCached(c.Request.Context()); err == nil {
+		for i := range idx.narrators {
+			if strings.Contains(strings.ToLower(idx.narrators[i].Name), lower) {
+				// §6.3: the client's Narrator.id is non-optional and ONE element
+				// without it throws the whole list.
+				//
+				// The names come from the contributor index rather than the raw
+				// store, which is what makes the id USABLE and not merely present.
+				// The index splits compound credits and covers visible books only,
+				// so these are the same names -- and therefore the same ids -- that
+				// /narrators publishes and that narrators.<id> resolves against.
+				// ListNarrators keeps "Jeff Hays, Annie Ellicott" whole and also
+				// returns narrators of hidden books, both of which encode to ids
+				// that decode fine and then match nothing: tap a search hit, get an
+				// empty list. Authors three branches up already read this index; the
+				// narrator branch was the last one on the raw store.
+				//
+				// NumBooks is dropped deliberately: the index carries a real count,
+				// and §6.3 wants the field omitted here rather than sent.
 				resp.Narrators = append(resp.Narrators, narratorDTO{
-					ID: narratorID(n.Name), Name: n.Name,
+					ID: idx.narrators[i].ID, Name: idx.narrators[i].Name,
 				})
 			}
 		}
