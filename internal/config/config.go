@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.83.3
+// version: 1.84.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-23
 
@@ -577,9 +577,22 @@ func (c *Config) EffectiveLLMMode() string {
 	if c.AIBackend.LocalBaseURL != "" || c.Embedding.BaseURL != "" {
 		return AIBackendModeLocal
 	}
-	if c.OpenAIAPIKey != "" && (c.EnableAIParsing || c.MetadataScoring.LLMEnabled) {
-		return AIBackendModeOpenAI
-	}
+	// DERIVATION NEVER YIELDS A PAID BACKEND.
+	//
+	// This used to return AIBackendModeOpenAI whenever a key was present and
+	// any LLM consumer was enabled (enable_ai_parsing defaults to TRUE), which
+	// is the exact shape of the incident described above. It survived that
+	// incident only because ai_backend.local_base_url shipped a hardcoded LAN
+	// address, so the local branch above always won and this branch was
+	// effectively unreachable on a default install. TASK-018 removed that
+	// address -- correctly, it was one developer's own host -- which would
+	// have re-armed this branch for every install that has a key and no local
+	// endpoint.
+	//
+	// Opting in to a paid backend is now explicit only: set
+	// ai_backend.llm_mode = "openai", which returns from the top of this
+	// function before any derivation runs. A bare API key is not consent to
+	// spend money.
 	return AIBackendModeDisabled
 }
 
