@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-08-23
 
