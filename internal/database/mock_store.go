@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.88.1
+// version: 1.89.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-22
 
@@ -380,8 +380,20 @@ type MockStore struct {
 	GetCollectionFunc       func(id string) (*Collection, error)
 	GetCollectionByNameFunc func(name string) (*Collection, error)
 	ListCollectionsFunc     func(collectionType string, limit, offset int) ([]Collection, int, error)
-	UpdateCollectionFunc    func(col *Collection) error
-	DeleteCollectionFunc    func(id string) error
+	// UpdateCollectionFunc: unlike PebbleStore.UpdateCollection, the default
+	// (Func nil) path does NOT enforce the Collection.Version compare-and-swap
+	// added there — this struct holds no collections state to validate a
+	// caller's Version against, matching the "permissive by default" contract
+	// documented at the top of this file. That is a deliberate, audited
+	// divergence from PebbleStore, not the undetected #2406/#2410/#2411 class of
+	// dual-implementation drift: those were two REAL backends (memdb vs pebble)
+	// silently disagreeing on business logic, whereas MockStore implements no
+	// business logic here to drift. A test that needs to exercise the
+	// conflict path must set this Func itself (see abscolFakeStore in
+	// internal/server/handlers/abs/collections_test.go for a stateful example
+	// that does).
+	UpdateCollectionFunc func(col *Collection) error
+	DeleteCollectionFunc func(id string) error
 
 	// API keys
 	CreateAPIKeyFunc        func(key *APIKey) (*APIKey, error)
