@@ -1,0 +1,187 @@
+// file: internal/database/author_bookref_test.go
+// version: 1.0.0
+// guid: 53e2c4ec-167f-4096-990e-5e348ba07236
+// last-edited: 2026-08-23
+
+package database
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// These tests exist because a DISPLAY counter was used as an EXISTENCE test.
+// GetAllAuthorBookCounts / GetBooksByAuthorIDCore skip trashed and non-primary
+// books — correct for a badge or a listing, catastrophic for "is it safe to
+// delete this author row". Every assertion below is about the difference
+// between the two questions, and every fixture is built so the two counters
+// DISAGREE: a fixture where they agree passes with or without the fix.
+
+// seedAuthorRefStore builds a warm store the way production runs it.
+func seedAuthorRefStore(t *testing.T, dir string) *PebbleStore {
+	t.Helper()
+	store, err := NewPebbleStore(dir)
+	require.NoError(t, err)
+	store.WaitForWarmup()
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+// mkAuthorRefBook creates a book through the normal write path so both the
+// memdb and Pebble see it exactly as production does. legacyAuthor may be 0 to
+// leave Book.AuthorID nil.
+func mkAuthorRefBook(t *testing.T, s *PebbleStore, title string, legacyAuthor int, primary, trashed bool) *Book {
+	t.Helper()
+	b := &Book{
+		Title:             title,
+		FilePath:          "/authorref/" + title,
+		IsPrimaryVersion:  boolp(primary),
+		MarkedForDeletion: boolp(trashed),
+	}
+	if legacyAuthor != 0 {
+		b.AuthorID = intp(legacyAuthor)
+	}
+	created, err := s.CreateBook(b)
+	require.NoError(t, err)
+	return created
+}
+
+// TestGetAllAuthorBookRefCounts_CountsTrashedAndNonPrimary is THE bug. An
+// author whose only book is in the trash, or is a non-primary duplicate
+// version, is still REFERENCED — the book keeps the author_id and renders with
+// a dangling author once the row is gone.
+func TestGetAllAuthorBookRefCounts_CountsTrashedAndNonPrimary(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+
+	const onlyTrashed = 8100 // every book in the trash
+	const onlyNonPrim = 8101 // every book a secondary version
+	const healthy = 8102     // an ordinary author
+	mkAuthorRefBook(t, store, "trashed-a", onlyTrashed, true, true)
+	mkAuthorRefBook(t, store, "trashed-b", onlyTrashed, true, true)
+	mkAuthorRefBook(t, store, "secondary", onlyNonPrim, false, false)
+	mkAuthorRefBook(t, store, "normal", healthy, true, false)
+
+	refs, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+
+	require.Equal(t, 2, refs[onlyTrashed],
+		"an author whose books are all trashed is still REFERENCED — deleting the row strands them")
+	require.Equal(t, 1, refs[onlyNonPrim],
+		"a non-primary version still holds the author_id")
+	require.Equal(t, 1, refs[healthy])
+
+	// PRECONDITION, not decoration: prove the OLD instrument disagrees. Without
+	// this the fixture could be one where both counters agree, and the test
+	// would pass whether or not the guard is wired up.
+	display, err := store.GetAllAuthorBookCounts()
+	require.NoError(t, err)
+	require.Zero(t, display[onlyTrashed],
+		"precondition: the display counter must report 0 here, which is exactly why it must not drive deletion")
+	require.Zero(t, display[onlyNonPrim], "precondition: display counter hides non-primary")
+	require.Equal(t, 1, display[healthy],
+		"precondition: the two counters agree on the healthy author, so the divergence above is about state, not arithmetic")
+}
+
+// TestGetAllAuthorBookRefCounts_CountsJunctionOnlyCoAuthor covers the second
+// way an author is attached: authors 2..n of a credit list live ONLY in the
+// book_authors junction table, and the per-author listing the delete handlers
+// used to consult drops them once the book is trashed or non-primary.
+func TestGetAllAuthorBookRefCounts_CountsJunctionOnlyCoAuthor(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+
+	const primaryAuthor = 8110
+	const coAuthor = 8111 // exists only as a junction row, on a TRASHED book
+
+	b := mkAuthorRefBook(t, store, "trashed-coauthored", primaryAuthor, true, true)
+	require.NoError(t, store.SetBookAuthors(b.ID, []BookAuthor{
+		{BookID: b.ID, AuthorID: primaryAuthor, Role: "author", Position: 0},
+		{BookID: b.ID, AuthorID: coAuthor, Role: "author", Position: 1},
+	}))
+
+	refs, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	require.Equal(t, 1, refs[coAuthor],
+		"a junction-only co-author on a trashed book is still referenced")
+	require.Equal(t, 1, refs[primaryAuthor])
+
+	display, err := store.GetAllAuthorBookCounts()
+	require.NoError(t, err)
+	require.Zero(t, display[coAuthor], "precondition: the display counter reports 0 for this co-author")
+	require.Zero(t, display[primaryAuthor], "precondition: the display counter reports 0 here too")
+}
+
+// TestGetAllAuthorBookRefCounts_JunctionWithoutLegacyAuthorStillCounts is the
+// fail-open the display counter's per-BOOK dedup would reintroduce. The book
+// carries junction rows that do NOT mention its own Book.AuthorID; skipping the
+// whole book (which is what GetAllAuthorBookCounts does) loses the legacy
+// author's reference entirely and makes a referenced author deletable.
+func TestGetAllAuthorBookRefCounts_JunctionWithoutLegacyAuthorStillCounts(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+
+	const legacyOnly = 8120 // named ONLY by Book.AuthorID
+	const junctionOnly = 8121
+
+	b := mkAuthorRefBook(t, store, "legacy-not-in-junction", legacyOnly, true, false)
+	require.NoError(t, store.SetBookAuthors(b.ID, []BookAuthor{
+		{BookID: b.ID, AuthorID: junctionOnly, Role: "author", Position: 1},
+	}))
+
+	refs, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	require.Equal(t, 1, refs[legacyOnly],
+		"Book.AuthorID is a reference even when the junction list omits it; a per-book skip would lose it")
+	require.Equal(t, 1, refs[junctionOnly])
+
+	// PRECONDITION: the display counter really does lose it, so this test is
+	// asserting a divergence rather than restating agreement.
+	display, err := store.GetAllAuthorBookCounts()
+	require.NoError(t, err)
+	require.Zero(t, display[legacyOnly],
+		"precondition: the per-book dedup in GetAllAuthorBookCounts drops the legacy author entirely")
+}
+
+// TestGetAllAuthorBookRefCounts_NoDoubleCounting — a book present in BOTH the
+// junction and the legacy field for the SAME author counts once, so the guard
+// refuses on real references rather than on arithmetic.
+func TestGetAllAuthorBookRefCounts_NoDoubleCounting(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+
+	const both = 8130
+	b := mkAuthorRefBook(t, store, "both-links", both, true, false)
+	require.NoError(t, store.SetBookAuthors(b.ID, []BookAuthor{
+		{BookID: b.ID, AuthorID: both, Role: "author", Position: 0},
+	}))
+
+	refs, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	require.Equal(t, 1, refs[both],
+		"one book referencing an author two ways is ONE reference, not two")
+}
+
+// TestGetAllAuthorBookRefCounts_UnreferencedAuthorsAreAbsent — the
+// safe-to-delete signal is absence from the map, so absence must mean "nothing
+// points here", not "no book passed a filter". This is the positive control at
+// the database layer: without it, a counter that returned every author id would
+// pass every assertion above.
+func TestGetAllAuthorBookRefCounts_UnreferencedAuthorsAreAbsent(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	mkAuthorRefBook(t, store, "somewhere", 8140, true, false)
+
+	refs, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	require.Equal(t, 1, refs[8140])
+	_, present := refs[8141]
+	require.False(t, present, "an author nothing references must be absent from the map")
+}
+
+// TestAsAuthorBookRefStore_ResolvesPebbleStore guards the capability lookup.
+// Production wraps the store in the Bleve indexedStore decorator, and a bare
+// type assertion against a wrapped store is indistinguishable from an
+// unsupported backend — which is how several ops silently no-opped in prod.
+func TestAsAuthorBookRefStore_ResolvesPebbleStore(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	require.NotNil(t, AsAuthorBookRefStore(store))
+	require.Nil(t, AsAuthorBookRefStore(nil))
+	require.Nil(t, AsAuthorBookRefStore(struct{}{}))
+}

@@ -1,7 +1,7 @@
 // file: internal/database/author_getter_conformance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b3e9f47-2a81-4c06-b9d3-7e14a8c02f65
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package database
 
@@ -298,4 +298,63 @@ func TestAuthorGetters_WithRoleIsASupersetOfCore(t *testing.T) {
 	require.Greater(t, len(withRole), len(core),
 		"fixture must contain a book visible only to WithRole (the non-primary co-author "+
 			"credit) or this assertion is vacuous")
+}
+
+// TestGetAllAuthorBookRefCounts_MemDBAndPebbleAgree is the conformance gate for
+// the UNFILTERED reference counter the author delete handlers guard on.
+//
+// Two implementations answer this question — the memdb walk (the prod default,
+// warm) and the Pebble scan (cold, right after a restart) — and per-path
+// hardcoded expectations cannot catch drift between them, because whoever
+// writes a path also writes its expectation. One fixture, both implementations,
+// assert EQUAL. The shapes most likely to diverge are exactly the ones seeded
+// here: the memdb book_authors primary index is a UNIQUE compound of
+// BookID+AuthorID and collapses a repeated pair, while Pebble stores the whole
+// credit list as one JSON array and would count a repeated pair twice unless
+// the implementation dedups per (book, author) pair. Drift here means the
+// answer depends on warmup state, and an irreversible delete rides on it.
+func TestGetAllAuthorBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	// The mixed corpus the two backends historically disagreed on: trashed,
+	// non-primary, junction-only, legacy-only, and both-links books.
+	fx := buildAuthorGetterConformanceFixture(t, store)
+
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok, "expected *PebbleStore from setupPebbleTestDB")
+	p.WaitForWarmup()
+	require.True(t, p.IsMemReady(), "memdb must be published")
+
+	// A duplicated (book, author) junction pair — the one shape where the two
+	// storage layouts structurally differ.
+	dupBook, err := store.CreateBook(&Book{
+		Title:            "Duplicate Junction Pair",
+		FilePath:         "/lib/conf/dup-junction",
+		AuthorID:         &fx.authorID,
+		IsPrimaryVersion: func() *bool { b := true; return &b }(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(dupBook.ID, []BookAuthor{
+		{BookID: dupBook.ID, AuthorID: fx.authorID, Role: "author", Position: 0},
+		{BookID: dupBook.ID, AuthorID: fx.authorID, Role: "editor", Position: 1},
+	}))
+
+	fromMem, err := p.mem().GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	fromPebble, err := p.getAllAuthorBookRefCountsPebble()
+	require.NoError(t, err)
+
+	require.Equal(t, fromPebble, fromMem,
+		"memdb and Pebble must agree on unfiltered author references; drift here means "+
+			"the answer depends on warmup state, and an irreversible delete rides on it")
+	require.NotEmpty(t, fromMem, "fixture must actually produce references, or this asserts nothing")
+
+	// Non-vacuity: the fixture must make the unfiltered counter DISAGREE with
+	// the filtered one, or both would pass with or without the fix.
+	filtered, err := store.GetAllAuthorBookCounts()
+	require.NoError(t, err)
+	require.Greater(t, fromMem[fx.authorID], filtered[fx.authorID],
+		"fixture must contain references the display counter hides (trashed / non-primary / "+
+			"junction-only), or this conformance test would pass against the buggy counter too")
 }
