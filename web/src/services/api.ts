@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.70.0
+// version: 2.71.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -2818,9 +2818,22 @@ export interface SeriesDedupResult {
   errors: string[];
 }
 
-export async function deduplicateSeries(): Promise<Operation> {
+/**
+ * Runs the series-dedup operation.
+ *
+ * `dryRun` is REQUIRED rather than optional on purpose. The server defaults an
+ * absent `dry_run` to true -- a bare POST previews and writes nothing -- which
+ * is the right default for an op that deletes series rows. But that makes an
+ * omitted argument here silently mean "preview", and the one caller is a
+ * confirm dialog whose text promises an irreversible merge. Forcing every
+ * caller to say which one it wants keeps the safe server default without
+ * letting a caller inherit it by accident.
+ */
+export async function deduplicateSeries(dryRun: boolean): Promise<Operation> {
   const response = await apiFetch(`${API_BASE}/series/deduplicate`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dry_run: dryRun }),
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to deduplicate series');
