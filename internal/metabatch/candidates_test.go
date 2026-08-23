@@ -200,11 +200,17 @@ type latestMatchedStore struct {
 	database.MockStore
 	ops     []database.Operation
 	opsErr  error
+	v2Rows  []database.OperationV2Row
+	v2Err   error
 	results map[string][]database.OperationResult
 }
 
 func (s *latestMatchedStore) GetRecentOperations(limit int) ([]database.Operation, error) {
 	return s.ops, s.opsErr
+}
+
+func (s *latestMatchedStore) ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error) {
+	return s.v2Rows, s.v2Err
 }
 
 func (s *latestMatchedStore) GetOperationResults(opID string) ([]database.OperationResult, error) {
@@ -214,11 +220,52 @@ func (s *latestMatchedStore) GetOperationResults(opID string) ([]database.Operat
 	return nil, nil
 }
 
-func TestLatestMatchedBookIDs_StoreError(t *testing.T) {
-	store := &latestMatchedStore{opsErr: fmt.Errorf("db error")}
+func TestLatestMatchedBookIDs_BothKeyspacesErrorYieldsNothing(t *testing.T) {
+	store := &latestMatchedStore{
+		opsErr: fmt.Errorf("db error"),
+		v2Err:  fmt.Errorf("db error"),
+	}
+	if result := metabatch.LatestMatchedBookIDs(store); len(result) != 0 {
+		t.Errorf("expected no matches when neither keyspace answers, got %v", result)
+	}
+}
+
+// A failure in ONE keyspace must not hide the other's results. This is the
+// whole reason CandidateFetchOps swallows errors per-keyspace instead of
+// aborting: OnlyUnmatched is gated on this map, so a v1 hiccup that blanked it
+// would re-fetch every book the v2 side already knows is matched.
+func TestLatestMatchedBookIDs_LegacyErrorDoesNotHideV2Results(t *testing.T) {
+	now := time.Now()
+	store := &latestMatchedStore{
+		opsErr: fmt.Errorf("v1 unavailable"),
+		v2Rows: []database.OperationV2Row{
+			{ID: "op-v2", DefID: metabatch.CandidateFetchDefID, Status: "completed", QueuedAt: now},
+		},
+		results: map[string][]database.OperationResult{
+			"op-v2": {{BookID: "book-a", Status: "matched", CreatedAt: now}},
+		},
+	}
 	result := metabatch.LatestMatchedBookIDs(store)
-	if result != nil {
-		t.Errorf("expected nil on store error, got %v", result)
+	if !result["book-a"] {
+		t.Errorf("v2-keyed match must survive a v1 listing error, got %v", result)
+	}
+}
+
+// The mirror of the above: a v2 failure must not hide history keyed under v1.
+func TestLatestMatchedBookIDs_V2ErrorDoesNotHideLegacyResults(t *testing.T) {
+	now := time.Now()
+	store := &latestMatchedStore{
+		v2Err: fmt.Errorf("v2 unavailable"),
+		ops: []database.Operation{
+			{ID: "op-v1", Type: "metadata_candidate_fetch", CreatedAt: now},
+		},
+		results: map[string][]database.OperationResult{
+			"op-v1": {{BookID: "book-old", Status: "matched", CreatedAt: now}},
+		},
+	}
+	result := metabatch.LatestMatchedBookIDs(store)
+	if !result["book-old"] {
+		t.Errorf("v1-keyed match must survive a v2 listing error, got %v", result)
 	}
 }
 

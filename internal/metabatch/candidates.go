@@ -88,19 +88,15 @@ type BatchApplyRequest struct {
 // metadata_candidate_fetch result has status "matched". Used to exclude
 // already-matched books when OnlyUnmatched is requested.
 func LatestMatchedBookIDs(store operationResultReader) map[string]bool {
-	allOps, err := store.GetRecentOperations(5000)
-	if err != nil {
-		return nil
-	}
 	type entry struct {
 		status    string
 		createdAt time.Time
 	}
 	latest := map[string]entry{}
-	for _, op := range allOps {
-		if op.Type != "metadata_candidate_fetch" {
-			continue
-		}
+	// Spans both keyspaces — see CandidateFetchOps. This gates OnlyUnmatched,
+	// so a v2-only scan would report every historically-matched book as
+	// unmatched and re-fetch the lot.
+	for _, op := range CandidateFetchOps(store, 5000) {
 		results, err := store.GetOperationResults(op.ID)
 		if err != nil {
 			continue
