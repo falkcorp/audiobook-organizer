@@ -18,13 +18,13 @@ import (
 )
 
 type olDownloadOpParams struct {
-	Types      []string `json:"types"`
-	TargetDir  string   `json:"target_dir"`
+	Types     []string `json:"types"`
+	TargetDir string   `json:"target_dir"`
 }
 
 type olImportOpParams struct {
-	Types      []string `json:"types"`
-	TargetDir  string   `json:"target_dir"`
+	Types     []string `json:"types"`
+	TargetDir string   `json:"target_dir"`
 }
 
 // RegisterOLDownloadOp registers the "openlibrary.download" v2 OperationDef.
