@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 2.1.0
+// version: 3.0.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.

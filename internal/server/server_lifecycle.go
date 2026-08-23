@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.24.1
+// version: 3.25.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-22
 
@@ -146,19 +146,20 @@ func (s *Server) resumeV2Op(opID, opType string, policy opsregistry.ResumePolicy
 // default branch is intentionally excluded — it is a namespaced prefix, not a
 // fixed v1 type name, and is not a candidate for the future shim deletion.
 var legacyV1OpTypes = map[string]struct{}{
-	"itunes_import":         {},
-	"scan":                  {},
-	"organize":              {},
-	"bulk_write_back":       {},
-	"isbn-enrichment":       {},
-	"metadata-refresh":      {},
-	"itunes_path_reconcile": {},
-	"itunes_path_repair":    {},
-	"transcode":             {},
-	"diagnostics_export":    {},
-	"diagnostics_ai":        {},
-	"itunes_sync":           {},
-	"reconcile_scan":        {},
+	"itunes_import":            {},
+	"scan":                     {},
+	"organize":                 {},
+	"bulk_write_back":          {},
+	"isbn-enrichment":          {},
+	"metadata-refresh":         {},
+	"itunes_path_reconcile":    {},
+	"itunes_path_repair":       {},
+	"transcode":                {},
+	"diagnostics_export":       {},
+	"diagnostics_ai":           {},
+	"itunes_sync":              {},
+	"reconcile_scan":           {},
+	"metadata_candidate_fetch": {},
 }
 
 // countLegacyV1Ops returns how many of the given operations carry a pre-UOS v1
@@ -191,6 +192,19 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 		// ResumePolicy=Drop; restarting them via the v1 queue would race with
 		// v2 workers. Mark failed so the user can re-trigger manually.
 		_ = store.UpdateOperationError(opID, fmt.Sprintf("interrupted during %s, please retry", opType))
+		_ = operations.ClearState(store, opID)
+	case "metadata_candidate_fetch":
+		// A fetch from before metadata.candidate-fetch stopped writing a v1 row.
+		// Runs started since resume themselves (ResumePolicy=ResumeRestart, and
+		// Run skips books that already have results), so this branch only ever
+		// sees the pre-migration backlog.
+		//
+		// Marked for retry rather than re-enqueued. Re-enqueueing would key the
+		// remainder under a NEW v2 id while the finished half stays under the v1
+		// one, so a single logical fetch would show up as two partial runs in the
+		// Resume Review picker. Its results stay readable either way — the picker
+		// spans both keyspaces — and re-running skips whatever already matched.
+		_ = store.UpdateOperationError(opID, "interrupted during metadata candidate fetch, please retry")
 		_ = operations.ClearState(store, opID)
 	case "bulk_write_back":
 		// Migrated to UOS (library.bulk-write-back); re-enqueue via registry on resume.

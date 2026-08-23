@@ -1,7 +1,7 @@
 // file: internal/metabatch/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d4e6b02-8a15-4c73-b2f9-7e1a3d508c62
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 package metabatch
 

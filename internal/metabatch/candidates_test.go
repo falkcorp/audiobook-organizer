@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-05-11
+// last-edited: 2026-08-22
 
 package metabatch_test
 

@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_op.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-05-11
+// last-edited: 2026-08-22
 //
 // FetchOpParams holds the serializable parameters for the
 // metadata.candidate-fetch v2 OperationDef. Kept here so the

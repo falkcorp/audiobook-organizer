@@ -1,6 +1,7 @@
 // file: internal/activity/api.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9a4f2e1b-3c7d-4b8e-a6f0-5d2c8e1b7a3f
+// last-edited: 2026-08-22
 
 package activity
 
