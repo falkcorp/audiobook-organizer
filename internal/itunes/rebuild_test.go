@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.10
-// last-edited: 2026-08-20
+// version: 1.0.11
+// last-edited: 2026-08-23
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -139,6 +139,12 @@ func (m *mockRebuildStore) GetBooksByTitleInDir(normalizedTitle, dirPath string)
 }
 
 func (m *mockRebuildStore) GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error) {
+	return nil, nil
+}
+
+// Present only to satisfy database.BookRelationReader, which RebuildStore picks
+// up via database.BookReader. No ITL rebuild path reads books by series.
+func (m *mockRebuildStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error) {
 	return nil, nil
 }
 

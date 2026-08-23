@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
 // last-edited: 2026-08-23
 
@@ -646,3 +646,116 @@ func TestDedupSeries_RefusesToRunWithoutTheUnfilteredCount(t *testing.T) {
 // promoted GetAllSeriesBookRefCounts, which is the only way to model a store
 // that cannot answer.
 type noRefCountStore struct{ database.Store }
+
+// --- TASK-029: the non-primary half of the orphaning hazard ------------------
+
+// TestDedupSeries_RelinksNonPrimaryVersionBooks is the regression gate for the
+// change that switched the merge loop from GetBooksBySeriesIDCore to
+// GetBooksBySeriesIDAllVersions.
+//
+// The hazard it pins: a NON-PRIMARY version whose only series link is the one
+// about to be deleted. The listing getter hides it precisely because it
+// duplicates a book already in the list — but "duplicate for display" and
+// "safe to strand" are different claims, and the merge loop conflated them. It
+// reassigned only what the filtered getter returned and then called
+// DeleteSeries, leaving the hidden row pointing at an ID that no longer
+// resolves. That is the shape behind the 6,893 phantom series IDs held by
+// 13,322 live books in database/series_bookref.go.
+//
+// The fixture makes the two getters DISAGREE — Core sees one book, AllVersions
+// sees two — because a fixture where they agree passes with or without the
+// change. It asserts the positive outcome (the row is RELINKED) rather than
+// only that the delete was refused: refusing to delete would also avoid the
+// orphan, but it would leave the duplicate series in place forever and quietly
+// stop the op from doing its job.
+func TestDedupSeries_RelinksNonPrimaryVersionBooks(t *testing.T) {
+	const (
+		primaryBookID    = "PRIMARY1"
+		nonPrimaryBookID = "NONPRIMARY1"
+		keepSeriesID     = 1
+		mergeSeriesID    = 2
+	)
+
+	deleted := []int{}
+	// seriesAfterUpdate records what each book's SeriesID actually became, so
+	// the assertions below read the WRITE rather than inferring it from a call
+	// count. A count cannot tell "relinked to the kept series" apart from
+	// "written back unchanged".
+	seriesAfterUpdate := map[string]int{}
+
+	mock := &database.MockStore{}
+	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{
+			{ID: keepSeriesID, Name: "Foundation"},
+			{ID: mergeSeriesID, Name: "Foundation"},
+		}, nil
+	}
+
+	// The LISTING getter hides the non-primary version — this is correct
+	// behaviour for it, and it is what the merge loop used to consult.
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		if id == mergeSeriesID {
+			sid := id
+			return []database.BookCore{{ID: primaryBookID, SeriesID: &sid}}, nil
+		}
+		return nil, nil
+	}
+	// The COMPLETE getter sees both. Set explicitly rather than relying on the
+	// mock's fallback to the Core stub: this test exists to prove the merge
+	// loop reads THIS one, so the two must return different sets.
+	mock.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == mergeSeriesID {
+			sid := id
+			return []database.BookCore{
+				{ID: primaryBookID, SeriesID: &sid},
+				{ID: nonPrimaryBookID, SeriesID: &sid},
+			}, nil
+		}
+		return nil, nil
+	}
+
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := mergeSeriesID
+		primary := id == primaryBookID
+		return &database.Book{ID: id, SeriesID: &sid, IsPrimaryVersion: &primary}, nil
+	}
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if b.SeriesID != nil {
+			seriesAfterUpdate[id] = *b.SeriesID
+		}
+		return b, nil
+	}
+	mock.DeleteSeriesFunc = func(id int) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+
+	// TWO live rows reference series 2. The unfiltered guard only lets the
+	// delete through once BOTH have been reassigned, so this count is also
+	// what makes the delete assertion below meaningful.
+	store := seriesRefStore{MockStore: mock, refCounts: map[int]int{mergeSeriesID: 2}}
+
+	result, err := DedupSeries(context.Background(), store, nil, false)
+	require.NoError(t, err)
+
+	// The point of the whole task: the hidden row is RELINKED, not orphaned.
+	require.Contains(t, seriesAfterUpdate, nonPrimaryBookID,
+		"the non-primary version was never written — the merge loop is still reading the "+
+			"filtered listing getter, and DeleteSeries will strand this row")
+	assert.Equal(t, keepSeriesID, seriesAfterUpdate[nonPrimaryBookID],
+		"the non-primary version must be repointed at the KEPT series")
+	assert.Equal(t, keepSeriesID, seriesAfterUpdate[primaryBookID],
+		"the primary book must still be repointed — the switch must not regress the "+
+			"rows that already worked")
+
+	// Positive control. Refusing the delete would also prevent the orphan, so
+	// without this a guard that never deletes would pass everything above
+	// while silently disabling the op.
+	assert.Contains(t, deleted, mergeSeriesID,
+		"both referencing rows were reassigned, so series 2 is genuinely unreferenced "+
+			"and must be deleted")
+	assert.Equal(t, 1, result.TotalMerged)
+	assert.Equal(t, 2, result.TotalBooksReassigned,
+		"both rows count as reassigned, including the one the listing getter hides")
+	assert.Empty(t, result.Errors)
+}
