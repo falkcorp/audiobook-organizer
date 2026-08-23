@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/item_filter_contributor_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d17b8e0-96ca-4c33-a5f1-2e0b7d4996a1
-// last-edited: 2026-08-17
+// last-edited: 2026-08-22
 
 package abs_test
 
@@ -249,5 +249,61 @@ func TestNarratorID_RoundTripsThroughTheFilterToken(t *testing.T) {
 				t.Fatalf("round trip gave %q, want %q", decoded, name)
 			}
 		})
+	}
+}
+
+// TestSearch_NarratorIDsAgreeWithTheNarratorsTab is the cross-endpoint assertion
+// that a per-endpoint shape test cannot make: the id /search publishes for a
+// person must be the id /narrators publishes for that person, because the client
+// taps the search hit and sends the id straight back as a narrators.<id> filter.
+//
+// An id that is merely PRESENT and correctly FORMATTED still fails the user. This
+// fixture is why: c-b1 stores the compound credit "Jeff Hays, Annie Ellicott",
+// and the raw store keeps it whole. Deriving the search id from the raw name
+// produced a well-formed, cleanly decodable id for a person who does not exist —
+// search found one hit, tapping it returned nothing, while the Narrators tab had
+// a working entry for the same person. Sourcing both from the contributor index
+// is what keeps them equal.
+func TestSearch_NarratorIDsAgreeWithTheNarratorsTab(t *testing.T) {
+	h, tok := absContribHarness(t)
+	published, _ := absNarratorRows(t, h, tok)
+	if published["Annie Ellicott"] == "" {
+		t.Fatal("fixture precondition: /narrators must split the compound credit and " +
+			"publish an id for Annie Ellicott")
+	}
+
+	code, body := h.doAny(t, request{
+		method:  http.MethodGet,
+		path:    "/api/libraries/" + h.libraryID() + "/search?q=annie",
+		headers: bearer(tok),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("GET search = %d, want 200", code)
+	}
+	hits := requireArray(t, body.(map[string]any), "narrators")
+	if len(hits) == 0 {
+		t.Fatal("search for 'annie' returned no narrators")
+	}
+
+	for i, entry := range hits {
+		n, _ := entry.(map[string]any)
+		name, _ := n["name"].(string)
+		id, _ := n["id"].(string)
+
+		want, listed := published[name]
+		if !listed {
+			t.Errorf("narrator[%d] %q is not a name /narrators publishes — the two "+
+				"endpoints disagree about who exists, so its id cannot resolve", i, name)
+			continue
+		}
+		if id != want {
+			t.Errorf("narrator[%d] %q: search id %q != narrators id %q", i, name, id, want)
+			continue
+		}
+		// The id is equal to the published one; prove that one actually resolves.
+		if titles := absItemTitles(absItemsFiltered(t, h, tok, "narrators."+id)); len(titles) == 0 {
+			t.Errorf("narrator[%d] %q: filtering by the published id returned no books — "+
+				"a search hit the client cannot open", i, name)
+		}
 	}
 }
