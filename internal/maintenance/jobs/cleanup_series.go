@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 package jobs
 
@@ -46,6 +46,24 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		return fmt.Errorf("failed to get series book counts: %w", err)
 	}
 
+	// bookCounts above is the DISPLAY count: GetAllSeriesBookCounts skips
+	// trashed and non-primary rows, which is right for a badge and wrong as an
+	// existence test. Both phases below delete series rows, so they also need
+	// the UNFILTERED count -- "is anything still pointing at this?" is a
+	// different question from "how many books should I show".
+	//
+	// Using the filtered count as an existence test is what produced the 6,893
+	// phantom series IDs held by 13,322 live books recorded in
+	// database/series_bookref.go. This job runs unattended, so the damage
+	// accumulates silently.
+	//
+	// Fails CLOSED: a store that cannot answer aborts the job rather than
+	// falling back to bookCounts.
+	refCounts, err := database.SeriesRefCounts(store)
+	if err != nil {
+		return fmt.Errorf("cleanup-series refusing to run without unfiltered reference counts: %w", err)
+	}
+
 	reporter.SetTotal(len(allSeries))
 
 	// Phase 1: single-book series
@@ -72,6 +90,19 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		}
 		book := books[0]
 		if book.SeriesSequence != nil && *book.SeriesSequence > 1 {
+			reporter.Increment()
+			continue
+		}
+
+		// The filtered count says one book, so this looks like a 1-book series
+		// worth collapsing. Only act if the UNFILTERED count agrees: a series
+		// with one primary book and three non-primary versions also reads as
+		// count==1 here, and unlinking the one visible book then deleting the
+		// row strands the other three.
+		if refCounts[ser.ID] > 1 {
+			slog.Info("Skipping 1-book series: more books reference it than the filtered count shows",
+				"seriesID", ser.ID, "seriesName", ser.Name,
+				"filtered_count", count, "unfiltered_count", refCounts[ser.ID])
 			reporter.Increment()
 			continue
 		}
@@ -121,7 +152,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		}
 
 		if !dryRun {
-			if mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs); mergeErr != nil {
+			if mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs, refCounts); mergeErr != nil {
 				slog.Error("Failed to merge series group", "normName", normName, "err", mergeErr)
 			} else {
 				dupApplied++
@@ -155,7 +186,13 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, book *database.BookCore, seri
 	return nil
 }
 
-func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int) error {
+// csMergeSeriesGroup folds mergeIDs into keepID. refCounts is the UNFILTERED
+// seriesID -> book-count map; it is required, not optional, because the
+// reassignment loop below reads membership from GetBooksBySeriesIDCore, which
+// hides trashed and non-primary rows. Deleting a series whose unfiltered count
+// exceeds what was reassigned strands those rows on a series ID that no longer
+// resolves.
+func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int) error {
 	for _, fromID := range mergeIDs {
 		books, err := store.GetBooksBySeriesIDCore(fromID)
 		if err != nil {
@@ -173,6 +210,17 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int) error {
 			if _, err = store.UpdateBook(book.ID, current); err != nil {
 				return fmt.Errorf("UpdateBook(%s): %w", book.ID, err)
 			}
+		}
+		if stranded := refCounts[fromID] - len(books); stranded > 0 {
+			// Books were still reassigned above -- that is strictly an
+			// improvement and is not rolled back. Only the row removal is
+			// refused, leaving a resolvable series ID for the rows we could
+			// not see. A later run, or the reconciler, can finish the job once
+			// those rows become visible.
+			slog.Warn("Keeping merged-from series row: books reference it that the filtered getter cannot see",
+				"seriesID", fromID, "keepID", keepID,
+				"reassigned", len(books), "stranded_if_deleted", stranded)
+			continue
 		}
 		if err = store.DeleteSeries(fromID); err != nil {
 			return fmt.Errorf("DeleteSeries(%d): %w", fromID, err)
