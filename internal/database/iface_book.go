@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.11.1
+// version: 2.12.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-07-11
+// last-edited: 2026-08-23
 
 package database
 
@@ -98,6 +98,17 @@ type BookRelationReader interface {
 	// of those MUST fetch via GetBookByID / GetAllBooksFullFrom (full
 	// Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error)
+	// GetBooksBySeriesIDAllVersions is GetBooksBySeriesIDCore without the
+	// primary-version filter — the COMPLETE set of live books attached to
+	// the series. Merges and deletes must use THIS one: a non-primary
+	// version invisible to the listing getter is a book the merge will not
+	// repoint before deleting the series, which strands it (series_bookref.go
+	// measured 6,893 phantom series IDs held by 13,322 live books from
+	// exactly that). Listing/display callers want the Core twin above.
+	// Soft-deleted books are excluded from BOTH; the unfiltered
+	// SeriesRefCounts counter is what covers trashed rows.
+	// Core-typed on the same rationale as GetBooksBySeriesIDCore.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, error)
 	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2): the memdb
 	// projection is stripped of the nine heavy fields (Description,
 	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,

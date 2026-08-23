@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-23
 
@@ -47,6 +47,10 @@ type MockStore struct {
 	GetAllBookSummariesFunc         func(limit, offset int) ([]BookSummary, error)
 	GetBooksByWorkIDFunc            func(workID string) ([]Book, error)
 	GetBooksBySeriesIDCoreFunc      func(seriesID int) ([]BookCore, error)
+	// GetBooksBySeriesIDAllVersionsFunc stubs the complete-set series getter.
+	// When it is nil the mock method falls back to GetBooksBySeriesIDCoreFunc
+	// rather than returning an empty slice — see the method for why.
+	GetBooksBySeriesIDAllVersionsFunc func(seriesID int) ([]BookCore, error)
 	GetBooksByAuthorIDCoreFunc      func(authorID int) ([]BookCore, error)
 	GetBooksByAuthorIDWithRoleFunc  func(authorID int) ([]BookCore, error)
 	GetBookByITunesPersistentIDFunc func(persistentID string) (*Book, error)
@@ -955,6 +959,27 @@ func (m *MockStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]Book
 }
 
 func (m *MockStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
+	if m.GetBooksBySeriesIDCoreFunc != nil {
+		return m.GetBooksBySeriesIDCoreFunc(seriesID)
+	}
+	return nil, nil
+}
+
+// GetBooksBySeriesIDAllVersions falls back to GetBooksBySeriesIDCoreFunc when
+// its own stub is unset, instead of the usual bare `return nil, nil`.
+//
+// The bare-nil default would be actively harmful here. Every existing test that
+// stubs a series' membership does so through GetBooksBySeriesIDCoreFunc, and
+// the series merge path was switched from Core to AllVersions — so a bare-nil
+// default would hand those suites an EMPTY series and let them go green while
+// asserting nothing. A vacuous pass is worse than a failure. Since AllVersions
+// is by contract a superset of Core, deferring to the Core stub reproduces the
+// pre-switch behaviour exactly. A test that needs the two to DIFFER (the
+// non-primary version the merge must see and the listing must not) sets both.
+func (m *MockStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, error) {
+	if m.GetBooksBySeriesIDAllVersionsFunc != nil {
+		return m.GetBooksBySeriesIDAllVersionsFunc(seriesID)
+	}
 	if m.GetBooksBySeriesIDCoreFunc != nil {
 		return m.GetBooksBySeriesIDCoreFunc(seriesID)
 	}

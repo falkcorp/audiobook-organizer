@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package dedup
 
@@ -81,7 +81,14 @@ type dedupAuthorStore interface {
 type dedupSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetSeriesByID(id int) (*database.Series, error)
+	// GetBooksBySeriesIDCore is the LISTING view (non-primary versions
+	// excluded). Only enrichSeries uses it — a truncated display preview.
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	// GetBooksBySeriesIDAllVersions is the COMPLETE set. Every path that
+	// repoints books before DeleteSeries must use this one; a non-primary
+	// version the merge cannot see is one it will not repoint, and the
+	// series is deleted out from under it.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	DeleteSeries(id int) error
 	UpdateSeriesName(id int, name string) error
 }

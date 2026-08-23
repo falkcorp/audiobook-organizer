@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.136.0
+// version: 1.137.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-21
+// last-edited: 2026-08-23
 
 package database
 
@@ -1812,7 +1812,7 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetBooksBySeriesIDCore(seriesID, 0, 0)
 	}
-	books, err := p.getBooksBySeriesIDFull(seriesID)
+	books, err := p.getBooksBySeriesIDFull(seriesID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1823,18 +1823,59 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 	return cores, nil
 }
 
-// getBooksBySeriesIDFull performs a full Pebble book scan for the series
-// LISTING view: soft-deleted excluded, non-primary versions excluded, ordered
-// by SeriesSequence then title.
+// GetBooksBySeriesIDAllVersions returns the COMPLETE set of live books attached
+// to a series — non-primary versions included — ordered like the listing view.
 //
-// All three of those were missing before 2026-08-14 except the soft-delete
-// check, leaving this path disagreeing with its memdb counterpart on both what
-// it returned and what order it returned it in — a series listing served during
-// the ~132 s warmup window showed every alternate rip alongside the book it
-// duplicates, in ULID order. Found by sweeping the other dual-dispatch store
-// methods for the defect shape fixed in the author getters. See
+// Same "complete set" semantics as GetBooksByAuthorIDWithRoleCore, and for the
+// same reason: this is what the series MERGE path consults to find the rows it
+// must repoint at the kept series before deleting the one being merged away.
+// A book this getter cannot see is a book the merge will not repoint, and the
+// series gets deleted out from under it. series_bookref.go measured that on
+// production: 6,893 phantom series IDs held by 13,322 live books.
+//
+// Core-typed (STOREFID W4) on the same rationale as GetBooksBySeriesIDCore
+// above — the memdb rows never carry the nine heavy fields and the Pebble scan
+// projects via .Core() before returning, so a caller needing Description /
+// BookSig* / Author / Series MUST hydrate via GetBookByID. The merge path does
+// exactly that.
+//
+// Soft-deleted books are still excluded, on BOTH paths. This getter closes only
+// the non-primary half of the orphaning hazard; the unfiltered SeriesRefCounts
+// counter is still what covers trashed rows.
+// See internal/database/series_getter_conformance_test.go.
+func (p *PebbleStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, error) {
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().GetBooksBySeriesIDAllVersions(seriesID, 0, 0)
+	}
+	books, err := p.getBooksBySeriesIDFull(seriesID, false)
+	if err != nil {
+		return nil, err
+	}
+	cores := make([]BookCore, len(books))
+	for i := range books {
+		cores[i] = books[i].Core()
+	}
+	return cores, nil
+}
+
+// getBooksBySeriesIDFull performs a full Pebble book scan for a series:
+// soft-deleted always excluded, non-primary versions excluded only when
+// primaryOnly is set, ordered by SeriesSequence then title.
+//
+// primaryOnly selects the LISTING view (true) or the COMPLETE set (false) —
+// the same split the memdb twin makes in getBooksBySeriesID. Both arms share
+// this one scan on purpose: the two Pebble getters cannot then drift apart on
+// what "in this series" means, which is precisely how the author getters broke.
+//
+// Ordering and the soft-delete/non-primary filters were missing here before
+// 2026-08-14 except the soft-delete check, leaving this path disagreeing with
+// its memdb counterpart on both what it returned and what order it returned it
+// in — a series listing served during the ~132 s warmup window showed every
+// alternate rip alongside the book it duplicates, in ULID order. Found by
+// sweeping the other dual-dispatch store methods for the defect shape fixed in
+// the author getters. See
 // internal/database/series_getter_conformance_test.go.
-func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int) ([]Book, error) {
+func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int, primaryOnly bool) ([]Book, error) {
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
@@ -1862,7 +1903,7 @@ func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int) ([]Book, error) {
 		if bookIsSoftDeleted(&book) {
 			continue
 		}
-		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+		if primaryOnly && book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
 			continue
 		}
 		books = append(books, book)
