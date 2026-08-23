@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-08-18
+// last-edited: 2026-08-22
 
 package handlers
 
@@ -255,7 +255,13 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 	col.MaterializedBookIDs = ids
 	if changed {
 		// Best-effort persist: the response is already correct without it, so a
-		// write failure must not turn a successful read into an error.
+		// write failure must not turn a successful read into an error. This now
+		// also swallows a Version compare-and-swap conflict, which is fine here
+		// specifically: a conflict just means some other writer changed the
+		// collection between this read and this cache-refresh write, so the
+		// stale MaterializedBookIDs this call would have written are no more
+		// current than what is already stored — there is nothing worth retrying
+		// for a cache write the next read recomputes anyway.
 		_ = h.store.UpdateCollection(col)
 	}
 	httputil.RespondWithOK(c, col)
@@ -339,7 +345,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 	}
 
 	if err := h.store.UpdateCollection(col); err != nil {
-		if strings.Contains(err.Error(), "already in use") {
+		if strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "version conflict") {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}
@@ -394,6 +400,14 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 	col.MaterializedBookIDs = ids
 	if changed {
 		if uerr := h.store.UpdateCollection(col); uerr != nil {
+			// Same conflict class as UpdateCollection above: col was read via
+			// h.load at the top of this handler, so a version conflict here
+			// means something else wrote the collection in between — a real,
+			// expected race under concurrent access, not a server fault.
+			if strings.Contains(uerr.Error(), "version conflict") {
+				httputil.RespondWithConflict(c, uerr.Error())
+				return
+			}
 			httputil.InternalError(c, "failed to store materialized collection", uerr)
 			return
 		}

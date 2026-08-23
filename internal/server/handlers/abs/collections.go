@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 package abs
 
@@ -247,7 +247,7 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 	}
 
 	if err := h.collections.UpdateCollection(col); err != nil {
-		if strings.Contains(err.Error(), "already in use") {
+		if strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "version conflict") {
 			respondError(c, http.StatusConflict, err.Error())
 			return
 		}
@@ -322,6 +322,16 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 	col.BookIDs = append(col.BookIDs, ids[0])
 
 	if err := h.collections.UpdateCollection(col); err != nil {
+		// col was read via h.lookupCollection above with no lock held until this
+		// write, so a concurrent add/remove/edit on the same collection can win
+		// the race and make this call's read stale — the classic
+		// read-modify-write clobber the Version compare-and-swap exists to
+		// catch. Surface it as a 409 so the client re-reads and retries rather
+		// than getting a 500 for what is really "try again."
+		if strings.Contains(err.Error(), "version conflict") {
+			respondError(c, http.StatusConflict, err.Error())
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "could not update collection")
 		return
 	}
@@ -363,6 +373,12 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 	col.BookIDs = kept
 
 	if err := h.collections.UpdateCollection(col); err != nil {
+		// Same race as AddBookToCollection above: surface a stale-Version
+		// conflict as 409 rather than a generic 500.
+		if strings.Contains(err.Error(), "version conflict") {
+			respondError(c, http.StatusConflict, err.Error())
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "could not update collection")
 		return
 	}

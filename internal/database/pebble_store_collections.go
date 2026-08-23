@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_collections.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c9e2b71-6f83-4a15-9d02-7e5b1a83c064
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 package database
 
@@ -198,6 +198,40 @@ func (p *PebbleStore) UpdateCollection(col *Collection) error {
 	}
 	if prev == nil {
 		return fmt.Errorf("collection %s not found", col.ID)
+	}
+
+	// Compare-and-swap on Version: without this, two concurrent
+	// read-modify-write cycles (e.g. two AddBookToCollection calls racing on the
+	// same collection) silently clobber one another — the second write always
+	// wins with no signal that the first one's change was lost. Requiring the
+	// caller's col.Version to match what is currently stored turns that into a
+	// rejected write the caller can retry against fresh data.
+	//
+	// Plain equality, not "skip the check when col.Version == 0": a caller that
+	// read the current row first has col.Version == prev.Version by
+	// construction (all production call sites do — see the callers audited in
+	// this change's PR body), so this never rejects a normal sequential update.
+	// A caller that never read the row (Version left at its Go zero value) is
+	// exactly the blind-overwrite case this guard exists to catch, so it must
+	// conflict too, not be waved through as "unconditional write" — treating
+	// zero as a bypass would silently recreate the last-write-wins bug for any
+	// caller that merely forgets to populate the field. A collection whose
+	// stored JSON predates the Version field unmarshals prev.Version as 0 too,
+	// so a first read-then-write of a legacy row satisfies 0 == 0 and proceeds
+	// normally — no separate legacy-compat branch is needed.
+	//
+	// This check is NOT atomic with the write below: there is no lock held
+	// across GetCollection → compare → Commit, so two goroutines in the same
+	// process racing inside this function can both read the same prev.Version,
+	// both pass the check, and both commit (last one wins, same as before).
+	// What it does close is the far more common case in practice — two
+	// separate request cycles (e.g. two sequential HTTP calls that each did
+	// their own read-modify-write) where the second call's read happened after
+	// the first call's write. Closing the intra-process race too would need a
+	// per-collection lock (or a pebble conditional-write primitive); that is
+	// out of scope for this change.
+	if col.Version != prev.Version {
+		return fmt.Errorf("collection %s version conflict: expected %d, got %d", col.ID, prev.Version, col.Version)
 	}
 
 	lower := util.NormalizeString(col.Name)
