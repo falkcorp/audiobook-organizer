@@ -47,9 +47,12 @@ type importPathReader interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
+// UpdateOperationResultData is deliberately ABSENT: it wrote the run's output
+// onto a v1 operations row, which is the thing being retired. Results now go
+// through the SaveResultFunc the caller supplies, so this package no longer
+// needs to know which operations table exists.
 type operationRecorder interface {
 	CreateOperationChange(change *database.OperationChange) error
-	UpdateOperationResultData(id string, resultData string) error
 }
 
 // Store is the database dependency for reconcile operations.
@@ -168,7 +171,19 @@ type AssignVGResult struct {
 }
 
 // RunReconcileScan executes the reconcile preview build and persists results.
-func RunReconcileScan(store Store, ctx context.Context, opID string, progress operations.ProgressReporter) error {
+// SaveResultFunc persists a run's output payload.
+//
+// It replaces a store method that wrote onto the v1 operations row. Taking a
+// callback rather than an id-plus-store means this package never names an
+// operations table at all: the caller already holds a reporter that knows where
+// its own results go, so nothing here has to be told twice.
+//
+// Errors are RETURNED, not swallowed. The payload IS the operation's output —
+// a scan whose preview never landed reads to the next caller as a scan that
+// found nothing.
+type SaveResultFunc func(payload any) error
+
+func RunReconcileScan(store Store, ctx context.Context, saveResult SaveResultFunc, progress operations.ProgressReporter) error {
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -180,7 +195,7 @@ func RunReconcileScan(store Store, ctx context.Context, opID string, progress op
 	if err != nil {
 		return fmt.Errorf("failed to marshal scan results: %w", err)
 	}
-	if err := store.UpdateOperationResultData(opID, string(resultJSON)); err != nil {
+	if err := saveResult(json.RawMessage(resultJSON)); err != nil {
 		return fmt.Errorf("failed to store scan results: %w", err)
 	}
 	return nil
@@ -594,7 +609,7 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 }
 
 // ExecuteReconcile applies confirmed matches: updates DB file_path and records OperationChanges.
-func ExecuteReconcile(ctx context.Context, store Store, operationID string, matches []ReconcileApplyItem, log logger.Logger) error {
+func ExecuteReconcile(ctx context.Context, store Store, operationID string, saveResult SaveResultFunc, matches []ReconcileApplyItem, log logger.Logger) error {
 	result := &ReconcileApplyResult{
 		Errors: []string{},
 	}
@@ -614,7 +629,12 @@ func ExecuteReconcile(ctx context.Context, store Store, operationID string, matc
 		log.UpdateProgress(0, 1, "Reconciliation starting: 0 matches to apply")
 		log.UpdateProgress(1, 1, "Reconciliation complete: 0 applied, 0 skipped (100%)")
 		resultJSON, _ := json.Marshal(result)
-		_ = store.UpdateOperationResultData(operationID, string(resultJSON))
+		// Mid-run progress snapshot. Unlike the final write below this one is
+		// advisory — the run continues either way — but a failure still gets
+		// logged rather than dropped on the floor.
+		if serr := saveResult(json.RawMessage(resultJSON)); serr != nil {
+			log.Warn("reconcile: failed to persist interim result: %v", serr)
+		}
 		return nil
 	}
 	log.UpdateProgress(0, total, fmt.Sprintf("Reconciliation starting: 0/%d (0%%)", total))
@@ -671,7 +691,9 @@ func ExecuteReconcile(ctx context.Context, store Store, operationID string, matc
 
 	// Store result data on the operation
 	resultJSON, _ := json.Marshal(result)
-	_ = store.UpdateOperationResultData(operationID, string(resultJSON))
+	if serr := saveResult(json.RawMessage(resultJSON)); serr != nil {
+		return fmt.Errorf("reconcile: persist result: %w", serr)
+	}
 	log.UpdateProgress(total, total, fmt.Sprintf("Reconciliation complete: %d/%d processed (%s) — %d applied, %d skipped", total, total, fmtPct(total, total), result.Applied, result.Skipped))
 
 	if len(result.Errors) > 0 {
