@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-23-the-second-set-of-books-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0f4c8a52-6b19-4d73-ae05-91c2f8d3b746 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -69,6 +69,8 @@ one.
 - Maintenance jobs are recorded once, not twice. A finished job stays finished across a
   restart.
 - If a job is interrupted, it resumes as what you asked for. A preview stays a preview.
+  (See the correction below — this was right about *preview or not*, and wrong about
+  *whether five jobs resumed at all*.)
 - Two operator tools that fetch a job's detailed results — the composer-tag scan and the
   missing-file repair — accept identifiers from **both** eras. Runs from before this
   release keep working; runs after it stop failing.
@@ -86,3 +88,40 @@ Two things are deliberately left alone. The old ledger still holds about **1,700
 from before any of this, all in a state the restart sweep ignores — they are inert, and
 clearing them out is its own task with its own risks. And a small piece of the old bridge
 stays for two scheduled jobs that have not been moved across yet; it retires with them.
+
+## Correction, same day
+
+The line above — "if a job is interrupted, it resumes as what you asked for" — was only
+half true when it was written, and the wrong half was not the half we checked.
+
+The preview setting is genuinely safe now; that part holds. But five jobs stopped
+resuming **at all**. Clearing out the old ledger also removed the piece of startup code
+that had been quietly restarting them, and those five had been depending on it while
+declaring, in their own settings, that they should be dropped rather than resumed. The
+declaration had never had to be correct, because the old code restarted them regardless.
+Remove the old code and the declaration is suddenly the only thing left, and it said the
+wrong thing.
+
+The five: the Deluge bulk import, the empty-folder cleanup, the missing-author refetch,
+the missing-file repair, and the composer-tag scan. One of them deletes folders from disk,
+which is exactly the job you would least like to see quietly change behaviour.
+
+A sixth job, the bulk metadata fetch, kept resuming but forgot what it had already done.
+It tracks its finished books against the job's identifier, and the way it was set up to
+resume issued a *new* identifier each time — so an interrupted run started the whole
+library over, re-fetching tens of thousands of records across the network for no reason.
+
+All six are fixed: they now resume the original run in place, keeping both the preview
+setting and the record of what they already finished. Two smaller faults in the same
+release were fixed alongside — a database failure while looking up a job's results was
+being reported as "no such job", which would have sent an operator hunting for a bad
+identifier instead of a sick database; and a warning that was supposed to fire when a job
+could not obtain an identifier was positioned so that it only covered part of what goes
+wrong in that case.
+
+**Why this is worth writing down rather than quietly patching.** Nothing failed loudly.
+The five jobs did not error; they simply never came back after a restart, and every
+comment, plan document and note in the codebase said the opposite was happening. The
+reason we found it is that the code was re-read after it shipped, against the question
+"is the thing this comment claims actually true?" — and it was not. A justification had
+outlived the reason it was written.
