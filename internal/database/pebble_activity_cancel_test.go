@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_cancel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e91b7d2-6c04-4a58-9f13-8d27e5a06b41
 // last-edited: 2026-08-23
 
@@ -261,12 +261,23 @@ func TestQueryByIndexPrefixAbortsWhenCallerGoesAway(t *testing.T) {
 //     reported, and lost nothing either — a retry has real, boundable work
 //     left)
 //
-// NEGATIVE CONTROL: removing the per-batch ctx check in WipeAllActivity's
-// delete loop makes deleted jump to 750 (err becomes nil too — with the
-// scan interval pinned high, nothing except that check would ever observe
-// cancellation during this run) and the Query assertion below fails as a
-// result (0 rows remain instead of 250). Verified red with that check
-// removed, green with it restored.
+// NEGATIVE CONTROL, measured rather than reasoned about: removing the
+// per-batch ctx check in WipeAllActivity's delete loop fails EXACTLY the
+// three row-count assertions below -- deleted 500->750, the Less check, and
+// the remaining-rows Query 250->0.
+//
+// It does NOT fail require.Error or assert.ErrorIs. Those two keep passing,
+// because with the per-batch check gone the wipe drains all 750 rows and then
+// a LATER tier's per-tier guard trips instead: "debug" is empty so its scan
+// makes no Err() call at all, and "audit"'s per-tier check lands on the
+// tripping context's 4th call. The error is still context.Canceled -- just
+// raised for the wrong reason, after the damage.
+//
+// So the error assertions are documentation, not discrimination. Do not trim
+// the row-count assertions as redundant on the strength of them: the counts
+// are the only thing here that can tell a cancelled wipe from a completed
+// one. (An earlier version of this comment claimed err went nil under this
+// mutation. It does not -- that was reasoned, not run.)
 func TestWipeAllActivityAbortsMidWipe(t *testing.T) {
 	// Deliberately NOT pinCtxCheckInterval(t) (which sets it to 1): this test
 	// wants scanTierKVs' per-row check to stay silent throughout the 750-row
@@ -309,4 +320,55 @@ func TestWipeAllActivityAbortsMidWipe(t *testing.T) {
 	_, total, qErr := s.Query(context.Background(), ActivityFilter{Limit: 2000})
 	require.NoError(t, qErr)
 	assert.Equal(t, seeded-500, total, "the un-reached rows must be untouched, not lost and not double-deleted")
+
+	// The trip point above is hand-calibrated against three things that live
+	// elsewhere: "change" being first in actTiers, the 500-row batch size, and
+	// scanTierKVs checking exactly once at seen=0. If any of them moves, the
+	// row counts above fail in a way that points at the wipe rather than at
+	// the calibration. Pinning the call count makes that failure name itself.
+	assert.Equal(t, 4, ctx.checkCount(), "Err() call sequence changed upstream -- recalibrate newTrippingContext, the wipe is not necessarily broken")
+}
+
+// TestWipeAllActivityRefusesAlreadyCancelledContext pins the per-tier guard on
+// its own, which the mid-wipe test above only exercises incidentally (removing
+// that guard shifts the trip accounting there, so the failure points at a row
+// count rather than at the guard).
+//
+// The property is the one that matters most in this file: a destructive
+// operation handed a dead context deletes NOTHING. Without a test that names
+// it, someone could delete the per-tier guard, watch the mid-wipe test fail on
+// its call-count assertion, "fix" the calibration, and ship a wipe that
+// happily starts work for a caller that is already gone.
+//
+// NEGATIVE CONTROL: removing the per-tier ctx.Err() check at the top of
+// WipeAllActivity's tier loop makes this fail on both counts -- deleted
+// becomes 10 and the surviving-row Query returns 0. Verified red, then green.
+func TestWipeAllActivityRefusesAlreadyCancelledContext(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+
+	const seeded = 10
+	base := time.Now().UTC().Add(-time.Hour)
+	for i := 0; i < seeded; i++ {
+		_, err := s.Record(ActivityEntry{
+			Tier: "change", Type: "test", Level: "info",
+			Source: "test", Summary: "seed",
+			Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+		})
+		require.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	deleted, err := s.WipeAllActivity(ctx)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, deleted, "a wipe handed a dead context must not delete anything, not even one batch")
+
+	// Asserting the count alone would pass against a wipe that deleted rows
+	// and then lied about it, so check the store itself.
+	_, total, qErr := s.Query(context.Background(), ActivityFilter{Limit: 100})
+	require.NoError(t, qErr)
+	assert.Equal(t, seeded, total, "every seeded row must survive a wipe that never legitimately started")
 }
