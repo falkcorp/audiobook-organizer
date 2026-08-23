@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -524,9 +524,19 @@ func (h *Handler) ValidateDedupEntry(c *gin.Context) {
 
 // DeduplicateSeriesHandler enqueues an async series-dedup operation.
 // POST /series/deduplicate.
+//
+// The optional body {"dry_run": false} opts out of the preview. Absent,
+// empty, or unparseable bodies leave DryRun nil, which the op reads as
+// dry_run=true (TODO.md L3966) — every failure mode of this bind lands on the
+// side that writes nothing, and this endpoint took no body at all before, so
+// existing callers get the preview rather than a 400.
 func (h *Handler) DeduplicateSeriesHandler(c *gin.Context) {
+	var req struct {
+		DryRun *bool `json:"dry_run"`
+	}
+	_ = c.ShouldBindJSON(&req)
 	h.launchOp(c, "dedup.series-dedup", "series-dedup", "series-deduplicate",
-		seriesDedupOpParams{Detail: "series-deduplicate"})
+		seriesDedupOpParams{Detail: "series-deduplicate", DryRun: req.DryRun})
 }
 
 // SeriesPrunePreview returns a dry-run preview of the series auto-prune.
