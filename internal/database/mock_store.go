@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package database
 
@@ -158,6 +158,12 @@ type MockStore struct {
 	// reference counting still lets deletes through. Tests that assert a
 	// series must survive have to say so explicitly.
 	GetAllSeriesBookRefCountsFunc func() (map[int]int, error)
+	// GetAllAuthorBookRefCountsFunc backs the AuthorBookRefStore capability.
+	// Same contract as GetAllSeriesBookRefCountsFunc above: a nil func yields
+	// an empty map, i.e. "no author is referenced by anything", so a mock that
+	// does not care about reference counting still lets deletes through. Tests
+	// that assert an author must survive have to say so explicitly.
+	GetAllAuthorBookRefCountsFunc func() (map[int]int, error)
 
 	// Metadata
 	GetMetadataFieldStatesFunc   func(bookID string) ([]MetadataFieldState, error)
@@ -771,6 +777,18 @@ func (m *MockStore) DeleteSeries(id int) error {
 func (m *MockStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 	if m.GetAllSeriesBookRefCountsFunc != nil {
 		return m.GetAllSeriesBookRefCountsFunc()
+	}
+	return map[int]int{}, nil
+}
+
+// GetAllAuthorBookRefCounts satisfies AuthorBookRefStore so a MockStore can
+// stand in for a store that answers the UNFILTERED author reference question.
+// Without it, AsAuthorBookRefStore returns nil and every caller correctly fails
+// closed, which would make the mock unusable for the author delete paths rather
+// than merely permissive.
+func (m *MockStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
+	if m.GetAllAuthorBookRefCountsFunc != nil {
+		return m.GetAllAuthorBookRefCountsFunc()
 	}
 	return map[int]int{}, nil
 }

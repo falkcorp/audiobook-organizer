@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -591,12 +591,18 @@ func (h *Handler) DeleteAuthor(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid author ID")
 		return
 	}
-	books, err := h.store.GetBooksByAuthorIDCore(authorID)
+	// "Is anything still pointing at this author?" is NOT the question
+	// GetBooksByAuthorIDCore answers — it skips trashed and non-primary books,
+	// which still hold the author_id, and it is a per-author listing rather than
+	// a junction-aware reference count. Deleting on its zero is what stranded
+	// 13,322 books behind 6,893 series on the series side of this same bug; see
+	// internal/database/author_bookref.go.
+	refCounts, err := authorRefCounts(h.store)
 	if err != nil {
-		httputil.InternalError(c, "failed to get author books", err)
+		httputil.InternalError(c, "failed to count author references", err)
 		return
 	}
-	if len(books) > 0 {
+	if refCounts[authorID] > 0 {
 		httputil.RespondWithConflict(c, "cannot delete author with books")
 		return
 	}
@@ -621,13 +627,18 @@ func (h *Handler) BulkDeleteAuthors(c *gin.Context) {
 	deleted := 0
 	skipped := 0
 	var errors []string
+	// Counted ONCE for the whole library rather than per author. That is both the
+	// only form in which "referenced by nothing" is answerable — the per-author
+	// getter skips trashed and non-primary books that still hold the author_id,
+	// and misses junction-only co-author credits entirely — and cheaper than one
+	// scan per requested ID.
+	refCounts, err := authorRefCounts(h.store)
+	if err != nil {
+		httputil.InternalError(c, "failed to count author references", err)
+		return
+	}
 	for _, id := range req.IDs {
-		books, err := h.store.GetBooksByAuthorIDCore(id)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("author %d: %v", id, err))
-			continue
-		}
-		if len(books) > 0 {
+		if refCounts[id] > 0 {
 			skipped++
 			continue
 		}
