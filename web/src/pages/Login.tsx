@@ -1,6 +1,7 @@
 // file: web/src/pages/Login.tsx
-// version: 1.3.2
+// version: 1.4.0
 // guid: 9a3f2c1d-4b5e-6f70-8a9b-0c1d2e3f4a5b
+// last-edited: 2026-08-21
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -18,6 +19,7 @@ import {
   Typography,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
+import { sanitizeReturn } from '../utils/safeReturn';
 
 type AuthMode = 'login' | 'setup';
 
@@ -78,7 +80,7 @@ export function Login() {
 
   const redirectTo = useMemo(() => {
     const state = location.state as { from?: string } | null;
-    return state?.from || '/dashboard';
+    return sanitizeReturn(state?.from) || '/dashboard';
   }, [location.state]);
 
   useEffect(() => {

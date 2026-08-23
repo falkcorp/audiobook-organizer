@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.54.2
+// version: 1.55.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-08-19
+// last-edited: 2026-08-21
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -38,6 +38,7 @@ import {
   BookDetailDialogs,
   type MetadataRejection,
 } from '../components/bookdetail/BookDetailDialogs';
+import { sanitizeReturn } from '../utils/safeReturn';
 
 export const BookDetail = () => {
   const { id } = useParams();
@@ -1009,9 +1010,8 @@ export const BookDetail = () => {
           startIcon={<ArrowBackIcon />}
           sx={{ mt: 2 }}
           onClick={() => {
-            const returnUrl = sessionStorage.getItem('library_return_url');
-            if (returnUrl) navigate(returnUrl);
-            else navigate('/library');
+            const returnUrl = sanitizeReturn(sessionStorage.getItem('library_return_url')) || '/library';
+            navigate(returnUrl);
           }}
         >
           Back to Library
@@ -1047,9 +1047,8 @@ export const BookDetail = () => {
         itunesPidCount={itunesPidCount}
         activeTab={activeTab}
         onBack={() => {
-          const returnUrl = sessionStorage.getItem('library_return_url');
-          if (returnUrl) navigate(returnUrl);
-          else navigate('/library');
+          const returnUrl = sanitizeReturn(sessionStorage.getItem('library_return_url')) || '/library';
+          navigate(returnUrl);
         }}
         onSetActiveTab={setActiveTab}
       />
