@@ -1,6 +1,6 @@
 // file: internal/ai/register.go
-// version: 1.5.0
-// last-edited: 2026-08-20
+// version: 1.6.0
+// last-edited: 2026-08-23
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -34,7 +34,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			mode := cfg.EffectiveEmbeddingMode()
 			if mode == config.AIBackendModeDisabled {
 				return (*EmbeddingClient)(nil), nil
@@ -89,7 +89,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			mode := cfg.EffectiveLLMMode()
 			if mode == config.AIBackendModeDisabled {
 				return (*OpenAIParser)(nil), nil
@@ -120,7 +120,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig, "embedclient", serviceregistry.KeyEmbeddingStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			if !cfg.MetadataScoring.EmbeddingEnabled {
 				return (*EmbeddingScorer)(nil), nil
 			}
@@ -142,7 +142,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig, "llmparser"},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			if cfg.EffectiveLLMMode() == config.AIBackendModeDisabled {
 				return (*LLMScorer)(nil), nil
 			}

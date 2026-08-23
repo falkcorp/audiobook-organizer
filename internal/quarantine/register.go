@@ -1,6 +1,6 @@
 // file: internal/quarantine/register.go
-// version: 1.1.0
-// last-edited: 2026-08-19
+// version: 1.2.0
+// last-edited: 2026-08-23
 
 package quarantine
 
@@ -17,8 +17,8 @@ func init() {
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[Store](c, serviceregistry.KeyStore)
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
-			bus := serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
+			cfg := config.GetConfig(c)
+			bus := plugin.GetEventBus(c)
 			return NewQuarantineService(store, cfg, bus), nil
 		},
 	})

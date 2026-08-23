@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.4.0
-// last-edited: 2026-08-19
+// version: 1.5.0
+// last-edited: 2026-08-23
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -62,7 +62,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig, "pebble-activitystore"},
 		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			if cfg.DatabasePath == "" {
 				return nil, fmt.Errorf("activitystore: DatabasePath not configured")
 			}

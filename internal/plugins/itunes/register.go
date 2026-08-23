@@ -1,6 +1,6 @@
 // file: internal/plugins/itunes/register.go
-// version: 2.1.0
-// last-edited: 2026-08-19
+// version: 2.2.0
+// last-edited: 2026-08-23
 
 // Service registry registration for the iTunes UOS plugin (W5).
 //
@@ -45,7 +45,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyITunes, serviceregistry.KeyConfig},
 		Groups: []string{"plugins"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			// Test-path guard: empty RootDir means tests without a real
 			// AppConfig — the mock store has no UpsertOpDefinitionV2
 			// expectations, so don't register ops.

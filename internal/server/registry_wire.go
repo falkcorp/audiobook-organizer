@@ -1,6 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.22.0
-// last-edited: 2026-08-19
+// version: 1.23.0
+// last-edited: 2026-08-23
 
 package server
 
@@ -84,7 +84,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			if cfg.DatabasePath == "" {
 				return nil, nil
 			}
@@ -130,7 +130,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			// Keyless local backends are valid (TOGGLE-1/TASK-10): gate on the
 			// resolved effective mode, not on OpenAIAPIKey presence. The old
 			// key check silently disabled the whole dedup plugin on keyless
@@ -192,7 +192,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyConfig, serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
+			cfg := config.GetConfig(c)
 			if cfg.DatabasePath == "" {
 				return (*database.PebbleMetricsStore)(nil), nil
 			}
@@ -262,8 +262,8 @@ func init() {
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[itunesWireStore](c, serviceregistry.KeyStore)
-			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
-			bus := serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
+			cfg := config.GetConfig(c)
+			bus := plugin.GetEventBus(c)
 			mf := serviceregistry.Get[*metafetch.Service](c, serviceregistry.KeyMetaFetch)
 			svc, err := itunesservice.New(itunesservice.Deps{
 				Store: store,
@@ -325,7 +325,7 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	s.mergeService = serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
 	s.organizeService = serviceregistry.Get[*OrganizeService](c, serviceregistry.KeyOrganize)
 	s.quarantineSvc = serviceregistry.Get[*quarantine.QuarantineService](c, serviceregistry.KeyQuarantine)
-	s.eventBus = serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
+	s.eventBus = plugin.GetEventBus(c)
 	// activity is conditional on config.DatabasePath — pull via TryGet so
 	// tests that don't configure a DB path still build.
 	if svc, ok := serviceregistry.TryGet[*activity.Service](c, serviceregistry.KeyActivity); ok {
