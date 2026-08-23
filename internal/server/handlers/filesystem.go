@@ -53,11 +53,15 @@ type FileImporter interface {
 }
 
 // FilesystemStore is the narrow database interface required by FilesystemHandler.
+// CreateOperation is deliberately ABSENT. AddImportPath used to mint a v1
+// operations row here and hand the caller its id, which the client then polled
+// against /operations/v2 — where it did not exist. Leaving the method off this
+// interface makes reintroducing that a compile error rather than something a
+// reviewer has to notice.
 type FilesystemStore interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 	GetDashboardStats() (*database.DashboardStats, error)
 	CountBooksByPathPrefix(prefix string) (int, error)
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
 	UpdateImportPath(id int, path *database.ImportPath) error
 	DeleteImportPath(id int) error
 	GetBookByFilePath(path string) (*database.Book, error)
