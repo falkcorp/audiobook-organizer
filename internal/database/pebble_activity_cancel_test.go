@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_cancel_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e91b7d2-6c04-4a58-9f13-8d27e5a06b41
 // last-edited: 2026-08-23
 
@@ -329,20 +329,29 @@ func TestWipeAllActivityAbortsMidWipe(t *testing.T) {
 	assert.Equal(t, 4, ctx.checkCount(), "Err() call sequence changed upstream -- recalibrate newTrippingContext, the wipe is not necessarily broken")
 }
 
-// TestWipeAllActivityRefusesAlreadyCancelledContext pins the per-tier guard on
-// its own, which the mid-wipe test above only exercises incidentally (removing
-// that guard shifts the trip accounting there, so the failure points at a row
-// count rather than at the guard).
+// TestWipeAllActivityRefusesAlreadyCancelledContext pins the property that
+// matters most in this file: a destructive operation handed a context that is
+// ALREADY dead deletes nothing at all. Not one batch.
 //
-// The property is the one that matters most in this file: a destructive
-// operation handed a dead context deletes NOTHING. Without a test that names
-// it, someone could delete the per-tier guard, watch the mid-wipe test fail on
-// its call-count assertion, "fix" the calibration, and ship a wipe that
-// happily starts work for a caller that is already gone.
+// What this test does and does not pin, measured rather than assumed. Each of
+// WipeAllActivity's three cancellation checks was removed and the test re-run:
 //
-// NEGATIVE CONTROL: removing the per-tier ctx.Err() check at the top of
-// WipeAllActivity's tier loop makes this fail on both counts -- deleted
-// becomes 10 and the surviving-row Query returns 0. Verified red, then green.
+//	per-tier guard removed .................... still PASSES
+//	scanTierKVs(ctx) -> Background ............ still PASSES
+//	per-batch guard removed ................... still PASSES
+//	all three removed ......................... FAILS ("expected an error, got nil")
+//
+// So this is a defense-in-depth assertion, not a single-guard one: any ONE of
+// the three stops an already-cancelled wipe on its own, and the test only goes
+// red when the last of them is gone. That redundancy is the point on a
+// destructive path -- but it does mean this test cannot be used to justify
+// keeping any individual check. TestWipeAllActivityAbortsMidWipe above is what
+// isolates the per-batch guard; the per-tier guard has no isolating test,
+// because scanTierKVs' own seen=0 check (0 % activityCtxCheckInterval == 0
+// always) shadows it for every input that reaches it.
+//
+// An earlier draft of this comment claimed the per-tier guard alone was pinned
+// here. It ran, it wasn't, and the numbers above replaced the claim.
 func TestWipeAllActivityRefusesAlreadyCancelledContext(t *testing.T) {
 	s := newTestPebbleActivityStore(t)
 
