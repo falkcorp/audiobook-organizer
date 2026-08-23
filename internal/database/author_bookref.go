@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
 // last-edited: 2026-08-23
 
@@ -179,9 +179,16 @@ func (m *MemStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 // refusing. Pebble is the source of truth and its scan aborts on an undecodable
 // row, so the fall-through yields a CORRECT answer where a refusal would only
 // have yielded a safe one — purge-empty-authors keeps working instead of
-// stalling until the next restart. The fall-through is bounded: it happens only
-// when a row was actually lost, and no caller counts inside a loop (both
-// entities handlers and the purge op build the map once per operation).
+// stalling until the next restart.
+//
+// The cost is NOT once-off, and an earlier version of this comment said it was.
+// lostRows is sticky for the life of the process: the only things that clear it
+// are publishLostRows and Reset, and nothing re-warms in steady state. So once
+// anything taints the store, EVERY call takes the full two-keyspace Pebble scan
+// until restart — including every DELETE /authors/:id, which is a per-request
+// path. Deleting 50 authors through the UI after one taint is 50 full scans.
+// That is still the right trade against deleting a referenced author, but it is
+// a standing cost to be aware of, not a rare blip.
 //
 // The fall-through is only trustworthy because the Pebble scan's own
 // completeness bugs were fixed first: it had a hand-written "book_authors:~"
@@ -203,7 +210,11 @@ func (p *PebbleStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 		if !errors.Is(err, ErrMemdbIncomplete) {
 			return nil, err
 		}
-		slog.Warn("author ref count: memdb is missing rows, falling through to the authoritative Pebble scan",
+		// Error, not Warn: this does not clear without a restart, and until then
+		// every OTHER memdb reader (listings, dedup scans, the filtered counters)
+		// is being served from the same known-short projection with no guard at
+		// all. This counter is the only reader that notices.
+		slog.Error("author ref count: memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
 			"error", err, "lost_rows", m.LostRows())
 	}
 	return p.getAllAuthorBookRefCountsPebble()
@@ -228,8 +239,28 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 	// fail-open this file exists to close, arriving through the key range instead
 	// of the decoder. pebble_store_authors.go:221-227 warns against exactly this
 	// for exactly this keyspace.
+	//
+	// ONE SNAPSHOT FEEDS BOTH PASSES. Two independent NewIter calls each pin
+	// their own LSM version, so pass 1 and pass 2 would read different points in
+	// time. One direction of that skew is fail-OPEN: a book CREATED between the
+	// passes has its book_authors key missed by pass 1 and its book row seen by
+	// pass 2, so its junction-only co-authors count 0 and become deletable while
+	// the credit list references them. The author-split op creates exactly that
+	// shape -- brand-new authors attached only through the junction -- and it can
+	// run while purge-empty-authors is scanning.
+	//
+	// (The other direction, a book deleted between passes, over-counts and is
+	// therefore harmless to a delete guard.)
+	//
+	// The series twin needs no snapshot because it scans a single table and
+	// cannot tear. This is the first two-table Pebble ref scan in the codebase,
+	// and NewSnapshot is not used anywhere else in internal/ -- it is here
+	// because a delete guard is exactly where a torn read must not happen.
+	snap := p.db.NewSnapshot()
+	defer func() { _ = snap.Close() }()
+
 	jPrefix := []byte("book_authors:")
-	jIter, err := p.db.NewIter(&pebble.IterOptions{
+	jIter, err := snap.NewIter(&pebble.IterOptions{
 		LowerBound: jPrefix,
 		UpperBound: prefixUpperBound(jPrefix),
 	})
@@ -275,7 +306,22 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 	}
 
 	// Pass 2: every book row, for the legacy AuthorID field.
-	iter, err := p.db.NewIter(&pebble.IterOptions{
+	//
+	// book:0 .. book:; is the package-wide book-record convention (~20 sites),
+	// NOT a hand-rolled sentinel like the book_authors:~ bound removed above --
+	// which is why the argument there does not condemn it here. It is narrower
+	// than that bound was, though: it admits only '0'-'9' and ':' as the first
+	// byte after the colon. Every minting site produces a ULID (which starts
+	// 0-7), so this holds today.
+	//
+	// RESIDUAL, recorded rather than guessed: a caller-supplied book ID starting
+	// outside that range would be invisible to pass 2, losing its LEGACY
+	// AuthorID reference (pass 1 still counts its junction rows). Whether any
+	// such row exists on the live library has NOT been measured -- it needs a
+	// prefix scan for book: keys whose first byte after the colon is not a
+	// digit. Widening both bounds is safe if so; the strings.Count(key, ":")
+	// filter below already excludes secondary indexes over the wider range.
+	iter, err := snap.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
 		UpperBound: []byte("book:;"),
 	})

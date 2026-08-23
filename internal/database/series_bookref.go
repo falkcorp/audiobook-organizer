@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
 // last-edited: 2026-08-23
 
@@ -108,9 +108,18 @@ func (m *MemStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 // is the source of truth and its scan is hardened to abort on an undecodable
 // row, so the fall-through yields a CORRECT answer where the refusal would only
 // have yielded a safe one — the nightly prune keeps working instead of stalling
-// until the next restart. The fall-through is bounded: it happens only when
-// warmup actually lost a row, and no caller counts inside a loop (both handler
-// sites and all three job sites build the map once per operation).
+// until the next restart.
+//
+// The cost is NOT once-off. lostRows is sticky for the life of the process --
+// only publishLostRows and Reset clear it, and nothing re-warms in steady state
+// -- so once anything taints the store, EVERY call takes the full Pebble scan
+// until restart. No caller counts inside a loop (both handler sites and all
+// three job sites build the map once per operation), but the handler sites are
+// per-request. Still the right trade against deleting a referenced series; just
+// a standing cost rather than a rare blip.
+//
+// Also note the trigger is broader than "warmup lost a books row": a runtime
+// memSync failure is attributed to memTableUnknown, which taints every table.
 //
 // Any other error is propagated unchanged. Falling back to a full scan on an
 // unrecognized failure would be guessing at its cause.
@@ -126,7 +135,10 @@ func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 		if !errors.Is(err, ErrMemdbIncomplete) {
 			return nil, err
 		}
-		slog.Warn("series ref count: memdb is missing rows, falling through to the authoritative Pebble scan",
+		// Error, not Warn: this does not clear without a restart, and until then
+		// every OTHER memdb reader is served from the same known-short projection
+		// with no guard at all. This counter is the only reader that notices.
+		slog.Error("series ref count: memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
 			"error", err, "lost_rows", m.LostRows())
 	}
 	return p.getAllSeriesBookRefCountsPebble()
