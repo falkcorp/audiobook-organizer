@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 package jobs
 
@@ -205,12 +205,25 @@ func fileExt(path string) string {
 	return ""
 }
 
-// Policy: ResumeDrop, which is what the bridge does today — deliberately NOT
-// ResumeRequeue despite CanResume() being true and this job checkpointing nothing.
-// It advertises dry_run:true, and server.resumeV2Op re-enqueues with nil params,
-// under which DryRun would silently resolve to false and run the job for real.
-// Revisit in PR-2, where the replay is testable. See RequeuePolicy's doc comment
-// and todo.d/20260817-resumerequeue-two-divergent-implementations.md.
+// Policy: ResumeRestart. CanResume() is true and this job checkpoints nothing,
+// so a resume re-runs it; ResumeRestart is what makes that actually happen.
+//
+// This was ResumeDrop until 2026-08-23, on the reasoning that a dry_run:true job
+// could not take ResumeRequeue because server.resumeV2Op re-enqueues with nil
+// params, under which DryRun resolves to false and a preview runs for real. That
+// reasoning no longer applies, on two independent grounds. First, resumeV2Op is
+// unreachable for maintenance: its one caller is fed from GetInterruptedOperations
+// (v1 rows) and dispatches only when opRegistry.Def(op.Type) resolves, but v1
+// maintenance rows are typed "maintenance:<job>" while v2 defs are
+// "maintenance.<job>", and RegisterOp rejects ids containing ":". Second, and
+// decisively, ResumeRestart never requeues at all — it updates the existing row
+// in place, so Params (dry_run included) is preserved by construction rather than
+// reconstructed. TestResume_PreservesParamsAcrossRestartAndRequeue pins that.
+//
+// ResumeDrop was not a no-op choice: until the v1 op minter was retired, these
+// jobs were resumed by server.resumeLegacyOp's default branch off the v1 row, so
+// the declared policy never had to be correct. That branch is gone, and without
+// this a job advertising CanResume() would silently never resume.
 func (j *refetchMissingAuthorsJob) Policy() maintenance.ExecutionPolicy {
-	return maintenance.DefaultPolicy()
+	return maintenance.RestartPolicy()
 }

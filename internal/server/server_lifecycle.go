@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.26.0
+// version: 3.27.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-23
 
@@ -292,8 +292,18 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 		// already resumed the v2 row per the job's own declared ResumePolicy before
 		// this function ran at all; the enqueue here was absorbed only by
 		// EnqueueOp's ConcurrencyKey dedupe. Retiring the minter deletes the first
-		// half of that pairing, so the re-enqueue has nothing left to add -- the v2
-		// twin of any such row is still the thing that resumes it.
+		// half of that pairing, so the re-enqueue has nothing left to add for any
+		// job whose declared ResumePolicy actually resumes.
+		//
+		// BUT NOT FOR EVERY JOB, and the difference is load-bearing. Five jobs --
+		// bulk-deluge-import, cleanup-empty-folders, refetch-missing-authors,
+		// repair-missing-files and scan-composer-tags -- declare CanResume() true
+		// while still returning maintenance.DefaultPolicy(), whose ResumePolicy is
+		// ResumeDrop. For those five the re-enqueue deleted here was NOT redundant:
+		// it was their only resume, and they no longer resume at all. That is a
+		// deliberate, recorded state and not an oversight; making them resume for
+		// real means giving them RestartPolicy/RequeuePolicy, which is tracked in
+		// todo.d/20260823-five-maintenance-jobs-declare-canresume-but-drop.md.
 		//
 		// The elaborate dry_run reconstruction that lived here goes with it. It
 		// existed only because database.Operation has no params field, so an
