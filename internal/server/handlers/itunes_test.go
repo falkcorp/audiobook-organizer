@@ -1,11 +1,13 @@
 // file: internal/server/handlers/itunes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c2a4e71-6b53-4d18-8f0a-2e7c1b9d3a64
-// last-edited: 2026-06-16
+// last-edited: 2026-08-22
 
 package handlers_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newITunesCtx builds a gin context with the given path params, query string,
@@ -238,6 +241,75 @@ func TestITunesHandler_ListBooks_Happy(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "PID1")
+}
+
+func TestITunesHandler_ListBooks_Search_BoundedOverfetch_PinsResultSet(t *testing.T) {
+	// The search path over-fetches SearchBooks up to itunesSearchOverfetchWindow
+	// (10000) before post-filtering for a non-empty iTunes PID, since SearchBooks
+	// has no PID filter of its own. Seed more matching books than the window,
+	// with more PID-tagged matches (125) than a single default page (50), and
+	// assert BOTH pages of the response contain exactly the PID-tagged books
+	// visible within the window — not just "no error". A naive small limit
+	// regression would either error, undercount, or drop far-end PIDs; this
+	// catches all three.
+	store := handlersmocks.NewMockITunesStore(t)
+
+	const window = 10000
+	books := make([]database.Book, 0, window)
+	var wantPIDs []string
+	for i := 0; i < window; i++ {
+		id := fmt.Sprintf("b%d", i)
+		var pid *string
+		if i%80 == 0 { // 10000/80 = 125 PID-tagged matches, spanning >1 page
+			p := fmt.Sprintf("PID%04d", i)
+			pid = &p
+			wantPIDs = append(wantPIDs, p)
+		}
+		books = append(books, database.Book{ID: id, Title: "Match " + id, FilePath: "/x/" + id + ".m4b", ITunesPersistentID: pid})
+	}
+	if len(wantPIDs) != 125 {
+		t.Fatalf("test setup produced %d PID-tagged books, want 125", len(wantPIDs))
+	}
+
+	// Assert the handler asks the store for exactly the bounded window, not 0
+	// (unbounded). Each page request re-runs the search, so allow multiple calls.
+	store.EXPECT().SearchBooks("match", window, 0).Return(books, nil).Times(2)
+
+	type listResp struct {
+		Data struct {
+			Items []handlers.ITunesBookMapping `json:"items"`
+			Count int                          `json:"count"`
+		} `json:"data"`
+	}
+
+	h := handlers.NewITunesHandler(enabledSvc(t), nil, nil, store)
+
+	// Page 1: default limit=50. count must report the full filtered total
+	// (125), not the page length (50).
+	c1, w1 := newITunesCtx(http.MethodGet, "/itunes/books?search=match", "", nil)
+	h.ListBooks(c1)
+	assert.Equal(t, http.StatusOK, w1.Code)
+	var page1 listResp
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &page1))
+	assert.Equal(t, 125, page1.Data.Count, "count must be the full filtered total, not the page length")
+	require.Len(t, page1.Data.Items, 50)
+	for i, item := range page1.Data.Items {
+		assert.Equal(t, wantPIDs[i], item.ITunesPersistentID)
+	}
+
+	// Page 2: offset=100 crosses into the tail of the filtered set (items
+	// 100-124), proving the far-end PID-tagged matches within the window
+	// survive both the bound and pagination.
+	c2, w2 := newITunesCtx(http.MethodGet, "/itunes/books?search=match&offset=100", "", nil)
+	h.ListBooks(c2)
+	assert.Equal(t, http.StatusOK, w2.Code)
+	var page2 listResp
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &page2))
+	assert.Equal(t, 125, page2.Data.Count)
+	require.Len(t, page2.Data.Items, 25)
+	for i, item := range page2.Data.Items {
+		assert.Equal(t, wantPIDs[100+i], item.ITunesPersistentID)
+	}
 }
 
 func TestITunesHandler_ListBooks_NilStore_500(t *testing.T) {

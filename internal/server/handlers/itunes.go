@@ -1,5 +1,5 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
 // last-edited: 2026-08-22
 
@@ -686,6 +686,16 @@ func (h *ITunesHandler) WriteBackPreview(c *gin.Context) {
 	})
 }
 
+// itunesSearchOverfetchWindow bounds the SearchBooks over-fetch used by
+// ListBooks' search path below. SearchBooks has no iTunes-PID filter, so
+// the PID narrowing has to happen in Go after the substring search runs —
+// a small limit could return zero PID-tagged results even when matches
+// exist further down the scan. Mirrors the searchPostFilterWindow
+// precedent (internal/audiobooks/service_query.go) for this exact
+// over-fetch-then-post-filter shape: bound the fetch instead of leaving it
+// unlimited, and warn rather than silently truncate.
+const itunesSearchOverfetchWindow = 10000
+
 // ListBooks returns paginated books that have iTunes persistent IDs.
 func (h *ITunesHandler) ListBooks(c *gin.Context) {
 	if h.store == nil {
@@ -701,10 +711,17 @@ func (h *ITunesHandler) ListBooks(c *gin.Context) {
 	if search != "" {
 		// Search path still needs to scan the search results then filter,
 		// since SearchBooks doesn't have an iTunes-PID filter.
-		allBooks, err := h.store.SearchBooks(search, 0, 0)
+		allBooks, err := h.store.SearchBooks(search, itunesSearchOverfetchWindow, 0)
 		if err != nil {
 			httputil.InternalError(c, "failed to list books", err)
 			return
+		}
+		if len(allBooks) >= itunesSearchOverfetchWindow {
+			// Truncated: rows past the window were never scanned, so the
+			// PID-tagged results below are a lower bound, not a complete
+			// set. Say so rather than silently reporting it as complete.
+			stdlog.Warn("itunes ListBooks: search over-fetch window exhausted; iTunes-tagged results may be a lower bound",
+				"query", search, "window", itunesSearchOverfetchWindow)
 		}
 		for _, book := range allBooks {
 			if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
