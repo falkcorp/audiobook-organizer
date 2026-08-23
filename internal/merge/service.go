@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-08-23
 
@@ -267,11 +267,26 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	// the bug class this fix exists to remove. The winner is whoever this call
 	// elected; everyone else in the group is demoted.
 	//
-	// nil is NOT false: a nil IsPrimaryVersion counts as PRIMARY everywhere
-	// that reads it (pebble_store.go `eff := book.IsPrimaryVersion == nil ||
-	// *book.IsPrimaryVersion`, memdb_reads.go likewise), so a nil member must
-	// be rewritten to an explicit false rather than skipped. Only members
-	// already storing an explicit false are left alone.
+	// nil is NOT false, so a nil member must be rewritten to an explicit false
+	// rather than skipped. Only members already storing an explicit false are
+	// left alone.
+	//
+	// Do NOT read that as "nil means primary everywhere" -- an earlier version
+	// of this comment said so and it is wrong. The readers disagree, which is
+	// the TASK-002/003/004 split:
+	//
+	//	nil == PRIMARY:      pebble_store.go  `eff := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion`
+	//	                     memdb_reads.go   likewise
+	//	                     memdb_schema.go  effectiveBoolFieldIndex{Default: true}
+	//	nil == NOT primary:  reconcile/elect_primaries.go:150 and :207
+	//	                     pebble_store.go  sortVersions
+	//	                     dbtest/invariants.go
+	//
+	// This write is correct under BOTH readings -- it is the repair if nil
+	// counts as primary, and a harmless no-op if it does not -- which is
+	// exactly why it is safe to make while that disagreement is unresolved.
+	// It is spelled out because a future reader who trusts one reading will
+	// mis-predict what this loop does at the other call sites.
 	for i := range preExistingMembers {
 		member := &preExistingMembers[i]
 		if seen[member.ID] || member.ID == resolvedPrimaryID {
@@ -280,9 +295,25 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		if member.IsPrimaryVersion != nil && !*member.IsPrimaryVersion {
 			continue
 		}
+		// Re-fetch before writing. UpdateBook is a full-column REPLACE, and
+		// GetBooksByVersionGroup is documented as possibly serving a slim
+		// projection (elect_primaries.go:232 says so about this exact
+		// accessor; regroup_apply.go:290 and reconcile.go:810 state the same
+		// rule for their own writes). Writing the listed row straight back
+		// would silently drop whatever the projection omitted.
+		//
+		// Today every PebbleStore path happens to return a full row, so this
+		// is a latent hazard rather than live data loss -- but the three
+		// precedents above all hydrate, and being the one writer that does not
+		// is how the hazard eventually becomes real. Merge groups are small;
+		// the point-get is free.
+		full, err := ms.db.GetBookByID(member.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load pre-existing version-group member %s for demotion: %w", member.ID, err)
+		}
 		notPrimary := false
-		member.IsPrimaryVersion = &notPrimary
-		if _, err := ms.db.UpdateBook(member.ID, member); err != nil {
+		full.IsPrimaryVersion = &notPrimary
+		if _, err := ms.db.UpdateBook(member.ID, full); err != nil {
 			return nil, fmt.Errorf("failed to demote pre-existing version-group member %s: %w", member.ID, err)
 		}
 		slog.Info("merge demoted pre-existing version-group member",
