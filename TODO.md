@@ -6371,8 +6371,25 @@ before anyone is asked to trust a dry run of a repointing job.
       **Do not** add a retry, a URL tolerance, or a `test.fixme` to this test on the
       strength of "it passes alone."
 
-- [ ] **Change Log rows lost their visible "Compare snapshot" affordance and are
-      mouse-only.** `web/src/components/ChangeLog.tsx:135-154` renders each entry as a
+- [x] **Change Log rows lost their visible "Compare snapshot" affordance and are
+      mouse-only.** *(DONE 2026-08-23 — TASK-090, PR #2807. Took the FIRST option
+      below: a real sibling `<Button>` in the Actions stack next to Revert. The
+      SECOND option this entry offers — `role="button"` + `tabIndex={0}` +
+      `aria-label` on the row — was investigated and is **actively wrong here**,
+      so do not "improve" it back. A `role="button"` element carries "Children
+      Presentational: True" per the ARIA spec, so nesting the row's real
+      interactive controls (Revert, and now Compare snapshot) inside one is
+      undefined for assistive tech; and an `aria-label` on the row would
+      override the accessible name computed from its own text, making every
+      actionable row announce as just "Compare snapshot, button" and nothing
+      else. The row keeps its `onClick` as a mouse-only convenience. This
+      entry's own closing warning about double-firing was the real risk and is
+      pinned by test: 4 tests cover Tab-reachability, Enter AND Space
+      activation, absence on non-actionable rows, and that Enter on Revert does
+      not fire `onCompareSnapshot`. Mutation-verified 2/2 — dropping Revert's
+      `stopPropagation` and rendering the button unconditionally each fail,
+      control green.)*
+      `web/src/components/ChangeLog.tsx:135-154` renders each entry as a
       plain `<Box onClick={...}>` that fires `onCompareSnapshot` for `tag_write` /
       `metadata_apply` entries. There is no `role`, no `tabIndex`, no keyboard
       handler, and no label — the old "Compare snapshot" link that used to sit in the
