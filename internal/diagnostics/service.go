@@ -1,13 +1,15 @@
 // file: internal/diagnostics/service.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 package diagnostics
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"runtime"
 	"time"
@@ -122,104 +124,95 @@ type missingFieldEntry struct {
 	MissingFields []string `json:"missing_fields"`
 }
 
+// ProgressFunc receives one call per export phase, in the shape the operations
+// registry's Reporter.UpdateProgress takes. A nil ProgressFunc is allowed.
+type ProgressFunc func(current, total int, message string)
+
 // GenerateExport creates a temporary ZIP file containing diagnostic data.
 // Category must be one of: "deduplication", "error_analysis", "metadata_quality", "general".
-func (ds *Service) GenerateExport(category, description string) (string, error) {
-	// Create temp file for the ZIP
+//
+// REPORTING PROGRESS IS NOT COSMETIC HERE. This runs as the diagnostics.export
+// operation, and the registry watchdog cancels any op that reports nothing for
+// ProgressTimeout — which that def does not set, so it gets the 5-minute default
+// while declaring a 30-minute Timeout. Before this took a ProgressFunc the whole
+// export was one silent call, so every export slower than five minutes was
+// killed, and because there was no ctx to observe the cancel it went right on
+// building a ZIP nothing would ever serve.
+//
+// ctx is checked between phases. It cannot interrupt a phase already in flight
+// (the write helpers take no ctx), which bounds the cancellation granularity at
+// one file rather than the whole export.
+func (ds *Service) GenerateExport(ctx context.Context, category, description string, onProgress ProgressFunc) (string, error) {
+	if onProgress == nil {
+		onProgress = func(int, int, string) {}
+	}
+
 	tmpFile, err := os.CreateTemp("", "diagnostics-*.zip")
 	if err != nil {
 		return "", err
 	}
 	zipPath := tmpFile.Name()
-
 	zw := zip.NewWriter(tmpFile)
 
-	// Collect all books (paginated)
-	allBooks, err := ds.CollectAllBooks()
-	if err != nil {
+	// Every failure below discards the partial ZIP. This was nine identical
+	// four-line blocks; a phase added without one would have leaked a temp file.
+	fail := func(err error) (string, error) {
 		zw.Close()
 		tmpFile.Close()
 		os.Remove(zipPath)
 		return "", err
 	}
 
-	// Always: system_info.json
-	if err := ds.writeSystemInfo(zw, category, description); err != nil {
-		zw.Close()
-		tmpFile.Close()
-		os.Remove(zipPath)
-		return "", err
-	}
+	// Declared before the phase list so the closures capture the variable, and
+	// assigned by the collect step below — that way the phase count, and so the
+	// progress total, is known before any work starts.
+	var allBooks []database.BookCore
 
-	// Always: books.json
-	if err := ds.writeBooks(zw, allBooks); err != nil {
-		zw.Close()
-		tmpFile.Close()
-		os.Remove(zipPath)
-		return "", err
+	type phase struct {
+		name string
+		run  func() error
 	}
-
-	// Always: authors.json
-	if err := ds.writeAuthors(zw); err != nil {
-		zw.Close()
-		tmpFile.Close()
-		os.Remove(zipPath)
-		return "", err
+	phases := []phase{
+		{"system_info.json", func() error { return ds.writeSystemInfo(zw, category, description) }},
+		{"books.json", func() error { return ds.writeBooks(zw, allBooks) }},
+		{"authors.json", func() error { return ds.writeAuthors(zw) }},
+		{"series.json", func() error { return ds.writeSeries(zw) }},
+		{"batch.jsonl", func() error { return ds.writeBatchJSONL(zw, category, description, allBooks) }},
 	}
-
-	// Always: series.json
-	if err := ds.writeSeries(zw); err != nil {
-		zw.Close()
-		tmpFile.Close()
-		os.Remove(zipPath)
-		return "", err
-	}
-
-	// Always: batch.jsonl
-	if err := ds.writeBatchJSONL(zw, category, description, allBooks); err != nil {
-		zw.Close()
-		tmpFile.Close()
-		os.Remove(zipPath)
-		return "", err
-	}
-
-	// Category-specific files
 	if category == "error_analysis" || category == "general" {
-		if err := ds.writeLogs(zw); err != nil {
-			zw.Close()
-			tmpFile.Close()
-			os.Remove(zipPath)
-			return "", err
-		}
-		if err := ds.writeOperations(zw); err != nil {
-			zw.Close()
-			tmpFile.Close()
-			os.Remove(zipPath)
-			return "", err
-		}
+		phases = append(phases,
+			phase{"logs", func() error { return ds.writeLogs(zw) }},
+			phase{"operations.json", func() error { return ds.writeOperations(zw) }},
+		)
 	}
-
 	if category == "deduplication" || category == "general" {
-		if err := ds.writeVersionGroups(zw, allBooks); err != nil {
-			zw.Close()
-			tmpFile.Close()
-			os.Remove(zipPath)
-			return "", err
-		}
-		if err := ds.writeITunesAlbums(zw); err != nil {
-			zw.Close()
-			tmpFile.Close()
-			os.Remove(zipPath)
-			return "", err
-		}
+		phases = append(phases,
+			phase{"version_groups.json", func() error { return ds.writeVersionGroups(zw, allBooks) }},
+			phase{"itunes_albums.json", func() error { return ds.writeITunesAlbums(zw) }},
+		)
+	}
+	if category == "metadata_quality" || category == "general" {
+		phases = append(phases,
+			phase{"missing_fields.json", func() error { return ds.writeMissingFields(zw, allBooks) }},
+		)
 	}
 
-	if category == "metadata_quality" || category == "general" {
-		if err := ds.writeMissingFields(zw, allBooks); err != nil {
-			zw.Close()
-			tmpFile.Close()
-			os.Remove(zipPath)
-			return "", err
+	// +1 for the book collect, which is a reported step of its own: it walks the
+	// whole library and is typically the longest single stretch of the export.
+	total := len(phases) + 1
+
+	onProgress(0, total, "Collecting books")
+	if allBooks, err = ds.CollectAllBooks(); err != nil {
+		return fail(err)
+	}
+
+	for i, ph := range phases {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
+		onProgress(i+1, total, "Writing "+ph.name)
+		if err := ph.run(); err != nil {
+			return fail(fmt.Errorf("write %s: %w", ph.name, err))
 		}
 	}
 
@@ -233,6 +226,7 @@ func (ds *Service) GenerateExport(category, description string) (string, error) 
 		return "", err
 	}
 
+	onProgress(total, total, "Export complete")
 	return zipPath, nil
 }
 

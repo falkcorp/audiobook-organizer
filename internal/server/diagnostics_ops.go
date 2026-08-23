@@ -1,5 +1,5 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-08-22
 
@@ -17,7 +17,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 type diagnosticsExportOpParams struct {
@@ -37,6 +36,13 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 		Cancellable:     false,
 		Isolate:         false,
 		Timeout:         30 * time.Minute,
+		// Without this the watchdog applies its 5-minute default, so the
+		// 30-minute Timeout above was never the real budget: any export quieter
+		// than 5 minutes got cancelled. GenerateExport now reports once per
+		// phase, which alone would fix it — this makes the declared budget match
+		// the one actually enforced, rather than leaving the op one refactor
+		// away from silent death again.
+		ProgressTimeout: 30 * time.Minute,
 		ResumePolicy:    opsregistry.ResumeDrop,
 		ConcurrencyKey:  "diagnostics.export",
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
@@ -53,9 +59,14 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 			if ds == nil {
 				ds = diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath)
 			}
-			prog := sdk.NewProgress(reporter, 0)
-			prog.Start("Generating export data")
-			zipPath, genErr := ds.GenerateExport(p.Category, p.Description)
+			// Forwards straight to the reporter rather than through sdk.Progress:
+			// GenerateExport counts its own phases (which vary by category) and
+			// reports real (current, total) pairs, so wrapping it in a second
+			// counter would only let the two disagree.
+			zipPath, genErr := ds.GenerateExport(ctx, p.Category, p.Description,
+				func(current, total int, message string) {
+					_ = reporter.UpdateProgress(current, total, message)
+				})
 			if genErr != nil {
 				return fmt.Errorf("generate export: %w", genErr)
 			}
@@ -70,7 +81,6 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 			if err := opsregistry.ReporterSetResult(reporter, map[string]string{"zip_path": zipPath}); err != nil {
 				return fmt.Errorf("persist export result: %w", err)
 			}
-			prog.Done("Export complete")
 			return nil
 		},
 	})
