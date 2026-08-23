@@ -1,13 +1,14 @@
 // file: internal/operations/registry/registry_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-07-01
+// last-edited: 2026-08-23
 
 package registry_test
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -163,6 +164,35 @@ func TestCancel_QueuedOpSetsCanceled(t *testing.T) {
 	}
 	if store.statusOf(opID) != "canceled" {
 		t.Errorf("expected status canceled, got %s", store.statusOf(opID))
+	}
+}
+
+// TestCancel_UnknownID_ReturnsErrOpNotFound pins TASK-115: Cancel must
+// distinguish "an op with this id was found and actually signalled to stop"
+// from "no op with this id exists" — the latter must return ErrOpNotFound,
+// not nil (nil looks identical to a successful cancel to every caller).
+// It also re-asserts, in the same test, that a legitimately queued op's
+// Cancel still returns nil — so the two outcomes are proven to actually
+// differ under this test rather than the fixture only ever exercising one
+// branch.
+func TestCancel_UnknownID_ReturnsErrOpNotFound(t *testing.T) {
+	r, _ := newTestRegistry(t)
+	def := makeValidDef("test.cancel-unknown")
+	_ = r.RegisterOp(def)
+
+	// Never queued, never running: the registry has no record of this id.
+	err := r.Cancel("op-never-existed")
+	if err == nil {
+		t.Fatal("expected ErrOpNotFound for an unknown id, got nil")
+	}
+	if !errors.Is(err, registry.ErrOpNotFound) {
+		t.Fatalf("expected errors.Is(err, registry.ErrOpNotFound), got: %v", err)
+	}
+
+	// Contrast: a legitimately queued op must still report success (nil).
+	opID, _ := r.EnqueueOp(context.Background(), "test.cancel-unknown", nil)
+	if err := r.Cancel(opID); err != nil {
+		t.Fatalf("Cancel on a queued op returned error: %v", err)
 	}
 }
 

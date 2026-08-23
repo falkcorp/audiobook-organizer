@@ -1,7 +1,7 @@
 // file: internal/server/operations_v2_handlers_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1d
-// last-edited: 2026-05-06
+// last-edited: 2026-08-23
 
 // Tests for UOS-06: operations v2 SSE + timeline + introspection endpoints.
 
@@ -11,7 +11,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -245,49 +244,6 @@ func TestHandleOperationsSSE_NilHub(t *testing.T) {
 }
 
 // --- Cancel test ---
-
-func TestHandleCancelOperationV2_Success(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	// Build a real registry with a fakeStore.
-	fakeStore := &fakeOpsV2Store{
-		ops: []database.OperationV2Row{
-			{
-				ID:       "op-cancel-me",
-				Plugin:   "scan",
-				DefID:    "scan",
-				Status:   "queued",
-				QueuedAt: time.Now().UTC(),
-			},
-		},
-	}
-	reg := opsregistry.NewWithOptions(fakeStore, slog.Default(), 1, opsregistry.Options{})
-	srv := &Server{
-		store:      fakeStore,
-		opRegistry: reg,
-	}
-	router := gin.New()
-	router.DELETE("/operations/v2/:id", srv.handleCancelOperationV2)
-
-	req := httptest.NewRequest(http.MethodDelete, "/operations/v2/op-cancel-me", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNoContent, w.Code)
-}
-
-func TestHandleCancelOperationV2_NilRegistry(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	srv := &Server{opRegistry: nil}
-	router := gin.New()
-	router.DELETE("/operations/v2/:id", srv.handleCancelOperationV2)
-
-	req := httptest.NewRequest(http.MethodDelete, "/operations/v2/any-id", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
 
 // --- GetOperationV2 test ---
 

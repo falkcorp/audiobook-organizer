@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -11,6 +11,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -305,6 +306,10 @@ func (h *OperationsV2Handler) CancelOperationV2(c *gin.Context) {
 		return
 	}
 	if err := h.registry.Cancel(id); err != nil {
+		if errors.Is(err, opsregistry.ErrOpNotFound) {
+			httputil.RespondWithNotFound(c, "operation", id)
+			return
+		}
 		httputil.InternalError(c, "cancel failed", err)
 		return
 	}
