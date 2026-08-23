@@ -1,5 +1,5 @@
 // file: internal/database/memdb_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000003
 // last-edited: 2026-08-23
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -56,6 +57,25 @@ type MemStore struct {
 	// reference counters refuse to answer when it is non-empty.
 	lostMu   sync.RWMutex
 	lostRows map[string]int
+
+	// lastWarmSkips records rows the most recent warmup could not admit,
+	// keyed "<table>/<reason>". Retained rather than only logged so the
+	// operator-facing "skipped_total" claim is assertable in a test instead of
+	// recoverable only by grepping startup logs.
+	lastWarmSkips map[string]int
+}
+
+// LastWarmupSkips returns the rows the most recent WarmFromPebble could not
+// admit into memdb, keyed "<table>/<reason>".
+//
+// Split by reason on purpose: "12 undecodable rows" means corrupt values on
+// disk, "12 rejected inserts" means a schema rule the data does not satisfy,
+// and those call for opposite fixes. This package has already paid for one
+// conflated counter — see warmIter on rows-vs-keys, which cost a false P0.
+func (m *MemStore) LastWarmupSkips() map[string]int {
+	m.warmCountsMu.RLock()
+	defer m.warmCountsMu.RUnlock()
+	return maps.Clone(m.lastWarmSkips)
 }
 
 // Keys for the per-field discarded-byte breakdown. These are field GROUPS, not

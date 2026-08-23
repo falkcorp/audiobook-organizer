@@ -1,5 +1,5 @@
 // file: internal/database/memdb_integrity.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1e4b90-2d63-4a85-9f27-e0b3a5c48d61
 // last-edited: 2026-08-23
 
@@ -121,14 +121,33 @@ func (m *MemStore) recordLostRows(table string, n int) {
 // window is exactly the fail-open this file exists to close, reintroduced.
 // `WarmFromPebble` advertises itself as "safe to re-run", so the window has to
 // be closed by construction rather than by no caller currently re-running it.
-func (m *MemStore) publishLostRows(lost map[string]int) {
+// `unknownAtStart` is the memTableUnknown count observed when the warmup began.
+// Unattributable RUNTIME losses that arrived while the scan was running are
+// carried forward, because the scan reads an iterator snapshot and therefore
+// did NOT rebuild whatever those losses dropped. Replacing the map wholesale
+// would erase exactly the flag that case needs — the same "safe by
+// construction, not by nobody currently doing it" standard this function's
+// move-to-commit was made for.
+func (m *MemStore) publishLostRows(lost map[string]int, unknownAtStart int) {
 	m.lostMu.Lock()
 	defer m.lostMu.Unlock()
-	if len(lost) == 0 {
+
+	carried := 0
+	if n := m.lostRows[memTableUnknown]; n > unknownAtStart {
+		carried = n - unknownAtStart
+	}
+
+	if len(lost) == 0 && carried == 0 {
 		m.lostRows = nil
 		return
 	}
 	m.lostRows = maps.Clone(lost)
+	if m.lostRows == nil {
+		m.lostRows = make(map[string]int, 1)
+	}
+	if carried > 0 {
+		m.lostRows[memTableUnknown] += carried
+	}
 }
 
 // LostRows returns a copy of the per-table count of rows known to be missing

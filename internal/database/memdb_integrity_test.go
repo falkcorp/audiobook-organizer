@@ -1,5 +1,5 @@
 // file: internal/database/memdb_integrity_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b8f61d4-9c07-4e3a-a154-8d29f0b7e3c6
 // last-edited: 2026-08-23
 
@@ -67,6 +67,22 @@ func TestSeriesRefCounts_CleanWarmupIsNotFlagged(t *testing.T) {
 
 	_, seriesID := seedSeriesBook(t, store, 1)
 
+	// An author ALIAS specifically. Every "author_alias:" key family shares the
+	// prefix, and two of them are indexes: :author: holds row JSON and :name:
+	// holds a bare strconv.Itoa(id) that cannot decode into an AuthorAlias.
+	// Warmup had no filter for them (its siblings all do), so before that was
+	// fixed a library containing ONE well-formed alias flagged author_aliases
+	// known-incomplete on EVERY warmup -- and the author-side ref counter would
+	// then have refused forever the moment it was wired up.
+	//
+	// This fixture is the difference between a positive control that means
+	// something and one that passes because the library it builds is too small
+	// to contain the bug. Found by review, empirically, on exactly this test.
+	author, err := store.CreateAuthor("Alias Fixture Author")
+	require.NoError(t, err)
+	_, err = store.CreateAuthorAlias(author.ID, "Fixture Alias Name", "alternate")
+	require.NoError(t, err)
+
 	mem, err := NewMemStore()
 	require.NoError(t, err)
 	require.NoError(t, mem.WarmFromPebble(context.Background(), store))
@@ -119,7 +135,7 @@ func TestSeriesRefCounts_UndecodableRowIsNotSilentlyDropped(t *testing.T) {
 	// Pebble is corrupt too here, so the hardened scan aborts and the whole
 	// call fails closed. What must NOT happen is the pre-fix behaviour: a map
 	// missing seriesID returned with a nil error.
-	store.memPtr.Store(mem)
+	require.True(t, store.publishWarmMemStore(mem))
 	counts, err := store.GetAllSeriesBookRefCounts()
 	require.Error(t, err,
 		"a store that cannot read the row holding the only reference to a "+
@@ -153,7 +169,7 @@ func TestSeriesRefCounts_FallsThroughToPebbleWhenMemdbIsIncomplete(t *testing.T)
 
 	// Simulate a row memdb could not admit but Pebble holds fine.
 	mem.recordLostRows(memTableBooks, 1)
-	store.memPtr.Store(mem)
+	require.True(t, store.publishWarmMemStore(mem))
 
 	_, memErr := mem.GetAllSeriesBookRefCounts()
 	require.ErrorIs(t, memErr, ErrMemdbIncomplete,
@@ -186,7 +202,7 @@ func TestRequireTablesComplete_OnlyFiresForTheNamedTables(t *testing.T) {
 
 	// And a warmup publishing a clean result -- a rebuild from the
 	// authoritative source -- clears it.
-	mem.publishLostRows(map[string]int{})
+	mem.publishLostRows(map[string]int{}, 0)
 	require.NoError(t, mem.requireTablesComplete("series reference count", memTableBlockedHashes))
 	require.Empty(t, mem.LostRows())
 }
@@ -209,6 +225,18 @@ func TestWarmupCountsDecodeFailuresInSkippedTotal(t *testing.T) {
 	lost := mem.LostRows()
 	require.Equal(t, 1, lost[memTableBooks])
 	require.Len(t, lost, 1, "only the books table lost a row")
+
+	// The operator-facing counter, which is the claim the changelog makes.
+	// Before this fix skipped_total read 0 through a warmup that had dropped
+	// the row, because only insert-rejections were counted.
+	skips := mem.LastWarmupSkips()
+	require.Equal(t, 1, skips[memTableBooks+"/undecodable row"],
+		"the decode failure must appear in the skips map, split by reason")
+	total := 0
+	for _, v := range skips {
+		total += v
+	}
+	require.Equal(t, 1, total, "skipped_total must count the decode failure")
 
 	// The counter is per-table and additive, and ErrMemdbIncomplete is the
 	// sentinel every caller matches on.
@@ -260,7 +288,7 @@ func TestApplyMemSyncFailureTaintsTheRefCount(t *testing.T) {
 	require.Contains(t, err.Error(), memTableUnknown)
 
 	// And the store still answers correctly, from Pebble.
-	store.memPtr.Store(mem)
+	require.True(t, store.publishWarmMemStore(mem))
 	counts, err = store.GetAllSeriesBookRefCounts()
 	require.NoError(t, err)
 	require.Equal(t, 1, counts[seriesID],
