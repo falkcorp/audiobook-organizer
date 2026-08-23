@@ -102,20 +102,18 @@ func TestRestoreBackupRejectsZipslipAttack(t *testing.T) {
 	// Act - Try to restore the malicious backup
 	err = RestoreBackup(backupPath, restoreDir, false)
 
-	// Assert - Should fail because of the traversal attempt
-	if err == nil {
-		t.Fatal("Expected RestoreBackup to fail with traversal attempt, but it succeeded")
-	}
+	// Assert the filesystem FIRST and with t.Error, not t.Fatal. The error
+	// return is secondary evidence; the property that actually matters is that
+	// nothing appeared alongside restoreDir. Asserting the error first with
+	// t.Fatal would short-circuit the only check that cannot pass vacuously.
+	assertNothingEscaped(t, tempDir, "malicious.tar.gz", "extract")
 
-	// Verify the error mentions the escaped path
-	if !strings.Contains(err.Error(), "escapes target directory") {
+	// Then the error contract.
+	if err == nil {
+		t.Error("Expected RestoreBackup to fail with traversal attempt, but it succeeded")
+	} else if !strings.Contains(err.Error(), "escapes target directory") {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
-
-	// Verify — at the filesystem level — that nothing appeared alongside
-	// restoreDir. Only the archive itself and (optionally) the restore
-	// directory may exist in tempDir.
-	assertNothingEscaped(t, tempDir, "malicious.tar.gz", "extract")
 }
 
 // TestRestoreBackupAllowsNormalExtraction tests normal extraction works
@@ -292,16 +290,14 @@ func TestRestoreBackupRejectsDotDotInPath(t *testing.T) {
 	// Act
 	err = RestoreBackup(backupPath, restoreDir, false)
 
-	// Assert
-	if err == nil {
-		t.Fatal("Expected RestoreBackup to fail with .. traversal, but it succeeded")
-	}
+	// Assert the filesystem first — see TestRestoreBackupRejectsZipslipAttack.
+	assertNothingEscaped(t, tempDir, "dotdot.tar.gz", "extract")
 
-	if !strings.Contains(err.Error(), "escapes target directory") {
+	if err == nil {
+		t.Error("Expected RestoreBackup to fail with .. traversal, but it succeeded")
+	} else if !strings.Contains(err.Error(), "escapes target directory") {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
-
-	assertNothingEscaped(t, tempDir, "dotdot.tar.gz", "extract")
 }
 
 // TestRestoreBackupValidatesAllEntries tests that all entries in archive are validated
@@ -352,19 +348,17 @@ func TestRestoreBackupValidatesAllEntries(t *testing.T) {
 	// Act
 	err = RestoreBackup(backupPath, restoreDir, false)
 
-	// Assert - Should fail because second entry is malicious
-	if err == nil {
-		t.Fatal("Expected RestoreBackup to fail on second malicious entry")
-	}
+	// Assert the filesystem first. The previous version of this assertion
+	// stat'ed tempDir/extract/escape — a path INSIDE the restore directory,
+	// i.e. the one place "../escape" provably cannot land. It could not fail.
+	assertNothingEscaped(t, tempDir, "mixed.tar.gz", "extract")
 
-	if !strings.Contains(err.Error(), "escapes target directory") {
+	// Then the error contract - should fail because second entry is malicious.
+	if err == nil {
+		t.Error("Expected RestoreBackup to fail on second malicious entry")
+	} else if !strings.Contains(err.Error(), "escapes target directory") {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
-
-	// The previous version of this assertion stat'ed tempDir/extract/escape —
-	// a path INSIDE the restore directory, i.e. the one place "../escape"
-	// provably cannot land. It could not fail. Assert on the parent instead.
-	assertNothingEscaped(t, tempDir, "mixed.tar.gz", "extract")
 
 	// The valid first entry is still extracted before the failure; restore is
 	// not transactional. Assert that explicitly so a future change to
