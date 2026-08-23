@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-23
 
@@ -397,6 +397,15 @@ func DedupSeries(
 					fmt.Sprintf("failed to get books for series %d: %v", s.ID, err))
 				continue
 			}
+			// moved counts reassignments that actually SUCCEEDED. It is not
+			// len(books): that is what we ATTEMPTED, and the three continue
+			// paths below leave a row still pointing at s.ID while it would
+			// still count toward len(books). Using the attempted count would
+			// make the guard below pass on exactly the failure it exists to
+			// catch -- refCounts[s.ID]-len(books) == 0 while a book the store
+			// refused to update is still holding the series we are about to
+			// delete.
+			moved := 0
 			for _, bookCore := range books {
 				full, herr := store.GetBookByID(bookCore.ID)
 				if herr != nil {
@@ -405,11 +414,20 @@ func DedupSeries(
 					continue
 				}
 				if full == nil {
+					// Was silent before. A row the filtered getter listed but
+					// GetBookByID cannot hydrate is an inconsistency, not a
+					// non-event: it is indistinguishable here from a row that
+					// still holds s.ID, so it must be visible AND must not
+					// count toward moved.
+					result.Errors = append(result.Errors,
+						fmt.Sprintf("book %s vanished between the series scan and hydration; "+
+							"series %d kept, it may still reference it", bookCore.ID, s.ID))
 					continue
 				}
 				full.SeriesID = &keepID
 				if dryRun {
 					result.TotalBooksReassigned++
+					moved++
 					continue
 				}
 				if _, err := store.UpdateBook(full.ID, full); err != nil {
@@ -418,17 +436,24 @@ func DedupSeries(
 					continue
 				}
 				result.TotalBooksReassigned++
+				moved++
 			}
 			// Refuse to delete a series that something we could not reassign
-			// still points at. `books` came from the FILTERED getter, so if the
-			// unfiltered count exceeds what we just moved, the remainder is
-			// trashed or non-primary rows that would be stranded.
+			// still points at. The unfiltered count minus what we actually
+			// MOVED is the number of rows left holding s.ID: trashed and
+			// non-primary rows the filtered getter never returned, plus any
+			// row above whose reassignment failed.
+			//
+			// The subtrahend is `moved`, never len(books) -- see the comment on
+			// moved. In a dry run every skipped-for-preview row counts as
+			// moved, which is what keeps the preview's decision identical to
+			// the apply's.
 			//
 			// Checked BEFORE the dryRun branch on purpose: the preview must
 			// make the same decision the apply makes, or it reports a merge
 			// that will not happen. TASK-043 built this one-decision-path
 			// property and TASK-029 is queued to edit the same loop.
-			if stranded := refCounts[s.ID] - len(books); stranded > 0 {
+			if stranded := refCounts[s.ID] - moved; stranded > 0 {
 				result.Errors = append(result.Errors,
 					fmt.Sprintf("refusing to delete series %d (%q): %d book(s) still reference it that the filtered "+
 						"getter cannot see (trashed or non-primary); books were reassigned, the series row is kept",
