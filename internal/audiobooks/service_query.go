@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-08-23
 
@@ -205,7 +205,19 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 				// the raw projection would make the same request answer
 				// differently on a hit than on a miss.
 				normalizeEffectivePrimaryVersion(books)
-				svc.listCache.Set(cacheKey, books)
+				// Cache ONLY when the store actually applied the filter.
+				// cacheKey encodes p=<IsPrimaryVersion>, so a value stored
+				// under it must be the result of having applied that
+				// predicate. When summariesPushdown falls back
+				// (didPushdown=false) it returns the UNFILTERED page from
+				// GetAllBookSummaries; the post-filter further down repairs
+				// the slice returned to THIS caller but not the cached copy,
+				// so caching unconditionally published rows the filter
+				// excludes, and every later request for the same key was
+				// served them from the early return above.
+				if didPushdown {
+					svc.listCache.Set(cacheKey, books)
+				}
 			}
 			// When the store applied the filter AND paginated, the page is
 			// final. Running the post-filter block would re-slice this
