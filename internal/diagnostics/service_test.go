@@ -1,13 +1,14 @@
 // file: internal/diagnostics/service_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d1a9n0st-1cs0-t3st-s3rv-1c3t3st0001
-// last-edited: 2026-07-07
+// last-edited: 2026-08-22
 
 package diagnostics
 
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -61,7 +62,7 @@ func TestService_GenerateExport_Deduplication(t *testing.T) {
 	store := setupDiagnosticsMocks(t)
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport("deduplication", "test export")
+	zipPath, err := svc.GenerateExport(context.Background(), "deduplication", "test export", nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -117,7 +118,7 @@ func TestService_GenerateExport_ErrorAnalysis(t *testing.T) {
 	}, nil).Maybe()
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport("error_analysis", "debug errors")
+	zipPath, err := svc.GenerateExport(context.Background(), "error_analysis", "debug errors", nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -163,7 +164,7 @@ func TestService_GenerateExport_MetadataQuality(t *testing.T) {
 	store.EXPECT().CountPrimaryBooks().Return(3, nil).Maybe()
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport("metadata_quality", "check quality")
+	zipPath, err := svc.GenerateExport(context.Background(), "metadata_quality", "check quality", nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -190,7 +191,7 @@ func TestService_GenerateExport_General(t *testing.T) {
 	store := setupDiagnosticsMocks(t)
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport("general", "full export")
+	zipPath, err := svc.GenerateExport(context.Background(), "general", "full export", nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -282,4 +283,65 @@ func TestBuildBatchJSONL_EmptyBooks(t *testing.T) {
 	data, err := BuildBatchJSONL("deduplication", "test", []SlimBook{}, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Greater(t, len(data), 0, "should still produce at least one request line")
+}
+
+// TestService_GenerateExport_ReportsProgressEveryPhase is the regression test
+// for a silent export.
+//
+// diagnostics.export runs under the registry watchdog, which cancels an op that
+// reports nothing for ProgressTimeout. This function used to make the entire
+// export — a full library walk plus up to ten file writes — in one silent call,
+// so any export slower than the watchdog's default was killed while a zip
+// nothing would serve went on being built.
+//
+// Asserting "more than one frame" is the point: a single Start-then-Done pair
+// satisfies any total-based assertion while still being silent for the whole
+// run, which is exactly what shipped.
+func TestService_GenerateExport_ReportsProgressEveryPhase(t *testing.T) {
+	store := setupDiagnosticsMocks(t)
+	svc := NewService(store, nil, "")
+
+	type frame struct {
+		cur, total int
+		msg        string
+	}
+	var frames []frame
+
+	zipPath, err := svc.GenerateExport(context.Background(), "general", "progress test",
+		func(cur, total int, msg string) { frames = append(frames, frame{cur, total, msg}) })
+	require.NoError(t, err)
+	defer os.Remove(zipPath)
+
+	require.Greater(t, len(frames), 2,
+		"a silent export is what the watchdog kills; one frame per phase is the fix")
+
+	// "general" is the widest category: 10 writes plus the book collect.
+	require.Equal(t, 11, frames[0].total, "total must be known before work starts")
+	assert.Equal(t, 0, frames[0].cur)
+	assert.Contains(t, frames[0].msg, "Collecting")
+
+	last := frames[len(frames)-1]
+	assert.Equal(t, last.total, last.cur, "the final frame must read 100%")
+
+	for i := 1; i < len(frames); i++ {
+		assert.GreaterOrEqual(t, frames[i].cur, frames[i-1].cur, "progress must not go backwards")
+		assert.Equal(t, frames[0].total, frames[i].total, "total must not move mid-run")
+	}
+}
+
+// TestService_GenerateExport_HonorsCanceledContext pins the other half: the
+// watchdog's cancel has to actually stop the work. Before ctx was threaded
+// through, a cancelled export kept running to completion, unobserved.
+func TestService_GenerateExport_HonorsCanceledContext(t *testing.T) {
+	store := setupDiagnosticsMocks(t)
+	svc := NewService(store, nil, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	zipPath, err := svc.GenerateExport(ctx, "general", "canceled", nil)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, zipPath, "a canceled export must not hand back a path")
 }
