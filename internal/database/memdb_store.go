@@ -1,7 +1,7 @@
 // file: internal/database/memdb_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000003
-// last-edited: 2026-08-13
+// last-edited: 2026-08-23
 
 package database
 
@@ -45,6 +45,17 @@ type MemStore struct {
 	// lastWarmDiscardedByField breaks lastWarmDiscarded down by which group of
 	// fields the bytes belonged to, keyed by the DiscardField* constants.
 	lastWarmDiscardedByField map[string]int64
+
+	// lostRows records, per table, how many rows are KNOWN to be missing from
+	// this memdb — rows Pebble holds that warmup could not decode or could not
+	// insert, plus any a later write-through sync dropped.
+	//
+	// Guarded by its own mutex rather than warmCountsMu because it is not a
+	// warmup statistic: it is a live integrity flag that a runtime path can set
+	// long after warmup finished. See memdb_integrity.go for why the unfiltered
+	// reference counters refuse to answer when it is non-empty.
+	lostMu   sync.RWMutex
+	lostRows map[string]int
 }
 
 // Keys for the per-field discarded-byte breakdown. These are field GROUPS, not

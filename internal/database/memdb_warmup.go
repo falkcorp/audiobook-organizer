@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
-// last-edited: 2026-08-13
+// last-edited: 2026-08-23
 
 package database
 
@@ -35,6 +35,13 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	}
 
 	started := time.Now()
+
+	// Clear any known-incomplete state up front: this warmup rebuilds every
+	// table from Pebble, the authoritative source, and so supersedes whatever
+	// was previously known to be missing. Clearing at the END would erase the
+	// losses this warmup is about to record.
+	m.resetLostRows()
+
 	txn := m.db.Txn(true)
 	defer txn.Abort()
 
@@ -141,20 +148,39 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		return description + signature
 	}
 
+	// lose records one row that Pebble holds and memdb will not, counting it,
+	// logging it, and flagging the table as known-incomplete.
+	//
+	// There are exactly TWO ways to lose a row here — a value that will not
+	// decode, and an insert the schema rejects — and until 2026-08-23 only the
+	// second was counted. `skipped_total` therefore read 0 through a warmup
+	// that had silently dropped every undecodable row in the library, and the
+	// unfiltered reference counters, which consult this state to decide whether
+	// their count can be trusted, saw an intact table. Both paths funnel through
+	// here so neither can be hardened without the other.
+	//
+	// For the list-valued phases one key holds a JSON array, so an undecodable
+	// value loses an unknown number of rows and this counts 1 — conservative in
+	// the count, exact in the condition. See MemStore.recordLostRows.
+	lose := func(table, keyForLog, reason string, err error) {
+		skips[table]++
+		m.recordLostRows(table, 1)
+		// Don't spam: log first 10 per table, then mute.
+		if skips[table] <= 10 {
+			slog.Warn("memdb warmup: skipping row",
+				"table", table, "key", keyForLog, "reason", reason, "error", err)
+		} else if skips[table] == 11 {
+			slog.Warn("memdb warmup: further skips muted",
+				"table", table, "muting_after", 10)
+		}
+	}
+
 	// safeInsert tries to insert an object, logging+counting failures rather
 	// than aborting the warmup. Returns whether the row actually landed in
 	// memdb (never an error, so warmIter keeps going).
 	safeInsert := func(table string, obj interface{}, keyForLog string) (bool, error) {
 		if err := txn.Insert(table, obj); err != nil {
-			skips[table]++
-			// Don't spam: log first 10 per table, then drop to debug.
-			if skips[table] <= 10 {
-				slog.Warn("memdb warmup: skipping row",
-					"table", table, "key", keyForLog, "error", err)
-			} else if skips[table] == 11 {
-				slog.Warn("memdb warmup: further skips muted",
-					"table", table, "muting_after", 10)
-			}
+			lose(table, keyForLog, "insert rejected", err)
 			return false, nil
 		}
 		return true, nil
@@ -172,6 +198,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var b Book
 		if err := json.Unmarshal(val, &b); err != nil {
+			lose(memTableBooks, key, "undecodable row", err)
 			return false, nil
 		}
 		bytesDiscarded[memTableBooks] += discardBook(&b)
@@ -193,6 +220,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var a Author
 		if err := json.Unmarshal(val, &a); err != nil {
+			lose(memTableAuthors, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableAuthors, &a, key)
@@ -210,6 +238,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var s Series
 		if err := json.Unmarshal(val, &s); err != nil {
+			lose(memTableSeries, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableSeries, &s, key)
@@ -229,6 +258,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var bf BookFile
 		if err := json.Unmarshal(val, &bf); err != nil {
+			lose(memTableBookFiles, key, "undecodable row", err)
 			return false, nil
 		}
 		bytesDiscarded[memTableBookFiles] += discardBookFile(&bf)
@@ -247,6 +277,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if _, keys, err := warm("book_authors:", memTableBookAuthors, func(key string, val []byte) (bool, error) {
 		var list []BookAuthor
 		if err := json.Unmarshal(val, &list); err != nil {
+			lose(memTableBookAuthors, key, "undecodable row", err)
 			return false, nil
 		}
 		for i := range list {
@@ -268,6 +299,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if _, keys, err := warm("book_narrators:", memTableBookNarrators, func(key string, val []byte) (bool, error) {
 		var list []BookNarrator
 		if err := json.Unmarshal(val, &list); err != nil {
+			lose(memTableBookNarrators, key, "undecodable row", err)
 			return false, nil
 		}
 		for i := range list {
@@ -288,6 +320,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if n, keys, err := warm("narrator:", memTableNarrators, func(key string, val []byte) (bool, error) {
 		var nrt Narrator
 		if err := json.Unmarshal(val, &nrt); err != nil {
+			lose(memTableNarrators, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableNarrators, &nrt, key)
@@ -305,6 +338,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 		}
 		var ip ImportPath
 		if err := json.Unmarshal(val, &ip); err != nil {
+			lose(memTableImportPaths, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableImportPaths, &ip, key)
@@ -319,6 +353,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if n, keys, err := warm("author_alias:", memTableAuthorAliases, func(key string, val []byte) (bool, error) {
 		var aa AuthorAlias
 		if err := json.Unmarshal(val, &aa); err != nil {
+			lose(memTableAuthorAliases, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableAuthorAliases, &aa, key)
@@ -333,6 +368,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	if n, keys, err := warm("blocked:hash:", memTableBlockedHashes, func(key string, val []byte) (bool, error) {
 		var bh DoNotImport
 		if err := json.Unmarshal(val, &bh); err != nil {
+			lose(memTableBlockedHashes, key, "undecodable row", err)
 			return false, nil
 		}
 		return safeInsert(memTableBlockedHashes, &bh, key)
