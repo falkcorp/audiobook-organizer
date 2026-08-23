@@ -1,6 +1,6 @@
 // file: internal/ai/register_test.go
-// version: 2.0.0
-// last-edited: 2026-07-03
+// version: 2.1.0
+// last-edited: 2026-08-23
 
 package ai
 
@@ -115,6 +115,13 @@ func TestLLMParserBuild_ModeGated(t *testing.T) {
 
 	t.Run("openai mode -> parser constructed", func(t *testing.T) {
 		cfg := &config.Config{}
+		// llm_mode is now set EXPLICITLY. TASK-018 closed the derivation that
+		// turned a bare key plus EnableAIParsing into openai mode: that is the
+		// shape of the 2026-08-16 credit_balance_exhausted incident, and it
+		// became reachable on a default install once the hardcoded
+		// ai_backend.local_base_url was removed. Opting in to a paid backend
+		// is explicit now, so this test opts in explicitly.
+		cfg.AIBackend.LLMMode = config.AIBackendModeOpenAI
 		cfg.OpenAIAPIKey = "sk-real"
 		cfg.EnableAIParsing = true
 		got := buildLLMParser(t, cfg)
