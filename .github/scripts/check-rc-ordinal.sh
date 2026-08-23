@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: .github/scripts/check-rc-ordinal.sh
-# version: 1.0.0
+# version: 1.0.1
 # guid: 49d5c680-8da1-44d4-907f-f3394d52c900
 # last-edited: 2026-08-22
 #
@@ -42,9 +42,18 @@ if [[ ! -f "$RELEASES_FILE" ]]; then
   exit 2
 fi
 
+# Counted with string operations, NOT by interpolating $base into a regex.
+# A version is full of dots and `.` is a regex metacharacter, so
+# test("^" + $base + "-rc\\.[0-9]+$") with base v0.217 also matches v0X217-rc.1
+# and over-counts. Anchoring does not help -- it fixes prefix confusion
+# (v0.217 vs v0.217.9), which is a different bug. startswith/ltrimstr are
+# literal, so the base can contain anything and the ordinal is still the only
+# part matched as a pattern.
 # shellcheck disable=SC2016  # $base is a jq variable (--arg), not a shell variable
 COUNT=$(jq --arg base "$BASE" \
-  '[.[] | select(.isPrerelease and (.tagName | test("^" + $base + "-rc\\.[0-9]+$")))] | length' \
+  '[.[] | select(.isPrerelease
+      and (.tagName | startswith($base + "-rc."))
+      and ((.tagName | ltrimstr($base + "-rc.")) | test("^[0-9]+$")))] | length' \
   "$RELEASES_FILE")
 
 echo "Base version: $BASE"
