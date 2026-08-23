@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
 // last-edited: 2026-08-23
 
@@ -171,9 +171,20 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 
 	// Pass 1: the book_authors junction table. Each key holds the whole credit
 	// list for one book as a JSON array.
+	// UpperBound comes from prefixUpperBound, NOT a hand-written "book_authors:~".
+	// bookID is an opaque caller-suppliable string (CreateBook only mints a ULID
+	// when book.ID == "", so importers and restore paths supply their own), and a
+	// literal '~' (0x7E) excludes every id whose first byte sorts above it --
+	// which is every non-ASCII id, since UTF-8 continuation bytes start at 0xC2.
+	// Those books' credit lists would silently fall outside the scan, and an
+	// author credited only there would count 0 and be deletable. That is the same
+	// fail-open this file exists to close, arriving through the key range instead
+	// of the decoder. pebble_store_authors.go:221-227 warns against exactly this
+	// for exactly this keyspace.
+	jPrefix := []byte("book_authors:")
 	jIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_authors:"),
-		UpperBound: []byte("book_authors:~"),
+		LowerBound: jPrefix,
+		UpperBound: prefixUpperBound(jPrefix),
 	})
 	if err != nil {
 		return nil, err
@@ -186,8 +197,13 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 			// nowhere else. Skipping it undercounts, and undercounting is
 			// fail-OPEN for every caller: the delete proceeds and strands the
 			// very row we could not read.
+			// Capture the key BEFORE closing: jIter.Key() after Close returns
+			// "", which made the abort message's only actionable field always
+			// empty ("undecodable book_authors row \"\""). The book pass below
+			// already does this correctly.
+			badKey := string(jIter.Key())
 			_ = jIter.Close()
-			return nil, fmt.Errorf("author ref scan: undecodable book_authors row %q: %w", string(jIter.Key()), err)
+			return nil, fmt.Errorf("author ref scan: undecodable book_authors row %q: %w", badKey, err)
 		}
 		bookID := strings.TrimPrefix(string(jIter.Key()), "book_authors:")
 		for _, a := range authors {

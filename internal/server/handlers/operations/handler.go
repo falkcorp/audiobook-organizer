@@ -279,6 +279,16 @@ func (h *Handler) OptimizeDatabase(c *gin.Context) {
 							}
 						}
 						bookAuthors = append(bookAuthors, database.BookAuthor{
+							// BookID is REQUIRED: memdb's book_authors primary
+							// index is a non-AllowMissing compound on
+							// {BookID, AuthorID}, so omitting it aborts the
+							// memdb sync while the Pebble write still succeeds
+							// and SetBookAuthors still returns nil. The split
+							// authors then count 0 everywhere and get purged
+							// while the book keeps unresolvable author_ids.
+							// This was the only one of 13 non-test call sites
+							// that left it empty.
+							BookID:   book.ID,
 							AuthorID: a.ID,
 							Role:     "author",
 						})

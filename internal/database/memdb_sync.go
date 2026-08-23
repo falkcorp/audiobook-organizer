@@ -356,6 +356,28 @@ func (p *PebbleStore) ReplaceBookAuthorsInMemDB(bookID string, authors []BookAut
 	// Copy the slice at enqueue — the closure iterates it much later during
 	// warmup replay, and the caller may reuse/mutate the backing array.
 	authors = append([]BookAuthor(nil), authors...)
+	// Backfill BookID on every row.
+	//
+	// memdb's book_authors primary index is a NON-AllowMissing compound index on
+	// {BookID, AuthorID} (memdb_schema.go), so a row with an empty BookID makes
+	// go-memdb return "object missing primary index", which aborts the whole
+	// transaction below -- and SetBookAuthors, having already written the rows
+	// to Pebble, still returns nil. Pebble then holds credits that memdb holds
+	// none of, and BOTH the filtered author counter and the unfiltered ref
+	// guard report 0 for those authors, so a purge deletes them while the book
+	// keeps author_ids that no longer resolve. A restart does not repair it:
+	// warmup hits the same index rule.
+	//
+	// One of the 13 non-test SetBookAuthors call sites omitted BookID (the
+	// author-split op in handlers/operations). That call site is fixed too, but
+	// fixing it alone leaves the trap armed for the next caller: the bookID is
+	// right here in the argument list, so there is no reason for a row to reach
+	// the index without it.
+	for i := range authors {
+		if authors[i].BookID == "" {
+			authors[i].BookID = bookID
+		}
+	}
 	p.memSync("ReplaceBookAuthors", func(txn memTxn) error {
 		if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, bookID); err != nil {
 			return err
