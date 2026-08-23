@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-23-staged-library-scan-design.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 4c1e8b73-2a9f-4d06-b5e1-7f3a90c2d846 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -489,10 +489,32 @@ change this repo has been bitten by before.
 > EMPTY PAGE.** Verified the stream really does run past the count: `offset=50000` with
 > the flag still returns items, against an alleged ceiling of 41,743.
 >
-> This is not hypothetical for this diagnostic. A `TODO.md` entry claiming
-> `show_quarantined=true` "SHRINKS the list" was produced by exactly this bound — the
-> instrument stopped at the count and the short stream was read as a short list. The bug
-> report was produced by the bug. Found by peer session `ao-here-there`; reproduced here.
+> **The underlying defect is narrower than "picks the wrong counter."** At `:113` the
+> handler already has the right answer — `totalCount = matchTotal`, from the *same query
+> that produced the stream* — under a comment that says "Prefer it." The block at
+> `:118–127` then **overwrites it** with a separate count query whenever there is no
+> search/author/series. The correct total is computed and thrown away. Worse: the comment
+> block directly above documents a previous fix for this exact class (count tracking the
+> limit, measured on prod 2026-08-12: `count=5` at `limit=5`), and *that* fix was to prefer
+> `matchTotal`. The unfiltered path re-breaks it with the justification still in the source.
+>
+> So the fix is narrow — let a valid `matchTotal` win and make the count queries the
+> fallback for `matchTotal < 0` — and it is **not** this design's to make. What this design
+> owes is only that its own diagnostic not depend on the broken value.
+>
+> Full page-through, empty-page terminated, distinct-id counted (peer-measured, arithmetic
+> verified here): bare `count=56,727 / rows=56,727`, flag `count=41,743 / rows=56,729`,
+> zero duplicates either way. `is_primary_version=false` is stable at 14,986 across the
+> flag, and `56,729 − 14,986 = 41,743` exactly — so `CountPrimaryBooks()` omits precisely
+> the explicit-false population.
+>
+> Found by peer session `ao-here-there`; source claims and arithmetic verified here. Note
+> what is *not* claimed: a `TODO.md` entry asserting `show_quarantined=true` "SHRINKS the
+> list" is false (the stream runs to 56,729 with the flag), but **no one has evidence for
+> how its 41,319 figure was produced.** Both of us found "the bug report was produced by
+> the bug" satisfying and neither could support it. It is recorded as not-reproducible with
+> the cause left blank — a neat story that cannot be measured is exactly the kind this
+> document should not carry.
 
 Decide in a follow-up, against a number rather than an estimate. This is a
 deliverable of this work, not an afterthought — without the count the follow-up has
