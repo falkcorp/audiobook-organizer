@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
 // last-edited: 2026-08-23
 
@@ -284,4 +284,91 @@ func TestAuthorRefCounts_SharedGuard(t *testing.T) {
 	_, err = AuthorRefCounts(struct{}{})
 	require.Error(t, err, "a store that cannot answer must make the caller refuse, never fall back")
 	require.Contains(t, err.Error(), "refusing to delete from a filtered count")
+}
+
+// ── The BookID-less credit (open-findings §2) ──────────────────────────────
+//
+// memdb's book_authors primary index is a NON-AllowMissing compound index on
+// {BookID, AuthorID}. A BookAuthor reaching it with an empty BookID makes
+// go-memdb return "object missing primary index", which aborts the whole
+// ReplaceBookAuthors transaction -- while SetBookAuthors, having already
+// committed the rows to Pebble, returns nil.
+//
+// The result is a DIVERGENCE, not an error: Pebble holds the credit and memdb
+// holds nothing. Since GetAllAuthorBookRefCounts prefers the memdb whenever it
+// is warm (which in production is always), the guard that is supposed to stop
+// a delete reads 0 for an author that is still referenced -- the exact
+// fail-open the guard was written to close, arriving through a caller that
+// simply forgot a field.
+//
+// So the assertion that matters is not "no error" (there never was one) but
+// "the two backends agree". A test that only checked the memdb count would
+// pass against a store that had lost the row from BOTH.
+
+// TestSetBookAuthors_CreditWithoutBookIDStillReachesMemDB is the regression.
+// The author-split op in handlers/operations built exactly this literal.
+func TestSetBookAuthors_CreditWithoutBookIDStillReachesMemDB(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	book := mkAuthorRefBook(t, store, "SplitSource", 0, true, false)
+	author, err := store.CreateAuthor("Credit Without BookID")
+	require.NoError(t, err)
+
+	// BookID deliberately omitted -- the shape the broken call site produced.
+	require.NoError(t, store.SetBookAuthors(book.ID, []BookAuthor{
+		{AuthorID: author.ID, Role: "author"},
+	}))
+
+	memCounts, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	pebCounts, err := store.getAllAuthorBookRefCountsPebble()
+	require.NoError(t, err)
+
+	require.Equal(t, 1, pebCounts[author.ID],
+		"Pebble always held the credit -- if this fails the fixture is wrong, not the fix")
+	require.Equal(t, 1, memCounts[author.ID],
+		"memdb dropped the credit: the delete guard would report this author unreferenced")
+	require.Equal(t, pebCounts[author.ID], memCounts[author.ID],
+		"memdb and Pebble must not disagree about who references an author")
+}
+
+// TestSetBookAuthors_ExplicitBookIDIsUnchanged is the positive control. If the
+// backfill were wrong in the other direction -- overwriting a BookID rather
+// than filling an empty one -- the test above would still pass while credits
+// silently reattached to the wrong book.
+func TestSetBookAuthors_ExplicitBookIDIsUnchanged(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	keep := mkAuthorRefBook(t, store, "KeepsItsCredit", 0, true, false)
+	other := mkAuthorRefBook(t, store, "MustNotReceiveIt", 0, true, false)
+	author, err := store.CreateAuthor("Explicit BookID Author")
+	require.NoError(t, err)
+
+	// Written against `keep` while the call is made through `other`, so a
+	// backfill that overwrites rather than fills would move the credit.
+	require.NoError(t, store.SetBookAuthors(other.ID, []BookAuthor{
+		{BookID: keep.ID, AuthorID: author.ID, Role: "author"},
+	}))
+
+	// Read the MEMDB row, not GetBookAuthors -- that reads Pebble directly and
+	// never sees the backfill, so asserting on it would pass no matter what the
+	// backfill did.
+	rows := memBookAuthorRows(t, store)
+	require.Len(t, rows, 1)
+	require.Equal(t, keep.ID, rows[0].BookID,
+		"an explicitly-set BookID must survive the backfill untouched")
+}
+
+// memBookAuthorRows returns every book_authors row the memdb actually holds.
+func memBookAuthorRows(t *testing.T, s *PebbleStore) []*BookAuthor {
+	t.Helper()
+	m := s.mem()
+	require.NotNil(t, m, "memdb must be warm for these tests to mean anything")
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get(memTableBookAuthors, memIdxID)
+	require.NoError(t, err)
+	var out []*BookAuthor
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		out = append(out, obj.(*BookAuthor))
+	}
+	return out
 }
