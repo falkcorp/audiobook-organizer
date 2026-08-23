@@ -145,6 +145,11 @@ func (r *Registry) watchdogCycle() {
 					"hint", "Run never called reporter.UpdateProgress — run the work through "+
 						"registry.RunItems, or report directly; raising ProgressTimeout only hides this")
 			}
+			// A watchdog kill is a deliberate decision, not an interruption, and
+			// must not be resumed: the op is stuck or unwired, so resuming it
+			// reproduces the same stall on the next boot -- a stuck -> cancel ->
+			// resume -> stuck loop that never converges and never surfaces.
+			h.userCanceled.Store(true)
 			h.cancelIfActive()
 			continue // don't also check uncheckpointed for the same op
 		}

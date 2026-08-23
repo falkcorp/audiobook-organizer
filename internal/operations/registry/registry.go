@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.15.0
+// version: 3.16.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package registry
 
@@ -930,6 +930,11 @@ func (r *Registry) Cancel(opID string) error {
 	if running {
 		if h.cancel != nil {
 			r.logger.Info("registry: canceling running op", "op_id", opID)
+			// Record the INTENT before canceling. The run may take seconds to
+			// notice its context and reach its terminal switch, by which time a
+			// shutdown may already be in progress; without this the run would be
+			// recorded as shutdown-interrupted and resurrected on the next boot.
+			h.userCanceled.Store(true)
 			h.cancelIfActive()
 			return nil
 		}

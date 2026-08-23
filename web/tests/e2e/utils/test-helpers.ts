@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.15.0
+// version: 2.16.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 import { Page } from '@playwright/test';
 
@@ -1204,7 +1204,18 @@ export async function setupMockApiRoutes(
     if (pathname === '/api/v1/operations/clear-stale' && method === 'POST') {
       const ops = mockState.operations as { timeline?: Array<Record<string, unknown>> };
       const before = (ops.timeline || []).length;
-      const TERMINAL = ['completed', 'failed', 'canceled', 'interrupted_dropped', 'interrupted_restart'];
+      // Must match the real terminal set in services/api.ts. 'interrupted_quiesced'
+      // was missing here: it is the status three of the four resume policies produce,
+      // and it became common once shutdown started recording interrupted runs as
+      // resumable rather than as plain cancels.
+      const TERMINAL = [
+        'completed',
+        'failed',
+        'canceled',
+        'interrupted_dropped',
+        'interrupted_restart',
+        'interrupted_quiesced',
+      ];
       ops.timeline = (ops.timeline || []).filter(
         (op) => !TERMINAL.includes(String(op.status))
       );
