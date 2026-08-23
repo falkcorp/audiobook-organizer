@@ -1429,7 +1429,7 @@ func (s *Server) setupRoutes() {
 		slog.Warn("authentication is disabled (enable_authfalse) — do not expose this server to untrusted networks")
 	}
 	if !config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
-		slog.Warn("rate limiting is disabled (enable_rate_limitfalse) despite api_rate_limit_per_minute being set — the API is vulnerable to abuse. Set enable_rate_limit true in config.yaml for production deployments")
+		slog.Warn("rate limiting is disabled (enable_rate_limit=false) despite api_rate_limit_per_minute being set — the API is vulnerable to abuse. Set enable_rate_limit=true in config.yaml for production deployments")
 	}
 
 	// oauthH and cfMW were built earlier, before the /api/events route that also
