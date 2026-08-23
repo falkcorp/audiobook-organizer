@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -590,15 +591,36 @@ func TestHandleBulkWriteBack_NoRegistry(t *testing.T) {
 	}
 }
 
-func TestBatchWriteBackAudiobooks(t *testing.T) {
+// The handler must hand back the id EnqueueOp minted, NOT one it minted itself.
+// The absence of a CreateOperation expectation is half the assertion: the mock
+// is strict, so a reintroduced v1 write fails this test rather than passing
+// silently. The returned id is the other half — a handler that enqueued
+// correctly but still returned its own id is the #2747 bug, and it would
+// satisfy the mock while leaving the client polling an id that resolves
+// nowhere.
+func TestBatchWriteBackAudiobooks_ReturnsEnqueuedOpID(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().CreateOperation(mock.Anything, "batch_save_to_files", mock.Anything).
-		Return(&database.Operation{}, nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "metadata.batch-save", mock.Anything).Return("op-1", nil)
 	w := doReq(h.BatchWriteBackAudiobooks, http.MethodPost, "/audiobooks/batch-write-back",
 		map[string]any{"book_ids": []string{"b1", "b2"}}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"operation_id":"op-1"`) {
+		t.Fatalf("must return the enqueued id op-1, got %s", w.Body.String())
+	}
+}
+
+// An enqueue failure must surface, not be swallowed into a 200 with no run
+// behind it.
+func TestBatchWriteBackAudiobooks_EnqueueFailureIs500(t *testing.T) {
+	h, d := newHandler(t)
+	d.reg.EXPECT().EnqueueOp(mock.Anything, "metadata.batch-save", mock.Anything).
+		Return("", errors.New("queue down"))
+	w := doReq(h.BatchWriteBackAudiobooks, http.MethodPost, "/audiobooks/batch-write-back",
+		map[string]any{"book_ids": []string{"b1", "b2"}}, nil)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
