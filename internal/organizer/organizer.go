@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-16
+// last-edited: 2026-08-23
 
 package organizer
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 )
 
 // ErrTargetOccupied is returned from OrganizeBook when the computed
@@ -752,19 +753,33 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 		}
 
 		// A file already at the destination is only OURS if it is the same file
-		// or byte-identical in size. Recording an unrelated occupant here would
-		// point this book's row at another book's file: the previous code did a
-		// bare os.Stat and wrote pathMap[src] = dst for whatever it found, which
-		// was survivable while the destination name was just filepath.Base(src)
-		// and is not now that the file naming pattern decides it.
+		// or byte-identical in CONTENT. Recording an unrelated occupant here
+		// would point this book's row at another book's file: the previous code
+		// did a bare os.Stat and wrote pathMap[src] = dst for whatever it found,
+		// which was survivable while the destination name was just
+		// filepath.Base(src) and is not now that the file naming pattern decides
+		// it.
+		//
+		// Equal size used to BE the adoption test, and equal size is not the
+		// same file. Two different audiobooks of identical byte length are not
+		// rare — same-length encodes of the same runtime, placeholder files,
+		// files padded to a block boundary — and adopting one silently points
+		// this book's row at the other book's audio, which cannot be undone from
+		// inside the app. Size survives only as a free pre-filter (a differing
+		// size is still a hard "not the same file"); sameness itself is now
+		// proven by hashing both sides. See destinationIsSameContent for what
+		// that does and does not establish.
 		if dstInfo, statErr := os.Stat(dstPath); statErr == nil {
 			srcInfo, srcErr := os.Stat(srcPath)
 			switch {
 			case srcErr == nil && os.SameFile(srcInfo, dstInfo):
 				pathMap[srcPath] = dstPath
-			case srcErr == nil && srcInfo.Size() == dstInfo.Size():
+			case srcErr == nil && destinationIsSameContent(srcPath, dstPath, srcInfo.Size(), dstInfo.Size()):
 				// Interrupted copy/reflink from an earlier run: same content,
-				// different inode. Adopt it rather than re-copying.
+				// different inode. Adopt it rather than re-copying. Evaluated
+				// lazily, after os.SameFile: the hardlink/reflink strategies hit
+				// the case above on every re-organize and must not pay for a
+				// hash to do it.
 				pathMap[srcPath] = dstPath
 			default:
 				slog.Warn("organizeFile destination already occupied by a different file — leaving this file's row unchanged",
@@ -820,6 +835,68 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 
 // organizeFile copies/links a single file using the configured strategy.
 // Returns (method, error) where method is "reflink", "hardlink", "copy", or "symlink"
+// destinationIsSameContent reports whether srcPath and dstPath hold
+// byte-identical content. It is the adoption test for a destination that
+// already exists and is NOT the same inode as the source, and it replaced a
+// bare size comparison that treated any two same-length files as one file.
+//
+// It fails CLOSED. Every uncertain answer — either file unreadable, a size that
+// changed between the caller's os.Stat and the read here, any I/O error — is
+// false, i.e. "do not adopt". The two outcomes are not symmetric: declining to
+// adopt costs a re-copy of a file that was already in place, while adopting
+// wrongly rewrites this book's row to point at a different book's audio and
+// leaves no record of what the row used to say.
+//
+// What it can distinguish: any two files differing in a single byte, anywhere
+// in the file, at any size — this is a whole-file SHA-256 of each side, not a
+// sampled or head/tail digest.
+//
+// What it cannot distinguish: a SHA-256 collision, and a file replaced by
+// byte-identical content between this check and the move. Neither changes the
+// outcome — in both cases the bytes at the destination are the bytes the caller
+// wanted there.
+//
+// Cost: it reads both files end to end, so it is deliberately the LAST test
+// tried. Reaching it requires a destination that already exists, is not the
+// same inode as the source, and has exactly the same size; the ordinary
+// re-organize of a hardlinked or reflinked library never gets here, and a
+// same-size collision between unrelated books is rare. When it does run on a
+// multi-GB pair it is two sequential streaming reads and no allocation beyond
+// the hash buffer — the price of not silently swapping the user's audio.
+func destinationIsSameContent(srcPath, dstPath string, srcSize, dstSize int64) bool {
+	// Free pre-filter: different lengths can never be the same bytes, and this
+	// rejects the overwhelming majority of occupied destinations without I/O.
+	if srcSize != dstSize {
+		return false
+	}
+
+	srcHash, srcHashedSize, err := fileops.ComputeFileHashAndSize(srcPath)
+	if err != nil {
+		slog.Warn("destinationIsSameContent cannot hash source — not adopting the destination",
+			"source_path", srcPath, "dest_path", dstPath, "error", err)
+		return false
+	}
+	dstHash, dstHashedSize, err := fileops.ComputeFileHashAndSize(dstPath)
+	if err != nil {
+		slog.Warn("destinationIsSameContent cannot hash destination — not adopting it",
+			"source_path", srcPath, "dest_path", dstPath, "error", err)
+		return false
+	}
+
+	// ComputeFileHashAndSize stats the open descriptor, so each size describes
+	// exactly the bytes that were hashed. Disagreeing with the caller's os.Stat
+	// means the file changed under us mid-check: unknown, so do not adopt.
+	if srcHashedSize != srcSize || dstHashedSize != dstSize {
+		slog.Warn("destinationIsSameContent saw a size change mid-check — not adopting the destination",
+			"source_path", srcPath, "dest_path", dstPath,
+			"source_size_before", srcSize, "source_size_hashed", srcHashedSize,
+			"dest_size_before", dstSize, "dest_size_hashed", dstHashedSize)
+		return false
+	}
+
+	return srcHash == dstHash
+}
+
 func (o *Organizer) organizeFile(src, dst string) (string, error) {
 	strategy := o.config.OrganizationStrategy
 
