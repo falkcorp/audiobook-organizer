@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 
 package fileops
 
@@ -119,7 +119,12 @@ func (op *FileOperation) Execute() error {
 		// nothing happened — and moves on, leaving a truncated audiobook at
 		// targetPath and the user's only intact copy orphaned at backupPath
 		// with nothing pointing at it.
-		if _, statErr := os.Stat(op.backupPath); statErr == nil {
+		//
+		// op.backupPath is produced by safepath.Join in NewFileOperation, which
+		// rejects absolute components and requires the cleaned result to stay
+		// under backupDir; CodeQL does not model that custom containment
+		// barrier, so suppress the false positive.
+		if _, statErr := os.Stat(op.backupPath); statErr == nil { // lgtm[go/path-injection]
 			if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
 				slog.Error("ROLLBACK FAILED: target may be corrupt and the only intact copy is the backup",
 					"target", op.targetPath, "backup", op.backupPath,
@@ -154,7 +159,12 @@ func (op *FileOperation) Execute() error {
 			// corruption, attempt recovery, ignore whether recovery worked, and
 			// then return "operation failed integrity check" — which reads as
 			// "we refused to do it", not "there is a known-bad file on disk".
-			if _, statErr := os.Stat(op.backupPath); statErr == nil {
+			//
+			// op.backupPath is produced by safepath.Join in NewFileOperation,
+			// which rejects absolute components and requires the cleaned result
+			// to stay under backupDir; CodeQL does not model that custom
+			// containment barrier, so suppress the false positive.
+			if _, statErr := os.Stat(op.backupPath); statErr == nil { // lgtm[go/path-injection]
 				if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
 					slog.Error("ROLLBACK FAILED after checksum mismatch: a known-corrupt file is left in place",
 						"target", op.targetPath, "backup", op.backupPath,
