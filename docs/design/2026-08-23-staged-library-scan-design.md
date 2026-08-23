@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-23-staged-library-scan-design.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 4c1e8b73-2a9f-4d06-b5e1-7f3a90c2d846 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -394,6 +394,62 @@ list that can drift out of sync with the library view it annotates.
 A dedicated count endpoint was considered for a global "N pending" indicator and
 deferred — it can be added later without changing this shape, and is only worth it
 if the indicator turns out to need it.
+
+## Resolved in review — round 4, 2026-08-23 **[OWNER]**
+
+### Ship as a new op alongside `library.scan`, do not replace it
+
+The staged pipeline registers under its own op id. `library.scan` stays registered
+and working, unchanged. The staged op becomes the default once it has proven itself
+against the real library.
+
+**Rollback is running the old op** — no revert, no redeploy, no config flip. This
+also means no existing schedule or saved trigger silently changes behaviour on its
+next run, which an in-place replacement could not promise.
+
+### Existing hash-less rows are left alone, and counted first
+
+`NeedsDeepScan` is `false` for every pre-existing row, so **dedup behaves exactly as
+it does today** once this ships. The blast radius is new and changed files only.
+
+Some existing books already have no `FileHash`. Whether those should be excluded
+from dedup is a real question — arguably the same question this design answers for
+new books — but answering it here would silently drop an unmeasured and possibly
+large slice of the library out of dedup inside a scan PR. That is the shape of
+change this repo has been bitten by before.
+
+**So: ship untouched, and add a diagnostic that counts hash-less books and why.**
+Decide in a follow-up, against a number rather than an estimate. This is a
+deliverable of this work, not an afterthought — without the count the follow-up has
+nothing to reason from.
+
+### Two ops, not one, and not four
+
+- **`library.scan.staged`** — Discover, fast pass, promote. Short, bounded, the
+  thing a user waits on. It has a beginning and an end and its completion means
+  "the new books are visible."
+- **`library.scan.deepen`** — stage 4. Long-running, checkpointed, low priority,
+  its own resume policy.
+
+The split follows how the two are actually used. One op with four phases would sit
+`running` for hours — the exact shape being removed — and cancelling the background
+half would throw away the ingest with it. Four chained ops would give four timeline
+rows per scan and make the chaining itself a failure surface.
+
+This also makes the checkpointing story honest: the short op does not need
+checkpointing, and the long one declares a real `MinCheckpointInterval`, which is
+what makes the watchdog's `uncheckpointed` strike meaningful on it rather than noise.
+
+### The canceled production scan is not restarted
+
+Production's `library.scan` stays canceled at 8,367/40,108. It is not resumed and
+not re-run on the current code.
+
+The first staged run discovers everything the canceled run never reached and makes
+those books visible in minutes instead of hours, which makes finishing the old run
+moot. Restarting it beforehand would re-do the 8,367 already scanned, cost the five
+hours again, and do it while the metadata-clobber hazard is still live — the
+`OverrideLocked` predicate lands as part of this work, not before it.
 
 ## Open questions for review
 
