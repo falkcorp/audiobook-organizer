@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package server
 
@@ -417,7 +417,7 @@ func wipeActivity(ctx context.Context, svc *activity.Service, dryRun bool) (int6
 		_ = entries
 		return int64(total), nil
 	}
-	return svc.Store().WipeAllActivity()
+	return svc.Store().WipeAllActivity(ctx)
 }
 
 // composerTagResult describes the COMPOSER field state for one audio file.

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 
 // Package database — parity test suite for PebbleActivityStore.
 //
@@ -238,7 +238,7 @@ func TestPebbleActivityStore_WipeAllActivity(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	n, err := s.WipeAllActivity()
+	n, err := s.WipeAllActivity(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), n)
 
