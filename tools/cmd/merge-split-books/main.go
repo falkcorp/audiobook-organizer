@@ -1,6 +1,6 @@
 // file: tools/cmd/merge-split-books/main.go
-// version: 1.0.1
-// last-edited: 2026-08-23
+// version: 1.0.0
+// last-edited: 2026-05-29
 //
 // merge-split-books is the operator-facing CLI for MAYDEPLOY-G2 + G4.
 // It triggers the split-book backfill scan on a running server, lists
@@ -90,9 +90,6 @@ func main() {
 	client := &http.Client{
 		Timeout: 60 * time.Second,
 		Transport: &http.Transport{
-			// Operator-run CLI, not server code. TLS skip is for connecting to
-			// the server's own self-signed cert (see reconcile-paths for the
-			// same pattern).
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 		},
 	}
