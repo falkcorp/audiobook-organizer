@@ -1,5 +1,5 @@
 // file: internal/fileops/backup_containment_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bf4ef376-6572-46ff-aeaf-d7d24fb2cc8d
 // last-edited: 2026-08-23
 
@@ -40,7 +40,9 @@ func TestNewFileOperation_EscapingBackupDirIsRejected(t *testing.T) {
 
 	op, err := NewFileOperation(srcFile, dstFile, cfg)
 	if err == nil {
-		t.Fatalf("NewFileOperation accepted an escaping BackupDir; backupPath=%q", op.backupPath)
+		// Errorf, not Fatalf: the filesystem assertion below is the stronger
+		// check and must still run when this one fails.
+		t.Errorf("NewFileOperation accepted an escaping BackupDir; backupPath=%q", op.backupPath)
 	}
 
 	// Assert on the filesystem, not on the shape of the error string: the
