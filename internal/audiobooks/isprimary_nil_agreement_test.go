@@ -297,9 +297,17 @@ func TestIsPrimaryVersion_SerializationAgreesOnCacheHit(t *testing.T) {
 	require.True(t, hitEff, "nil resolves to true on both cache paths")
 }
 
-// TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown is the cache
-// test that can actually FAIL if the normalization before listCache.Set is
-// removed, and it exists because the PebbleStore-backed one above cannot.
+// TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown exercises the
+// degraded no-pushdown read path.
+//
+// HISTORY (2026-08-23): this test used to be described as "the cache test that
+// can actually FAIL if the normalization before listCache.Set is removed". That
+// is no longer true and the claim was removed rather than left to mislead. The
+// Set is now gated on didPushdown, so this arm does not cache at all, and the
+// pre-cache normalization is unobservable everywhere (see the note in
+// service_query.go). What this test pins NOW is the membership invariant the
+// gate exists for: two identical requests must return the same set of books,
+// and the store must be hit twice because nothing was cached.
 //
 // With a conforming store the cached slice and the slice returned at the tail
 // are the SAME backing array, so normalizing only at the tail happens to fix

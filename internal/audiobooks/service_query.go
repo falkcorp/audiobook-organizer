@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-08-23
 
@@ -215,7 +215,18 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 				// so caching unconditionally published rows the filter
 				// excludes, and every later request for the same key was
 				// served them from the early return above.
-				if didPushdown {
+				// A fallback page is a valid entry only when there was nothing
+				// for the fallback to ignore. GetAllBookSummaries(limit, offset)
+				// honours the page geometry -- this arm runs only when
+				// !hasHeavyPostFilters, so storeLimit/storeOffset are
+				// limit/offset -- but ignores all three predicates the key
+				// encodes. Gating on didPushdown ALONE would disable the list
+				// cache for the commonest query (the plain unfiltered library
+				// list) on every store without summary pushdown, which in
+				// production is the ~2 minute memdb warmup after startup.
+				fallbackAnswersTheKey := f.IsPrimaryVersion == nil &&
+					f.SortBy == "" && !f.ExcludeQuarantined
+				if didPushdown || fallbackAnswersTheKey {
 					svc.listCache.Set(cacheKey, books)
 				}
 			}
