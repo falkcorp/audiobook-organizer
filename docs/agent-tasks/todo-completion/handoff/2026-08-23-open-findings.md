@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3f9c0a71-5b28-4d6e-9a13-7c40e8b2d561 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -134,7 +134,35 @@ All of these enumerate books through the FILTERED
 - `internal/server/entities_ops.go:159` — partly mitigated by
   `CreateAuthorTombstone` right after.
 
-## 6. TASK-084's brief is INVALID as written
+## 6. RESOLVED 2026-08-23 — TASK-084's brief was INVALID as written (now rewritten)
+
+> **Status: the four affected briefs were rewritten on 2026-08-23** (TASK-084 →
+> v2.0.0, TASK-026 → v2.0.0, TASK-080 → v2.0.0, TASK-083 → v2.0.0). Each now
+> carries a banner with the evidence and directs the agent to a code-scanning
+> API dismissal instead. They are safe to dispatch.
+>
+> **Stronger evidence found while rewriting.** The proof below is "markers
+> removed, alerts stayed open". There is a cleaner one: alert **#1104** is
+> `open` at `internal/audiobooks/service_mutation.go:63`, and that exact line
+> carries `// lgtm[go/path-injection]` **today**. Marker present, alert open —
+> no inference about the merge required:
+> ```bash
+> grep -n 'lgtm\[' internal/audiobooks/service_mutation.go
+> gh api /repos/falkcorp/audiobook-organizer/code-scanning/alerts/1104 -q '.state'
+> ```
+> Two of the three `lgtm[go/path-injection]` markers in the tree
+> (`internal/importer/collision.go`, `internal/server/bootstrap.go`) have no
+> corresponding open alert, but that is NOT evidence they worked — those lines
+> may simply never have been flagged. Only the service_mutation.go case is
+> decisive, because the marker and the open alert share a `path:line`.
+>
+> **A fourth false claim, found in TASK-083 and not recorded below:** that brief
+> cited `service_mutation.go:63` as "already suppressed" and told the agent to
+> copy it as the template. It is the counter-example, not the template.
+
+## 6a. Original finding (kept for the record)
+
+TASK-084's brief is INVALID as written
 
 Its goal is adding `// lgtm[go/disabled-certificate-check]` comments. **`lgtm[]`
 suppression is inert in this repo** — it is the legacy LGTM.com mechanism that
@@ -153,7 +181,24 @@ dismiss via the API, or to fix the code.
 those the same way. The sweep was widened beyond "lgtm" and found no others
 (one false positive: TASK-189 matched "nosec" inside "nanoseconds").
 
-## 7. TASK-083 is partially done, not done
+## 7. TASK-083 is partially done, not done — BRIEF REWRITTEN 2026-08-23
+
+> **Status: rewritten to v2.0.0.** Scope is now #1477/#1478 only, with #1429 and
+> #1105 marked done and explicitly out of scope. The brief now states the fix
+> (re-root containment at a trusted base independent of `targetPath`, validate
+> before deriving, resolve symlinks first), forbids dismissing them, and
+> requires a run-and-pasted negative control plus a positive control.
+>
+> Corroborated independently: `internal/fileops/safe_operations.go` already
+> carries an accurate in-code comment (added by #2781) stating the alert is not
+> dismissed, that the containment argument was wrong, and "Left open
+> deliberately; see TASK-083". It also records that neither upstream gate
+> (`fileops.ValidateUserPath`, `IsAllowedPath`) resolves symlinks — that gap is
+> part of the fix.
+
+## 7a. Original finding (kept for the record)
+
+TASK-083 is partially done, not done
 
 PR #2781 merged, but classified four findings and closed only two.
 `#1477`/`#1478` (`internal/fileops/safe_operations.go`) are **real**, not false
