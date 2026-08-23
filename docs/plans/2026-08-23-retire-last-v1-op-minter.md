@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-23-retire-last-v1-op-minter.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 9bad0e56-17c8-4b14-8010-7a04f6e17c6f -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -144,3 +144,102 @@ Already-existing v1 maintenance rows remain readable throughout.
 - The 1,737 stranded `pending` v1 rows (separate lane, unaffected — see above)
 - `metabatch.ResolveCandidateFetch` / `reconcileV2RowAsOperation` v1 response shapes
 - The pre-existing diagnostics `raw_responses`/`suggestions` gap
+
+---
+
+## Executed 2026-08-23 — what changed from the plan above
+
+The plan is kept as written so the corrections below are legible against it.
+**Three of its claims did not survive contact.** Two were wrong, and one gate it
+never measured turned out to be the real risk.
+
+### 1. `advertisedDryRunDefault` is NOT dead — step 4 was wrong to delete it
+
+Step 4 lists it as "now-dead" alongside the deleted resume branch. It has a
+**live caller in `runMaintenanceJob` itself** (`maintenance_dispatcher.go:148`):
+it is the fail-safe that makes a bodyless POST honour the `dry_run` the catalogue
+advertises. Deleting it would have silently restored Go's zero value — `dry_run:
+false` — for the 18 jobs that advertise `true`, including `cleanup-series`, whose
+first phase deletes every single-book series and whose names are not recoverable.
+Only its resume-path caller died. **The function and its conformance tests are
+untouched.**
+
+### 2. `sameParamsIgnoringLegacyID` keeps live users — step 5's condition fails
+
+Step 5 says to delete it "iff maintenance was its last user". It was not:
+`server_lifecycle.go:229` and `:240` still construct
+`schedulerExtraOpParams{LegacyOpID: opID}` for the `isbn-enrichment` and
+`metadata-refresh` legacy-resume branches, which this change does not touch.
+`propagateLegacyOpStatus` and the whole `legacy_op_status.go` bridge stay for the
+same reason. **Kept.**
+
+### 3. The gate the plan did not measure: what the v1 row was *for*
+
+`maintenance_dispatcher.go:154` justified the v1 row with "so it appears in
+active operations / activity bell". Nothing in the plan checked either surface.
+Measured before deleting:
+
+| Surface | Reads | Verdict |
+|---|---|---|
+| `GET /operations/active`, `/operations/recent` | — | **410 Gone** (`server_lifecycle.go:1569-1574`) |
+| `GET /operations/timeline` (what the UI uses) | `ListOperationsV2Since` | **v2 only** |
+| Activity bell | `database.ActivityEntry`, `OperationID string` | **no FK to any operations row** |
+
+Both halves of the justification were false. The v1 row was invisible to every
+surface it was said to feed — a stale comment that outlived its reason, exactly
+the pattern CLAUDE.md's worked example describes. Its only real readers were the
+resume sweep, the status mirror, and the two fixup routes.
+
+### 4. Ordering: steps 1 and 3 had to ship together
+
+The plan orders 1 → 2 → 3 and frames the hazard as the routes 404ing. That misses
+what step 1 does **alone**: after the re-key the 8 jobs write results under the v2
+id while the unchanged dispatcher still returns the v1 id, so a run in that window
+resolves its row fine and returns **zero results** — silent, and not something the
+v1 fallback catches. Landed as **2, then 1+3 together**, then 4 → 5.
+
+### 5. `JobID` kept, its comment corrected
+
+Its stated justification ("resume reads params written by an older build via
+`operations.SaveParams` / `LoadParams`") became false when steps 3 and 4 deleted
+both call sites. The field is now **read by nothing**: the job is captured in the
+Run closure, and EnqueueOp's dedupe is scoped to a single def
+(`registry.go`, `if op.DefID != defID { continue }`), so params cannot conflate two
+jobs. Kept as the human-readable record in a params blob, with the comment
+rewritten to say that rather than the old reason. Removing it is a candidate for a
+separate change — it predates this lane.
+
+### 6. Extra scope taken, with reasons
+
+- **`ServerOpsStore` narrowed.** `CreateOperation` and `DeleteOperationWithLogs`
+  lost their last non-test callers in `internal/server`. Leaving them advertised
+  on the server's own store interface is the stale-surface problem this lane
+  exists to end. Their removal also undoes the `serverOperationWriter` split,
+  which existed only because `DeleteOperationWithLogs` was its 9th method and
+  tripped `interfacebloat`'s cap of 8; at 7 it is one leaf again.
+- **The `maintenance_resume_params_fallback_total` changelog fragment was deleted,
+  not amended.** The metric is unreleased, so announcing a counter that will not
+  exist is worse than saying nothing. No alert rule or dashboard referenced it.
+
+### 7. Where the deleted tests' invariants went
+
+Nothing was dropped; two moved keyspace.
+
+| Deleted / rewritten | Invariant now lives in |
+|---|---|
+| `TestResumeLegacyOp_MaintenanceJobHonorsSavedDryRun` | `TestResume_PreservesParamsAcrossRestartAndRequeue` (`internal/operations/registry`) — pins params preservation across **both** resume policies |
+| `TestRunMaintenanceJob_MergedRequestLeavesNoOrphanRow` | `TestRunMaintenanceJob_MintsV2RowOnly` — pins the invariant that makes the cleanup unnecessary |
+| `maintenance_dedupe_test.go` "differing only in LegacyOpID" arm | `TestSameParamsIgnoringLegacyID` (`internal/operations/registry`), beside the enqueue sites that still stamp one |
+
+Every new guard was mutation-checked: the v1 fallback, the v2 def-id check, the
+no-v1-row invariant, the no-second-resume assertion, and both arms of params
+preservation each fail under their own mutant.
+
+### Still open, deliberately out of scope
+
+- The **1,737 stranded `pending` v1 rows** — `isResumableOpStatus` accepts only
+  `running`/`queued`/`interrupted*`, so they are neither swept today nor affected
+  by this change. Separate lane.
+- Removing `maintenanceJobOpParams.JobID` (see 5).
+- `sameParamsIgnoringLegacyID` and the `legacy_op_status.go` bridge, which retire
+  when the scheduler's two legacy-resume branches do.

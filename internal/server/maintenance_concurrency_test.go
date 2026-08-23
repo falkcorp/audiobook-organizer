@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_concurrency_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 14d07753-3a82-4678-8982-e488eef8a7e3
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -149,19 +149,19 @@ func TestMaintenanceJobEnqueuedTwiceRunsSequentially(t *testing.T) {
 	// Distinct params on purpose — and DryRun is what makes them distinct.
 	//
 	// This used to vary LegacyOpID, back when a fresh one per request meant a real
-	// double-click never byte-matched and never deduped. That is no longer true:
-	// LegacyOpID is bookkeeping rather than work identity and is excluded from the
-	// comparison (registry.sameParamsIgnoringLegacyID), so varying it now MERGES
-	// and there would be only one run to serialize — this test would pass
-	// vacuously with maxOverlap stuck at 1 for want of a second run.
+	// double-click never byte-matched and never deduped. Then LegacyOpID was
+	// excluded from the comparison, so varying it MERGED and this test would have
+	// passed vacuously with maxOverlap stuck at 1 for want of a second run. The
+	// field is now gone from the params entirely, which settles it: nothing about
+	// a request except the work it describes can distinguish two enqueues.
 	//
 	// A differing dry_run is genuinely different work, so it still queues a second
 	// op. The claim under test is unchanged: two runs of the same job must not
 	// overlap.
-	id1, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{LegacyOpID: "legacy-1", JobID: jobs[0].ID(), DryRun: true})
+	id1, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{JobID: jobs[0].ID(), DryRun: true})
 	require.NoError(t, err)
 	<-started // only enqueue the second once the first is actually running
-	id2, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{LegacyOpID: "legacy-2", JobID: jobs[0].ID(), DryRun: false})
+	id2, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{JobID: jobs[0].ID(), DryRun: false})
 	require.NoError(t, err)
 	require.NotEqual(t, id1, id2, "the second enqueue was deduped into the first; it "+
 		"should have queued a separate run because dry_run differs")
@@ -295,19 +295,16 @@ func newOpsFake(t *testing.T) *dbmocks.MockStore {
 	m.EXPECT().GetDepRev(mock.Anything).Return(uint64(0), nil).Maybe()
 	m.EXPECT().UpdateOperationV2Params(mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// The v1 legacy-status bridge, reached because maintenanceJobOpParams carries
-	// a LegacyOpID.
+	// The v1 legacy-status bridge. propagateLegacyOpStatus runs on every terminal
+	// op and reads the row's params for a legacy_op_id before touching a v1 row.
 	//
-	// This used to say the bridge "goes away with maintenance_dispatcher.go in
-	// the v1 kill". Measured 2026-08-22: it does not. maintenanceJobOpParams is
-	// constructed at three sites, and deleting the dispatcher removes only two of
-	// them — server_lifecycle.go:287 (resumeLegacyOp) stamps a LegacyOpID on the
-	// restart path with no involvement from the dispatcher at all. The field also
-	// still has live readers in maintenance_job_op.go:132,142-147, which key the
-	// activity log off it. So this expectation stays until activity tagging is
-	// re-keyed to the v2 op id, whatever happens to the dispatcher.
-	m.EXPECT().GetOperationByID(mock.Anything).Return(nil, nil).Maybe()
-	m.EXPECT().UpdateOperationStatus(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	// The previous note here said this expectation "stays until activity tagging
+	// is re-keyed to the v2 op id, whatever happens to the dispatcher", correcting
+	// an earlier one that had tied it to the dispatcher's deletion. That condition
+	// is now met: maintenanceJobOpParams no longer carries the field, and the
+	// activity log, the results and the summary log are all keyed off
+	// ReporterOpID. The bridge returns before reaching either call, so both
+	// expectations go — they are kept .Maybe() nowhere, because nothing calls them.
 	m.EXPECT().AddToBatchBucket(mock.Anything, mock.Anything).Return(nil).Maybe()
 	m.EXPECT().ListBatchBucket(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().ClearBatchBucket(mock.Anything, mock.Anything).Return(nil).Maybe()

@@ -1,7 +1,7 @@
 // file: internal/server/itunes_path_repair_resume_dryrun_test.go
 // version: 1.0.0
 // guid: 5a9f27c4-8e13-42db-b6a0-71c3fd48e902
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -39,7 +39,7 @@ func TestResumeLegacyITunesPathRepair_ResumesInDryRun(t *testing.T) {
 	since := time.Now().Add(-time.Minute)
 
 	opID := ulid.Make().String()
-	if _, err := server.Ops().CreateOperation(opID, "itunes_path_repair", nil); err != nil {
+	if _, err := server.storeForWiring().CreateOperation(opID, "itunes_path_repair", nil); err != nil {
 		t.Fatalf("CreateOperation: %v", err)
 	}
 
