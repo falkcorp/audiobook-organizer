@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-08-23
 
@@ -208,11 +208,27 @@ func (s *Server) handleWipe(c *gin.Context) {
 		targetSet["book_files"] = true
 	}
 
+	// Targets whose wipe returned an error. Every branch below records its
+	// count regardless, because a failed wipe still deletes whatever it got
+	// through before failing and the operator needs that number. But a count
+	// alone cannot distinguish "deleted 500 of 500" from "deleted 500 of 750
+	// and stopped" -- so the ones that did not finish are named explicitly.
+	//
+	// This became load-bearing when WipeAllActivity gained cancellation: before
+	// that, no target could return a partial count with an error, so reporting
+	// every result as complete was merely imprecise rather than wrong. It is now
+	// reachable on any abandoned request. The other six targets are given the
+	// same treatment because they have always had the same shape -- an errored
+	// wipe reported as a finished one -- and splitting the behaviour would leave
+	// the response meaning two different things depending on the target.
+	var incomplete []string
+
 	// ── book_files (db rows only) ──────────────────────────────────────────
 	if targetSet["book_files"] {
 		n, err := wipeBookFiles(store, dryRun)
 		if err != nil {
 			slog.Warn("wipe book_files failed", "error", err)
+			incomplete = append(incomplete, "book_files")
 		}
 		results["book_files"] = n
 	}
@@ -222,6 +238,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 		n, err := wipeSegments(store, dryRun)
 		if err != nil {
 			slog.Warn("wipe segments failed", "error", err)
+			incomplete = append(incomplete, "segments")
 		}
 		results["segments"] = n
 	}
@@ -231,6 +248,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 		n, err := wipeBooks(store, dryRun)
 		if err != nil {
 			slog.Warn("wipe books failed", "error", err)
+			incomplete = append(incomplete, "books")
 		}
 		results["books"] = n
 	}
@@ -240,6 +258,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 		n, err := wipeAuthors(store, dryRun)
 		if err != nil {
 			slog.Warn("wipe authors failed", "error", err)
+			incomplete = append(incomplete, "authors")
 		}
 		results["authors"] = n
 	}
@@ -249,6 +268,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 		n, err := wipeSeries(store, dryRun)
 		if err != nil {
 			slog.Warn("wipe series failed", "error", err)
+			incomplete = append(incomplete, "series")
 		}
 		results["series"] = n
 	}
@@ -258,6 +278,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 		n, err := wipeExternalIDs(store, dryRun)
 		if err != nil {
 			slog.Warn("wipe external_ids failed", "error", err)
+			incomplete = append(incomplete, "external_ids")
 		}
 		results["external_ids"] = n
 	}
@@ -268,6 +289,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 			n, err := wipeActivity(c.Request.Context(), s.activityService, dryRun)
 			if err != nil {
 				slog.Warn("wipe activity failed", "error", err)
+				incomplete = append(incomplete, "activity")
 			}
 			results["activity"] = n
 		} else {
@@ -275,11 +297,17 @@ func (s *Server) handleWipe(c *gin.Context) {
 		}
 	}
 
-	slog.Info("wipe complete", "dry_run", dryRun, "targets", req.Targets, "results", results)
+	if len(incomplete) > 0 {
+		slog.Warn("wipe stopped early", "dry_run", dryRun, "targets", req.Targets,
+			"results", results, "incomplete", incomplete)
+	} else {
+		slog.Info("wipe complete", "dry_run", dryRun, "targets", req.Targets, "results", results)
+	}
 	httputil.RespondWithOK(c, struct {
-		DryRun  bool             `json:"dry_run"`
-		Results map[string]int64 `json:"results"`
-	}{DryRun: dryRun, Results: results})
+		DryRun     bool             `json:"dry_run"`
+		Results    map[string]int64 `json:"results"`
+		Incomplete []string         `json:"incomplete,omitempty"`
+	}{DryRun: dryRun, Results: results, Incomplete: incomplete})
 }
 
 // dryRunLabel returns a label for logging.
