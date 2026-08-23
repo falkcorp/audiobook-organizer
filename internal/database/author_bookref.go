@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
 // last-edited: 2026-08-23
 
@@ -7,7 +7,9 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -109,6 +111,15 @@ type authorRefKey struct {
 // bookIsSoftDeleted on both passes and scans only the memIdxIsPrimaryVersion
 // index.
 func (m *MemStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
+	// BOTH tables, because both passes below feed the same answer. The series
+	// twin names only memTableBooks; this one would be fail-open if it did the
+	// same, since a lost book_authors row is a co-author credit that exists
+	// NOWHERE else -- the legacy Book.AuthorID field holds one author, so pass 2
+	// cannot recover it the way it can recover a primary credit.
+	if err := m.requireTablesComplete("author reference count", memTableBookAuthors, memTableBooks); err != nil {
+		return nil, err
+	}
+
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -153,11 +164,43 @@ func (m *MemStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 	return out, nil
 }
 
-// GetAllAuthorBookRefCounts prefers the memdb when it is warm (the prod
-// default) and otherwise scans Pebble directly.
+// GetAllAuthorBookRefCounts prefers the memdb when it is warm — which in
+// production is ALWAYS, because UseMemDB is hardcoded true (pebble_store.go).
+// That is why the hardening below the memdb branch is not optional: for the
+// whole life of this guard, every production call has taken the memdb path, and
+// a memdb that quietly lost a book_authors row answers "referenced by nothing"
+// with a nil error to a caller that deletes on it.
+//
+// When the memdb knows it is short, this falls THROUGH to Pebble rather than
+// refusing. Pebble is the source of truth and its scan aborts on an undecodable
+// row, so the fall-through yields a CORRECT answer where a refusal would only
+// have yielded a safe one — purge-empty-authors keeps working instead of
+// stalling until the next restart. The fall-through is bounded: it happens only
+// when a row was actually lost, and no caller counts inside a loop (both
+// entities handlers and the purge op build the map once per operation).
+//
+// The fall-through is only trustworthy because the Pebble scan's own
+// completeness bugs were fixed first: it had a hand-written "book_authors:~"
+// upper bound that excluded every non-ASCII book id, and it skipped undecodable
+// rows without reporting them. Falling back to a scan with those defects would
+// have swapped one short count for another.
+//
+// Any other error is propagated unchanged — falling back to a full scan on an
+// unrecognized failure would be guessing at its cause.
 func (p *PebbleStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllAuthorBookRefCounts()
+	// Loaded ONCE. Reset can swap memPtr underneath us, and reading it twice
+	// could report a refusal from one MemStore next to the (empty) loss map of
+	// its freshly-reset replacement -- a log line contradicting itself.
+	if m := p.mem(); p.UseMemDB && m != nil {
+		counts, err := m.GetAllAuthorBookRefCounts()
+		if err == nil {
+			return counts, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		slog.Warn("author ref count: memdb is missing rows, falling through to the authoritative Pebble scan",
+			"error", err, "lost_rows", m.LostRows())
 	}
 	return p.getAllAuthorBookRefCountsPebble()
 }
