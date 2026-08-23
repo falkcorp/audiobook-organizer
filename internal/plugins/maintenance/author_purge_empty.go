@@ -177,15 +177,13 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// reporting success. Computed once for the whole library rather than per
 	// author — it is also the only form in which "referenced by nothing" is
 	// actually answerable.
-	refCounter := database.AsAuthorBookRefStore(store)
-	if refCounter == nil {
-		return fmt.Errorf("purge-empty-authors: store cannot count unfiltered author references (got %T); "+
-			"refusing to purge from a filtered count, which silently strands books whose author "+
-			"is trashed, non-primary, or a junction-only co-author", store)
-	}
-	refCounts, err := refCounter.GetAllAuthorBookRefCounts()
+	// database.AuthorRefCounts is the shared guard -- the same one the entities
+	// delete handlers use. It resolves the capability through the decorator
+	// chain and returns an error rather than a filtered fallback when the store
+	// cannot answer, so the nil-capability case arrives here as an error too.
+	refCounts, err := database.AuthorRefCounts(store)
 	if err != nil {
-		return fmt.Errorf("author reference counts (needed for the purge guard): %w", err)
+		return fmt.Errorf("purge-empty-authors: %w", err)
 	}
 
 	// Built BEFORE the dry-run branch below, so `apply=false` and `apply=true`
