@@ -584,7 +584,6 @@ func (r *Registry) safeRun(ctx context.Context, def OperationDef, params json.Ra
 	return runErr
 }
 
-
 // finalStatusForCanceledRun decides the terminal status for a run whose context
 // was canceled, and is the single place that decision is made. Both terminal
 // switches call it -- the in-process one and the subprocess (Isolate) one -- so
