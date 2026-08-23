@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1000002-0000-0000-0000-000000000002
 // last-edited: 2026-08-23
 
@@ -226,12 +226,20 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 			return merged, refused, fmt.Errorf("GetBooksBySeriesIDCore(%d): %w", fromID, err)
 		}
 		// moved counts rows actually reassigned, mirroring the dedup path. The
-		// nil-hydration skip below must NOT count: refCounts is a snapshot
-		// taken before this loop, so a row we cannot hydrate is ambiguous --
-		// either it was deleted since the snapshot (refCounts is stale-high and
-		// refusing merely defers the row removal to the next run) or hydration
-		// is inconsistent and the row still holds fromID. Refusing is correct
-		// in the second case and cheap in the first.
+		// nil-hydration skip below must NOT count -- and the resulting refusal
+		// is NOT merely a one-run deferral. GetAllSeriesBookRefCounts prefers
+		// the memdb whenever it is warm, which is the prod default, while
+		// GetBookByID reads Pebble directly (see
+		// internal/database/series_bookref.go and pebble_store.go). A row the
+		// memdb still holds but Pebble no longer does is therefore counted in
+		// refCounts and unhydratable on EVERY run, so this keeps the series row
+		// indefinitely rather than for one pass.
+		//
+		// That is the side to err on. A surviving series row is visible,
+		// harmless, and re-cleanable once the memdb is rebuilt; deleting on a
+		// count we could not confirm is what stranded 6,893 series IDs across
+		// 13,322 books. Pinned by
+		// TestCsMergeSeriesGroup_RefusesWhenARowCannotBeHydrated.
 		moved := 0
 		for _, book := range books {
 			current, err := store.GetBookByID(book.ID)

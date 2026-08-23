@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_refcount_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f871254-fb7f-475b-a668-ec240f1b0ef3
 // last-edited: 2026-08-23
 
@@ -28,12 +28,19 @@ import (
 // takes. Only the filtered getter is modelled -- the whole point is that it
 // cannot see every referencing row.
 type csFakeMerger struct {
-	visible map[int][]database.BookCore
-	deleted []int
-	updated []string
+	visible      map[int][]database.BookCore
+	unhydratable map[string]bool
+	deleted      []int
+	updated      []string
 }
 
+// unhydratable models the memdb/Pebble split: GetAllSeriesBookRefCounts reads
+// the memdb when warm, GetBookByID reads Pebble, so a row can be listed and
+// counted while hydrating to (nil, nil) on every single run.
 func (f *csFakeMerger) GetBookByID(id string) (*database.Book, error) {
+	if f.unhydratable[id] {
+		return nil, nil
+	}
 	return &database.Book{ID: id}, nil
 }
 
@@ -120,5 +127,39 @@ func TestCsMergeSeriesGroup_AbsentFromRefCountsMeansUnreferenced(t *testing.T) {
 	}
 	if len(f.deleted) != 1 || f.deleted[0] != 7 {
 		t.Fatalf("a series absent from the ref-count map is unreferenced and must be deleted, got deleted=%v", f.deleted)
+	}
+}
+
+func TestCsMergeSeriesGroup_RefusesWhenARowCannotBeHydrated(t *testing.T) {
+	// The filtered getter lists two books for series 7 and refCounts agrees at
+	// 2, so the counts do NOT disagree here -- this fixture isolates the other
+	// way the guard can be defeated. GHOST hydrates to (nil, nil), which is
+	// what a memdb row that Pebble no longer holds looks like from here.
+	//
+	// If the nil skip were allowed to count toward moved, moved would reach 2,
+	// stranded would be 0, and series 7 would be deleted on a row we never
+	// confirmed we had moved. That is the same fail-open shape as the filtered
+	// count itself.
+	f := &csFakeMerger{
+		visible:      map[int][]database.BookCore{7: {{ID: "REAL"}, {ID: "GHOST"}}},
+		unhydratable: map[string]bool{"GHOST": true},
+	}
+
+	merged, refused, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 2})
+	if err != nil {
+		t.Fatalf("an unhydratable row must be a clean refusal, not an error: %v", err)
+	}
+	if merged != 0 || refused != 1 {
+		t.Fatalf("want (merged=0, refused=1), got (%d, %d)", merged, refused)
+	}
+	for _, id := range f.deleted {
+		if id == 7 {
+			t.Fatal("deleted series 7 after failing to hydrate one of the two rows that reference it")
+		}
+	}
+	// The hydratable row is still moved -- refusing the DELETE must not also
+	// abandon the reassignment work that succeeded.
+	if len(f.updated) != 1 || f.updated[0] != "REAL" {
+		t.Fatalf("the hydratable book must still be reassigned, got updated=%v", f.updated)
 	}
 }
