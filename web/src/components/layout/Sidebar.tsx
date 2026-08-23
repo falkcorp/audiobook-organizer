@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.18.1
+// version: 1.19.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-19
+// last-edited: 2026-08-21
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -15,6 +15,8 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Menu,
+  MenuItem,
   Toolbar,
   Tooltip,
 } from '@mui/material';
@@ -113,6 +115,7 @@ export function Sidebar({
   const reviewCount = useReviewStore((s) => s.count);
 
   const [libraryOpen, setLibraryOpen] = useState(true);
+  const [libraryMenuAnchor, setLibraryMenuAnchor] = useState<null | HTMLElement>(null);
 
   // Wrap a menu item's icon in a count Badge for the Review entry.
   const renderMenuIcon = (item: (typeof menuItems)[number]) => {
@@ -180,7 +183,7 @@ export function Sidebar({
                   location.pathname === '/series' ||
                   location.pathname === '/authors'
                 }
-                onClick={() => handleNavigation('/library')}
+                onClick={(e) => setLibraryMenuAnchor(e.currentTarget)}
                 sx={{ justifyContent: 'center' }}
               >
                 <ListItemIcon sx={{ minWidth: 0 }}>
@@ -188,6 +191,27 @@ export function Sidebar({
                 </ListItemIcon>
               </ListItemButton>
             </Tooltip>
+            <Menu
+              anchorEl={libraryMenuAnchor}
+              open={Boolean(libraryMenuAnchor)}
+              onClose={() => setLibraryMenuAnchor(null)}
+              transformOrigin={{ horizontal: 'left', vertical: 'top' }}
+              anchorOrigin={{ horizontal: 'right', vertical: 'top' }}
+            >
+              {librarySubItems.map((item) => (
+                <MenuItem
+                  key={item.text}
+                  selected={isSubItemSelected(item, location.pathname, location.search)}
+                  onClick={() => {
+                    setLibraryMenuAnchor(null);
+                    handleNavigation(item.path);
+                  }}
+                >
+                  <ListItemIcon>{item.icon}</ListItemIcon>
+                  <ListItemText primary={item.text} />
+                </MenuItem>
+              ))}
+            </Menu>
           </ListItem>
         ) : (
           <>
