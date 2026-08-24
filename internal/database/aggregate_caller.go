@@ -1,7 +1,7 @@
 // file: internal/database/aggregate_caller.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e17ab-64d2-4f80-9153-8ad7be2f01c6
-// last-edited: 2026-08-12
+// last-edited: 2026-08-24
 
 // Package database — caller attribution for aggregate recomputation.
 //
@@ -13,13 +13,26 @@
 //	sequential inserts cost 1+2+...+N reads: 5,430,858 implied reads for 126,928
 //	updates, a 42.8x amplification.
 //
-//	None of those 126,928 lines said WHO issued the write. There are thirteen
+//	None of those 126,928 lines said WHO issued the write. There were thirteen
 //	possible originators — eight packages calling RecomputeBookAggregates
-//	directly, plus five BookFile mutators that reach it through
+//	directly, plus five BookFile mutators that reached it through
 //	notifyBookFileChange — and the obvious suspect was ruled OUT: the scanner
-//	writes via BatchUpsertBookFiles, which never calls notifyBookFileChange at
-//	all. Without attribution the coalescing fix cannot be aimed, and more
-//	importantly cannot be MEASURED afterwards.
+//	wrote via BatchUpsertBookFiles, which at the time did not call
+//	notifyBookFileChange at all. Without attribution the coalescing fix cannot be
+//	aimed, and more importantly cannot be MEASURED afterwards.
+//
+// ⚠️ THE BASELINE AND THIS PARAGRAPH ARE BOTH PRE-2026-08-24 (see below):
+//
+//	BatchUpsertBookFiles now DOES call notifyBookFileChange — once per affected
+//	book, per batch — so it is six mutators, not five, and the scanner
+//	(internal/scanner/scanner.go, which batches one book's files per call) is no
+//	longer ruled out: it is a live originator. The tense above is deliberate; it
+//	describes the build the 126,928-line sample came from.
+//
+//	This matters for anyone comparing a NEW sample against that baseline: the two
+//	count different populations. The old one could not contain a single
+//	batch-path recompute, because none existed. A rise in total volume after this
+//	date is expected and is not evidence that the coalescing fix failed.
 //
 // WHY a runtime stack walk instead of a caller parameter:
 //

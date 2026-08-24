@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
-// last-edited: 2026-08-19
+// last-edited: 2026-08-24
 
 package maintenance
 
@@ -211,7 +211,20 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	// Phase 2a: write corrected durations in batches. BatchUpsertBookFiles does
 	// NOT recompute book aggregates per file — that's the whole point: a per-file
 	// recompute (175K of them, each re-summing the book) is what made the naive
-	// version take hours. We recompute once per book in Phase 2b instead.
+	// version take hours.
+	//
+	// ⚠️ AMENDED 2026-08-24. The clause above still holds: BatchUpsertBookFiles
+	// gained a recompute, but a per-BOOK-per-BATCH one, not the per-file one this
+	// note warns about. What is no longer true is the word this sentence used to
+	// end with — "we recompute once per book in Phase 2b *instead*". Phase 2b is
+	// no longer the only recompute; it is the second one. With writeBatchSize at
+	// 1000 a book straddling a flush boundary costs an extra one on top.
+	//
+	// Phase 2b is deliberately KEPT, and not merely out of caution: it is the only
+	// place an aggregate failure is reported LOUDLY. It counts errCount and returns
+	// an error, whereas the batch path's recompute is best-effort and a failure
+	// there produces only a warning. Deleting 2b would trade a reported failure for
+	// a silent one, which is the bug class this whole change exists to close.
 	pending := make([]*database.BookFile, 0, writeBatchSize)
 	flush := func() error {
 		if len(pending) == 0 {
