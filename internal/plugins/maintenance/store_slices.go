@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-08-19
+// last-edited: 2026-08-24
 
 package maintenance
 
@@ -197,6 +197,16 @@ type bookFileCreator interface {
 	CreateBookFile(file *database.BookFile) error
 }
 
+// bookFileBatchCreator creates several book_file rows in one write.
+//
+// Kept separate from bookFileCreator rather than folded into it: createBookFileFor
+// writes exactly one row and has no use for the plural method, and probe's
+// linkProbedFolder still creates row-at-a-time. Only relinkOne needs both, and it
+// composes them via folderLinker.
+type bookFileBatchCreator interface {
+	BatchCreateBookFiles(files []*database.BookFile) error
+}
+
 // Compile-time assertions: the concrete store and the hand-written mock must
 // satisfy every slice above. If a `database` method signature changes, these
 // break here — at the declaration — instead of at whichever call site happens to
@@ -216,6 +226,7 @@ var (
 	_ bookByIDReader        = (*database.PebbleStore)(nil)
 	_ reviewHoldStore       = (*database.PebbleStore)(nil)
 	_ bookFileCreator       = (*database.PebbleStore)(nil)
+	_ bookFileBatchCreator  = (*database.PebbleStore)(nil)
 
 	_ bookFieldWriter    = (*database.MockStore)(nil)
 	_ fsRegroupStore     = (*database.MockStore)(nil)
@@ -234,6 +245,15 @@ type folderLinker interface {
 	bookByIDReader
 	bookFileLister
 	bookFileCreator
+}
+
+// folderRelinker is folderLinker plus the batch create relinkOne needs for the
+// multi-file (ShapeDirectory) case. linkProbedFolder deliberately does NOT get
+// it: that path still creates row-at-a-time, and declaring a method it cannot
+// call would misstate what it does.
+type folderRelinker interface {
+	folderLinker
+	bookFileBatchCreator
 }
 
 // multidiscApplier: ApplyMultidisc forwards into applyDiscTrackNumbers and

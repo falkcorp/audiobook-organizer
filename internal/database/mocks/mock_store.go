@@ -5305,6 +5305,57 @@ func (_c *MockStore_AppendOpLogsV2_Call) RunAndReturn(run func(rows []database.O
 	return _c
 }
 
+// BatchCreateBookFiles provides a mock function for the type MockStore
+func (_mock *MockStore) BatchCreateBookFiles(files []*database.BookFile) error {
+	ret := _mock.Called(files)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BatchCreateBookFiles")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func([]*database.BookFile) error); ok {
+		r0 = returnFunc(files)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_BatchCreateBookFiles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BatchCreateBookFiles'
+type MockStore_BatchCreateBookFiles_Call struct {
+	*mock.Call
+}
+
+// BatchCreateBookFiles is a helper method to define mock.On call
+//   - files []*database.BookFile
+func (_e *MockStore_Expecter) BatchCreateBookFiles(files any) *MockStore_BatchCreateBookFiles_Call {
+	return &MockStore_BatchCreateBookFiles_Call{Call: _e.mock.On("BatchCreateBookFiles", files)}
+}
+
+func (_c *MockStore_BatchCreateBookFiles_Call) Run(run func(files []*database.BookFile)) *MockStore_BatchCreateBookFiles_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []*database.BookFile
+		if args[0] != nil {
+			arg0 = args[0].([]*database.BookFile)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_BatchCreateBookFiles_Call) Return(err error) *MockStore_BatchCreateBookFiles_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_BatchCreateBookFiles_Call) RunAndReturn(run func(files []*database.BookFile) error) *MockStore_BatchCreateBookFiles_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BatchUpsertBookFiles provides a mock function for the type MockStore
 func (_mock *MockStore) BatchUpsertBookFiles(files []*database.BookFile) error {
 	ret := _mock.Called(files)
@@ -14879,8 +14930,8 @@ func (_c *MockStore_GetDashboardStats_Call) Run(run func()) *MockStore_GetDashbo
 	return _c
 }
 
-func (_c *MockStore_GetDashboardStats_Call) Return(v *database.DashboardStats, err error) *MockStore_GetDashboardStats_Call {
-	_c.Call.Return(v, err)
+func (_c *MockStore_GetDashboardStats_Call) Return(dashboardStats *database.DashboardStats, err error) *MockStore_GetDashboardStats_Call {
+	_c.Call.Return(dashboardStats, err)
 	return _c
 }
 

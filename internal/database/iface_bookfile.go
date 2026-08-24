@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-08-18
+// last-edited: 2026-08-24
 
 package database
 
@@ -31,6 +31,11 @@ type BookFileReader interface {
 // BookFileWriter creates and updates book_file rows.
 type BookFileWriter interface {
 	CreateBookFile(file *BookFile) error
+	// BatchCreateBookFiles is CreateBookFile for many rows: every row is
+	// created, and the affected books' aggregates are recomputed once rather
+	// than once per row. It does NOT match existing rows — see
+	// BatchUpsertBookFiles for that.
+	BatchCreateBookFiles(files []*BookFile) error
 	UpdateBookFile(id string, file *BookFile) error
 	UpsertBookFile(file *BookFile) error
 	BatchUpsertBookFiles(files []*BookFile) error

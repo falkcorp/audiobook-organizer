@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-08-19
+// last-edited: 2026-08-24
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -303,7 +303,7 @@ func readDirNames(dir string) (names []string, subdirs int) {
 // regroup series-guard just as inert as before. It is passed through
 // NormalizeDurationSec because ~1.9% of historical rows stored milliseconds, and
 // a 1000x-inflated value would read as book-length to that guard.
-func relinkOne(store folderLinker, f linkintegrity.Finding) (int, error) {
+func relinkOne(store folderRelinker, f linkintegrity.Finding) (int, error) {
 	b, err := store.GetBookByID(f.BookID)
 	if err != nil {
 		return 0, fmt.Errorf("refetch book: %w", err)
@@ -347,18 +347,32 @@ func relinkOne(store folderLinker, f linkintegrity.Finding) (int, error) {
 			return 0, nil
 		}
 		sort.Strings(audio)
-		created := 0
+		// Build every row first, then write them in ONE batch.
+		//
+		// This loop used to call createBookFileFor per file, and each of those
+		// recomputed the book's aggregates — which re-reads the book's entire file
+		// set, so an N-file book cost 1+2+...+N reads. Production log attribution
+		// measured this exact loop at 92.1% of all attributed recomputes, by a wide
+		// margin the largest single source. BatchCreateBookFiles recomputes once.
+		//
+		// Creating (not upserting) is correct here because relinkOne has already
+		// re-read GetBookFiles under the write path above and returned early if the
+		// book owned any row, so there is nothing to match against.
+		bfs := make([]*database.BookFile, 0, len(audio))
 		for i, n := range audio {
 			// Per-file duration is unknown here; leave it 0 and let
 			// maintenance.duration-backfill fill it. Seeding the BOOK's total
 			// onto every track would be actively wrong (it would multiply the
 			// runtime by the track count).
-			if err := createBookFileFor(store, b, filepath.Join(f.FilePath, n), 0, i+1); err != nil {
-				return created, err
-			}
-			created++
+			bfs = append(bfs, buildBookFileFor(b, filepath.Join(f.FilePath, n), 0, i+1))
 		}
-		return created, nil
+		if err := store.BatchCreateBookFiles(bfs); err != nil {
+			// The batch is atomic, so nothing was written: report 0, not len(bfs).
+			// The old per-file loop could report a partial count here; it no longer
+			// can, because a partial state can no longer exist.
+			return 0, fmt.Errorf("BatchCreateBookFiles for book %s: %w", b.ID, err)
+		}
+		return len(bfs), nil
 	}
 	return 0, nil
 }
@@ -367,11 +381,22 @@ func relinkOne(store folderLinker, f linkintegrity.Finding) (int, error) {
 // known without probing the file; everything else is left for the existing
 // backfill ops, which are idempotent.
 func createBookFileFor(store bookFileCreator, b *database.Book, path string, durationSec, track int) error {
+	if err := store.CreateBookFile(buildBookFileFor(b, path, durationSec, track)); err != nil {
+		return fmt.Errorf("CreateBookFile %q: %w", path, err)
+	}
+	return nil
+}
+
+// buildBookFileFor constructs the row createBookFileFor writes, without writing
+// it. Split out so a caller creating several rows for one book can build them all
+// and write them in a single batch — one aggregate recompute instead of one per
+// row. Does no store I/O; the only side effect is the os.Stat for FileSize.
+func buildBookFileFor(b *database.Book, path string, durationSec, track int) *database.BookFile {
 	var size int64
 	if st, err := os.Stat(path); err == nil {
 		size = st.Size()
 	}
-	bf := &database.BookFile{
+	return &database.BookFile{
 		BookID:           b.ID,
 		FilePath:         path,
 		OriginalFilename: filepath.Base(path),
@@ -380,10 +405,6 @@ func createBookFileFor(store bookFileCreator, b *database.Book, path string, dur
 		FileSize:         size,
 		Format:           strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
 	}
-	if err := store.CreateBookFile(bf); err != nil {
-		return fmt.Errorf("CreateBookFile %q: %w", path, err)
-	}
-	return nil
 }
 
 // sortFindingsByID keeps output deterministic across runs.

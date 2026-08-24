@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.92.0
+// version: 1.93.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-24
 
@@ -496,6 +496,7 @@ type MockStore struct {
 
 	// BookFile methods
 	CreateBookFileFunc                      func(file *BookFile) error
+	BatchCreateBookFilesFunc                func(files []*BookFile) error
 	GetAllBookFilesCoreFunc                 func() ([]BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCoreFunc func() ([]BookFileCore, error)
 	UpdateBookFileFunc                      func(id string, file *BookFile) error
@@ -2848,6 +2849,27 @@ func (m *MockStore) GetSeriesByTag(tag string) ([]int, error) {
 func (m *MockStore) CreateBookFile(file *BookFile) error {
 	if m.CreateBookFileFunc != nil {
 		return m.CreateBookFileFunc(file)
+	}
+	return nil
+}
+
+// BatchCreateBookFiles falls back to CreateBookFileFunc per row when no batch
+// hook is set, so a test that already observes creates through CreateBookFileFunc
+// keeps seeing every row after a caller switches to the batch method. Set
+// BatchCreateBookFilesFunc explicitly to assert on the batch shape itself.
+func (m *MockStore) BatchCreateBookFiles(files []*BookFile) error {
+	if m.BatchCreateBookFilesFunc != nil {
+		return m.BatchCreateBookFilesFunc(files)
+	}
+	if m.CreateBookFileFunc != nil {
+		for _, f := range files {
+			if f == nil {
+				continue
+			}
+			if err := m.CreateBookFileFunc(f); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
