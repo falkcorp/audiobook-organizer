@@ -10,8 +10,11 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
@@ -1120,24 +1123,66 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 		lastNames = append(lastNames, ln)
 	}
 	sort.Strings(lastNames)
+	// Finding which last names are similar is the most expensive loop in author
+	// dedup -- every pair of distinct names, 26,357,430 of them on the
+	// production library's 7,261 -- and it is PURE: it reads only lastNames and
+	// writes nothing shared. The grouping it feeds is the opposite, being greedy
+	// over `used` and order-dependent. So the two are separated here: the scan
+	// runs across all cores, then the handful of surviving pairs are grouped
+	// serially.
+	//
+	// No lock is needed because each worker writes only similarPairs[li], and
+	// walking li in ascending order afterwards visits pairs in exactly the order
+	// the original nested loop did, so the result is unchanged.
+	//
+	// Workers pull outer indices from a shared counter instead of taking a
+	// contiguous range. The inner loop runs len(lastNames)-li times, so a static
+	// split would hand the worker holding li=0 thousands of times the work of
+	// the one holding the tail, and the whole phase would finish no sooner than
+	// that one worker.
+	similarPairs := make([][]int, len(lastNames))
+	nextLi := int64(-1)
+	workers := runtime.NumCPU()
+	if workers > len(lastNames) {
+		workers = len(lastNames)
+	}
+	var scanWG sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		scanWG.Add(1)
+		go func() {
+			defer scanWG.Done()
+			for {
+				li := int(atomic.AddInt64(&nextLi, 1))
+				if li >= len(lastNames) {
+					return
+				}
+				var matches []int
+				for lj := li + 1; lj < len(lastNames); lj++ {
+					if lastNames[li] == lastNames[lj] {
+						continue // already handled in same-bucket phase
+					}
+					// Screen on length before paying for the real
+					// comparison. jaroWinklerSimilarity allocates two rune
+					// slices and two match bitmaps per call. The length test
+					// is provably conservative (see its doc comment), so this
+					// changes only the cost, not the outcome; it discards
+					// ~61% of pairs on the real corpus.
+					if jaroWinklerBelowThreshold(lastNames[li], lastNames[lj], 0.95) {
+						continue
+					}
+					if jaroWinklerSimilarity(lastNames[li], lastNames[lj]) < 0.95 {
+						continue
+					}
+					matches = append(matches, lj)
+				}
+				similarPairs[li] = matches
+			}
+		}()
+	}
+	scanWG.Wait()
+
 	for li := 0; li < len(lastNames); li++ {
-		for lj := li + 1; lj < len(lastNames); lj++ {
-			if lastNames[li] == lastNames[lj] {
-				continue // already handled in same-bucket phase
-			}
-			// Screen on length before paying for the real comparison.
-			// jaroWinklerSimilarity allocates two rune slices and two match
-			// bitmaps per call, and this loop runs over every pair of distinct
-			// last names -- 26.4M pairs on the production library's 7,261 of
-			// them. The length test is provably conservative (see its doc
-			// comment), so this changes only the cost, not the outcome; it
-			// discards ~61% of pairs there.
-			if jaroWinklerBelowThreshold(lastNames[li], lastNames[lj], 0.95) {
-				continue
-			}
-			if jaroWinklerSimilarity(lastNames[li], lastNames[lj]) < 0.95 {
-				continue
-			}
+		for _, lj := range similarPairs[li] {
 			// Similar last names — compare all pairs across these two buckets
 			bucketI := lastNameBuckets[lastNames[li]]
 			bucketJ := lastNameBuckets[lastNames[lj]]
