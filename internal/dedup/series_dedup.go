@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-23
 
@@ -465,9 +465,14 @@ func DedupSeries(
 			}
 			// Refuse to delete a series that something we could not reassign
 			// still points at. The unfiltered count minus what we actually
-			// MOVED is the number of rows left holding s.ID: trashed and
-			// non-primary rows the filtered getter never returned, plus any
-			// row above whose reassignment failed.
+			// MOVED is the number of rows left holding s.ID.
+			//
+			// Since the loop above switched to GetBooksBySeriesIDAllVersions,
+			// non-primary versions are no longer among them -- that getter
+			// returns them, so they get reassigned and counted in `moved`.
+			// What remains is TRASHED rows (excluded from AllVersions too,
+			// deliberately: a trashed row cannot be repointed) and any row
+			// above whose reassignment failed.
 			//
 			// The subtrahend is `moved`, never len(books) -- see the comment on
 			// moved. In a dry run every skipped-for-preview row counts as
@@ -480,8 +485,9 @@ func DedupSeries(
 			// property and TASK-029 is queued to edit the same loop.
 			if stranded := refCounts[s.ID] - moved; stranded > 0 {
 				result.Errors = append(result.Errors,
-					fmt.Sprintf("refusing to delete series %d (%q): %d book(s) still reference it that the filtered "+
-						"getter cannot see (trashed or non-primary); books were reassigned, the series row is kept",
+					fmt.Sprintf("refusing to delete series %d (%q): %d book(s) still reference it "+
+						"(trashed rows, which cannot be repointed, or rows whose reassignment failed); "+
+						"the reassignable books were moved, the series row is kept",
 						s.ID, s.Name, stranded))
 				continue
 			}

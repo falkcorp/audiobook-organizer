@@ -31,11 +31,20 @@ Two limits worth stating plainly:
 
 - `AllVersions` does **not** mean unfiltered. Soft-deleted (trashed) books are
   still excluded from both getters, because a trashed row cannot be repointed.
-- This therefore closes only half the hazard. The unfiltered reference-count
-  guard that refuses a delete which would strand a trashed row is still
-  load-bearing and was left in place. A code comment claiming the merge loop
-  skips "trashed and non-primary" rows was updated rather than deleted: the
-  non-primary half is now false, the trashed half is not.
+- This therefore closes only half the hazard, and the remaining half is not
+  covered everywhere. The scheduled dedup pass (`DedupSeries`) has an
+  unfiltered reference-count guard that refuses to delete a series a trashed
+  row still points at; that guard was left in place and is still load-bearing.
+  The manually-invoked merge (`MergeSeries`) has **no such guard** and deletes
+  the series unconditionally, so a trashed row there is still stranded. That
+  gap predates this change and is not introduced by it, but it is worth
+  stating plainly rather than implying the guard covers both paths.
+
+A code comment and the operator-facing refusal message both claimed the
+skipped rows were "trashed or non-primary". The non-primary half became false
+with this change — that getter now returns them — so both were corrected to
+name the causes that actually remain: trashed rows, and rows whose
+reassignment failed.
 
 The regression is pinned by a conformance test keyed on the **getter pair**
 rather than on a list of call sites — it asserts `AllVersions` returns a
