@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-08-11
+// last-edited: 2026-08-24
 
 package handlers
 
