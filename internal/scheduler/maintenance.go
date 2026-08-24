@@ -1,5 +1,5 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
 // last-edited: 2026-06-16
 
@@ -143,7 +143,15 @@ func (ts *TaskScheduler) IsTaskRunning(name string) bool {
 // library_size_refresh — were absent, and a missing key is indistinguishable
 // from "not running". Nothing announces a map entry that was never added.
 var taskV2DefIDs = map[string]string{
-	"library_scan":               "library.scan",
+	"library_scan": "library.scan",
+	// Deliberately the SAME def id as library_scan. isTaskRunning keys on the
+	// def, so the incremental scan and the weekly full sweep report each
+	// other's runs as their own -- which is the answer we want: they share
+	// library.scan's ConcurrencyKey, so while either is running the other
+	// genuinely cannot start. Giving the sweep its own key here would make it
+	// look idle while a scan was in flight, which is the exact defect this map
+	// replaced.
+	"library_scan_full":          "library.scan",
 	"library_organize":           "library.organize",
 	"library_size_refresh":       "library.size-refresh",
 	"dedup_refresh":              "dedup.author-scan",

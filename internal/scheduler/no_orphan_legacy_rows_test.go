@@ -1,5 +1,5 @@
 // file: internal/scheduler/no_orphan_legacy_rows_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1e6d90b4-73af-4c25-8d10-b2c4f9a05e37
 // last-edited: 2026-08-22
 
@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -44,6 +46,13 @@ func TestScheduledTasksDoNotWriteOrphanLegacyRows(t *testing.T) {
 	// covered the moment it is added.
 	for task, defID := range taskV2DefIDs {
 		t.Run(task, func(t *testing.T) {
+			// library_scan_full reads period_hours from config; without the
+			// shipped defaults it is zero, the sweep is never due, and the
+			// task correctly declines to enqueue.
+			restoreCfg := config.Snapshot()
+			t.Cleanup(func() { config.AppConfig = restoreCfg })
+			config.ResetToDefaults()
+
 			store := dbmocks.NewMockStore(t)
 			// Deliberately NO CreateOperation expectation: that absence IS the
 			// assertion. Everything the registry needs to enqueue is allowed.
@@ -57,6 +66,20 @@ func TestScheduledTasksDoNotWriteOrphanLegacyRows(t *testing.T) {
 			store.EXPECT().GetOperationV2(mock.Anything).Return(nil, nil).Maybe()
 			store.EXPECT().ListActiveOperationsV2().Return(nil, nil).Maybe()
 			store.EXPECT().GetDepRev(mock.Anything).Return(0, nil).Maybe()
+
+			// library_scan_full gates its enqueue on a persisted last-run
+			// timestamp. Hand it a long-past one so this test exercises the
+			// ENQUEUE path; with no stored value the task correctly seeds the
+			// clock and declines, and the assertions below would read that as
+			// a broken task rather than the deliberate first-tick behaviour.
+			store.EXPECT().GetSetting(mock.Anything).
+				Return(&database.Setting{
+					Key:   fullSweepLastRunSetting,
+					Value: time.Now().Add(-365 * 24 * time.Hour).Format(time.RFC3339),
+					Type:  "string",
+				}, nil).Maybe()
+			store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(nil).Maybe()
 
 			reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)
 			// A stub def standing in for the real one, which lives in
