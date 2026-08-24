@@ -1,5 +1,5 @@
 // file: internal/server/library_core_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -27,32 +27,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	ulid "github.com/oklog/ulid/v2"
 )
-
-type libraryScanParams struct {
-	FolderPath  *string `json:"folder_path,omitempty"`
-	ForceUpdate *bool   `json:"force_update,omitempty"`
-
-	// IncludeRootDir adds the organized library root to the scan while KEEPING
-	// the incremental skip. force_update also reaches RootDir but disables the
-	// skip at the same time, which turns "scan the whole library" into a full
-	// re-hash of it; these are now separable.
-	IncludeRootDir *bool `json:"include_root_dir,omitempty"`
-
-	// ResumeFolderIdx / ResumeItemOffset are written by the scan's own
-	// Checkpoint calls and merged back into params by resumeRestart() before
-	// Run is re-invoked. They are not part of the public trigger payload — a
-	// caller may set them, but normally they arrive only from a checkpoint.
-	ResumeFolderIdx  int `json:"resume_folder_idx,omitempty"`
-	ResumeItemOffset int `json:"resume_item_offset,omitempty"`
-}
-
-// libraryScanCheckpoint is the state blob persisted mid-scan. Its JSON field
-// names must match libraryScanParams exactly: resumeRestart() merges the blob
-// into the params object, so a mismatch silently resumes from zero.
-type libraryScanCheckpoint struct {
-	ResumeFolderIdx  int `json:"resume_folder_idx"`
-	ResumeItemOffset int `json:"resume_item_offset"`
-}
 
 type libraryOrganizeParams struct {
 	FolderPath         *string  `json:"folder_path,omitempty"`
@@ -95,7 +69,7 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 		// `completed`. They were not crashing; they were being discarded by policy.
 		//
 		// This now genuinely continues mid-scan. resumeRestart() merges the saved
-		// checkpoint blob into params; libraryScanParams carries matching
+		// checkpoint blob into params; scanner.LibraryScanParams carries matching
 		// resume_folder_idx / resume_item_offset fields, and the scan path calls
 		// Checkpoint() after every completed chunk of books and every completed
 		// folder.
@@ -114,7 +88,7 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 		Permissions:    []auth.Permission{auth.PermScanTrigger},
 		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			var p libraryScanParams
+			var p scanner.LibraryScanParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("library.scan: decode params: %w", err)
@@ -151,7 +125,7 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 					// optimisation for the NEXT run, and failing the scan
 					// because we could not record where it got to would trade a
 					// working scan for a lost one.
-					_ = reporter.Checkpoint(libraryScanCheckpoint{
+					_ = reporter.Checkpoint(scanner.LibraryScanCheckpoint{
 						ResumeFolderIdx:  folderIdx,
 						ResumeItemOffset: itemOffset,
 					})

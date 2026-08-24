@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.29.0
+// version: 3.30.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-23
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
+	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -580,7 +581,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 			if s.scanService != nil && s.opRegistry != nil {
 				go func() {
 					scanPath := path
-					if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "library.scan", libraryScanParams{FolderPath: &scanPath}); enqErr != nil {
+					if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "library.scan", scanner.LibraryScanParams{FolderPath: &scanPath}); enqErr != nil {
 						watchLog.Error("Auto-scan: failed to enqueue: %v", enqErr)
 					}
 				}()
