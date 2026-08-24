@@ -182,6 +182,18 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, fmt.Errorf("database not initialized")
 			}
 			period := time.Duration(config.AppConfig.Scheduled.LibraryScanFull.PeriodHours) * time.Hour
+			if period <= 0 {
+				// Declining is right -- a zero period would otherwise mean
+				// "always due", i.e. a full re-hash of the library every
+				// due-check. But it must not decline QUIETLY: the task reports
+				// itself enabled with a live ticker, so without this line a
+				// mistyped period_hours looks exactly like a healthy schedule
+				// that never happens to fire.
+				slog.Warn("library_scan_full: period_hours is not positive, so the full sweep can NEVER run; "+
+					"set scheduled.library_scan_full.period_hours (168 = weekly)",
+					"periodHours", config.AppConfig.Scheduled.LibraryScanFull.PeriodHours, "source", source)
+				return nil, nil
+			}
 
 			last, found := ts.loadLastFullSweep()
 			if !found {
@@ -226,6 +238,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled: func() bool {
 			return config.AppConfig.Scheduled.LibraryScanFull.Enabled
 		},
+		// Required, not optional: ListTasks calls RunOnStart() unconditionally,
+		// so leaving it nil panics the tasks page. Always false here -- a full
+		// sweep must never be triggered by a restart, which on this host
+		// happens several times a day.
+		RunOnStart: func() bool { return false },
 		GetInterval: func() time.Duration {
 			if !config.AppConfig.Scheduled.LibraryScanFull.Enabled {
 				return 0
