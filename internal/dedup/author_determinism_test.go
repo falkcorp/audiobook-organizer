@@ -1,5 +1,5 @@
 // file: internal/dedup/author_determinism_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b1e47c6-2a95-4d03-be71-5c9f28a4d016
 // last-edited: 2026-08-24
 
@@ -106,21 +106,34 @@ func TestFindDuplicateAuthorsIsDeterministic(t *testing.T) {
 	t.Logf("%d runs identical; %d groups", runs, strings.Count(first, "\n"))
 }
 
-// wantGoldenGroups is the exact grouping determinismCorpus produces, captured
-// from the pre-parallel implementation and verified byte-identical at every
-// stage of the phase-3 rework (serial baseline, prefilter, sharded scan). It is
-// pinned in full rather than summarized so that a change in WHICH authors get
-// grouped -- not merely how many groups come back -- fails as a readable diff.
+// wantGoldenGroups is the exact grouping determinismCorpus produces. It was
+// captured from the sorted-serial baseline -- the commit that fixed the map
+// iteration order but had not yet been sharded, which is the earliest commit
+// whose output is stable enough to capture at all -- and verified
+// byte-identical at every later stage of the phase-3 rework (prefilter, then
+// sharded scan). It is pinned in full rather than summarized so that a change
+// in WHICH authors get grouped, not merely how many groups come back, fails as
+// a readable diff.
 //
-// NOTE ON A PRE-EXISTING QUIRK, DELIBERATELY PINNED AS-IS: the four-member
-// Anderson family does not form one group of four. It splits into
-// Anderson+Andersen and Andersson+Andersonn. Grouping is greedy over a `used`
-// set with no transitive closure, so once an author is absorbed into a group it
-// can never pull in a third name, and the pairs that form depend on visit
-// order. The three-member families (Kowalski, Petersen, Johansson, Mikkelsen,
-// Christiansen) happen to group cleanly. This behavior predates the O(n^2)
-// work and is orthogonal to it -- the cross-commit equivalence check proves the
-// split is identical before and after -- so it is recorded here rather than
+// NOTE ON A PRE-EXISTING LIMITATION, DELIBERATELY PINNED AS-IS: every one of
+// the 56 groups below has exactly two members, and the corpus's odd-sized
+// surname families each strand a spelling entirely. Kowalsky, Petersonn,
+// Johanssen, Mikkelson and Christianson appear zero times in this constant --
+// 40 of the corpus's 152 family authors are never offered for merging at all.
+// The four-member Anderson family, by contrast, is fully covered, as two pairs.
+//
+// The mechanism is greedy pairing, not a size cap. When a pair is grouped, both
+// authors are marked in `used`, and the outer loop skips used authors, so an
+// author that has already been paired can never pull in a third spelling. Even-
+// sized families therefore pair off completely and odd-sized families leave one
+// spelling with no unused partner. (A group CAN exceed two in principle, via
+// the append-to-existing-canonical branch, but only when one author matches
+// several others inside the same bucket pair and was chosen canonical; in this
+// corpus each first name matches exactly once, so that branch never fires.)
+//
+// This behavior predates the O(n^2) work and is orthogonal to it -- the
+// cross-commit equivalence check proves the output is identical before and
+// after -- so it is recorded here rather than
 // changed. If transitive grouping is ever implemented, this constant is the
 // thing that should fail.
 const wantGoldenGroups = `canonical=9:John Andersen books=5 suggested="" variants=[1:John Anderson]
