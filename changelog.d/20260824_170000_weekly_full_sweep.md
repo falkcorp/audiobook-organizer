@@ -24,6 +24,11 @@ Deploying this does not start a sweep. With no recorded history the first check
 writes down the current time and waits a full period, so upgrading never kicks off
 an unannounced multi-hour re-read of the whole library.
 
+Pressing **Run now** on the task ignores the weekly schedule and sweeps immediately,
+so you can take the first one whenever the library is quiet rather than waiting a
+week. (Previously the button would have reported success and done nothing on any day
+but the due one.)
+
 ### Fixed
 
 #### Files that were being re-read and re-hashed on every single scan are now visible
@@ -44,3 +49,12 @@ process, and it can never resolve on its own.
 Each cause is now counted separately and reported in the scan summary, so the size
 of the problem can finally be measured rather than guessed at. This change makes
 the waste visible; it does not yet eliminate it.
+
+#### A file that finished downloading mid-scan could stay flagged as "suspicious" forever
+
+A file smaller than the minimum book size is flagged as suspicious and then read in
+full — a slow step, during which a still-downloading file can finish and grow past
+the threshold. The bookkeeping then recorded the file's *new* size, so every later
+scan considered it unchanged and skipped it, and the suspicious flag never cleared.
+It now records the size the decision was actually made on, so the next scan notices
+the mismatch, re-reads the file, and clears the flag by itself.

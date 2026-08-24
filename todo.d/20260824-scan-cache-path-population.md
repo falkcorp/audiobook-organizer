@@ -43,3 +43,8 @@ entries for files that *get* a row, and these never do.
 - [ ] Also check `scanCacheStatErrCount` and `scanCacheLookupErrCount` on the
       same run. A non-trivial lookup-error count means a store problem that was
       invisible before 2026-08-24 and is a different bug.
+- [ ] Note when sizing: version-linking is *a* cause of a row-less path, not
+      *the* cause. There is at least a third early `return nil` with the same
+      effect — the blocked-hash skip in `saveBookToDatabase`. Any estimate that
+      attributes the whole `scanCacheNoRowCount` figure to duplicate files will
+      be wrong.
