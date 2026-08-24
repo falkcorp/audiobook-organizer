@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7e2a4c98-3d61-4f05-b8a7-52c9e10d6b34 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -191,6 +191,39 @@ rather than "can this guard actually fail?"
 whose fixtures make the two questions genuinely disagree — a test where they return the
 same books would have passed against the broken code too, and proved nothing. Each fix was
 then deliberately broken to confirm the new test is what catches it.
+
+## 8. What the review of the fix found in the fix (added 2026-08-24)
+
+Two reviewers were run over section 7's change before it merged. Both found things, and
+the more useful of the two findings was about the change itself rather than the old code.
+
+**A failure while moving books still deleted the series.** Asking the complete question
+settles *which* books a merge tries to move. It says nothing about what happens when
+moving one **fails** — and both merge paths recorded the failure and deleted the series
+anyway. That is the same outcome as the original bug, reached through the error path
+instead of the blind spot, with one difference that makes it worse: the operator is told
+the job succeeded. The worst case was a book the library lists but can no longer load,
+which was recorded nowhere at all. Both paths now refuse to delete unless every book moved,
+and say which series they refused and why.
+
+**And one of the changes was wrong.** Section 7's fix also widened a second list — the one
+that decides which *files* get moved and re-tagged — on the reasoning that a book whose
+series changed should have its file follow. That reasoning does not survive contact with
+the rest of the app: alternate copies are deliberately never filed, and under the default
+naming settings an alternate copy and its main copy compute the **same** destination, so
+they would have fought over it and one would have been refused. The widening was reverted.
+
+It is worth being plain about how that got in. The justification written into the code for
+it was confident, specific, and false — and it was checked against the code it described
+rather than against the behaviour it claimed. **That is the same failure this entire
+report is about**, committed while fixing it, and caught only because the change was
+reviewed by something that had not already convinced itself. Sections 4 and 5 are two
+earlier instances; this is the third in one week.
+
+Three things are recorded as still open rather than quietly fixed, because each changes
+what the app does to a real library rather than correcting a mistake: merges still ignore
+books in the trash, a moved alternate copy keeps stale labels inside the file, and the
+lowest-level merge function has no safety check of its own at all.
 
 ---
 
