@@ -106,6 +106,35 @@
       this: both its tests `require.True(p.IsMemReady())` and run only against a
       COMPLETE memdb, so they pass unchanged — reading as "conformance still holds"
       while covering none of the new behaviour.
+      🚨 **The first version of this fix was DEFECTIVE and review caught it.**
+      Falling through to `getBooksBySeriesIDFull` promoted that scan from a
+      listing read to the read a `DeleteSeries` is authorized against, and it had
+      none of the hardening the new role needs. Three fail-OPEN paths, all now
+      closed, all three demonstrated by tests confirmed to FAIL before the fix:
+      (a) an undecodable row was `continue`d past — and that is the SAME
+      condition that trips the memdb guard, so the repair path was blind to
+      exactly one of the three triggers that reach it, while `slog.Error`-ing
+      that it had fallen through to safety; (b) bounds were
+      `["book:0","book:;")`, admitting only `'0'-'9'` and `':'` as the first byte
+      after the prefix, so a caller-supplied letter-leading book ID (constructible
+      — `CreateBook` mints a ULID only when `ID == ""`) was invisible to every
+      series merge; (c) `iter.Error()` was unchecked. Fixed in the same PR.
+      **Generalizable, and the reason it was missed:** the defective function was
+      NOT in the diff. Giving existing code a more important job silently
+      transfers every safety assumption ever written about its old job, and no
+      diff shows you that — the newly-inadequate code is not part of the change.
+      Concretely, it falsified `series_bookref.go`'s comment "every other Pebble
+      scan in this package checks `iter.Error()`" nine days after it was written.
+      Both comments corrected in the same PR per the stale-justification rule.
+      📊 Mutation matrix: **8 mutants, 7 killed, 1 survived.** The survivor is a
+      removed `iter.Error()` check, unkillable without a fault-injection layer
+      this package does not have — recorded as inspection-only rather than
+      rounded up. M4 (guard pushed into the shared body) still kills exactly one
+      test, so the wrapper-vs-body decision remains pinned by precisely one.
+      ➡️ Four follow-ups filed in
+      `todo.d/2026-08-24-unguarded-membership-getters-authorize-deletes.md`,
+      including a **hard-delete** path with this same shape that is worse than
+      this one (`ORPHAN-FILES-HARD-DELETE-FAIL-OPEN`).
 
 - [ ] **SERIES-NORMALIZE-WRITEBACK-SPLIT** `executeSeriesNormalizeCore` returns
       ONE list that feeds two different consumers with two different policies:

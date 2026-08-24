@@ -24,3 +24,20 @@
   nothing.
 
   Books in the trash are unaffected by this change and are still covered separately.
+
+- **The authoritative series scan that fall-through relies on no longer answers
+  short in silence.** Making the merge getter fall through to the on-disk scan
+  (above) promoted that scan from a listing read to the read a `DeleteSeries` is
+  authorized against, and it had none of the hardening that role requires. It
+  skipped book rows it could not decode — which is the *same* condition that
+  makes the in-memory index refuse, so the repair path was blind to exactly one
+  of the three triggers that send callers down it. It scanned
+  `["book:0","book:;")`, a range that only covers IDs whose first character is a
+  digit, so a caller-supplied letter-leading book ID was invisible to every
+  series merge (latent: generated IDs are ULIDs and start with a digit — the
+  same bounds bug fixed in the version-group backfill one day earlier). And it
+  never checked the iterator's error, so a truncated scan and a complete one
+  both returned success. All three now fail closed. Widening the bounds admits
+  the secondary indexes, whose values are bare book IDs rather than book JSON,
+  so the structural one-colon key filter and the now-fatal decode are a single
+  change and must not be separated.
