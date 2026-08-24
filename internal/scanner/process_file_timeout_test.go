@@ -1,5 +1,5 @@
 // file: internal/scanner/process_file_timeout_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 60f4711a-799e-4583-8b12-21b77ce2bc3d
 // last-edited: 2026-08-23
 
@@ -30,6 +30,56 @@ import (
 // These tests exercise the arms that matter. The happy path is the easy one and
 // proves the least: a wrapper that never returns early would pass it.
 
+// callBounded runs processFileBounded on its own goroutine and fails the test if
+// it does not return within hardCap.
+//
+// Every test below feeds processFileBounded work that never returns on its own;
+// the call escapes ONLY because one of the select arms fires. Calling it
+// synchronously therefore makes the test's own liveness depend on the thing
+// under test. A mutation that deletes an arm does not fail those assertions --
+// it never reaches them, and the test binary hangs until Go's -timeout panics.
+//
+// That distinction matters more than it looks. A hang reads as "still running"
+// in CI, not as a red test, so a regression in the timeout guard would present
+// as a stuck job -- the exact symptom the guard exists to prevent. It also
+// quietly weakens mutation testing: #2830's matrix scored 5/5, but only because
+// the mutations picked happened to return the WRONG value rather than not
+// return at all. Bounding the call here is what makes a future 5/5 mean
+// something.
+//
+// Credit: the hang-not-fail failure mode was reported by a parallel session that
+// hit it in internal/operations/registry on 2026-08-23.
+func callBounded(t *testing.T, hardCap time.Duration, ctx context.Context, path string,
+	timeout time.Duration, work func(string) (*metadata.Metadata, *mediainfo.MediaInfo, string, error),
+) (*metadata.Metadata, *mediainfo.MediaInfo, string, error) {
+	t.Helper()
+
+	type outcome struct {
+		meta *metadata.Metadata
+		mi   *mediainfo.MediaInfo
+		hash string
+		err  error
+	}
+	// Buffered: if the hard cap fires first, the late send must not block a
+	// goroutine forever -- the same reasoning as the channel inside
+	// processFileBounded itself.
+	done := make(chan outcome, 1)
+	go func() {
+		meta, mi, hash, err := processFileBounded(ctx, path, timeout, work)
+		done <- outcome{meta, mi, hash, err}
+	}()
+
+	select {
+	case o := <-done:
+		return o.meta, o.mi, o.hash, o.err
+	case <-time.After(hardCap):
+		t.Fatalf("processFileBounded(%q, timeout=%v) did not return within %v: "+
+			"the call is not bounded at all, so no assertion below this line can run",
+			path, timeout, hardCap)
+		return nil, nil, "", nil
+	}
+}
+
 // The load-bearing case: work that never returns must not block the caller.
 func TestProcessFileBounded_TimesOutOnWorkThatNeverReturns(t *testing.T) {
 	never := make(chan struct{})
@@ -41,7 +91,7 @@ func TestProcessFileBounded_TimesOutOnWorkThatNeverReturns(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, _, _, err := processFileBounded(context.Background(), "/stuck.m4b", 50*time.Millisecond, work)
+	_, _, _, err := callBounded(t, 2*time.Second, context.Background(), "/stuck.m4b", 50*time.Millisecond, work)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -91,7 +141,7 @@ func TestProcessFileBounded_LateSendDoesNotLeakAGoroutine(t *testing.T) {
 
 	before := settle()
 
-	_, _, _, err := processFileBounded(context.Background(), "/slow.m4b", 20*time.Millisecond, work)
+	_, _, _, err := callBounded(t, 2*time.Second, context.Background(), "/slow.m4b", 20*time.Millisecond, work)
 	if err == nil {
 		t.Fatal("expected a timeout")
 	}
@@ -128,7 +178,7 @@ func TestProcessFileBounded_HonoursContextCancellation(t *testing.T) {
 	cancel()
 
 	start := time.Now()
-	_, _, _, err := processFileBounded(ctx, "/x.m4b", time.Hour, work)
+	_, _, _, err := callBounded(t, 2*time.Second, ctx, "/x.m4b", time.Hour, work)
 	elapsed := time.Since(start)
 
 	if err == nil {
