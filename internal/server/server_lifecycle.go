@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
 // version: 3.30.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package server
 

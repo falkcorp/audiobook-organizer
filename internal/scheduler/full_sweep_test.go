@@ -1,16 +1,25 @@
 // file: internal/scheduler/full_sweep_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a8eab374-460f-4ba3-816a-4e5d365ca8f6
 // last-edited: 2026-08-24
 
 package scheduler
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,4 +125,130 @@ func TestLibraryScanFullIntervalIsConfigurable(t *testing.T) {
 	assert.False(t, task.IsEnabled())
 	assert.Equal(t, time.Duration(0), task.GetInterval(),
 		"a disabled sweep must report no interval even when one is configured")
+}
+
+// fullSweepHarness wires a mock store and a registry holding a stub
+// library.scan def, and returns the rows the task actually enqueued.
+func fullSweepHarness(t *testing.T, store *dbmocks.MockStore) (*TaskScheduler, *[]database.OperationV2Row) {
+	t.Helper()
+
+	inserted := &[]database.OperationV2Row{}
+	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
+	store.EXPECT().InsertOperationV2(mock.Anything).
+		RunAndReturn(func(row database.OperationV2Row) error {
+			*inserted = append(*inserted, row)
+			return nil
+		}).Maybe()
+	store.EXPECT().GetOperationV2(mock.Anything).Return(nil, nil).Maybe()
+	store.EXPECT().ListActiveOperationsV2().Return(nil, nil).Maybe()
+	store.EXPECT().GetDepRev(mock.Anything).Return(0, nil).Maybe()
+
+	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)
+	require.NoError(t, reg.RegisterOp(opsregistry.OperationDef{
+		ID:           "library.scan",
+		Plugin:       "test",
+		ResumePolicy: opsregistry.ResumeDrop,
+		Liveness:     opsregistry.LivenessManual,
+		Run: func(context.Context, json.RawMessage, opsregistry.Reporter) error {
+			return nil
+		},
+	}))
+
+	deps := testDeps()
+	deps.Store = func() SchedulerStore { return store }
+	deps.OpRegistry = reg
+	return NewTaskScheduler(deps), inserted
+}
+
+func pastSweepSetting(age time.Duration) *database.Setting {
+	return &database.Setting{
+		Key:   fullSweepLastRunSetting,
+		Value: time.Now().Add(-age).Format(time.RFC3339),
+		Type:  "string",
+	}
+}
+
+// TestFullSweepEnqueuesForceUpdateParams pins the params the sweep actually
+// sends. This is load-bearing twice over: force_update is what makes it a full
+// re-read at all, and the params being UNEQUAL to the incremental's {} is the
+// only reason EnqueueOp queues a second row instead of collapsing the sweep
+// into a running incremental scan. Drop include_root_dir and the params stay
+// distinct -- so no other test fails -- while the sweep quietly stops covering
+// the organized library root.
+func TestFullSweepEnqueuesForceUpdateParams(t *testing.T) {
+	restore := config.Snapshot()
+	t.Cleanup(func() { config.AppConfig = restore })
+	config.ResetToDefaults()
+
+	store := dbmocks.NewMockStore(t)
+	store.EXPECT().GetSetting(fullSweepLastRunSetting).Return(pastSweepSetting(2*testWeek), nil).Maybe()
+	store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	ts, inserted := fullSweepHarness(t, store)
+	task, ok := ts.GetTask("library_scan_full")
+	require.True(t, ok)
+
+	op, err := task.TriggerFn(operations.TriggerScheduled)
+	require.NoError(t, err)
+	require.NotNil(t, op, "an overdue sweep must enqueue")
+
+	require.Len(t, *inserted, 1)
+	assert.JSONEq(t, `{"force_update":true,"include_root_dir":true}`, string((*inserted)[0].Params),
+		"the sweep must force a full re-read AND include the organized root")
+}
+
+// TestFullSweepStoreErrorDoesNotReseed is the regression test for the worst
+// failure this task could have: an unreadable settings store was reported as
+// "never run", so the caller wrote a fresh timestamp and pushed the sweep out
+// another full period. A ~1-in-168 read-failure rate was then enough to stop
+// the weekly sweep from EVER firing, and the log line blamed a first run.
+//
+// The assertion is the ABSENCE of a write: no SetSetting expectation is
+// registered, so mockery fails the test if the task re-seeds.
+func TestFullSweepStoreErrorDoesNotReseed(t *testing.T) {
+	restore := config.Snapshot()
+	t.Cleanup(func() { config.AppConfig = restore })
+	config.ResetToDefaults()
+
+	store := dbmocks.NewMockStore(t)
+	store.EXPECT().GetSetting(fullSweepLastRunSetting).
+		Return(nil, errors.New("pebble: temporarily unavailable")).Maybe()
+
+	ts, inserted := fullSweepHarness(t, store)
+	task, ok := ts.GetTask("library_scan_full")
+	require.True(t, ok)
+
+	op, err := task.TriggerFn(operations.TriggerScheduled)
+	require.NoError(t, err, "a store hiccup must not fail the tick")
+	assert.Nil(t, op, "a store error must not enqueue a sweep")
+	assert.Empty(t, *inserted)
+}
+
+// TestFullSweepManualTriggerBypassesDueCheck pins that pressing Run actually
+// runs. Applying the weekly gate to a manual trigger made the button a no-op
+// that still answered 202 "task triggered" on any day but the due one, and left
+// no way at all to force a full sweep.
+func TestFullSweepManualTriggerBypassesDueCheck(t *testing.T) {
+	restore := config.Snapshot()
+	t.Cleanup(func() { config.AppConfig = restore })
+	config.ResetToDefaults()
+
+	store := dbmocks.NewMockStore(t)
+	// Swept one minute ago: nowhere near due.
+	store.EXPECT().GetSetting(fullSweepLastRunSetting).Return(pastSweepSetting(time.Minute), nil).Maybe()
+	store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	ts, inserted := fullSweepHarness(t, store)
+	task, ok := ts.GetTask("library_scan_full")
+	require.True(t, ok)
+
+	scheduled, err := task.TriggerFn(operations.TriggerScheduled)
+	require.NoError(t, err)
+	require.Nil(t, scheduled, "a scheduled tick must respect the period")
+	require.Empty(t, *inserted)
+
+	manual, err := task.TriggerFn(operations.TriggerManual)
+	require.NoError(t, err)
+	require.NotNil(t, manual, "a manual trigger must run regardless of the period")
+	require.Len(t, *inserted, 1)
 }

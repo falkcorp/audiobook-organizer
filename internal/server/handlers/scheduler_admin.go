@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
-// last-edited: 2026-08-22
+// last-edited: 2026-08-24
 
 // TODO.md scheduler-config item (was line 4563 as of commit 46628240): the
 // task-scheduler endpoints (list/run/configure tasks) and the
@@ -237,6 +237,28 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		return full(&sched.MetadataRefresh, &maint.MetadataRefresh), true
 	case "series_prune":
 		return full(&sched.SeriesPrune, &maint.SeriesPrune), true
+	case "library_scan_full":
+		// The weekly full sweep. Deliberately NOT full(): it reads a
+		// LibraryScanFullConfig, not a ScheduledTaskConfig, and only two of the
+		// four knobs exist. Without an entry here the task 400s as "not
+		// configurable" while ListTasks still enumerates it and the UI renders
+		// an interval editor for it -- an editable field that cannot be saved.
+		//
+		// interval is the DUE-CHECK cadence, not the sweep period. The period
+		// is scheduled.library_scan_full.period_hours and has no knob in this
+		// API; it is reachable via PUT /config or the env var. Changing that
+		// means widening the UpdateTaskConfig request body, which is a decision
+		// about the whole endpoint rather than this task.
+		return taskConfigBinding{
+			enabled:  &sched.LibraryScanFull.Enabled,
+			interval: &sched.LibraryScanFull.Interval,
+			hints: map[string]string{
+				"run_on_startup": "the full sweep never runs on startup by design — this host " +
+					"restarts several times a day and each one would trigger a full re-hash",
+				"run_in_maintenance_window": "not reachable from the maintenance window; it has its " +
+					"own hourly due-check driven by scheduled.library_scan_full.period_hours",
+			},
+		}, true
 	case "library_scan":
 		// All four knobs are real: the task reads Scheduled.LibraryScan for
 		// enabled/interval/on-startup. The previous switch bound only the

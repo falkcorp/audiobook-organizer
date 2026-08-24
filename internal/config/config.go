@@ -1,7 +1,7 @@
 // file: internal/config/config.go
 // version: 1.85.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package config
 
@@ -2563,10 +2563,12 @@ func ResetToDefaults() {
 				},
 				// NOTE: this literal is a SECOND source of truth for defaults,
 				// parallel to the viper.SetDefault calls. A field added there
-				// but not here is silently ZERO after a factory reset -- which
-				// for a scheduled task means "enabled but no ticker", the exact
-				// never-runs-and-never-says-so failure the scheduler's own
-				// comments were written about.
+				// but not here is silently ZERO after a factory reset, and for
+				// a scheduled task the zero value fails two different ways
+				// depending on which field is missed: a missing Interval leaves
+				// it "enabled with no ticker", a missing Enabled turns it off
+				// outright. Both are the never-runs-and-never-says-so shape the
+				// scheduler's own comments were written about.
 				LibraryScanFull: LibraryScanFullConfig{
 					Enabled:     true,
 					Interval:    60,

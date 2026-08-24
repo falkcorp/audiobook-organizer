@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -107,6 +107,14 @@ type TaskScheduler struct {
 	shutdown           chan struct{}
 	maintenanceOrder   []string
 	lastMaintenanceRun time.Time
+
+	// fullSweepMu serializes library_scan_full's load-check-enqueue-stamp
+	// sequence. Without it a ticker tick and a manual trigger arriving together
+	// can both read "due" and enqueue two full sweeps; Gate 3 serializes them,
+	// so the cost is a second whole-library re-hash queued behind the first,
+	// which doubles the window in which a running scan clobbers applied
+	// metadata.
+	fullSweepMu sync.Mutex
 	// previousRun maps a task name to the v2 operation id it last enqueued.
 	// Only tasks that need to skip a tick while their own previous run is
 	// still queued/running use it (currently library_scan, whose full walk can
