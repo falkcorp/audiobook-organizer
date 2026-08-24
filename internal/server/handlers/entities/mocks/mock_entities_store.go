@@ -857,6 +857,66 @@ func (_c *MockEntitiesStore_GetAuthorByName_Call) RunAndReturn(run func(name str
 	return _c
 }
 
+// GetAuthorTombstone provides a mock function for the type MockEntitiesStore
+func (_mock *MockEntitiesStore) GetAuthorTombstone(oldID int) (int, error) {
+	ret := _mock.Called(oldID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAuthorTombstone")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int) (int, error)); ok {
+		return returnFunc(oldID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int) int); ok {
+		r0 = returnFunc(oldID)
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
+		r1 = returnFunc(oldID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockEntitiesStore_GetAuthorTombstone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAuthorTombstone'
+type MockEntitiesStore_GetAuthorTombstone_Call struct {
+	*mock.Call
+}
+
+// GetAuthorTombstone is a helper method to define mock.On call
+//   - oldID int
+func (_e *MockEntitiesStore_Expecter) GetAuthorTombstone(oldID any) *MockEntitiesStore_GetAuthorTombstone_Call {
+	return &MockEntitiesStore_GetAuthorTombstone_Call{Call: _e.mock.On("GetAuthorTombstone", oldID)}
+}
+
+func (_c *MockEntitiesStore_GetAuthorTombstone_Call) Run(run func(oldID int)) *MockEntitiesStore_GetAuthorTombstone_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockEntitiesStore_GetAuthorTombstone_Call) Return(n int, err error) *MockEntitiesStore_GetAuthorTombstone_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockEntitiesStore_GetAuthorTombstone_Call) RunAndReturn(run func(oldID int) (int, error)) *MockEntitiesStore_GetAuthorTombstone_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBookAuthors provides a mock function for the type MockEntitiesStore
 func (_mock *MockEntitiesStore) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
 	ret := _mock.Called(bookID)

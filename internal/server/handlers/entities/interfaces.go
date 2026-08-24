@@ -29,6 +29,11 @@ type AuthorEntityStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	UpdateAuthorName(id int, name string) error
 	DeleteAuthor(id int) error
+	// GetAuthorTombstone resolves a merged-away author id to its canonical id
+	// (0 when none). Needed by AuditAuthorRefs to tell a SELF-HEALING reference
+	// from a genuinely dangling one -- GetAuthorByID follows the redirect and so
+	// cannot distinguish them on its own.
+	GetAuthorTombstone(oldID int) (int, error)
 }
 
 // AuthorAliasEntityStore covers author aliases.

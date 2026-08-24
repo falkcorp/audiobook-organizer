@@ -23,6 +23,9 @@ func (s *Server) wireEntitiesRoutes(
 	// (now aiH.*) and the entity-tag routes stay on *Server / their own handlers.
 	protected.GET("/authors", s.perm(auth.PermLibraryView), entitiesH.ListAuthors)
 	protected.GET("/authors/count", s.perm(auth.PermLibraryView), entitiesH.CountAuthors)
+	// Read-only diagnostic: classify author ids as live / tombstoned (self-healing)
+	// / dangling, so a dangling-book.AuthorID population can be scoped before repair.
+	protected.GET("/authors/ref-audit", s.perm(auth.PermLibraryView), entitiesH.AuditAuthorRefs)
 	protected.POST("/authors/merge", s.perm(auth.PermLibraryEditMetadata), entitiesH.MergeAuthors)
 	protected.POST("/authors/:id/reclassify-as-narrator", s.perm(auth.PermLibraryEditMetadata), entitiesH.ReclassifyAuthorAsNarrator)
 	protected.PUT("/authors/:id/name", s.perm(auth.PermLibraryEditMetadata), entitiesH.RenameAuthor)
