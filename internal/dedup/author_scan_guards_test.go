@@ -1,5 +1,5 @@
 // file: internal/dedup/author_scan_guards_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c7e2b91-8f36-4a0d-b214-6e9d3a75f0c2
 // last-edited: 2026-08-24
 
@@ -148,6 +148,87 @@ func TestFindDuplicateAuthorsGoldenAcrossShardCounts(t *testing.T) {
 			}
 		}
 	}
+}
+
+// denseScanCorpus builds an author set in which almost every surname has a
+// similar partner, so that almost every outer index of the phase-3 scan carries
+// at least one match.
+//
+// This exists because the golden corpus does not have that property, and the
+// gap is only visible under mutation. determinismCorpus deliberately includes
+// eight mutually-dissimilar padding authors, and its families are large, so
+// matches are concentrated on a minority of indices: mutating the scan to drop
+// every index where li%7 == 3 leaves the ENTIRE suite green, because those
+// particular indices happen to carry no matches. (Dropping li%7 == 0 fails four
+// tests, so the golden is not blind in general -- only sparse.)
+//
+// Pairs of surnames, no padding, means a dropped index is a dropped group.
+func denseScanCorpus() []database.Author {
+	// Every pair below was measured to score >= 0.95, so all 14 really do
+	// produce groups. Short surnames were deliberately avoided: Jaro-Winkler is
+	// length-sensitive, so the same single-character substitution that clears
+	// the gate in "gundersen"/"gunderson" (0.9556) falls short in
+	// "olsen"/"olson" (0.9067). A fixture built from short names would silently
+	// yield far fewer groups than it appears to.
+	pairs := [][2]string{
+		{"Kristiansen", "Kristianson"}, {"Andreasen", "Andreason"},
+		{"Mortensen", "Mortenson"}, {"Dahlberg", "Dahlbergh"},
+		{"Thorvaldsen", "Thorvaldson"}, {"Steffensen", "Steffenson"},
+		{"Gundersen", "Gunderson"}, {"Halvorsen", "Halvorson"},
+		{"Ivarsson", "Ivarson"}, {"Jakobsen", "Jakobson"},
+		{"Pedersen", "Pederson"}, {"Henriksen", "Henrikson"},
+		{"Johannsen", "Johannson"}, {"Rasmussen", "Rasmusson"},
+	}
+	var authors []database.Author
+	id := 1
+	for _, p := range pairs {
+		for _, first := range []string{"John", "Maria", "Erik"} {
+			authors = append(authors, database.Author{ID: id, Name: first + " " + p[0]})
+			id++
+			authors = append(authors, database.Author{ID: id, Name: first + " " + p[1]})
+			id++
+		}
+	}
+	return authors
+}
+
+// TestFindDuplicateAuthorsDenseScanIsShardStable is the dropped-pair guard.
+//
+// Every surname here has a partner, so a scan that silently loses ANY outer
+// index loses groups. Rather than pinning a second golden constant, this
+// compares the single-worker result against every other shard count: workers=1
+// is the serial reference, and any divergence means the parallel path lost or
+// duplicated work. A drop that affects all shard counts identically is caught
+// by the group-count floor instead.
+func TestFindDuplicateAuthorsDenseScanIsShardStable(t *testing.T) {
+	original := scanWorkerCount
+	t.Cleanup(func() { scanWorkerCount = original })
+
+	authors := denseScanCorpus()
+
+	scanWorkerCount = 1
+	reference := serializeGroups(FindDuplicateAuthors(authors, 0.85, guardBookCount))
+	groups := strings.Count(strings.TrimSpace(reference), "\n") + 1
+
+	// 14 surname pairs x 3 first names = 42 groups if nothing is lost. Asserting
+	// the floor keeps this test from passing vacuously if the corpus is edited
+	// into one that no longer matches, and catches a drop that hits every shard
+	// count equally.
+	if groups < 42 {
+		t.Fatalf("dense corpus produced only %d groups, expected 42; the scan is "+
+			"losing pairs or the corpus no longer matches:\n%s", groups, reference)
+	}
+
+	for _, workers := range []int{2, 3, 5, 7, 16, 64} {
+		scanWorkerCount = workers
+		got := serializeGroups(FindDuplicateAuthors(authors, 0.85, guardBookCount))
+		if got != reference {
+			t.Errorf("workers=%d diverged from the serial reference (workers=1)."+
+				"\n--- workers=1 ---\n%s\n--- workers=%d ---\n%s",
+				workers, reference, workers, got)
+		}
+	}
+	t.Logf("%d groups identical across 7 shard counts", groups)
 }
 
 // TestFindDuplicateAuthorsHandlesDegenerateInputs covers the cases where the
