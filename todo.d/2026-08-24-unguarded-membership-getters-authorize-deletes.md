@@ -51,13 +51,36 @@
         a book whose junction link got swept but was never relinked to the new
         individual author(s) at all (silently demoted to no author for that
         slot), because it was invisible to the getter throughout.
-      - **Audit query for the confirmed exposure:** the set of live author IDs
-        minus every book's `AuthorID`; any book pointing at an ID outside that
-        set is a hit. This should never occur in healthy operation — no other
-        known code path produces a dangling `book.AuthorID` — so a nonzero
-        count is unambiguous blast radius, no need to know which of the 1,400
-        splits caused it. Handed to the other session with this exact query;
-        follow up for the result before scoping a repair.
+      - **Audit RUN, by the other session, on prod:** live author IDs (14,949,
+        paginated to an empty page) minus every book's `AuthorID` (56,729
+        books, `show_quarantined=true`, paginated to an empty page) = **499
+        books with a dangling `AuthorID`**. Full list:
+        `.claude/notes/2026-08-24-dangling-author-id-audit.json` (other
+        session's worktree). Confirmed `book.Author`/`AuthorID` is a
+        denormalized snapshot written into the `book:<id>` JSON blob
+        (`GetBookByID`, `pebble_store.go:1074`, bare `json.Unmarshal`, no live
+        author lookup anywhere in the read path) — so a dangling entry's
+        stale `Author.Name` is real forensic signal, not a join artifact.
+      - **Attribution, name-matched against tonight's 1,402 `Split "OLD" →
+        [NEW...]` log lines: only 9 of 499 match.** The other 490 carry
+        ordinary (non-composite) names, meaning they almost certainly went
+        dangling through a DIFFERENT unconditional `DeleteAuthor` call site,
+        not `runAuthorSplitScan` — same bug class, different job. Candidates,
+        none yet checked against this specific data: `entities/handler.go:463`
+        (`POST /authors/:id/split`), `entities_ops.go:91`,
+        `author_conjunction_repair.go:291`.
+      - **🔴 CHRONIC, PREDATES TONIGHT.** Earliest dangling row spot-checked:
+        `updated_at: 2026-08-11T02:24:38-04:00` (13 days before tonight, per
+        the other session), with the full date-bucket distribution showing
+        hits back to `2026-06-30`. Neither figure independently re-verified
+        by this session — from the other session's report, not re-derived.
+        Disabling `maintenance.author_split` tonight does NOT
+        close this: it only stops the bounded, already-caught 1,400-author
+        run. The other ~8-week-old leak is very likely still live on whichever
+        call site is producing the 490 unmatched. **Finding the still-active
+        leak is higher priority than finishing tonight's attribution** —
+        tonight's damage is bounded and stopped; the other one apparently
+        isn't.
       - Hand-verified other call sites, unrelated to tonight's incident:
         `internal/server/handlers/entities/handler.go:463` → `DeleteAuthor` at
         `:517`, unconditional (`POST /authors/:id/split`).
