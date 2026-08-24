@@ -1,5 +1,5 @@
 // file: internal/scanner/unit_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
 // last-edited: 2026-08-24
 
@@ -1590,7 +1590,24 @@ func TestCreateBookFilesForBookWithStore(t *testing.T) {
 	}, nil)
 	store.EXPECT().GetBookFiles("book-1").Return(nil, nil) // no existing files
 	store.EXPECT().BatchUpsertBookFiles(mock.Anything).Return(nil)
-	store.EXPECT().UpdateBook("book-1", mock.Anything).Return(nil, nil) // normalize FilePath
+
+	// The batch write recomputes and persists the book's aggregates, so the copy
+	// fetched at the top of createBookFilesForBook is stale by this point. The
+	// FilePath normalization below must send the RE-READ book, not that copy —
+	// UpdateBook does not preserve FileSize on nil, so writing the stale one back
+	// erases what the batch just computed.
+	freshSize := int64(4096)
+	store.EXPECT().GetBookByID("book-1").Return(&database.Book{
+		ID:       "book-1",
+		Title:    "Test Book",
+		FilePath: bookPath,
+		FileSize: &freshSize,
+	}, nil)
+
+	store.EXPECT().UpdateBook("book-1", mock.MatchedBy(func(b *database.Book) bool {
+		// Normalized to the parent directory, and still carrying the aggregate.
+		return b != nil && b.FilePath == tmp && b.FileSize != nil && *b.FileSize == freshSize
+	})).Return(nil, nil)
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
