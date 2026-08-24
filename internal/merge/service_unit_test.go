@@ -1,5 +1,5 @@
 // file: internal/merge/service_unit_test.go
-// version: 1.0.0
+// version: 1.1.0
 
 package merge
 
@@ -77,6 +77,11 @@ func TestUnit_MergeBooks_UpdateBookFails(t *testing.T) {
 	mockStore.EXPECT().GetBookByID("book-1").Return(book1, nil)
 	mockStore.EXPECT().GetBookByID("book-2").Return(book2, nil)
 
+	// The provisional-scan guard reads each book's files before any write.
+	// No files => nothing provisional => the merge proceeds.
+	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
+	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
+
 	// The loop iterates in order: book-1 then book-2. Fail on the first.
 	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(nil, fmt.Errorf("disk full"))
 
@@ -95,6 +100,10 @@ func TestUnit_MergeBooks_AutoSelectM4B(t *testing.T) {
 	book2 := newBook("book-2", "A", "m4b", "/tmp/a.m4b")
 	mockStore.EXPECT().GetBookByID("book-1").Return(book1, nil)
 	mockStore.EXPECT().GetBookByID("book-2").Return(book2, nil)
+
+	// The provisional-scan guard reads each book's files before any write.
+	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
+	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
 	// UpdateBook called for both books in the version-group loop
 	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(book1, nil)
@@ -122,6 +131,10 @@ func TestUnit_MergeBooks_ExplicitPrimaryOverridesAuto(t *testing.T) {
 	book2 := newBook("book-2", "A", "m4b", "/tmp/a.m4b")
 	mockStore.EXPECT().GetBookByID("book-1").Return(book1, nil)
 	mockStore.EXPECT().GetBookByID("book-2").Return(book2, nil)
+
+	// The provisional-scan guard reads each book's files before any write.
+	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
+	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
 	// Both books updated in version-group loop
 	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(book1, nil)
