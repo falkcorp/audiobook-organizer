@@ -1,15 +1,17 @@
 <!-- file: docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7e2a4c98-3d61-4f05-b8a7-52c9e10d6b34 -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-08-24 -->
 
 # The copies the merge left behind
 
 **2026-08-23 — when two duplicate series were merged into one, every alternate copy of a
 book in them was left pointing at a series that had just been deleted**
 
-**PR:** [#2821](https://github.com/falkcorp/audiobook-organizer/pull/2821) · merge commit
-pending
+**PRs:** [#2821](https://github.com/falkcorp/audiobook-organizer/pull/2821) · merged as
+`41641f952` — the original fix, sections 1-6.
+[#2825](https://github.com/falkcorp/audiobook-organizer/pull/2825) — the same bug in three
+more places, found while reviewing #2821; see section 7.
 **Direct sequel to:** [The series that vanished from under 13,322
 books](2026-08-14-the-series-that-vanished-from-under-13322-books-executive-summary.md)
 (Aug 14) — that report fixed the *guard* that decides whether a series is safe to delete.
@@ -133,6 +135,15 @@ by hand does not, and deletes unconditionally. That gap predates this work and i
 introduced by it, but the honest reading is that this closes most of the hazard rather
 than all of it.
 
+> **Update, 2026-08-24 — the second paragraph above is now out of date, and section 7
+> records what replaced it.** Reviewing this work turned up the same mistake in three
+> more places outside the file it was commissioned for. Two of them were the
+> hand-triggered path this paragraph is about. They are fixed in
+> [#2825](https://github.com/falkcorp/audiobook-organizer/pull/2825). This note is left
+> in rather than the paragraph quietly rewritten, because a reader who acts on the
+> original text needs to see that it was true and then stopped being true — which is the
+> whole subject of section 4.
+
 ## 6. Why the test is written the way it is
 
 The task that commissioned this work came with a list of three places to change. There
@@ -145,8 +156,45 @@ exactly the hidden alternate copy — checked against both the in-memory and the
 copies of the library, because those are two separate implementations that have disagreed
 before. A new place that asks the wrong question still has to get past that property.
 
+## 7. The same mistake in three more places (added 2026-08-24)
+
+**What it was.** The property test in section 6 was written because a checklist cannot
+find a place nobody wrote down. Reviewing the finished work, we went looking anyway — and
+found three more places asking the hidden question, none of them on the commissioned list.
+
+Two of them are the hand-triggered merge that section 5 named as the remaining gap:
+
+- **Merging duplicate series from the review screen.** No guard at all. It moved the books
+  it could see and deleted the series unconditionally, exactly as described above.
+- **Renumbering a series** that had been split into "Discworld 01", "Discworld 02" and so
+  on. This one *had* a guard — and the guard could not fire. It worked by assuming every
+  book moved successfully and then looking for a failure among the books it had just
+  processed. A book it never saw could not report a failure, so the check passed on
+  precisely the books it existed to protect. **A guard is only as good as the set it looks
+  at**, and this one was looking at the wrong set by construction.
+
+The third is the overnight tidy-up, and it had the opposite problem: it was *refusing*
+work it should have done. Its guard compared a count that includes alternate copies
+against a list that excludes them, so any series holding an alternate copy failed the
+comparison — not once, but on every run, forever. Nothing was ever lost there; the job
+simply never finished those merges. That one is a separate change
+([#2826](https://github.com/falkcorp/audiobook-organizer/pull/2826)) because it makes the
+tidy-up delete series it previously kept, which is a judgement call about production data
+rather than a bug fix.
+
+**Why it mattered.** The first two are the same silent data loss this report is about,
+still live, in code the original task never looked at. The renumbering one is the more
+instructive of the two: it would have passed any review that checked "is there a guard?"
+rather than "can this guard actually fail?"
+
+**The fix.** Both were switched to the complete question, and both were pinned by tests
+whose fixtures make the two questions genuinely disagree — a test where they return the
+same books would have passed against the broken code too, and proved nothing. Each fix was
+then deliberately broken to confirm the new test is what catches it.
+
 ---
 
 **Outcome.** Verified against both storage backends, with the fix deliberately broken
 three different ways beforehand to confirm the new tests actually fail when the bug is
-present rather than passing for unrelated reasons.
+present rather than passing for unrelated reasons. The follow-up in section 7 was verified
+the same way: four separate ways of breaking it, each one caught by a named test.

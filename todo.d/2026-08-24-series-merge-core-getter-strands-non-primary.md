@@ -1,26 +1,36 @@
-- [ ] **DEDUP-SERIES-MERGE-STRAND** Decide whether the three series-merge paths
-      *outside* `internal/dedup/series_dedup.go` get the same fix TASK-029 /
-      PR #2821 applied inside it. The shape: a merge calls
-      `GetBooksBySeriesIDCore(fromID)` — the listing getter, which excludes
-      non-primary versions — repoints every book it sees to `keepID`, then calls
-      `DeleteSeries(fromID)`, leaving any non-primary version holding a series ID
-      that no longer exists. **Two are live data loss.**
-      (1) `internal/server/duplicates_helpers.go:454` `mergeSeriesGroupHelper` —
-      no guard at all; `DeleteSeries` at `:476` is unconditional; reached from
-      `executeSeriesNormalizeCore` at `:536`.
-      (2) `internal/plugins/maintenance/series_denumber_op.go:286` — has a guard
-      that cannot fire: `movedAll` is only set `false` inside the loop over the
-      Core getter's rows, so a row that getter excludes can never flip it and the
-      delete proceeds anyway.
-      (3) `internal/maintenance/jobs/cleanup_series.go:222` `csMergeSeriesGroup`
-      does **not** strand — its guard uses an independently-sourced *unfiltered*
-      count (`GetAllSeriesBookRefCounts`, verified unfiltered in both the memdb
-      and Pebble implementations), so it refuses the delete instead. But the
-      refusal is permanent for those series, so those merges never complete.
-      ⚠️ A getter swap alone will NOT fix (3): `refCounts` counts trashed rows
-      while `GetBooksBySeriesIDAllVersions` excludes them, so any series with a
-      trashed book still refuses forever. That one needs the count and the getter
-      to share one predicate. Suggested split: one PR for (1)+(2), a separate one
-      for (3). Full analysis in
-      `docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md` §9.
+- [ ] **DEDUP-SERIES-MERGE-STRAND** Three series-merge paths *outside*
+      `internal/dedup/series_dedup.go` had the shape TASK-029 / PR #2821 fixed
+      inside it: a merge calls `GetBooksBySeriesIDCore(fromID)` — the listing
+      getter, which excludes non-primary versions — repoints every book it sees
+      to `keepID`, then calls `DeleteSeries(fromID)`, leaving any non-primary
+      version holding a series ID that no longer exists. **Decision made and
+      executed; this entry stays open only for the one PR still awaiting review.**
+      - [x] (1) `internal/server/duplicates_helpers.go` `mergeSeriesGroupHelper`
+        — live data loss, no guard at all, `DeleteSeries` unconditional. Fixed in
+        **#2825**, which also converted `executeSeriesPrune`'s merge loop (a
+        second stranding path in the same file, missed by the original survey)
+        and `executeSeriesNormalizeCore`'s affected-book list.
+      - [x] (2) `internal/plugins/maintenance/series_denumber_op.go` — live data
+        loss behind a guard that could not fire: `movedAll` was only set `false`
+        inside the loop over the Core getter's rows, so a row that getter
+        excluded could never flip it. Fixed in **#2825**.
+      - [ ] (3) `internal/maintenance/jobs/cleanup_series.go` `csMergeSeriesGroup`
+        — did **not** strand. Its guard compared an unfiltered count
+        (`GetAllSeriesBookRefCounts`) against a filtered read, so it refused
+        instead — permanently, on every run. Fixed in **#2826**, held for review
+        rather than merged: aligning the two predicates makes the job delete
+        series it previously kept, which is a production-data judgement call.
+        **Check this off when #2826 is merged or closed.**
+      Full analysis in
+      `docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md` §9;
+      user-facing write-up in
+      `docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md` §7.
       Raised while reviewing PR #2821 (TASK-029).
+
+- [ ] **SERIES-MERGE-PRIMITIVE-UNGUARDED** `MergeSeries` — the store-level
+      primitive beneath the paths above — has **no ref-count guard at all**.
+      Every guard discussed in DEDUP-SERIES-MERGE-STRAND lives in a caller, so a
+      new caller gets no protection by default and the safety property is
+      re-implemented per site rather than enforced once at the bottom. Pre-existing
+      and out of scope for #2825/#2826; noted so it is not lost. Decide whether the
+      guard belongs in the primitive.
