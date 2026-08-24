@@ -1,5 +1,5 @@
 // file: internal/scheduler/wait_for_operation_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c2e4f61-9a37-4b0d-85e2-1f6a3d7c9b40
 // last-edited: 2026-08-23
 
@@ -32,6 +32,20 @@ func waitTestScheduler(t *testing.T, script func(call int) (*database.OperationV
 	return &TaskScheduler{deps: deps, waitPollInterval: 5 * time.Millisecond}, &calls
 }
 
+// boundedCtx caps every wait in this file.
+//
+// Mutation testing earned this: dropping interrupted_dropped/interrupted_quiesced
+// from isTerminalOpV2Status made these tests poll forever on context.Background()
+// and the run had to be killed at 600s. A regression that hangs CI reads as
+// "still running", not as a failure. With a bound, the same break fails in ~2s
+// on the require.NotNil below, which is what a regression should look like.
+func boundedCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 func row(status string) *database.OperationV2Row {
 	return &database.OperationV2Row{ID: "op-1", Status: status}
 }
@@ -60,7 +74,7 @@ func TestWaitForOperationKeepsPollingWhenRowIsMissing(t *testing.T) {
 		return row("completed"), nil
 	})
 
-	got := ts.WaitForOperation(context.Background(), "op-1")
+	got := ts.WaitForOperation(boundedCtx(t), "op-1")
 
 	require.NotNil(t, got, "must wait for the real terminal row, not return on not-found")
 	require.Equal(t, "completed", got.Status)
@@ -79,7 +93,7 @@ func TestWaitForOperationKeepsPollingOnStoreError(t *testing.T) {
 		return row("completed"), nil
 	})
 
-	got := ts.WaitForOperation(context.Background(), "op-1")
+	got := ts.WaitForOperation(boundedCtx(t), "op-1")
 
 	require.NotNil(t, got)
 	require.Greater(t, int(calls.Load()), 3, "a transient store error must not end the wait")
@@ -99,8 +113,8 @@ func TestWaitForOperationTerminalStatuses(t *testing.T) {
 			ts, calls := waitTestScheduler(t, func(int) (*database.OperationV2Row, error) {
 				return row(status), nil
 			})
-			got := ts.WaitForOperation(context.Background(), "op-1")
-			require.NotNil(t, got, "%s must end the wait", status)
+			got := ts.WaitForOperation(boundedCtx(t), "op-1")
+			require.NotNil(t, got, "%s did not end the wait: it is missing from isTerminalOpV2Status, so the window would block on it until ctx expired", status)
 			require.Equal(t, status, got.Status)
 			require.Equal(t, 1, int(calls.Load()), "%s should be terminal on the first read", status)
 		})
@@ -114,7 +128,7 @@ func TestWaitForOperationTerminalStatuses(t *testing.T) {
 				}
 				return row("completed"), nil
 			})
-			got := ts.WaitForOperation(context.Background(), "op-1")
+			got := ts.WaitForOperation(boundedCtx(t), "op-1")
 			require.Equal(t, "completed", got.Status)
 			require.Greater(t, int(calls.Load()), 3, "%s must NOT end the wait", status)
 		})
@@ -134,7 +148,7 @@ func TestWaitForOperationHeartbeatsWhileRunning(t *testing.T) {
 	})
 
 	var beats int
-	got := ts.WaitForOperation(context.Background(), "op-1", func(*database.OperationV2Row) { beats++ })
+	got := ts.WaitForOperation(boundedCtx(t), "op-1", func(*database.OperationV2Row) { beats++ })
 
 	require.Equal(t, "completed", got.Status)
 	require.Equal(t, 3, beats, "one heartbeat per running tick, none for the terminal read")
@@ -156,5 +170,5 @@ func TestWaitForOperationReturnsNilOnContextCancel(t *testing.T) {
 // TestWaitForOperationNilStoreReturnsNil covers the pre-DB-init path.
 func TestWaitForOperationNilStoreReturnsNil(t *testing.T) {
 	ts := &TaskScheduler{deps: testDeps(), waitPollInterval: time.Millisecond}
-	require.Nil(t, ts.WaitForOperation(context.Background(), "op-1"))
+	require.Nil(t, ts.WaitForOperation(boundedCtx(t), "op-1"))
 }
