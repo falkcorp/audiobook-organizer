@@ -1,5 +1,5 @@
 // file: internal/server/series_prune_phase2_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f3d21c6-47ba-4e09-95d1-6c027ea3b4d8
 // last-edited: 2026-08-24
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -139,5 +140,63 @@ func TestExecuteSeriesPrune_Phase2DoesNotUndoPhase1Refusal(t *testing.T) {
 	if assignments[primary] != keepID {
 		t.Errorf("%s was not repointed to %d (got %d) -- phase 1 did not merge, so the "+
 			"refusal proves nothing", primary, keepID, assignments[primary])
+	}
+}
+
+// TestExecuteSeriesPrune_ACancellationKeepsTheRecordedErrors pins the exit that
+// used to throw everything away.
+//
+// Phase 1 refuses a delete and records "REFUSING to delete it ... Re-run after
+// resolving the errors above". The context is then cancelled. Both cancellation
+// exits used to `return ctx.Err()` bare, so the operator got "context canceled"
+// and no record that a series had been left half-merged — books repointed, the
+// old row still present, and nothing saying so.
+//
+// This is the same defect the same change fixes one file over with
+// errors.Join(opErr, ctx.Err()). Building the error in the deferred block means
+// the next early return added inherits the behaviour rather than reintroducing
+// the bug, and this test is what holds that.
+func TestExecuteSeriesPrune_ACancellationKeepsTheRecordedErrors(t *testing.T) {
+	const (
+		keepID  = 1
+		mergeID = 2
+		primary = "cancel-primary"
+		altRip  = "cancel-alternate-rip"
+	)
+
+	s := newSeriesPruneServer(t)
+	mock, assignments := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// The rip's write fails, so phase 1 refuses the delete and records it. The
+	// cancellation fires immediately afterwards, on the next loop check.
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == altRip {
+			cancel() // refusal recorded, now the run is cancelled
+			return nil, errors.New("simulated write failure")
+		}
+		if b.SeriesID != nil {
+			assignments[id] = *b.SeriesID
+		}
+		return b, nil
+	}
+	mock.DeleteSeriesFunc = func(int) error { return nil }
+
+	store := seriesRefCountingStore{MockStore: mock, refCounts: map[int]int{keepID: 2, mergeID: 2}}
+	err := s.executeSeriesPrune(ctx, store, seriesPruneNoopProgress{}, "")
+	if err == nil {
+		t.Fatal("a cancelled prune that had already recorded a refusal returned nil")
+	}
+
+	// Both facts must survive: that it was cancelled, and WHAT it had recorded.
+	// Reporting only the cancellation is what made the half-merged series
+	// invisible.
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the cancellation was lost from the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "REFUSING to delete") {
+		t.Errorf("the recorded refusal was discarded by the cancellation exit; the operator "+
+			"cannot tell a series was left half-merged. got: %v", err)
 	}
 }
