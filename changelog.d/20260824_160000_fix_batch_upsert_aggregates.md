@@ -29,22 +29,6 @@ by book will still recompute a book once per chunk that book appears in. That is
 bounded and vastly better than per row, but it is not a promise of exactly one
 recompute per book across a whole backfill.
 
-#### The scanner was erasing the totals it had just computed
-
-Fixing the batch path exposed that it did not help the highest-volume caller. When the
-scanner creates a book's files it loads the book once at the start, writes the files,
-and then — for books whose path points at a file rather than a folder, i.e. single-file
-audiobooks — writes that original copy back to normalise the path. That copy still has
-the totals from before the write.
-
-`UpdateBook` preserves a field on nil for nine fields; duration and file size are not
-among them, so the nils in the stale copy were written straight through, discarding what
-the recompute had just stored. Every single-file audiobook the scanner imported had its
-totals computed and then erased inside one function.
-
-The scanner now re-reads the book before that final write. If the re-read fails it falls
-back to the old behaviour and says so in the log, rather than losing the values silently.
-
 Two details that are easy to get wrong, and are now pinned by tests:
 
 - **The recompute follows the row, not the request.** A batch upsert matches an
