@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-08-24
 //
@@ -142,6 +142,14 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 
 	// Phase 1: Merge duplicates
 	totalMerged := 0
+	// Books actually repointed, counted separately from series deleted.
+	//
+	// These used to be the same thing: a merge either repointed everything and
+	// deleted the series, or errored. Now a merge can repoint some books and then
+	// REFUSE the delete, which changes book→series assignments while leaving
+	// totalMerged at zero. The cached series list has to be dropped for that run
+	// too — see the invalidation at the end of this function.
+	booksRepointed := 0
 	var mergeErrors []string
 	dupGroupCount := 0
 
@@ -232,16 +240,23 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 				if _, err := store.UpdateBook(full.ID, full); err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 					repointFailed++
-				} else if operationID != "" {
-					_ = store.CreateOperationChange(&database.OperationChange{
-						ID:          ulid.Make().String(),
-						OperationID: operationID,
-						BookID:      bookCore.ID,
-						ChangeType:  "series_merge",
-						FieldName:   "series_id",
-						OldValue:    fmt.Sprintf("%d (%s)", oldSeriesID, ser.Name),
-						NewValue:    fmt.Sprintf("%d (%s)", keepID, group[canonicalIdx].Name),
-					})
+				} else {
+					// Counted on the WRITE succeeding, not inside the operationID
+					// branch below: a repoint with no operation to attribute it to
+					// still changed the book's series and still invalidates the
+					// cached series list.
+					booksRepointed++
+					if operationID != "" {
+						_ = store.CreateOperationChange(&database.OperationChange{
+							ID:          ulid.Make().String(),
+							OperationID: operationID,
+							BookID:      bookCore.ID,
+							ChangeType:  "series_merge",
+							FieldName:   "series_id",
+							OldValue:    fmt.Sprintf("%d (%s)", oldSeriesID, ser.Name),
+							NewValue:    fmt.Sprintf("%d (%s)", keepID, group[canonicalIdx].Name),
+						})
+					}
 				}
 			}
 			if repointFailed > 0 {
@@ -368,9 +383,19 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// A run that cleaned nothing must NOT invalidate: it changed nothing, and
 	// dropping a warm cache costs a full recount for no reason. Same rule the
 	// author-conjunction repair follows (658d91a2).
-	if totalCleaned > 0 {
+	//
+	// "Cleaned nothing" used to be the same as "changed nothing", because a merge
+	// either finished and deleted the series or errored out. Since phase 1 can now
+	// repoint books and then REFUSE the delete, a run can change every book's
+	// series while removing no rows at all — totalCleaned would be 0 and the
+	// cached list would keep serving the old membership under its 24-hour TTL.
+	// That is the exact 2026-08-14 symptom above, reached from the other side.
+	// booksRepointed is what makes the predicate true again.
+	if totalCleaned > 0 || booksRepointed > 0 {
 		s.InvalidateSeriesCache()
-		_ = progress.Log("info", fmt.Sprintf("Invalidated the cached series list (%d rows removed)", totalCleaned), nil)
+		_ = progress.Log("info", fmt.Sprintf(
+			"Invalidated the cached series list (%d rows removed, %d books repointed)",
+			totalCleaned, booksRepointed), nil)
 	}
 
 	return nil
