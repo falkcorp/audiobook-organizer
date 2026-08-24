@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-08-17
+// last-edited: 2026-08-24
 
 package jobs
 
@@ -142,10 +142,14 @@ type seriesUnlinker interface {
 
 // seriesMerger is seriesUnlinker plus the membership read needed to fold one
 // series group into another.
+//
+// AllVersions rather than Core: this membership read feeds a loop that repoints
+// every row it is handed and then deletes the series. Reading the filtered
+// listing getter here does not merely skip a non-primary version, it strands it.
 type seriesMerger interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	DeleteSeries(id int) error
 }
 

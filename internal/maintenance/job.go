@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package maintenance
 
@@ -195,6 +195,11 @@ type jobBookReader interface {
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	ListBookIDs() ([]string, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	// The complete set minus trashed rows. A job that UNLINKS or REPOINTS series
+	// membership must read this, not the Core listing getter: the rows Core hides
+	// are still rows, and leaving them behind while deleting the series is what
+	// strands them.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
 }
 
