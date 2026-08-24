@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 4f8b2d6e-9c1a-4e3f-b7d5-2a6c8e0f1b3d -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -7,9 +7,21 @@
 
 > ## ⚠️ STATUS 2026-08-24 — read this before acting on anything below
 >
-> **Every item in the original "Suggested priority order" has been fixed.** The
-> tables further down are a snapshot of 2026-07-05 and were never updated as the
-> work landed, so they read as a live TODO list while describing code that no
+> **Items 1-5 of the original "Suggested priority order" have been fixed and
+> re-verified at 2026-08-24 HEAD** (evidence table below). **Item 6 has not**, and
+> cannot be closed as written: it says "everything else in the High/Medium
+> tables," and those tables have not been re-verified. At least two named sites
+> are still serial — `internal/dedup/auto_resolve.go`'s `AutoResolveCertain`
+> (no `RunItems`, no `errgroup`, no `go func` anywhere in the file) and
+> `internal/itunes/backfill.go:97`, which still carries its `TODO(PERF-5)`.
+>
+> An earlier version of this banner said "every item in the priority order has
+> been fixed" while also saying, fifteen lines further down, that the
+> Medium/Lower tables had not been re-verified. Both cannot be true, and it
+> happened in a document written to correct exactly this kind of overclaim.
+>
+> The tables further down are a snapshot of 2026-07-05 and were never updated as
+> the work landed, so they read as a live TODO list while describing code that no
 > longer exists in that form. Verify at HEAD before starting anything here.
 >
 > Re-verified at HEAD on 2026-08-24:
@@ -168,8 +180,10 @@ for some of these:
 
 ## Suggested priority order
 
-> **All five items below were completed between 2026-07-05 and 2026-08-24.**
-> Kept for the record; see the status banner at the top of this file.
+> **Items 1-5 below were completed between 2026-07-05 and 2026-08-24. Item 6 was
+> NOT** -- it is open-ended ("everything else in the High/Medium tables") and
+> those tables have not been re-verified. Kept for the record; see the status
+> banner at the top of this file.
 
 1. `BookSignatureScan` (worst algorithmic shape — O(n²))
 2. `FullScan`'s two passes (confirmed prod incident, now has progress reporting but still

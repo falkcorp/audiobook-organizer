@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-08-24
 
@@ -688,6 +688,20 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 	return jaro + float64(prefixLen)*0.1*(1-jaro)
 }
 
+// authorLastNameSimilarity is the Jaro-Winkler score two DIFFERENT last names
+// must reach before the authors behind them are compared in full. It is
+// deliberately much stricter than the caller-supplied author threshold: this
+// gate only decides whether two surname buckets are worth opening.
+const authorLastNameSimilarity = 0.95
+
+// scanWorkerCount is how many goroutines phase 3's similarity scan uses.
+// Production always gets runtime.NumCPU(); it is a variable only so tests can
+// pin a specific shard count, because otherwise every test observes whatever
+// core count the machine happens to have -- and on a single-core CI runner the
+// parallel path would never be exercised at all while the suite stayed green.
+// Tests that set it must restore it and must not call t.Parallel.
+var scanWorkerCount = runtime.NumCPU()
+
 // jaroWinklerBelowThreshold reports whether jaroWinklerSimilarity(s1, s2) is
 // guaranteed to come out below threshold based on string LENGTH alone, so a
 // caller screening pairs can skip the real comparison. It never returns true
@@ -713,26 +727,14 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 //
 // Two details are load-bearing. Lengths are RUNE counts because the function
 // above counts runes -- measuring bytes would over-skip on any non-ASCII name.
-// And the ratio is biased down by an epsilon so that floating-point error in
-// 5t-4 (5*0.95-4 is not exactly 0.75 in binary) can only ever cost a few
-// wasted comparisons, never wrongly discard a pair sitting on the boundary.
+// And the ratio is biased down by an epsilon, so floating-point error in 5t-4
+// can only ever cost a few wasted comparisons, never wrongly discard a pair
+// sitting on the boundary. See jaroWinklerMinLengthRatio: at the 0.95 gate this
+// package actually uses, 5t-4 IS exactly 0.75, so the epsilon is defensive
+// there rather than load-bearing; it earns its place at other thresholds.
 //
 // For t <= 0.8 the bound is non-positive -- length proves nothing -- and this
 // correctly declines to skip anything.
-// authorLastNameSimilarity is the Jaro-Winkler score two DIFFERENT last names
-// must reach before the authors behind them are compared in full. It is
-// deliberately much stricter than the caller-supplied author threshold: this
-// gate only decides whether two surname buckets are worth opening.
-const authorLastNameSimilarity = 0.95
-
-// scanWorkerCount is how many goroutines phase 3's similarity scan uses.
-// Production always gets runtime.NumCPU(); it is a variable only so tests can
-// pin a specific shard count, because otherwise every test observes whatever
-// core count the machine happens to have -- and on a single-core CI runner the
-// parallel path would never be exercised at all while the suite stayed green.
-// Tests that set it must restore it and must not call t.Parallel.
-var scanWorkerCount = runtime.NumCPU()
-
 func jaroWinklerBelowThreshold(s1, s2 string, threshold float64) bool {
 	return lengthRatioBelowThreshold(
 		utf8.RuneCountInString(s1),
@@ -1298,12 +1300,6 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 					if used[pi.author.ID] || pi.skip {
 						continue
 					}
-					startJ := 0
-					if li == lj {
-						// Same bucket — avoid double-counting (only compare forward pairs)
-						startJ = i + 1
-					}
-					_ = startJ
 					for _, j := range bucketJ {
 						if li == lj && j <= i {
 							continue // same bucket, skip already-checked pairs

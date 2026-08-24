@@ -1,5 +1,5 @@
 // file: internal/dedup/author_prefilter_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9c21ad-7e40-4b62-9c85-1d6a0f3b8e74
 // last-edited: 2026-08-24
 
@@ -24,9 +24,18 @@ import (
 //     deterministically, without relying on the fuzz alphabet and seed to
 //     stumble onto it (see its comment).
 //
-// All four failure modes below were confirmed to fail these tests by mutating
-// the implementation -- byte counting, an always-false filter, dropping the
-// epsilon bias, and an over-aggressive 5t-3 bound.
+// THREE failure modes were confirmed to fail these tests by mutating the
+// implementation: byte counting, an always-false filter, and an over-aggressive
+// 5t-3 bound.
+//
+// A fourth -- dropping the epsilon bias -- was claimed here and is NOT caught:
+// removing it leaves the whole suite green. That is not a coverage hole, it is
+// the epsilon being unnecessary at the only threshold this package uses.
+// 5*0.95-4 evaluates to exactly 0.75 in float64, so there is no rounding error
+// at the 0.95 gate for the epsilon to absorb. It is kept because
+// jaroWinklerMinLengthRatio takes an arbitrary threshold and 5t-4 is inexact
+// for most values of t, but no test here exercises those, so no test can fail
+// on its removal.
 
 // prefilterCorpus returns realistic surname-shaped strings plus deliberately
 // adversarial ones: near-identical pairs, length-boundary pairs, and non-ASCII.
@@ -275,8 +284,11 @@ func TestJaroWinklerBelowThresholdCountsRunesNotBytes(t *testing.T) {
 // the derivation: a ratio sitting exactly on 5t-4 must be kept, and a threshold
 // at or below 0.8 makes the bound non-positive so nothing may be skipped.
 func TestJaroWinklerBelowThresholdBoundaryAndWeakThresholds(t *testing.T) {
-	// 3 vs 4 runes is exactly 0.75, the 0.95 bound. Must NOT be skipped --
-	// this is what the epsilon bias protects.
+	// 3 vs 4 runes is exactly 0.75, the 0.95 bound. Must NOT be skipped.
+	//
+	// This case is carried by exact float representation, NOT by the epsilon as
+	// previously claimed here: 3.0 < 0.75*4.0 is 3.0 < 3.0, which is false with
+	// or without the bias. Removing the epsilon leaves this assertion green.
 	if jaroWinklerBelowThreshold("abc", "abcd", 0.95) {
 		t.Error("ratio exactly 0.75 was skipped at threshold 0.95; the bound is off by one rounding step")
 	}

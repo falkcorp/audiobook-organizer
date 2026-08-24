@@ -1,5 +1,5 @@
 // file: internal/dedup/author_determinism_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b1e47c6-2a95-4d03-be71-5c9f28a4d016
 // last-edited: 2026-08-24
 
@@ -19,8 +19,20 @@ import (
 // actually runs, paired with matching first names so the pairs group rather
 // than being rejected downstream.
 func determinismCorpus() []database.Author {
-	// Families of near-identical surnames. Each family's members score >= 0.95
-	// against each other on Jaro-Winkler, which is what phase 3 gates on.
+	// Families of near-identical surnames. Membership is NOT transitive: only
+	// 15 of the 21 intra-family pairs actually score >= 0.95, which is what
+	// phase 3 gates on. "Andersen"/"Andersson", "Kowalskii"/"Kowalsky",
+	// "Petersen"/"Petersonn", "Johanssen"/"Johanson" and
+	// "Mikkelson"/"Mikkelsenn" all land at ~0.93 and are NOT similar to each
+	// other, even though each is similar to a third spelling in its family.
+	//
+	// This is recorded because the original comment here claimed every family
+	// member scores >= 0.95 against every other, which is false. It does NOT
+	// explain the stranding documented on wantGoldenGroups below -- that comes
+	// purely from greedy `used` marking, and would happen even if the families
+	// were fully connected. "Kowalski" is similar to BOTH "Kowalskii" and
+	// "Kowalsky"; it is simply already used by the time the second pair is
+	// reached.
 	families := [][]string{
 		{"Anderson", "Andersen", "Andersson", "Andersonn"},
 		{"Kowalski", "Kowalskii", "Kowalsky"},
@@ -126,10 +138,20 @@ func TestFindDuplicateAuthorsIsDeterministic(t *testing.T) {
 // authors are marked in `used`, and the outer loop skips used authors, so an
 // author that has already been paired can never pull in a third spelling. Even-
 // sized families therefore pair off completely and odd-sized families leave one
-// spelling with no unused partner. (A group CAN exceed two in principle, via
-// the append-to-existing-canonical branch, but only when one author matches
-// several others inside the same bucket pair and was chosen canonical; in this
-// corpus each first name matches exactly once, so that branch never fires.)
+// spelling with no unused partner.
+//
+// A group can never exceed two members AT ALL -- not merely in this corpus.
+// author.go carries an append-to-existing-canonical branch that looks like it
+// grows a group past two, but it is unreachable for every input: reaching it
+// requires !used[pi], while the branch itself requires pi to be some group's
+// canonical, and every group-creation path marks its canonical used (author.go
+// :1263, :1137, :1382). `used` is never cleared. So the two conditions are
+// mutually exclusive and the branch is dead code.
+//
+// The user-visible consequence is worth stating plainly: author dedup
+// structurally CANNOT offer a three-way merge of surname spellings. It offers
+// pairs, and a library with three spellings of one name needs two passes -- if
+// the third is offered at all, which per the stranding above it may not be.
 //
 // This behavior predates the O(n^2) work and is orthogonal to it -- the
 // cross-commit equivalence check proves the output is identical before and
