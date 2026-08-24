@@ -36,7 +36,7 @@
 > strings*, not books/authors/candidates, so it did not match the shapes being
 > grepped for. Fixed 2026-08-24: a provable length prefilter (discards 61% of
 > pairs, cannot change results) plus sharding the pure scan while the greedy
-> grouping stays serial. Measured 4.62s → 0.53s at production shape on 10 cores,
+> grouping stays serial. Measured 4.62s → 0.50s at production shape on 10 cores,
 > byte-identical output.
 >
 > **Lesson for the next sweep:** search by *loop shape* (nested pairwise over any
@@ -51,6 +51,15 @@
 > - `internal/dedup/author.go` phase 2 — pairwise *within* exact-last-name buckets.
 >   Cost is `Σ k_b² ≤ (max bucket) · n`, single-digit millions of cheap precomputed
 >   compares at library scale. Not worth the concurrency risk.
+> - `internal/dedup/author.go` phase 3.5 (the `len(seriesMap) > 0` block) — the
+>   SAME full pairwise `jaroWinklerSimilarity` scan over `lastNames` that phase 3
+>   was, and marginally larger, since it starts its inner loop at `lj := li`
+>   rather than `li+1`. Left serial because it is unreachable in production:
+>   `FindDuplicateAuthorsWithSeries` has no non-test callers — all seven live call
+>   sites use `FindDuplicateAuthors`. **If it is ever wired up it becomes the new
+>   hotspot, and the length prefilter cannot help it:** it gates at 0.80, where
+>   `5t-4 = 0`, so the bound admits every pair and the screen correctly declines
+>   to skip anything. Sharding it would be the available fix.
 
 **Date:** 2026-07-05
 **Branch:** `docs/concurrency-audit`

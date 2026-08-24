@@ -1,13 +1,13 @@
 ### Performance
 
-#### Author deduplication runs 8.8x faster
+#### Author deduplication runs 9.3x faster
 
 The most expensive loop in author dedup compared every pair of distinct author
 last names with Jaro-Winkler similarity: 26,357,430 pairs on the production
 library's 7,261 distinct surnames, on a single core, each comparison allocating
 two rune slices and two match bitmaps.
 
-Two changes, neither of which alters which authors get grouped:
+Three changes, none of which alters which authors get grouped:
 
 - **A provable length screen.** Because matches cannot exceed the shorter
   string and the Winkler prefix boost is capped at 4 characters, a Jaro-Winkler
@@ -22,8 +22,13 @@ Two changes, neither of which alters which authors get grouped:
   counter rather than claiming fixed ranges, because the inner loop shrinks as
   the outer index advances and a static split would leave one worker holding
   most of the work.
+- **Not repeating work that never changes.** Each surname's length was being
+  recounted on every comparison it took part in — 52.7 million counts to learn
+  7,261 fixed facts — and the loop opened with a check for two surnames being
+  equal, which cannot happen because the list is built from unique keys. Both
+  are gone.
 
-Measured at production shape on 10 cores: **4.62s to 0.53s**. Output verified
+Measured at production shape on 10 cores: **4.62s to 0.50s**. Output verified
 byte-identical to the previous implementation, pinned by a golden test that
 records the full grouping rather than a group count.
 
