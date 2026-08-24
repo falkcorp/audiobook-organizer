@@ -1047,6 +1047,57 @@ func (_c *MockAudiobooksStore_GetNarratorByID_Call) RunAndReturn(run func(id int
 	return _c
 }
 
+// MarkNeedsRescan provides a mock function for the type MockAudiobooksStore
+func (_mock *MockAudiobooksStore) MarkNeedsRescan(bookID string) error {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkNeedsRescan")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockAudiobooksStore_MarkNeedsRescan_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkNeedsRescan'
+type MockAudiobooksStore_MarkNeedsRescan_Call struct {
+	*mock.Call
+}
+
+// MarkNeedsRescan is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockAudiobooksStore_Expecter) MarkNeedsRescan(bookID any) *MockAudiobooksStore_MarkNeedsRescan_Call {
+	return &MockAudiobooksStore_MarkNeedsRescan_Call{Call: _e.mock.On("MarkNeedsRescan", bookID)}
+}
+
+func (_c *MockAudiobooksStore_MarkNeedsRescan_Call) Run(run func(bookID string)) *MockAudiobooksStore_MarkNeedsRescan_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAudiobooksStore_MarkNeedsRescan_Call) Return(err error) *MockAudiobooksStore_MarkNeedsRescan_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockAudiobooksStore_MarkNeedsRescan_Call) RunAndReturn(run func(bookID string) error) *MockAudiobooksStore_MarkNeedsRescan_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RecordMetadataChange provides a mock function for the type MockAudiobooksStore
 func (_mock *MockAudiobooksStore) RecordMetadataChange(record *database.MetadataChangeRecord) error {
 	ret := _mock.Called(record)

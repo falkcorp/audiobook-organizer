@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-08-14
+// last-edited: 2026-08-24
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -370,22 +370,22 @@ func TestRestoreAudiobook_NotFound(t *testing.T) {
 	}
 }
 
-func TestRescanAudiobook_NotFound(t *testing.T) {
+func TestReconcileAudiobookFiles_NotFound(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("x").Return(nil, errString("nope"))
-	c, w := newCtx("POST", "/audiobooks/x/rescan", nil, p("id", "x"))
-	h.RescanAudiobook(c)
+	c, w := newCtx("POST", "/audiobooks/x/reconcile-files", nil, p("id", "x"))
+	h.ReconcileAudiobookFiles(c)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
 	}
 }
 
-func TestRescanAudiobook_NoFiles(t *testing.T) {
+func TestReconcileAudiobookFiles_NoFiles(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	d.store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{}, nil)
-	c, w := newCtx("POST", "/audiobooks/b1/rescan", nil, p("id", "b1"))
-	h.RescanAudiobook(c)
+	c, w := newCtx("POST", "/audiobooks/b1/reconcile-files", nil, p("id", "b1"))
+	h.ReconcileAudiobookFiles(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
 	}

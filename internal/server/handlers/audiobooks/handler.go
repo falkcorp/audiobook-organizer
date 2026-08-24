@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-08-19
+// last-edited: 2026-08-24
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -654,9 +654,17 @@ func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
 	httputil.RespondWithOK(c, result)
 }
 
-// RescanAudiobook re-stats the book's files on disk and updates FileSize fields
-// in the DB to match physical reality. POST /audiobooks/:id/rescan.
-func (h *Handler) RescanAudiobook(c *gin.Context) {
+// ReconcileAudiobookFiles re-stats the book's files on disk and updates the
+// FileSize fields in the DB to match physical reality.
+// POST /audiobooks/:id/reconcile-files.
+//
+// Renamed from RescanAudiobook on 2026-08-24. The old name promised a rescan it
+// never performed: it stats files and corrects sizes, but nothing is re-read,
+// no tags are parsed and no hash is recomputed. For an actual forced re-read of
+// a book see ForceRescanAudiobook. POST /audiobooks/:id/rescan is retained as a
+// deprecated alias for THIS handler, so no existing caller silently changes
+// meaning.
+func (h *Handler) ReconcileAudiobookFiles(c *gin.Context) {
 	id := c.Param("id")
 	store := h.store
 	if store == nil {
@@ -747,6 +755,43 @@ func (h *Handler) RescanAudiobook(c *gin.Context) {
 		"new_total":  newTotal,
 		"file_count": len(results),
 		"files":      results,
+	})
+}
+
+// ForceRescanAudiobook flags one book for a full re-read by the next scan.
+// POST /audiobooks/:id/force-rescan.
+//
+// This sets NeedsRescan, which shouldSkipFile treats as "never skip", and
+// GetDirtyBookFolders then pulls the book's immediate parent directory into the
+// next scan even when that directory sits outside the configured import paths.
+// Unchanged siblings in that directory are still skipped, so the cost is one
+// directory walk plus this one book.
+//
+// It deliberately does NOT trigger a scan. The flag is durable and the next
+// scheduled incremental picks it up; triggering here would queue behind any
+// running library.scan anyway, because they share ConcurrencyKey "library.scan".
+func (h *Handler) ForceRescanAudiobook(c *gin.Context) {
+	id := c.Param("id")
+	store := h.store
+	if store == nil {
+		httputil.RespondWithInternalError(c, "database not initialized")
+		return
+	}
+	book, err := store.GetBookByID(id)
+	if err != nil || book == nil {
+		httputil.RespondWithNotFound(c, "audiobook", id)
+		return
+	}
+	if markErr := store.MarkNeedsRescan(id); markErr != nil {
+		// Never swallow this. A silent failure here looks identical to success
+		// from the caller's side and the book would simply never be re-read.
+		httputil.InternalError(c, "failed to flag audiobook for rescan", markErr)
+		return
+	}
+	httputil.RespondWithOK(c, gin.H{
+		"book_id":      id,
+		"needs_rescan": true,
+		"message":      "audiobook flagged for a full re-read by the next scan",
 	})
 }
 
