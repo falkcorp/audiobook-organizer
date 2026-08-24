@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -852,7 +852,7 @@ func (ts *TaskScheduler) runLabelRefinementChain() {
 		slog.Warn("label_refinement: failed to enqueue dedup.rebuild-gold-labels", "err", err)
 		return
 	}
-	if !ts.waitForOpV2(ctx, rebuildID) {
+	if row := ts.WaitForOperation(ctx, rebuildID); row == nil || row.Status != "completed" {
 		slog.Warn("label_refinement: rebuild-gold-labels did not complete cleanly; aborting chain", "op", rebuildID)
 		return
 	}
@@ -862,44 +862,11 @@ func (ts *TaskScheduler) runLabelRefinementChain() {
 		slog.Warn("label_refinement: failed to enqueue dedup.calibrate-composite", "err", err)
 		return
 	}
-	if !ts.waitForOpV2(ctx, calibrateID) {
+	if row := ts.WaitForOperation(ctx, calibrateID); row == nil || row.Status != "completed" {
 		slog.Warn("label_refinement: calibrate-composite did not complete cleanly", "op", calibrateID)
 		return
 	}
 
 	slog.Info("label_refinement: dry-run chain complete (report only, nothing written)",
 		"rebuild_op", rebuildID, "calibrate_op", calibrateID)
-}
-
-// waitForOpV2 polls the v2 operation store until opID reaches a terminal state
-// or ctx is canceled; it returns true only on "completed". NOTE: the scheduler's
-// WaitForOperation reads the LEGACY operation:<id> table and would nil-deref on
-// a v2 registry op id (GetOperationByID returns (nil,nil) on not-found), so this
-// polls GetOperationV2 instead — mirroring Server.WaitForOp's terminal set.
-func (ts *TaskScheduler) waitForOpV2(ctx context.Context, opID string) bool {
-	store := ts.deps.Store()
-	if store == nil {
-		return false
-	}
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-			row, err := store.GetOperationV2(opID)
-			if err != nil || row == nil {
-				// DB error or not-yet-visible — keep polling until ctx expires.
-				continue
-			}
-			switch row.Status {
-			case "completed":
-				return true
-			case "failed", "canceled", "interrupted_dropped", "interrupted_quiesced":
-				return false
-			}
-			// queued or running — keep polling.
-		}
-	}
 }
