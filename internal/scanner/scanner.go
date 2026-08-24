@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -67,6 +67,19 @@ var (
 	dupLookupSkipCount      atomic.Int64 // files skipped: duplicate status undeterminable
 	scanCacheUpdateErrCount atomic.Int64 // UpdateScanCache failures (file re-hashed every scan until it succeeds)
 	scanFailCountErrCount   atomic.Int64 // IncrScanFailCount failures
+
+	// The three ways a scan-cache write-back can be abandoned BEFORE
+	// UpdateScanCache is ever called. Until 2026-08-24 all three were dropped
+	// on the floor by a single `if ... statErr == nil` / `dbErr == nil &&
+	// dbBook != nil` chain with no else, so a store error, a missing row and a
+	// vanished file were indistinguishable from a successful write -- and each
+	// one leaves the path with no cache entry, which GetScanCacheMap treats as
+	// "never scanned" FOREVER (it skips rows whose LastScanMtime is nil).
+	// The result is a file re-read and re-hashed on every scan for the life of
+	// the library, reported as nothing.
+	scanCacheStatErrCount   atomic.Int64 // write-back abandoned: os.Stat failed
+	scanCacheLookupErrCount atomic.Int64 // write-back abandoned: GetBookByFilePath returned an error
+	scanCacheNoRowCount     atomic.Int64 // write-back abandoned: no book row exists at this path
 )
 
 // Skip-decision counters. shouldSkipFile used to return a bare bool with no
@@ -564,6 +577,60 @@ func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) (
 	return ScanDirectoryParallel(ctx, rootDir, 1, scanLog)
 }
 
+// writeBackScanCache stamps the scan cache for filePath so the next incremental
+// scan can skip it.
+//
+// Both call sites used to inline a near-identical copy of this, and both copies
+// silently abandoned the write on three separate conditions. They are counted
+// individually now because the fixes differ and the volumes differ by orders of
+// magnitude: a stat error is a race with a moving file, a lookup error is a
+// store problem, and "no row" is structural -- saveBookToDatabase returns early
+// without creating a row for a file that duplicates an already-version-linked
+// book, so those paths can NEVER acquire a cache entry no matter how many times
+// they are scanned. Only the last one is self-perpetuating, and it selects for
+// exactly the files that are most expensive to process.
+func writeBackScanCache(filePath string, scanLog logger.Logger) {
+	// Recover guard: getStore() may return a non-nil interface wrapping a nil
+	// concrete pointer (happens in tests).
+	defer func() {
+		if r := recover(); r != nil {
+			scanLog.Warn("scan cache update recovered from panic: %v", r)
+		}
+	}()
+
+	store := getStore()
+	if store == nil {
+		return
+	}
+
+	fi, statErr := os.Stat(filePath)
+	if statErr != nil {
+		warnSampled(&scanCacheStatErrCount, scanLog,
+			"scan cache write-back skipped for %s: stat failed: %v (file will be re-read next scan)", filePath, statErr)
+		return
+	}
+
+	dbBook, dbErr := store.GetBookByFilePath(filePath)
+	if dbErr != nil {
+		warnSampled(&scanCacheLookupErrCount, scanLog,
+			"scan cache write-back skipped for %s: book lookup failed: %v (file will be re-read next scan)", filePath, dbErr)
+		return
+	}
+	if dbBook == nil {
+		// Not an error, and deliberately not warnSampled: on a library with
+		// many duplicate files this is the common case, not the exception. The
+		// count lands in the run summary instead.
+		scanCacheNoRowCount.Add(1)
+		return
+	}
+
+	if uerr := store.UpdateScanCache(dbBook.ID, fi.ModTime().Unix(), fi.Size()); uerr != nil {
+		// Silent failure meant the file was re-hashed every scan forever (H5).
+		warnSampled(&scanCacheUpdateErrCount, scanLog,
+			"UpdateScanCache failed for %s: %v (file will be re-hashed next scan)", filePath, uerr)
+	}
+}
+
 // ScanDirectoryParallel scans directory with parallel workers for improved performance.
 // If scanLog is nil, a default logger is used.
 func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error) {
@@ -819,6 +886,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	dupLookupSkipStart := dupLookupSkipCount.Load()
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
+	scanCacheStatErrStart := scanCacheStatErrCount.Load()
+	scanCacheLookupErrStart := scanCacheLookupErrCount.Load()
+	scanCacheNoRowStart := scanCacheNoRowCount.Load()
 	skipUnchangedStart := skipUnchangedCount.Load()
 	readCacheMissStart := readCacheMissCount.Load()
 	readChangedStart := readChangedCount.Load()
@@ -972,17 +1042,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 						scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
 					}
 					scanLog.Warn("suspicious file (%d bytes, threshold %d): %s", fi.Size(), threshold, filePath)
-					func() {
-						defer func() { recover() }()
-						if store := getStore(); store != nil {
-							if dbBook, dbErr := store.GetBookByFilePath(filePath); dbErr == nil && dbBook != nil {
-								if uerr := store.UpdateScanCache(dbBook.ID, fi.ModTime().Unix(), fi.Size()); uerr != nil {
-									// Silent failure meant the file was re-hashed every scan forever (H5).
-									warnSampled(&scanCacheUpdateErrCount, scanLog, "UpdateScanCache failed for %s: %v (file will be re-hashed next scan)", filePath, uerr)
-								}
-							}
-						}
-					}()
+					writeBackScanCache(filePath, scanLog)
 					return
 				}
 			}
@@ -1237,27 +1297,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					scanLog.Warn("chapter persistence failed for %s: %v", books[idx].FilePath, err)
 				}
 				// Update scan cache so next incremental scan skips this file.
-				// Use a deferred recover guard in case GlobalStore is a non-nil interface
-				// wrapping a nil concrete pointer (can happen in tests).
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							scanLog.Warn("scan cache update recovered from panic: %v", r)
-						}
-					}()
-					store := getStore()
-					if store == nil {
-						return
-					}
-					if fi, statErr := os.Stat(books[idx].FilePath); statErr == nil {
-						if dbBook, dbErr := store.GetBookByFilePath(books[idx].FilePath); dbErr == nil && dbBook != nil {
-							if uerr := store.UpdateScanCache(dbBook.ID, fi.ModTime().Unix(), fi.Size()); uerr != nil {
-								// Silent failure meant the file was re-hashed every scan forever (H5).
-								warnSampled(&scanCacheUpdateErrCount, scanLog, "UpdateScanCache failed for %s: %v (file will be re-hashed next scan)", books[idx].FilePath, uerr)
-							}
-						}
-					}
-				}()
+				writeBackScanCache(books[idx].FilePath, scanLog)
 			}
 		}(i)
 	}
@@ -1289,6 +1329,20 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	if d := scanFailCountErrCount.Load() - scanFailCountErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-fail-count increments failed", d)
+	}
+	if d := scanCacheStatErrCount.Load() - scanCacheStatErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-cache write-backs skipped because os.Stat failed", d)
+	}
+	if d := scanCacheLookupErrCount.Load() - scanCacheLookupErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-cache write-backs skipped because the book lookup failed (store errors)", d)
+	}
+	if d := scanCacheNoRowCount.Load() - scanCacheNoRowStart; d > 0 {
+		// Not a store failure: these paths have no book row at all, so there is
+		// nowhere to record that they were scanned. They will be re-read and
+		// re-hashed on EVERY scan until either a row exists for them or the
+		// scan cache learns to key on paths rather than book rows.
+		scanLog.Warn("scan summary: %d scan-cache write-backs skipped because no book row exists at the path "+
+			"(these files are re-read and re-hashed on every scan)", d)
 	}
 
 	// Skip-rate summary. Logged UNCONDITIONALLY, unlike the error counters
