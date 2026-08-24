@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.65.0
+// version: 1.66.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -92,6 +92,12 @@ var (
 	// half-written metadata this pass recorded. See writeBackScanCache.
 	scanCacheRearmCount    atomic.Int64 // write-back re-armed NeedsRescan: file still inside the rescan-age window
 	scanCacheRearmErrCount atomic.Int64 // MarkNeedsRescan failed after a write-back that needed re-arming
+
+	// createBookFilesForBook's own by-path lookup. Split out because a store
+	// ERROR and "no row here" are different facts with different consequences,
+	// and the original code returned the same "" for both -- silently.
+	bookFileLookupErrCount     atomic.Int64 // book lookup failed: chapters and scan-cache write-back skipped for this book
+	bookFilePathRecoveredCount atomic.Int64 // no row at the segment path, but the row was found at the normalized directory
 )
 
 // Skip-decision counters. The skip decision used to return a bare bool with no
@@ -1215,9 +1221,14 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				if err := saveBook(ctx, &books[idx]); err != nil {
 					errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 				} else {
-					// dirPath is already a directory, so the normalization
-					// branch cannot fire and the row cannot move -- discarding
-					// the result is correct here, not an oversight.
+					// dirPath is a directory, so the normalization branch
+					// (guarded by !info.IsDir()) does not fire and the row does
+					// not move -- discarding the result is correct here, not an
+					// oversight. Deliberately "does not" rather than "cannot":
+					// the guard is evaluated against a fresh stat, so if this
+					// call is ever changed to pass a FILE the discard becomes a
+					// silent bug. TestProcessBooksParallelDirectoryBookKeepsItsPath
+					// pins the current behaviour.
 					_ = createBookFilesForBook(dirPath, nil, scanLog)
 					// Chapters must be persisted AFTER the book files exist —
 					// the multi-file synthesis path reads BookFile durations to
@@ -1405,14 +1416,16 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				// Pass SegmentHashes (populated by saveBookToDatabase dedup loop)
 				// to avoid re-hashing each segment file (PERF-2b).
 				if len(books[idx].SegmentFiles) > 1 {
-					// Keep the in-memory book in step with the row. This call can
-					// move the stored FilePath to the containing directory, and
-					// BOTH consumers below look the book up BY PATH:
+					// Keep the in-memory book in step with the row. This call
+					// can move the stored FilePath to the containing directory,
+					// and BOTH consumers below look the book up BY PATH:
 					// PersistChaptersForBook returns silently on a miss (so
-					// chapters were never persisted) and writeBackScanCache counts
-					// a miss as "no book row" (so the file was re-read and
-					// re-hashed on every scan, forever). Measured on prod
-					// 2026-08-24; see the doc comment on createBookFilesForBook.
+					// chapters were never persisted at all) and writeBackScanCache
+					// counts a miss as "no book row" (so the book never acquired a
+					// scan-cache entry). Measured on prod 2026-08-24. Note this
+					// does NOT yet make the next scan SKIP the book -- see the
+					// SCOPE paragraph on createBookFilesForBook for the two
+					// grain mismatches that still defeat that.
 					if moved := createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, books[idx].SegmentHashes); moved != "" {
 						books[idx].FilePath = moved
 					}
@@ -1784,6 +1797,45 @@ func isInitialToken(word string) bool {
 	return len(word) == 2 && word[1] == '.' && word[0] >= 'A' && word[0] <= 'Z'
 }
 
+// recoverNormalizedBookPath answers "is this segment file's book already
+// filed under its parent directory?" and returns that directory if so.
+//
+// It exists because FilePath normalization is one-way and invisible: the scan
+// walk always re-emits a multi-file book as FilePath=segs[0] (it makes no store
+// calls, so it cannot know the row moved), while the row itself stays at the
+// directory. Every scan after the first therefore looks the book up at a path
+// that no longer has a row.
+//
+// The ownership check is the load-bearing part. Finding *a* book at the parent
+// directory is not enough -- a directory can hold a different book than the one
+// this segment belongs to, and writing chapters or a scan-cache entry to the
+// wrong book is worse than writing none. The row must demonstrably own THIS
+// file, i.e. carry a BookFile whose path is exactly the one we were asked about.
+func recoverNormalizedBookPath(bookFilePath string) string {
+	info, statErr := os.Stat(bookFilePath)
+	if statErr != nil || info.IsDir() {
+		// Only a FILE path can have been normalized away from.
+		return ""
+	}
+
+	dirPath := filepath.Dir(bookFilePath)
+	dirBook, derr := getStore().GetBookByFilePath(dirPath)
+	if derr != nil || dirBook == nil {
+		return ""
+	}
+
+	files, ferr := getStore().GetBookFiles(dirBook.ID)
+	if ferr != nil {
+		return ""
+	}
+	for _, bf := range files {
+		if bf.FilePath == bookFilePath {
+			return dirPath
+		}
+	}
+	return ""
+}
+
 // createBookFilesForBook creates BookFile records for a book.
 // If segmentFiles is nil, it scans dirPath for all audio files.
 // If segmentFiles is provided, only those specific files become BookFile records.
@@ -1800,7 +1852,7 @@ func isInitialToken(word string) bool {
 // longer matched any row, and TWO consumers then failed silently on the miss:
 //
 //   - writeBackScanCache found no row, so the book never acquired a scan-cache
-//     entry and was re-read AND re-hashed on every scan, permanently;
+//     entry at all and every scan counted it in scanCacheNoRowCount;
 //   - PersistChaptersForBook found no row and returned quietly (its comment
 //     classifies "a stale path" as a benign data condition), so the book's
 //     chapters were never persisted at all.
@@ -1810,13 +1862,54 @@ func isInitialToken(word string) bool {
 // this function, so is never normalized -- had a real timestamp. Handing the
 // caller the new path lets it keep its in-memory Book in step with the row,
 // which fixes both consumers with one change.
+//
+// SCOPE -- do not read more into this than it does. Populating the scan-cache
+// entry does NOT yet make the next scan SKIP the book, and an earlier version
+// of this comment wrongly said it did. Two independent things still defeat the
+// skip, both measured 2026-08-24:
+//
+//  1. KEY GRAIN. GetScanCacheMap keys the cache by book.FilePath -- now the
+//     directory -- but the walk emits, and classifySkipFile looks up, the
+//     SEGMENT file path. The lookup misses on every scan.
+//  2. VALUE GRAIN. This path hands writeBackScanCache a DIRECTORY to stat, so
+//     the stored size is the directory inode's (128 bytes in the measurement),
+//     never the segment's. Aligning the keys alone would still fail the size
+//     comparison.
+//
+// The scan cache is keyed per-BOOK while the skip decision is made per-FILE;
+// closing that needs per-file cache keying, which is tracked separately. What
+// this function's return value fixes is chapter persistence and the no-row
+// counter -- both real, neither a skip.
 func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, knownHashes ...map[string]string) string {
 	if getStore() == nil {
 		return ""
 	}
 
 	dbBook, err := getStore().GetBookByFilePath(bookFilePath)
-	if err != nil || dbBook == nil {
+	if err != nil {
+		// A store error is NOT "the row is still where you left it" -- we do not
+		// know where it is. Returning "" is the only safe answer (the caller
+		// must not be sent to a path we cannot confirm), but it was previously
+		// returned with no log and no counter, so the two consumers below went
+		// silently unserviced. Say so.
+		warnSampled(&bookFileLookupErrCount, scanLog,
+			"createBookFilesForBook: book lookup failed for %s: %v "+
+				"(chapters and scan-cache write-back skipped for this book)", bookFilePath, err)
+		return ""
+	}
+	if dbBook == nil {
+		// No row at this path. Before giving up, check whether THIS book was
+		// normalized by an earlier scan and now lives at its parent directory.
+		//
+		// Without this, a book normalized on its first scan can never recover:
+		// every later scan re-emits FilePath=segs[0], finds no row there, and
+		// returns "" -- so the caller keeps the dead path and BOTH consumers
+		// miss again, forever. The 2026-08-24 fix closed the path that CREATES
+		// the desync; this is the path that REPAIRS the rows it already made.
+		if recovered := recoverNormalizedBookPath(bookFilePath); recovered != "" {
+			bookFilePathRecoveredCount.Add(1)
+			return recovered
+		}
 		return ""
 	}
 
