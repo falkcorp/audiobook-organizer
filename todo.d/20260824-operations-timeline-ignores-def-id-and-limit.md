@@ -40,8 +40,50 @@
       end: `since=240h` and `336h` both return the same 8 rows, so a window that
       hits the cap cannot support any "it never happened before X" claim.
 
-      Rejecting unknown query keys with a 400 is arguably the better fix than
-      implementing the filters, since it converts every existing wrong query
-      into a loud failure instead of a plausible one. Related:
-      [[feedback_operations_timeline_hardcodes_limit_200]],
-      [[feedback_verify_the_instrument_with_a_bogus_value]].
+      **🚨 There are TWO timeline handlers and the tested one is DEAD.** Verified
+      2026-08-24:
+
+      - **Live**, routed at `wire_operations_routes.go:24` —
+        `handlers.OperationsV2Handler.GetOperationTimeline`
+        (`internal/server/handlers/operations_v2.go:145`).
+      - **Dead** — `(*Server).handleGetOperationTimeline`
+        (`internal/server/operations_v2_handlers.go:58`). Its only references
+        are its own definition and doc comment, plus
+        `operations_v2_handlers_test.go`. **No route registers it.**
+
+      So the existing test coverage for this endpoint — including a
+      `?since=badvalue` case — exercises code that never runs in production. A
+      strict-rejection test added there **passes green while prod is
+      unchanged.** Test against `handlers/operations_v2.go`, and prefer deleting
+      the dead twin as part of the fix: two implementations of one endpoint
+      drifting apart is how this became confusing.
+
+      **A 400 breaks nothing — verified, not assumed.** The only programmatic
+      caller is `web/src/services/api.ts:535`, which sends exactly one
+      parameter, always explicitly:
+
+      ```ts
+      apiFetch(`${API_BASE}/operations/timeline?since=${sinceMinutes}m`)
+      ```
+
+      **But rejecting unknown keys fixes only ONE of three traps.** Do not close
+      this entry on the 400 alone:
+
+      1. **Inert `def_id`/`limit`** — fixed by a 400 on unknown keys. ✅
+      2. **`since` defaults to 15m** — *not* fixed. A bare
+         `GET /operations/timeline` has no unknown key to reject, still silently
+         measures a quarter hour, still returns a plausible small answer. This
+         is the half that caused the `maintenance.window` undercount. Because
+         the sole caller always passes `since` explicitly, **making `since`
+         required (400 if absent) breaks nothing** and closes the more dangerous
+         hole.
+      3. **The 200 cap** — *not* fixed. A full page still reads as a complete
+         census. The structural answer is to make the response describe its own
+         scope, e.g. `{"data":{…,"since":"168h","window_start":"…",
+         "truncated":true}}`. An answer that states what it looked at cannot be
+         misread as a census, and it defends against the next caller who never
+         reads this entry.
+
+      Related: [[feedback_operations_timeline_hardcodes_limit_200]],
+      [[feedback_verify_the_instrument_with_a_bogus_value]],
+      [[feedback_never_enumerate_with_the_suspect_instrument]].
