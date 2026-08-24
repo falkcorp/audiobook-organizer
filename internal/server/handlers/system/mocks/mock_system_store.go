@@ -643,8 +643,8 @@ func (_c *MockSystemStore_GetDashboardStats_Call) Run(run func()) *MockSystemSto
 	return _c
 }
 
-func (_c *MockSystemStore_GetDashboardStats_Call) Return(v *database.DashboardStats, err error) *MockSystemStore_GetDashboardStats_Call {
-	_c.Call.Return(v, err)
+func (_c *MockSystemStore_GetDashboardStats_Call) Return(dashboardStats *database.DashboardStats, err error) *MockSystemStore_GetDashboardStats_Call {
+	_c.Call.Return(dashboardStats, err)
 	return _c
 }
 

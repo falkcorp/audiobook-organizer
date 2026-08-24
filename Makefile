@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.23.0
+# version: 2.24.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-20
+# last-edited: 2026-08-24
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -298,7 +298,7 @@ mutate-matrix:
 
 ## mocks: Regenerate mockery-managed mocks from .mockery.yaml.
 ## Run this after editing an interface listed in .mockery.yaml.
-## Pinned mockery version: v3.7.1 (module github.com/vektra/mockery/v3).
+## Pinned mockery version: v3.7.4 (module github.com/vektra/mockery/v3).
 ## Install via scripts/setup-mockery.sh. Mockery v2.x cannot regenerate
 ## these mocks: it does not support merging multiple interfaces into one
 ## shared output file (e.g. internal/database/mocks/mock_store.go), so
@@ -312,7 +312,7 @@ mocks:
 
 ## mocks-check: Verify committed mocks match what mockery would generate
 ## right now. Fails CI if someone edited an interface without re-running
-## mockery. Pinned mockery version: v3.7.1 (see scripts/setup-mockery.sh).
+## mockery. Pinned mockery version: v3.7.4 (see scripts/setup-mockery.sh).
 ## Backlog 5.9.
 mocks-check:
 	@echo "🎭 Checking that committed mocks are up to date..."

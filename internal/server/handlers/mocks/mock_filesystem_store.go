@@ -309,8 +309,8 @@ func (_c *MockFilesystemStore_GetDashboardStats_Call) Run(run func()) *MockFiles
 	return _c
 }
 
-func (_c *MockFilesystemStore_GetDashboardStats_Call) Return(v *database.DashboardStats, err error) *MockFilesystemStore_GetDashboardStats_Call {
-	_c.Call.Return(v, err)
+func (_c *MockFilesystemStore_GetDashboardStats_Call) Return(dashboardStats *database.DashboardStats, err error) *MockFilesystemStore_GetDashboardStats_Call {
+	_c.Call.Return(dashboardStats, err)
 	return _c
 }
 

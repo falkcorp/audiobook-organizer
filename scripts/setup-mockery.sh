@@ -1,11 +1,11 @@
 #!/bin/bash
 # file: scripts/setup-mockery.sh
-# version: 1.3.0
+# version: 1.4.0
 # guid: c3d4e5f6-a7b8-9012-cdef-345678901abc
 
 # Setup script for integrating mockery v3 into the project.
 #
-# PINNED VERSION: v3.7.1 (module github.com/vektra/mockery/v3). This must
+# PINNED VERSION: v3.7.4 (module github.com/vektra/mockery/v3). This must
 # match the version installed in .github/workflows/ci.yml's mocks-check job.
 # Do NOT use @latest — it drifts silently (e.g. resolving to a newer mockery
 # major/minor than CI expects) and produces spurious formatting-only diffs
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-MOCKERY_VERSION="v3.7.1"
+MOCKERY_VERSION="v3.7.4"
 
 echo "🔧 Setting up mockery for improved test coverage..."
 
