@@ -1,5 +1,5 @@
 // file: internal/database/batch_upsert_aggregates_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d41f6b2-70e8-4c35-b1a7-38f0c92e64d5
 // last-edited: 2026-08-24
 
@@ -78,15 +78,43 @@ func (w *syncWriter) Write(p []byte) (int, error) {
 //
 // Counting "updated" therefore reports 1 whether the recompute ran once or once
 // per row. A mutant that dropped the per-book de-duplication and recomputed N
-// times passed a version of this suite that counted writes. Every message this
-// function matches begins with "RecomputeBookAggregates", so matching the prefix
-// catches the updated / no-change / not-found / failed variants alike.
+// times passed a version of this suite that counted writes.
+//
+// WHY AN EXPLICIT LIST AND NOT A "RecomputeBookAggregates" SUBSTRING TEST: the
+// obvious matcher over-counts, and it was measured doing so. One invocation can
+// emit THREE lines carrying both that token and book_id — the two partial-data
+// warnings ("no files have Duration", "no files have FileSize") and then the
+// terminal "no change needed", because preserving both existing values means
+// nothing changed. Seed a book with real aggregates, batch-upsert its row with
+// Duration 0 and FileSize 0, and this returned 3 for a single call.
+//
+// It reads correctly today only because every fixture file carries a positive
+// duration AND a positive size. Adding one unprobed (zero-duration) file — a
+// realistic edit — would break the counts and the failure would look exactly
+// like a coalescing regression while being a counting artifact.
+//
+// So match only the mutually exclusive TERMINAL outcomes: every invocation
+// reaches exactly one of these, and none of them is a partial-data warning.
+// Anything added to RecomputeBookAggregates that returns by another route must
+// be added here too, or invocations will be under-counted.
+var aggregateTerminalMarkers = []string{
+	"RecomputeBookAggregates updated",
+	"RecomputeBookAggregates: no change needed",
+	"RecomputeBookAggregates book not found, skipping",
+	"notifyBookFileChange RecomputeBookAggregates failed",
+}
+
 func countAggregateInvocations(logs, bookID string) int {
 	n := 0
 	for _, line := range strings.Split(logs, "\n") {
-		if strings.Contains(line, "RecomputeBookAggregates") &&
-			strings.Contains(line, "book_id="+bookID) {
-			n++
+		if !strings.Contains(line, "book_id="+bookID) {
+			continue
+		}
+		for _, marker := range aggregateTerminalMarkers {
+			if strings.Contains(line, marker) {
+				n++
+				break
+			}
 		}
 	}
 	return n
@@ -112,7 +140,17 @@ func countAggregateWrites(logs, bookID string) int {
 // values handed to BatchUpsertBookFiles, because the batch path runs each file
 // through normalizeBookFileDuration (CONS-18) and may rewrite a duration on the
 // way in. Comparing the book against its own files is also the invariant that
-// actually matters: the parent's aggregates must equal the sum of its children.
+// actually matters: the parent's aggregates must equal the sum of its children —
+// but ONLY while at least one child carries a duration. When none does, the
+// partial-data rule deliberately preserves the book's previous value instead,
+// and parent will not equal children. TestDeletingEveryFileKeepsTheBookDuration
+// pins exactly that case, so do not use this helper to assert it.
+//
+// KNOWN BLIND SPOT: expectations come from the stored rows, so this cannot see
+// row duplication — if a batch wrote the same file twice, both copies are summed
+// on each side and the comparison still balances. That is the deliberate
+// trade-off for surviving CONS-18, not an oversight; see the todo.d fragment on
+// duplicate rows within a single batch.
 func sumStoredFileAggregates(t *testing.T, store Store, bookID string) (int, int64) {
 	t.Helper()
 	files, err := store.GetBookFiles(bookID)
@@ -152,8 +190,17 @@ func TestBatchUpsertBookFilesRecomputesAggregatesOncePerBook(t *testing.T) {
 		return b.ID
 	}
 
-	// Two books of DIFFERENT file counts, so a per-book total cannot
-	// coincidentally match the other book's.
+	// TWO books is the load-bearing property, and it was measured: rerun with a
+	// single-book fixture and the "recompute only the first book" and "only the
+	// last book" mutants both survive. Multiplicity is what catches a partial
+	// recompute.
+	//
+	// The differing file counts (5 vs 3) are NOT load-bearing — an earlier
+	// version of this comment claimed they were. Rerun with 5 and 5 and every
+	// mutant this fixture kills is still killed. What actually separates the two
+	// books is their disjoint per-file durations (600+i vs 900+i), which is what
+	// stops one book's total coincidentally matching the other's. Keep the
+	// durations distinct; the counts are free to change.
 	bookA := mkBook("Batch Book A", "/lib/batch/a")
 	bookB := mkBook("Batch Book B", "/lib/batch/b")
 
@@ -330,4 +377,107 @@ func TestBatchUpsertBookFilesAttributesTheAffectedBookNotTheRequestedOne(t *test
 	// spurious recompute happened, and would prove nothing.
 	require.Zero(t, countAggregateInvocations(readLogs(), other.ID),
 		"the requested-but-not-affected book must not be recomputed")
+}
+
+// TestBatchUpsertBookFilesMultiRowRetargetStrict closes the gap between the two
+// tests above: one is multi-row but every row is NEW, the other exercises the
+// retarget branch but with a SINGLE row. Nothing covered a batch that both
+// retargets a row and carries a second row for the same book.
+//
+// That combination is where a per-row recompute can hide. Two mutations survive
+// the rest of this suite and are killed only here: appending the book id a
+// second time inside the `existing != nil` branch (so an updated row costs an
+// extra recompute), and keying the de-dup set on the PRE-match BookID while
+// appending the POST-match one (so the set never suppresses anything for a
+// retargeted row). Both reintroduce exactly the O(N^2) read amplification this
+// change exists to delete, on the update path only.
+func TestBatchUpsertBookFilesMultiRowRetargetStrict(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	owner, err := store.CreateBook(&Book{Title: "Owner", FilePath: "/lib/own"})
+	require.NoError(t, err)
+	other, err := store.CreateBook(&Book{Title: "Other", FilePath: "/lib/other"})
+	require.NoError(t, err)
+
+	const ownedPath = "/lib/own/t1.m4b"
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID:   owner.ID,
+		FilePath: ownedPath,
+		Duration: 100,
+		FileSize: 1_000_000,
+	}))
+
+	readLogs := captureAggregateLogs(t)
+
+	// Row 1 is submitted under `other` and retargets to `owner` by path.
+	// Row 2 is a genuinely new row for `owner`. Both resolve to one book, so
+	// one recompute must cover them.
+	require.NoError(t, store.BatchUpsertBookFiles([]*BookFile{
+		{BookID: other.ID, FilePath: ownedPath, Duration: 250, FileSize: 2_000_000},
+		{BookID: owner.ID, FilePath: "/lib/own/t2.m4b", Duration: 300, FileSize: 3_000_000},
+	}))
+
+	require.Equal(t, 1, countAggregateInvocations(readLogs(), owner.ID),
+		"a batch resolving to ONE book must recompute it exactly once, "+
+			"however many rows resolve to it and whether they are new or updated")
+	require.Zero(t, countAggregateInvocations(readLogs(), other.ID),
+		"the book named on the request but owning no row must not be recomputed")
+
+	wantDur, wantSize := sumStoredFileAggregates(t, store, owner.ID)
+	require.Positive(t, wantDur, "fixture must produce a non-zero duration or the assertion is vacuous")
+
+	ownerBook, err := store.GetBookByID(owner.ID)
+	require.NoError(t, err)
+	require.NotNil(t, ownerBook.Duration)
+	require.Equal(t, wantDur, *ownerBook.Duration)
+	require.NotNil(t, ownerBook.FileSize)
+	require.Equal(t, wantSize, *ownerBook.FileSize)
+}
+
+// TestBatchUpsertBookFilesAggregateLogInstrumentIsLive is a known-good twin for
+// the counting helper, and it exists because the instrument can die silently.
+//
+// Every coalescing assertion in this file is counted through log lines emitted
+// by RecomputeBookAggregates in a DIFFERENT file. Renaming those lines fails
+// loudly — plenty of tests break. But DELETING the "no change needed" Debug
+// block (or raising its level, or changing its Enabled guard so it stops
+// emitting) leaves this whole suite green, because a redundant recompute then
+// produces no line at all and simply is not counted. With that block gone, a
+// mutant that drops the per-book de-duplication and recomputes once per row
+// survives a full `go test ./internal/database/` run. Measured, not assumed.
+//
+// So that Debug line is load-bearing for tests in another file, and nothing at
+// the line says so. This test is the control: it asserts the redundant path is
+// still observable, so the instrument's death fails here rather than quietly
+// blinding everything else.
+func TestBatchUpsertBookFilesAggregateLogInstrumentIsLive(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	book, err := store.CreateBook(&Book{Title: "Instrument", FilePath: "/lib/instr"})
+	require.NoError(t, err)
+
+	readLogs := captureAggregateLogs(t)
+
+	require.NoError(t, store.BatchUpsertBookFiles([]*BookFile{{
+		BookID:   book.ID,
+		FilePath: "/lib/instr/t1.m4b",
+		Duration: 600,
+		FileSize: 6_000_000,
+	}}))
+	require.Equal(t, 1, countAggregateInvocations(readLogs(), book.ID))
+	require.Equal(t, 1, countAggregateWrites(readLogs(), book.ID))
+
+	// Deliberately redundant: the sums are unchanged, so this takes the
+	// no-change early return and emits ONLY the Debug line.
+	require.NoError(t, store.RecomputeBookAggregates(book.ID))
+
+	require.Equal(t, 2, countAggregateInvocations(readLogs(), book.ID),
+		"a redundant no-change recompute must still be COUNTED — if this reads 1, "+
+			"the 'no change needed' Debug line is gone and every coalescing "+
+			"assertion in this file has silently stopped being able to see a "+
+			"per-row regression")
+	require.Equal(t, 1, countAggregateWrites(readLogs(), book.ID),
+		"a no-change recompute must not be counted as a write")
 }

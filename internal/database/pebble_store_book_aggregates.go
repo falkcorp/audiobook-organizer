@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-12
+// last-edited: 2026-08-24
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -184,8 +184,22 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 //
 // WHY best-effort: BookFile writes are committed to Pebble before this is
 // called. Rolling back the aggregate recompute would leave the DB in an
-// inconsistent state (file committed, book not updated). The backfill job
-// acts as a safety net for any misses.
+// inconsistent state (file committed, book not updated). Failing the caller's
+// write over a derived value that can be rebuilt is the worse trade.
+//
+// ⚠️ THERE IS NO SAFETY NET. This comment used to end "the backfill job acts as
+// a safety net for any misses." That is not true and should not be relied on:
+// maintenance.recompute-book-aggregates short-circuits on a one-time sentinel,
+// and its documented escape hatch — Force — is declared but never read, and is
+// absent from the params struct the only call site populates, so it cannot even
+// be submitted. Once the sentinel is set the job refuses to run. See the todo.d
+// fragment. Until that is resolved, a book whose recompute fails here stays
+// wrong until some later write to its files happens to recompute it.
+//
+// That is why the failure must at least be loud. For batch writes use
+// notifyBookFileChanges, which additionally emits one aggregated Error for the
+// whole batch — a per-book warning buried in a 175K-row backfill is not a signal
+// anyone will see.
 func (p *PebbleStore) notifyBookFileChange(bookID string) {
 	if err := p.RecomputeBookAggregates(bookID); err != nil {
 		slog.Warn("notifyBookFileChange RecomputeBookAggregates failed (best-effort)",
@@ -194,6 +208,48 @@ func (p *PebbleStore) notifyBookFileChange(bookID string) {
 			"error", err,
 		)
 	}
+}
+
+// notifyBookFileChanges recomputes aggregates for a batch's affected books and
+// reports the batch's failures as ONE line rather than N.
+//
+// Each book still gets its per-book warning, so per-book counting and debugging
+// are unchanged. What this adds is the summary an operator can actually notice:
+// without it, a backfill in which every recompute failed and one in which none
+// did are distinguishable only by grepping warnings out of a very large log, and
+// the operation reports success either way.
+//
+// The summary message deliberately does NOT contain the string
+// "RecomputeBookAggregates". The test helper countAggregateInvocations counts
+// terminal log lines to detect per-row recompute regressions, and a per-batch
+// line carrying that token would be counted as an extra invocation and break the
+// coalescing assertions. Keep it that way.
+func (p *PebbleStore) notifyBookFileChanges(bookIDs []string) {
+	var failed []string
+	for _, bookID := range bookIDs {
+		if err := p.RecomputeBookAggregates(bookID); err != nil {
+			slog.Warn("notifyBookFileChange RecomputeBookAggregates failed (best-effort)",
+				"book_id", bookID,
+				"caller", aggregateCaller(),
+				"error", err,
+			)
+			failed = append(failed, bookID)
+		}
+	}
+	if len(failed) == 0 {
+		return
+	}
+	sample := failed
+	if len(sample) > 10 {
+		sample = sample[:10]
+	}
+	slog.Error("book aggregate recompute failed after a batch write; these books' "+
+		"totals are now stale and nothing re-derives them automatically",
+		"failed_count", len(failed),
+		"affected_count", len(bookIDs),
+		"failed_sample", sample,
+		"caller", aggregateCaller(),
+	)
 }
 
 // IsBookAggregatesBackfillDone reports whether the one-time backfill has been

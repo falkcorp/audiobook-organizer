@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-24
 
@@ -1096,9 +1096,7 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 
 	// ONE recompute per affected book, not one per row. This is the actual fix —
 	// everything above is just what makes it safe to do.
-	for _, bookID := range affectedBooks {
-		s.notifyBookFileChange(bookID)
-	}
+	s.notifyBookFileChanges(affectedBooks)
 	return nil
 }
 
@@ -1325,9 +1323,7 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 	//
 	// Best-effort, like every other caller: the rows are committed, and a failure
 	// to refresh a derived aggregate must not be reported as a failed write.
-	for _, bookID := range affectedBooks {
-		s.notifyBookFileChange(bookID)
-	}
+	s.notifyBookFileChanges(affectedBooks)
 	return nil
 }
 
