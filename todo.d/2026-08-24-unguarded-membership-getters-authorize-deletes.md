@@ -81,6 +81,13 @@
         leak is higher priority than finishing tonight's attribution** —
         tonight's damage is bounded and stopped; the other one apparently
         isn't.
+      - **⚠️ Containment boundary, explicit:** the config disable
+        (`maintenance.author_split` / `scheduled.author_split.enabled`) covers
+        ONLY `author_split_scan`, confirmed to survive a prod restart
+        (`UpdateConfig` → `SaveConfigToDatabase`, DB-first boot). It does
+        **NOT** cover the three other candidate sites above — if any is
+        reachable from something scheduled or user-triggered, it stays live
+        through any restart, including tonight's in-flight #2842 deploy.
       - Hand-verified other call sites, unrelated to tonight's incident:
         `internal/server/handlers/entities/handler.go:463` → `DeleteAuthor` at
         `:517`, unconditional (`POST /authors/:id/split`).

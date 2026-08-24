@@ -114,16 +114,25 @@ about its old job, and no diff will show you that.**
 All checks passed on the flawed version, because no test data contained an unreadable
 record. Green tests answered "did anything break," not "is this correct."
 
+A second review pass found the same iterator-bounds defect one function over, in the
+counter three delete sites consult before removing a series row at all. Fixed the same
+way, with the same before/after proof. **Undercounting there is the sharper failure**: a
+series absent from that counter's answer is not a wrong number on a page, it is the
+signal "nothing points here, safe to delete."
+
 ## Confidence
 
-Seven new tests. The three added after review were each confirmed to **fail against the
-code as it stood** before the fix was written — the only way to know a test reaches the
-thing it claims to check.
+Ten new tests across both fixes. Every one was confirmed to **fail against the code as
+it stood** before its fix was written — the only way to know a test reaches the thing it
+claims to check.
 
-The fix was then re-broken eight different ways to confirm the tests notice. Seven of the
-eight were caught. The eighth — a storage-layer read error part-way through — cannot be
-triggered without fault-injection machinery this code does not have, so it is protected
-by inspection only, and is recorded here rather than rounded up to "all covered."
+The fix was then re-broken eight different ways to confirm the tests notice. All eight
+were caught, including one — a storage-layer read error part-way through a scan — first
+written up as untestable without fault-injection machinery this codebase does not have.
+That was wrong: the store's own test constructor already takes a pluggable filesystem,
+and the open-source database driver ships an error-injecting one. Two dedicated tests
+force the read to fail after the data is written and confirm both scans refuse rather
+than answer short — closing the one gap this review had flagged as inspection-only.
 
 The pre-existing test suite for this area would **not** have caught any of it. Those
 tests only ever run against a healthy index, so they pass identically before and after —
