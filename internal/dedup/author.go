@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-08-14
+// last-edited: 2026-08-24
 
 package dedup
 
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -990,7 +991,18 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	// Phase 2: Compare within last-name buckets (exact last name match)
 	// Plus check similar last names via Jaro-Winkler >= 0.95
 	processed := 0
-	for _, bucket := range lastNameBuckets {
+	// Iterate buckets in a stable order. Bucket CONTENTS are order-independent
+	// (buckets partition authors by exact last name, so no author is reachable
+	// from two of them), but the order groups are appended in is user-visible,
+	// and ranging the map directly reshuffled the result set on every run.
+	bucketKeys := make([]string, 0, len(lastNameBuckets))
+	for ln := range lastNameBuckets {
+		bucketKeys = append(bucketKeys, ln)
+	}
+	sort.Strings(bucketKeys)
+
+	for _, bucketKey := range bucketKeys {
+		bucket := lastNameBuckets[bucketKey]
 		for bi := 0; bi < len(bucket); bi++ {
 			i := bucket[bi]
 			pi := &precomputed[i]
@@ -1049,10 +1061,16 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 
 	// Phase 3: Cross-bucket comparison for similar (not exact) last names.
 	// Build list of unique last names, compare pairs with JW >= 0.95.
+	//
+	// Sorted for the same reason phase 2's iteration is: the grouping below is
+	// greedy over `used`, so the ORDER in which pairs are visited decides which
+	// author becomes a group's anchor and which get absorbed into it. Ranging a
+	// map here made the group contents themselves vary run to run.
 	lastNames := make([]string, 0, len(lastNameBuckets))
 	for ln := range lastNameBuckets {
 		lastNames = append(lastNames, ln)
 	}
+	sort.Strings(lastNames)
 	for li := 0; li < len(lastNames); li++ {
 		for lj := li + 1; lj < len(lastNames); lj++ {
 			if lastNames[li] == lastNames[lj] {
