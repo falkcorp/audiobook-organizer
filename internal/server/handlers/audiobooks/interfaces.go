@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
 // last-edited: 2026-08-24
 
@@ -44,6 +44,20 @@ import (
 type AudiobookBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// MarkNeedsRescan flags the book for a full re-read by the next scan.
+	//
+	// This is the ONLY per-book forced rescan that is precise. The alternative --
+	// triggering library.scan with folder_path + force_update -- nils the scan
+	// cache for everything in scope, and folders are not uniformly small: measured
+	// 2026-08-24, /mnt/bigdata/books/newbooks/audiobooks holds 1,458 files
+	// directly, so "rescan this one book" would re-read all 1,458.
+	//
+	// It is precise because the scan already honours the flag end-to-end:
+	// GetDirtyBookFolders adds the book's immediate parent directory to the scan
+	// list (even outside the configured import paths), and shouldSkipFile returns
+	// false for a book with NeedsRescan set while still skipping every unchanged
+	// sibling in that directory. Cost is one directory walk plus one book.
+	MarkNeedsRescan(bookID string) error
 }
 
 // AudiobookFileStore covers the book's files.
@@ -94,24 +108,6 @@ type AudiobookSyncStore interface {
 	SetLastWrittenAt(bookID string, t time.Time) error
 }
 
-// AudiobookRescanStore flags a book for a full re-read by the next scan.
-//
-// This is the ONLY per-book forced rescan that is precise. The alternative --
-// triggering library.scan with folder_path + force_update -- nils the scan
-// cache for everything in scope, and folders are not uniformly small: measured
-// 2026-08-24, /mnt/bigdata/books/newbooks/audiobooks holds 1,458 files
-// directly, so "rescan this one book" would re-read all 1,458.
-//
-// MarkNeedsRescan is precise because the scan already honours the flag
-// end-to-end: GetDirtyBookFolders adds the book's immediate parent directory to
-// the scan list (even outside the configured import paths), and shouldSkipFile
-// returns false for a book with NeedsRescan set while still skipping every
-// unchanged sibling in that directory. Cost is one directory walk plus one
-// book.
-type AudiobookRescanStore interface {
-	MarkNeedsRescan(bookID string) error
-}
-
 // AudiobooksStore is the narrow database.Store subset the audiobooks handlers
 // require for direct store access (i.e. the calls the handlers made through
 // s.Ops() that are part of the stable database.Store contract). The concrete
@@ -139,7 +135,6 @@ type AudiobooksStore interface {
 	AudiobookFacetStore
 	AudiobookCreditStore
 	AudiobookSyncStore
-	AudiobookRescanStore
 }
 
 // AudiobookReader AudiobookReader is the plain read side: fetch one book, its tag comparison view, and the library count.
