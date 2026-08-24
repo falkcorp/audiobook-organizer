@@ -27,32 +27,6 @@ Also fixed: the canonical-series vote silently treated a series whose book count
 failed to load as empty, so a transient read error could decide which of two
 duplicate series got **deleted**, leaving no record of having done so.
 
-#### A refused merge no longer leaves the series list stale
-
-Introducing that refusal broke a nearby assumption, caught in review before it
-shipped. The cached series list is dropped only when a run "cleaned" something,
-on the stated reasoning that *"a run that cleaned nothing changed nothing."*
-
-That was true when a merge either completed or errored. A merge that repoints
-books and then refuses the delete changes every one of those books' series while
-removing no rows — so the count stayed at zero, the cache was kept, and
-`/api/v1/series` went on serving the pre-merge membership under its 24-hour TTL.
-That is the same stale-list symptom measured in production on 2026-08-14,
-reached from the opposite direction. Repointed books are now counted in their own
-right, and the invalidation reports both numbers.
-
-#### A partial series-normalize no longer discards the work that succeeded
-
-Recording the affected-book collection error (above) turned a swallowed failure
-into one that aborted the operation — which skipped organize and tag write-back
-for **every** book in the run, not just the series that failed.
-
-Because the renames and merges have already committed by then, a re-run finds no
-contaminated names, computes no actions, and never organizes those files: the
-failure was permanent rather than retryable. The operation now organizes and
-retags the books it did collect, then reports the failure. The status is still
-`failed` — deferring it buys file consistency, not silence.
-
 ### Changed
 
 #### The series-normalize affected-book list stays on the filtered getter
@@ -81,22 +55,14 @@ different answers. Only the first belongs in the stranding fix.
 Recorded rather than fixed, because each changes what a run does to a real library
 rather than correcting a defect. Tracked in `todo.d`:
 
-- **Every guard here counts against what the membership getter returned, and that
-  getter has no completeness guard of its own.** It reads the in-memory index
-  unconditionally when warm. Two populations therefore sit outside the guard: books
-  in the trash (excluded by design — latent, it bites on restore), and books the
-  in-memory index has **lost** while their on-disk row survives, which is a live,
-  primary, untrashed book stranded immediately with no error raised. The second is
-  structurally the same defect this work removed from the series-renumbering job:
-  a guard whose sample space is the filtered getter's own output, so the rows the
-  bug lives on can never trip it.
-
-  The fix already exists and is already used *in the same function* —
+- **Trashed rows are still invisible to all three merge paths.** Both series
+  getters exclude soft-deleted books by design, so a series holding one live book
+  and one trashed book is still deleted with the trashed row pointing at it. The
+  guard needed already exists and is already used *in the same function*:
   `executeSeriesPrune`'s phase 2 fails closed on the unfiltered reference count,
   with a comment calling the filtered fallback "the failure family this repo keeps
   rediscovering" — while phase 1, sixty lines above, has none. Adding it makes the
-  prune refuse merges it currently completes, which is why it is a decision rather
-  than a fix.
+  prune refuse merges it currently completes.
 - **A repointed non-primary version keeps stale series tags,** because nothing adds
   it to any write-back list. The fix is to split one list into an organize list
   (filtered) and a write-back list (complete), which would begin writing tags to
