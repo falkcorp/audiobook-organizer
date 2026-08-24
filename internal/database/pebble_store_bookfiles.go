@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-08-14
+// last-edited: 2026-08-24
 
 package database
 
@@ -1163,6 +1163,15 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 
 	batch := s.db.NewBatch()
 
+	// Books whose aggregates this batch invalidates, in first-touched order.
+	// Collected DURING the loop rather than derived from the caller's slice
+	// because the match branch below can retarget a row: when an existing row is
+	// found by PID or path, file.BookID is overwritten with that row's owner, so
+	// the book this write actually affects is not always the one the caller named.
+	// Recorded after that branch for exactly this reason.
+	affectedBooks := make([]string, 0, len(files))
+	seenBooks := make(map[string]struct{}, len(files))
+
 	now := time.Now()
 	for _, file := range files {
 		if file == nil {
@@ -1245,6 +1254,11 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 			file.UpdatedAt = now
 		}
 
+		if _, ok := seenBooks[file.BookID]; !ok && file.BookID != "" {
+			seenBooks[file.BookID] = struct{}{}
+			affectedBooks = append(affectedBooks, file.BookID)
+		}
+
 		// T020: drop AcoustIDSeg0..6 from the stored value via a copy.
 		data, err := marshalBookFileDropSegs(file)
 		if err != nil {
@@ -1280,6 +1294,31 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 	}
 	s.InvalidateLibraryStats()
 	s.MarkQuickQueryDirty("no_fingerprints", "batch_upsert_book_files")
+
+	// ONE recompute per affected book, not one per row — the same shape
+	// DeleteBookFilesByIDs uses, and for the same reason.
+	//
+	// This method previously did NOT recompute at all. Every other BookFile
+	// mutator reaches RecomputeBookAggregates through notifyBookFileChange; this
+	// one skipped it, so a batch write left Book.Duration and Book.FileSize at
+	// whatever the last single-row write (or the original import) had set. The
+	// failure was silent: the rows themselves were correct, only the parent
+	// book's summed fields were stale, and nothing on the write path reported it.
+	// A whole-library batch backfill could therefore correct every file's duration
+	// and leave every book still displaying the wrong total.
+	//
+	// Ordered after the memdb refresh above to match DeleteBookFilesByIDs. The
+	// ordering is not load-bearing for the sum itself — RecomputeBookAggregates
+	// reads via GetBookFiles, which iterates Pebble directly rather than memdb, so
+	// it sees the rows committed above regardless — but keeping the two plural
+	// paths in the same order means a future change to either has one shape to
+	// reason about, not two.
+	//
+	// Best-effort, like every other caller: the rows are committed, and a failure
+	// to refresh a derived aggregate must not be reported as a failed write.
+	for _, bookID := range affectedBooks {
+		s.notifyBookFileChange(bookID)
+	}
 	return nil
 }
 
