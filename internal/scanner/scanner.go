@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.57.0
+// version: 1.58.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package scanner
 
@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/dhowden/tag"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -188,6 +187,14 @@ func getStore() scannerStore {
 	defer pkgStoreMu.RUnlock()
 	return pkgStore
 }
+
+// aiBatchWorkers bounds how many AI filename-parsing batches are in flight at
+// once. Network-bound work against a single backend, so this is a small fixed
+// number rather than runtime.NumCPU(): the point is to stop waiting on one
+// request at a time, not to saturate the model host. The per-batch delay is
+// preserved per worker, so the aggregate request rate rises by this factor and
+// no more.
+const aiBatchWorkers = 4
 
 // globalScanCache is set before a scan and used inside ProcessBooksParallel to
 // skip files whose mtime+size are unchanged since the last successful scan.
@@ -1201,124 +1208,8 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		return ctxErr
 	}
 
-	// Batch AI parsing phase: process candidates in batches of 20 with rate limiting
 	if aiEnabled && len(aiCandidates) > 0 {
-		scanLog.Info("AI batch parsing %d books in batches of 20", len(aiCandidates))
-		const batchSize = 20
-		const delayBetweenBatches = 2 * time.Second
-
-		// consecutiveFailures aborts the phase when the AI backend is down
-		// rather than persistently unavailable for this one batch.
-		//
-		// On 2026-08-16 the OpenAI account hit credit_balance_exhausted, so
-		// every one of 77 batches failed after 3 attempts with 2s+8s backoff
-		// plus the 5s inter-batch sleep below -- roughly 25 minutes of
-		// guaranteed-useless work. Nothing here reported progress while it
-		// happened, so the watchdog struck library.scan as stuck at 5m1s and
-		// killed the whole scan, discarding a completed 3,917-file walk. The
-		// same shape applies to a bad API key or a sustained outage.
-		const maxConsecutiveFailures = 3
-		consecutiveFailures := 0
-		totalBatches := (len(aiCandidates) + batchSize - 1) / batchSize
-
-		for start := 0; start < len(aiCandidates); start += batchSize {
-			if ctx.Err() != nil {
-				break
-			}
-
-			end := start + batchSize
-			if end > len(aiCandidates) {
-				end = len(aiCandidates)
-			}
-			batch := aiCandidates[start:end]
-
-			// Report before the call, not after: a batch takes up to 30s and a
-			// failing one takes longer, so reporting only on success leaves
-			// gaps that exceed the watchdog's ProgressTimeout. This phase is
-			// why library.scan could complete its entire file walk and still
-			// be canceled for inactivity.
-			batchNum := start/batchSize + 1
-			scanLog.UpdateProgress(batchNum, totalBatches,
-				fmt.Sprintf("AI parsing batch %d/%d (%d books)", batchNum, totalBatches, len(batch)))
-
-			// Collect filenames for this batch
-			filenames := make([]string, len(batch))
-			for i, idx := range batch {
-				filenames[i] = filepath.Base(books[idx].FilePath)
-			}
-
-			aiCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			results, aiErr := aiParser.ParseBatch(aiCtx, filenames)
-			cancel()
-
-			if aiErr != nil {
-				scanLog.Warn("AI batch parsing failed (batch %d-%d): %v", start, end, aiErr)
-
-				// A permanent backend state -- no credits, revoked key, quota
-				// exhausted -- will not clear by the next batch. Retrying it 76
-				// more times cannot succeed and merely delays the rest of the
-				// scan by 25 minutes, so stop the phase on the first one.
-				if isPermanentAIFailure(aiErr) {
-					scanLog.Warn("AI batch parsing disabled for this scan after a non-retryable error at batch %d/%d: %v — "+
-						"the remaining %d books keep their filename-derived metadata",
-						batchNum, totalBatches, aiErr, len(aiCandidates)-start)
-					break
-				}
-
-				consecutiveFailures++
-				if consecutiveFailures >= maxConsecutiveFailures {
-					scanLog.Warn("AI batch parsing disabled for this scan: %d consecutive batch failures at batch %d/%d — "+
-						"the remaining %d books keep their filename-derived metadata",
-						consecutiveFailures, batchNum, totalBatches, len(aiCandidates)-start)
-					break
-				}
-
-				// Rate limit error — wait longer before retry/next batch
-				if start+batchSize < len(aiCandidates) {
-					time.Sleep(5 * time.Second)
-				}
-				continue
-			}
-			consecutiveFailures = 0
-
-			// Apply results
-			for i, idx := range batch {
-				if i >= len(results) || results[i] == nil {
-					continue
-				}
-				aiMeta := results[i]
-				if books[idx].Title == "" && aiMeta.Title != "" {
-					books[idx].Title = aiMeta.Title
-				}
-				if books[idx].Author == "" && aiMeta.Author != "" {
-					books[idx].Author = aiMeta.Author
-				}
-				if books[idx].Series == "" && aiMeta.Series != "" {
-					books[idx].Series = aiMeta.Series
-				}
-				if books[idx].Position == 0 && aiMeta.SeriesNum > 0 {
-					books[idx].Position = aiMeta.SeriesNum
-				}
-				if books[idx].Narrator == "" && aiMeta.Narrator != "" {
-					books[idx].Narrator = aiMeta.Narrator
-				}
-				if books[idx].Publisher == "" && aiMeta.Publisher != "" {
-					books[idx].Publisher = aiMeta.Publisher
-				}
-
-				// Re-save with updated metadata
-				if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
-					scanLog.Warn("failed to re-save AI-enriched book %s: %v", books[idx].FilePath, saveErr)
-				}
-			}
-
-			scanLog.Info("AI batch %d-%d complete (%d results)", start, end, len(results))
-
-			// Rate limit: wait between batches to avoid OpenAI throttling
-			if end < len(aiCandidates) {
-				time.Sleep(delayBetweenBatches)
-			}
-		}
+		runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog)
 	}
 
 	// After processing all books, try to match series using external APIs for uncertain cases
