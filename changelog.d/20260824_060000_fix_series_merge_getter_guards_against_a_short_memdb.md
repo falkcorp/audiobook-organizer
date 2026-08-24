@@ -41,3 +41,8 @@
   the secondary indexes, whose values are bare book IDs rather than book JSON,
   so the structural one-colon key filter and the now-fatal decode are a single
   change and must not be separated.
+- Fixed the same iterator-bounds defect in `getAllSeriesBookRefCountsPebble`,
+  the unfiltered counter that three series-delete sites consult before removing
+  a row. It scanned `["book:0", "book:;")`, so a book whose ID does not begin
+  with a digit was absent from the returned map — and absence is exactly the
+  signal those callers read as "referenced by nothing, safe to delete".

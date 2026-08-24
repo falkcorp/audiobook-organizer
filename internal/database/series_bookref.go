@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
 // last-edited: 2026-08-24
 
@@ -144,14 +144,31 @@ func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 	return p.getAllSeriesBookRefCountsPebble()
 }
 
-// getAllSeriesBookRefCountsPebble mirrors GetAllSeriesBookCounts_Pebble's key
-// range and row-shape guard, minus the IsPrimaryVersion filter, and without
-// skipping trashed rows.
+// getAllSeriesBookRefCountsPebble applies GetAllSeriesBookCounts_Pebble's
+// row-shape guard, minus the IsPrimaryVersion filter, and without skipping
+// trashed rows.
+//
+// It deliberately does NOT mirror that function's key range. The range was
+// ["book:0", "book:;") -- copied from the sibling, as the word "mirrors" here
+// used to admit -- which admits only '0'-'9' and ':' as the first byte after
+// the prefix. Book IDs are ULIDs and today's ULIDs lead with a digit, so this
+// was latent; but CreateBook mints a ULID only when book.ID == "", making a
+// caller-supplied letter-leading ID constructible and invisible to the scan.
+// Invisible here means ABSENT from the returned map, and absence is precisely
+// the signal three delete sites read as "referenced by nothing, safe to
+// remove" (series_dedup.go:486, cleanup_series.go:120 and :307). Undercounting
+// is fail-OPEN for every one of them.
+//
+// Widening is safe here only because the structural filter below already
+// existed. The same bounds fix on getBooksBySeriesIDFull had to ADD that filter
+// in the same commit: a wider range admits the secondary indexes, whose values
+// are bare book IDs rather than book JSON, and the unmarshal below is fatal.
+// Bounds and filter are one change; do not separate them.
 func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 	counts := make(map[int]int)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
+		LowerBound: []byte("book:"),
+		UpperBound: []byte("book;"),
 	})
 	if err != nil {
 		return nil, err

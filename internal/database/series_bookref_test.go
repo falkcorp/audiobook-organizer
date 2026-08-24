@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package database
 
@@ -114,6 +114,18 @@ func TestSeriesBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
 	_, err = store.CreateBook(&Book{Title: "noseries", FilePath: "/ref/noseries"})
 	require.NoError(t, err)
 
+	// A caller-supplied letter-leading ID. Every other book here gets a minted
+	// ULID, which is why this conformance test could not see the bounds bug
+	// fixed on 2026-08-24: the two implementations agreed because the fixture
+	// only ever produced keys that both of them happened to admit. A
+	// conformance test is bounded by the diversity of its fixture, not by the
+	// number of implementations it compares.
+	_, err = store.CreateBook(&Book{
+		ID: "ZZREF00000000000000000000", Title: "letterled",
+		FilePath: "/ref/letterled", SeriesID: intp(928),
+	})
+	require.NoError(t, err)
+
 	fromMem, err := store.mem().GetAllSeriesBookRefCounts()
 	require.NoError(t, err)
 	fromPebble, err := store.getAllSeriesBookRefCountsPebble()
@@ -123,7 +135,7 @@ func TestSeriesBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
 		"memdb and Pebble must agree on unfiltered series references; drift here means "+
 			"the answer depends on warmup state, and deletion decisions ride on it")
 	require.NotEmpty(t, fromMem, "fixture must actually produce references, or this asserts nothing")
-	require.Equal(t, 41, sumCounts(fromMem), "every seeded book with a series must be counted exactly once")
+	require.Equal(t, 42, sumCounts(fromMem), "every seeded book with a series must be counted exactly once")
 }
 
 func sumCounts(m map[int]int) int {
@@ -164,4 +176,43 @@ func TestAsSeriesBookRefStore_ResolvesPebbleStore(t *testing.T) {
 	// around it would bypass whatever behaviour it was added to provide.
 	require.Nil(t, AsSeriesBookRefStore(&decoratorNoUnwrap{Store: store}),
 		"a decorator without Unwrap must not be reached around")
+}
+
+// TestSeriesBookRefCounts_CountsALetterLeadingBookID isolates the iterator
+// BOUNDS from the agreement question above, so a future fixture change cannot
+// quietly retire the coverage.
+//
+// getAllSeriesBookRefCountsPebble scanned ["book:0", "book:;") -- a byte range
+// admitting only '0'-'9' and ':' as the first character after the prefix.
+// CreateBook mints a ULID only when book.ID == "", so a caller-supplied
+// letter-leading ID is constructible, sorts above the upper bound, and was
+// invisible to the scan.
+//
+// The stakes are higher HERE than in the merge getter that shipped the same fix
+// hours earlier. This counter is the guard three delete sites consult before
+// removing a series row (series_dedup.go:486, cleanup_series.go:120 and :307);
+// they were classified "genuinely covered" precisely because they gate on it.
+// A counter that undercounts reports "referenced by nothing" -- the permissive
+// answer -- and the delete proceeds, stranding the book it could not see.
+func TestSeriesBookRefCounts_CountsALetterLeadingBookID(t *testing.T) {
+	store := seedRefStore(t, t.TempDir())
+
+	const lonely = 940 // referenced by exactly one book, so the count is unambiguous
+	b, err := store.CreateBook(&Book{
+		ID: "ZZBOUNDS0000000000000000", Title: "letter-leading",
+		FilePath: "/ref/letter-leading", SeriesID: intp(lonely),
+		IsPrimaryVersion: boolp(true),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ZZBOUNDS0000000000000000", b.ID,
+		"fixture check: CreateBook must not have re-minted the ID, or this tests nothing")
+
+	// The Pebble arm directly -- the fall-through target, and the only arm the
+	// bounds apply to. Going through GetAllSeriesBookRefCounts would be served
+	// by the memdb and prove nothing about the scan.
+	fromPebble, err := store.getAllSeriesBookRefCountsPebble()
+	require.NoError(t, err)
+	require.Equal(t, 1, fromPebble[lonely],
+		"a referenced series the ref counter cannot see reads as safe-to-delete, "+
+			"and the delete strands the very book the scan missed")
 }
