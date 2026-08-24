@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-08-24
 
@@ -224,7 +224,9 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	if h.opsStore == nil {
 		scope["operations"] = []OperationV2Response{}
 		scope["matched"] = 0
+		scope["in_flight_before_window"] = 0
 		scope["truncated"] = false
+		scope["scan_capped"] = false
 		httputil.RespondWithOK(c, scope)
 		return
 	}
@@ -240,6 +242,24 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// len(rows)==limit guess — which cannot tell "exactly limit existed" from
 	// "there were more".
 	matched := 0
+	// Operations still in flight are returned NO MATTER how old they are, so for
+	// those rows `window_start` does not describe why they are here.
+	//
+	// The store admits every row with a nil CompletedAt unconditionally
+	// (pebble_store_ops_v2.go, `row.CompletedAt == nil || !row.QueuedAt.Before(since)`),
+	// deliberately: an operation that has not finished is current however long ago
+	// it was queued, and filtering on QueuedAt alone meant an op simply had to RUN
+	// longer than the window to vanish from its own timeline. A library.scan
+	// running 1h50m returned an empty timeline in production while it was logging
+	// once a second.
+	//
+	// That is right, and it makes a bare `matched` misleading in exactly the way
+	// this endpoint is being fixed for. A scan queued three weeks ago and never
+	// completed answers `?since=1h` with matched=1, which reads as "it ran once in
+	// the last hour". Counting those separately is what keeps the stated scope
+	// true: an answer that describes itself has to describe the rows that escape
+	// its own window too.
+	inFlightBeforeWindow := 0
 	// Same reason as the clamp above: an explicit branch, so the ceiling on this
 	// allocation (timelineMaxLimit, 1000) is reachable by dataflow analysis.
 	capHint := len(rows)
@@ -252,6 +272,9 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 			continue
 		}
 		matched++
+		if r.CompletedAt == nil && r.QueuedAt.Before(since) {
+			inFlightBeforeWindow++
+		}
 		if len(resp) >= limit {
 			continue
 		}
@@ -266,14 +289,18 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 
 	scope["operations"] = resp
 	scope["matched"] = matched
+	scope["in_flight_before_window"] = inFlightBeforeWindow
 	scope["truncated"] = matched > len(resp)
 	// The store itself trims to timelineScanBound after sorting, so a full scan
 	// means `matched` is a FLOOR, not a total, and no "it never happened before X"
 	// claim can rest on it. Saying so is the difference between a bounded answer
 	// and a wrong one.
-	if len(rows) >= timelineScanBound {
-		scope["scan_capped"] = true
-	}
+	//
+	// Always present, never omitted-when-false. This object exists to be read by
+	// someone who might misread it, and two booleans with two different presence
+	// conventions is an invitation to treat a missing `scan_capped` as unknown
+	// rather than false.
+	scope["scan_capped"] = len(rows) >= timelineScanBound
 	httputil.RespondWithOK(c, scope)
 }
 
