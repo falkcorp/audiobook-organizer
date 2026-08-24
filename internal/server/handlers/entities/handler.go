@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -398,6 +399,72 @@ func (h *Handler) RenameAuthor(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"id": authorID, "name": name})
 }
 
+// repointPrimaryAuthor moves book.AuthorID off an author that is about to be
+// deleted, onto newPrimary, keeping the denormalized book.Author snapshot in
+// agreement with it.
+//
+// Updating the book_authors junction is NOT sufficient before a DeleteAuthor.
+// book.AuthorID is a denormalized pointer living on the BOOK row, and
+// DeleteAuthor never touches it: it removes the author row, the name index and
+// the aliases, then sweeps the junction (pebble_store_authors.go:157-220) and
+// stops. A caller that rewrites the junction, deletes the author and returns
+// leaves book.AuthorID dangling for every book it touched.
+//
+// A dangling AuthorID is not cosmetic, and it is not symmetric across read
+// paths. The list path serves books out of memdb, where stripBookForMemdb
+// clears book.Author (memdb_strip.go:53), so the name is re-hydrated via
+// GetAuthorsByIDs -> GetAuthorByID. For a deleted author with no tombstone that
+// returns nil, GetAuthorsByIDs omits the key entirely rather than recording a
+// miss (pebble_store_authors.go:87), and service_query.go:658 then leaves
+// AuthorName nil: the book renders with NO AUTHOR. Callers that read the full
+// Pebble row instead still see the stale snapshot and show the OLD name, so the
+// same book disagrees with itself between two screens.
+//
+// Both fields must be set together. Writing AuthorID alone would leave
+// UpdateBook's preserve-on-nil guard (pebble_store.go:2407) holding the
+// previous Author object, which is precisely the stale-snapshot half of the
+// divergence above. That guard also means this helper cannot express "no
+// author": Author cannot be cleared to nil through UpdateBook, so a successor
+// is required and newPrimary must be non-nil.
+//
+// Third copy of this logic, after internal/scheduler/extra_ops.go:382-410 and
+// internal/plugins/maintenance/author.go:221-246. Those two agree; this handler
+// was the one that had drifted, which is what the "keep in sync" comment on the
+// scheduler copy was meant to prevent and did not.
+func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID int, newPrimary *database.Author) {
+	if book == nil || newPrimary == nil {
+		return
+	}
+	// Only the books whose PRIMARY author is the doomed one need repointing;
+	// for the rest the junction rewrite was the whole job.
+	if book.AuthorID == nil || *book.AuthorID != deletedAuthorID {
+		return
+	}
+	newID := newPrimary.ID
+
+	full, err := h.store.GetBookByID(book.ID)
+	if err != nil || full == nil {
+		// Hydration failed. Fall back to the BookCore projection so the
+		// AuthorID change still lands -- a stale Author (preserved by the
+		// guard) is strictly better than a pointer into a deleted row, which
+		// is what skipping the write would leave behind. Never skip it.
+		projection := book.ToBook()
+		projection.AuthorID = &newID
+		if _, uErr := h.store.UpdateBook(book.ID, &projection); uErr != nil {
+			slog.Warn("author split: failed to repoint primary author via projection",
+				"book_id", book.ID, "hydrate_err", err, "update_err", uErr)
+		}
+		return
+	}
+
+	full.AuthorID = &newID
+	full.Author = newPrimary
+	if _, err := h.store.UpdateBook(book.ID, full); err != nil {
+		slog.Warn("author split: failed to repoint primary author",
+			"book_id", book.ID, "new_author_id", newID, "err", err)
+	}
+}
+
 // SplitCompositeAuthor splits an author like "Author1 / Author2" or "Author1, Author2"
 // into individual author records, relinking all books to each new author.
 // Implements POST /authors/:id/split.
@@ -509,6 +576,9 @@ func (h *Handler) SplitCompositeAuthor(c *gin.Context) {
 		}
 		if err := h.store.SetBookAuthors(book.ID, updated); err != nil {
 			continue
+		}
+		if len(newAuthors) > 0 {
+			h.repointPrimaryAuthor(&book, authorID, &newAuthors[0])
 		}
 		booksUpdated++
 	}

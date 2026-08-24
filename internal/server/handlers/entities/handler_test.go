@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package entities_test
 
@@ -792,4 +792,91 @@ func TestListAuthors_IgnoresUnparseableParams(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	items, _ := decodeAuthors(t, w)
 	assert.Len(t, items, 6)
+}
+
+// TestSplitCompositeAuthor_RepointsPrimaryAuthorID pins the fix for the dangling
+// book.AuthorID leak.
+//
+// TestSplitCompositeAuthor above returns an EMPTY book list, so it exercises the
+// junction rewrite and the DeleteAuthor and nothing in between -- which is
+// exactly why this shipped. The bug only exists for books whose PRIMARY author is
+// the composite, and a zero-book fixture has none. Any future edit that drops the
+// repoint will still pass that test; it must fail this one.
+//
+// DeleteAuthor sweeps book_authors but never touches book.AuthorID, so without
+// the repoint every book here keeps a pointer into a deleted row. On the memdb
+// list path that renders as NO AUTHOR (GetAuthorsByIDs omits the miss and
+// service_query.go leaves AuthorName nil); on the full-row path it renders the
+// stale name. Same book, two answers.
+func TestSplitCompositeAuthor_RepointsPrimaryAuthorID(t *testing.T) {
+	h, d := newHandler(t)
+	composite := 5
+
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "A / B"}, nil)
+	d.store.EXPECT().GetAuthorByName("A").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("A").Return(&database.Author{ID: 10, Name: "A"}, nil)
+	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
+
+	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
+		Return([]database.BookCore{{ID: "b1", AuthorID: &composite}}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").
+		Return([]database.BookAuthor{{BookID: "b1", AuthorID: 5, Role: "author"}}, nil)
+	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{
+		ID:       "b1",
+		AuthorID: &composite,
+		Author:   &database.Author{ID: 5, Name: "A / B"},
+	}, nil)
+
+	var wrote *database.Book
+	d.store.EXPECT().UpdateBook("b1", mock.Anything).
+		RunAndReturn(func(_ string, b *database.Book) (*database.Book, error) {
+			wrote = b
+			return b, nil
+		})
+	d.store.EXPECT().DeleteAuthor(5).Return(nil)
+
+	c, w := newCtx(http.MethodPost, "/authors/5/split", `{"names":["A","B"]}`, idParam("5"))
+	h.SplitCompositeAuthor(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	require.NotNil(t, wrote,
+		"the book row must be written: leaving AuthorID on the about-to-be-deleted "+
+			"composite is the leak itself")
+	require.NotNil(t, wrote.AuthorID, "AuthorID must not be cleared")
+	assert.Equal(t, 10, *wrote.AuthorID,
+		"AuthorID must move to the first individual author, not stay on the deleted composite")
+	require.NotNil(t, wrote.Author,
+		"Author must be written alongside AuthorID -- UpdateBook's preserve-on-nil guard "+
+			"(pebble_store.go:2407) would otherwise keep the stale composite snapshot")
+	assert.Equal(t, 10, wrote.Author.ID,
+		"the denormalized Author must agree with AuthorID, not lag it")
+}
+
+// TestSplitCompositeAuthor_LeavesNonPrimaryBooksAlone is the negative half: a book
+// that merely LISTS the composite author (not as its primary) needs only the
+// junction rewrite. Writing the book row for it would be a needless write and
+// would silently promote a secondary contributor to primary. No GetBookByID or
+// UpdateBook is EXPECTed here, so the mock fails the test if either is called.
+func TestSplitCompositeAuthor_LeavesNonPrimaryBooksAlone(t *testing.T) {
+	h, d := newHandler(t)
+	otherPrimary := 99
+
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "A / B"}, nil)
+	d.store.EXPECT().GetAuthorByName("A").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("A").Return(&database.Author{ID: 10, Name: "A"}, nil)
+	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
+
+	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
+		Return([]database.BookCore{{ID: "b2", AuthorID: &otherPrimary}}, nil)
+	d.store.EXPECT().GetBookAuthors("b2").
+		Return([]database.BookAuthor{{BookID: "b2", AuthorID: 5, Role: "contributor"}}, nil)
+	d.store.EXPECT().SetBookAuthors("b2", mock.Anything).Return(nil)
+	d.store.EXPECT().DeleteAuthor(5).Return(nil)
+
+	c, w := newCtx(http.MethodPost, "/authors/5/split", `{"names":["A","B"]}`, idParam("5"))
+	h.SplitCompositeAuthor(c)
+	assert.Equal(t, http.StatusOK, w.Code)
 }
