@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 import { useState } from 'react';
 import {
