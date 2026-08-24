@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
 // last-edited: 2026-08-24
 
@@ -54,7 +54,7 @@ type AudiobookBookStore interface {
 	//
 	// It is precise because the scan already honours the flag end-to-end:
 	// GetDirtyBookFolders adds the book's immediate parent directory to the scan
-	// list (even outside the configured import paths), and shouldSkipFile returns
+	// list (even outside the configured import paths), and classifySkipFile returns
 	// false for a book with NeedsRescan set while still skipping every unchanged
 	// sibling in that directory. Cost is one directory walk plus one book.
 	MarkNeedsRescan(bookID string) error

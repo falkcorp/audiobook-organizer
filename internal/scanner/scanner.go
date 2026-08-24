@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/dhowden/tag"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -84,9 +85,16 @@ var (
 	scanCacheLookupErrCount atomic.Int64 // write-back abandoned: GetBookByFilePath returned an error
 	scanCacheNoRowCount     atomic.Int64 // write-back abandoned: no book row exists at this path
 	scanCachePanicCount     atomic.Int64 // write-back recovered from a panic (nil-wrapping store interface)
+
+	// Rescan-age re-arm. UpdateScanCache CLEARS NeedsRescan, so a file that is
+	// still inside the rescan-age window has to have the flag put back or the
+	// age gate would defer it for a full period on the strength of whatever
+	// half-written metadata this pass recorded. See writeBackScanCache.
+	scanCacheRearmCount    atomic.Int64 // write-back re-armed NeedsRescan: file still inside the rescan-age window
+	scanCacheRearmErrCount atomic.Int64 // MarkNeedsRescan failed after a write-back that needed re-arming
 )
 
-// Skip-decision counters. shouldSkipFile used to return a bare bool with no
+// Skip-decision counters. The skip decision used to return a bare bool with no
 // counter, no log and no metric, so the single most load-bearing number in an
 // incremental scan -- how many files it actually avoided re-reading -- was not
 // observable at all. A scan that skipped everything and a scan that skipped
@@ -101,6 +109,7 @@ var (
 // is the exact question any future skip-rate work has to answer.
 var (
 	skipUnchangedCount atomic.Int64 // skipped: mtime+size unchanged and no rescan flag
+	skipTooFreshCount  atomic.Int64 // skipped: changed, but mtime is inside the rescan-age window
 	readCacheMissCount atomic.Int64 // re-read: no scan-cache entry for this path
 	readChangedCount   atomic.Int64 // re-read: mtime or size differs from the cached values
 	readDirtyCount     atomic.Int64 // re-read: NeedsRescan set (forced per-book rescan)
@@ -485,13 +494,45 @@ const (
 	reasonCacheMiss                   // re-read: path absent from the cache
 	reasonChanged                     // re-read: mtime or size differs
 	reasonDirty                       // re-read: NeedsRescan set
+	reasonTooFresh                    // skipped: changed, but inside the rescan-age window
 )
 
-// classifySkipFile is shouldSkipFile with its reasoning made visible. The
+// rescanFreshCutoff returns the mtime at or below which a CHANGED file is
+// considered settled enough to re-read. A file whose mtime is strictly greater
+// than the cutoff changed too recently and is left alone until it goes quiet.
+//
+// A non-positive minAgeHours disables the gate, and it returns math.MaxInt64 to
+// do it rather than 0: the comparison is `mtime > cutoff`, so the value that
+// makes it never fire is the largest one, not the smallest. Returning 0 would
+// invert the intent and gate every file with a post-epoch mtime -- i.e. all of
+// them.
+func rescanFreshCutoff(now time.Time, minAgeHours int) int64 {
+	if minAgeHours <= 0 {
+		return math.MaxInt64
+	}
+	return now.Add(-time.Duration(minAgeHours) * time.Hour).Unix()
+}
+
+// classifySkipFile decides whether a file can be skipped, and says why. The
 // order of the checks matters for attribution: a dirty entry whose mtime also
 // changed is reported as dirty, because the forced rescan is the reason a
 // caller would care about.
-func classifySkipFile(filePath string, mtime int64, size int64, cache map[string]database.ScanCacheEntry) (bool, skipReason) {
+//
+// freshCutoff is the rescan-age gate (rescanFreshCutoff). It applies to exactly
+// ONE branch -- a file that is in the cache, is not flagged for rescan, and has
+// changed -- and that narrowness is the whole design:
+//
+//   - a path with NO cache entry is new and is read immediately, so discovery
+//     is never delayed by the gate;
+//   - NeedsRescan is checked FIRST, so an explicitly forced per-file rescan
+//     bypasses the gate;
+//   - a force_update run passes cache == nil, so the gate is never consulted at
+//     all on a full sweep.
+//
+// Those are the two "unless" clauses the gate was specified with, and they are
+// satisfied structurally rather than by a flag this function has to be told
+// about.
+func classifySkipFile(filePath string, mtime int64, size int64, cache map[string]database.ScanCacheEntry, freshCutoff int64) (bool, skipReason) {
 	if cache == nil {
 		return false, reasonCacheOff
 	}
@@ -503,6 +544,12 @@ func classifySkipFile(filePath string, mtime int64, size int64, cache map[string
 		return false, reasonDirty
 	}
 	if entry.Mtime != mtime || entry.Size != size {
+		// Strictly greater: a file whose mtime is EXACTLY the cutoff has aged
+		// the full period and is re-read. Using >= here would hold it one more
+		// scan for no reason.
+		if mtime > freshCutoff {
+			return true, reasonTooFresh
+		}
 		return false, reasonChanged
 	}
 	return true, reasonUnchanged
@@ -513,6 +560,8 @@ func recordSkipDecision(reason skipReason) {
 	switch reason {
 	case reasonUnchanged:
 		skipUnchangedCount.Add(1)
+	case reasonTooFresh:
+		skipTooFreshCount.Add(1)
 	case reasonCacheOff:
 		readCacheOffCount.Add(1)
 	case reasonCacheMiss:
@@ -522,14 +571,6 @@ func recordSkipDecision(reason skipReason) {
 	case reasonDirty:
 		readDirtyCount.Add(1)
 	}
-}
-
-// shouldSkipFile returns true when a file is unchanged since the last scan and
-// does not have a pending rescan request. Retained as the boolean-only form
-// classifySkipFile delegates for; the two can never disagree.
-func shouldSkipFile(filePath string, mtime int64, size int64, cache map[string]database.ScanCacheEntry) bool {
-	skip, _ := classifySkipFile(filePath, mtime, size, cache)
-	return skip
 }
 
 // isExcludedPath checks whether a path matches any configured exclude pattern.
@@ -656,6 +697,35 @@ func writeBackScanCache(filePath string, fi os.FileInfo, scanLog logger.Logger) 
 		// Silent failure meant the file was re-hashed every scan forever (H5).
 		warnSampled(&scanCacheUpdateErrCount, scanLog,
 			"UpdateScanCache failed for %s: %v (file will be re-hashed next scan)", filePath, uerr)
+		return
+	}
+
+	// Re-arm NeedsRescan when the file is still inside the rescan-age window.
+	//
+	// UpdateScanCache CLEARS NeedsRescan by design. Without this, the
+	// rescan-age gate would introduce a regression in exactly the population it
+	// exists to protect: a file discovered part-way through being written is a
+	// cache MISS, so it is read immediately and a row is created from whatever
+	// bytes existed at that moment; when the write finishes, the mtime change
+	// makes it reasonChanged, and the gate would then defer that half-written
+	// row for a full period. Before the gate that case self-healed on the very
+	// next scan.
+	//
+	// reasonDirty is checked before the gate, so NeedsRescan is the one
+	// existing mechanism that already means "read this again regardless". This
+	// covers both halves -- the row just created for a fresh file, and a
+	// re-read of a file that is STILL moving -- because every processed file
+	// reaches this same write-back.
+	if fi.ModTime().Unix() > rescanFreshCutoff(time.Now(), config.AppConfig.MinRescanAgeHours) {
+		if merr := store.MarkNeedsRescan(dbBook.ID); merr != nil {
+			// Not silent: losing this leaves a still-changing file gated for a
+			// full period on half-written metadata, which is the precise
+			// failure the re-arm exists to prevent.
+			warnSampled(&scanCacheRearmErrCount, scanLog,
+				"MarkNeedsRescan failed for %s: %v (a still-changing file may be deferred by the rescan-age gate)", filePath, merr)
+			return
+		}
+		scanCacheRearmCount.Add(1)
 	}
 }
 
@@ -918,12 +988,27 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	scanCacheLookupErrStart := scanCacheLookupErrCount.Load()
 	scanCacheNoRowStart := scanCacheNoRowCount.Load()
 	scanCachePanicStart := scanCachePanicCount.Load()
+	scanCacheRearmStart := scanCacheRearmCount.Load()
+	scanCacheRearmErrStart := scanCacheRearmErrCount.Load()
 	skipUnchangedStart := skipUnchangedCount.Load()
+	skipTooFreshStart := skipTooFreshCount.Load()
 	readCacheMissStart := readCacheMissCount.Load()
 	readChangedStart := readChangedCount.Load()
 	readDirtyStart := readDirtyCount.Load()
 	readStatErrStart := readStatErrCount.Load()
 	readCacheOffStart := readCacheOffCount.Load()
+
+	// Computed ONCE for the run, not per file: a cutoff that drifts while the
+	// scan walks 40k files would make the gate's verdict depend on where in the
+	// run a file happened to land.
+	freshCutoff := rescanFreshCutoff(time.Now(), config.AppConfig.MinRescanAgeHours)
+	if config.AppConfig.MinRescanAgeHours > 0 {
+		scanLog.Info("rescan-age gate active: a changed file is re-read only once its mtime is older than %dh",
+			config.AppConfig.MinRescanAgeHours)
+	} else {
+		scanLog.Info("rescan-age gate disabled (min_rescan_age_hours=%d): every changed file is re-read",
+			config.AppConfig.MinRescanAgeHours)
+	}
 
 	// progressCh serializes progress updates so callbacks and progress output
 	// are handled in a single goroutine.
@@ -1048,7 +1133,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 						readStatErrCount.Add(1)
 						break
 					}
-					skip, reason := classifySkipFile(books[idx].FilePath, fi.ModTime().Unix(), fi.Size(), cache)
+					skip, reason := classifySkipFile(books[idx].FilePath, fi.ModTime().Unix(), fi.Size(), cache, freshCutoff)
 					recordSkipDecision(reason)
 					if skip {
 						return // progress deferred func will still fire
@@ -1376,13 +1461,22 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	if d := scanCachePanicCount.Load() - scanCachePanicStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-cache write-backs recovered from a panic", d)
 	}
+	if d := scanCacheRearmErrCount.Load() - scanCacheRearmErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d NeedsRescan re-arms failed (those files may be deferred by the rescan-age gate "+
+			"on half-written metadata)", d)
+	}
+	if d := scanCacheRearmCount.Load() - scanCacheRearmStart; d > 0 {
+		scanLog.Info("scan summary: %d files re-armed for rescan because they are still inside the rescan-age window", d)
+	}
 
 	// Skip-rate summary. Logged UNCONDITIONALLY, unlike the error counters
 	// above: those are silent when nothing went wrong, but the pathology this
 	// instrument exists to catch is a scan that skipped NOTHING, and a `d > 0`
 	// guard would print nothing in exactly that case -- the same silence the
 	// counters were added to remove. A zero here is a finding, not a non-event.
-	skipped := skipUnchangedCount.Load() - skipUnchangedStart
+	unchanged := skipUnchangedCount.Load() - skipUnchangedStart
+	tooFresh := skipTooFreshCount.Load() - skipTooFreshStart
+	skipped := unchanged + tooFresh
 	reRead := struct{ cacheMiss, changed, dirty, statErr, cacheOff int64 }{
 		cacheMiss: readCacheMissCount.Load() - readCacheMissStart,
 		changed:   readChangedCount.Load() - readChangedStart,
@@ -1392,8 +1486,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	reReadTotal := reRead.cacheMiss + reRead.changed + reRead.dirty + reRead.statErr + reRead.cacheOff
 	if decided := skipped + reReadTotal; decided > 0 {
-		scanLog.Info("scan summary: %d/%d files skipped (%.1f%%); re-read %d = %d cache-miss, %d changed, %d forced-rescan, %d stat-error, %d cache-disabled",
-			skipped, decided, float64(skipped)*100/float64(decided), reReadTotal,
+		// tooFresh is broken out of the skip total rather than folded into it:
+		// it is the only skip reason that represents deferred work rather than
+		// work correctly avoided, so a run where it dominates means something
+		// is churning the library, not that the cache is doing its job.
+		scanLog.Info("scan summary: %d/%d files skipped (%.1f%%) = %d unchanged, %d too-fresh; "+
+			"re-read %d = %d cache-miss, %d changed, %d forced-rescan, %d stat-error, %d cache-disabled",
+			skipped, decided, float64(skipped)*100/float64(decided), unchanged, tooFresh, reReadTotal,
 			reRead.cacheMiss, reRead.changed, reRead.dirty, reRead.statErr, reRead.cacheOff)
 	}
 

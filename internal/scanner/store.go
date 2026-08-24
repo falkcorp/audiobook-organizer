@@ -1,5 +1,5 @@
 // file: internal/scanner/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
 // last-edited: 2026-08-24
 
@@ -56,6 +56,10 @@ type scanEntityStore interface {
 // and back off on ones that keep failing.
 type scanProgressStore interface {
 	UpdateScanCache(bookID string, mtime int64, size int64) error
+	// MarkNeedsRescan re-arms the per-book rescan flag that UpdateScanCache
+	// clears. writeBackScanCache needs it to stop the rescan-age gate deferring
+	// a file that is still being written.
+	MarkNeedsRescan(bookID string) error
 	IncrScanFailCount(pathHash string) (int, error)
 	ResetScanFailCount(pathHash string) error
 }
