@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.64.0
+// version: 1.65.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -1215,7 +1215,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				if err := saveBook(ctx, &books[idx]); err != nil {
 					errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 				} else {
-					createBookFilesForBook(dirPath, nil, scanLog)
+					// dirPath is already a directory, so the normalization
+					// branch cannot fire and the row cannot move -- discarding
+					// the result is correct here, not an oversight.
+					_ = createBookFilesForBook(dirPath, nil, scanLog)
 					// Chapters must be persisted AFTER the book files exist —
 					// the multi-file synthesis path reads BookFile durations to
 					// build the cumulative timeline. Never fatal to the scan.
@@ -1402,7 +1405,17 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				// Pass SegmentHashes (populated by saveBookToDatabase dedup loop)
 				// to avoid re-hashing each segment file (PERF-2b).
 				if len(books[idx].SegmentFiles) > 1 {
-					createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, books[idx].SegmentHashes)
+					// Keep the in-memory book in step with the row. This call can
+					// move the stored FilePath to the containing directory, and
+					// BOTH consumers below look the book up BY PATH:
+					// PersistChaptersForBook returns silently on a miss (so
+					// chapters were never persisted) and writeBackScanCache counts
+					// a miss as "no book row" (so the file was re-read and
+					// re-hashed on every scan, forever). Measured on prod
+					// 2026-08-24; see the doc comment on createBookFilesForBook.
+					if moved := createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, books[idx].SegmentHashes); moved != "" {
+						books[idx].FilePath = moved
+					}
 				}
 				// Persist chapters. Deliberately OUTSIDE the SegmentFiles>1 block
 				// so it also runs for genuinely-single-file books, whose embedded
@@ -1778,20 +1791,43 @@ func isInitialToken(word string) bool {
 // it normalizes it to the parent directory.
 // The optional knownHashes parameter (filePath→hash) lets callers pass hashes
 // already computed during the dedup check (PERF-2b) to avoid a second os.Open.
-func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, knownHashes ...map[string]string) {
+// The returned string is the path the book row LIVES AT once this function is
+// done, or "" if it did not move it.
+//
+// Returning it is not a convenience. The normalization block below can rewrite
+// the stored FilePath to the containing directory, and until 2026-08-24 nothing
+// told the caller. The caller went on using the path it passed IN, which no
+// longer matched any row, and TWO consumers then failed silently on the miss:
+//
+//   - writeBackScanCache found no row, so the book never acquired a scan-cache
+//     entry and was re-read AND re-hashed on every scan, permanently;
+//   - PersistChaptersForBook found no row and returned quietly (its comment
+//     classifies "a stale path" as a benign data condition), so the book's
+//     chapters were never persisted at all.
+//
+// Measured on prod 2026-08-24: books stored under a normalized directory path
+// had last_scan_mtime = nil, while a single-file book -- which never reaches
+// this function, so is never normalized -- had a real timestamp. Handing the
+// caller the new path lets it keep its in-memory Book in step with the row,
+// which fixes both consumers with one change.
+func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, knownHashes ...map[string]string) string {
 	if getStore() == nil {
-		return
+		return ""
 	}
 
 	dbBook, err := getStore().GetBookByFilePath(bookFilePath)
 	if err != nil || dbBook == nil {
-		return
+		return ""
 	}
+
+	// normalizedPath stays "" unless the normalization block below actually
+	// moves the row. "" means "the row is still where you left it".
+	var normalizedPath string
 
 	// Check if book files already exist
 	existing, _ := getStore().GetBookFiles(dbBook.ID)
 	if len(existing) > 0 {
-		return // BookFiles already created (rescan)
+		return "" // BookFiles already created (rescan)
 	}
 
 	// If no specific files provided, scan the directory
@@ -1804,7 +1840,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 	if len(segmentFiles) == 0 {
 		entries, rerr := os.ReadDir(scanDir)
 		if rerr != nil {
-			return
+			return ""
 		}
 		audioExts := make(map[string]bool)
 		for _, ext := range config.AppConfig.SupportedExtensions {
@@ -1915,12 +1951,20 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		toUpdate.FilePath = dirPath
 		if _, updateErr := getStore().UpdateBook(toUpdate.ID, toUpdate); updateErr != nil {
 			scanLog.Warn("failed to normalize FilePath for book %s: %v", dbBook.ID, updateErr)
+		} else {
+			// ONLY on a successful write. If UpdateBook failed the row still
+			// lives at the path the caller passed in, and reporting a move that
+			// did not happen would send the caller's scan-cache write-back and
+			// chapter persistence to a path with no row -- reintroducing the
+			// exact bug this return value exists to close, in the error path.
+			normalizedPath = dirPath
 		}
 	}
 
 	if len(segmentFiles) > 0 {
 		scanLog.Debug("Created %d book files for book %s", len(segmentFiles), dbBook.Title)
 	}
+	return normalizedPath
 }
 
 // createSegmentsForBook is deprecated and removed — use createBookFilesForBook instead.
