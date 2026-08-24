@@ -1,5 +1,5 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
 // last-edited: 2026-08-23
 
@@ -30,13 +30,13 @@ import (
 //
 // It said seven until 2026-08-23. CreateOperation and UpdateOperationError were
 // declared here and called from nowhere in this package; re-running the probe
-// after the last v1 operation minter was retired enumerated five. Note the probe
+// after the last v1 operation minter was retired enumerated five, and dropping
+// GetOperationByID with the v2 repoint of WaitForOperation (2026-08-23) left four. Note the probe
 // reports only the FIRST missing method per call site, so it has to be run to
 // convergence rather than once — a single pass would have stopped at seven again.
 type SchedulerStore interface {
 	GetSetting(key string) (*database.Setting, error)
 	SetSetting(key, value, typ string, isSecret bool) error
-	GetOperationByID(id string) (*database.Operation, error)
 	GetOperationV2(id string) (*database.OperationV2Row, error)
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
@@ -112,6 +112,22 @@ type TaskScheduler struct {
 	// still queued/running use it (currently library_scan, whose full walk can
 	// outlast its interval on a large library). Guarded by mu.
 	previousRun map[string]string
+
+	// waitPollInterval is how often WaitForOperation re-reads a child op. Zero
+	// means defaultWaitPollInterval. It exists so tests can drive the poll loop
+	// without sleeping through real 5s ticks; nothing in production sets it.
+	waitPollInterval time.Duration
+}
+
+// defaultWaitPollInterval is WaitForOperation's production poll cadence.
+const defaultWaitPollInterval = 5 * time.Second
+
+// pollInterval returns the configured wait cadence, or the production default.
+func (ts *TaskScheduler) pollInterval() time.Duration {
+	if ts.waitPollInterval > 0 {
+		return ts.waitPollInterval
+	}
+	return defaultWaitPollInterval
 }
 
 // previousRunID returns the v2 operation id this task last enqueued, or "" if
@@ -447,11 +463,27 @@ func (ts *TaskScheduler) reachableViaMaintenanceWindow(name string) bool {
 	return task.RunInMaintenanceWindow()
 }
 
-// WaitForOperation polls until an operation completes or the context is canceled.
+// WaitForOperation polls until opID reaches a terminal state or ctx is
+// canceled, and returns the final operation row (nil if ctx ended the wait).
 //
-// onPoll, if given, is called with the child operation on every poll tick
-// (~5s) while it is still running. It exists so a supervising op can prove it
-// is alive to the watchdog while it blocks here.
+// It reads the V2 operation store. It used to read the LEGACY operation:<id>
+// table via GetOperationByID, which panicked: every scheduled task now returns
+// a row synthesized by v2ScheduledOp carrying a V2 registry id that was never
+// written to the legacy keyspace, GetOperationByID returns (nil, nil) on
+// not-found, and the guard here tested only err. maintenance.window therefore
+// nil-dereferenced on the first 5s tick of its first task, every night, taking
+// all 12 nightly jobs down with it (measured 3/3 nights to 2026-08-23).
+//
+// Nil-guarding alone would have been wrong twice over. It would have turned the
+// wait into an instant return, so the window would fan every task out at once
+// instead of serializing them; and the legacy terminal set (completed/failed/
+// canceled) does not include interrupted_dropped or interrupted_quiesced, which
+// is how library.scan and metadata.batch-save actually end on prod — the window
+// would have waited on them until ctx expired.
+//
+// onPoll, if given, is called with the operation on every poll tick (~5s) while
+// it is still running. It exists so a supervising op can prove it is alive to
+// the watchdog while it blocks here.
 //
 // Without it, a supervisor that waits on children reports progress once per
 // child, and any child that runs longer than the supervisor's ProgressTimeout
@@ -465,30 +497,45 @@ func (ts *TaskScheduler) reachableViaMaintenanceWindow(name string) bool {
 // if it wedges, IT is struck and canceled, its status goes terminal, and this
 // loop returns. Striking the parent instead would abandon every remaining task
 // in the window because one of them misbehaved.
-func (ts *TaskScheduler) WaitForOperation(ctx context.Context, opID string, onPoll ...func(op *database.Operation)) {
+func (ts *TaskScheduler) WaitForOperation(ctx context.Context, opID string, onPoll ...func(op *database.OperationV2Row)) *database.OperationV2Row {
 	store := ts.deps.Store()
 	if store == nil {
-		return
+		return nil
 	}
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(ts.pollInterval())
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
-			op, err := store.GetOperationByID(opID)
-			if err != nil {
-				return
+			row, err := store.GetOperationV2(opID)
+			if err != nil || row == nil {
+				// Transient DB error, or the row is not visible yet. Keep
+				// polling: returning here would report the child as finished
+				// and let the caller start the next one alongside it.
+				continue
 			}
-			if op.Status == "completed" || op.Status == "failed" || op.Status == "canceled" {
-				return
+			if isTerminalOpV2Status(row.Status) {
+				return row
 			}
 			for _, fn := range onPoll {
 				if fn != nil {
-					fn(op)
+					fn(row)
 				}
 			}
 		}
 	}
+}
+
+// isTerminalOpV2Status reports whether a v2 operation status means the operation
+// will not progress further. The two interrupted_* states are terminal: an
+// interrupted op is resumed as a NEW op, so the id being waited on never moves
+// again. Omitting them is what made the legacy terminal set unsafe to reuse.
+func isTerminalOpV2Status(status string) bool {
+	switch status {
+	case "completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced":
+		return true
+	}
+	return false
 }
