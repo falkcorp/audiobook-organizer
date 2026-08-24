@@ -1,5 +1,5 @@
 // file: internal/database/scan_state.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a846cd3-3757-482a-b4df-71e02cb47292
 // last-edited: 2026-08-23
 
@@ -108,4 +108,34 @@ func (f BookFileCore) IsProvisional() bool {
 // See BookFile.DeepScanExhausted.
 func (f BookFileCore) DeepScanExhausted() bool {
 	return f.Scan.Attempts >= DeepScanMaxAttempts
+}
+
+// AnyProvisional reports whether any file in the set is still awaiting its deep
+// pass. This is the set-level form of IsProvisional and the one the bulk-write
+// paths call: they act on a BOOK, and a book is unsafe to merge as soon as ONE
+// of its files lacks a trustworthy hash.
+//
+// Note the asymmetry -- ANY, not ALL. A book with nine hashed files and one
+// provisional one still cannot be safely merged: the merge picks a winner and
+// soft-deletes the losers, and the file it knows least about is exactly the one
+// that might make the pair a false match.
+func AnyProvisional(files []BookFile) bool {
+	for i := range files {
+		if files[i].IsProvisional() {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyProvisionalCore is AnyProvisional over the lightweight projection. Both
+// exist because callers hold whichever the read path gave them, and a caller who
+// has to convert in order to ask is a caller who skips the check.
+func AnyProvisionalCore(files []BookFileCore) bool {
+	for i := range files {
+		if files[i].IsProvisional() {
+			return true
+		}
+	}
+	return false
 }

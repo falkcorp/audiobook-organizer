@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-08-23
 
@@ -193,6 +193,42 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		}
 	}
 
+	// Refuse to merge a book whose files have not been content-scanned.
+	//
+	// A merge picks a winner and soft-deletes the losers. Deciding that without
+	// a trustworthy file hash means deciding on title/author similarity alone,
+	// and this repo has already MEASURED that dedup collisions in the repoint
+	// bucket are frequently genuine duplicate BOOKS rather than false pairs. A
+	// bulk operation that silently joins two different books is the same class
+	// of data loss the missing-file lane exists to prevent.
+	//
+	// Enforced here rather than at the callers for the reason the de-dupe guard
+	// above gives: a guard that lives at one caller protects one caller. This is
+	// the chokepoint every merge path funnels through.
+	//
+	// Deliberately NOT applied to browsing, playing, or a single manual edit --
+	// a user acting on one book can see what they are doing. See
+	// docs/design/2026-08-23-staged-library-scan-design.md.
+	//
+	// Fail CLOSED on a read error: if we cannot tell whether a book is
+	// provisional, we do not merge it. The alternative silently reintroduces the
+	// hazard on exactly the paths where the store is unhealthy.
+	for _, b := range books {
+		files, err := ms.db.GetBookFiles(b.ID)
+		if err != nil {
+			return nil, fmt.Errorf("cannot verify scan state for book %s, refusing to merge: %w", b.ID, err)
+		}
+		if database.AnyProvisional(files) {
+			return nil, fmt.Errorf("book %s is awaiting a full scan and cannot be merged yet; "+
+				"run its deep scan first (a merge decided without a file hash rests on "+
+				"title similarity alone)", b.ID)
+		}
+	}
+
+	// Ordering: this runs AFTER the cheap argument checks above (a bad
+	// primary_id should not cost a file read per book) and BEFORE the version
+	// group work below, which is where writes begin. Everything between is pure
+	// computation.
 	// Determine version group ID (reuse if any book already has one)
 	versionGroupID := ""
 	reusedGroup := false
