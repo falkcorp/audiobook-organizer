@@ -22,15 +22,43 @@
       `ListSoftDeletedBooks`' twin is already hardened against undecodable rows.
       Found by the silent-failure sweep on PR #2839; hand-verified.
 
-- [ ] 🔴 **AUTHOR-MEMBERSHIP-UNGUARDED** `GetBooksByAuthorIDWithRoleCore`
+- [ ] 🔴🔥 **AUTHOR-MEMBERSHIP-UNGUARDED — CONFIRMED FIRED IN PROD 2026-08-24
+      05:00 UTC, not just a filed risk.** `GetBooksByAuthorIDWithRoleCore`
       (`internal/database/pebble_store.go:2086`) is the author-side structural
-      twin of the series getter PR #2839 guarded, with the same defect and four
-      delete sites. A lost memdb `books`/`book_authors` row yields a short member
-      list with a nil error, that book is never relinked, and `DeleteAuthor`
-      runs — leaving a dangling author_id. **Not recoverable: the author's name
-      lived only in the row that was deleted.**
-      - Hand-verified: `internal/plugins/maintenance/author.go:171` →
-        `DeleteAuthor` at `:250`, unconditional; and
+      twin of the series getter PR #2839 guarded.
+      - `maintenance.author_split_scan` ran unattended in the nightly window,
+        reached task 3/10, and had processed 10,681/14,951 authors — **1,400
+        already split** — before another session caught and canceled it
+        (`DELETE /operations/v2/01M0S29XYASPQ9HY73RYP9MEQN`), then disabled
+        `maintenance.author_split`, `scheduled.author_split.enabled`, and
+        `maintenance.enabled` at the config level so it cannot relaunch.
+        Blast radius of the 1,400 (all/some/none actually hit the bug) is
+        UNMEASURED — an audit was handed to the other session, not yet run as
+        of this writing.
+      - **Corrected failure signature** (my original note below was wrong about
+        WHERE the damage lands — verified by reading both functions end to end,
+        not inferred): `DeleteAuthor` (`pebble_store_authors.go:157`) does NOT
+        depend on the split job's book list for its own cleanup —
+        `sweepAuthorFromBookAuthors` (`:220`) is an unconditional, raw Pebble
+        scan over every `book_authors:` key, independent of memdb. **The
+        `book_authors` junction is safe.** The real exposure is the
+        DENORMALIZED `book.AuthorID` field: `runAuthorSplitScan`
+        (`internal/plugins/maintenance/author.go:171-248`) only rewrites it
+        for books the (possibly short) getter returned. A book the getter
+        missed keeps `AuthorID` pointing at the composite author row that
+        `DeleteAuthor` then deletes unconditionally at `:250` — a dangling FK
+        on the BOOK record, not the junction. A second, harder-to-detect case:
+        a book whose junction link got swept but was never relinked to the new
+        individual author(s) at all (silently demoted to no author for that
+        slot), because it was invisible to the getter throughout.
+      - **Audit query for the confirmed exposure:** the set of live author IDs
+        minus every book's `AuthorID`; any book pointing at an ID outside that
+        set is a hit. This should never occur in healthy operation — no other
+        known code path produces a dangling `book.AuthorID` — so a nonzero
+        count is unambiguous blast radius, no need to know which of the 1,400
+        splits caused it. Handed to the other session with this exact query;
+        follow up for the result before scoping a repair.
+      - Hand-verified other call sites, unrelated to tonight's incident:
         `internal/server/handlers/entities/handler.go:463` → `DeleteAuthor` at
         `:517`, unconditional (`POST /authors/:id/split`).
       - Sweep-reported, NOT hand-verified: `entities_ops.go:91` → `:160`;
@@ -39,7 +67,10 @@
       "a link they cannot see is one they will not rewrite before deleting the
       author — which orphans it." The author understood the hazard for the
       filtered-view case and fixed that half; the lost-row half was never wired
-      up. A documented hazard is not a control.
+      up. A documented hazard is not a control — and this is now the second
+      incident (after `feedback_a_documented_hazard_is_not_a_control.md`'s
+      2026-08-23 pair) where a written-up hazard sat un-tested until it fired
+      for real.
       Lower severity, same class: `GetAllAuthors` (`authors.go:22`) →
       `cleanup_orphan_author_embeddings.go:141` → `embeddingStore.Delete` `:168`
       (embeddings are recomputable, so this degrades rather than destroys).
