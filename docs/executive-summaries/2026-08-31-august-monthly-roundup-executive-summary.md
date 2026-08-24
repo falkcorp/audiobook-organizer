@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.13.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -903,6 +903,41 @@ that will genuinely confirm it is the next 5am.
 That distinction is being written down rather than smoothed over, because a
 merged fix plus a convincing explanation is exactly the combination that gets
 recorded as "verified" when nothing has actually been verified yet.
+
+## 23. The copies a merge left behind (Aug 23)
+
+**Merging duplicate series could quietly abandon alternate copies of a book.**
+
+When the library holds the same series twice under slightly different names, merging
+them is meant to move every book across and then remove the empty one. It moved only
+the books it could see — and it was deliberately not looking at alternate copies: the
+second and third rips of a book you already own, which the library hides behind the
+main one. Those were left pointing at a series that had just been deleted, which is how
+a book ends up on the shelf with no series and nothing ever revisits it.
+
+A second problem sat behind it. If moving one book failed partway, the series was
+deleted anyway and the job reported success. That turned a recoverable hiccup into
+permanent loss with a green tick next to it.
+
+Both are fixed, along with two further mistakes found while reviewing the fix itself.
+
+**No book is known to have been affected.** The jobs carrying this fault have not run on
+this library in at least the last nine days, and the scheduled one has a prior
+measurement of never having run at all. This was a trap that had not yet sprung.
+
+It is worth recording anyway, for a reason that is easy to miss: the same mistake, in a
+job that *was* running nightly, is exactly what section 17 above describes — the series
+that vanished from under 13,322 books on August 14. That one did real damage. This is
+the same class of fault caught before it fired, not a second helping of it, and the two
+should not be added together.
+
+One caution about the evidence, which applies beyond this entry. The reason we can say
+these jobs did not run is a direct measurement of what actually ran. It is *not* the
+absence of failure reports — and this month gave us a sharp lesson in why that
+distinction matters. As the previous section describes, the nightly maintenance run
+itself was dying on its first task, so nothing scheduled behind it executed at all. A
+scheduler that is not running produces no failures. Silence from it was never evidence
+that anything was well.
 
 ## Themes worth carrying into next month
 
