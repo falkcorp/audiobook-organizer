@@ -85,13 +85,24 @@ func TestRunAIBatchPhase_RunsBatchesConcurrently(t *testing.T) {
 // remaining batch. The serial version did this and the concurrent one must too.
 func TestRunAIBatchPhase_PermanentFailureAbortsRemainingBatches(t *testing.T) {
 	books, cands := makeCandidates(20 * 40) // 40 batches
-	f := &fakeAIParser{err: errors.New("insufficient_quota: credit balance exhausted")}
+	// Fails ONLY on the very first invocation, every subsequent call succeeds.
+	// This is the assertion that actually distinguishes "abort on the first
+	// permanent failure" from "abort after maxTotalFailures": with
+	// aiBatchWorkers(4) > maxTotalFailures(3), a backend that fails on EVERY
+	// call trips the count-based threshold within the same first concurrent
+	// wave immediate-abort would also stop at, so the two are indistinguishable
+	// by call count alone (verified: that was this test's original, useless
+	// form). A single permanent failure can never reach a threshold of 3 by
+	// itself -- only the immediate-abort path stops the run over it.
+	f := &fakeAIParser{err: errors.New("insufficient_quota: credit balance exhausted"), errNTimes: 1}
 
 	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"))
 
 	if got := f.calls.Load(); got >= 40 {
-		t.Errorf("all %d batches were attempted after a permanent failure: the abort "+
-			"did not take effect (this is the 25-minutes-of-useless-work incident)", got)
+		t.Errorf("%d/40 batches ran after ONE permanent failure: a permanent failure "+
+			"must abort immediately, not wait for a failure count that a single "+
+			"non-retryable error can never reach on its own "+
+			"(this is the 25-minutes-of-useless-work incident)", got)
 	}
 }
 
