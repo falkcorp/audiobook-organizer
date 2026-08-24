@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-08-24
 
@@ -39,6 +39,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/gin-gonic/gin"
 )
@@ -797,6 +798,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 
 			log2 := logger.NewWithActivityLog("series-normalize", store)
 			organizeFailed := 0
+			organizeRefused := 0
 			for _, bookID := range affectedBookIDs {
 				if ctx.Err() != nil {
 					op.SetStatus("failed")
@@ -828,26 +830,65 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 				// nothing.
 				if book == nil {
 					organizeFailed++
-					logging.Error(ctx, "book listed as affected does not resolve; its series row changed but its files were NOT organized",
+					// Deliberately states BOTH causes, because this code cannot tell
+					// them apart and claiming either one would be a guess presented as
+					// a fact. GetBookByID returns (nil, nil) on ErrNotFound, so a book
+					// hard-deleted between collection and here looks identical to one
+					// whose on-disk row survives while the in-memory index has lost it.
+					// The first is harmless; the second is a live book left behind.
+					logging.Error(ctx, "book listed as affected does not resolve",
 						"book_id", bookID, "op", "series-normalize")
 					_ = progress.Log("warn", fmt.Sprintf(
-						"book %s does not resolve; its series row changed but its files were NOT organized", bookID), nil)
+						"book %s does not resolve: it was either deleted after this run collected it "+
+							"(harmless), or its row exists but the in-memory index has lost it, in which "+
+							"case its series changed and its files were NOT moved", bookID), nil)
 					continue
 				}
 				if _, oErr := s.organizeService.ReOrganizeInPlace(book, log2); oErr != nil {
+					// A refused organize is NOT a failed organize.
+					//
+					// ErrAuthorUnresolved means the organizer deliberately declined:
+					// the book has no resolved author, so renaming it would file it
+					// under a placeholder. That is a routine library state, not a
+					// fault, and counting it would flip an otherwise-clean run red on
+					// every unresolved-author book in the affected set. Reporting that
+					// is worse than useless -- an operation that is red every time
+					// teaches its operator to ignore it, which is how the silent
+					// failures this PR exists to fix went unnoticed in the first place.
+					if errors.Is(oErr, organizer.ErrAuthorUnresolved) {
+						organizeRefused++
+						_ = progress.Log("info", fmt.Sprintf(
+							"book %s not organized: its author is unresolved, so organize declined to "+
+								"rename it. Resolve the author via metadata fetch and organize will "+
+								"pick it up.", bookID), nil)
+						continue
+					}
 					organizeFailed++
 					_ = progress.Log("warn", fmt.Sprintf("organize failed for book %s: %v", bookID, oErr), nil)
 				}
+			}
+			if organizeRefused > 0 {
+				logging.Info(ctx, "series normalization declined to organize some books by policy",
+					"refused", organizeRefused, "total", len(affectedBookIDs))
 			}
 			// Folded into the operation's outcome rather than left in the log. A
 			// re-run cannot recover these: normalize is idempotent on the series NAME,
 			// so once the rename has committed a second run computes no actions and
 			// never revisits the book. Silence here is permanent.
+			//
+			// The message points at the per-book warnings instead of naming one cause,
+			// because the causes differ (a store failure, a vanished row, a missing
+			// source file) and a summary that asserts one of them would be false for
+			// the others. A PR about honest reporting does not get to round its own
+			// summary off.
 			if organizeFailed > 0 {
-				organizeErr := fmt.Errorf("%d of %d affected books were not organized; their series rows changed but their files did not move, and a re-run will not retry them because the series names are already normalized",
+				organizeErr := fmt.Errorf("%d of %d affected books were not organized; their series rows changed, "+
+					"so their files may no longer match their series path, and re-running this operation will not "+
+					"retry them because the series names are already normalized. See the per-book warnings above "+
+					"for each cause",
 					organizeFailed, len(affectedBookIDs))
 				logging.Error(ctx, "series normalization could not organize every affected book",
-					"failed", organizeFailed, "total", len(affectedBookIDs))
+					"failed", organizeFailed, "refused", organizeRefused, "total", len(affectedBookIDs))
 				_ = progress.Log("warn", organizeErr.Error(), nil)
 				opErr = errors.Join(opErr, organizeErr)
 			}

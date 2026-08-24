@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-08-24
 //
@@ -27,6 +27,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -159,6 +160,35 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 				"Invalidated the cached series list (%d rows removed, %d books repointed)",
 				totalMerged+orphansDeleted, booksRepointed), nil)
 		}
+
+		// Attaching the recorded errors here, to the NAMED return, is what makes
+		// them survive every exit rather than only the last one.
+		//
+		// Both cancellation exits used to `return ctx.Err()` bare. Phase 1 can
+		// refuse a delete -- appending "REFUSING to delete it ... Re-run after
+		// resolving the errors above" to mergeErrors -- and then the operator
+		// cancels, or the maintenance window's context ends. A bare return
+		// destroyed that message and the counts with it, leaving "context
+		// canceled" and no record that a series is now half-merged.
+		//
+		// That is the same defect this change fixes one file over with
+		// errors.Join(opErr, ctx.Err()); doing it in the defer means the NEXT
+		// early return somebody adds inherits the behaviour instead of
+		// reintroducing the bug.
+		if len(mergeErrors) == 0 {
+			return
+		}
+		detail := strings.Join(mergeErrors[:min(len(mergeErrors), 10)], "; ")
+		if len(mergeErrors) > 10 {
+			detail += fmt.Sprintf(" (and %d more)", len(mergeErrors)-10)
+		}
+		recorded := fmt.Errorf("series prune recorded %d error(s) (%d series merged, %d orphans deleted, %d books repointed): %s",
+			len(mergeErrors), totalMerged, orphansDeleted, booksRepointed, detail)
+		if err != nil {
+			err = errors.Join(err, recorded)
+			return
+		}
+		err = recorded
 	}()
 
 	allSeries, err := store.GetAllSeries()
@@ -441,17 +471,18 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// The cached series list is dropped by the deferred invalidation at the top of
 	// this function, so that every exit path gets it and not just this one.
 
-	// Report the errors as a FAILURE, not just as a log line.
+	// The errors are turned into this function's return value by the deferred
+	// block at the top -- NOT here.
 	//
-	// Until 2026-08-24 this was an unconditional `return nil`, so mergeErrors —
-	// every hydrate failure, every refused delete, every skipped orphan sweep —
+	// Until 2026-08-24 this was an unconditional `return nil`, so mergeErrors --
+	// every hydrate failure, every refused delete, every skipped orphan sweep --
 	// reached the operator only as a warn line truncated to ten entries. The caller
 	// (duplicates_ops.go) read the nil, set status "success" and emitted "Series
 	// prune completed"; the nightly maintenance job did the same.
 	//
 	// That made the fail-closed refusal added in #2828 self-defeating. Its whole
 	// purpose is to stop a merge deleting a series whose books could not all be
-	// moved, and its message ends "Re-run after resolving the errors above" — an
+	// moved, and its message ends "Re-run after resolving the errors above" -- an
 	// instruction delivered to a run that reported itself green, so nobody re-ran
 	// it. The books stay split across both series rows indefinitely.
 	//
@@ -459,11 +490,6 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// refuse is an outcome class that did not exist when these conditions were
 	// written, and it has to be taught to every condition that consumes the same
 	// facts, not just the first one noticed.
-	if len(mergeErrors) > 0 {
-		return fmt.Errorf("series prune finished with %d error(s), %d series merged, %d orphans deleted, %d books repointed: %s",
-			len(mergeErrors), totalMerged, orphansDeleted, booksRepointed, errDetail)
-	}
-
 	return nil
 }
 
