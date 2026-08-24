@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package jobs
 
@@ -83,6 +83,9 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 			continue
 		}
 
+		// Core for CANDIDATE SELECTION: "is this a one-book series?" is a
+		// question about distinct books, and alternate rips of the same book must
+		// not make a 1-book series look like a 4-book one.
 		books, bErr := store.GetBooksBySeriesIDCore(ser.ID)
 		if bErr != nil || len(books) == 0 {
 			reporter.Increment()
@@ -94,12 +97,27 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 			continue
 		}
 
+		// AllVersions for the WRITE SET: every row that references this series
+		// has to be unlinked before the row is deleted, alternate rips included.
+		// Selection and mutation legitimately ask different questions here, which
+		// is why this reads a different getter rather than replacing the one
+		// above.
+		unlink, uErr := store.GetBooksBySeriesIDAllVersions(ser.ID)
+		if uErr != nil || len(unlink) == 0 {
+			reporter.Increment()
+			continue
+		}
+
 		// The filtered count says one book, so this looks like a 1-book series
-		// worth collapsing. Only act if the UNFILTERED count agrees: a series
-		// with one primary book and three non-primary versions also reads as
-		// count==1 here, and unlinking the one visible book then deleting the
-		// row strands the other three.
-		if refCounts[ser.ID] > 1 {
+		// worth collapsing. Only act if the UNFILTERED count agrees -- but the
+		// comparison is now against what we are actually about to unlink, not
+		// against 1. Against 1, a series with one primary and three non-primary
+		// versions refused forever, because refCounts counts all four while the
+		// listing getter showed one. Those four are now all unlinked, so the
+		// guard fires only on rows this run still cannot see: trashed books
+		// (both series getters skip soft-deleted rows) or rows the memdb counts
+		// and Pebble can no longer hydrate.
+		if refCounts[ser.ID] > len(unlink) {
 			// Counted and reported through the reporter, not just slog. A
 			// skip here is a series this job DECLINED to collapse; if it were
 			// only incremented like the thousands of non-candidates above,
@@ -108,16 +126,16 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 			// job output an operator actually reads.
 			singleSkipped++
 			reporter.Log("warn", fmt.Sprintf(
-				"Kept 1-book series %d (%q): %d books reference it but the filtered count shows %d "+
-					"(trashed or non-primary rows would have been stranded)",
-				ser.ID, ser.Name, refCounts[ser.ID], count), nil)
+				"Kept 1-book series %d (%q): %d books reference it but only %d can be unlinked "+
+					"(trashed or unhydratable rows would have been stranded)",
+				ser.ID, ser.Name, refCounts[ser.ID], len(unlink)), nil)
 			reporter.Increment()
 			continue
 		}
 
 		singleFound++
 		if !dryRun {
-			if applyErr := csUnlinkAndDeleteSeries(store, &book, ser.ID); applyErr != nil {
+			if applyErr := csUnlinkAndDeleteSeries(store, unlink, ser.ID); applyErr != nil {
 				slog.Error("Failed to remove 1-book series", "seriesID", ser.ID, "seriesName", ser.Name, "err", applyErr)
 			} else {
 				deletedIDs[ser.ID] = true
@@ -177,8 +195,9 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 
 	if singleSkipped > 0 || dupRefused > 0 {
 		reporter.Log("warn", fmt.Sprintf(
-			"Reference guard kept %d single-book series and %d merged-from series that the filtered "+
-				"count reported as empty; rerun once those rows are visible", singleSkipped, dupRefused), nil)
+			"Reference guard kept %d single-book series and %d merged-from series holding rows this run "+
+				"could not reach (trashed, or counted but unhydratable); rerun once those rows are visible",
+			singleSkipped, dupRefused), nil)
 	}
 	slog.Info("Done single_found single_applied single_skipped dup_groups_found dup_applied dup_refused dryRun",
 		"singleFound", singleFound, "singleApplied", singleApplied, "singleSkipped", singleSkipped,
@@ -186,23 +205,45 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	return nil
 }
 
-// csUnlinkAndDeleteSeries only reads book.ID from the passed-in row (BookCore
-// is sufficient — see caller) and hydrates the real writeback target via
-// GetBookByID below, so no heavy-field fidelity is lost.
-func csUnlinkAndDeleteSeries(store seriesUnlinker, book *database.BookCore, seriesID int) error {
-	current, err := store.GetBookByID(book.ID)
-	if err != nil {
-		return fmt.Errorf("GetBookByID: %w", err)
+// csUnlinkAndDeleteSeries unlinks EVERY passed-in row from seriesID and only
+// then deletes the series row.
+//
+// It takes a slice rather than a single book because the caller now hands it the
+// complete set (AllVersions), not just the one book the listing getter showed.
+// Unlinking one of four and deleting the row is precisely the stranding this
+// job's guard existed to refuse.
+//
+// Only book.ID is read from each passed-in row (BookCore is sufficient — see
+// caller); the real writeback target is hydrated via GetBookByID, so no
+// heavy-field fidelity is lost.
+//
+// Fail-closed and ordered: the delete happens only after every unlink has
+// SUCCEEDED. Returning early on the first failure leaves the series row in
+// place, which is the recoverable state -- the rows still point at a series
+// that still exists, and a later run retries. Deleting after a partial unlink
+// would strand exactly the rows that failed.
+func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, seriesID int) error {
+	if len(books) == 0 {
+		// Deleting here would be a delete with no unlink at all. The caller
+		// already skips an empty set; this is the second lock on that door.
+		return fmt.Errorf("refusing to delete series %d: no books to unlink", seriesID)
 	}
-	if current == nil {
-		return fmt.Errorf("book %s not found", book.ID)
+	for i := range books {
+		id := books[i].ID
+		current, err := store.GetBookByID(id)
+		if err != nil {
+			return fmt.Errorf("GetBookByID(%s): %w", id, err)
+		}
+		if current == nil {
+			return fmt.Errorf("book %s not found", id)
+		}
+		current.SeriesID = nil
+		current.SeriesSequence = nil
+		if _, err = store.UpdateBook(id, current); err != nil {
+			return fmt.Errorf("UpdateBook(%s): %w", id, err)
+		}
 	}
-	current.SeriesID = nil
-	current.SeriesSequence = nil
-	if _, err = store.UpdateBook(book.ID, current); err != nil {
-		return fmt.Errorf("UpdateBook: %w", err)
-	}
-	if err = store.DeleteSeries(seriesID); err != nil {
+	if err := store.DeleteSeries(seriesID); err != nil {
 		return fmt.Errorf("DeleteSeries: %w", err)
 	}
 	return nil
@@ -222,9 +263,16 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, book *database.BookCore, seri
 func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int) (int, int, error) {
 	var merged, refused int
 	for _, fromID := range mergeIDs {
-		books, err := store.GetBooksBySeriesIDCore(fromID)
+		// AllVersions, not Core. This loop repoints every row it is handed and
+		// then deletes fromID, so the getter and the refCounts guard below must
+		// answer about the SAME population. They did not: refCounts is unfiltered
+		// while Core hides non-primary versions, so any series holding an
+		// alternate rip failed refCounts-moved > 0 and was refused -- on EVERY
+		// run, not once. The guard was not wrong, it was misaligned; aligning the
+		// read leaves it firing only on the rows it still cannot see (trashed).
+		books, err := store.GetBooksBySeriesIDAllVersions(fromID)
 		if err != nil {
-			return merged, refused, fmt.Errorf("GetBooksBySeriesIDCore(%d): %w", fromID, err)
+			return merged, refused, fmt.Errorf("GetBooksBySeriesIDAllVersions(%d): %w", fromID, err)
 		}
 		// moved counts rows actually reassigned, mirroring the dedup path. The
 		// nil-hydration skip below must NOT count -- and the resulting refusal
@@ -262,7 +310,14 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 			// refused, leaving a resolvable series ID for the rows we could
 			// not see. A later run, or the reconciler, can finish the job once
 			// those rows become visible.
-			slog.Warn("Keeping merged-from series row: books reference it that the filtered getter cannot see",
+			//
+			// Reaching here now means something OTHER than a non-primary
+			// version: the getter above sees those. What it still cannot see is
+			// a trashed row (both series getters skip soft-deleted books) or a
+			// row the memdb counts and Pebble can no longer hydrate. Naming
+			// "the filtered getter" here would send the next reader to a cause
+			// this change removed.
+			slog.Warn("Keeping merged-from series row: more books reference it than this run could reassign (trashed or unhydratable)",
 				"seriesID", fromID, "keepID", keepID,
 				"reassigned", moved, "stranded_if_deleted", stranded)
 			refused++
