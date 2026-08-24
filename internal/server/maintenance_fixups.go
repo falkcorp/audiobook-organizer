@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package server
 
@@ -42,6 +42,10 @@ type maintenanceBookStore interface {
 type maintenanceSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	// Display may filter; anything that WRITES must not. A merge repoints the
+	// rows it is handed and then deletes the series, so a row the Core listing
+	// getter hides is a row left pointing at a series that no longer exists.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	UpdateSeriesName(id int, name string) error
 	DeleteSeries(id int) error
 }

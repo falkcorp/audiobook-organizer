@@ -1,13 +1,14 @@
 // file: internal/server/duplicates_handlers_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c1e2f3a-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-07-06
+// last-edited: 2026-08-24
 
 package server
 
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -105,6 +106,19 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 		}
 		return nil, nil
 	}
+	// The listing getter above hides non-primary versions; this one does not.
+	// Modelling the difference is the point: series 2 has an alternate rip that
+	// only AllVersions can see, and the merge repoints it, so it must appear in
+	// affectedBookIDs or its file is never moved and its tags never rewritten.
+	store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		switch id {
+		case 1:
+			return []database.BookCore{{ID: "book-1"}}, nil
+		case 2:
+			return []database.BookCore{{ID: "book-2"}, {ID: "book-2-alt"}}, nil
+		}
+		return nil, nil
+	}
 	renamed := map[int]string{}
 	store.UpdateSeriesNameFunc = func(id int, name string) error {
 		renamed[id] = name
@@ -132,5 +146,14 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 	}
 	if len(affected) == 0 {
 		t.Errorf("expected affected book IDs returned")
+	}
+	// The non-primary version must be in the affected set. The caller organizes
+	// (moves files for) and writes tags back to exactly this list, so a row the
+	// merge repoints but the list omits keeps its file under the old series'
+	// path with stale tags -- silent, and invisible to any assertion on len().
+	if !slices.Contains(affected, "book-2-alt") {
+		t.Errorf("non-primary version book-2-alt missing from affected books %v; "+
+			"the affected list must be collected with the same getter the merge "+
+			"repoints with, or its file is never moved and its tags never rewritten", affected)
 	}
 }

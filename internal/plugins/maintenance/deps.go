@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-08-20
+// last-edited: 2026-08-24
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -92,6 +92,10 @@ type opsSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetAllSeriesBookCounts() (map[int]int, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	// Display may filter; anything that WRITES must not. A repoint-then-delete
+	// loop that reads the Core listing getter cannot see non-primary versions,
+	// so it leaves them pointing at a series it just deleted.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 

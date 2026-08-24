@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-08-18
+// last-edited: 2026-08-24
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -47,6 +47,8 @@ import (
 type seriesPruneStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	// See maintenanceSeriesStore: display may filter, writes may not.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	DeleteSeries(id int) error
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
@@ -180,7 +182,12 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			// Description/VersionNotes/BookSig*). Hydrating keeps the write
 			// correct and self-contained.
 			// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-			books, err := store.GetBooksBySeriesIDCore(ser.ID)
+			//
+			// AllVersions, not the Core listing getter: this loop repoints every
+			// row it is handed and then deletes ser.ID below. A non-primary
+			// version the listing getter hides is one this loop never repoints,
+			// and it is left holding a series that no longer exists.
+			books, err := store.GetBooksBySeriesIDAllVersions(ser.ID)
 			if err != nil {
 				mergeErrors = append(mergeErrors, fmt.Sprintf("failed to get books for series %d: %v", ser.ID, err))
 				continue
@@ -453,9 +460,13 @@ func buildSeriesNormalizePreview(store seriesMergeStore) seriesNormalizePreviewR
 // collision with the duplicates handler MergeSeriesGroup.
 func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int) error {
 	for _, fromID := range mergeIDs {
-		books, err := store.GetBooksBySeriesIDCore(fromID)
+		// AllVersions, not the Core listing getter: this loop repoints every row
+		// it is handed and then deletes fromID below, unconditionally. A
+		// non-primary version the listing getter hides is never repointed and is
+		// left holding a series that no longer exists.
+		books, err := store.GetBooksBySeriesIDAllVersions(fromID)
 		if err != nil {
-			return fmt.Errorf("GetBooksBySeriesIDCore(%d): %w", fromID, err)
+			return fmt.Errorf("GetBooksBySeriesIDAllVersions(%d): %w", fromID, err)
 		}
 
 		for _, book := range books {
@@ -498,7 +509,14 @@ func executeSeriesNormalizeCore(
 		if a.Action == "flag" {
 			continue
 		}
-		books, bErr := store.GetBooksBySeriesIDCore(a.SeriesID)
+		// AllVersions, and this one is NOT about stranding. affectedBookIDs is
+		// what the caller organizes (moves files for) and writes tags back to.
+		// mergeSeriesGroupHelper below now repoints non-primary versions too, so
+		// collecting this list with the filtered getter would repoint a row and
+		// then never move its file or refresh its tags — the row would point at
+		// the new series while its file stayed under the old series' path.
+		// The two must read the same set.
+		books, bErr := store.GetBooksBySeriesIDAllVersions(a.SeriesID)
 		if bErr != nil {
 			continue
 		}
