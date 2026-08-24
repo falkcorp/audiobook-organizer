@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-17
+// last-edited: 2026-08-24
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -31,6 +31,12 @@ import (
 type libraryScanParams struct {
 	FolderPath  *string `json:"folder_path,omitempty"`
 	ForceUpdate *bool   `json:"force_update,omitempty"`
+
+	// IncludeRootDir adds the organized library root to the scan while KEEPING
+	// the incremental skip. force_update also reaches RootDir but disables the
+	// skip at the same time, which turns "scan the whole library" into a full
+	// re-hash of it; these are now separable.
+	IncludeRootDir *bool `json:"include_root_dir,omitempty"`
 
 	// ResumeFolderIdx / ResumeItemOffset are written by the scan's own
 	// Checkpoint calls and merged back into params by resumeRestart() before
@@ -137,6 +143,7 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 			scanReq := &scanner.ScanRequest{
 				FolderPath:       p.FolderPath,
 				ForceUpdate:      p.ForceUpdate,
+				IncludeRootDir:   p.IncludeRootDir,
 				ResumeFolderIdx:  p.ResumeFolderIdx,
 				ResumeItemOffset: p.ResumeItemOffset,
 				Checkpoint: func(folderIdx, itemOffset int) {

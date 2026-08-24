@@ -1,7 +1,7 @@
 // file: internal/scanner/service_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-b8c9-d0e1-f2a3b4c5d6e7
-// last-edited: 2026-05-05
+// last-edited: 2026-08-24
 
 package scanner
 
@@ -21,7 +21,7 @@ func TestScanService_DetermineFoldersToScan_SpecificFolder(t *testing.T) {
 	folderPath := "/test/folder"
 	req := &ScanRequest{FolderPath: &folderPath}
 
-	folders, err := ss.determineFoldersToScan(req.FolderPath, false, testLog)
+	folders, err := ss.determineFoldersToScan(req.FolderPath, false, false, testLog)
 
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -44,7 +44,7 @@ func TestScanService_DetermineFoldersToScan_AllImportPaths(t *testing.T) {
 	ss := NewScanService(mockDB)
 
 	testLog := logger.New("test")
-	folders, err := ss.determineFoldersToScan(nil, false, testLog)
+	folders, err := ss.determineFoldersToScan(nil, false, false, testLog)
 
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
