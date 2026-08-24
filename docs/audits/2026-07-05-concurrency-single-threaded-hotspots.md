@@ -1,9 +1,56 @@
 <!-- file: docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 4f8b2d6e-9c1a-4e3f-b7d5-2a6c8e0f1b3d -->
-<!-- last-edited: 2026-07-05 -->
+<!-- last-edited: 2026-08-24 -->
 
 # Concurrency Audit — Single-Threaded Hotspots
+
+> ## ⚠️ STATUS 2026-08-24 — read this before acting on anything below
+>
+> **Every item in the original "Suggested priority order" has been fixed.** The
+> tables further down are a snapshot of 2026-07-05 and were never updated as the
+> work landed, so they read as a live TODO list while describing code that no
+> longer exists in that form. Verify at HEAD before starting anything here.
+>
+> Re-verified at HEAD on 2026-08-24:
+>
+> | original priority | state at HEAD | evidence |
+> |---|---|---|
+> | 1. `BookSignatureScan` O(n²) | **done** — outer loop sharded | `registry.RunItems` + `Concurrency: runtime.NumCPU()`, `internal/dedup/engine.go` |
+> | 2. `FullScan`'s two passes | **done** — both parallel | `registry.RunItems` over layer-1 indices, `internal/dedup/engine.go` |
+> | 3. `AcoustIDScan` | **done** | same `RunItems` pattern |
+> | 4. `internal/server/acoustid_backfill.go` | **done — file deleted**, as this audit recommended | path no longer exists |
+> | 5. `embed_scan.go` + `embedding_backfill.go` | **done** | `registry.RunItems` in both |
+>
+> The Medium- and Lower-confidence tables have **not** been re-verified; treat
+> them as 2026-07-05 claims needing a fresh check, not as current facts.
+>
+> ### What this audit MISSED
+>
+> Its sweep was for *serial loops over large collections*, which is why it caught
+> `BookSignatureScan` but not the worst quadratic site actually in the tree:
+> **phase 3 of `FindDuplicateAuthors`** (`internal/dedup/author.go`), which
+> compared every pair of distinct author last names with Jaro-Winkler —
+> **26,357,430 pairs** on the production library's 7,261 distinct surnames,
+> single-threaded. It was invisible to the audit because it iterates *last-name
+> strings*, not books/authors/candidates, so it did not match the shapes being
+> grepped for. Fixed 2026-08-24: a provable length prefilter (discards 61% of
+> pairs, cannot change results) plus sharding the pure scan while the greedy
+> grouping stays serial. Measured 4.62s → 0.53s at production shape on 10 cores,
+> byte-identical output.
+>
+> **Lesson for the next sweep:** search by *loop shape* (nested pairwise over any
+> slice), not only by *collection name*. A `for j := i+1` over a derived string
+> set is the same O(n²) hazard as one over books.
+>
+> ### Pairwise sites deliberately NOT changed
+>
+> - `internal/database/pebble_store.go` `groupMetadataBucket` — quadratic, but the
+>   caller skips any bucket over `metadataFuzzyBucketCap = 200` with a warning, so
+>   work is bounded at ~20K comparisons per bucket. The cap is real; verified.
+> - `internal/dedup/author.go` phase 2 — pairwise *within* exact-last-name buckets.
+>   Cost is `Σ k_b² ≤ (max bucket) · n`, single-digit millions of cheap precomputed
+>   compares at library scale. Not worth the concurrency risk.
 
 **Date:** 2026-07-05
 **Branch:** `docs/concurrency-audit`
@@ -36,6 +83,10 @@ recent cleanup work — see the July 3-5 gold-label/orphan-embedding cleanup ent
 CHANGELOG.md).
 
 ### High confidence
+
+> ⚠️ **Stale — every row in this table that appears in the priority order has
+> since been fixed.** See the status banner at the top. Preserved as the
+> 2026-07-05 snapshot.
 
 | file:line | what's serial | item scale | why it matters |
 |---|---|---|---|
@@ -107,6 +158,9 @@ for some of these:
    inline on a user-facing HTTP request rather than as a background op with its own budget.
 
 ## Suggested priority order
+
+> **All five items below were completed between 2026-07-05 and 2026-08-24.**
+> Kept for the record; see the status banner at the top of this file.
 
 1. `BookSignatureScan` (worst algorithmic shape — O(n²))
 2. `FullScan`'s two passes (confirmed prod incident, now has progress reporting but still
