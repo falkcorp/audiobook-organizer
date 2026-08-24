@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.41.0 -->
+<!-- version: 10.42.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -4844,6 +4844,26 @@ are simply left stale after a batch write.
 Two paths, opposite failure modes, neither correct. The right answer is **exactly one
 recompute per affected book** on both.
 
+#### ✅ Batch half fixed — 2026-08-24
+
+`BatchUpsertBookFiles` now recomputes once per affected book after the commit, matching
+`DeleteBookFilesByIDs`. Book ids are collected during the write loop, not from the
+caller's slice, because the match-by-PID/path branch reassigns `file.BookID` and the
+recompute has to follow the row that was actually written.
+
+Pinned by `internal/database/batch_upsert_aggregates_test.go`, asserting recompute
+**invocations** rather than writes — a redundant recompute finds nothing changed and logs
+only at Debug, so a write-count assertion reads 1 even when it ran per row. A mutant that
+dropped the de-duplication survived the write-counting version of that test.
+
+Also corrected there: `DeleteBookFilesForBook`'s comment claimed the book "likely has
+Duration=0 after deletion, which is correct". It does not — the partial-data rule
+preserves a populated Duration when no remaining file carries one. Now pinned by
+`TestDeletingEveryFileKeepsTheBookDuration`.
+
+**Still open: the `CreateBookFile`-per-row half**, i.e. the 92.1% above. See the
+attribution table for where it actually comes from.
+
 ### ⚠️ Attribution is NOT established — do not repeat this mistake
 
 These 126,928 calls were initially attributed to the scan writing book files. **That is
@@ -4870,15 +4890,40 @@ line the 126,928 baseline was counted from — so the next sample is directly co
 with it. A runtime stack walk was chosen over a signature change because
 `RecomputeBookAggregates` is mocked in eight generated files.
 
-**Still open — the numbers below cannot be produced until prod runs this build:**
+#### ✅ Production sample taken — 2026-08-24
+
+Prod's binary (Aug 24 07:23) postdates the instrumentation, so the field is live. Full
+unit journal: 212,823 `RecomputeBookAggregates` lines Aug 3 → Aug 21, of which **6,376**
+carry `caller=` (only lines written after the Aug 12 instrumentation can).
+
+| caller | recomputes | share |
+|---|---:|---:|
+| `maintenance.createBookFileFor:382` | **5,875** | **92.1%** |
+| `metafetch.ensureLibraryCopy:406`+`:425` | 265 | 4.2% |
+| `merge.CombineBooks:438` | 150 | 2.4% |
+| `merge.attachVirtualFile:535` | 29 | 0.5% |
+| `metafetch.generateSegmentTitles:432`+`:453` | 31 | 0.5% |
+| `maintenance.planMissingFileRepoint.func4:454` | 21 | 0.3% |
+| `metafetch.runApplyPipeline:541` | 5 | 0.1% |
+
+**The prediction above held**: maintenance, metafetch and merge — and *not* the scanner.
+
+⚠️ **Read the 92.1% as "when this fires it dominates", not as a traffic split.** 6,216 of
+the 6,376 samples fall on **Aug 14 alone**; the other days contribute 5, 3, 21 and 131.
+Two further limits: the journal's newest recompute line is Aug 21 23:54 despite the Aug 24
+restart (rotation, or no aggregate work since), and 206,447 of the 212,823 lines predate
+the instrumentation entirely and are unattributed.
+
+`createBookFileFor` is `relink_unlinked.go:369`, reached from `relinkOne`'s
+`ShapeDirectory` branch, which loops over a folder's audio files calling `CreateBookFile`
+once per file — the 1+2+…+N shape, exactly.
+
+**Verify-after command** (the sample above was taken with the full-dump form, since prod's
+sudo allowlist rejects `--since`):
 
 ```
-# which subsystem drives the recomputes
-journalctl -u audiobook-organizer --since "..." \
-  | grep -o 'caller=[^ ]*' | sort | uniq -c | sort -rn
-
-# redundant recomputes per caller (requires log level debug)
-... | grep 'no change needed' | grep -o 'caller=[^ ]*' | sort | uniq -c | sort -rn
+ssh <server> 'sudo /usr/bin/journalctl -u audiobook-organizer.service' \
+  | grep RecomputeBookAggregates | grep -o 'caller=[^ ]*' | sort | uniq -c | sort -rn
 ```
 
 Degenerate values are meaningful, not noise: `runtime.goexit:0` means the write came from

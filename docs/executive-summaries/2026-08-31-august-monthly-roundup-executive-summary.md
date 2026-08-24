@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.17.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -1064,6 +1064,46 @@ re-checked. At least two places named in them are still doing this work one item
 time today. A document written to stop people trusting a stale claim had a fresh
 overstatement of its own in it, which is a fair illustration of how easily this happens.
 Both now say plainly which parts were verified and which were not.
+
+## 26. The one way of changing a book's files that forgot to update the book (Aug 24)
+
+A book shows a total running time and a total size. Those are not stored facts —
+they are sums of the individual files underneath, and they have to be re-added
+whenever the files change. Every way of changing a book's files did that
+afterwards. Except one.
+
+The exception was the bulk path: the one used when the system rewrites many files
+at once, which is exactly what a library-wide repair job does. It wrote every file
+correctly and never re-added the totals. So the parent book kept whatever number it
+had from the last single-file edit, or from the day it was first imported.
+
+Nothing announced this, because from the system's point of view nothing failed. The
+write succeeded. The files were right. Only the two summary numbers on the book were
+quietly out of date. The unpleasant consequence is what it does to a repair job: a
+run that correctly fixes the duration of every file in the library finishes, reports
+success, and leaves every book still displaying the old total. Checking afterwards
+makes the repair look like it did nothing — which invites running it again, to the
+same non-effect.
+
+The bulk path now re-adds the totals once per affected book, after the write lands.
+Once per book matters: re-adding the totals means re-reading all of that book's
+files, so doing it once per file turns writing a 200-file audiobook into roughly
+twenty thousand reads instead of two hundred. That is the same shape of problem as
+the one in section 25, in a different part of the system, and it was measured on
+real production logs before being fixed — one repair job accounted for 92% of all
+this work observed, with a single book having its totals recalculated 1,189 times.
+
+Two smaller things were settled while confirming the fix, both of which had been
+easy to assume wrong:
+
+- When a file is moved or reassigned, it can end up belonging to a different book
+  than the one that submitted it. The book that gets its totals refreshed is now
+  guaranteed to be the one the file actually landed on.
+- Deleting every file from a book does **not** reset its running time to zero. That
+  is deliberate — a file that has temporarily gone missing should not be allowed to
+  erase a duration that was expensive to determine. A note in the code claimed the
+  opposite, confidently enough to plan against; it has been corrected and the real
+  behaviour written down as a test.
 
 ## Themes worth carrying into next month
 
