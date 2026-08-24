@@ -139,8 +139,8 @@ func (_c *MockConfigUpdateService_UpdateConfig_Call) Run(run func(payload map[st
 	return _c
 }
 
-func (_c *MockConfigUpdateService_UpdateConfig_Call) Return(n int, stringToV map[string]any) *MockConfigUpdateService_UpdateConfig_Call {
-	_c.Call.Return(n, stringToV)
+func (_c *MockConfigUpdateService_UpdateConfig_Call) Return(n int, stringToAnyMoqParam map[string]any) *MockConfigUpdateService_UpdateConfig_Call {
+	_c.Call.Return(n, stringToAnyMoqParam)
 	return _c
 }
 

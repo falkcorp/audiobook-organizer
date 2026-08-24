@@ -301,8 +301,8 @@ func (_c *MockAudiobookService_DeleteAudiobook_Call) Run(run func(ctx context.Co
 	return _c
 }
 
-func (_c *MockAudiobookService_DeleteAudiobook_Call) Return(stringToV map[string]any, err error) *MockAudiobookService_DeleteAudiobook_Call {
-	_c.Call.Return(stringToV, err)
+func (_c *MockAudiobookService_DeleteAudiobook_Call) Return(stringToAnyMoqParam map[string]any, err error) *MockAudiobookService_DeleteAudiobook_Call {
+	_c.Call.Return(stringToAnyMoqParam, err)
 	return _c
 }
 
@@ -502,8 +502,8 @@ func (_c *MockAudiobookService_GetAudiobookTags_Call) Run(run func(ctx context.C
 	return _c
 }
 
-func (_c *MockAudiobookService_GetAudiobookTags_Call) Return(stringToV map[string]any, err error) *MockAudiobookService_GetAudiobookTags_Call {
-	_c.Call.Return(stringToV, err)
+func (_c *MockAudiobookService_GetAudiobookTags_Call) Return(stringToAnyMoqParam map[string]any, err error) *MockAudiobookService_GetAudiobookTags_Call {
+	_c.Call.Return(stringToAnyMoqParam, err)
 	return _c
 }
 

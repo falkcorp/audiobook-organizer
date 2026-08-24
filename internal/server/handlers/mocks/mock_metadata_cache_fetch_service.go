@@ -221,8 +221,8 @@ func (_c *MockMetadataCacheFetchService_GetCachedCandidates_Call) Run(run func(b
 	return _c
 }
 
-func (_c *MockMetadataCacheFetchService_GetCachedCandidates_Call) Return(v *metafetch.MetadataCandidateCache, b bool, err error) *MockMetadataCacheFetchService_GetCachedCandidates_Call {
-	_c.Call.Return(v, b, err)
+func (_c *MockMetadataCacheFetchService_GetCachedCandidates_Call) Return(metadataCandidateCache *metafetch.MetadataCandidateCache, b bool, err error) *MockMetadataCacheFetchService_GetCachedCandidates_Call {
+	_c.Call.Return(metadataCandidateCache, b, err)
 	return _c
 }
 
@@ -334,8 +334,8 @@ func (_c *MockMetadataCacheFetchService_ListCachedSummaries_Call) Run(run func(c
 	return _c
 }
 
-func (_c *MockMetadataCacheFetchService_ListCachedSummaries_Call) Return(vs []metafetch.MetadataCacheSummary, err error) *MockMetadataCacheFetchService_ListCachedSummaries_Call {
-	_c.Call.Return(vs, err)
+func (_c *MockMetadataCacheFetchService_ListCachedSummaries_Call) Return(metadataCacheSummarys []metafetch.MetadataCacheSummary, err error) *MockMetadataCacheFetchService_ListCachedSummaries_Call {
+	_c.Call.Return(metadataCacheSummarys, err)
 	return _c
 }
 

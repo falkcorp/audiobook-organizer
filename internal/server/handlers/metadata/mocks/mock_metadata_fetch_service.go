@@ -351,8 +351,8 @@ func (_c *MockMetadataFetchService_FetchAndCache_Call) Run(run func(ctx context.
 	return _c
 }
 
-func (_c *MockMetadataFetchService_FetchAndCache_Call) Return(v *metafetch.MetadataCandidateCache, err error) *MockMetadataFetchService_FetchAndCache_Call {
-	_c.Call.Return(v, err)
+func (_c *MockMetadataFetchService_FetchAndCache_Call) Return(metadataCandidateCache *metafetch.MetadataCandidateCache, err error) *MockMetadataFetchService_FetchAndCache_Call {
+	_c.Call.Return(metadataCandidateCache, err)
 	return _c
 }
 
@@ -487,8 +487,8 @@ func (_c *MockMetadataFetchService_GetCachedCandidates_Call) Run(run func(bookID
 	return _c
 }
 
-func (_c *MockMetadataFetchService_GetCachedCandidates_Call) Return(v *metafetch.MetadataCandidateCache, b bool, err error) *MockMetadataFetchService_GetCachedCandidates_Call {
-	_c.Call.Return(v, b, err)
+func (_c *MockMetadataFetchService_GetCachedCandidates_Call) Return(metadataCandidateCache *metafetch.MetadataCandidateCache, b bool, err error) *MockMetadataFetchService_GetCachedCandidates_Call {
+	_c.Call.Return(metadataCandidateCache, b, err)
 	return _c
 }
 
