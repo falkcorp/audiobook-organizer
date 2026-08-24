@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-08-24
 
@@ -199,7 +199,16 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "limit must be a positive integer: "+raw)
 			return
 		}
-		limit = min(n, timelineMaxLimit)
+		// Clamped with an explicit branch rather than the min builtin. Both bound
+		// limit to timelineMaxLimit identically, but CodeQL's Go dataflow does not
+		// model the Go 1.21 builtin, so it traced strconv.Atoi(c.Query("limit"))
+		// straight into the make below and raised go/uncontrolled-allocation-size
+		// on an allocation that was already capped at 1000. Written this way the
+		// bound is visible to the analyzer as well as to a reader.
+		limit = n
+		if limit > timelineMaxLimit {
+			limit = timelineMaxLimit
+		}
 	}
 
 	defID := c.Query("def_id")
@@ -231,7 +240,13 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// len(rows)==limit guess — which cannot tell "exactly limit existed" from
 	// "there were more".
 	matched := 0
-	resp := make([]OperationV2Response, 0, min(len(rows), limit))
+	// Same reason as the clamp above: an explicit branch, so the ceiling on this
+	// allocation (timelineMaxLimit, 1000) is reachable by dataflow analysis.
+	capHint := len(rows)
+	if capHint > limit {
+		capHint = limit
+	}
+	resp := make([]OperationV2Response, 0, capHint)
 	for _, r := range rows {
 		if defID != "" && r.DefID != defID {
 			continue
