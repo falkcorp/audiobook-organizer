@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-24
 
@@ -1457,8 +1457,34 @@ func (s *PebbleStore) GetBookFileByID(bookID, fileID string) (*BookFile, error) 
 }
 
 // MoveBookFilesToBook reassigns BookFile records from sourceBookID to targetBookID.
+//
+// BOTH books' aggregates are recomputed, and the moved rows are refreshed in
+// memdb. This method previously did NEITHER, and it is the only BookFile mutator
+// that changes which book a row belongs to — so it is also the only one where
+// recomputing a single book is not enough. Duration and FileSize moved between
+// two books while both books' cached totals kept their pre-move values: the
+// source still counted runtime it no longer owned, and the target did not count
+// runtime it had just gained. Nothing re-derived either total afterwards
+// (maintenance.recompute-book-aggregates is one-shot and refuses to run once its
+// sentinel is set), so the wrong numbers were permanent.
+//
+// This is the merge path. All seven production callers are dedup/merge/regroup
+// flows — internal/merge/service.go, internal/dedup/split_book_merge.go,
+// internal/plugins/maintenance/{itunes_regroup,fs_regroup_xml}.go and the version
+// split/create handlers — so every merge of two duplicate books left the survivor
+// displaying a runtime that predated the merge.
+//
+// A fully drained source keeps its old totals rather than dropping to zero: that
+// is RecomputeBookAggregates' partial-data rule (no files carry a Duration, so it
+// declines to overwrite a populated value with a less-complete sum) and it is
+// deliberate. In the merge flow the drained source is deleted immediately after,
+// so the retained value is discarded with it.
 func (s *PebbleStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
 	batch := s.db.NewBatch()
+
+	// Retained so the post-commit memdb refresh can replay exactly the rows that
+	// were written, rather than re-reading them under their new keys.
+	moved := make([]*BookFile, 0, len(fileIDs))
 
 	for _, fid := range fileIDs {
 		f, err := s.getBookFileByID(sourceBookID, fid)
@@ -1504,9 +1530,49 @@ func (s *PebbleStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, target
 			batch.Close()
 			return err
 		}
+
+		moved = append(moved, f)
 	}
 
-	return batch.Commit(pebble.Sync)
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+
+	// Post-commit derived-state refresh. Every other BookFile mutator runs these
+	// four steps (see CreateBookFile and UpdateBookFile); this one ran none of
+	// them, so a move updated Pebble and left every cache reading the old world.
+	s.InvalidateLibraryStats()
+	s.MarkQuickQueryDirty("no_fingerprints", "move_book_files_to_book")
+
+	// memdb is keyed by file ID, so re-inserting the moved row replaces it in
+	// place with the new BookID — no delete-then-insert is needed. memdb is what
+	// GetAllBookFilesCore and the UI read, and before this fix it kept the OLD
+	// BookID, so the move was invisible to every memdb reader until the next
+	// warmup. Measured: with all four post-commit steps removed, memdb still
+	// reports the pre-move owner.
+	//
+	// This loop is deliberately NOT the only thing that re-syncs memdb — the
+	// recompute below reaches GetBookFiles for both books and re-syncs them as a
+	// side effect, so removing this loop alone does not currently break the
+	// visible behaviour (measured). Keep it anyway: notifyBookFileChanges is
+	// best-effort and swallows its errors, so on a failed recompute that side
+	// effect does not happen and memdb would silently keep the old owner. This is
+	// the step that makes memdb correctness independent of a best-effort call,
+	// and it is what every other BookFile mutator does.
+	for _, f := range moved {
+		s.UpsertBookFileToMemDB(f)
+	}
+
+	// Both sides, in one call. Passing them together rather than as two
+	// notifyBookFileChange calls means a failure on either book is reported by
+	// the same aggregated Error, and a self-move (source == target, which the
+	// regroup callers can produce) recomputes once instead of twice.
+	books := []string{sourceBookID}
+	if targetBookID != sourceBookID {
+		books = append(books, targetBookID)
+	}
+	s.notifyBookFileChanges(books)
+	return nil
 }
 
 // UpdateBookFileHashes updates the original_file_hash and post_metadata_hash
