@@ -113,4 +113,3 @@ func TestListResumableOperationsV2_SkipsUnreadableRows(t *testing.T) {
 	require.Len(t, resumable, 1, "want only op-good: got %+v", resumable)
 	require.Equal(t, "op-good", resumable[0].ID)
 }
-
