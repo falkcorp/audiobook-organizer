@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.14.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -839,21 +839,33 @@ and the test has been rebuilt around the real recorded reply. The fix was then d
 sabotaged four different ways to confirm the new test actually notices — including
 restoring the original bug, which it now catches.
 
-## 22. Three nights of housekeeping that never happened (Aug 21–23)
+## 22. A week of housekeeping that never happened (Aug 17–23)
 
 Every night at 5am the organiser runs a maintenance window: a list of twelve
 housekeeping jobs that tidy up after the day's work — refreshing the duplicate
 caches, clearing out temporary files, emptying the trash, pruning old logs,
 optimising the database.
 
-For at least three consecutive nights, **none of the twelve ran.** Not one.
-(Three is what the records still held when this was measured — it is a floor,
-not a count. The failure had no reason to start on the 21st.)
+For seven consecutive nights, **none of the twelve ran.** Not one.
+
+An earlier draft of this entry said three nights, and flagged that three was a
+floor rather than a count — the records had only been searched back that far.
+Searching the full week settled it. Every maintenance window from the 17th to
+the 23rd failed, at 05:00, with the identical fault: seven for seven, no
+exceptions, no partial successes.
+
+The boundary is exact, and it is the strongest evidence here. The change that
+caused this went in at 8:34pm on the 16th. The maintenance window that had run
+that same morning — hours *before* the change — did not hit this fault. The
+very next one, at 5am on the 17th, did. So did every one after it. The first
+opportunity the bug had to fire, it fired, and it never once missed
+afterwards.
 
 What makes this worth writing down is how it failed. The jobs themselves were
 perfectly healthy. The duplicate-refresh job — the first on the list — started
-on time and finished successfully, all 14,948 authors processed, every single
-night. The problem was the supervisor: the part of the system whose only job is
+on time and finished successfully on all seven nights, working through every
+author in the library each time (12,856 of them on the first night, 14,948 by
+the last, as the library grew underneath it). The problem was the supervisor: the part of the system whose only job is
 to stand and watch each task finish so it can start the next one.
 
 Five seconds into watching the very first task, the supervisor crashed. And
