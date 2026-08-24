@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -1016,7 +1016,7 @@ bulk.
 
 Comparing every surname against every other surname meant **26.4 million comparisons**
 on this library's 7,261 distinct surnames — all on a single processor core while the
-other nine sat idle. Two changes fixed that, neither of which changes a single answer:
+other nine sat idle. Three changes fixed that, none of which changes a single answer:
 
 - **Not comparing what cannot possibly match.** Two names of very different lengths
   cannot score as similar, no matter how they are spelled — that follows from how the
@@ -1027,8 +1027,14 @@ other nine sat idle. Two changes fixed that, neither of which changes a single a
   across all cores safely, because it only reads and never changes anything shared. The
   grouping step that follows genuinely does depend on order, so that part deliberately
   stayed on one core.
+- **Not re-doing work that never changes.** Each surname's length was being measured
+  again on every single comparison it took part in — 52.7 million measurements to
+  establish 7,261 facts that never change. And every comparison began by checking
+  whether two surnames were identical, which cannot happen, because the list is built
+  from names that are unique by construction. Both are gone.
 
-**Result: 4.6 seconds down to 0.5 — about nine times faster** — with the output checked
+**Result: 4.6 seconds down to 0.5 — about nine times faster** on a library-sized
+test corpus, with the output checked
 to be identical, character for character, to what the old code produced.
 
 ### One thing deliberately left alone
@@ -1043,12 +1049,21 @@ it, on purpose or by accident.
 ### A note on how this was found
 
 This work also corrected an internal audit document from July that listed places in the
-code doing this kind of unnecessarily slow work. Every item on its list had in fact been
-fixed already, but the document still read like an open to-do list, which is a good way
-to get someone to "fix" working code. The slow author check described above was not on
-that list at all — the July sweep looked for work that loops over books and authors, and
-this one loops over surnames, so it did not match the pattern being searched for. Both
-facts are now recorded in the document itself.
+code doing this kind of unnecessarily slow work. Its five priority items had all in fact
+been dealt with already, but the document still read like an open to-do list, which is a
+good way to get someone to "fix" working code. The slow author check described above was
+not on that list at all — the July sweep looked for work that loops over books and
+authors, and this one loops over surnames, so it did not match the pattern being searched
+for. Both facts are now recorded in the document itself.
+
+One correction to that correction, which is worth being straight about. An earlier draft
+of this section, and of the document itself, said *every* item on the list had been
+fixed. That was not true: alongside the five specific items there was a sixth,
+open-ended one — "everything else" in two longer tables — and those tables were never
+re-checked. At least two places named in them are still doing this work one item at a
+time today. A document written to stop people trusting a stale claim had a fresh
+overstatement of its own in it, which is a fair illustration of how easily this happens.
+Both now say plainly which parts were verified and which were not.
 
 ## Themes worth carrying into next month
 

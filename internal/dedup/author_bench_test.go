@@ -1,5 +1,5 @@
 // file: internal/dedup/author_bench_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c0d4e918-6b57-42fa-8e13-9a72b5f04c8d
 // last-edited: 2026-08-24
 
@@ -13,11 +13,27 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// benchAuthorCorpus generates an author set shaped like the production library:
-// ~14,400 authors resolving to ~7,200 distinct last names, with surname lengths
-// following the real distribution (measured 2026-08-24: mode 6 runes, tail out
-// past 14). Phase 3's cost is quadratic in the DISTINCT last-name count, so
-// reproducing that count is what makes this benchmark representative.
+// benchAuthorCorpus generates an author set sized on the production library's
+// DISTINCT last-name count, which is the number that matters: phase 3's cost is
+// quadratic in surnames, not authors. At 7,261 surnames it reproduces the real
+// 26,357,430 pairs exactly.
+//
+// What it does NOT reproduce faithfully, so do not quote these from here:
+//
+//   - Author count. The generator emits 12,101 authors (reps=1 on every third
+//     surname, else 2, so 5/3 per surname), against production's 14,435 -- a
+//     ratio of 1.67 rather than 1.99. Harmless for this benchmark, since the
+//     authors behind a surname are only touched for pairs that survive the
+//     scan, but it means this is not an author-count-representative corpus.
+//   - Prefilter yield. Random surnames drawn from the length weights below skip
+//     ~52.5% of pairs, where the real surname list skips ~61%. The screen is a
+//     pure function of the length multiset, and these weights sum to 6,555, not
+//     7,261 -- the real distribution has a short head this table omits. The 61%
+//     figure quoted elsewhere is measured on the actual production surnames and
+//     is not reproducible from this generator.
+//
+// Surname lengths follow the measured distribution (2026-08-24: mode 6 runes,
+// tail past 14) so the length-screen work is at least the right shape.
 func benchAuthorCorpus(distinctLastNames int) []database.Author {
 	rng := rand.New(rand.NewSource(20260824))
 	letters := []rune("abcdefghijklmnopqrstuvwxyz")
@@ -64,7 +80,7 @@ func benchAuthorCorpus(distinctLastNames int) []database.Author {
 	authors := make([]database.Author, 0, distinctLastNames*2)
 	id := 1
 	for i, last := range lasts {
-		// Two authors per surname on average, matching 14,435 / 7,261.
+		// 5/3 authors per surname on average -- see the caveat in the doc comment.
 		reps := 2
 		if i%3 == 0 {
 			reps = 1
