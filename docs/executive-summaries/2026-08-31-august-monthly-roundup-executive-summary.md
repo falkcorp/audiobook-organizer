@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-22 -->
+<!-- last-edited: 2026-08-23 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-20 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-23 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the 29 dated summaries in this directory
 from 2026-08-04 to 2026-08-19, linked inline below.
@@ -794,6 +794,51 @@ a person rather than deleting anything.
 
 ---
 
+## 21. "You have no credit left" read as "try again in a moment" (Aug 23)
+
+The organiser can use a paid AI service to read details out of audiobook files. That
+service is bought with credit, and when the credit runs out it says so plainly in its
+reply.
+
+The organiser did not recognise that message. The reply carries the reason in two
+separate places, and the organiser only ever looked in one of them — the one the service
+happens **not** to use for this particular problem. So "your balance is empty" was read as
+"the service is busy right now", which is a completely different situation: busy means
+wait a moment and try again, and that is exactly what it did. Three attempts per batch of
+files, with a pause between each, against a service that had already given its final
+answer.
+
+**What it cost, once, on 16 August.** All 77 batches of a library scan failed this way,
+one after another. Because every batch was quietly waiting and retrying, the scan made no
+visible progress, and after five minutes the scan's own safety timer concluded it had
+hung and cancelled it. That threw away a completed pass over **3,917 files** — a pass that
+had worked perfectly. The only thing wrong was that the organiser could not hear the word
+"no".
+
+The same fault sat in a second, separate job: the one that builds the searchable index of
+the library. Nobody had noticed, because that job fails more quietly. Against an empty
+balance it made three times as many requests as it needed to, and waited an extra five
+seconds, for every batch of an entire library.
+
+**Why no test caught it.** There was a test for precisely this, and it had been passing
+for months. It passed because it wrote its own copy of the service's reply — shaped the
+way the code expected, rather than the way the service actually sends it. So the test was
+not checking the organiser against reality; it was checking the organiser against the same
+misunderstanding the organiser already had, and agreeing with it. A test like that can
+never fail, and its passing is not evidence of anything.
+
+What makes this one sting is that the project had already learned this lesson and written
+it down. A note sitting in a neighbouring part of the code says, in almost these words,
+that inventing the service's reply would let a check pass that could never work in real
+life — and next to that note is a genuine recorded reply, kept for exactly this reason.
+It was in a part of the code nobody working on this problem would have opened. **Writing a
+warning down somewhere does not put it anywhere it will be read.**
+
+Both are fixed. The organiser now checks both places the service might state the reason,
+and the test has been rebuilt around the real recorded reply. The fix was then deliberately
+sabotaged four different ways to confirm the new test actually notices — including
+restoring the original bug, which it now catches.
+
 ## Themes worth carrying into next month
 
 1. **A silent fallback is worse than a loud failure.** The transcription outage, the
@@ -802,7 +847,11 @@ a person rather than deleting anything.
    indistinguishable from normal.
 2. **A measurement is only as good as the thing it ran against.** The test suite reported
    green three separate ways this month — hidden output, a stale server, and a
-   developer machine that was not the build server. Each looked like evidence.
+   developer machine that was not the build server. Each looked like evidence. A fourth
+   turned up on 23 August and is the sharpest of them: a test that invented the input it
+   was testing against, and so spent months confirming the code did what the test assumed
+   the outside world does. The first three were checks that ran in the wrong place; this
+   one ran in the right place and certified the bug.
 3. **Being wrong on the record is fine; leaving it there is not.** Three summaries this
    month correct earlier ones. That is the system working.
 4. **A comment that records a fact can go stale faster than code that records a rule.**
