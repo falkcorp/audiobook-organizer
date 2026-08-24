@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.40.0 -->
+<!-- version: 10.40.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-08-24 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,1243 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **SEC-BACKUP-ABSPATH** Decide whether the backup restore path should
+      *reject* absolute tar entry names rather than normalise them.
+      `internal/backup/backup.go:267` strips leading slashes from
+      `header.Name`, so an archive entry called `/etc/passwd` is written to
+      `restoreDir/etc/passwd`. TASK-082's brief asked for outright rejection;
+      the current behaviour was left in place deliberately because it is
+      standard tar semantics (GNU tar strips leading `/`), the containment
+      property still holds — nothing is written outside the restore root — and
+      flipping to reject is a behaviour change on a prod-data restore path that
+      would break legitimate archives. `TestRestoreBackupHandlesAbsolutePathInArchive`
+      in `internal/backup/backup_test.go` currently locks the normalising
+      behaviour in, so changing it means changing that test too. Owner
+      decision; not a live vulnerability either way. Raised by TASK-082 / PR #2774.
+
+- [ ] **PEBBLE-KEY-BOUND-CENSUS** Two related gaps surfaced while fixing
+      `VGBACKFILL-BOUNDS-FRAGILE` (#2801):
+
+      **1. Colon-count gap in the version-group backfill's structural filter
+      (pre-existing, NOT introduced by #2801).** `BackfillVersionGroupIndex`'s
+      loop filter in `internal/database/pebble_store_versiongroup_backfill.go`
+      requires `strings.Count(key, ":") != 1` to skip a row — i.e. it assumes
+      every book ID contains zero colons, so a primary row is always exactly
+      one colon (`book:<id>`). `CreateBook` only mints a ULID
+      `if book.ID == ""` (`internal/database/pebble_store.go:2083`), so a
+      caller-supplied ID is accepted verbatim and could contain a colon (e.g.
+      `book:my:id`, two colons) — such a row is silently skipped by the
+      backfill with no error, same as before #2801. #2801 widened the
+      iterator's byte-range bounds (fixing the "ID doesn't start with a
+      digit" failure mode) but does not touch this separate "ID contains a
+      colon" failure mode; both are instances of the same underlying issue —
+      book IDs are assumed to be colon-free ULIDs at every consumer, but
+      that's never enforced at the one place IDs are created.
+
+      **Recommended fix (root cause, not a patch-each-site fix):** enforce
+      "no colon in a book ID" at `CreateBook` itself — reject or normalize a
+      caller-supplied `book.ID` containing `:` — rather than assuming the
+      invariant holds at every scan/filter site that reads `book:` keys. This
+      is the only version of the fix that scales; patching individual
+      `strings.Count`/prefix-filter call sites one at a time does not, per
+      gap 2 below.
+
+      **2. The exact same fragile `<prefix>:0`..`<prefix>:;` byte-range
+      iterator-bound idiom (digit-only lower bound, `;` upper bound scoped to
+      the same colon) that #2801 fixed for the version-group backfill exists
+      at other call sites across `internal/database`, none of which were
+      touched by #2801 (out of scope for that PR). **Two independent regexes
+      gave two different counts, and neither is an AST-level census — both
+      are lower bounds, not exact totals:**
+
+      - `git grep -nE '\[\]byte\("[a-z_]+:0"\)' -- 'internal/database/*.go'`
+        (anchors on the `[]byte`-wrapped lower bound), run against
+        `origin/main`: **48** hits, all in non-test files, across 14 files
+        (`pebble_store.go` 20; `pebble_store_authors.go`,
+        `pebble_store_series.go`, `pebble_store_stats.go` 4 each;
+        `pebble_quick_queries.go`, `pebble_store_importpaths.go`,
+        `pebble_store_itunes.go`, `pebble_store_scancache.go`,
+        `pebble_store_quarantine.go`, `pebble_store_works.go` 2 each;
+        `pebble_store_bookfiles.go`, `series_bookref.go`,
+        `soft_deleted_count.go`, `pebble_store_versiongroup_backfill.go`
+        1 each — the last one is the site #2801 fixed, so 47 remain
+        unfixed).
+      - `git grep -nE '"[a-z_]+:;"' -- 'internal/database/*.go'` (anchors on
+        the bare-string upper bound instead), run against `origin/main`:
+        **50** hits — 49 in non-test files, plus 1 in
+        `store_invariants_test.go`'s `mustIter(t, ps, "book:0", "book:;")`,
+        which the `[]byte`-wrapped regex above misses entirely because that
+        helper takes plain strings, not `[]byte`.
+
+      The two disagree because they anchor on different halves of the pair
+      (lower-bound `[]byte(...)` form vs. upper-bound bare-string form), not
+      because one is right and the other wrong — and both regexes miss any
+      bound built by concatenation or `fmt.Sprintf` rather than a single
+      string literal (see `pebble_activity_store.go`'s
+      `[]byte("act:" + tier + ";")` for an example of that shape elsewhere in
+      the package, itself already correct, but a template for how a fragile
+      one could hide from grep too). **Re-run both before sizing a sweep, and
+      expect the true count to be somewhat higher than either.**
+
+      All of these are latent in the same sense as the version-group backfill
+      was: correct today only because every ID minted so far happens to start
+      with a digit (ULIDs, or small integer author/series IDs). None are a
+      currently observed data-loss bug. Recommend a `/parallel-sweep`-style
+      mechanical pass replacing each `[]byte("<prefix>:0")`/`[]byte("<prefix>:;")`
+      pair with the true prefix range `[]byte("<prefix>:")`/`[]byte("<prefix>;")`
+      (the pattern already used correctly elsewhere in the same files for
+      `book_file;`, `metadata_cache;`, `opchange;`, `narrator;`, etc.) — but
+      only AFTER (or alongside) fixing gap 1 above, since several of these
+      scans have their own structural/type filters downstream that may share
+      the same colon-count assumption and would need the same audit
+      `VGBACKFILL-BOUNDS-FRAGILE`'s fix got. Fixing gap 1 at `CreateBook` may
+      make much of this sweep unnecessary — do that first and re-measure
+      blast radius before committing to a 47/50/N-site mechanical sweep.
+
+      ---
+
+      **MEASURED 2026-08-23 (the census finding 8.3 of the #2787 review asked
+      for, half-answered).** Finding 8.3 said "do not fix it without
+      measuring." Every book ID reachable through the API was enumerated and
+      its first byte after `book:` checked against the `'0'`–`'9'` lower
+      bound:
+
+      | population | endpoint | ids | leading byte | outside `book:0`..`book:;` |
+      |---|---|---:|---|---:|
+      | live | `/api/v1/audiobooks` (`show_quarantined=true`) | 56,727 | `'0'` ×56,727 | **0** |
+      | soft-deleted | `/api/v1/audiobooks/soft-deleted` | 16,124 | `'0'` ×16,124 | **0** |
+      | **total** | | **72,851** | 100% `'0'` | **0** |
+
+      All 72,851 are exactly 26 characters — canonical ULIDs, with no
+      caller-supplied UUID or other format anywhere in the live keyspace. The
+      digit-only lower bound therefore holds today with a full byte of margin
+      (`'0'` vs. the `'9'` ceiling; ULIDs do not reach a leading `'1'` until
+      ~2065).
+
+      **This measurement does NOT close gap 1, and only partly closes gap 2:**
+
+      - It measures **IDs**, not **keys**. A row whose value is corrupt enough
+        that neither listing decodes it is invisible to this instrument by
+        construction — and that population is exactly what the memdb
+        known-incomplete work (#2794/#2787) exists to handle. A true answer
+        needs a raw Pebble prefix scan on the server, which the API cannot
+        express.
+      - It says nothing about **colons inside an ID** (gap 1). Both listings
+        return IDs as JSON strings; none contained a colon, but `CreateBook`
+        still accepts a caller-supplied ID verbatim, so the invariant remains
+        unenforced at the one place it could be.
+      - Non-book prefixes (`author:`, `series:`, `work:` …) were **not**
+        measured. The 47–50 other sites use the same idiom over different
+        keyspaces with different ID generators.
+
+      **What this changes about the recommendation:** the sweep is now
+      confirmed *not* urgent — there is no live row outside the bound, so this
+      is latent, not active. Fix gap 1 at `CreateBook` first as the fragment
+      already recommends; that makes the invariant true by construction rather
+      than true by luck, and re-measuring after it lands is cheap.
+
+- [ ] **The dedup UI's "Merge All" button now previews instead of merging.**
+      TASK-043 made `POST /series/deduplicate` default to `dry_run=true`, and
+      `api.deduplicateSeries()` in `web/src/services/api.ts:2821` sends no body,
+      so `handleMergeAll` in `web/src/components/dedup/DedupSeriesTab.tsx:232`
+      gets a preview after the user confirms the dialog. This is not silent —
+      the op's final progress message (which the tab shows as its success
+      banner) reads `Series deduplication complete (dry_run=true): WOULD merge
+      N duplicates...` — but the button's label no longer matches what it does.
+      Deliberately left this way: the API default has to be the safe one, and
+      the op should stay preview-only until part 2 of TODO.md's series-dedup
+      item (the all-versions getter) and the undo journal land, because both
+      change what it deletes. Then give the tab a real two-step — preview,
+      show the counts, and a second button that sends `{"dry_run": false}`.
+
+- [ ] **`/api/v1/audiobooks` reports the PRIMARY count as `count` whenever no
+      filter is set — off by 14,986 on production.** Second consumer of the same
+      `CountPrimaryBooks` substitution already tracked above for
+      `audiobook_organizer_books_total`. Measured 2026-08-23 against
+      the production server:
+
+      | query | `count` | actual stream |
+      |---|---:|---:|
+      | `?limit=1` | 56,725 | 56,725 ✅ |
+      | `?limit=1&show_quarantined=true` | **41,741** | **56,727** ❌ |
+
+      Asking to *include* quarantined books makes the reported total **drop by
+      14,984**, which is backwards — the superset reports fewer rows than the
+      subset. The stream is fine: a 250-row page fetched with
+      `show_quarantined=true` held **240 non-primary books**. Only the counter
+      is wrong.
+
+      **Mechanism.** `buildAudiobookListResponse`
+      (`internal/server/audiobooks_helpers.go`) sets
+      `filters.ExcludeQuarantined = true` when `show_quarantined` is absent,
+      then tests `hasFilters := filters.IsPrimaryVersion != nil ||
+      filters.ExcludeQuarantined || ...`. So the flag that is set *by omitting*
+      a parameter is itself counted as a filter, and the branch selects a
+      different **counter**, not a different predicate:
+
+      - omit → `hasFilters=true` → `CountAudiobooksFiltered` → correct
+      - `show_quarantined=true` → `hasFilters=false` → `CountAudiobooks` →
+        `store.CountPrimaryBooks()` → *"primary, **non-deleted** books"*
+
+      `CountAudiobooks` (`internal/audiobooks/service_single.go`) is documented
+      as *"the total count of audiobooks"* but delegates straight to
+      `CountPrimaryBooks`. The name and the doc comment both promise a total and
+      neither delivers one — that mismatch is the actual defect, and it is why
+      the same wrong number reached two unrelated consumers.
+
+      **Why it matters beyond a wrong number.** This is the exact "count !=
+      items" defect the comment directly above `hasFilters` was written to
+      prevent (*"Dropping quarantined rows AFTER pagination made a 500-page
+      return fewer than 500 and made count != items"*). It was fixed on the
+      predicate axis and reintroduced on the counter axis. Any client paging
+      until `len(fetched) >= count` silently truncates at 41,741 — which is not
+      hypothetical: `tools/cmd/orphan-nonprimary-census` did exactly that until
+      #2809, and its `-min-expected` positive control only guards the low end,
+      so a 14,986-book truncation would have passed it.
+
+      **Fix direction.** Make the promise match the delivery rather than
+      patching the call site:
+      - rename `CountAudiobooks` → `CountPrimaryAudiobooks` (and fix the doc
+        comment) so no future caller reads "total" and gets "primary"; then
+      - give the unfiltered list branch a counter that actually counts the rows
+        it is about to stream, and
+      - decide whether the Prometheus gauge above wants the primary count (then
+        reword its help text) or a true total (then repoint it).
+      A regression test should assert `count == len(items)` for an unpaginated
+      request on both the `show_quarantined` and default paths — the two
+      currently disagree and nothing catches it.
+
+- [ ] **DATABASE-RUNMIGRATIONS-TEST-COST** `internal/database`'s
+      `-short` suite spends a large chunk of its wall-clock time re-running all
+      60 `RunMigrations` migrations from a fresh Pebble store, once per test call.
+      Found while profiling TASK-178 (`docs/agent-tasks/todo-completion`):
+      `setupCoverageDB` (`store_coverage_test.go`, called 43x directly + 26x from
+      `extra_coverage_test.go`) and `newTestStoreWithBook`
+      (`book_file_test.go`, 17 callers) each call `NewPebbleStore` +
+      `RunMigrations` per test. Measured `RunMigrations` on a fresh store at
+      0.88s–2.4s (noisy) per call; a second call on an already-migrated store is
+      ~29µs (the `len(pendingMigrations) == 0` short-circuit in
+      `migrations.go`), confirming the cost is inside the 60 migrations' `Up()`
+      bodies plus their `recordMigration`/`setVersion` writes (2 synced writes
+      per migration in the loop — same fsync-per-item shape as the fix already
+      applied to `memdb_warmup_writeloss_test.go`'s `seedBooksStore`), not in
+      `NewPebbleStore` itself (~136ms/iter measured separately) or in the
+      per-test CRUD bodies.
+      Rough size: ~90 total `RunMigrations`-from-fresh calls across 7 test files
+      (`book_file_test.go`, `external_id_map_test.go`, `do_not_import_test.go`,
+      `metadata_history_test.go`, `quarantine_test.go`, `store_coverage_test.go`,
+      `store_extra_test.go`) — closely matches `store_coverage_test.go` +
+      `extra_coverage_test.go` + `book_file_test.go`'s combined ~96s of the
+      package's ~323s -short top-level test time (measured before TASK-178's fix).
+      Two directions to fix it, neither attempted here: (1) speed up
+      `recordMigration`/`setVersion`'s per-migration synced writes in
+      `migrations.go` — but that is production migration code, and durability
+      guarantees there should not be weakened just to make tests faster without
+      a real product-side review; or (2) build ONE shared, package-level
+      migrated-store fixture (e.g. a `sync.Once`-created template directory,
+      copied per test) that ~90 call sites across 7 files with 3+ different
+      local helper signatures (`Store`-returning, `(Store, string, func())`-
+      returning, and 8 inline call sites in `external_id_map_test.go`) would
+      need to adopt — real effort, and each adoption needs its own correctness
+      check that no test depends on a freshly-computed (vs. copied) migration
+      side effect.
+
+- [ ] **`dedup.series-dedup`'s apply path writes no undo-ledger rows and does
+      not check for a running scan.** TASK-043 gave the op a dry run
+      (`dry_run` defaults to true), which covers the "read before you write"
+      half of the destructive-op checklist. The other half is still missing:
+      `DedupSeries` in `internal/dedup/series_dedup.go` calls `UpdateBook` and
+      `DeleteSeries` without journaling either through `CreateOperationChange`,
+      so a `dry_run=false` run is **not undoable via `internal/undo`** —
+      `git revert` restores the code and nothing restores the data. It also
+      does not refuse to start while a `library.scan` is running or queued, so
+      a concurrent scan can clobber the reassignments. `MergeSeries` in the
+      same file already threads an `opID` for exactly this purpose and is the
+      pattern to copy. Do this before anything wires the op to a production
+      trigger.
+
+- [ ] **DEDUP-SERIES-MERGE-STRAND** Three series-merge paths *outside*
+      `internal/dedup/series_dedup.go` had the shape TASK-029 / PR #2821 fixed
+      inside it: a merge calls `GetBooksBySeriesIDCore(fromID)` — the listing
+      getter, which excludes non-primary versions — repoints every book it sees
+      to `keepID`, then calls `DeleteSeries(fromID)`, leaving any non-primary
+      version holding a series ID that no longer exists. **All three decided and
+      shipped; this entry stays open only for the follow-up in #2828.**
+      - [x] (1) `internal/server/duplicates_helpers.go` `mergeSeriesGroupHelper`
+        — live data loss, no guard at all, `DeleteSeries` unconditional. Fixed in
+        **#2825**, which also converted `executeSeriesPrune`'s merge loop (a
+        second stranding path in the same file, missed by the original survey).
+        ⚠️ #2825 *also* widened `executeSeriesNormalizeCore`'s affected-book list;
+        that part was **wrong and is reverted in #2828** — the list drives
+        `ReOrganizeInPlace`, which deliberately skips non-primary versions, and a
+        primary and its alternate rip compute the same destination path.
+      - [x] (2) `internal/plugins/maintenance/series_denumber_op.go` — live data
+        loss behind a guard that could not fire: `movedAll` was only set `false`
+        inside the loop over the Core getter's rows, so a row that getter
+        excluded could never flip it. Fixed in **#2825**.
+      - [x] (3) `internal/maintenance/jobs/cleanup_series.go` `csMergeSeriesGroup`
+        — did **not** strand. Its guard compared an unfiltered count
+        (`GetAllSeriesBookRefCounts`) against a filtered read, so it refused
+        instead — permanently, on every run. Fixed in **#2826**, merged
+        2026-08-24 after review. ⚠️ Live behaviour change: the job now collapses
+        1-book series it previously kept, so a run removes more series rows than
+        before.
+      - [ ] (4) **NEW, found reviewing the above:** both `duplicates_helpers.go`
+        merge loops deleted the series even when a repoint FAILED, and reported
+        the prune as successful — the same stranding, reached through the error
+        path instead of the getter. The `(nil, nil)` hydrate branch was recorded
+        nowhere at all. Fail-closed gating in **#2828**.
+      Full analysis in
+      `docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md` §9;
+      user-facing write-up in
+      `docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md` §7.
+      Raised while reviewing PR #2821 (TASK-029).
+
+- [ ] **SERIES-MERGE-UNGUARDED-DENOMINATOR** (was `…-TRASHED-ROWS-RESIDUAL`; renamed
+      because that name understated it by a lot). Every guard in #2825/#2828 counts
+      against **what the membership getter returned**, and that getter has no
+      completeness guard of its own — `pebble_store.go`'s
+      `GetBooksBySeriesIDAllVersions` reads memdb unconditionally when warm, with no
+      `requireTablesComplete` check. So the guard's denominator is only as complete
+      as memdb is. Two populations fall outside it:
+      1. **Trashed rows.** Both getters exclude soft-deleted books by design, so a
+         series holding one live and one trashed book is deleted with the trashed
+         row still pointing at it. Latent — it bites when the book is restored.
+      2. 🔴 **Rows memdb has LOST.** `memdb_integrity.go` documents four ways a book
+         vanishes from memdb while its Pebble row survives — including a runtime
+         `applyMemSync` abort, which needs no restart. That book is a **live,
+         primary, untrashed** row. The getter never returns it, so `repointFailed`
+         stays 0, the delete proceeds, `totalMerged++`, and the row is stranded
+         **immediately** with no error and no counter.
+      (2) is the same shape as the `movedAll` defect #2825 deleted from
+      `series_denumber_op.go`: a guard whose sample space is the filtered getter's
+      output, so the rows the bug lives on can never flip it. #2828 reproduced it
+      one layer up.
+      The tooling to close this already exists and is
+      already used **in the same function**: `executeSeriesPrune`'s phase 2
+      (`internal/server/duplicates_helpers.go`) obtains
+      `database.AsSeriesBookRefStore(store)` and fails closed, with a comment
+      calling the filtered fallback *"the failure family this repo keeps
+      rediscovering"* — while phase 1, sixty lines above, deletes with no such
+      guard. `internal/maintenance/jobs/cleanup_series.go` uses the one-line
+      `database.SeriesRefCounts(store)` wrapper for exactly this.
+      ⚠️ Held out of #2825/#2828 on purpose: gating phase 1 on the unfiltered count
+      makes the prune **refuse merges it currently completes**, the same class of
+      production-data change #2826 was held for — and #2826 has since been merged,
+      so that precedent now exists.
+      **Argument for doing (2) now rather than bundling it:** the two halves are
+      one code change but not one decision. Refusing on a *trashed* row changes
+      what a HEALTHY run does. Refusing on a row memdb has lost only fires when the
+      store is already known-degraded, and it prevents immediate stranding of a
+      live book. If the bundle stalls, (2) is worth splitting out on its own.
+      ---
+      **✅ Half (2) CLOSED — the split was taken.** User approved the lost-index half
+      only and explicitly deferred the trashed half. **Half (1) remains OPEN and is
+      what keeps this item unchecked.**
+      The fix did NOT land where this entry predicted. Gating phase 1 on the
+      unfiltered ref count cannot separate the two halves: `GetAllSeriesBookRefCounts`
+      counts trashed AND non-primary rows while `GetBooksBySeriesIDAllVersions`
+      excludes soft-deleted, so `refCount > len(books)` fires on trashed rows too —
+      i.e. it ships the half that was deferred. **No discriminator exists at that
+      layer.** It exists one layer down: memdb tracks its own losses
+      (`requireTablesComplete` → `ErrMemdbIncomplete`), which is a *direct* signal
+      rather than a difference between two counters.
+      So the guard went into `GetBooksBySeriesIDAllVersions` itself. The sharper
+      framing of the original finding: `requireTablesComplete` was wired into exactly
+      two places, `author_bookref.go` and `series_bookref.go`, and **both are
+      reference COUNTERS that only report**. The getter that authorizes the delete
+      had no guard at all — the code that observes was protected, the code that acts
+      was not.
+      ⚠️ **Stronger than the approved option text, deliberately.** The user approved
+      *refusing*; this *repairs*. memdb loss is recoverable because the authoritative
+      Pebble scan is right there, so the wrapper falls through and the merge completes
+      correctly instead of aborting a merge that could be finished properly.
+      **Blast radius: seven repoint-then-delete sites, not one** — `duplicates_helpers.go`
+      :209 and :527, `cleanup_series.go` :105 and :273, `series_dedup.go` :419, :634
+      and :713, `series_denumber_op.go` :293. Fixing the getter closes the membership
+      half for all of them; fixing phase 1 would have closed one.
+      The guard is on the `AllVersions` wrapper and NOT the shared
+      `getBooksBySeriesID` body — Core is the listing view, and pushing the check down
+      would cost every series page a full Pebble scan for the rest of the process's
+      life (a lost row stays short until restart).
+      🔬 The existing `series_getter_conformance_test.go` could not have caught any of
+      this: both its tests `require.True(p.IsMemReady())` and run only against a
+      COMPLETE memdb, so they pass unchanged — reading as "conformance still holds"
+      while covering none of the new behaviour.
+      🚨 **The first version of this fix was DEFECTIVE and review caught it.**
+      Falling through to `getBooksBySeriesIDFull` promoted that scan from a
+      listing read to the read a `DeleteSeries` is authorized against, and it had
+      none of the hardening the new role needs. Three fail-OPEN paths, all now
+      closed, all three demonstrated by tests confirmed to FAIL before the fix:
+      (a) an undecodable row was `continue`d past — and that is the SAME
+      condition that trips the memdb guard, so the repair path was blind to
+      exactly one of the three triggers that reach it, while `slog.Error`-ing
+      that it had fallen through to safety; (b) bounds were
+      `["book:0","book:;")`, admitting only `'0'-'9'` and `':'` as the first byte
+      after the prefix, so a caller-supplied letter-leading book ID (constructible
+      — `CreateBook` mints a ULID only when `ID == ""`) was invisible to every
+      series merge; (c) `iter.Error()` was unchecked. Fixed in the same PR.
+      **Generalizable, and the reason it was missed:** the defective function was
+      NOT in the diff. Giving existing code a more important job silently
+      transfers every safety assumption ever written about its old job, and no
+      diff shows you that — the newly-inadequate code is not part of the change.
+      Concretely, it falsified `series_bookref.go`'s comment "every other Pebble
+      scan in this package checks `iter.Error()`" nine days after it was written.
+      Both comments corrected in the same PR per the stale-justification rule.
+      📊 Mutation matrix: **8 mutants, 7 killed, 1 survived.** The survivor is a
+      removed `iter.Error()` check, unkillable without a fault-injection layer
+      this package does not have — recorded as inspection-only rather than
+      rounded up. M4 (guard pushed into the shared body) still kills exactly one
+      test, so the wrapper-vs-body decision remains pinned by precisely one.
+      ➡️ Four follow-ups filed in
+      `todo.d/2026-08-24-unguarded-membership-getters-authorize-deletes.md`,
+      including a **hard-delete** path with this same shape that is worse than
+      this one (`ORPHAN-FILES-HARD-DELETE-FAIL-OPEN`).
+
+- [ ] **SERIES-NORMALIZE-WRITEBACK-SPLIT** `executeSeriesNormalizeCore` returns
+      ONE list that feeds two different consumers with two different policies:
+      `ReOrganizeInPlace` (which must exclude non-primary versions — the
+      organizer's own filter at `internal/organizer/service.go:640` says so, and
+      the default naming patterns give a primary and its alternate rip an
+      identical target path) and the tag write-back (which arguably should
+      include them, since a repointed alternate rip now carries stale series
+      tags). #2825 briefly widened the list to the complete set, which silently
+      overrode organize policy; that was reverted. The proper fix is to return
+      two lists. ⚠️ It would start writing tags to files this op has never
+      touched — a production-data decision, hence not done unilaterally.
+
+- [ ] **SERIES-MERGE-PRIMITIVE-UNGUARDED** `MergeSeries` — the store-level
+      primitive beneath the paths above — has **no ref-count guard at all**.
+      Every guard discussed in DEDUP-SERIES-MERGE-STRAND lives in a caller, so a
+      new caller gets no protection by default and the safety property is
+      re-implemented per site rather than enforced once at the bottom. Pre-existing
+      and out of scope for #2825/#2826; noted so it is not lost. Decide whether the
+      guard belongs in the primitive.
+
+- [ ] 🔴 **ORPHAN-FILES-HARD-DELETE-FAIL-OPEN** `internal/plugins/maintenance/orphan_book_files.go`
+      classifies `book_file` rows as orphans by testing membership against a map
+      built from TWO unguarded dual-dispatch getters, then **hard-deletes** them.
+      This is worse than SERIES-MERGE-UNGUARDED-DENOMINATOR, which only strands.
+      - `:232` `store.GetAllBooksCore(0, 0)` and `:256` `store.ListSoftDeletedBooks(0, 0, nil)`
+        both read memdb unconditionally when warm, with no `requireTablesComplete`.
+      - `:236-238` / `:264` fold both results into one `valid` set; `:277` treats
+        any `book_file` whose `BookID` is absent from it as an orphan; `:136`
+        calls `DeleteBookFilesByIDs(ids)`.
+      - So ONE lost memdb `books` row — or any `memTableUnknown` taint, which
+        taints every table — silently removes book R from `valid`, and **every
+        `book_file` row belonging to R is hard-deleted**. R survives as a fileless
+        shell. Pure fail-open membership test with no independent corroboration.
+      ⚠️ Context that raises the priority: 41.8% of `book_file` rows already have
+      no bytes (`project_missing_bookfile_rows_download_404`), so a job that
+      deletes file rows on a short read is operating on an already-damaged
+      population. `:251` records that this same `valid` set has had one
+      correctness incident already (soft-deleted rows leaking into it).
+      **Fix is ~3 lines and the pattern is already in-tree:** both getters have a
+      complete Pebble twin directly below the memdb branch, identical in shape to
+      the fall-through PR #2839 shipped for the series getter, and
+      `ListSoftDeletedBooks`' twin is already hardened against undecodable rows.
+      Found by the silent-failure sweep on PR #2839; hand-verified.
+
+- [ ] 🔴🔥 **AUTHOR-MEMBERSHIP-UNGUARDED — CONFIRMED FIRED IN PROD 2026-08-24
+      05:00 UTC, not just a filed risk.** `GetBooksByAuthorIDWithRoleCore`
+      (`internal/database/pebble_store.go:2086`) is the author-side structural
+      twin of the series getter PR #2839 guarded.
+      - `maintenance.author_split_scan` ran unattended in the nightly window,
+        reached task 3/10, and had processed 10,681/14,951 authors — **1,400
+        already split** — before another session caught and canceled it
+        (`DELETE /operations/v2/01M0S29XYASPQ9HY73RYP9MEQN`), then disabled
+        `maintenance.author_split`, `scheduled.author_split.enabled`, and
+        `maintenance.enabled` at the config level so it cannot relaunch.
+        Blast radius of the 1,400 (all/some/none actually hit the bug) is
+        UNMEASURED — an audit was handed to the other session, not yet run as
+        of this writing.
+      - **Corrected failure signature** (my original note below was wrong about
+        WHERE the damage lands — verified by reading both functions end to end,
+        not inferred): `DeleteAuthor` (`pebble_store_authors.go:157`) does NOT
+        depend on the split job's book list for its own cleanup —
+        `sweepAuthorFromBookAuthors` (`:220`) is an unconditional, raw Pebble
+        scan over every `book_authors:` key, independent of memdb. **The
+        `book_authors` junction is safe.** The real exposure is the
+        DENORMALIZED `book.AuthorID` field: `runAuthorSplitScan`
+        (`internal/plugins/maintenance/author.go:171-248`) only rewrites it
+        for books the (possibly short) getter returned. A book the getter
+        missed keeps `AuthorID` pointing at the composite author row that
+        `DeleteAuthor` then deletes unconditionally at `:250` — a dangling FK
+        on the BOOK record, not the junction. A second, harder-to-detect case:
+        a book whose junction link got swept but was never relinked to the new
+        individual author(s) at all (silently demoted to no author for that
+        slot), because it was invisible to the getter throughout.
+      - **Audit RUN, by the other session, on prod:** live author IDs (14,949,
+        paginated to an empty page) minus every book's `AuthorID` (56,729
+        books, `show_quarantined=true`, paginated to an empty page) = **499
+        books with a dangling `AuthorID`**. Full list:
+        `.claude/notes/2026-08-24-dangling-author-id-audit.json` (other
+        session's worktree). Confirmed `book.Author`/`AuthorID` is a
+        denormalized snapshot written into the `book:<id>` JSON blob
+        (`GetBookByID`, `pebble_store.go:1074`, bare `json.Unmarshal`, no live
+        author lookup anywhere in the read path) — so a dangling entry's
+        stale `Author.Name` is real forensic signal, not a join artifact.
+      - **Attribution, name-matched against tonight's 1,402 `Split "OLD" →
+        [NEW...]` log lines: only 9 of 499 match.** The other 490 carry
+        ordinary (non-composite) names, meaning they almost certainly went
+        dangling through a DIFFERENT unconditional `DeleteAuthor` call site,
+        not `runAuthorSplitScan` — same bug class, different job. Candidates,
+        none yet checked against this specific data: `entities/handler.go:463`
+        (`POST /authors/:id/split`), `entities_ops.go:91`,
+        `author_conjunction_repair.go:291`.
+      - **🔴 CHRONIC, PREDATES TONIGHT.** Earliest dangling row spot-checked:
+        `updated_at: 2026-08-11T02:24:38-04:00` (13 days before tonight, per
+        the other session), with the full date-bucket distribution showing
+        hits back to `2026-06-30`. Neither figure independently re-verified
+        by this session — from the other session's report, not re-derived.
+        Disabling `maintenance.author_split` tonight does NOT
+        close this: it only stops the bounded, already-caught 1,400-author
+        run. The other ~8-week-old leak is very likely still live on whichever
+        call site is producing the 490 unmatched. **Finding the still-active
+        leak is higher priority than finishing tonight's attribution** —
+        tonight's damage is bounded and stopped; the other one apparently
+        isn't.
+      - **⚠️ Containment boundary, explicit:** the config disable
+        (`maintenance.author_split` / `scheduled.author_split.enabled`) covers
+        ONLY `author_split_scan`, confirmed to survive a prod restart
+        (`UpdateConfig` → `SaveConfigToDatabase`, DB-first boot). It does
+        **NOT** cover the three other candidate sites above — if any is
+        reachable from something scheduled or user-triggered, it stays live
+        through any restart, including tonight's in-flight #2842 deploy.
+      - Hand-verified other call sites, unrelated to tonight's incident:
+        `internal/server/handlers/entities/handler.go:463` → `DeleteAuthor` at
+        `:517`, unconditional (`POST /authors/:id/split`).
+      - Sweep-reported, NOT hand-verified: `entities_ops.go:91` → `:160`;
+        `author_conjunction_repair.go:291` → `:372`. Re-verify before acting.
+      🚨 The getter's OWN doc comment (`pebble_store.go:2087-2092`) already says
+      "a link they cannot see is one they will not rewrite before deleting the
+      author — which orphans it." The author understood the hazard for the
+      filtered-view case and fixed that half; the lost-row half was never wired
+      up. A documented hazard is not a control — and this is now the second
+      incident (after `feedback_a_documented_hazard_is_not_a_control.md`'s
+      2026-08-23 pair) where a written-up hazard sat un-tested until it fired
+      for real.
+      Lower severity, same class: `GetAllAuthors` (`authors.go:22`) →
+      `cleanup_orphan_author_embeddings.go:141` → `embeddingStore.Delete` `:168`
+      (embeddings are recomputable, so this degrades rather than destroys).
+
+- [ ] **MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it.**
+      `todo.d/20260823-memdb-lossy-projection-unguarded-readers.md` names
+      `purge-empty-authors` (4,975 of 12,854 authors) as its worked example,
+      gating deletion on two unguarded counters. At HEAD that is no longer true:
+      `author_purge_empty.go:184` gates deletion on `database.AuthorRefCounts` →
+      the **guarded** `GetAllAuthorBookRefCounts`, failing closed, and
+      `bookCounts` is demoted to candidate SELECTION (a short count adds false
+      candidates, which refCounts then rescues). That half is closed. Two
+      supporting defects in that fragment DO still stand: `memdb_reads.go:184`
+      folds a lookup error into "book absent", and
+      `internal/plugins/maintenance/author.go:57` is
+      `bookCounts, _ := store.GetAllAuthorBookCounts()` — that `_` will swallow
+      `ErrMemdbIncomplete` the moment a guard lands on that getter.
+      Also update its count: **33 externally-reachable dual-dispatch getters, 3
+      guarded** (it says "1 of 29"). The enumeration is closed — `mem()` has
+      exactly one definition (`pebble_store.go:149`) and no other store wrapper
+      dispatches to memdb.
+
+- [ ] **SERIES-MERGE-PERSERIES-SCAN-COST** Four callers of
+      `GetBooksBySeriesIDAllVersions` call it once per series inside a loop and
+      none hoists or caches: `cleanup_series.go:105` (inside
+      `for _, ser := range allSeries` at `:73`), `duplicates_helpers.go:291`,
+      `series_dedup.go:419`, `series_dedup.go:634`. Once memdb is tainted,
+      `lostRows` is sticky until restart, so every iteration takes a full
+      `"book:"` prefix Pebble scan — a range `memdb_warmup.go:206-208` measures at
+      ~7.5 keys per admitted book row. On a 41k-book library that is
+      O(series × 7.5 × books), single-threaded, on the nightly maintenance
+      window, and CLAUDE.md's concurrency rule applies to a loop of that shape.
+      ⚠️ Filed because PR #2839 inherited the cost note from
+      `GetAllSeriesBookRefCounts`, whose justification is "No caller counts
+      inside a loop." That premise is FALSE for this getter. The correctness
+      trade is still right — a stranded book is unrecoverable and a slow window
+      is not — but it is a real standing cost, and the doc comment now says so
+      instead of repeating the inherited claim. Hoist the map per operation, the
+      way the ref-count callers already do.
+
+- [ ] **AUTHOR-FILE-SAFETY: `purge-empty-authors`' "safety that matters" is itself a
+      filtered display counter, so it cannot hold back a single case the ref guard
+      exists for.** `author_purge_empty.go` labels `require_zero_files` "🔴 THIS IS THE
+      SAFETY THAT MATTERS" and defaults it ON, to protect the 822 authors whose
+      zero-book count looks more like a broken link than an empty author. It reads
+      `GetAllAuthorFileCounts`, and BOTH implementations
+      (`memdb_reads.go` ~L299-344, `pebble_store_authors.go` ~L658-731) scan only the
+      primary-version index, skip soft-deleted books, and map books to authors via the
+      legacy `Book.AuthorID` field only — never the junction. So `fileCounts[id]` is
+      unconditionally 0 for a junction-only co-author, and for any legacy author whose
+      books are all trashed or all non-primary. Those are exactly the three populations
+      `author_bookref.go` documents as the bug. The candidate selector, the ref gate and
+      the file safety all read the same lossy memdb, so they are correlated, not
+      independent. The same function also still carries the three defects fixed in the
+      ref scan by #2787: an undecodable book row is silently skipped, `iter.Error()` is
+      never checked, and a `GetBookFilesForIDsCore` error is swallowed. Found by review
+      on #2787; deliberately not fixed there to keep that PR's diff reviewable.
+
+- [ ] **BOOKDETAIL-PROTO-READ: three membership checks in `web/src/pages/BookDetail.tsx` read
+      through the prototype chain, so a book id colliding with an `Object.prototype` member
+      silently skips a fetch.** `if (!id || versionFileTags[id] !== undefined) return;` and the
+      two sibling checks (`!versionSegments[versionId]`) resolve inherited members, so for
+      `id ∈ {constructor, toString, valueOf, hasOwnProperty, __defineGetter__, ...}` the lookup
+      returns an inherited function, which is `!== undefined`, and the preload is skipped.
+      Currently invisible: `loadBook()` 404s on such an id and renders an error page before the
+      skipped fetch could matter, so this is cosmetic today. Fix with `Object.hasOwn(map, id)`
+      or by building these maps with `Object.create(null)`. Note this is the READ side — the
+      three `js/remote-property-injection` alerts dismissed in #2798 were on the WRITE side
+      (`[id]: value` in an object literal, which cannot pollute the prototype), and those
+      dismissals are correct and unaffected. Found by review on #2798.
+
+- [ ] **`DeleteAuthor` scans the whole `book_authors:` keyspace once per author deleted.**
+      Correct, and fine for interactive single deletes. The concern is the bulk
+      caller: `maintenance.purge-empty-authors` deletes authors in a loop, so
+      the cost is (authors purged x junction size). TASK-075's report puts the
+      zero-book-but-has-files bucket alone at 822 authors, and the full
+      empty-author population is larger.
+
+      Two options, and they are not equivalent:
+
+      1. Add an author -> books reverse index in Pebble. Makes the sweep O(books
+         for this author), but needs a backfill migration and a second index to
+         keep consistent on every junction write.
+      2. Give the bulk path a batched variant that scans the junction ONCE and
+         removes a whole set of author IDs in that single pass. No new index, no
+         migration, and it fixes the only caller that actually has the problem.
+
+      Option 2 is almost certainly right — the reverse index is a large,
+      permanently-maintained structure bought to fix one loop — but this is
+      recorded rather than decided, because option 1 also unlocks other
+      author-scoped queries and that trade is the owner's to weigh.
+
+      Anchor: `sweepAuthorFromBookAuthors`, `internal/database/pebble_store_authors.go`.
+      Introduced with the TASK-036 fix; the cost is inherent to the correct
+      behaviour, not a regression.
+
+- [ ] **DEMO-RECORDING-BROKEN: `scripts/record_demo.js` fails at Phase 2 on `main` — the
+      import path it POSTs is not on the allow-list.** The script writes its fixture into a
+      temp directory and POSTs that `file_path` to `/api/v1/import/file`, which routes
+      through `ImportFile` (`internal/server/handlers/filesystem.go`) →
+      `ImportService.ImportFile` (`internal/importer/service.go`) →
+      `fileops.ValidateUserPath` (`internal/fileops/service.go`). The allow-list
+      (`defaultBrowseAllowPrefixes`) is `/home`, `/media`, `/mnt`, `/audiobooks`, `/data`,
+      `/etc/audiobook-organizer`, plus `config.AppConfig.RootDir` and any registered import
+      paths. **`/tmp` is not on it**, and `scripts/run_demo_recording.sh` starts the server
+      with no `--dir` (so `RootDir` is empty) immediately after `/api/v1/system/reset` (so no
+      import paths are registered). Result: `ErrPathNotAllowed` → HTTP 400 → the demo dies at
+      Phase 2. This is pre-existing, not caused by #2798.
+      **Two traps for whoever fixes it:** (a) since #2798 the script uses `os.tmpdir()`, which
+      honours `TMPDIR` — on macOS that is `/var/folders/...`, NOT `/tmp`, so allow-listing
+      `/tmp` alone will not fix it; (b) `mkdtempSync` creates the directory mode `0700`, so a
+      server running as a different user (container, systemd unit) cannot read it even if the
+      path is allowed. Prefer pointing the demo at a directory under an already-allowed prefix
+      over widening the allow-list. Found by review on #2798.
+
+- [ ] **OPS-V2-DISPATCH-RACE — `dispatchCycle` can start a brand-new run after `Shutdown()` has been entered.**
+      `internal/operations/registry/dispatcher.go:36` reads `r.shuttingDown` once at
+      the top of the cycle, then does a `ListQueuedOperationsV2()` store round-trip and
+      a dispatch loop. `Shutdown` (`registry.go:1026`) flips the flag at its top, but a
+      cycle already past line 36 keeps going and dispatches. The window is a whole store
+      list wide, not an instruction.
+      **Measured 2026-08-23** on CI run 32655184277 (PR #2788, tip `6da3e9dcb`), log
+      ordering: `enqueued op ...RD6WVXGN` → `registry: shutting down` → `dispatched op
+      ...RD6WVXGN` → `run finished status=completed`. The op started *after* shutdown
+      began, on a worker slot freed by shutdown cancelling the previous run.
+      **Cost:** every run started this way is immediately cancelled and recorded
+      `interrupted_*`, so it manufactures exactly the spurious backlog the v2 resume
+      sweep lane exists to clean up (26/28 of the current prod `interrupted_quiesced`
+      rows are `library.scan`). It also stretches drain time by up to one run's startup.
+      **Fix shape:** re-check `shuttingDown` immediately before each dispatch inside the
+      loop to shrink the window, or — the correct fix — take the dispatch decision and
+      the flag under the same mutex so the check and the act cannot interleave.
+      Not fixed in #2788: out of that PR's scope (maintenance resume policies + watchdog
+      gate + high-water mark). Candidate for the resume-sweep lane (#2793) or its own PR.
+      Worked around in `resume_shutdown_roundtrip_test.go` by planting the queued row
+      after `Shutdown` returns; see the FIXTURE NOTE there.
+
+- [ ] **SCAN-STALL-ITEM** Find what wedges `library.scan` at ~14912 — and fix the
+      progress reporting that currently names the wrong file.
+
+      **The reported filename is a completed book, not the stuck one.** In
+      `ProcessBooksParallel` the progress send is inside a *deferred* closure:
+
+      ```go
+      go func(idx int) {
+          defer wg.Done()
+          semaphore <- struct{}{}          // acquire
+          defer func() {
+              <-semaphore                  // release
+              progressCh <- books[idx].FilePath   // scanner.go:844
+          }()
+      ```
+
+      That defer runs when the worker's body *returns*, so a book only names
+      itself once it has finished. The wedged worker never returns and therefore
+      never sends. Whatever appears in `"Processed: N/M books (X)"` is simply the
+      last of the other ~9 workers to complete. `Past Life Hero Book 3.m4b` is a
+      book that scanned fine.
+
+      **Measured evidence — re-pulled 2026-08-24 over a 7-day window.** An
+      earlier version of this entry used a 9-row population; the correct one is
+      **21 rows**. The instrument was the problem, see below.
+
+      The stall count is **not** a single value. It steps *down* over the week
+      while the denominator grows:
+
+      | pin | rows | window | denominator |
+      |---|---|---|---|
+      | **16416** | 7 | Aug 18 08:07 – Aug 20 04:17 | 40084 → 40088 |
+      | **14916** | 3 | Aug 20 10:17 – Aug 21 21:08 | 40088 → 40089 |
+      | **14912** | 4 | Aug 22 09:08 – Aug 23 20:48 | 40090 → 40109 |
+
+      That shape is important and it argues against a single poisoned file. A
+      fixed bad input at sorted position N would hold N, or drift *up* as books
+      sort in ahead of it. This drifts **down** — it stalls progressively
+      earlier while the library grows.
+
+      **Not one `library.scan` in 7 days reached completion.** 20 of 21 rows end
+      `interrupted_quiesced`, 1 ends `canceled`. There is no `completed` row in
+      the window at all.
+
+      The named item varies across at least five titles at these pinned counts —
+      `Imagining Elsewhere.m4b` (5×), `Past Life Hero Book 3.m4b` (5×),
+      `Ryan DeBruyn - Endarkened Spire` (2×), `Noelle Stevenson - Nimona.mp3`,
+      `Orson Scott Card ... Shadow of the Hegemon` — exactly as the defer above
+      predicts.
+
+      **The instrument lied, and it is worth knowing how.**
+      `GET /api/v1/operations/timeline` reads **only** `since` (default **15m**).
+      `def_id` and `limit` are not parameters; Gin drops unknown query keys
+      silently. Verified with a bogus value on 2026-08-24 rather than by reading
+      the handler:
+
+      ```
+      since=168h                        -> 148 rows
+      since=168h&def_id=library.scan    -> 148 rows
+      since=168h&def_id=TOTAL_NONSENSE  -> 148 rows   <-- inert
+      since=168h&limit=5                -> 148 rows   <-- inert
+      (no params)                       ->   1 row    <-- the 15m default
+      ```
+
+      So a query written as `?def_id=library.scan&limit=200` silently asks for
+      *the last 15 minutes of everything*. See
+      [[20260824-operations-timeline-ignores-def-id-and-limit]]. Also note the
+      payload nests two deep — `{"data":{"operations":[…]}}` — so a parser
+      reading top-level `operations` gets 1.
+
+      Re-pull with `since=168h` and filter client-side. 148 < the 200 row cap,
+      so that window is a real count; `since=240h` and `336h` both hit the cap
+      and truncate the **old** end, leaving anything before Aug 17 unmeasured.
+
+      Rows in other phases must not be folded in with the `"Processed:"` rows.
+      Four are `"Reading tags"` at N/N with wildly different denominators —
+      49280, 132260, 22400, 61380 — because that phase counts *files* with a
+      growing denominator, so N/N means "still discovering", not "finished".
+      Two more are `"AI parsing batch"` (3/6 and 1/18), a different op shape
+      entirely.
+
+      **What to do, in order:**
+      1. Report the item being *started*, not only the one completed. Sending the
+         path on acquire (or keeping an in-flight set on the handle) makes the
+         stuck item name itself. Without this, no run can identify it — this is
+         the blocker, not a nice-to-have.
+      2. Populate `current_phase` / `current_item` on the op row. They are `None`
+         on all 9 rows, so the phase has to be guessed from prose today.
+      3. Only then chase the file. The candidate set is the ~10 books in flight
+         around sorted index 14912, inside the 500-book chunk containing it.
+
+      **Do not assume #2830 fixed this.** The 120s `ProcessFileWithTimeout` bound
+      converts a single wedged *file* into a normal scan failure. It does nothing
+      if the stall is a pool/semaphore/deadlock bound rather than one poisoned
+      input — and a count pinned to two adjacent values (14912/14916) across
+      three days is at least as consistent with the latter. Confirm which before
+      closing.
+
+- [ ] **BOOK-ID-RANGE: measure whether any `book:` key has a non-digit first byte, then
+      widen or document the `book:0`..`book:;` bound.** ~20 sites scan book records with
+      that hand-written range, which admits only `'0'`-`'9'` and `':'` as the first byte
+      after the colon. All four ID-minting sites produce ULIDs (leading `0`-`7`), so it
+      holds today — but `CreateBook` only mints when `book.ID == ""`, so importers and
+      restore paths can supply their own, and `pebble_store.go` describes the same
+      keyspace as "below any UUID character (0-9, a-f, '-')", which a UUID-leading id
+      would fall outside in BOTH directions. A row outside the range is invisible to the
+      legacy-AuthorID pass of the unfiltered author ref scan, losing that reference.
+      This is a measurement task first: prefix-scan `book:` on the live library for keys
+      whose first byte after the colon is not a digit. If any exist, widen both bounds to
+      `book:`..`prefixUpperBound("book:")` — the existing `strings.Count(key, ":") != 1`
+      filter already excludes secondary indexes over the wider range. Raised in review on
+      #2787 and explicitly left unmeasured rather than guessed.
+
+- [ ] **MEMDB-LOSSY-READERS** The known-incomplete guard added in #2794 covers
+      **1 of 29** `p.UseMemDB && p.mem() != nil` dispatch sites in
+      `internal/database`. The other 28 still answer from a lossy projection
+      with a nil error, and at least two of them gate a bulk delete.
+
+      **Highest priority — `maintenance.purge-empty-authors`.** Its own
+      description records deleting **4,975 of 12,854 authors** on this library.
+      It gates on two counters, and BOTH read lossy memdb tables unguarded:
+
+      - `GetAllAuthorBookCounts` → `internal/database/memdb_reads.go:165`
+        (scans `books` + `book_authors`)
+      - `GetAllAuthorFileCounts` → `internal/database/memdb_reads.go:299`
+        (scans `books` + `book_files`)
+
+      One lost book row makes an author absent from *both* maps, so
+      `bookCounts[a.ID] == 0` makes it eligible AND `fileCounts[a.ID] == 0`
+      *satisfies* the `require_zero_files` safety check. Both safety checks
+      fail open in the same direction from a single loss, so the second
+      corroborates the first instead of catching it.
+
+      The op already states the correct principle for the ERROR case
+      (`internal/plugins/maintenance/author_purge_empty.go:141-143`: "a failure
+      here must not be silently treated as zero files — that would turn a
+      missing signal into permission to delete") and then reads the value from
+      an unguarded lossy projection.
+
+      Two supporting defects in the same area:
+      - `memdb_reads.go:184` does `if bErr != nil || raw == nil { continue }` —
+        folds a lookup ERROR into "book absent", which is exactly the lossy case.
+      - `internal/plugins/maintenance/author.go:57` is
+        `bookCounts, _ := store.GetAllAuthorBookCounts()` — that `_` will
+        swallow `ErrMemdbIncomplete` the moment a guard is added.
+
+      Fix: wire both counters to `MemStore.requireTablesComplete` and give
+      `PebbleStore` the same `ErrMemdbIncomplete` fall-through
+      `GetAllSeriesBookRefCounts` has. Mechanism already exists
+      (`internal/database/memdb_integrity.go`); this is applying it.
+
+      Found by review of #2794, 2026-08-23. Not in that PR's scope.
+
+- [ ] **MEMDB-SYNC-DROPPED-ERRORS: seven delete helpers in `memdb_sync.go` treat a
+      lookup error as "row absent" and commit.** Each does `if err != nil || obj == nil
+      { continue }` (or `err == nil && obj != nil`) around a `txn.First`, so a real
+      lookup failure is indistinguishable from a missing row and is neither logged nor
+      recorded. Every one of them fails CLOSED for the reference counters — memdb
+      retains a row Pebble deleted, which over-counts — which is why this is not urgent.
+      But it is seven unlogged error drops in the single file that owns the
+      memdb/Pebble invariant, and the next divergence will arrive through one of them.
+      Split the conditions: `obj == nil` continues, `err != nil` logs and calls
+      `recordLostRows`. Related: `loadBookFilesForBookID` drops undecodable rows with
+      `if err := json.Unmarshal(...); err == nil` and returns a nil error, and
+      `UpsertBookToMemDB` then uses that short list to REPLACE memdb's book_files for
+      the book — a silent, unrecorded divergence feeding `GetAllAuthorFileCounts`.
+      Found by review on #2787.
+
+- [ ] **METADATA-GUARD-ASYMMETRY** Decide whether
+      `handlers/metadata/handler.go:1001` should also check `HasProviderValue()`.
+      Today it checks only `HasUserOverride()`, and nobody knows if that is
+      deliberate.
+
+      PR #2817 introduced two guard methods on `MetadataFieldState` —
+      `HasUserOverride()` (`OverrideLocked || OverrideValue != nil`) and
+      `HasProviderValue()` (`FetchedValue != nil`) — and repointed three
+      predicate sites at them. Two check **both**:
+
+      - `plugins/maintenance/repair_junk_titles.go:141` —
+        `HasUserOverride() || HasProviderValue()`
+      - `plugins/maintenance/title_repair.go:117,120` — both, separately
+
+      The third checks only the first:
+
+      - `server/handlers/metadata/handler.go:1001` — `HasUserOverride()` alone
+
+      **The asymmetry predates #2817 and was preserved verbatim.** It was not
+      introduced by the guard refactor and was deliberately not "fixed", because
+      no justification for it could be found. The comments near that call site
+      (`handler.go:31`, `:122`) explain something else entirely — why
+      `loadMetadataState` is injected as a concrete type — and say nothing about
+      the predicate.
+
+      **Record of what is and is not known:** it is *unexplained*, not
+      *established as intentional*. Whoever touches this next would otherwise
+      face the identical choice with no more information than was available on
+      2026-08-23, which is the reason this fragment exists rather than the note
+      living only in a merged PR description.
+
+      **To settle it:** determine whether a field with a provider value but no
+      user override should be treated as "has state" by that handler. If yes,
+      the site is a bug and should check both. If no, add a comment saying so,
+      naming the two sites that differ — the divergence is otherwise invisible
+      from any one of the three.
+
+      Filed at the suggestion of a parallel session that hit the same three
+      files from the series-merge side and had no evidence either way.
+
+- [ ] **JSONV2-OMITEMPTY** `omitempty` means something different in
+      `encoding/json` v1 and `encoding/json/v2`, and this repo is part-way
+      through migrating between them. **153 struct fields across 70 structs in
+      54 files** will change their serialized shape when their package moves.
+
+      Measured 2026-08-23 on this module (go 1.26.0, `GOEXPERIMENT=jsonv2`,
+      which the Makefile exports and every CI workflow sets):
+
+      | Go field    | tag         | v1 output   | v2 output          |
+      |-------------|-------------|-------------|--------------------|
+      | `bool` false | `omitempty` | omitted     | `"bo":false`       |
+      | `int` 0      | `omitempty` | omitted     | `"in":0`           |
+      | empty struct | `omitempty` | `"s":{}`    | `"s":{"a":false}`  |
+      | any zero     | `omitzero`  | omitted     | omitted            |
+
+      v1's `omitempty` means "the Go value is a zero value". v2's means "it
+      encodes to an **empty JSON value**" — and `false` and `0` are not empty
+      JSON values, only `""`, `null`, `{}` and `[]` are. So the tag silently
+      changes meaning for every bool and every number.
+
+      **Census by AST, not by grep** (a naming grep cannot tell `omitempty` on a
+      `bool` from `omitempty` on a `*string`): 153 fields whose type is a bare
+      bool/int/uint/float. Worst offenders:
+
+          internal/database   42     FileDiagnostic      15
+          internal/diagnosis  15     BookFile            12
+          internal/metafetch  13     BookFileCore        12
+          plugins/maintenance 13     MetadataCandidate   10
+          internal/server     12     BookDocument         9
+
+      **Why it matters here specifically.** `internal/database` still imports v1
+      and is what persists rows to Pebble. 17 files elsewhere already import
+      `encoding/json/v2`. The day `internal/database` migrates, every
+      `book_file` row gains ~12 zero-valued numeric keys (`track_number`,
+      `track_count`, `disc_number`, `disc_count`, `duration`, `file_size`,
+      `bitrate_kbps`, `sample_rate_hz`, `channels`, `bit_depth`,
+      `acoustid_fingerprint_duration_sec`, `acoustid_online_score`) that were
+      previously absent. Bigger rows, and any consumer distinguishing "absent"
+      from "zero" changes its answer — the exact shape of the
+      `is_primary_version` nil/absent divergence already tracked in this file.
+
+      **Fix direction:** retag affected fields `omitzero`, which means the same
+      thing under both. Mechanical but not blind — a field where "absent" and
+      "zero" genuinely differ needs a decision, not a sed. Do it package by
+      package, ahead of that package's v2 migration, not in one sweep.
+
+      Found while adding `ScanState` to `BookFile`
+      (`internal/database/scan_state.go`), which is tagged `omitzero` throughout
+      and carries the measured table in its doc comment.
+      `TestBookFile_ScanObjectSerializesIdenticallyAcrossMarshalers` pins the new
+      field against both marshalers; it is deliberately scoped to the `scan`
+      object because the rest of `BookFile` does not have that property today.
+
+- [ ] **RECORD-DEMO-TEMPDIR-LEAK: `scripts/record_demo.js` never removes the temp directory
+      it creates.** There is no `rmSync`/`rmdirSync`/`unlinkSync` anywhere in the file; the only
+      `finally` closes the browser. One directory leaks per run. Pre-existing — the old
+      `mkdirSync` path leaked identically — and #2798 only changed how the path is chosen, not
+      whether it is cleaned up. Low priority; fix alongside DEMO-RECORDING-BROKEN, since the
+      script does not currently get far enough to matter.
+
+- [ ] **`regroup_apply.go` skips nil members when demoting, so it can still leave a
+      double-primary group.** Same invariant as VG-DOUBLE-PRIMARY (TASK-042, fixed in
+      `internal/merge`), different file, opposite nil handling.
+
+      `internal/plugins/maintenance/regroup_apply.go:319`:
+
+      ```go
+      if m.ID == primaryID || m.IsPrimaryVersion == nil || !*m.IsPrimaryVersion {
+          continue
+      }
+      ```
+
+      `m.IsPrimaryVersion == nil` continues — the nil member is left alone. But the
+      store reads nil as PRIMARY (`pebble_store.go`:
+      `eff := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion`), so it stays
+      effectively primary.
+
+      Concrete input: a regroup hold whose reused target group contains a member
+      created before the flag was ever written. After apply the group holds
+      {new primary = explicit true, stale member = nil} = two effective primaries.
+
+      Notably this file ALREADY implements group-wide demotion for exactly this
+      reason, and does it more carefully than merge did — it re-hydrates via
+      `GetBookByID` at :324. The gap is only the nil case. So the fix is to make
+      the two agree on nil, NOT to extract a shared helper: the two paths elect
+      by different rules on purpose (lowest-ULID here, `BookIsBetter` in merge),
+      and merging them would install the second-disagreeing-election bug that
+      TASK-042 exists to remove.
+
+      Audited at the same time and found CLEAN, recorded so nobody re-checks them:
+      `internal/reconcile/reconcile.go:820,829` (`CleanupDuplicateVersionGroups`
+      partitions the whole group and accounts for every member) and
+      `internal/reconcile/reconcile.go:1406` (`AssignOrphanVGs` mints a fresh
+      single-member group, so there are no pre-existing members to miss).
+
+- [ ] **RESUME-SWEEP-INDEX-CONSTRAINT** Whatever fixes the v2 resume sweep's
+      blindness to `interrupted_*` rows, it must **not** widen the `opv2:act:`
+      index. Use a separate key prefix.
+
+      This is a hard constraint on
+      [[20260823-v2-resume-sweep-is-blind-to-interrupted-rows]], whose most
+      obvious fix is exactly the forbidden one. The sweep reads the
+      queued|running active set, `interrupted_*` rows are not in it, and the
+      tempting one-line fix is to keep them in it.
+
+      **Why that breaks the maintenance window.** Verified in code
+      2026-08-23, not assumed:
+
+      - `UpdateOperationV2Status` maintains the act key in the *same Pebble
+        batch* as the row write, committed with `pebble.Sync`
+        (`pebble_store_ops_v2.go:273-281`): `status == "running"` sets it,
+        `status != "queued"` deletes it. A run ending `interrupted_quiesced`
+        therefore leaves the active set atomically with the status change.
+      - `hasActiveV2Op` (`scheduler/maintenance.go:99-113`) returns true for
+        **any** row `ListActiveOperationsV2()` returns whose `DefID` matches.
+        There is no status filter — the index membership *is* the answer.
+      - `IsTaskRunning` (`scheduler/maintenance.go:123`) is that function, and
+        `scheduler_maintenance_window_op.go:150` skips a task when it returns
+        true.
+
+      So an `interrupted_*` row retained in `opv2:act:` makes `IsTaskRunning`
+      answer true **forever** for that def. The maintenance window then silently
+      skips every remaining run of it. Not a crash — a skip that reports
+      success, which is the hardest shape to notice.
+
+      `library.scan` ends `interrupted_quiesced` on nearly every run
+      (8 of 9 prod rows, 2026-08-21..23), so it would be among the first
+      affected.
+
+      **Also note this is now load-bearing in a way it was not before.** PR
+      #2831 makes `WaitForOperation` genuinely block until terminal, where it
+      previously returned on the first tick. That promotes `IsTaskRunning` from
+      a hint to the only thing preventing the interval ticker and the
+      maintenance window from double-launching the same def.
+
+      Raised by a parallel session working #2831; the invariant above was
+      re-verified against `origin/main` here rather than taken on trust. No test
+      pins it yet — that test belongs with whoever changes the sweep, and should
+      assert that a def whose last run ended `interrupted_quiesced` is
+      schedulable again.
+
+- [ ] **SERIES-DELETE-UNGUARDED** Two series-delete paths consult **no
+      reference count at all**, so the unfiltered ref-count guard cannot
+      protect them — a guard cannot help a call site that never asks it.
+
+      - `internal/server/duplicates_helpers.go:213` — `executeSeriesPrune`
+        **Phase 1**. `refCounter` is not constructed until ~L248, *after* Phase
+        1 has finished. The loop enumerates via the FILTERED
+        `GetBooksBySeriesIDCore`, appends reassignment failures to
+        `mergeErrors`, and then calls `store.DeleteSeries(ser.ID)`
+        **unconditionally — including after a reassignment it knows failed.**
+      - `internal/dedup/series_dedup.go:642` — `MergeSeries`. Identical shape:
+        filtered enumeration, errors appended to `result.Errors`, then an
+        unconditional `DeleteSeries(mergeID)`.
+
+      A series whose books are all trashed or all non-primary enumerates empty,
+      reassigns nothing, and is deleted anyway. That is the original stranding
+      bug (6,893 phantom series IDs held by 13,322 live books, measured
+      2026-08-14) still live on these two paths.
+
+      Confirmed fail-CLOSED and NOT affected: `cleanup_series.go:62`,
+      `series_dedup.go:326` (`DedupSeries`), `duplicates_helpers.go:248-260`
+      (Phase 2), and both `entities/handler.go` handlers (`:1009`, `:1043`).
+
+      Fix: both should take `database.SeriesRefCounts` once before their loop
+      and refuse to delete any series whose ref count exceeds what they
+      actually reassigned — the pattern `csMergeSeriesGroup` already uses.
+
+      Found by review of #2794, 2026-08-23. Pre-existing; outside that diff.
+
+- [ ] **OPS-V2-RESUME-BLIND** `resumeAfterStartup` cannot see any interrupted v2
+      operation, so `ResumePolicy` is only consulted after a hard kill. This is
+      pre-existing and affects **every** v2 op, not just maintenance.
+
+      Mechanism, measured 2026-08-23:
+      `Registry.resumeAfterStartup` (`internal/operations/registry/resume.go:34`)
+      takes its candidate rows from `store.ListActiveOperationsV2()`, which scans
+      the `opv2:act:` index (`internal/database/pebble_store_ops_v2.go:361`) and is
+      documented as exactly the `queued|running` set. `UpdateOperationV2Status`
+      **deletes** that index key for any status that is not `running` or `queued`
+      (`pebble_store_ops_v2.go:277`) — deliberately, so a terminal row leaves the
+      active set and stops poisoning `EnqueueOp`'s ConcurrencyKey dedupe.
+
+      Every shutdown path writes such a status. **Updated 2026-08-23 after
+      PR #2793:** the clean-drain branch no longer finishes `canceled` — a run
+      cancelled by shutdown now goes through `finalStatusForCanceledRun`
+      (`worker.go:611`, called from both the in-process and subprocess paths) and
+      records `interrupted_quiesced` or `interrupted_dropped` per the def's
+      declared `ResumePolicy`, while a run the *operator* cancelled still records
+      `canceled`. The shutdown-timeout branch (`registry.go:1075`) and worker
+      abandonment (`worker.go:370`) already wrote `interrupted_quiesced`.
+
+      **That does not fix this item, and it is worth being precise about why.**
+      `interrupted_*` is not `running` or `queued` either, so
+      `UpdateOperationV2Status` deletes the `opv2:act:` key just the same and the
+      next startup's sweep still sees nothing. Only a SIGKILL — where no shutdown
+      path runs and the row is left `running` — leaves a row the sweep can act on.
+
+      What #2793 *did* change is that the fix is now possible. Before it, a
+      deploy-interrupted run and an operator-cancelled run were both spelled
+      `canceled`, so any sweep that went looking for resumable rows would have had
+      to guess, and the likely failure was restarting work somebody deliberately
+      stopped. The distinction now exists in the record; nothing reads it yet.
+
+      There is **no** `ListInterruptedOperationsV2`: the only v2 listings are
+      `ListQueuedOperationsV2`, `ListActiveOperationsV2` and
+      `ListOperationsV2Since`.
+
+      This is the exact v2 twin of a v1 bug already fixed. See the comment on
+      `isResumableOpStatus` (`internal/database/pebble_store_operations.go:461`),
+      which matches the `interrupted` **prefix** precisely so the v1 sweep stops
+      being "blind to exactly the rows it exists to resume — a library.scan killed
+      by a deploy on 2026-08-17 sat at interrupted_quiesced and never came back."
+      The v1 sweep scans rows by status and so could be fixed that way; the v2
+      sweep reads an index, so it needs a listing that returns interrupted rows.
+
+      Why this surfaced now: the v1 sweep had been masking it for maintenance jobs.
+      PR #2784 retired the v1 op minter and deleted that branch, and PR #2788 then
+      corrected six jobs' declared policies — but a correct policy is still only
+      consulted on the hard-kill path. Do not fix this inside a maintenance PR: 19
+      ops declare `ResumeRequeue` (dedup, acoustid, itunes among them), so making
+      the sweep see interrupted rows changes startup behaviour for all of them on a
+      path that has never been exercised. Needs its own change, its own tests, and
+      a decision about whether a `canceled` op should be resumable at all.
+
+- [x] **TIMELINE-FILTER-INERT** `GET /api/v1/operations/timeline` silently
+      ignores `def_id` and `limit`. Either honour them or reject unknown query
+      keys — the current behaviour returns a plausible wrong answer.
+      **Fixed by honouring them, 2026-08-24.** Both are now read; `def_id` is
+      filtered across the whole window and `limit` applied after it, so the
+      "filter a page the store already cut" trap below is closed rather than
+      re-shaped. The dead twin was deleted with the fix. Trap-by-trap status is
+      recorded at the bottom of this entry — **trap 2 is deliberately still
+      open**, so read that before treating this as fully closed.
+
+      The handler (`internal/server/handlers/operations_v2.go:145-159`) reads
+      **only** `since`, defaulting to **15m**, and passes a hardcoded 200 row
+      cap. `def_id` and `limit` are not parameters at all; Gin drops unknown
+      query keys without complaint.
+
+      **Measured with a bogus value, 2026-08-24** — a nonsense `def_id` returns
+      the identical row set, which is what makes it inert rather than merely
+      broken:
+
+      ```
+      since=168h                        -> 148 rows
+      since=168h&def_id=library.scan    -> 148 rows
+      since=168h&def_id=TOTAL_NONSENSE  -> 148 rows
+      since=168h&limit=5                -> 148 rows
+      (no params)                       ->   1 row     <- the 15m default
+      ```
+
+      **Why this is worth fixing rather than documenting.** A query written the
+      natural way — `?def_id=X&limit=200` — reads as "200 rows of op X" and
+      actually asks for the last quarter hour of everything. On a quiet system
+      that returns one unrelated row, which looks exactly like *"this op has
+      never run."* It has already produced three wrong conclusions in two days:
+
+      1. A `library.scan` population recorded as 9 rows when the real 7-day
+         count is **21**, with a stall pin that turned out to move (16416 →
+         14916 → 14912) rather than hold — see
+         [[20260823-find-the-stalled-scan-item-progress-names-the-wrong-file]].
+      2. A `maintenance.window` failure count recorded as 3 nights when it was
+         **7 for 7**, in a document that shipped with the undercount.
+      3. A wrong mechanism diagnosis (a "broken `def_id` filter") that was
+         briefly confirmed off a second, unrelated parser bug.
+
+      **Two further traps for whoever fixes this.** The payload nests two deep,
+      `{"data":{"operations":[…]}}`, so a parser reading top-level `operations`
+      with a `len()` fallback returns 1. And the 200 cap truncates the **old**
+      end: `since=240h` and `336h` both return the same 8 rows, so a window that
+      hits the cap cannot support any "it never happened before X" claim.
+
+      **🚨 There are TWO timeline handlers and the tested one is DEAD.** Verified
+      2026-08-24:
+
+      - **Live**, routed at `wire_operations_routes.go:24` —
+        `handlers.OperationsV2Handler.GetOperationTimeline`
+        (`internal/server/handlers/operations_v2.go:145`).
+      - **Dead** — `(*Server).handleGetOperationTimeline`
+        (`internal/server/operations_v2_handlers.go:58`). Its only references
+        are its own definition and doc comment, plus
+        `operations_v2_handlers_test.go`. **No route registers it.**
+
+      So the existing test coverage for this endpoint — including a
+      `?since=badvalue` case — exercises code that never runs in production. A
+      strict-rejection test added there **passes green while prod is
+      unchanged.** Test against `handlers/operations_v2.go`, and prefer deleting
+      the dead twin as part of the fix: two implementations of one endpoint
+      drifting apart is how this became confusing.
+
+      **A 400 breaks nothing — verified, not assumed.** The only programmatic
+      caller is `web/src/services/api.ts:535`, which sends exactly one
+      parameter, always explicitly:
+
+      ```ts
+      apiFetch(`${API_BASE}/operations/timeline?since=${sinceMinutes}m`)
+      ```
+
+      **But rejecting unknown keys fixes only ONE of three traps.** Do not close
+      this entry on the 400 alone. Status as shipped 2026-08-24 — the fix
+      honoured the parameters rather than rejecting unknown keys, so trap 1 is
+      closed by a different route than this entry anticipated:
+
+      1. ✅ **Inert `def_id`/`limit`** — **CLOSED.** Both are read.
+         `def_id` filters the whole window and `limit` is applied afterwards, so
+         the obvious "push limit into the store" version — which would drop
+         QUEUED rows first, since they sort last — is pinned shut by
+         `TestGetOperationTimeline_DefIDFiltersTheWholeWindowNotJustTheFirstPage`.
+         An unusable `limit` is now a 400 rather than a silent fall-back to the
+         default, and a negative `since` is a 400 rather than a future window.
+      2. ⚠️ **`since` defaults to 15m** — **STILL OPEN, deliberately.** A bare
+         `GET /operations/timeline` still measures a quarter hour. It is no
+         longer *invisible*: every reply states `since` and `window_start`, so
+         the undercount is legible in the response that carries it. Making
+         `since` required is still the stronger fix and still breaks nothing
+         (the sole caller always passes it) — it was left out because it is a
+         breaking change to a live API that nobody asked for. Decide separately.
+      3. ✅ **The 200 cap** — **CLOSED.** The reply reports `matched` (the
+         pre-limit total) and `truncated`, computed by counting matches before
+         trimming — the only way to tell "exactly `limit` existed" from "there
+         were more", which `len(rows)==limit` cannot. A scan that hits the
+         server's internal 5000-row bound reports `scan_capped`, marking the
+         total a floor.
+
+      ⚠️ **One claim in this entry was overstated.** It said the existing test
+      coverage for this endpoint exercises code that never runs. The dead twin
+      did have its own tests — but `internal/server/handlers/operations_v2_test.go`
+      also existed and drove the LIVE handler. The twin's tests were duplicate
+      coverage, not the only coverage. The deletion still stands: two
+      implementations of one endpoint, one unreachable, is a trap regardless of
+      where the tests point.
+
+      Related: [[feedback_operations_timeline_hardcodes_limit_200]],
+      [[feedback_verify_the_instrument_with_a_bogus_value]],
+      [[feedback_never_enumerate_with_the_suspect_instrument]].
+
+- [x] **SERIES-PRUNE-REPORTS-SUCCESS-ON-REFUSAL** `executeSeriesPrune` returned
+      `nil` unconditionally, so every entry in `mergeErrors` — including the
+      fail-closed refusal added in #2828, whose message ends "Re-run after
+      resolving the errors above" — reached the operator only as a `progress.Log`
+      warn truncated to ten entries. `duplicates_ops.go` read the nil, set status
+      `success` and emitted "Series prune completed"; `server_maintenance_deps.go`
+      did the same for the nightly job. The guard worked and reported itself
+      green. **Fixed 2026-08-24**, along with five siblings found in the same
+      review:
+      - [x] the organize loop in `duplicates_ops.go` dropped a book on
+        `GetBookByID` returning `(nil, nil)` with no log, counter or error, while
+        still counting it in "organizing the %d books it collected". Unrecoverable
+        by re-running: normalize is idempotent on the series NAME, so a second run
+        computes no actions.
+      - [x] the canonical-series vote treated a failed count as zero books, so a
+        transient read error decided which duplicate series got DELETED. Now
+        disqualifies the group.
+      - [x] the cached series list was invalidated only at the normal exit; five
+        early returns bypassed it, all reachable after phase 1 had repointed
+        books. Now deferred.
+      - [x] a failed `GetAllSeries` refresh skipped the whole orphan sweep while
+        the summary still said "0 errors".
+      - [x] `computeSeriesNormalizeActions` swallowed a `GetAllSeries` failure and
+        returned nil, indistinguishable from "library already clean" — it zeroed
+        the dry-run PREVIEW too. Now returns an error.
+      Two test gaps closed in the same PR: the `booksRepointed` cache predicate
+      had **no** test that could detect its removal, and
+      `series_prune_phase2_test.go`'s fixture returned static membership, so
+      reverting phase 2 to the filtered counter (the 6,893-phantom-ID bug) stayed
+      green. Both now fail on revert.
+
+- [ ] **SERIES-NORMALIZE-PREVIEW-SWALLOWS-ERROR** `buildSeriesNormalizePreview`
+      now logs the `computeSeriesNormalizeActions` failure instead of swallowing
+      it, but still returns an empty preview — which an operator reads as "nothing
+      to normalize" when deciding whether to approve a run. Giving it a real error
+      channel needs a handler signature change (it feeds an injected closure the
+      duplicates sub-package calls, and that closure has no error return). Decide
+      whether the preview endpoint should 500 on a failed listing.
 
 - [ ] **TODO-052-UNDOC** `docs/api/openapi.json` has no entry at all for two
       live, permission-gated routes discovered while TASK-052 triaged the 15
