@@ -719,15 +719,51 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 //
 // For t <= 0.8 the bound is non-positive -- length proves nothing -- and this
 // correctly declines to skip anything.
+// authorLastNameSimilarity is the Jaro-Winkler score two DIFFERENT last names
+// must reach before the authors behind them are compared in full. It is
+// deliberately much stricter than the caller-supplied author threshold: this
+// gate only decides whether two surname buckets are worth opening.
+const authorLastNameSimilarity = 0.95
+
+// scanWorkerCount is how many goroutines phase 3's similarity scan uses.
+// Production always gets runtime.NumCPU(); it is a variable only so tests can
+// pin a specific shard count, because otherwise every test observes whatever
+// core count the machine happens to have -- and on a single-core CI runner the
+// parallel path would never be exercised at all while the suite stayed green.
+// Tests that set it must restore it and must not call t.Parallel.
+var scanWorkerCount = runtime.NumCPU()
+
 func jaroWinklerBelowThreshold(s1, s2 string, threshold float64) bool {
+	return lengthRatioBelowThreshold(
+		utf8.RuneCountInString(s1),
+		utf8.RuneCountInString(s2),
+		jaroWinklerMinLengthRatio(threshold),
+	)
+}
+
+// jaroWinklerMinLengthRatio returns the smallest shorter/longer rune-length
+// ratio a pair can have and still reach threshold, per the derivation on
+// jaroWinklerBelowThreshold. A result <= 0 means no pair can be excluded on
+// length alone (every ratio clears the bar), which is the case for thresholds
+// at or below 0.8.
+//
+// The epsilon biases the ratio DOWN, which makes skipping strictly harder. 5t-4
+// is not exactly representable for most t, so without it a pair sitting exactly
+// on the bound could be skipped by a rounding error. Erring this way costs a
+// wasted comparison; erring the other way would drop a real duplicate.
+func jaroWinklerMinLengthRatio(threshold float64) float64 {
 	const epsilon = 1e-9
-	minRatio := 5*threshold - 4 - epsilon
+	return 5*threshold - 4 - epsilon
+}
+
+// lengthRatioBelowThreshold is the arithmetic half of the prefilter, split out
+// so callers that compare one string against many can hoist the rune counting
+// out of their inner loop. minRatio must come from jaroWinklerMinLengthRatio.
+func lengthRatioBelowThreshold(len1, len2 int, minRatio float64) bool {
 	if minRatio <= 0 {
 		return false
 	}
-
-	shorter := utf8.RuneCountInString(s1)
-	longer := utf8.RuneCountInString(s2)
+	shorter, longer := len1, len2
 	if shorter > longer {
 		shorter, longer = longer, shorter
 	}
@@ -1140,9 +1176,25 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	// split would hand the worker holding li=0 thousands of times the work of
 	// the one holding the tail, and the whole phase would finish no sooner than
 	// that one worker.
+	//
+	// Rune lengths are counted once here rather than inside the scan. Every
+	// length is read len(lastNames)-1 times across the pass, so counting them
+	// per-comparison meant ~52.7M RuneCountInString calls to learn 7,261 facts.
+	//
+	// The scan also used to open with `if lastNames[li] == lastNames[lj]
+	// { continue }`, commented as "already handled in same-bucket phase". That
+	// could never fire: lastNames holds the KEYS of lastNameBuckets, so its
+	// entries are distinct by construction. It was a string compare on all
+	// 26.4M pairs guarding a case the data model rules out.
+	lastNameRunes := make([]int, len(lastNames))
+	for i, ln := range lastNames {
+		lastNameRunes[i] = utf8.RuneCountInString(ln)
+	}
+	minRatio := jaroWinklerMinLengthRatio(authorLastNameSimilarity)
+
 	similarPairs := make([][]int, len(lastNames))
 	nextLi := int64(-1)
-	workers := runtime.NumCPU()
+	workers := scanWorkerCount
 	if workers > len(lastNames) {
 		workers = len(lastNames)
 	}
@@ -1158,19 +1210,16 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 				}
 				var matches []int
 				for lj := li + 1; lj < len(lastNames); lj++ {
-					if lastNames[li] == lastNames[lj] {
-						continue // already handled in same-bucket phase
-					}
 					// Screen on length before paying for the real
 					// comparison. jaroWinklerSimilarity allocates two rune
 					// slices and two match bitmaps per call. The length test
-					// is provably conservative (see its doc comment), so this
-					// changes only the cost, not the outcome; it discards
-					// ~61% of pairs on the real corpus.
-					if jaroWinklerBelowThreshold(lastNames[li], lastNames[lj], 0.95) {
+					// is provably conservative (see jaroWinklerBelowThreshold's
+					// doc comment), so this changes only the cost, not the
+					// outcome; it discards ~61% of pairs on the real corpus.
+					if lengthRatioBelowThreshold(lastNameRunes[li], lastNameRunes[lj], minRatio) {
 						continue
 					}
-					if jaroWinklerSimilarity(lastNames[li], lastNames[lj]) < 0.95 {
+					if jaroWinklerSimilarity(lastNames[li], lastNames[lj]) < authorLastNameSimilarity {
 						continue
 					}
 					matches = append(matches, lj)
