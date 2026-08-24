@@ -46,3 +46,8 @@
   a row. It scanned `["book:0", "book:;")`, so a book whose ID does not begin
   with a digit was absent from the returned map — and absence is exactly the
   signal those callers read as "referenced by nothing, safe to delete".
+- Added fault-injection tests (`vfs/errorfs`) for both hardened scans, proving
+  each refuses rather than returns a partial answer when a storage-layer read
+  fails mid-scan. This closes the one gap a mutation-testing pass had flagged
+  as untestable without machinery the codebase didn't have — it did, one
+  constructor argument away.
