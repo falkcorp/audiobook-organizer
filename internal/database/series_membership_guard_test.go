@@ -275,6 +275,46 @@ func TestGetBooksBySeriesIDAllVersions_RefusesRatherThanSkipAnUndecodableRow(t *
 		"the error must name the row, or an operator cannot act on it")
 }
 
+// TestGetBooksBySeriesIDAllVersions_SkipsSecondaryIndexKeys is the other half
+// of making the unmarshal fatal, and without it that change is a live bug.
+//
+// Widening the bounds to the true "book:" prefix range (see the test below)
+// pulls the secondary indexes INTO the scan for the first time: book:hash:,
+// book:versiongroup:, book:asin:, book:isbn13: and friends, whose values are
+// bare book IDs, not book JSON. Under the old ["book:0","book:;") bounds they
+// were out of range entirely, which is why the pre-existing ":path:"-only skip
+// looked adequate -- it was dead code guarding a range nothing reached.
+//
+// So the structural one-colon filter is not tidying. It is what stops every
+// indexed book from turning the merge getter into a hard error. Measured: with
+// the filter reverted to the ":path:" test, this is the only test that fails.
+// The conformance fixture creates no hashed books, so nothing else in this
+// package writes a non-path secondary key.
+func TestGetBooksBySeriesIDAllVersions_SkipsSecondaryIndexKeys(t *testing.T) {
+	p, fx, _ := setupDegradedSeriesFixture(t)
+
+	// Every non-path index family, with the bare-ID values they really carry.
+	member := fx.wantOrderedIDs[0]
+	for _, k := range []string{
+		"book:hash:deadbeef",
+		"book:originalhash:cafebabe",
+		"book:versiongroup:vg-1",
+		"book:asin:B00TEST123",
+		"book:isbn13:9780000000000",
+	} {
+		require.NoError(t, p.db.Set([]byte(k), []byte(member), nil))
+	}
+
+	got, err := p.GetBooksBySeriesIDAllVersions(fx.seriesID)
+	require.NoError(t, err,
+		"a secondary-index key is not a corrupt book row; treating one as undecodable "+
+			"would fail every merge for any book that has ever been hashed or grouped")
+	require.ElementsMatch(t,
+		append(append([]string{}, fx.wantOrderedIDs...), fx.nonPrimaryBookID),
+		seriesIDsOf(got),
+		"and the index rows must not be admitted as books either")
+}
+
 // TestGetBooksBySeriesIDAllVersions_SeesALetterLeadingBookID covers the same
 // short-answer bug arriving through the iterator BOUNDS rather than the decode.
 //
