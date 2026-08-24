@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -67,6 +67,28 @@ var (
 	dupLookupSkipCount      atomic.Int64 // files skipped: duplicate status undeterminable
 	scanCacheUpdateErrCount atomic.Int64 // UpdateScanCache failures (file re-hashed every scan until it succeeds)
 	scanFailCountErrCount   atomic.Int64 // IncrScanFailCount failures
+)
+
+// Skip-decision counters. shouldSkipFile used to return a bare bool with no
+// counter, no log and no metric, so the single most load-bearing number in an
+// incremental scan -- how many files it actually avoided re-reading -- was not
+// observable at all. A scan that skipped everything and a scan that skipped
+// nothing produced byte-identical logs.
+//
+// The four re-read reasons are counted SEPARATELY rather than as one
+// "processed" total because they call for different fixes: "changed" is the
+// scan working as designed, "dirty" is a user-requested rescan, "stat error"
+// is a filesystem problem, and "cache miss" is the population that gets
+// re-read every single tick forever (measured 12.8% of the library on
+// 2026-08-24). Collapsing them into one number cannot tell those apart, which
+// is the exact question any future skip-rate work has to answer.
+var (
+	skipUnchangedCount atomic.Int64 // skipped: mtime+size unchanged and no rescan flag
+	readCacheMissCount atomic.Int64 // re-read: no scan-cache entry for this path
+	readChangedCount   atomic.Int64 // re-read: mtime or size differs from the cached values
+	readDirtyCount     atomic.Int64 // re-read: NeedsRescan set (forced per-book rescan)
+	readStatErrCount   atomic.Int64 // re-read: os.Stat failed, so no comparison was possible
+	readCacheOffCount  atomic.Int64 // re-read: cache disabled for this run (force_update)
 )
 
 // warnSampled increments c and logs at Warn on the first occurrence and every
@@ -436,17 +458,61 @@ func rememberCreatedWork(w *database.Work) {
 	worksLookupCache[worksLookupKey(util.NormalizeString(w.Title), w.AuthorID)] = w.ID
 }
 
-// shouldSkipFile returns true when a file is unchanged since the last scan and
-// does not have a pending rescan request.
-func shouldSkipFile(filePath string, mtime int64, size int64, cache map[string]database.ScanCacheEntry) bool {
+// skipReason explains why a file was skipped or re-read. It exists so the scan
+// summary can report WHICH reason dominated, not just a processed count.
+type skipReason int
+
+const (
+	reasonUnchanged skipReason = iota // skipped
+	reasonCacheOff                    // re-read: cache disabled for the run
+	reasonCacheMiss                   // re-read: path absent from the cache
+	reasonChanged                     // re-read: mtime or size differs
+	reasonDirty                       // re-read: NeedsRescan set
+)
+
+// classifySkipFile is shouldSkipFile with its reasoning made visible. The
+// order of the checks matters for attribution: a dirty entry whose mtime also
+// changed is reported as dirty, because the forced rescan is the reason a
+// caller would care about.
+func classifySkipFile(filePath string, mtime int64, size int64, cache map[string]database.ScanCacheEntry) (bool, skipReason) {
 	if cache == nil {
-		return false
+		return false, reasonCacheOff
 	}
 	entry, found := cache[filePath]
 	if !found {
-		return false
+		return false, reasonCacheMiss
 	}
-	return entry.Mtime == mtime && entry.Size == size && !entry.NeedsRescan
+	if entry.NeedsRescan {
+		return false, reasonDirty
+	}
+	if entry.Mtime != mtime || entry.Size != size {
+		return false, reasonChanged
+	}
+	return true, reasonUnchanged
+}
+
+// recordSkipDecision counts one classifySkipFile verdict.
+func recordSkipDecision(reason skipReason) {
+	switch reason {
+	case reasonUnchanged:
+		skipUnchangedCount.Add(1)
+	case reasonCacheOff:
+		readCacheOffCount.Add(1)
+	case reasonCacheMiss:
+		readCacheMissCount.Add(1)
+	case reasonChanged:
+		readChangedCount.Add(1)
+	case reasonDirty:
+		readDirtyCount.Add(1)
+	}
+}
+
+// shouldSkipFile returns true when a file is unchanged since the last scan and
+// does not have a pending rescan request. Retained as the boolean-only form
+// classifySkipFile delegates for; the two can never disagree.
+func shouldSkipFile(filePath string, mtime int64, size int64, cache map[string]database.ScanCacheEntry) bool {
+	skip, _ := classifySkipFile(filePath, mtime, size, cache)
+	return skip
 }
 
 // isExcludedPath checks whether a path matches any configured exclude pattern.
@@ -753,6 +819,12 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	dupLookupSkipStart := dupLookupSkipCount.Load()
 	scanCacheErrStart := scanCacheUpdateErrCount.Load()
 	scanFailCountErrStart := scanFailCountErrCount.Load()
+	skipUnchangedStart := skipUnchangedCount.Load()
+	readCacheMissStart := readCacheMissCount.Load()
+	readChangedStart := readChangedCount.Load()
+	readDirtyStart := readDirtyCount.Load()
+	readStatErrStart := readStatErrCount.Load()
+	readCacheOffStart := readCacheOffCount.Load()
 
 	// progressCh serializes progress updates so callbacks and progress output
 	// are handled in a single goroutine.
@@ -857,15 +929,30 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			}
 
 			// Incremental skip check: if mtime+size unchanged and no rescan flag, skip.
+			// Every branch records why, so the completion summary can report the
+			// skip rate and which re-read reason dominated.
 			{
 				globalScanCacheMu.RLock()
 				cache := globalScanCache
 				globalScanCacheMu.RUnlock()
-				if cache != nil {
-					if fi, statErr := os.Stat(books[idx].FilePath); statErr == nil {
-						if shouldSkipFile(books[idx].FilePath, fi.ModTime().Unix(), fi.Size(), cache) {
-							return // progress deferred func will still fire
-						}
+				switch {
+				case cache == nil:
+					// force_update nils the cache for the whole run.
+					readCacheOffCount.Add(1)
+				default:
+					fi, statErr := os.Stat(books[idx].FilePath)
+					if statErr != nil {
+						// Falling through to a full re-read here is deliberate
+						// (a stat failure is no evidence the file is unchanged),
+						// but it was previously indistinguishable from a cache
+						// miss in the logs.
+						readStatErrCount.Add(1)
+						break
+					}
+					skip, reason := classifySkipFile(books[idx].FilePath, fi.ModTime().Unix(), fi.Size(), cache)
+					recordSkipDecision(reason)
+					if skip {
+						return // progress deferred func will still fire
 					}
 				}
 			}
@@ -1202,6 +1289,26 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	if d := scanFailCountErrCount.Load() - scanFailCountErrStart; d > 0 {
 		scanLog.Warn("scan summary: %d scan-fail-count increments failed", d)
+	}
+
+	// Skip-rate summary. Logged UNCONDITIONALLY, unlike the error counters
+	// above: those are silent when nothing went wrong, but the pathology this
+	// instrument exists to catch is a scan that skipped NOTHING, and a `d > 0`
+	// guard would print nothing in exactly that case -- the same silence the
+	// counters were added to remove. A zero here is a finding, not a non-event.
+	skipped := skipUnchangedCount.Load() - skipUnchangedStart
+	reRead := struct{ cacheMiss, changed, dirty, statErr, cacheOff int64 }{
+		cacheMiss: readCacheMissCount.Load() - readCacheMissStart,
+		changed:   readChangedCount.Load() - readChangedStart,
+		dirty:     readDirtyCount.Load() - readDirtyStart,
+		statErr:   readStatErrCount.Load() - readStatErrStart,
+		cacheOff:  readCacheOffCount.Load() - readCacheOffStart,
+	}
+	reReadTotal := reRead.cacheMiss + reRead.changed + reRead.dirty + reRead.statErr + reRead.cacheOff
+	if decided := skipped + reReadTotal; decided > 0 {
+		scanLog.Info("scan summary: %d/%d files skipped (%.1f%%); re-read %d = %d cache-miss, %d changed, %d forced-rescan, %d stat-error, %d cache-disabled",
+			skipped, decided, float64(skipped)*100/float64(decided), reReadTotal,
+			reRead.cacheMiss, reRead.changed, reRead.dirty, reRead.statErr, reRead.cacheOff)
 	}
 
 	if ctxErr != nil {
