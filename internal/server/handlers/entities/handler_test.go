@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
 // last-edited: 2026-08-24
 
@@ -879,4 +879,106 @@ func TestSplitCompositeAuthor_LeavesNonPrimaryBooksAlone(t *testing.T) {
 	c, w := newCtx(http.MethodPost, "/authors/5/split", `{"names":["A","B"]}`, idParam("5"))
 	h.SplitCompositeAuthor(c)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor covers the reclassify
+// half of the dangling-AuthorID leak, where the book keeps a second author.
+//
+// Reclassify has no designated successor the way a split does -- the person
+// becomes a NARRATOR, so nothing replaces them as author. When the junction
+// still lists someone else, that someone is promoted to primary.
+//
+// Like TestSplitCompositeAuthor, the pre-existing TestReclassifyAuthorAsNarrator
+// passes an EMPTY book list and so cannot observe any of this.
+func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
+	h, d := newHandler(t)
+	reclassified := 5
+
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+
+	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
+		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{
+		{BookID: "b1", AuthorID: 5, Role: "author", Position: 0},
+		{BookID: "b1", AuthorID: 7, Role: "author", Position: 1},
+	}, nil)
+	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
+	// The surviving junction entry is looked up so a real Author object can be
+	// written next to the new AuthorID.
+	d.store.EXPECT().GetAuthorByID(7).Return(&database.Author{ID: 7, Name: "Real Author"}, nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{
+		ID:       "b1",
+		AuthorID: &reclassified,
+		Author:   &database.Author{ID: 5, Name: "Reader"},
+	}, nil)
+
+	var wrote *database.Book
+	d.store.EXPECT().UpdateBook("b1", mock.Anything).
+		RunAndReturn(func(_ string, b *database.Book) (*database.Book, error) {
+			wrote = b
+			return b, nil
+		})
+	d.store.EXPECT().GetBookNarrators("b1").Return(nil, nil)
+	d.store.EXPECT().SetBookNarrators("b1", mock.Anything).Return(nil)
+	d.store.EXPECT().DeleteAuthor(5).Return(nil)
+
+	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
+	h.ReclassifyAuthorAsNarrator(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	require.NotNil(t, wrote, "the book row must be written; otherwise AuthorID still points at the deleted author")
+	require.NotNil(t, wrote.AuthorID, "a surviving author exists, so AuthorID must be repointed, not cleared")
+	assert.Equal(t, 7, *wrote.AuthorID, "the surviving junction author must become primary")
+	require.NotNil(t, wrote.Author)
+	assert.Equal(t, 7, wrote.Author.ID, "the denormalized Author must agree with the new AuthorID")
+}
+
+// TestReclassifyAuthorAsNarrator_ClearsWhenNoAuthorSurvives covers the case with
+// no successor at all: the reclassified person was the book's ONLY author.
+//
+// AuthorID is cleared. book.Author is deliberately NOT cleared -- UpdateBook's
+// preserve-on-nil guard makes that impossible without a store-level sentinel --
+// so this asserts the reachable half and pins the residual rather than pretending
+// it is fixed. Display is unaffected either way: on the list path memdb has
+// already stripped Author, so a cleared AuthorID and a dangling one both render
+// as no author. What changes is that nothing dangles.
+func TestReclassifyAuthorAsNarrator_ClearsWhenNoAuthorSurvives(t *testing.T) {
+	h, d := newHandler(t)
+	reclassified := 5
+
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+
+	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
+		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{
+		{BookID: "b1", AuthorID: 5, Role: "author", Position: 0},
+	}, nil)
+	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{
+		ID:       "b1",
+		AuthorID: &reclassified,
+		Author:   &database.Author{ID: 5, Name: "Reader"},
+	}, nil)
+
+	var wrote *database.Book
+	d.store.EXPECT().UpdateBook("b1", mock.Anything).
+		RunAndReturn(func(_ string, b *database.Book) (*database.Book, error) {
+			wrote = b
+			return b, nil
+		})
+	d.store.EXPECT().GetBookNarrators("b1").Return(nil, nil)
+	d.store.EXPECT().SetBookNarrators("b1", mock.Anything).Return(nil)
+	d.store.EXPECT().DeleteAuthor(5).Return(nil)
+
+	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
+	h.ReclassifyAuthorAsNarrator(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	require.NotNil(t, wrote, "the book row must still be written to drop the dangling pointer")
+	assert.Nil(t, wrote.AuthorID,
+		"with no surviving author, AuthorID must be cleared rather than left pointing at the deleted row")
 }

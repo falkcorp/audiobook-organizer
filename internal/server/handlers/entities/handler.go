@@ -420,19 +420,29 @@ func (h *Handler) RenameAuthor(c *gin.Context) {
 // Pebble row instead still see the stale snapshot and show the OLD name, so the
 // same book disagrees with itself between two screens.
 //
-// Both fields must be set together. Writing AuthorID alone would leave
-// UpdateBook's preserve-on-nil guard (pebble_store.go:2407) holding the
-// previous Author object, which is precisely the stale-snapshot half of the
-// divergence above. That guard also means this helper cannot express "no
-// author": Author cannot be cleared to nil through UpdateBook, so a successor
-// is required and newPrimary must be non-nil.
+// Both fields must be set together when there IS a successor. Writing AuthorID
+// alone would leave UpdateBook's preserve-on-nil guard (pebble_store.go:2407)
+// holding the previous Author object, which is precisely the stale-snapshot
+// half of the divergence above.
+//
+// newPrimary == nil means "no successor exists" (every remaining junction entry
+// is gone -- the reclassify case). Then AuthorID is cleared and Author is left
+// alone, because that guard makes Author UNCLEARABLE through UpdateBook: there
+// is no sentinel for a pointer struct. That is deliberate and it costs nothing
+// on screen. A cleared AuthorID and a dangling one render IDENTICALLY -- the
+// list path reaches Author first but memdb stripped it, then finds either no
+// AuthorID or an AuthorID that misses the map, and yields "" either way; the
+// full-row path shows the stale snapshot in both cases. So clearing is a pure
+// referential-integrity win with no display change, and the residual stale
+// Author needs a store-level explicit-clear to fix. Do not mistake the
+// unchanged display for the clear having done nothing.
 //
 // Third copy of this logic, after internal/scheduler/extra_ops.go:382-410 and
 // internal/plugins/maintenance/author.go:221-246. Those two agree; this handler
 // was the one that had drifted, which is what the "keep in sync" comment on the
 // scheduler copy was meant to prevent and did not.
 func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID int, newPrimary *database.Author) {
-	if book == nil || newPrimary == nil {
+	if book == nil {
 		return
 	}
 	// Only the books whose PRIMARY author is the doomed one need repointing;
@@ -440,7 +450,12 @@ func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID 
 	if book.AuthorID == nil || *book.AuthorID != deletedAuthorID {
 		return
 	}
-	newID := newPrimary.ID
+	// nil newPrimary => clear. Named so the two branches below read the same.
+	var newID *int
+	if newPrimary != nil {
+		id := newPrimary.ID
+		newID = &id
+	}
 
 	full, err := h.store.GetBookByID(book.ID)
 	if err != nil || full == nil {
@@ -449,18 +464,23 @@ func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID 
 		// guard) is strictly better than a pointer into a deleted row, which
 		// is what skipping the write would leave behind. Never skip it.
 		projection := book.ToBook()
-		projection.AuthorID = &newID
+		projection.AuthorID = newID
 		if _, uErr := h.store.UpdateBook(book.ID, &projection); uErr != nil {
-			slog.Warn("author split: failed to repoint primary author via projection",
+			slog.Warn("author repoint: failed via projection",
 				"book_id", book.ID, "hydrate_err", err, "update_err", uErr)
 		}
 		return
 	}
 
-	full.AuthorID = &newID
-	full.Author = newPrimary
+	full.AuthorID = newID
+	// Only assign Author when there is a successor: nil would be ignored by
+	// UpdateBook's preserve-on-nil guard anyway, and assigning it would falsely
+	// suggest the snapshot gets cleared here.
+	if newPrimary != nil {
+		full.Author = newPrimary
+	}
 	if _, err := h.store.UpdateBook(book.ID, full); err != nil {
-		slog.Warn("author split: failed to repoint primary author",
+		slog.Warn("author repoint: failed to update book",
 			"book_id", book.ID, "new_author_id", newID, "err", err)
 	}
 }
@@ -864,6 +884,22 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 		if err := h.store.SetBookAuthors(book.ID, newAuthors); err != nil {
 			continue
 		}
+
+		// The reclassified person is a NARRATOR now, so unlike the split there
+		// is no designated successor: promote whatever author the junction
+		// still lists first, and clear when none is left. Either way
+		// book.AuthorID must stop pointing at the row DeleteAuthor is about to
+		// remove below.
+		var successor *database.Author
+		if len(newAuthors) > 0 {
+			if a, err := h.store.GetAuthorByID(newAuthors[0].AuthorID); err == nil && a != nil {
+				successor = a
+			}
+			// A failed lookup falls through with successor == nil, which
+			// clears rather than repoints. Clearing is the safe direction: it
+			// cannot invent a link, and it leaves nothing dangling.
+		}
+		h.repointPrimaryAuthor(&book, authorID, successor)
 
 		// Add narrator link if not already present
 		bookNarrators, err := h.store.GetBookNarrators(book.ID)
