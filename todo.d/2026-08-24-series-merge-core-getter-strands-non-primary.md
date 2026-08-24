@@ -72,6 +72,40 @@
       what a HEALTHY run does. Refusing on a row memdb has lost only fires when the
       store is already known-degraded, and it prevents immediate stranding of a
       live book. If the bundle stalls, (2) is worth splitting out on its own.
+      ---
+      **✅ Half (2) CLOSED — the split was taken.** User approved the lost-index half
+      only and explicitly deferred the trashed half. **Half (1) remains OPEN and is
+      what keeps this item unchecked.**
+      The fix did NOT land where this entry predicted. Gating phase 1 on the
+      unfiltered ref count cannot separate the two halves: `GetAllSeriesBookRefCounts`
+      counts trashed AND non-primary rows while `GetBooksBySeriesIDAllVersions`
+      excludes soft-deleted, so `refCount > len(books)` fires on trashed rows too —
+      i.e. it ships the half that was deferred. **No discriminator exists at that
+      layer.** It exists one layer down: memdb tracks its own losses
+      (`requireTablesComplete` → `ErrMemdbIncomplete`), which is a *direct* signal
+      rather than a difference between two counters.
+      So the guard went into `GetBooksBySeriesIDAllVersions` itself. The sharper
+      framing of the original finding: `requireTablesComplete` was wired into exactly
+      two places, `author_bookref.go` and `series_bookref.go`, and **both are
+      reference COUNTERS that only report**. The getter that authorizes the delete
+      had no guard at all — the code that observes was protected, the code that acts
+      was not.
+      ⚠️ **Stronger than the approved option text, deliberately.** The user approved
+      *refusing*; this *repairs*. memdb loss is recoverable because the authoritative
+      Pebble scan is right there, so the wrapper falls through and the merge completes
+      correctly instead of aborting a merge that could be finished properly.
+      **Blast radius: seven repoint-then-delete sites, not one** — `duplicates_helpers.go`
+      :209 and :527, `cleanup_series.go` :105 and :273, `series_dedup.go` :419, :634
+      and :713, `series_denumber_op.go` :293. Fixing the getter closes the membership
+      half for all of them; fixing phase 1 would have closed one.
+      The guard is on the `AllVersions` wrapper and NOT the shared
+      `getBooksBySeriesID` body — Core is the listing view, and pushing the check down
+      would cost every series page a full Pebble scan for the rest of the process's
+      life (a lost row stays short until restart).
+      🔬 The existing `series_getter_conformance_test.go` could not have caught any of
+      this: both its tests `require.True(p.IsMemReady())` and run only against a
+      COMPLETE memdb, so they pass unchanged — reading as "conformance still holds"
+      while covering none of the new behaviour.
 
 - [ ] **SERIES-NORMALIZE-WRITEBACK-SPLIT** `executeSeriesNormalizeCore` returns
       ONE list that feeds two different consumers with two different policies:
