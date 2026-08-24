@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-24
 
@@ -915,7 +915,16 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 	}
 	s.DeleteBookFilesFromMemDB(fileIDs)
 	// Recompute book-level aggregates after bulk-deleting all files for this book.
-	// The book likely has Duration=0 after deletion, which is correct — nothing to sum.
+	//
+	// This does NOT zero the book's Duration, despite there being nothing left to
+	// sum. RecomputeBookAggregates' partial-data rule fires on exactly this input:
+	// no file carries a duration and the book has a non-zero one, so the existing
+	// value is preserved and a warning logged, deliberately, so that a transient
+	// missing-file event cannot destroy hard-won duration data. Same for FileSize.
+	//
+	// Pinned by TestDeletingEveryFileKeepsTheBookDuration. This comment previously
+	// claimed the book "likely has Duration=0 after deletion, which is correct" —
+	// the opposite of what the code does, and believable enough to plan against.
 	s.notifyBookFileChange(bookID)
 	return nil
 }
