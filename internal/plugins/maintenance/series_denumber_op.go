@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-08-19
+// last-edited: 2026-08-24
 
 package maintenance
 
@@ -283,10 +283,17 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			continue // already the canonical row
 		}
 
-		books, berr := store.GetBooksBySeriesIDCore(pl.FromID)
+		// AllVersions, not the Core listing getter. The movedAll guard below
+		// CANNOT cover for the filtered getter here, which is why this line is
+		// the fix rather than the guard: movedAll starts true and is only ever
+		// set false inside the loop over these rows, so a non-primary version
+		// the Core getter excluded is never iterated, never flips the flag, and
+		// the delete proceeds anyway. The guard's sample space was the filtered
+		// set the bug lives outside of.
+		books, berr := store.GetBooksBySeriesIDAllVersions(pl.FromID)
 		if berr != nil {
 			failed++
-			log.Warn("series-denumber: GetBooksBySeriesIDCore failed", "series", pl.FromID, "err", berr)
+			log.Warn("series-denumber: GetBooksBySeriesIDAllVersions failed", "series", pl.FromID, "err", berr)
 			continue
 		}
 
