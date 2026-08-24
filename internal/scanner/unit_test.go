@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-07-01
+// last-edited: 2026-08-24
 
 package scanner
 
@@ -1500,6 +1500,9 @@ func TestSaveBookToDatabaseExistingBook(t *testing.T) {
 	store.EXPECT().IsHashBlocked(mock.Anything).Return(false, nil).Maybe()
 	existingBook := &database.Book{ID: "existing-id", Title: "Old Title", FilePath: fpath}
 	store.EXPECT().GetBookByFilePath(fpath).Return(existingBook, nil)
+	// The rescan overlay consults per-field provenance before writing, so a
+	// field the user locked is not overwritten from the file's tags.
+	store.EXPECT().GetMetadataFieldStates("existing-id").Return(nil, nil)
 	store.EXPECT().UpdateBook("existing-id", mock.Anything).Return(existingBook, nil)
 
 	book := &Book{Title: "Test Book", Author: "Author", FilePath: fpath, Format: ".m4b", FileHash: "abc123"}
