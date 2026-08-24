@@ -8,6 +8,7 @@ package sysinfo
 import (
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -325,13 +326,12 @@ func (ss *SystemService) CollectSystemLogs(level, search string, limit, offset i
 		}
 	}
 
-	for i := 0; i < len(allLogs)-1; i++ {
-		for j := i + 1; j < len(allLogs); j++ {
-			if allLogs[j].Timestamp.After(allLogs[i].Timestamp) {
-				allLogs[i], allLogs[j] = allLogs[j], allLogs[i]
-			}
-		}
-	}
+	// Newest first. This runs over the FULL collected set before the
+	// offset/limit slice below, so it is the whole log population, not a page --
+	// the O(n^2) swap loop it replaces scaled with every operation retained.
+	sort.SliceStable(allLogs, func(a, b int) bool {
+		return allLogs[a].Timestamp.After(allLogs[b].Timestamp)
+	})
 
 	total := len(allLogs)
 	start := offset

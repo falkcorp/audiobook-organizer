@@ -8,6 +8,7 @@ package database
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -237,13 +238,9 @@ func (p *PebbleStore) ListABSSessionsForUser(userID string) ([]ABSSession, error
 		out = append(out, *s)
 	}
 	// Newest first, matching ABS's /api/me/sessions ordering.
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].CreatedAt.After(out[i].CreatedAt) {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
+	sort.SliceStable(out, func(a, b int) bool {
+		return out[a].CreatedAt.After(out[b].CreatedAt)
+	})
 	return out, nil
 }
 
