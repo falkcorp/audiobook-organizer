@@ -86,3 +86,31 @@ func TestListResumableOperationsV2_StatusMembership(t *testing.T) {
 			"status %q: resumable=%v, want %v — %s", tc.status, got[tc.status], tc.want, tc.why)
 	}
 }
+
+// A row this scan cannot read is an operation that will never resume. It must be
+// skipped rather than handed onward as a zero-valued row — resumeAfterStartup
+// would call UpdateOperationV2Status("") on it — and the skip is logged, because
+// silently dropping it looks exactly like the blindness this method cures.
+func TestListResumableOperationsV2_SkipsUnreadableRows(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+	p := store.(*PebbleStore)
+
+	// One good row, so the scan cannot pass by returning nothing at all.
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-good", "queued")))
+
+	// Garbage that is not JSON at all.
+	require.NoError(t, p.db.Set([]byte("opv2:op:op-garbage"), []byte("{not json"), nil))
+	// Valid JSON, resumable status, but no id — the shape ListActiveOperationsV2
+	// already guards against and this one used not to.
+	require.NoError(t, p.db.Set([]byte("opv2:op:op-noid"),
+		[]byte(`{"Status":"interrupted_quiesced","DefID":"library.scan"}`), nil))
+
+	resumable, err := s.ListResumableOperationsV2()
+	require.NoError(t, err, "one bad row must not fail the whole scan; "+
+		"an error here strands every resumable op on the server")
+	require.Len(t, resumable, 1, "want only op-good: got %+v", resumable)
+	require.Equal(t, "op-good", resumable[0].ID)
+}
+

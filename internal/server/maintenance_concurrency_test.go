@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_concurrency_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 14d07753-3a82-4678-8982-e488eef8a7e3
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package server
 
@@ -254,6 +254,18 @@ func newOpsFake(t *testing.T) *dbmocks.MockStore {
 		func() ([]database.OperationV2Row, error) {
 			return snapshot(func(r *database.OperationV2Row) bool {
 				return r.Status == "queued" || r.Status == "running"
+			}), nil
+		}).Maybe()
+
+	// The startup resume sweep reads this one, NOT ListActiveOperationsV2: the
+	// active index drops a row as soon as it stops being queued/running, so a
+	// quiesced op was invisible to the sweep. The predicate here must mirror
+	// isResumableV2Status, or this fixture quietly stops representing the store.
+	m.EXPECT().ListResumableOperationsV2().RunAndReturn(
+		func() ([]database.OperationV2Row, error) {
+			return snapshot(func(r *database.OperationV2Row) bool {
+				return r.Status == "queued" || r.Status == "running" ||
+					r.Status == "interrupted_quiesced"
 			}), nil
 		}).Maybe()
 

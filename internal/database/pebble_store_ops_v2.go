@@ -866,7 +866,23 @@ func (p *PebbleStore) ListResumableOperationsV2() (rows []OperationV2Row, err er
 	var result []OperationV2Row
 	for iter.First(); iter.Valid(); iter.Next() {
 		var row OperationV2Row
+		// A row this scan cannot read is an operation that will never resume, so
+		// it is reported rather than silently skipped. The sibling scans here
+		// (ListActiveOperationsV2, ListWaitingDepsOps) drop a bad row in silence,
+		// and that is defensible for them: a missing row reads as "not in flight"
+		// or "not waiting", which is the safe direction. For THIS caller the safe
+		// direction is the opposite one -- a skipped row is indistinguishable from
+		// the blindness this method was added to cure, and would look identical in
+		// the logs ("no resumable ops").
 		if err := json.Unmarshal(iter.Value(), &row); err != nil {
+			slog.Warn("pebble: ListResumableOperationsV2 skipping undecodable op row; "+
+				"if this row was interrupted it will never be resumed",
+				"key", string(iter.Key()), "error", err)
+			continue
+		}
+		if row.ID == "" {
+			slog.Warn("pebble: ListResumableOperationsV2 skipping op row with no id",
+				"key", string(iter.Key()), "status", row.Status)
 			continue
 		}
 		if isResumableV2Status(row.Status) {
