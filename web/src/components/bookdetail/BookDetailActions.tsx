@@ -34,6 +34,7 @@ export interface BookDetailActionsProps {
   onParseWithAI: () => void;
   onRescanFolder: () => void;
   onRescanFiles: () => void;
+  onForceRescan: () => void;
   onRefresh: () => void;
   onOpenEdit: () => void;
   onFetchMetadata: () => void;
@@ -62,6 +63,7 @@ export const BookDetailActions = ({
   onParseWithAI,
   onRescanFolder,
   onRescanFiles,
+  onForceRescan,
   onRefresh,
   onOpenEdit,
   onFetchMetadata,
@@ -105,15 +107,31 @@ export const BookDetailActions = ({
           >
             {parsingWithAI ? 'Parsing...' : 'Parse with AI'}
           </Button>
-          <Button
-            variant="outlined"
-            startIcon={rescanningFolder ? <CircularProgress size={20} /> : <FolderOpenIcon />}
-            onClick={onRescanFolder}
-            disabled={rescanningFolder || actionLoading}
-          >
-            {rescanningFolder ? 'Scanning...' : 'Rescan Folder'}
-          </Button>
-          <Tooltip title="Re-stat this book's files on disk and update size">
+          <Tooltip title="Re-read every file in this book's folder, ignoring the skip cache. Folders are not all small — some hold over a thousand files.">
+            <span>
+              <Button
+                variant="outlined"
+                startIcon={rescanningFolder ? <CircularProgress size={20} /> : <FolderOpenIcon />}
+                onClick={onRescanFolder}
+                disabled={rescanningFolder || actionLoading}
+              >
+                {rescanningFolder ? 'Scanning...' : 'Rescan Whole Folder'}
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Re-read just this book on the next scan. Unchanged files nearby are still skipped.">
+            <span>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={onForceRescan}
+                disabled={actionLoading || isSoftDeleted}
+              >
+                Force Rescan
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Re-check file sizes on disk and correct them. Does not re-read tags or audio.">
             <span>
               <Button
                 variant="outlined"
@@ -121,7 +139,7 @@ export const BookDetailActions = ({
                 onClick={onRescanFiles}
                 disabled={actionLoading || isSoftDeleted}
               >
-                Rescan Files
+                Reconcile File Sizes
               </Button>
             </span>
           </Tooltip>
