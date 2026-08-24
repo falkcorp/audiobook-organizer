@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-08-06
+// last-edited: 2026-08-23
 
 package database
 
@@ -60,6 +60,14 @@ type BookFileCore struct {
 	FileHash         string            `json:"file_hash,omitempty"`
 	OriginalFileHash string            `json:"original_file_hash,omitempty"`
 	PostMetadataHash string            `json:"post_metadata_hash,omitempty"`
+	// Scan must live on Core, not in the stripped set. The stripped fields are
+	// heavy payloads (fingerprints, diagnostic JSON, the raw transcript); Scan is
+	// five small flags that the dedup and bulk-write paths FILTER on. If it were
+	// stripped, every reader coming through the memdb projection would see a zero
+	// ScanState and IsProvisional would answer false for provisional rows -- the
+	// exclusion would fail OPEN, silently, which is the direction that merges
+	// un-hashed books.
+	Scan ScanState `json:"scan,omitzero"`
 
 	// AcoustIDFingerprintDurationSec is RETAINED on Core (not stripped).
 	AcoustIDFingerprintDurationSec float64 `json:"acoustid_fingerprint_duration_sec,omitempty"`
@@ -127,6 +135,7 @@ func (f *BookFile) Core() BookFileCore {
 		FileHash:                       f.FileHash,
 		OriginalFileHash:               f.OriginalFileHash,
 		PostMetadataHash:               f.PostMetadataHash,
+		Scan:                           f.Scan,
 		AcoustIDFingerprintDurationSec: f.AcoustIDFingerprintDurationSec,
 		FingerprintFailedAt:            f.FingerprintFailedAt,
 		AcoustIDOnlineRecordingID:      f.AcoustIDOnlineRecordingID,
