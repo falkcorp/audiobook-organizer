@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.85.0
+// version: 1.86.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-24
 
@@ -822,6 +822,19 @@ type Config struct {
 	// MinBookSizeBytes: single-file books below this size are flagged as suspicious and
 	// skipped for heavy processing. Set to -1 to disable. Defaults to 5242880 (5 MB).
 	MinBookSizeBytes int64 `json:"min_book_size_bytes"`
+	// MinRescanAgeHours: a file the library ALREADY has a scan-cache entry for is
+	// only re-read once its mtime is at least this old. A file that is still
+	// being written changes mtime and size between every scan, so without this
+	// the scanner re-reads and re-hashes it on every pass and stores whatever
+	// half-written metadata it happened to see. Waiting for the file to go quiet
+	// costs at most one period of staleness and removes that whole class of churn.
+	//
+	// It does NOT delay discovery, and it is not a general scan cooldown: a path
+	// with no cache entry is new and is read immediately, a book flagged
+	// NeedsRescan bypasses it, and a force_update scan disables the scan cache
+	// outright so the gate is never consulted. Set to -1 to disable.
+	// Defaults to 144 (6 days).
+	MinRescanAgeHours int `json:"min_rescan_age_hours"`
 	// Log retention in days (0 = keep forever)
 	LogRetentionDays int `json:"log_retention_days"`
 	// Operation log retention in days (0 = keep forever; default 90)
@@ -1762,6 +1775,7 @@ func InitConfig() {
 			CoalesceShatteredSiblings:        viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:          viper.GetInt("operation_timeout_minutes"),
 			MinBookSizeBytes:                 viper.GetInt64("min_book_size_bytes"),
+			MinRescanAgeHours:                viper.GetInt("min_rescan_age_hours"),
 			APIRateLimitPerMinute:            viper.GetInt("api_rate_limit_per_minute"),
 			AuthRateLimitPerMinute:           viper.GetInt("auth_rate_limit_per_minute"),
 			JSONBodyLimitMB:                  viper.GetInt("json_body_limit_mb"),
@@ -2282,6 +2296,11 @@ func (c *Config) Validate() error {
 	if c.MinBookSizeBytes == 0 {
 		c.MinBookSizeBytes = 5 * 1024 * 1024
 	}
+	// 0 means "unset" and takes the default; -1 (or any negative) disables the
+	// rescan-age gate outright. Same idiom as MinBookSizeBytes above.
+	if c.MinRescanAgeHours == 0 {
+		c.MinRescanAgeHours = 144
+	}
 	if c.AutoScanDebounceSeconds < 0 {
 		errs = append(errs, "auto_scan_debounce_seconds must be >= 0")
 	}
@@ -2399,6 +2418,7 @@ func ResetToDefaults() {
 			ChapterConsolidationThresholdMin: 10,
 			OperationTimeoutMinutes:          30,
 			MinBookSizeBytes:                 5 * 1024 * 1024,
+			MinRescanAgeHours:                144,
 			APIRateLimitPerMinute:            100,
 			AuthRateLimitPerMinute:           10,
 			JSONBodyLimitMB:                  1,

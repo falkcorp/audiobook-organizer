@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-08-24
 
@@ -761,7 +761,8 @@ func (h *Handler) ReconcileAudiobookFiles(c *gin.Context) {
 // ForceRescanAudiobook flags one book for a full re-read by the next scan.
 // POST /audiobooks/:id/force-rescan.
 //
-// This sets NeedsRescan, which shouldSkipFile treats as "never skip", and
+// This sets NeedsRescan, which classifySkipFile treats as "never skip" (it is
+// checked before the rescan-age gate, so a forced rescan is never deferred), and
 // GetDirtyBookFolders then pulls the book's immediate parent directory into the
 // next scan even when that directory sits outside the configured import paths.
 // Unchanged siblings in that directory are still skipped, so the cost is one

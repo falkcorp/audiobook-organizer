@@ -1,5 +1,5 @@
 // file: internal/scanner/unit_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
 // last-edited: 2026-08-24
 
@@ -77,7 +77,7 @@ func TestSetScanCacheAndClear(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// shouldSkipFile — additional edge cases
+// skipOnly — additional edge cases
 // ---------------------------------------------------------------------------
 
 func TestShouldSkipFileNeedsRescan(t *testing.T) {
@@ -86,13 +86,13 @@ func TestShouldSkipFileNeedsRescan(t *testing.T) {
 		"/b.m4b": {Mtime: 10, Size: 20, NeedsRescan: false},
 	}
 	// NeedsRescan forces re-scan even when mtime+size match
-	assert.False(t, shouldSkipFile("/a.m4b", 10, 20, cache))
+	assert.False(t, skipOnly("/a.m4b", 10, 20, cache))
 	// No rescan needed and mtime+size match -> skip
-	assert.True(t, shouldSkipFile("/b.m4b", 10, 20, cache))
+	assert.True(t, skipOnly("/b.m4b", 10, 20, cache))
 	// Different size -> don't skip
-	assert.False(t, shouldSkipFile("/b.m4b", 10, 99, cache))
+	assert.False(t, skipOnly("/b.m4b", 10, 99, cache))
 	// Different mtime -> don't skip
-	assert.False(t, shouldSkipFile("/b.m4b", 99, 20, cache))
+	assert.False(t, skipOnly("/b.m4b", 99, 20, cache))
 }
 
 // ---------------------------------------------------------------------------
