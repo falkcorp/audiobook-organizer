@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"strconv"
 	"time"
 
@@ -341,14 +342,10 @@ func aggregateCacheMetrics(mfs []*io_prometheus_client.MetricFamily) []CacheStat
 		result = append(result, *stat)
 	}
 
-	// Sort by cache name for stable output
-	for i := 0; i < len(result)-1; i++ {
-		for j := i + 1; j < len(result); j++ {
-			if result[i].Name > result[j].Name {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
+	// Sort by cache name for stable output.
+	sort.SliceStable(result, func(a, b int) bool {
+		return result[a].Name < result[b].Name
+	})
 
 	return result
 }

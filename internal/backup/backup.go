@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -526,15 +527,10 @@ func cleanupOldBackups(backupDir string, maxBackups int) error {
 		return nil
 	}
 
-	// Sort backups by creation time (oldest first)
-	// Simple bubble sort since list is typically small
-	for i := 0; i < len(backups)-1; i++ {
-		for j := i + 1; j < len(backups); j++ {
-			if backups[i].CreatedAt.After(backups[j].CreatedAt) {
-				backups[i], backups[j] = backups[j], backups[i]
-			}
-		}
-	}
+	// Sort backups by creation time (oldest first).
+	sort.SliceStable(backups, func(a, b int) bool {
+		return backups[a].CreatedAt.Before(backups[b].CreatedAt)
+	})
 
 	// Delete oldest backups
 	deleteCount := len(backups) - maxBackups

@@ -302,14 +302,10 @@ func (p *PebbleStore) ListOperationSummaryLogs(limit, offset int) ([]OperationSu
 		logs = append(logs, op)
 	}
 
-	// Sort by created_at descending
-	for i := 0; i < len(logs)-1; i++ {
-		for j := i + 1; j < len(logs); j++ {
-			if logs[j].CreatedAt.After(logs[i].CreatedAt) {
-				logs[i], logs[j] = logs[j], logs[i]
-			}
-		}
-	}
+	// Sort by created_at descending.
+	sort.SliceStable(logs, func(a, b int) bool {
+		return logs[a].CreatedAt.After(logs[b].CreatedAt)
+	})
 
 	// Apply offset and limit
 	if offset >= len(logs) {

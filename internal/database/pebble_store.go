@@ -3996,25 +3996,23 @@ func (p *PebbleStore) recomputeDurationMap(bookNumericID int) error {
 	if err != nil {
 		return err
 	}
-	// simple stable ordering: by TrackNumber(if present) then FilePath
-	// bubble sort (small lists expected)
-	for i := 0; i < len(segs)-1; i++ {
-		for j := i + 1; j < len(segs); j++ {
-			less := false
-			if segs[i].TrackNumber != nil && segs[j].TrackNumber != nil {
-				less = *segs[i].TrackNumber > *segs[j].TrackNumber
-			} else if segs[i].TrackNumber != nil {
-				less = false
-			} else if segs[j].TrackNumber != nil {
-				less = true
-			} else {
-				less = segs[i].FilePath > segs[j].FilePath
-			}
-			if less {
-				segs[i], segs[j] = segs[j], segs[i]
-			}
+	// Stable ordering: tracked segments first (ascending TrackNumber), then
+	// untracked ones (ascending FilePath). SliceStable so equal keys keep their
+	// existing relative order -- the hand-rolled swap loop this replaced was
+	// O(n^2) and its tie order depended on comparison sequence.
+	sort.SliceStable(segs, func(a, b int) bool {
+		ta, tb := segs[a].TrackNumber, segs[b].TrackNumber
+		switch {
+		case ta != nil && tb != nil:
+			return *ta < *tb
+		case ta != nil:
+			return true
+		case tb != nil:
+			return false
+		default:
+			return segs[a].FilePath < segs[b].FilePath
 		}
-	}
+	})
 	type segMap struct {
 		ID          string `json:"id"`
 		Duration    int    `json:"duration"`
