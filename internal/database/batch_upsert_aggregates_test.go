@@ -1,5 +1,5 @@
 // file: internal/database/batch_upsert_aggregates_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d41f6b2-70e8-4c35-b1a7-38f0c92e64d5
 // last-edited: 2026-08-24
 
@@ -20,14 +20,17 @@ import (
 //
 // Counting log lines is the point, not a convenience. RecomputeBookAggregates is
 // reached through notifyBookFileChange, which is unexported and has no return
-// value, so there is no seam to inject a counter into. The "RecomputeBookAggregates
-// updated" line is emitted exactly once per aggregate WRITE, which makes it a
-// direct measure of the property under test.
+// value, so there is no seam to inject a counter into. Its log lines are the only
+// observable record of how many times it ran.
 //
 // A test that only checked the final Duration/FileSize would pass whether the
 // recompute ran once or once per row — and "once per row" is precisely the O(N^2)
-// this exists to prevent. The final values cannot distinguish those two cases;
-// the line count can.
+// this exists to prevent. The final values cannot distinguish those two cases.
+//
+// The handler is pinned at LevelDebug because that distinction lives entirely in
+// the Debug-level "no change needed" line: a redundant recompute produces no
+// Info-level output at all. At the default level this capture would be blind to
+// exactly the regression it exists to detect. See countAggregateInvocations.
 //
 // slog.SetDefault is process-global, so a test using this must NOT call
 // t.Parallel.
