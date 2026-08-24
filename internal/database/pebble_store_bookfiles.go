@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-24
 
@@ -278,6 +278,130 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 	// Recompute book-level Duration/FileSize aggregates now that a file was added.
 	// Best-effort: the file write already committed; don't fail on aggregate errors.
 	s.notifyBookFileChange(file.BookID)
+	return nil
+}
+
+// BatchCreateBookFiles stores several new BookFiles in one atomic batch and
+// recomputes each affected book's aggregates ONCE.
+//
+// WHY THIS EXISTS: callers that create a book's files in a loop pay
+// RecomputeBookAggregates per row, and each recompute re-reads the book's entire
+// file set — so an N-file book costs 1+2+...+N reads. Production log attribution
+// measured a single such loop (maintenance relink) at 92.1% of all attributed
+// recomputes. One recompute per book after the write deletes that amplification.
+//
+// SEMANTICS ARE CreateBookFile's, NOT BatchUpsertBookFiles': every row here is
+// created. There is deliberately no match-by-path or match-by-PID step, so a
+// caller that may be re-running over rows that already exist must check first —
+// relinkOne does exactly that, re-reading GetBookFiles under the write path
+// before it builds anything. Using this where an upsert was meant produces
+// duplicate rows, not updates.
+//
+// The write is atomic: on any error nothing is committed and no book is
+// recomputed, so a partial failure cannot leave aggregates describing rows that
+// were never stored.
+func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	batch := s.db.NewBatch()
+
+	// Books whose aggregates this batch invalidates, in first-touched order.
+	affectedBooks := make([]string, 0, len(files))
+	seenBooks := make(map[string]struct{}, len(files))
+
+	// enforceBookFilePIDUniqueness resolves the prior owner via a COMMITTED read,
+	// so it cannot see a row staged earlier in this same batch. Two rows sharing a
+	// PID would therefore both pass and both be written, silently breaking the very
+	// invariant that function exists to hold. Track PIDs within the call and refuse
+	// rather than create a second owner.
+	seenPIDs := make(map[string]string, len(files))
+
+	staged := make([]*BookFile, 0, len(files))
+	for _, file := range files {
+		if file == nil {
+			continue
+		}
+
+		// CONS-18: repair millisecond-valued durations at the write chokepoint, as
+		// every other ingest path does.
+		normalizeBookFileDuration(file)
+
+		if file.ID == "" {
+			id, err := newULID()
+			if err != nil {
+				batch.Close()
+				return err
+			}
+			file.ID = id
+		}
+		if file.CreatedAt.IsZero() {
+			file.CreatedAt = now
+		}
+		file.UpdatedAt = now
+
+		if file.ITunesPersistentID != "" {
+			if prior, dup := seenPIDs[file.ITunesPersistentID]; dup {
+				batch.Close()
+				return fmt.Errorf("BatchCreateBookFiles: iTunes persistent ID %q appears on two rows in one batch (%s and %s); "+
+					"a PID must identify exactly one row", file.ITunesPersistentID, prior, file.ID)
+			}
+			seenPIDs[file.ITunesPersistentID] = file.ID
+		}
+
+		// Transfers the PID from any prior COMMITTED owner. Writes outside this
+		// batch, exactly as CreateBookFile does.
+		if err := s.enforceBookFilePIDUniqueness(file); err != nil {
+			batch.Close()
+			return err
+		}
+
+		// T020: drop AcoustIDSeg0..6 from the stored value via a copy; the original
+		// struct is preserved for the memdb upsert below.
+		data, err := marshalBookFileDropSegs(file)
+		if err != nil {
+			batch.Close()
+			return err
+		}
+
+		key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
+		if err := batch.Set(key, data, nil); err != nil {
+			batch.Close()
+			return err
+		}
+		if err := writeBookFileSecondaryIndexes(batch, file); err != nil {
+			batch.Close()
+			return err
+		}
+
+		if _, ok := seenBooks[file.BookID]; !ok && file.BookID != "" {
+			seenBooks[file.BookID] = struct{}{}
+			affectedBooks = append(affectedBooks, file.BookID)
+		}
+		staged = append(staged, file)
+	}
+
+	if len(staged) == 0 {
+		batch.Close()
+		return nil
+	}
+
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+
+	s.InvalidateLibraryStats()
+	s.MarkQuickQueryDirty("no_fingerprints", "batch_create_book_files")
+	for _, file := range staged {
+		s.UpsertBookFileToMemDB(file)
+	}
+
+	// ONE recompute per affected book, not one per row — the whole point of this
+	// method. Best-effort like every other caller: the rows are committed, and a
+	// failure to refresh a derived aggregate must not be reported as a failed write.
+	s.notifyBookFileChanges(affectedBooks)
 	return nil
 }
 
