@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -140,8 +140,40 @@ func NewOperationsV2Handler(opsStore database.OpsV2Store, registry OperationsReg
 	return h
 }
 
-// GetOperationTimeline implements GET /api/v1/operations/timeline?since=15m.
-// It reads operations from the v2 store that were queued within the given window.
+// Timeline query bounds.
+//
+// timelineScanBound is deliberately much larger than timelineMaxLimit: def_id is
+// filtered HERE, and ListOperationsV2Since sorts then truncates before this
+// handler ever sees a row. Asking the store for `limit` rows and filtering the
+// result would answer "the rows for this def that happen to fall in the newest N
+// overall" — a plausible wrong answer, which is the defect this endpoint is being
+// fixed for. Same reasoning, same shape as recentReconcileScans in
+// internal/server/reconcile_ops_index.go, whose comment notes that a small limit
+// pushed down to the store drops QUEUED rows first (they have no StartedAt and
+// sort last), so a just-enqueued op is the first thing to vanish from a view whose
+// job is to show it.
+const (
+	timelineDefaultLimit = 200
+	timelineMaxLimit     = 1000
+	timelineScanBound    = 5000
+)
+
+// GetOperationTimeline implements
+// GET /api/v1/operations/timeline?since=15m[&def_id=X][&limit=N].
+//
+// It reads operations from the v2 store that were queued within the given window,
+// optionally restricted to a single operation def.
+//
+// The response describes its own scope — since, window_start, def_id, limit,
+// matched, truncated — because the failure mode this endpoint actually produced
+// was not an error but a confident undercount. Until 2026-08-24 `def_id` and
+// `limit` were not parameters at all: Gin drops unknown query keys silently, so
+// `?def_id=X&limit=200` read as "200 rows of op X" and asked for the last quarter
+// hour of everything. On a quiet system that returns one unrelated row, which
+// looks exactly like "this op has never run" — a reading that produced three wrong
+// conclusions in two days, including a maintenance.window failure count recorded
+// as 3 nights when it was 7 for 7. An answer that states what it looked at cannot
+// be misread as a census.
 func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	sinceStr := c.DefaultQuery("since", "15m")
 	dur, err := parseSinceDuration(sinceStr)
@@ -149,21 +181,65 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid since parameter: "+sinceStr)
 		return
 	}
-
-	if h.opsStore == nil {
-		httputil.RespondWithOK(c, gin.H{"operations": []OperationV2Response{}})
+	// A negative duration puts the window boundary in the FUTURE, which silently
+	// yields a near-empty list plus whatever is still running. Rejecting beats
+	// answering something no caller could mean.
+	if dur < 0 {
+		httputil.RespondWithBadRequest(c, "since must not be negative: "+sinceStr)
 		return
 	}
 
+	// An unparseable or non-positive limit is rejected rather than ignored. Falling
+	// back to the default would repeat the exact bug being fixed: the caller asked
+	// for something specific, got the default, and had no way to tell.
+	limit := timelineDefaultLimit
+	if raw := c.Query("limit"); raw != "" {
+		n, convErr := strconv.Atoi(raw)
+		if convErr != nil || n <= 0 {
+			httputil.RespondWithBadRequest(c, "limit must be a positive integer: "+raw)
+			return
+		}
+		limit = min(n, timelineMaxLimit)
+	}
+
+	defID := c.Query("def_id")
+
 	since := time.Now().UTC().Add(-dur)
-	rows, err := h.opsStore.ListOperationsV2Since(since, 200)
+	scope := gin.H{
+		"since":        sinceStr,
+		"window_start": since.Format(time.RFC3339),
+		"def_id":       defID,
+		"limit":        limit,
+	}
+
+	if h.opsStore == nil {
+		scope["operations"] = []OperationV2Response{}
+		scope["matched"] = 0
+		scope["truncated"] = false
+		httputil.RespondWithOK(c, scope)
+		return
+	}
+
+	rows, err := h.opsStore.ListOperationsV2Since(since, timelineScanBound)
 	if err != nil {
 		httputil.InternalError(c, "failed to list operations", err)
 		return
 	}
 
-	resp := make([]OperationV2Response, 0, len(rows))
+	// matched counts every row in the window that satisfies def_id, BEFORE the
+	// limit is applied, so `truncated` is a fact rather than the usual
+	// len(rows)==limit guess — which cannot tell "exactly limit existed" from
+	// "there were more".
+	matched := 0
+	resp := make([]OperationV2Response, 0, min(len(rows), limit))
 	for _, r := range rows {
+		if defID != "" && r.DefID != defID {
+			continue
+		}
+		matched++
+		if len(resp) >= limit {
+			continue
+		}
 		item := rowToResponse(r, h.displayNameFor(r.DefID), h.notifyLevelFor(r.DefID))
 		if r.Status == "running" && h.registry != nil {
 			if ci := h.registry.GetCurrentItem(r.ID); ci != "" {
@@ -172,7 +248,18 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 		}
 		resp = append(resp, item)
 	}
-	httputil.RespondWithOK(c, gin.H{"operations": resp})
+
+	scope["operations"] = resp
+	scope["matched"] = matched
+	scope["truncated"] = matched > len(resp)
+	// The store itself trims to timelineScanBound after sorting, so a full scan
+	// means `matched` is a FLOOR, not a total, and no "it never happened before X"
+	// claim can rest on it. Saying so is the difference between a bounded answer
+	// and a wrong one.
+	if len(rows) >= timelineScanBound {
+		scope["scan_capped"] = true
+	}
+	httputil.RespondWithOK(c, scope)
 }
 
 // GetOperationV2 implements GET /api/v1/operations/v2/:id.
