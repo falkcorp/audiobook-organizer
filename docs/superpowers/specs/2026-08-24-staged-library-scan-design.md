@@ -1,5 +1,5 @@
 <!-- file: docs/superpowers/specs/2026-08-24-staged-library-scan-design.md -->
-<!-- version: 4.0.0 -->
+<!-- version: 5.0.0 -->
 <!-- guid: c7f76dfd-5447-4c73-a9a6-b77f62db8736 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -268,3 +268,82 @@ marks are existing fields on existing rows.
    scheduled tick is plain incremental and nothing has ever scheduled a full sweep.
 3. Should the incremental interval rise from 360 min while the scan still exceeds
    it, to stop near-continuous scanning in the interim?
+
+---
+
+## 2026-08-24 — item 2 (per-scan concurrency key) is BLOCKED, and why
+
+Measured, not inferred. Three findings, in the order they change the design.
+
+**1. A folder-scoped scan is NOT silently swallowed by a running full scan.**
+`EnqueueOp`'s dedupe (`internal/operations/registry/registry.go:632`) compares the
+*marshalled params byte-for-byte*, not just the def ID. The scheduler enqueues `{}`;
+a folder scan enqueues `{"folder_path":...,"force_update":true}`. Those are unequal,
+so the folder scan **queues a second row** rather than being handed the running scan's
+ID. It is delayed, not dropped. (An earlier draft of this spec assumed the opposite.)
+
+**2. The shared `ConcurrencyKey: "library.scan"` is load-bearing, and splitting it
+reintroduces a known data-loss class.** Dispatcher Gate 3b
+(`internal/operations/registry/dispatcher.go:122`) records the 2026-08-07
+`acoustid.backfill` x `maintenance.repair-transcribe-status` incident: two ops doing
+whole-row read-modify-write on the same rows **silently lose fields**. A full scan
+walks every import path, so a folder scan's scope overlaps it in the normal case, not
+the exceptional one. Giving folder scans their own key would let two scans write the
+same book row concurrently. This is the blocking finding.
+
+**3. Gate 3b cannot be narrowed to rescue option 2.** `Writes []Resource`
+(`internal/operations/registry/types.go:121`) is a **static field on the
+OperationDef**, resolved per-def and not per-invocation
+(`writeSetConflictLocked(row.ID, def.Writes)`). There is no way to declare "this
+invocation touches only book X". A scan-shaped op either declares a coarse write-set
+(always conflicts -> always queues -> no gain over the shared key) or declares nothing
+(no protection at all). The tempting middle path does not exist.
+
+### What this means for the acceptance criterion
+
+The user's criterion was: force a full rescan on a single book and **"then pick it up
+immediately"**. PR1 (#2856) delivers the *precision* half — `MarkNeedsRescan` re-reads
+exactly one book instead of the 1,458 files in `newbooks/audiobooks` — but explicitly
+defers to the next scan tick, up to 6 hours away. It does **not** deliver the
+immediacy half, and finding 2 says the mechanism we were going to use for that is
+unsafe.
+
+Three honest options. This is a user decision, not a design detail:
+
+1. **Accept the delay.** Per-book force lands on the next tick. Zero new risk; the
+   criterion is met in precision but not in latency.
+2. **Fund a bounded single-book re-read path outside `library.scan`.** Answer first:
+   what serializes it against the running scan at book granularity? Finding 3 says the
+   existing write-set gate cannot, so this needs a new mechanism.
+3. **Make the full scan short enough that queueing behind it is fine** — the staged
+   pipeline already designed in this document. This is the root fix; item 2 was only
+   ever a workaround for a 6-hour scan.
+
+### Item 3 (the 6-day age gate) — one finding that decides its shape
+
+**There is no per-book "last scanned at" timestamp.** `ScanCacheEntry`
+(`internal/database/store.go:1140`) carries only `Mtime`, `Size`, `NeedsRescan`; the
+book row carries only `LastScanMtime` / `LastScanSize` / `NeedsRescan`
+(`:323-325`). `LastScan *time.Time` at `:549` belongs to `ImportPath` — it is
+per-import-path, not per-book. So an age gate needs a NEW field, and two consequences
+follow:
+
+- **Deploy herd.** Every existing row reads as "never scanned", passes the age gate,
+  and is re-read on the first tick after deploy — a whole-library re-read on a library
+  that already takes ~4 hours. That is the exact opposite of the intent. The new field
+  needs a backfill or a "treat absent as recent" default, decided deliberately.
+- **Where the timestamp is written matters more than the gate itself.** The existing
+  cache write-back (`internal/scanner/scanner.go:1166`) sits inside
+  `if dbBook, dbErr := store.GetBookByFilePath(...); dbErr == nil && dbBook != nil`,
+  and the nil branch logs nothing. The books the age gate exists to help are exactly
+  the ones whose cache entry is missing — measured 12.8% overall, far worse in the
+  untracked trees — and which therefore get re-read every 6 hours forever. If the age
+  timestamp is written in that same conditional, it will be missing for precisely
+  those books and the gate will do nothing for them. It must be written
+  unconditionally, keyed by file path.
+
+**Predicate shape.** Unchanged files are already skipped today on mtime+size, so an
+OR'd age arm adds nothing there — and OR'ing it naively *breaks* "changed files are
+always processed": a file with a new mtime scanned 2 days ago would start getting
+skipped. The age gate belongs on the **cache-miss** path, not as another arm on the
+unchanged path.
