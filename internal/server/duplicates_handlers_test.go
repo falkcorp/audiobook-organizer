@@ -182,3 +182,27 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 		t.Errorf("primary book-2 missing from affected books %v", affected)
 	}
 }
+
+// TestComputeSeriesNormalizeActions_ReportsAListingFailure pins the difference
+// between "nothing needs normalizing" and "nothing was examined".
+//
+// This used to return a bare nil on a GetAllSeries failure, with no error return
+// to put the failure in and no log. An empty action list is indistinguishable
+// from a clean library, so the operation reported "Series normalization complete,
+// affected_books=0" with status success — and the dry-run PREVIEW showed the same
+// empty, clean-looking list to whoever was deciding whether to approve the run.
+func TestComputeSeriesNormalizeActions_ReportsAListingFailure(t *testing.T) {
+	store := &database.MockStore{}
+	store.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return nil, fmt.Errorf("simulated: store unavailable")
+	}
+
+	actions, err := computeSeriesNormalizeActions(store)
+	if err == nil {
+		t.Fatal("a failed series listing returned nil error; an empty action list then reads " +
+			"as 'the library is already clean' when nothing was examined at all")
+	}
+	if actions != nil {
+		t.Errorf("expected no actions alongside the error, got %d", len(actions))
+	}
+}
