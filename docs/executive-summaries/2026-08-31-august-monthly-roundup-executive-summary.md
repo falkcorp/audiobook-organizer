@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.14.0 -->
+<!-- version: 1.15.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-08-24 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
@@ -950,6 +950,43 @@ distinction matters. As the previous section describes, the nightly maintenance 
 itself was dying on its first task, so nothing scheduled behind it executed at all. A
 scheduler that is not running produces no failures. Silence from it was never evidence
 that anything was well.
+
+## 24. A "Rescan" button that never rescanned anything (Aug 24)
+
+The book page had a button labelled **Rescan Files**. It did not rescan anything. What it
+actually did was re-check how big each file on disk was and correct that number if it had
+drifted — useful, but not what anybody pressing "Rescan" was asking for. Someone who
+noticed a book's title or author was wrong and pressed it would have seen it complete
+successfully and change nothing, with no way to tell why.
+
+There was a second button, for the book's whole folder, that *did* force a genuine re-read.
+Its problem was cost, and the cost was invisible. Folders in this library are not all the
+same size: one of them holds 1,458 files directly. Pressing "rescan this book" could
+therefore re-read 1,458 files, and nothing on screen said so.
+
+Three changes went out together. The mislabelled button is now **Reconcile File Sizes**,
+which is what it does. A new **Force Rescan** re-reads exactly one book — the machinery to
+do that precisely already existed and simply had never been connected to a button. And the
+folder button is now **Rescan Whole Folder**, with its real cost stated when you hover over
+it. The old web address still works and still does the old thing, so anything already
+calling it keeps behaving the same way rather than silently starting to do something else.
+
+One honest limitation, recorded rather than papered over. "Force Rescan" is precise but not
+immediate: it marks the book and the next scheduled scan picks it up, which can be up to six
+hours later. The obvious way to make it immediate — letting a small targeted scan run
+alongside the big one — turns out to be unsafe for a reason the project already learned the
+hard way in early August: two jobs writing the same records at the same time silently lose
+fields. So rather than ship something that looked faster and quietly corrupted data, the
+three real options were written down for a decision. The most promising one is not a
+workaround at all: make the full scan fast enough that waiting for it stops mattering.
+
+Alongside this, the scan gained the ability to say how much work it skipped. It has always
+avoided re-reading files that have not changed, but it never counted or reported that, so a
+scan that skipped everything and a scan that skipped nothing produced identical logs. It now
+reports the proportion skipped and, for the files it did re-read, which of five reasons
+applied. That distinction matters: "the file changed" is the scan working correctly, while
+"we have no record of this file" is a file being re-read on every single run forever. Those
+need different fixes, and until now there was no way to tell which one you were looking at.
 
 ## Themes worth carrying into next month
 
