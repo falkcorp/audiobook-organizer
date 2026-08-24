@@ -1,5 +1,5 @@
 // file: internal/dedup/store.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
 // last-edited: 2026-08-23
 
@@ -82,7 +82,11 @@ type dedupSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetSeriesByID(id int) (*database.Series, error)
 	// GetBooksBySeriesIDCore is the LISTING view (non-primary versions
-	// excluded). Only enrichSeries uses it — a truncated display preview.
+	// excluded), and is correct ONLY for display. Today its single caller in
+	// this package is enrichSeries, a truncated preview card -- but do not
+	// rely on that count staying true. The rule is what keeps this safe:
+	// anything that WRITES off the result -- repointing books, or deleting
+	// the series afterwards -- must use AllVersions below instead.
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
 	// GetBooksBySeriesIDAllVersions is the COMPLETE set. Every path that
 	// repoints books before DeleteSeries must use this one; a non-primary

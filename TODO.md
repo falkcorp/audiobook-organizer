@@ -4619,7 +4619,7 @@ returning no rows (its cited mechanism: the store treats limit 0 as "nothing",
       preview rather than applying. Safest probe: `scan-composer-tags` (scan
       only). Do **not** probe with `cleanup-series` or `cleanup-empty-folders`.
 
-- [ ] **`dedup.series-dedup` still has no dry-run parameter at all.**
+- [x] **`dedup.series-dedup` still has no dry-run parameter at all.**
       `internal/dedup/series_dedup.go:266` `DedupSeries` applies on every
       invocation, and its merge loop reassigns books via the *listing* getter
       `GetBooksBySeriesIDCore` (which filters trashed and non-primary rows)
@@ -4628,6 +4628,12 @@ returning no rows (its cited mechanism: the store treats limit 0 as "nothing",
       operations), so there is no existing damage; it is a latent hazard only.
       Give it a dry-run parameter and switch it to the all-versions getter
       before anything wires it to a trigger.
+      **Both halves done.** Dry-run by TASK-043; the all-versions getter by
+      TASK-029 (#2821), which added `GetBooksBySeriesIDAllVersions` and moved
+      the two reassign-before-delete loops plus the author-relink pass onto it.
+      The `DeleteSeries` in `MergeSeries` is still unguarded by a ref count
+      (`DedupSeries` has one) — tracked by the "Two more series deleters" item
+      below, not closed here.
 
 - [ ] **Consider making the resume path's fallback observable.** When no saved
       params exist, `resumeLegacyOp` now logs at info and resumes with the
