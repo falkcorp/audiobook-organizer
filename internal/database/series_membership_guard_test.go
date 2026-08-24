@@ -1,5 +1,5 @@
 // file: internal/database/series_membership_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b7f9c02-8e31-4d6a-b5f8-1c93a70de244
 // last-edited: 2026-08-24
 
@@ -103,14 +103,18 @@ func TestGetBooksBySeriesIDAllVersions_FallsThroughWithTheCompleteAnswer(t *test
 	got, err := p.GetBooksBySeriesIDAllVersions(fx.seriesID)
 	require.NoError(t, err, "a tainted memdb must not stall the merge -- it must fall through")
 
-	want, err := p.getBooksBySeriesIDFull(fx.seriesID, false)
-	require.NoError(t, err)
-	wantIDs := make([]string, 0, len(want))
-	for i := range want {
-		wantIDs = append(wantIDs, want[i].ID)
-	}
-	require.Equal(t, wantIDs, seriesIDsOf(got),
-		"the fall-through must return the authoritative Pebble answer, in Pebble's order")
+	// The expected set is spelled out from the fixture, NOT read back from
+	// getBooksBySeriesIDFull. Comparing against that function would be
+	// comparing the fall-through to its own callee: if the scan silently
+	// dropped a row, the expectation would drop it identically and this would
+	// pass while its failure message claimed to have verified authoritativeness.
+	// That tautology shipped in v1.0.0 of this file and is exactly the "passes
+	// for the wrong reason" shape these tests were written to call out
+	// elsewhere.
+	wantIDs := append(append([]string{}, fx.wantOrderedIDs...), fx.nonPrimaryBookID)
+	require.ElementsMatch(t, wantIDs, seriesIDsOf(got),
+		"the fall-through must return every live book in the series -- the complete "+
+			"set the merge has to repoint, named independently of the scan under test")
 
 	require.Contains(t, seriesIDsOf(got), dropped,
 		"the book memdb lost is exactly the one the merge would fail to repoint before "+
@@ -177,8 +181,10 @@ func TestGetBooksBySeriesIDAllVersions_HealthyMemdbIsStillServedFromMemdb(t *tes
 
 	got, err := p.mem().GetBooksBySeriesIDAllVersions(fx.seriesID, 0, 0)
 	require.NoError(t, err, "an intact memdb must answer; a guard that always refuses is not safety")
-	require.Len(t, got, len(fx.wantOrderedIDs)+1,
-		"every live book in the series, non-primary version included")
+	require.ElementsMatch(t, append(append([]string{}, fx.wantOrderedIDs...), fx.nonPrimaryBookID),
+		seriesIDsOf(got),
+		"every live book in the series, non-primary version included -- named, not counted, "+
+			"so a fixture change cannot quietly re-satisfy a length assertion")
 
 	viaStore, err := p.GetBooksBySeriesIDAllVersions(fx.seriesID)
 	require.NoError(t, err)
@@ -215,7 +221,8 @@ func TestSeriesMembershipGuard_TaintFromAnUnrelatedTableStillBlocksTheMergeGette
 
 	got, sErr := p.GetBooksBySeriesIDAllVersions(fx.seriesID)
 	require.NoError(t, sErr)
-	require.Len(t, got, len(fx.wantOrderedIDs)+1,
+	require.ElementsMatch(t, append(append([]string{}, fx.wantOrderedIDs...), fx.nonPrimaryBookID),
+		seriesIDsOf(got),
 		"and the wrapper still returns the complete set from Pebble")
 }
 
@@ -224,4 +231,84 @@ func TestSeriesMembershipGuard_TaintFromAnUnrelatedTableStillBlocksTheMergeGette
 func mustSeriesMergeGetterErr(m *MemStore, seriesID int) error {
 	_, err := m.GetBooksBySeriesIDAllVersions(seriesID, 0, 0)
 	return err
+}
+
+// --- the Pebble arm ------------------------------------------------------
+//
+// Everything above degrades memdb and asserts the fall-through repairs it.
+// That covers the wrapper. It says nothing about whether the thing it falls
+// through TO is complete, and the four tests above cannot: degradeSeriesMemdb
+// leaves the Pebble row perfectly readable, so the scan always succeeds.
+//
+// The two tests below attack the fall-through target itself. Both were written
+// against the unfixed scan and both failed there, which is the only reason to
+// believe they reach the path.
+
+// TestGetBooksBySeriesIDAllVersions_RefusesRatherThanSkipAnUndecodableRow
+// closes the hole that made the guard partly decorative.
+//
+// requireTablesComplete fires on three triggers, and one of them is memdb
+// warmup FAILING TO DECODE a book row (memdb_warmup.go). On that trigger the
+// old fall-through re-read the same corrupt value from Pebble, hit
+// json.Unmarshal, and `continue`d -- returning a SHORT list with a nil error.
+// So the merge repointed only what it was handed and DeleteSeries ran anyway:
+// the precise failure the guard was built to prevent, reached THROUGH the
+// repair path, while the log line claimed it had fallen through to safety.
+//
+// series_bookref.go already made this call for the ref counter and wrote down
+// why: undercounting is fail-OPEN for every caller, because the delete proceeds
+// and strands the very row that could not be read. The membership getter
+// authorizes the same delete and gets the same answer.
+func TestGetBooksBySeriesIDAllVersions_RefusesRatherThanSkipAnUndecodableRow(t *testing.T) {
+	p, fx, _ := setupDegradedSeriesFixture(t)
+
+	// Corrupt the Pebble row for a book that IS in the series, so a scan that
+	// skips it returns a set that is short by exactly one live member.
+	corrupted := fx.wantOrderedIDs[1]
+	require.NoError(t, p.db.Set([]byte("book:"+corrupted), []byte("{not json"), nil))
+
+	_, err := p.GetBooksBySeriesIDAllVersions(fx.seriesID)
+	require.Error(t, err,
+		"a row the scan cannot decode may hold this series ID; skipping it hands the "+
+			"merge a short list and the series is deleted out from under that book")
+	require.Contains(t, err.Error(), corrupted,
+		"the error must name the row, or an operator cannot act on it")
+}
+
+// TestGetBooksBySeriesIDAllVersions_SeesALetterLeadingBookID covers the same
+// short-answer bug arriving through the iterator BOUNDS rather than the decode.
+//
+// The scan ran over ["book:0", "book:;") -- a byte range that admits only
+// '0'-'9' and ':' as the first character after the prefix. Book IDs are ULIDs
+// and today's ULIDs start with a digit, so this was latent. But CreateBook
+// mints a ULID only when book.ID == "", so a caller-supplied letter-leading ID
+// is constructible, sorts above the upper bound, and is invisible to the scan.
+//
+// Invisible to a LISTING is a missing row. Invisible to the MERGE getter is a
+// stranded book. Identical reasoning to the versionGroupBackfillKey v2 -> v3
+// bump (pebble_store_versiongroup_backfill.go), which found the same bounds bug
+// in the same key family one day earlier and fixed it the same way.
+func TestGetBooksBySeriesIDAllVersions_SeesALetterLeadingBookID(t *testing.T) {
+	p, fx, _ := setupDegradedSeriesFixture(t)
+
+	yes := true
+	seq := 9
+	// CreateBook honours a caller-supplied ID; this is the constructible case.
+	letterLed, err := p.CreateBook(&Book{
+		ID:               "ZZTOP000000000000000000000",
+		Title:            "Letter Leading ID",
+		FilePath:         "/lib/series/Letter Leading ID",
+		SeriesID:         &fx.seriesID,
+		SeriesSequence:   &seq,
+		IsPrimaryVersion: &yes,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ZZTOP000000000000000000000", letterLed.ID,
+		"fixture check: CreateBook must not have re-minted the ID, or this tests nothing")
+
+	got, err := p.GetBooksBySeriesIDAllVersions(fx.seriesID)
+	require.NoError(t, err)
+	require.Contains(t, seriesIDsOf(got), letterLed.ID,
+		"a book the merge getter cannot see is a book the merge will not repoint "+
+			"before deleting the series")
 }

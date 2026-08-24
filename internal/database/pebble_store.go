@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.138.0
+// version: 1.139.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-24
 
@@ -1846,10 +1846,29 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 // A memdb known to be missing rows is NOT consulted here, and unlike the
 // listing getter above this one repairs itself rather than refusing: memdb
 // loss is recoverable because the authoritative Pebble scan is right there, and
-// aborting a merge that could be completed correctly is the worse outcome. Same
-// shape as GetAllSeriesBookRefCounts in series_bookref.go — including the
-// single p.mem() load, so a concurrent Reset cannot pair one MemStore's refusal
-// with its replacement's (empty) loss map in the log line.
+// aborting a merge that could be completed correctly is the worse outcome.
+//
+// Two properties are shared with GetAllSeriesBookRefCounts in series_bookref.go
+// and are worth naming individually rather than claiming "same shape", because
+// an unqualified parity claim here was FALSE for a day: the fall-through target
+// had none of that function's scan hardening until 2026-08-24.
+//   - The single p.mem() load, so a concurrent Reset cannot pair one MemStore's
+//     refusal with its replacement's (empty) loss map in the log line.
+//   - Fail-CLOSED scanning in getBooksBySeriesIDFull below: an undecodable row,
+//     a truncated iteration, or an out-of-bounds key can no longer shorten the
+//     answer silently.
+//
+// ⚠️ Cost, stated because the reference's cost note does NOT transfer. That
+// function justifies the sticky-lostRows expense with "no caller counts inside
+// a loop." Four callers of THIS getter do exactly that — cleanup_series.go:105,
+// duplicates_helpers.go:291, series_dedup.go:419 and :634 all call it per
+// series inside a loop, and none hoists or caches. Once memdb is tainted, each
+// iteration costs a full "book:" prefix scan, a range memdb_warmup.go measures
+// at ~7.5 keys per admitted book row. On a 41k-book library that is
+// O(series x 7.5 x books) single-threaded on the nightly maintenance window.
+// Correctness is still worth it — a stranded book is unrecoverable and a slow
+// window is not — but this is a real standing cost, not a free guard, and the
+// per-series hoist is tracked in todo.d rather than pretended away.
 //
 // This is the only membership getter with the guard, and that is deliberate:
 // see MemStore.GetBooksBySeriesIDAllVersions for why pushing it down to the
@@ -1901,27 +1920,60 @@ func (p *PebbleStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, e
 // sweeping the other dual-dispatch store methods for the defect shape fixed in
 // the author getters. See
 // internal/database/series_getter_conformance_test.go.
+//
+// ⚠️ This scan is FAIL-CLOSED as of 2026-08-24, and that is a deliberate
+// change of policy for the listing arm too. It became the fall-through target
+// for GetBooksBySeriesIDAllVersions when the memdb guard landed above, which
+// silently promoted it from "a listing scan" to "the scan a DeleteSeries is
+// authorized against" — and every safety property written about the old role
+// stopped covering the new one. A short answer here is fail-OPEN: the merge
+// repoints what it was handed and deletes the series, stranding whatever the
+// scan could not see. Three separate ways it could answer short, all now
+// closed, all three demonstrated by tests that failed before the fix:
+//
+//  1. An undecodable row was skipped. That is the SAME condition that trips
+//     the memdb guard (memdb_warmup.go decodes these identical bytes), so the
+//     repair path was blind to exactly one of the three triggers that send
+//     callers down it, while logging that it had fallen through to safety.
+//     series_bookref.go made this call first and wrote down why: undercounting
+//     is fail-open, because the delete proceeds and strands the very row that
+//     could not be read.
+//  2. The bounds were ["book:0", "book:;"), which admit only '0'-'9' and ':'
+//     as the first byte after the prefix. Today's ULIDs start with a digit so
+//     this was latent, but CreateBook mints a ULID only when book.ID == "" —
+//     a caller-supplied letter-leading ID sorts above the upper bound and was
+//     invisible. Identical bug, identical fix, and found one day earlier in
+//     this same key family: see the v2 -> v3 note on versionGroupBackfillKey.
+//  3. iter.Error() was never checked, so a truncated scan and a completed one
+//     were indistinguishable and both returned a nil error.
+//
+// The structural one-colon filter is what makes (2) safe: the true prefix
+// range admits book:path:, book:hash:, book:versiongroup: and friends, whose
+// values are bare IDs rather than book JSON. Widening the bounds WITHOUT that
+// filter would feed non-JSON values to a now-fatal unmarshal. The two edits are
+// one change and must not be separated.
 func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int, primaryOnly bool) ([]Book, error) {
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
+		LowerBound: []byte("book:"),
+		UpperBound: []byte("book;"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
+	defer func() { _ = iter.Close() }()
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		// Skip non-primary book keys (path index etc.)
-		if strings.Contains(key, ":path:") {
+		// Primary rows are exactly "book:<id>". Every secondary index carries
+		// a second colon, and their values are bare book IDs, not book JSON.
+		if strings.Count(key, ":") != 1 {
 			continue
 		}
 
 		var book Book
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+			return nil, fmt.Errorf("books by series scan: undecodable book row %q: %w", key, err)
 		}
 		if book.SeriesID == nil || *book.SeriesID != seriesID {
 			continue
@@ -1933,6 +1985,14 @@ func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int, primaryOnly bool) ([]
 			continue
 		}
 		books = append(books, book)
+	}
+
+	// The loop exits on end-of-range OR on an iteration error, and nothing
+	// distinguishes them without this. Returning a truncated list with a nil
+	// error tells a merge "these are all the books in the series" — the
+	// permissive answer — on the strength of a scan that stopped early.
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("books by series scan truncated, refusing to answer from a partial list: %w", err)
 	}
 
 	// Shared with the memdb walk so the two implementations of this method
