@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.90.1
+// version: 2.91.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-08-22
 
@@ -830,6 +830,12 @@ type BookFile struct {
 	BitDepth         int               `json:"bit_depth,omitempty"`
 	FileHash         string            `json:"file_hash,omitempty"`
 	OriginalFileHash string            `json:"original_file_hash,omitempty"`
+	// Scan is the staged library scan's view of this file's completeness.
+	// omitzero, never omitempty: v1 and v2 disagree about what omitempty means
+	// for bools, ints and empty structs, so omitempty would change this row's
+	// shape when the store moves to encoding/json/v2. See
+	// internal/database/scan_state.go for the measured table.
+	Scan ScanState `json:"scan,omitzero"`
 	// PostMetadataHash is the SHA-256 of the file immediately after a metadata
 	// tag write. It differs from OriginalFileHash because tag writes add/change
 	// bytes in the header. Store it so pre-write identity is always recoverable.
