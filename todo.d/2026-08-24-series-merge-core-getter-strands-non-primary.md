@@ -35,11 +35,27 @@
       `docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md` §7.
       Raised while reviewing PR #2821 (TASK-029).
 
-- [ ] **SERIES-MERGE-TRASHED-ROWS-RESIDUAL** All three paths fixed by #2825/#2828 still
-      strand **trashed** rows. Both series getters exclude soft-deleted books by
-      design, so a series holding one live book and one trashed book is deleted
-      with the trashed row still pointing at it — restore it from the trash later
-      and it has no series. The tooling to close this already exists and is
+- [ ] **SERIES-MERGE-UNGUARDED-DENOMINATOR** (was `…-TRASHED-ROWS-RESIDUAL`; renamed
+      because that name understated it by a lot). Every guard in #2825/#2828 counts
+      against **what the membership getter returned**, and that getter has no
+      completeness guard of its own — `pebble_store.go`'s
+      `GetBooksBySeriesIDAllVersions` reads memdb unconditionally when warm, with no
+      `requireTablesComplete` check. So the guard's denominator is only as complete
+      as memdb is. Two populations fall outside it:
+      1. **Trashed rows.** Both getters exclude soft-deleted books by design, so a
+         series holding one live and one trashed book is deleted with the trashed
+         row still pointing at it. Latent — it bites when the book is restored.
+      2. 🔴 **Rows memdb has LOST.** `memdb_integrity.go` documents four ways a book
+         vanishes from memdb while its Pebble row survives — including a runtime
+         `applyMemSync` abort, which needs no restart. That book is a **live,
+         primary, untrashed** row. The getter never returns it, so `repointFailed`
+         stays 0, the delete proceeds, `totalMerged++`, and the row is stranded
+         **immediately** with no error and no counter.
+      (2) is the same shape as the `movedAll` defect #2825 deleted from
+      `series_denumber_op.go`: a guard whose sample space is the filtered getter's
+      output, so the rows the bug lives on can never flip it. #2828 reproduced it
+      one layer up.
+      The tooling to close this already exists and is
       already used **in the same function**: `executeSeriesPrune`'s phase 2
       (`internal/server/duplicates_helpers.go`) obtains
       `database.AsSeriesBookRefStore(store)` and fails closed, with a comment
@@ -47,10 +63,15 @@
       rediscovering"* — while phase 1, sixty lines above, deletes with no such
       guard. `internal/maintenance/jobs/cleanup_series.go` uses the one-line
       `database.SeriesRefCounts(store)` wrapper for exactly this.
-      ⚠️ **Not** done in #2825 on purpose: gating phase 1 on the unfiltered count
-      makes the prune **refuse merges it currently completes**, which is the same
-      class of production-data behaviour change #2826 is being held for. Decide
-      both together or neither.
+      ⚠️ Held out of #2825/#2828 on purpose: gating phase 1 on the unfiltered count
+      makes the prune **refuse merges it currently completes**, the same class of
+      production-data change #2826 was held for — and #2826 has since been merged,
+      so that precedent now exists.
+      **Argument for doing (2) now rather than bundling it:** the two halves are
+      one code change but not one decision. Refusing on a *trashed* row changes
+      what a HEALTHY run does. Refusing on a row memdb has lost only fires when the
+      store is already known-degraded, and it prevents immediate stranding of a
+      live book. If the bundle stalls, (2) is worth splitting out on its own.
 
 - [ ] **SERIES-NORMALIZE-WRITEBACK-SPLIT** `executeSeriesNormalizeCore` returns
       ONE list that feeds two different consumers with two different policies:

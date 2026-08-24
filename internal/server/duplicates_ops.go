@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -767,11 +767,24 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 				}
 			}
 
+			// A partial failure must NOT discard the work that succeeded.
+			//
+			// This used to return immediately, skipping organize and write-back for
+			// EVERY book in the run. The renames and merges have already committed
+			// by the time an error surfaces here, so a re-run finds no contaminated
+			// names, computes no actions, and never organizes those files -- the
+			// failure is permanent rather than retryable.
+			//
+			// Organizing what was collected and THEN reporting the failure leaves
+			// the files consistent with the series rows that did change. The op
+			// still ends "failed", so the error is not swallowed.
 			affectedBookIDs, opErr := executeSeriesNormalizeCore(ctx, store, enqueueWB)
 			if opErr != nil {
-				op.SetStatus("failed")
-				logging.Error(ctx, "series normalization failed", "err", opErr)
-				return opErr
+				logging.Error(ctx, "series normalization reported errors; organizing the books it did collect before failing the operation",
+					"err", opErr, "affected_books", len(affectedBookIDs))
+				_ = progress.Log("warn", fmt.Sprintf(
+					"Series normalization hit errors (%v); still organizing the %d books it collected so their files match the series rows that changed",
+					opErr, len(affectedBookIDs)), nil)
 			}
 
 			for _, bookID := range affectedBookIDs {
@@ -804,6 +817,18 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 					logging.Warn(ctx, "tag write-back incomplete", "err", wbErr)
 					_ = progress.Log("warn", fmt.Sprintf("tag write-back incomplete: %v", wbErr), nil)
 				}
+			}
+
+			// Report the failure now that the recoverable work is done. The status
+			// is still "failed" -- deferring it bought file consistency, not
+			// silence.
+			if opErr != nil {
+				op.SetStatus("failed")
+				logging.Error(ctx, "series normalization failed", "err", opErr, "affected_books", len(affectedBookIDs))
+				if s.activityWriter != nil && opID != "" {
+					activity.FlushOperation(s.activityWriter, opID)
+				}
+				return opErr
 			}
 
 			op.SetStatus("success")
