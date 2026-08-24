@@ -1,5 +1,5 @@
 // file: internal/server/series_prune_phase2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f3d21c6-47ba-4e09-95d1-6c027ea3b4d8
 // last-edited: 2026-08-24
 
@@ -64,7 +64,7 @@ func TestExecuteSeriesPrune_Phase2DoesNotUndoPhase1Refusal(t *testing.T) {
 	)
 
 	s := newSeriesPruneServer(t)
-	mock := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
+	mock, _ := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
 
 	// Series 3 joins the list but belongs to no group, so phase 1 ignores it and
 	// only phase 2 can remove it.
@@ -104,8 +104,12 @@ func TestExecuteSeriesPrune_Phase2DoesNotUndoPhase1Refusal(t *testing.T) {
 	}
 
 	store := seriesLiveRefStore{MockStore: mock, assignments: assignments}
-	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err != nil {
-		t.Fatalf("executeSeriesPrune: %v", err)
+	// Non-nil by design: this fixture drives phase 1 into a refusal, and a refusal
+	// is now reported as a failure so the "re-run after resolving" instruction
+	// reaches an operator. What matters to THIS test is what phase 2 did next,
+	// asserted below.
+	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err == nil {
+		t.Fatal("expected the phase-1 refusal to be reported as an error")
 	}
 
 	// Positive control. Without this, a phase 2 that silently did nothing would

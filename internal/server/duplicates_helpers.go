@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-08-24
 //
@@ -34,6 +34,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -113,8 +114,52 @@ func (s *Server) filterReviewedAuthorGroups(groups []dedup.AuthorDedupGroup) []d
 }
 
 // executeSeriesPrune performs the actual series prune logic (used by both HTTP handler and scheduler).
-func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore, progress operations.ProgressReporter, operationID string) error {
+//
+// Counters and the cache invalidation are hoisted to the top and deferred on
+// purpose. This function has six exits — two ctx cancellations, two store
+// failures, the fail-closed refCounter guard, and the normal end — and every one
+// of them can be reached AFTER phase 1 has already repointed books. Invalidating
+// only at the normal exit left the other five serving pre-merge membership under
+// the cached list's 24-hour TTL, which is the 2026-08-14 production symptom
+// quoted below reached from a third direction. A defer is the only form that
+// cannot be bypassed by the next early return somebody adds.
+func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore, progress operations.ProgressReporter, operationID string) (err error) {
 	_ = progress.Log("info", "Starting series auto-prune...", nil)
+
+	// Declared before the first exit so the deferred invalidation can see them.
+	totalMerged := 0
+	orphansDeleted := 0
+	// Books actually repointed, counted separately from series deleted.
+	//
+	// These used to be the same thing: a merge either repointed everything and
+	// deleted the series, or errored. Now a merge can repoint some books and then
+	// REFUSE the delete, which changes book→series assignments while leaving
+	// totalMerged at zero.
+	booksRepointed := 0
+	var mergeErrors []string
+
+	// Drop the cached series list, but only when this run actually changed
+	// something.
+	//
+	// The cache holds a 24-hour TTL and is warmed at startup, and until 2026-08-14
+	// it was invalidated only by the interactive entities API — so a prune that
+	// merged and deleted correctly left /api/v1/series serving the pre-prune list,
+	// which is indistinguishable from a prune that did nothing. Measured on
+	// production: "17 duplicates merged, 326 orphans deleted, 0 errors" followed by
+	// a series list still reporting all 14,629 rows.
+	//
+	// A run that changed nothing must NOT invalidate: dropping a warm cache costs a
+	// full recount for no reason. Same rule the author-conjunction repair follows
+	// (658d91a2). "Changed nothing" is why booksRepointed is in the predicate and
+	// not just rows removed — see its declaration above.
+	defer func() {
+		if totalMerged+orphansDeleted > 0 || booksRepointed > 0 {
+			s.InvalidateSeriesCache()
+			_ = progress.Log("info", fmt.Sprintf(
+				"Invalidated the cached series list (%d rows removed, %d books repointed)",
+				totalMerged+orphansDeleted, booksRepointed), nil)
+		}
+	}()
 
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
@@ -140,17 +185,8 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		groups[key] = append(groups[key], s)
 	}
 
-	// Phase 1: Merge duplicates
-	totalMerged := 0
-	// Books actually repointed, counted separately from series deleted.
-	//
-	// These used to be the same thing: a merge either repointed everything and
-	// deleted the series, or errored. Now a merge can repoint some books and then
-	// REFUSE the delete, which changes book→series assignments while leaving
-	// totalMerged at zero. The cached series list has to be dropped for that run
-	// too — see the invalidation at the end of this function.
-	booksRepointed := 0
-	var mergeErrors []string
+	// Phase 1: Merge duplicates. Counters are declared at the top of the function
+	// so the deferred cache invalidation can observe them on every exit path.
 	dupGroupCount := 0
 
 	for _, group := range groups {
@@ -166,6 +202,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		// Pick canonical: most books, then lowest ID
 		canonicalIdx := 0
 		canonicalBookCount := 0
+		voteFailed := false
 		for i, s := range group {
 			// Core is right here: this is candidate SELECTION, picking which of
 			// several duplicate series survives. Counting alternate rips would let
@@ -174,19 +211,34 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			// different roles and that is deliberate.
 			books, err := store.GetBooksBySeriesIDCore(s.ID)
 			if err != nil {
-				// Silent before. A series whose count fails to load is treated as
-				// having zero books and quietly loses the vote, so the error decides
-				// which series gets DELETED and leaves no trace of having done so.
+				// A failed count DISQUALIFIES the whole group.
+				//
+				// Recording the error and carrying on was not enough. A series whose
+				// count fails to load counts as zero books, so it loses the vote to any
+				// sibling — and the loser is then DELETED. One transient read error
+				// could make a 400-book series lose to a 2-book typo of itself: the
+				// books survive (they get repointed) but the canonical row, its ID and
+				// every external reference to it are gone, and reversing it means
+				// hand-reading the OperationChange ledger.
+				//
+				// Skipping the group costs one deferred merge. Getting the vote wrong
+				// costs a row that cannot be recovered from the summary.
 				mergeErrors = append(mergeErrors, fmt.Sprintf(
-					"failed to count books for series %d (%q) while picking the canonical series; "+
-						"it is being treated as empty and will lose the vote: %v", s.ID, s.Name, err))
-				continue
+					"failed to count books for series %d (%q) while picking which of %d duplicate "+
+						"series to keep; REFUSING to merge this group, because an unreadable count "+
+						"would silently lose the vote and get the series deleted: %v",
+					s.ID, s.Name, len(group), err))
+				voteFailed = true
+				break
 			}
 			bc := len(books)
 			if bc > canonicalBookCount || (bc == canonicalBookCount && s.ID < group[canonicalIdx].ID) {
 				canonicalIdx = i
 				canonicalBookCount = bc
 			}
+		}
+		if voteFailed {
+			continue
 		}
 		keepID := group[canonicalIdx].ID
 
@@ -301,7 +353,6 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// The reference counts are computed ONCE for the whole library rather than
 	// per series: it turns 14,626 scans into one, and more importantly it is the
 	// only form in which "referenced by nothing" is actually answerable.
-	orphansDeleted := 0
 	refCounter := database.AsSeriesBookRefStore(store)
 	if refCounter == nil {
 		// Deliberately fatal. Falling back to the filtered counter is precisely
@@ -320,7 +371,16 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// Re-fetch series to account for merges
 	refreshedSeries, err := store.GetAllSeries()
 	if err != nil {
-		_ = progress.Log("warn", fmt.Sprintf("Failed to refresh series list: %v", err), nil)
+		// Recorded as an error, not just logged. This skips the ENTIRE orphan
+		// sweep, and without an entry in mergeErrors the run still reported
+		// "0 errors" — a false clean bill of health on the one phase whose job is
+		// finding stale rows. The two failures eight lines above (refCounter nil,
+		// GetAllSeriesBookRefCounts failing) are hard returns; this one was the
+		// odd branch out.
+		mergeErrors = append(mergeErrors, fmt.Sprintf(
+			"failed to refresh the series list; the orphan sweep was SKIPPED entirely "+
+				"and no orphan count in this run's summary is meaningful: %v", err))
+		_ = progress.Log("warn", fmt.Sprintf("Failed to refresh series list, skipping orphan sweep: %v", err), nil)
 	} else {
 		for _, ser := range refreshedSeries {
 			if ctx.Err() != nil {
@@ -362,8 +422,15 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			NewValue:    resultMsg,
 		})
 	}
+	// Capped at ten in the message so a run with thousands of failures does not
+	// produce an unreadable error string; the count above it is the complete
+	// figure, and every entry is in the operation log.
+	errDetail := ""
 	if len(mergeErrors) > 0 {
-		errDetail := strings.Join(mergeErrors[:min(len(mergeErrors), 10)], "; ")
+		errDetail = strings.Join(mergeErrors[:min(len(mergeErrors), 10)], "; ")
+		if len(mergeErrors) > 10 {
+			errDetail += fmt.Sprintf(" (and %d more)", len(mergeErrors)-10)
+		}
 		_ = progress.Log("warn", fmt.Sprintf("Errors: %s", errDetail), nil)
 	}
 	_ = progress.UpdateProgress(totalSteps, totalSteps, fmt.Sprintf("%s (%d/%d 100.00%%)", resultMsg, totalSteps, totalSteps))
@@ -371,31 +438,30 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	if s.dedupCache != nil {
 		s.dedupCache.InvalidateAll()
 	}
+	// The cached series list is dropped by the deferred invalidation at the top of
+	// this function, so that every exit path gets it and not just this one.
 
-	// Drop the cached series list, but only when this run actually removed rows.
-	// The cache holds a 24-hour TTL and is warmed at startup, and until now it
-	// was invalidated only by the interactive entities API — so a prune that
-	// merged and deleted correctly left /api/v1/series serving the pre-prune
-	// list, which is indistinguishable from a prune that did nothing. Measured
-	// on production 2026-08-14: "17 duplicates merged, 326 orphans deleted, 0
-	// errors" followed by a series list still reporting all 14,629 rows.
+	// Report the errors as a FAILURE, not just as a log line.
 	//
-	// A run that cleaned nothing must NOT invalidate: it changed nothing, and
-	// dropping a warm cache costs a full recount for no reason. Same rule the
-	// author-conjunction repair follows (658d91a2).
+	// Until 2026-08-24 this was an unconditional `return nil`, so mergeErrors —
+	// every hydrate failure, every refused delete, every skipped orphan sweep —
+	// reached the operator only as a warn line truncated to ten entries. The caller
+	// (duplicates_ops.go) read the nil, set status "success" and emitted "Series
+	// prune completed"; the nightly maintenance job did the same.
 	//
-	// "Cleaned nothing" used to be the same as "changed nothing", because a merge
-	// either finished and deleted the series or errored out. Since phase 1 can now
-	// repoint books and then REFUSE the delete, a run can change every book's
-	// series while removing no rows at all — totalCleaned would be 0 and the
-	// cached list would keep serving the old membership under its 24-hour TTL.
-	// That is the exact 2026-08-14 symptom above, reached from the other side.
-	// booksRepointed is what makes the predicate true again.
-	if totalCleaned > 0 || booksRepointed > 0 {
-		s.InvalidateSeriesCache()
-		_ = progress.Log("info", fmt.Sprintf(
-			"Invalidated the cached series list (%d rows removed, %d books repointed)",
-			totalCleaned, booksRepointed), nil)
+	// That made the fail-closed refusal added in #2828 self-defeating. Its whole
+	// purpose is to stop a merge deleting a series whose books could not all be
+	// moved, and its message ends "Re-run after resolving the errors above" — an
+	// instruction delivered to a run that reported itself green, so nobody re-ran
+	// it. The books stay split across both series rows indefinitely.
+	//
+	// This is the same predicate mistake the cache invalidation had: repoint-then-
+	// refuse is an outcome class that did not exist when these conditions were
+	// written, and it has to be taught to every condition that consumes the same
+	// facts, not just the first one noticed.
+	if len(mergeErrors) > 0 {
+		return fmt.Errorf("series prune finished with %d error(s), %d series merged, %d orphans deleted, %d books repointed: %s",
+			len(mergeErrors), totalMerged, orphansDeleted, booksRepointed, errDetail)
 	}
 
 	return nil
@@ -423,10 +489,18 @@ type seriesNormalizePreviewResult struct {
 // computeSeriesNormalizeActions iterates all series, strips contamination from
 // each name, and returns the list of rename / merge_into / flag actions that
 // would be taken by a full normalize run. No writes are performed.
-func computeSeriesNormalizeActions(store seriesMergeStore) []seriesNormalizeAction {
+//
+// Returns an error rather than swallowing one. This used to be `return nil` on a
+// GetAllSeries failure, with no error return to put it in and no log: an empty
+// action list is indistinguishable from "the library is already clean", so a
+// store failure made the operation report "Series normalization complete,
+// affected_books=0" with status success. The same swallow zeroed the dry-run
+// PREVIEW, so the operator's pre-approval check also showed a clean, empty list —
+// nothing had been examined in either case.
+func computeSeriesNormalizeActions(store seriesMergeStore) ([]seriesNormalizeAction, error) {
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to list series: %w", err)
 	}
 
 	type groupKey struct {
@@ -484,7 +558,7 @@ func computeSeriesNormalizeActions(store seriesMergeStore) []seriesNormalizeActi
 			})
 		}
 	}
-	return actions
+	return actions, nil
 }
 
 // buildSeriesNormalizePreview computes the dry-run normalize actions over store
@@ -493,7 +567,17 @@ func computeSeriesNormalizeActions(store seriesMergeStore) []seriesNormalizeActi
 // the identical payload through an injected closure (it cannot reference the
 // unexported seriesNormalizeAction / seriesNormalizePreviewResult types).
 func buildSeriesNormalizePreview(store seriesMergeStore) seriesNormalizePreviewResult {
-	actions := computeSeriesNormalizeActions(store)
+	// A failed listing yields an empty preview, which reads as "nothing to do" to
+	// an operator deciding whether to approve the run. The error is logged rather
+	// than returned because this builds a payload for a dry-run view with no error
+	// channel; SERIES-NORMALIZE-PREVIEW-SWALLOWS-ERROR in todo.d tracks giving it
+	// one, which needs a handler signature change.
+	actions, err := computeSeriesNormalizeActions(store)
+	if err != nil {
+		logging.Error(context.Background(),
+			"series normalize preview could not list series; returning an EMPTY preview that must not be read as a clean library",
+			"err", err)
+	}
 
 	flagged := make([]seriesNormalizeAction, 0)
 	normal := make([]seriesNormalizeAction, 0)
@@ -566,7 +650,14 @@ func executeSeriesNormalizeCore(
 	store maintenanceStore,
 	enqueueWriteBack func(bookID string),
 ) (affectedBookIDs []string, err error) {
-	actions := computeSeriesNormalizeActions(store)
+	// Fatal, and deliberately so. An empty action list means "nothing needs
+	// normalizing"; a failed listing means "nothing was examined". Continuing past
+	// this would organize zero books and report success on a library nobody looked
+	// at.
+	actions, err := computeSeriesNormalizeActions(store)
+	if err != nil {
+		return nil, fmt.Errorf("series normalize: %w", err)
+	}
 
 	var errs []string
 

@@ -1,12 +1,13 @@
 // file: internal/server/duplicates_series_cache_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1d94b6-2ea8-4f30-9c57-1b0e6a8d3f42
-// last-edited: 2026-08-14
+// last-edited: 2026-08-24
 
 package server
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -118,4 +119,111 @@ func TestExecuteSeriesPrune_KeepsSeriesCacheWhenNothingRemoved(t *testing.T) {
 		t.Error("series cache dropped by a prune that removed nothing — " +
 			"a no-op run must not force a full recount")
 	}
+}
+
+// TestExecuteSeriesPrune_InvalidatesSeriesCacheWhenOnlyBooksWereRepointed is the
+// case the two tests above cannot produce, and the one the booksRepointed
+// counter exists for.
+//
+// The pair above only ever exercise totalCleaned>0 with booksRepointed==0, and
+// both counters zero. Neither reaches totalCleaned==0 && booksRepointed>0 — so
+// before this test, reverting the predicate to `if totalCleaned > 0` left the
+// entire package green and the fix was decorative.
+//
+// That state is not exotic: it is what EVERY refused merge produces. Phase 1
+// repoints the books it can, hits a failure, refuses the delete, and removes no
+// rows at all — while every book it did move now belongs to a different series.
+// Serving the pre-merge membership for the cache's 24-hour TTL is the 2026-08-14
+// production symptom reached from the opposite direction.
+func TestExecuteSeriesPrune_InvalidatesSeriesCacheWhenOnlyBooksWereRepointed(t *testing.T) {
+	const (
+		keepID  = 1
+		mergeID = 2
+		primary = "cache-primary"
+		altRip  = "cache-alternate-rip"
+	)
+
+	s := newSeriesPruneServer(t)
+	mock, assignments := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
+
+	// The rip's write fails, so phase 1 repoints the primary and then REFUSES the
+	// delete: books changed, zero rows removed.
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == altRip {
+			return nil, errors.New("simulated write failure")
+		}
+		if b.SeriesID != nil {
+			assignments[id] = *b.SeriesID
+		}
+		return b, nil
+	}
+	mock.DeleteSeriesFunc = func(id int) error {
+		t.Errorf("DeleteSeries(%d) called; the refusal should have blocked every delete", id)
+		return nil
+	}
+
+	store := seriesRefCountingStore{MockStore: mock, refCounts: map[int]int{keepID: 2, mergeID: 2}}
+	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err == nil {
+		t.Fatal("a refused merge must be reported as an error")
+	}
+
+	// Not vacuous: the repoint has to have actually happened.
+	if assignments[primary] != keepID {
+		t.Fatalf("%s was not repointed (still series %d); nothing changed, so the cache "+
+			"assertion below would pass for the wrong reason", primary, assignments[primary])
+	}
+
+	if seriesCacheIsPrimed(s) {
+		t.Error("series cache still primed after a run that repointed books but removed no rows — " +
+			"/api/v1/series serves pre-merge membership for up to 24h, which is exactly the " +
+			"2026-08-14 symptom the invalidation was added to prevent")
+	}
+}
+
+// TestExecuteSeriesPrune_InvalidatesSeriesCacheOnAnEarlyExit covers the shape,
+// not one branch: the invalidation must survive a return that happens BEFORE the
+// end of the function.
+//
+// executeSeriesPrune has six exits and five of them are early. Phase 1 can have
+// repointed books before any of them fires, so an invalidation written at the
+// normal exit is skipped precisely when the cache is most wrong. Here the
+// unfiltered reference count fails after phase 1 has merged -- a real, documented
+// case, since MemStore refuses that call when memdb is short.
+func TestExecuteSeriesPrune_InvalidatesSeriesCacheOnAnEarlyExit(t *testing.T) {
+	const (
+		keepID  = 1
+		mergeID = 2
+		primary = "early-primary"
+		altRip  = "early-alternate-rip"
+	)
+
+	s := newSeriesPruneServer(t)
+	mock, assignments := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
+	mock.DeleteSeriesFunc = func(int) error { return nil }
+
+	store := seriesRefCountFailStore{MockStore: mock}
+	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err == nil {
+		t.Fatal("a failed reference count must abort the prune")
+	}
+
+	if assignments[primary] != keepID {
+		t.Fatalf("%s was not repointed before the early exit; this test cannot observe "+
+			"what it is meant to observe", primary)
+	}
+
+	if seriesCacheIsPrimed(s) {
+		t.Error("series cache still primed after an early exit that followed a completed merge — " +
+			"the invalidation must run on every exit path, not just the last one")
+	}
+}
+
+// seriesRefCountFailStore satisfies the unfiltered-refcount interface (so the
+// fail-closed guard is passed) but fails the call itself, which is what MemStore
+// does when memdb is missing tables.
+type seriesRefCountFailStore struct {
+	*database.MockStore
+}
+
+func (seriesRefCountFailStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	return nil, errors.New("simulated: memdb tables incomplete")
 }
