@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_cache_writeback_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d23028ef-779a-4609-8fd4-f113ebedf97d
 // last-edited: 2026-08-24
 
@@ -101,7 +101,7 @@ func TestWriteBackScanCache_HappyPath(t *testing.T) {
 	withStore(t, store)
 
 	before := snapshotScanCacheCounters()
-	writeBackScanCache(path, logger.New("test"))
+	writeBackScanCache(path, nil, logger.New("test"))
 	d := before.delta()
 
 	assert.Equal(t, 1, store.updateCalls, "the cache write must actually happen")
@@ -124,7 +124,7 @@ func TestWriteBackScanCache_NoRowIsCounted(t *testing.T) {
 	withStore(t, store)
 
 	before := snapshotScanCacheCounters()
-	writeBackScanCache(path, logger.New("test"))
+	writeBackScanCache(path, nil, logger.New("test"))
 	d := before.delta()
 
 	assert.Equal(t, int64(1), d.noRow, "a missing book row must be counted")
@@ -143,7 +143,7 @@ func TestWriteBackScanCache_LookupErrorIsCounted(t *testing.T) {
 	withStore(t, store)
 
 	before := snapshotScanCacheCounters()
-	writeBackScanCache(path, logger.New("test"))
+	writeBackScanCache(path, nil, logger.New("test"))
 	d := before.delta()
 
 	assert.Equal(t, int64(1), d.lookupErr, "a store error must be counted as a store error")
@@ -164,7 +164,7 @@ func TestWriteBackScanCache_StatErrorIsCounted(t *testing.T) {
 	withStore(t, store)
 
 	before := snapshotScanCacheCounters()
-	writeBackScanCache(missing, logger.New("test"))
+	writeBackScanCache(missing, nil, logger.New("test"))
 	d := before.delta()
 
 	assert.Equal(t, int64(1), d.statErr)
@@ -185,7 +185,7 @@ func TestWriteBackScanCache_UpdateErrorIsCounted(t *testing.T) {
 	withStore(t, store)
 
 	before := snapshotScanCacheCounters()
-	writeBackScanCache(path, logger.New("test"))
+	writeBackScanCache(path, nil, logger.New("test"))
 	d := before.delta()
 
 	assert.Equal(t, int64(1), d.updateErr)
@@ -200,7 +200,74 @@ func TestWriteBackScanCache_NilStoreIsSafe(t *testing.T) {
 	withStore(t, nil)
 
 	before := snapshotScanCacheCounters()
-	assert.NotPanics(t, func() { writeBackScanCache(path, logger.New("test")) })
+	assert.NotPanics(t, func() { writeBackScanCache(path, nil, logger.New("test")) })
 	assert.Equal(t, scanCacheCounters{}, before.delta(),
 		"an unwired store is a configuration state, not a per-file failure")
+}
+
+// TestWriteBackScanCache_UsesCallerFileInfo pins the self-healing property the
+// suspicious-file path depends on.
+//
+// That path stats a file, finds it under the minimum-size threshold, marks it
+// LibraryState="suspicious", then hashes the whole file — a wide window in
+// which a still-downloading file grows past the threshold. If the write-back
+// re-stats, the cache is stamped with the POST-growth mtime/size, and the next
+// scan's classifySkipFile (which compares only NeedsRescan/Mtime/Size, never
+// LibraryState) skips the file, leaving it flagged suspicious forever.
+//
+// Stamping the size the decision was actually made on leaves a mismatch, so the
+// next scan re-reads and the flag clears itself.
+func TestWriteBackScanCache_UsesCallerFileInfo(t *testing.T) {
+	path := writableFile(t)
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+
+	// The file grows after the caller took its FileInfo, as a completing
+	// download would.
+	require.NoError(t, os.WriteFile(path, []byte("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 0o600))
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	require.NotEqual(t, before.Size(), after.Size(), "precondition: the file must actually have grown")
+
+	var gotSize int64
+	store := &fakeScanCacheStore{
+		getBook: func(string) (*database.Book, error) {
+			return &database.Book{ID: "book-1", FilePath: path}, nil
+		},
+		update: func(_ string, _ int64, size int64) error {
+			gotSize = size
+			return nil
+		},
+	}
+	withStore(t, store)
+
+	writeBackScanCache(path, before, logger.New("test"))
+
+	assert.Equal(t, before.Size(), gotSize,
+		"the caller's FileInfo must win: stamping the post-growth size makes the next scan skip the file "+
+			"and it stays flagged suspicious permanently")
+	assert.NotEqual(t, after.Size(), gotSize)
+}
+
+// TestWriteBackScanCache_NilFileInfoStats pins the other half: the main path
+// passes nil and the helper stats for itself.
+func TestWriteBackScanCache_NilFileInfoStats(t *testing.T) {
+	path := writableFile(t)
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+
+	var gotSize int64
+	store := &fakeScanCacheStore{
+		getBook: func(string) (*database.Book, error) {
+			return &database.Book{ID: "book-1", FilePath: path}, nil
+		},
+		update: func(_ string, _ int64, size int64) error {
+			gotSize = size
+			return nil
+		},
+	}
+	withStore(t, store)
+
+	writeBackScanCache(path, nil, logger.New("test"))
+	assert.Equal(t, fi.Size(), gotSize)
 }

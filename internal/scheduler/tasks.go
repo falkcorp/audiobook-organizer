@@ -244,13 +244,34 @@ func (ts *TaskScheduler) registerAllTasks() {
 			// Same skip-if-active guard as the incremental scan, keyed to this
 			// task's own previous run.
 			if prev := ts.previousRunID("library_scan_full"); prev != "" {
-				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
-					if row.Status == "queued" || row.Status == "running" {
-						slog.Info("library_scan_full: previous sweep still active, skipping this tick",
-							"op", prev, "status", row.Status, "source", source)
-						return nil, nil
-					}
+				row, err := store.GetOperationV2(prev)
+				switch {
+				case err != nil:
+					// Proceeding is right (EnqueueOp's dedupe still covers the
+					// case where that op is genuinely active), but saying
+					// nothing would hide a store fault behind a normal-looking
+					// sweep.
+					slog.Warn("library_scan_full: could not read the previous sweep's status; "+
+						"proceeding, so a sweep may be enqueued while one is already active",
+						"op", prev, "err", err, "source", source)
+				case row != nil && (row.Status == "queued" || row.Status == "running"):
+					slog.Info("library_scan_full: previous sweep still active, skipping this tick",
+						"op", prev, "status", row.Status, "source", source)
+					return nil, nil
 				}
+			}
+
+			// Stamp BEFORE enqueueing, and refuse to enqueue if the stamp
+			// fails. Enqueue-then-stamp fails OPEN: a swallowed stamp failure
+			// leaves the timestamp stale, and once the sweep COMPLETES it is in
+			// neither ListActiveOperationsV2 nor the ConcurrencyKey's active
+			// set, so nothing dedupes the next due-check. The result is a
+			// whole-library force_update re-hash running back to back forever,
+			// announced once an hour as a warning nobody reads. Skipping one
+			// sweep is the cheaper failure.
+			if stampErr := ts.stampFullSweepRun(time.Now()); stampErr != nil {
+				return nil, fmt.Errorf("library_scan_full: refusing to enqueue a sweep whose clock cannot be "+
+					"persisted, because it would re-enqueue on every due check: %w", stampErr)
 			}
 
 			forceUpdate, includeRoot := true, true
@@ -262,8 +283,6 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, fmt.Errorf("failed to enqueue full library.scan: %w", enqErr)
 			}
 			ts.setPreviousRunID("library_scan_full", v2ID)
-			// Stamped on ENQUEUE, not completion — see stampFullSweepRun.
-			ts.stampFullSweepRun(time.Now())
 			slog.Info("library_scan_full: enqueued full sweep", "op", v2ID, "since", last, "source", source)
 			return v2ScheduledOp(v2ID, "scan"), nil
 		},

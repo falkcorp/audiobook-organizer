@@ -381,9 +381,18 @@ func (ts *TaskScheduler) runTask(name, source string) (*database.Operation, erro
 		return nil, err
 	}
 
-	ts.mu.Lock()
-	ts.lastRun[name] = time.Now()
-	ts.mu.Unlock()
+	// Stamp lastRun only when the tick actually ENQUEUED something. A TriggerFn
+	// may legitimately decline -- library_scan skips while a scan is active, and
+	// library_scan_full declines on 167 of every 168 hourly due-checks by
+	// design. Stamping unconditionally made "Last Run" on the tasks page mean
+	// "last time the ticker fired", so a task that had not run in months
+	// displayed a timestamp minutes old. That is the one operator-facing signal
+	// for "did this actually happen", and it read healthy unconditionally.
+	if op != nil {
+		ts.mu.Lock()
+		ts.lastRun[name] = time.Now()
+		ts.mu.Unlock()
+	}
 
 	return op, nil
 }
