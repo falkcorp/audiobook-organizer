@@ -2446,7 +2446,15 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// GetBookByID is a full-fidelity point-get), so this adds no extra DB
 		// read. Copy it first so the getter's pointer is never mutated in place.
 		merged := *existing
-		applyScannerFields(&merged, dbBook)
+		// Consult per-field provenance before overlaying: a field the user
+		// locked or explicitly set is not ours to rewrite from a file tag.
+		locked, ok := lockedFieldsForBook(getStore(), existing.ID)
+		if !ok {
+			defaultLog.Warn("metadata field state unreadable for book %s (%s); "+
+				"treating every guarded field as locked so a scan cannot clobber a user edit",
+				existing.ID, existing.FilePath)
+		}
+		applyScannerFields(&merged, dbBook, locked)
 
 		_, err = getStore().UpdateBook(existing.ID, &merged)
 		if err == nil {
@@ -2824,7 +2832,7 @@ func preserveExistingFields(scanned *database.Book, existing *database.Book) {
 // overwrote unconditionally (Title/AuthorID/SeriesID/Format/hashes/Duration) —
 // which is precisely the wipe this fixes (an untagged file yields nil
 // AuthorID/SeriesID), applied consistently.
-func applyScannerFields(dst *database.Book, scanned *database.Book) {
+func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[string]bool) {
 	// Identity / file-derived fields (freshly read from the file this scan).
 	if scanned.FilePath != "" {
 		dst.FilePath = scanned.FilePath
@@ -2858,16 +2866,16 @@ func applyScannerFields(dst *database.Book, scanned *database.Book) {
 	}
 
 	// Tag-derived identity fields.
-	if scanned.Title != "" {
+	if scanned.Title != "" && !locked["title"] {
 		dst.Title = scanned.Title
 	}
-	if scanned.AuthorID != nil {
+	if scanned.AuthorID != nil && !locked["author"] {
 		dst.AuthorID = scanned.AuthorID
 	}
-	if scanned.SeriesID != nil {
+	if scanned.SeriesID != nil && !locked["series"] {
 		dst.SeriesID = scanned.SeriesID
 	}
-	if scanned.SeriesSequence != nil && *scanned.SeriesSequence != 0 {
+	if scanned.SeriesSequence != nil && *scanned.SeriesSequence != 0 && !locked["series_sequence"] {
 		dst.SeriesSequence = scanned.SeriesSequence
 	}
 	if scanned.WorkID != nil {
@@ -2875,13 +2883,13 @@ func applyScannerFields(dst *database.Book, scanned *database.Book) {
 	}
 
 	// Tag-derived enrichment fields.
-	if scanned.Narrator != nil {
+	if scanned.Narrator != nil && !locked["narrator"] {
 		dst.Narrator = scanned.Narrator
 	}
-	if scanned.Language != nil {
+	if scanned.Language != nil && !locked["language"] {
 		dst.Language = scanned.Language
 	}
-	if scanned.Publisher != nil {
+	if scanned.Publisher != nil && !locked["publisher"] {
 		dst.Publisher = scanned.Publisher
 	}
 	if scanned.ASIN != nil {

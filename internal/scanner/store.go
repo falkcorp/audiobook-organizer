@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-08-19
+// last-edited: 2026-08-24
 
 package scanner
 
@@ -67,6 +67,7 @@ type scannerStore interface {
 	scanBookWriter
 	scanEntityStore
 	scanProgressStore
+	scanFieldStateReader
 
 	// Forwarded, embedded by name so each re-narrows on its own.
 	scanServiceStore
