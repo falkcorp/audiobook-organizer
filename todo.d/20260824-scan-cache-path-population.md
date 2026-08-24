@@ -28,8 +28,17 @@ entries for files that *get* a row, and these never do.
 - [ ] Read `scanCacheNoRowCount` off a completed production scan summary to size
       the population. Until that number exists this is unquantified — do not
       assume it is either negligible or large.
-- [ ] Decide where scan state for a row-less path should live. Two candidates,
-      and the choice changes the data model, so it needs the user's sign-off:
+- [x] ~~Decide where scan state for a row-less path should live.~~
+      **DECIDED 2026-08-24: a path-keyed scan-cache keyspace, independent of
+      book rows — built INSIDE the staged pipeline's enumerate/diff phase, not
+      as a standalone change.** The user chose the more correct shape and
+      sequenced it deliberately: building it now against the current scanner
+      would mean building it twice, because the diff phase needs the same
+      path-keyed state. Do NOT create a row for the duplicate path (the rejected
+      alternative below) — it changes import semantics and risks regrowing the
+      dedup backlog.
+
+      The two candidates as they were weighed:
       - a path-keyed scan-cache keyspace, independent of book rows. This is the
         more correct shape (the scanner walks *files*; the cache is keyed by
         *book rows*, and the mismatch is the root cause) and it has a natural
