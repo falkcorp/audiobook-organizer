@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 3f9c0a71-5b28-4d6e-9a13-7c40e8b2d561 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -341,3 +341,66 @@ re-running the mutation at HEAD, not by argument.
 Re-armed with `require.Empty(t, store.mem().LostRows())`. **Re-run mutation
 matrices at final HEAD, not only when each test is authored** — a fix that makes
 the system more robust can make a test less discriminating.
+
+## 9. OPEN, awaiting a scope decision — TASK-029's bug shape exists in 3 more files
+
+Found 2026-08-24 while reviewing **PR #2821 (TASK-029)**. Deliberately **not**
+folded into that PR: its brief scopes it to `internal/dedup/series_dedup.go`, and
+these are three other files. The owner decides whether they get their own PRs.
+
+TASK-029's shape: a series merge calls `GetBooksBySeriesIDCore(fromID)` — the
+**listing** getter, which excludes non-primary versions — repoints each book it
+sees to `keepID`, then calls `DeleteSeries(fromID)`. A non-primary version is
+never repointed, and is then left holding a series ID that no longer exists.
+#2821 fixes the three repoint-then-delete paths inside `series_dedup.go` by
+adding `GetBooksBySeriesIDAllVersions`. The same shape lives in:
+
+| File | Verdict |
+|---|---|
+| `internal/server/duplicates_helpers.go:454` `mergeSeriesGroupHelper` | **Live stranding, no guard.** |
+| `internal/plugins/maintenance/series_denumber_op.go:286` | **Live stranding, guard is blind.** |
+| `internal/maintenance/jobs/cleanup_series.go:222` `csMergeSeriesGroup` | **Safe, but permanently degraded.** |
+
+**`mergeSeriesGroupHelper`** is the plain instance — `DeleteSeries(fromID)` at
+`:476` is unconditional. Reached from `executeSeriesNormalizeCore` (`:536`).
+
+**`series_denumber_op.go`** looks defended and is not. `movedAll` is initialized
+`true` and is only ever set `false` inside `for i := range books`, where `books`
+came from the Core getter. A row that getter excludes is never iterated, so it
+cannot flip the flag; `movedAll` stays true and the delete proceeds. **The
+guard's sample space is the filtered set the bug lives outside of.** Its comment
+at `:318` ("a partial move plus a delete would orphan the stragglers") describes
+a protection it does not provide for this case.
+
+**`cleanup_series.go` does NOT strand**, and the reason is structural rather than
+lucky: its guard is driven by an independently-sourced *unfiltered* count, so it
+can see what the getter cannot.
+
+```go
+if stranded := refCounts[fromID] - moved; stranded > 0 { refused++; continue }
+```
+
+That predicate was **verified, not taken from the comment** — this matters,
+because if `GetAllSeriesBookRefCounts` were also primary-filtered, `moved` would
+equal the count, the guard would pass, and this would be a third live stranding
+bug. Both implementations are genuinely unfiltered: `MemStore`
+(`series_bookref.go:80`) counts every book with a non-nil `SeriesID`, and the
+Pebble path's own comment at `:154` says "minus the `IsPrimaryVersion` filter,
+and without skipping trashed rows." So it refuses instead of deleting — but the
+refusal is permanent for those series, not a one-run deferral, so those merges
+never complete.
+
+⚠️ **A getter swap alone will NOT fix `cleanup_series`.** `refCounts` counts
+**trashed** rows; `GetBooksBySeriesIDAllVersions` excludes them (pinned by
+`TestSeriesGetters_AllVersionsIsASupersetOfCore`). For any series with a trashed
+book, `refCounts[fromID] - moved > 0` still holds after the swap and it still
+refuses forever. Fixing it properly means making the count and the getter share
+one predicate — a different change from the other two.
+
+**Suggested split if approved:** one PR for `duplicates_helpers.go` +
+`series_denumber_op.go` (same one-line getter swap plus a regression test, same
+data-loss class as #2821); a separate PR for `cleanup_series.go`, which is a
+predicate-alignment fix, not a stranding fix.
+
+Longer write-up, including the caller chains:
+`.claude/notes/2026-08-23-series-merge-core-getter-siblings.md` (gitignored).
