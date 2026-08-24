@@ -15,15 +15,38 @@
       scan short enough that queueing behind it is fine — the staged pipeline,
       which is the root fix.
 
-- [ ] **Add a per-book last-scanned timestamp before building the 6-day age gate.**
-      There is none today: `ScanCacheEntry` carries only mtime/size/`NeedsRescan`,
-      the book row carries `LastScanMtime`/`LastScanSize`/`NeedsRescan`, and
-      `LastScan *time.Time` belongs to `ImportPath`. Two consequences to decide
-      deliberately: a new field makes every existing row read "never scanned", so
-      the first tick after deploy re-reads the whole library; and the timestamp
-      must be written **unconditionally**, not inside the existing
-      `GetBookByFilePath(...) != nil` branch at `internal/scanner/scanner.go`,
-      because the books the gate exists to help are exactly the ones whose cache
-      entry is missing. The gate belongs on the cache-miss path, not as an OR arm
-      on the unchanged path — OR'ing it naively would start skipping genuinely
-      changed files. Measure with the skip-rate summary added in #2858 first.
+- [x] **~~Add a per-book last-scanned timestamp before building the 6-day age gate.~~**
+      **RESOLVED 2026-08-24 by decision, not by code — no new field is needed.**
+      This task assumed COOLDOWN semantics ("don't re-read a file we scanned in
+      the last 6 days"), which is the only one of the three readings that needs a
+      per-book *scanned-at* timestamp. The user chose **HYBRID** instead: a new
+      or unknown file is scanned immediately, and a file the library already
+      knows about is re-read only once its **mtime** is more than 6 days old.
+      `LastScanMtime` already carries exactly that, so the gate shipped against
+      existing fields.
+
+      Two claims in the original text did NOT survive the decision, and are
+      recorded here so they are not re-derived:
+
+      - *"a new field makes every existing row read 'never scanned', so the first
+        tick after deploy re-reads the whole library"* — moot, there is no new
+        field.
+      - *"The gate belongs on the cache-miss path, not as an OR arm on the
+        unchanged path"* — this is the QUIESCENCE reading, which the user
+        explicitly rejected because it would delay discovery of a newly added
+        book by six days. The gate deliberately sits on the **changed** branch:
+        cache-miss is read immediately, `NeedsRescan` is checked first so a
+        forced rescan bypasses it, and `force_update` passes a nil cache so a
+        full sweep never consults it.
+
+      Shipped in `classifySkipFile` / `rescanFreshCutoff`
+      (`internal/scanner/scanner.go`) behind `min_rescan_age_hours`, default 144,
+      `-1` disables.
+
+- [ ] **Watch `too-fresh` in the scan summary on the first real run after deploy.**
+      The gate is new and its skip reason is reported separately from
+      `unchanged` precisely because it means *deferred* work rather than work
+      correctly avoided. A run where `too-fresh` is a large fraction means
+      something is churning the library — that is a finding, not a success. If
+      it is near zero, the gate is inert on this library and the 144h default is
+      the wrong number.
