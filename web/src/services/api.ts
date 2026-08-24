@@ -2001,15 +2001,21 @@ async function triggerOp(
 export async function startScan(
   folderPath?: string,
   _priority?: number,
-  forceUpdate?: boolean
+  forceUpdate?: boolean,
+  includeRootDir?: boolean
 ): Promise<{ id: string }> {
   // _priority is accepted and ignored, exactly as before: the legacy route put it
   // in the request body, but libraryScanParams has no priority field, so it was
   // dropped server-side too. Kept in the signature so call sites need no edit.
+  //
+  // includeRootDir reaches the organized library root WITHOUT disabling the
+  // incremental skip cache -- force_update does both at once (it also nils the
+  // cache server-side), so it re-hashes every file it touches. Pass this
+  // instead of forceUpdate when the goal is coverage, not verification.
   return wrapTrigger('library.scan', () =>
     triggerOp(
       'library.scan',
-      { folder_path: folderPath, force_update: forceUpdate },
+      { folder_path: folderPath, force_update: forceUpdate, include_root_dir: includeRootDir },
       'Failed to start scan'
     )
   );
