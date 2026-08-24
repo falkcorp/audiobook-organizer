@@ -62,3 +62,21 @@ and pointed it at the dead code. Anyone strengthening this endpoint's tests ther
 would have watched them pass green while production behaviour never changed. The
 file and its tests are gone; the live handler's tests are in
 `internal/server/handlers/`.
+
+#### The timeline says which of its results predate the window it names
+
+Operations that are still running are returned however old they are — deliberately,
+because an operation that has not finished is current no matter when it started.
+A library scan running for nearly two hours once returned an *empty* timeline in
+production while it was logging once a second, which reads as "nothing is
+running."
+
+That is the right behaviour and it made the new self-describing window partly
+untrue. A scan queued three weeks ago and never finished answers a one-hour
+query with one result, under a stated window of one hour — which reads as "this
+job ran once in the last hour."
+
+Those rows are now counted separately, so the window the reply names is true of
+the rows it is claimed for. An answer that describes its own scope has to describe
+the results that escape that scope too, or it is just a more confident version of
+the wrong answer.

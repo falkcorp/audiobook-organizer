@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2_timeline_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f3c1a94-2e6b-4d58-9a71-c0d4e8b52f36
 // last-edited: 2026-08-24
 
@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
@@ -72,12 +73,18 @@ func timelineHandler(t *testing.T, rows []database.OperationV2Row) *handlers.Ope
 // The load-bearing test. def_id must be applied to the WHOLE window, never to a
 // page the store already truncated.
 //
-// The target rows sit at positions 250-252 of 300 deliberately. Push the caller's
-// limit down into ListOperationsV2Since — the obvious "optimisation" — and the
-// store trims to 200 before the handler can filter, so this returns an empty list
-// and the caller reads "this op has never run" about an op that ran three times.
-// That is the reported production failure, not a hypothetical: the store sorts
-// StartedAt DESC NULLS LAST and truncates, so queued rows are dropped FIRST.
+// The mutant is caught by the mocked store argument: `ListOperationsV2Since(_,
+// 5000)` fails on mismatch the moment anyone pushes the caller's limit down into
+// the store. That expectation is the pin — say so plainly, because this fixture
+// returns all 300 rows unconditionally and does NOT itself simulate the store's
+// truncation. A future editor who relaxes that argument to mock.Anything would
+// remove the only thing catching this, and a comment claiming the row positions
+// do the work would tell them they were still covered.
+//
+// The positions still document WHY it matters: in the real store the trim happens
+// after a StartedAt DESC NULLS LAST sort, so queued rows are dropped FIRST and a
+// just-enqueued op is the first thing to vanish from a view whose job is to show
+// it.
 func TestGetOperationTimeline_DefIDFiltersTheWholeWindowNotJustTheFirstPage(t *testing.T) {
 	rows := timelineRows("other.op", 250)
 	rows = append(rows, timelineRows("target.op", 3)...)
@@ -189,6 +196,65 @@ func TestGetOperationTimeline_ReportsTheWindowItMeasured(t *testing.T) {
 	assert.Equal(t, float64(200), data["limit"], "the default limit must be stated, not implied")
 }
 
+// Operations still in flight are returned regardless of age, so the window does
+// not explain why they are present. Reporting them inside a bare `matched` is the
+// same confident-wrong-answer this endpoint is being fixed for, wearing an
+// authoritative window: a scan queued three weeks ago and never completed answers
+// ?since=1h with matched=1, which reads as "it ran once in the last hour".
+func TestGetOperationTimeline_CountsInFlightRowsThatPredateTheWindow(t *testing.T) {
+	old := time.Now().UTC().Add(-21 * 24 * time.Hour)
+	done := time.Now().UTC().Add(-30 * time.Minute)
+	rows := []database.OperationV2Row{
+		// Queued three weeks ago, never completed: admitted by the store no matter
+		// what `since` says.
+		{ID: "stale-running", DefID: "library.scan", Status: "running", QueuedAt: old},
+		// Genuinely inside the window.
+		{ID: "recent-done", DefID: "library.scan", Status: "completed", QueuedAt: done, CompletedAt: &done},
+	}
+
+	store := databasemocks.NewMockOpsV2Store(t)
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	store.EXPECT().ListOperationsV2Since(mock.Anything, 5000).Return(rows, nil)
+	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{}).Maybe()
+	registry.EXPECT().GetCurrentItem(mock.Anything).Return("").Maybe()
+	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h&def_id=library.scan", "", nil)
+	h.GetOperationTimeline(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	data := timelineBody(t, w.Body.Bytes())
+
+	assert.Equal(t, float64(2), data["matched"])
+	assert.Equal(t, float64(1), data["in_flight_before_window"],
+		"a row still running from before window_start must be counted separately, or the "+
+			"stated window is false for it and matched reads as activity inside the window")
+}
+
+// The counter must not fire for rows that genuinely fall inside the window —
+// otherwise it is decorative and every answer looks partly out-of-scope.
+func TestGetOperationTimeline_DoesNotCountInWindowRowsAsPredatingIt(t *testing.T) {
+	recent := time.Now().UTC().Add(-10 * time.Minute)
+	rows := []database.OperationV2Row{
+		{ID: "running-now", DefID: "a.op", Status: "running", QueuedAt: recent},
+	}
+
+	store := databasemocks.NewMockOpsV2Store(t)
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	store.EXPECT().ListOperationsV2Since(mock.Anything, 5000).Return(rows, nil)
+	registry.EXPECT().ActiveDefs().Return([]opsregistry.OperationDef{}).Maybe()
+	registry.EXPECT().GetCurrentItem(mock.Anything).Return("").Maybe()
+	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h", "", nil)
+	h.GetOperationTimeline(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	data := timelineBody(t, w.Body.Bytes())
+	assert.Equal(t, float64(1), data["matched"])
+	assert.Equal(t, float64(0), data["in_flight_before_window"])
+}
+
 // The nil-store path answers the same self-describing shape. A caller that reads
 // `matched` must not get a missing key from one branch and a number from another.
 func TestGetOperationTimeline_NilStoreStillDescribesItsScope(t *testing.T) {
@@ -229,6 +295,9 @@ func TestGetOperationTimeline_DoesNotFlagAnUnfilledScan(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	data := timelineBody(t, w.Body.Bytes())
-	_, present := data["scan_capped"]
-	assert.False(t, present, "scan_capped must be absent when the scan did not fill")
+	// Always present, never omitted. Two booleans in one object with two different
+	// presence conventions invites a reader to treat a missing key as unknown
+	// rather than false — and this object exists to be read by someone who might
+	// misread it.
+	assert.Equal(t, false, data["scan_capped"], "scan_capped must be present and false when the scan did not fill")
 }
