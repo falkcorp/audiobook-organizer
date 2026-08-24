@@ -5,7 +5,7 @@
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-23 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-24 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the 29 dated summaries in this directory
 from 2026-08-04 to 2026-08-19, linked inline below.
@@ -987,6 +987,68 @@ reports the proportion skipped and, for the files it did re-read, which of five 
 applied. That distinction matters: "the file changed" is the scan working correctly, while
 "we have no record of this file" is a file being re-read on every single run forever. Those
 need different fixes, and until now there was no way to tell which one you were looking at.
+
+## 25. The same library, asked twice, answering differently (Aug 24)
+
+The app can look through your library for authors that are probably the same person
+entered twice — "Mikkelsen" and "Mikkelson", that sort of thing — and offer to merge
+them. This month we found that if you ran that check twice on a library that had not
+changed at all, you could get **different suggestions each time**.
+
+Not merely a different order. Different groupings. Given four spellings of one surname,
+one run might pair them off one way and the next run pair them another. Nothing about
+your library had changed in between.
+
+The cause was a small thing with a large shadow. When the check walked through the
+surnames it had collected, it walked them in whatever order the computer happened to
+hand them over — an order that is deliberately shuffled, and genuinely different on each
+run. The grouping logic then works on a first-come basis: whichever spelling it happens
+to see first becomes the one the others get folded into. Shuffled input, first-come
+rule, different answer. Both parts now go in a fixed, sorted order, so the suggestions
+depend only on what is actually in your library.
+
+Why this matters more than a cosmetic wobble: these suggestions are the input to
+merging authors together. A list that changes when the underlying facts have not is a
+list you cannot check, cannot compare against yesterday's, and cannot safely act on in
+bulk.
+
+### The same check was also very slow
+
+Comparing every surname against every other surname meant **26.4 million comparisons**
+on this library's 7,261 distinct surnames — all on a single processor core while the
+other nine sat idle. Two changes fixed that, neither of which changes a single answer:
+
+- **Not comparing what cannot possibly match.** Two names of very different lengths
+  cannot score as similar, no matter how they are spelled — that follows from how the
+  similarity score is defined, so it can be proven rather than guessed at. Checking
+  lengths first is close to free and rules out **61%** of the comparisons before any
+  real work starts.
+- **Using the whole machine.** Deciding which names look alike is work that can be split
+  across all cores safely, because it only reads and never changes anything shared. The
+  grouping step that follows genuinely does depend on order, so that part deliberately
+  stayed on one core.
+
+**Result: 4.6 seconds down to 0.5 — about nine times faster** — with the output checked
+to be identical, character for character, to what the old code produced.
+
+### One thing deliberately left alone
+
+The new checks record an existing oddity rather than hiding it: given four spellings of
+one surname, the app produces two pairs rather than one group of four. It never chains
+"A matches B" and "B matches C" into a single group. That behaviour is unchanged by this
+work — it was verified identical before and after — so it was written down rather than
+quietly altered. It is now the kind of thing that will show up loudly if anyone changes
+it, on purpose or by accident.
+
+### A note on how this was found
+
+This work also corrected an internal audit document from July that listed places in the
+code doing this kind of unnecessarily slow work. Every item on its list had in fact been
+fixed already, but the document still read like an open to-do list, which is a good way
+to get someone to "fix" working code. The slow author check described above was not on
+that list at all — the July sweep looked for work that loops over books and authors, and
+this one loops over surnames, so it did not match the pattern being searched for. Both
+facts are now recorded in the document itself.
 
 ## Themes worth carrying into next month
 
