@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_allversions_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e2a9f13-84c7-4d05-b1e6-3a7f52cd8091
 // last-edited: 2026-08-24
 
@@ -7,6 +7,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -138,5 +139,47 @@ func TestCleanupSeriesRun_Phase1StillRefusesWhenARowIsInvisible(t *testing.T) {
 	// tell a 4-vs-3 refusal from a 4-vs-1 one.
 	if !strings.Contains(found, "4 books reference it") || !strings.Contains(found, "only 3") {
 		t.Fatalf("the log must report both the unfiltered count and how many could be unlinked, got %q", found)
+	}
+}
+
+// TestCleanupSeriesRun_Phase1DoesNotDeleteAfterAPartialUnlink pins the
+// fail-closed ordering in csUnlinkAndDeleteSeries.
+//
+// Every row here is visible, so the guard passes and the job proceeds -- this is
+// not about the guard. It is about what happens when a write fails midway: the
+// series row must survive, because leaving it means the rows that failed still
+// point at something that exists and a later run can retry. Deleting it would
+// strand exactly the rows the failure prevented us from unlinking.
+//
+// A delete placed before the unlink loop, or one that ignored the loop's error,
+// passes every other test in this file.
+func TestCleanupSeriesRun_Phase1DoesNotDeleteAfterAPartialUnlink(t *testing.T) {
+	var deleted []int
+	var unlinked []string
+	store := newCsAllVersionsStore(t, map[int]int{7: 3}, &deleted, &unlinked)
+
+	// ALT-1 refuses to be written. PRIMARY (ordered first) succeeds, so this is
+	// a genuine PARTIAL unlink rather than a total failure.
+	store.MockStore.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == "ALT-1" {
+			return nil, errors.New("simulated write failure")
+		}
+		if b.SeriesID == nil {
+			unlinked = append(unlinked, id)
+		}
+		return b, nil
+	}
+
+	rep := &csPhase1Reporter{}
+	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
+		t.Fatalf("Run must absorb a per-series write failure, not abort the job: %v", err)
+	}
+
+	for _, id := range deleted {
+		if id == 7 {
+			t.Fatal("series 7 was deleted after an unlink failed -- ALT-1 and ALT-2 " +
+				"still reference it and are now stranded. The delete must happen only " +
+				"after EVERY unlink has succeeded.")
+		}
 	}
 }
