@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-08-24
 //
@@ -159,8 +159,19 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		canonicalIdx := 0
 		canonicalBookCount := 0
 		for i, s := range group {
+			// Core is right here: this is candidate SELECTION, picking which of
+			// several duplicate series survives. Counting alternate rips would let
+			// a series win the vote on copies rather than on distinct books. The
+			// repoint loop below reads the complete set — the two getters play
+			// different roles and that is deliberate.
 			books, err := store.GetBooksBySeriesIDCore(s.ID)
 			if err != nil {
+				// Silent before. A series whose count fails to load is treated as
+				// having zero books and quietly loses the vote, so the error decides
+				// which series gets DELETED and leaves no trace of having done so.
+				mergeErrors = append(mergeErrors, fmt.Sprintf(
+					"failed to count books for series %d (%q) while picking the canonical series; "+
+						"it is being treated as empty and will lose the vote: %v", s.ID, s.Name, err))
 				continue
 			}
 			bc := len(books)
@@ -192,19 +203,35 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 				mergeErrors = append(mergeErrors, fmt.Sprintf("failed to get books for series %d: %v", ser.ID, err))
 				continue
 			}
+			// Every book that could NOT be repointed. The delete below is gated on
+			// this being zero: a book still holding ser.ID when the row is deleted
+			// is stranded exactly as if the getter had hidden it, and the operator
+			// is told the prune succeeded. Recording the failure is not enough --
+			// that is what this loop already did.
+			repointFailed := 0
 			for _, bookCore := range books {
 				oldSeriesID := ser.ID
 				full, herr := store.GetBookByID(bookCore.ID)
 				if herr != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to hydrate book %s: %v", bookCore.ID, herr))
+					repointFailed++
 					continue
 				}
 				if full == nil {
+					// Reachable: the Pebble store returns (nil, nil) on ErrNotFound,
+					// and the membership getter can list a row from the memdb that a
+					// later point-get cannot hydrate. This branch used to be entirely
+					// silent -- no error, no counter -- and then fell through to the
+					// delete.
+					mergeErrors = append(mergeErrors, fmt.Sprintf(
+						"book %s is listed under series %d but does not resolve", bookCore.ID, ser.ID))
+					repointFailed++
 					continue
 				}
 				full.SeriesID = &keepID
 				if _, err := store.UpdateBook(full.ID, full); err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
+					repointFailed++
 				} else if operationID != "" {
 					_ = store.CreateOperationChange(&database.OperationChange{
 						ID:          ulid.Make().String(),
@@ -216,6 +243,14 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 						NewValue:    fmt.Sprintf("%d (%s)", keepID, group[canonicalIdx].Name),
 					})
 				}
+			}
+			if repointFailed > 0 {
+				mergeErrors = append(mergeErrors, fmt.Sprintf(
+					"series %d (%q): %d of %d books could not be repointed to %d; REFUSING to "+
+						"delete it, which would leave them holding a series row that no longer "+
+						"exists. Re-run after resolving the errors above.",
+					ser.ID, ser.Name, repointFailed, len(books), keepID))
+				continue
 			}
 			if err := store.DeleteSeries(ser.ID); err != nil {
 				mergeErrors = append(mergeErrors, fmt.Sprintf("failed to delete series %d: %v", ser.ID, err))
@@ -475,7 +510,12 @@ func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int) 
 				return fmt.Errorf("GetBookByID(%s): %w", book.ID, err)
 			}
 			if current == nil {
-				continue
+				// Not a skippable row. DeleteSeries(fromID) below is unconditional,
+				// so continuing here deletes the series while this book still points
+				// at it. The two error branches around this one already return; this
+				// was the one way through, and it was silent.
+				return fmt.Errorf("book %s is listed under series %d but does not resolve; "+
+					"refusing to delete series %d, which would strand it", book.ID, fromID, fromID)
 			}
 
 			current.SeriesID = &keepID
@@ -503,21 +543,50 @@ func executeSeriesNormalizeCore(
 ) (affectedBookIDs []string, err error) {
 	actions := computeSeriesNormalizeActions(store)
 
+	var errs []string
+
 	// Collect affected book IDs BEFORE renaming/merging.
+	//
+	// Core, NOT AllVersions — deliberately, and this is the one getter in this
+	// file that must stay filtered.
+	//
+	// affectedBookIDs is not a record of what was repointed. It is the worklist
+	// the caller hands to ReOrganizeInPlace (duplicates_ops.go) and to the tag
+	// write-back, i.e. it decides which FILES get moved and rewritten. The
+	// organizer deliberately never organizes a non-primary version while a
+	// primary exists in its version group (organizer/service.go:640), and
+	// duplicates_ops.go calls ReOrganizeInPlace directly, bypassing that filter.
+	// Widening this list therefore does not "keep the row and its file in sync"
+	// — it overrides an explicit organize policy from the outside.
+	//
+	// It would also collide. The default folder/file patterns
+	// (config/naming_patterns.go) carry no codec/quality/edition variable, so a
+	// primary and its alternate rip compute the SAME target path; whichever the
+	// stable series ordering happens to emit first would claim it and the other
+	// would be refused. mergeSeriesGroupHelper repointing a non-primary version
+	// is correct and necessary — moving its file is a separate question with a
+	// different, already-settled answer.
+	//
+	// Residual, recorded rather than fixed here: a repointed non-primary version
+	// keeps stale series tags, because nothing adds it to any write-back list.
+	// Splitting this into an organize list (Core) and a write-back list
+	// (AllVersions) is the real fix and would start writing tags to files this
+	// op has never touched — a production-data decision, not a bug fix. Filed as
+	// SERIES-NORMALIZE-WRITEBACK-SPLIT in todo.d.
 	seen := make(map[string]bool)
 	for _, a := range actions {
 		if a.Action == "flag" {
 			continue
 		}
-		// AllVersions, and this one is NOT about stranding. affectedBookIDs is
-		// what the caller organizes (moves files for) and writes tags back to.
-		// mergeSeriesGroupHelper below now repoints non-primary versions too, so
-		// collecting this list with the filtered getter would repoint a row and
-		// then never move its file or refresh its tags — the row would point at
-		// the new series while its file stayed under the old series' path.
-		// The two must read the same set.
-		books, bErr := store.GetBooksBySeriesIDAllVersions(a.SeriesID)
+		books, bErr := store.GetBooksBySeriesIDCore(a.SeriesID)
 		if bErr != nil {
+			// Not skippable: these books are about to be renamed or merged, and
+			// dropping them here means their files are never reorganized and
+			// their tags never refreshed, with nothing to retry from.
+			errs = append(errs, fmt.Sprintf(
+				"GetBooksBySeriesIDCore(%d): %v — its books will be renamed/merged but NOT "+
+					"reorganized or retagged; files will be left under the old series path",
+				a.SeriesID, bErr))
 			continue
 		}
 		for _, b := range books {
@@ -527,8 +596,6 @@ func executeSeriesNormalizeCore(
 			}
 		}
 	}
-
-	var errs []string
 
 	// First pass: rename.
 	for _, a := range actions {
