@@ -27,6 +27,35 @@
       `docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md` §7.
       Raised while reviewing PR #2821 (TASK-029).
 
+- [ ] **SERIES-MERGE-TRASHED-ROWS-RESIDUAL** All three paths fixed by #2825 still
+      strand **trashed** rows. Both series getters exclude soft-deleted books by
+      design, so a series holding one live book and one trashed book is deleted
+      with the trashed row still pointing at it — restore it from the trash later
+      and it has no series. The tooling to close this already exists and is
+      already used **in the same function**: `executeSeriesPrune`'s phase 2
+      (`internal/server/duplicates_helpers.go`) obtains
+      `database.AsSeriesBookRefStore(store)` and fails closed, with a comment
+      calling the filtered fallback *"the failure family this repo keeps
+      rediscovering"* — while phase 1, sixty lines above, deletes with no such
+      guard. `internal/maintenance/jobs/cleanup_series.go` uses the one-line
+      `database.SeriesRefCounts(store)` wrapper for exactly this.
+      ⚠️ **Not** done in #2825 on purpose: gating phase 1 on the unfiltered count
+      makes the prune **refuse merges it currently completes**, which is the same
+      class of production-data behaviour change #2826 is being held for. Decide
+      both together or neither.
+
+- [ ] **SERIES-NORMALIZE-WRITEBACK-SPLIT** `executeSeriesNormalizeCore` returns
+      ONE list that feeds two different consumers with two different policies:
+      `ReOrganizeInPlace` (which must exclude non-primary versions — the
+      organizer's own filter at `internal/organizer/service.go:640` says so, and
+      the default naming patterns give a primary and its alternate rip an
+      identical target path) and the tag write-back (which arguably should
+      include them, since a repointed alternate rip now carries stale series
+      tags). #2825 briefly widened the list to the complete set, which silently
+      overrode organize policy; that was reverted. The proper fix is to return
+      two lists. ⚠️ It would start writing tags to files this op has never
+      touched — a production-data decision, hence not done unilaterally.
+
 - [ ] **SERIES-MERGE-PRIMITIVE-UNGUARDED** `MergeSeries` — the store-level
       primitive beneath the paths above — has **no ref-count guard at all**.
       Every guard discussed in DEDUP-SERIES-MERGE-STRAND lives in a caller, so a

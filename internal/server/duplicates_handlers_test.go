@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_handlers_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c1e2f3a-4b5d-6e7f-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-08-24
 
@@ -108,8 +108,8 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 	}
 	// The listing getter above hides non-primary versions; this one does not.
 	// Modelling the difference is the point: series 2 has an alternate rip that
-	// only AllVersions can see, and the merge repoints it, so it must appear in
-	// affectedBookIDs or its file is never moved and its tags never rewritten.
+	// only AllVersions can see. The merge repoints it (correctly), and the
+	// affected list must still NOT contain it -- see the assertion below.
 	store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
 		switch id {
 		case 1:
@@ -147,13 +147,32 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 	if len(affected) == 0 {
 		t.Errorf("expected affected book IDs returned")
 	}
-	// The non-primary version must be in the affected set. The caller organizes
-	// (moves files for) and writes tags back to exactly this list, so a row the
-	// merge repoints but the list omits keeps its file under the old series'
-	// path with stale tags -- silent, and invisible to any assertion on len().
-	if !slices.Contains(affected, "book-2-alt") {
-		t.Errorf("non-primary version book-2-alt missing from affected books %v; "+
-			"the affected list must be collected with the same getter the merge "+
-			"repoints with, or its file is never moved and its tags never rewritten", affected)
+	// The non-primary version must NOT be in the affected set.
+	//
+	// This asserted the opposite for one commit, on the reasoning that a row the
+	// merge repoints should also have its file moved. That reasoning was wrong:
+	// affectedBookIDs is the worklist for ReOrganizeInPlace, and the organizer
+	// deliberately never organizes a non-primary version while a primary exists
+	// (organizer/service.go:640). duplicates_ops.go calls ReOrganizeInPlace
+	// directly and so bypasses that filter -- meaning a widened list here does
+	// not "keep row and file in sync", it silently overrides organize policy
+	// from outside.
+	//
+	// It would also collide: the default naming patterns carry no codec or
+	// edition variable, so a primary and its alternate rip compute the SAME
+	// destination path. One of the two would claim it and the other would be
+	// refused, with the winner decided by emission order rather than primacy.
+	//
+	// Repointing it (which the merge does) and organizing it are separate
+	// questions. This pins the answer to the second one.
+	if slices.Contains(affected, "book-2-alt") {
+		t.Errorf("non-primary version book-2-alt is in affected books %v; it must not be. "+
+			"The caller runs ReOrganizeInPlace on this list, bypassing the organizer's own "+
+			"non-primary filter, and the alternate rip computes the same target path as its "+
+			"primary -- so including it causes a path collision, not a correctly moved file.", affected)
+	}
+	// ...and the primary still must be, or the list is simply broken.
+	if !slices.Contains(affected, "book-2") {
+		t.Errorf("primary book-2 missing from affected books %v", affected)
 	}
 }
