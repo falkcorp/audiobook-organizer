@@ -445,6 +445,23 @@ export const BookDetail = () => {
     }
   };
 
+  const handleForceRescan = async () => {
+    if (!book) return;
+    setActionLoading(true);
+    setActionLabel('Flagging for rescan...');
+    try {
+      await api.forceRescanBook(book.id);
+      toast('Flagged for a full re-read on the next scan.', 'success');
+      await loadBook();
+    } catch (error) {
+      console.error('Failed to flag book for rescan', error);
+      toast('Failed to flag book for rescan.', 'error');
+    } finally {
+      setActionLabel(null);
+      setActionLoading(false);
+    }
+  };
+
   const handlePurge = async () => {
     if (!book) return;
     setActionLoading(true);
@@ -1096,6 +1113,7 @@ export const BookDetail = () => {
         onParseWithAI={handleParseWithAI}
         onRescanFolder={handleRescanFolder}
         onRescanFiles={handleRescanFiles}
+        onForceRescan={handleForceRescan}
         onRefresh={() => {
           loadBook();
           loadVersions();

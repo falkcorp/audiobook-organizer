@@ -1232,12 +1232,30 @@ export interface RescanBookResult {
   }>;
 }
 
+// Re-stats the book's files and corrects FileSize. Despite the historical name
+// this does NOT re-read anything -- no tags, no hashing. Use forceRescanBook for
+// an actual re-read. Points at /reconcile-files; /rescan remains a deprecated
+// server-side alias for the same handler.
 export async function rescanBookFiles(bookId: string): Promise<RescanBookResult> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/rescan`, {
+  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/reconcile-files`, {
     method: 'POST',
   });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to rescan book files');
+    throw await buildApiError(response, 'Failed to reconcile book files');
+  }
+  const json = await response.json();
+  return json.data ?? json;
+}
+
+// Flags ONE book for a full re-read by the next scan. Precise: unchanged
+// siblings in the same directory are still skipped, unlike a folder scan with
+// force_update, which re-reads everything in scope.
+export async function forceRescanBook(bookId: string): Promise<{ book_id: string; needs_rescan: boolean }> {
+  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/force-rescan`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to flag book for rescan');
   }
   const json = await response.json();
   return json.data ?? json;
