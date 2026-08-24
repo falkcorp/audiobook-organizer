@@ -18,6 +18,7 @@ import {
   MenuItem,
   ListItemText,
   IconButton,
+  ButtonGroup,
 } from '@mui/material';
 import {
   FilterList as FilterListIcon,
@@ -28,6 +29,7 @@ import {
   Bookmark as BookmarkIcon,
   Edit as EditIcon,
   Close as CloseIcon,
+  ArrowDropDown as ArrowDropDownIcon,
 } from '@mui/icons-material';
 import { ColumnChooser } from '../audiobooks/ColumnChooser';
 import { BatchToolbar } from '../BatchToolbar';
@@ -80,6 +82,7 @@ interface LibraryToolbarProps {
   onFilterOpen: () => void;
   onOrganizeLibrary: () => void;
   onFullRescan: () => void;
+  onScanEverything: () => void;
   onPurgeOpen: () => void;
   onStorageDrawerClose: () => void;
   navigate: (path: string) => void;
@@ -129,11 +132,13 @@ export const LibraryToolbar = ({
   onFilterOpen,
   onOrganizeLibrary,
   onFullRescan,
+  onScanEverything,
   onPurgeOpen,
   onStorageDrawerClose,
   navigate,
 }: LibraryToolbarProps) => {
   const [presetsMenuAnchor, setPresetsMenuAnchor] = useState<null | HTMLElement>(null);
+  const [rescanMenuAnchor, setRescanMenuAnchor] = useState<null | HTMLElement>(null);
   const presetsMenuOpen = Boolean(presetsMenuAnchor);
   const closePresetsMenu = () => setPresetsMenuAnchor(null);
   const { toast } = useToast();
@@ -307,15 +312,38 @@ export const LibraryToolbar = ({
             >
               {organizeRunning ? 'Organizing…' : 'Organize Library'}
             </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={activeScanOp !== null ? <CircularProgress size={16} /> : <RefreshIcon />}
-              disabled={activeScanOp !== null}
-              onClick={onFullRescan}
+            <ButtonGroup variant="outlined" size="small" disabled={activeScanOp !== null}>
+              <Button
+                startIcon={activeScanOp !== null ? <CircularProgress size={16} /> : <RefreshIcon />}
+                onClick={onFullRescan}
+              >
+                {activeScanOp !== null ? 'Scanning…' : 'Full Rescan'}
+              </Button>
+              <Button
+                size="small"
+                onClick={(e) => setRescanMenuAnchor(e.currentTarget)}
+                aria-label="More rescan options"
+              >
+                <ArrowDropDownIcon fontSize="small" />
+              </Button>
+            </ButtonGroup>
+            <Menu
+              anchorEl={rescanMenuAnchor}
+              open={Boolean(rescanMenuAnchor)}
+              onClose={() => setRescanMenuAnchor(null)}
             >
-              {activeScanOp !== null ? 'Scanning…' : 'Full Rescan'}
-            </Button>
+              <MenuItem
+                onClick={() => {
+                  setRescanMenuAnchor(null);
+                  onScanEverything();
+                }}
+              >
+                <ListItemText
+                  primary="Scan Everything"
+                  secondary="Include the library root, but skip unchanged files (fast)"
+                />
+              </MenuItem>
+            </Menu>
             <Button variant="outlined" size="small" onClick={onFetchAllUnmatched}>
               Fetch Unmatched
             </Button>

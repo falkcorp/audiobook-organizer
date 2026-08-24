@@ -1922,6 +1922,21 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
+  // Adds the organized library root to the scan WITHOUT re-hashing every file
+  // in the library the way Full Rescan (force_update) does -- unchanged files
+  // are still skipped. This is the option to reach for "find new books
+  // anywhere in the library", not Full Rescan.
+  const handleScanEverything = async () => {
+    try {
+      setImportPaths((prev) => prev.map((p) => ({ ...p, status: 'scanning' })));
+      const op = await api.startScan(undefined, undefined, false, true);
+      startPolling(op.id, 'scan');
+    } catch (error) {
+      console.error('Failed to start whole-library scan:', error);
+      setImportPaths((prev) => prev.map((p) => ({ ...p, status: 'idle' })));
+    }
+  };
+
   const handleFingerprintRescanFull = async () => {
     if (!window.confirm('Re-fingerprint ALL files? This may take a while for large libraries.')) {
       return;
@@ -2081,6 +2096,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         onFilterOpen={() => setFilterOpen(true)}
         onOrganizeLibrary={handleOrganizeLibrary}
         onFullRescan={handleFullRescan}
+        onScanEverything={handleScanEverything}
         onPurgeOpen={() => setPurgeDialogOpen(true)}
         onStorageDrawerClose={() => setStorageDrawerOpen(false)}
         navigate={navigate}
