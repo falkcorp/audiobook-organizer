@@ -1,5 +1,5 @@
 // file: internal/dedup/author_prefilter_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9c21ad-7e40-4b62-9c85-1d6a0f3b8e74
 // last-edited: 2026-08-24
 
@@ -169,6 +169,69 @@ func TestJaroWinklerBelowThresholdActuallySkips(t *testing.T) {
 			"substantial fraction. It may have gone inert.", skipped, total, ratio*100)
 	}
 	t.Logf("prefilter rejects %d/%d pairs (%.1f%%)", skipped, total, ratio*100)
+}
+
+// TestPrefilterCorpusDiscriminatesAtTheBound asserts a property of the CORPUS
+// rather than of the filter, and it is the exact mirror of the yield floor
+// above.
+//
+// TestJaroWinklerBelowThresholdActuallySkips exists because soundness alone is
+// satisfied by a filter that never skips anything. The same reasoning applies
+// in the other direction: TestJaroWinklerBelowThresholdIsSound can only catch a
+// filter that skips TOO MUCH if the corpus actually contains a true match close
+// to the bound. Today it does -- the tightest matching pairs sit at exactly
+// 0.75, which is the bound itself -- so any tightening whatsoever is caught.
+// But nothing pins that, and the pairs responsible ("muelle"/"muellers",
+// "smithe"/"smithers", "anders"/"andersso") look like redundant filler. Pruning
+// them would silently gut the soundness test while every assertion stayed
+// green.
+//
+// So: measure the tightest true match in the corpus and require it to sit at or
+// below the bound. This makes the corpus's discriminating power self-verifying
+// instead of incidental.
+func TestPrefilterCorpusDiscriminatesAtTheBound(t *testing.T) {
+	corpus := prefilterCorpus()
+	bound := jaroWinklerMinLengthRatio(0.95)
+
+	tightest := 1.0
+	var a, b string
+	matches := 0
+	for i := range corpus {
+		for j := i + 1; j < len(corpus); j++ {
+			if jaroWinklerSimilarity(corpus[i], corpus[j]) < 0.95 {
+				continue
+			}
+			matches++
+			shorter := utf8.RuneCountInString(corpus[i])
+			longer := utf8.RuneCountInString(corpus[j])
+			if shorter > longer {
+				shorter, longer = longer, shorter
+			}
+			if longer == 0 {
+				continue
+			}
+			if ratio := float64(shorter) / float64(longer); ratio < tightest {
+				tightest, a, b = ratio, corpus[i], corpus[j]
+			}
+		}
+	}
+
+	if matches == 0 {
+		t.Fatal("corpus contains no true matches at all; the soundness test " +
+			"cannot detect over-skipping and proves nothing")
+	}
+	// Allow a hair above the bound for float representation, but nothing more:
+	// the point is that the tightest match sits ON the bound, not near it.
+	if tightest > bound+1e-6 {
+		t.Fatalf("corpus's tightest true match is at ratio %.4f, but the "+
+			"prefilter bound is %.4f. Every true match is comfortably clear of "+
+			"the bound, so TestJaroWinklerBelowThresholdIsSound would stay green "+
+			"against a filter tightened anywhere in (%.4f, %.4f] -- a range that "+
+			"discards real duplicates. Add a matching pair at the bound.",
+			tightest, bound, bound, tightest)
+	}
+	t.Logf("%d true matches; tightest sits at ratio %.4f (%q vs %q), bound is %.4f",
+		matches, tightest, a, b, bound)
 }
 
 // TestJaroWinklerBelowThresholdCountsRunesNotBytes pins rune-vs-byte counting
