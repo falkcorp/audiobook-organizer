@@ -1,5 +1,5 @@
 <!-- file: docs/superpowers/specs/2026-08-24-staged-library-scan-design.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 4.0.0 -->
 <!-- guid: c7f76dfd-5447-4c73-a9a6-b77f62db8736 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -95,6 +95,61 @@ distinguishes "cache hit, skipped" from "cache missed, re-read everything," whic
 is why two wrong diagnoses survived this long. A skipped/processed counter in the
 scan summary is a prerequisite for any further work here.
 
+### 3b. Where the wall clock actually goes (measured, 07:24-11:20)
+
+The mark is not merely present, it is *correct*: 203 marked books in the walked
+trees were stat'd on prod and compared against their stored mark.
+
+```
+n=202
+  WOULD SKIP (mtime AND size match): 202 (100.0%)
+  mtime differs only: 0   size differs only: 0   both differ: 0   missing: 0
+```
+
+100% would skip. The cache is not the problem, and this closes the question.
+
+Attribution over the 3.98 h since the 07:24 resume:
+
+| wall clock | share | phase |
+|---|---|---|
+| 1.00 h | 25% | per-book processing (64,005 events) |
+| 0.86 h | 22% | multi-file group consolidation (7,911 groups) |
+| 0.78 h | 20% | folder walk / batching |
+| 0.55 h | 14% | **AI parsing — 268 `context deadline exceeded` + 268 backoff retries** |
+| 0.38 h | 10% | tag reads |
+
+No stalls: 267,926 log lines, largest gap 15 s, zero gaps over 30 s. The process
+is continuously busy, not blocked.
+
+**Concurrency contention, previously misattributed.** `dedup.full-scan` ran
+alongside `library.scan` for most of this window and produced *more* log volume
+than the scan itself:
+
+| op | log lines since 07:24 |
+|---|---|
+| `dedup.full-scan` | 119,145 |
+| `library.scan` | 99,982 |
+
+The `Scanning books: N / 56729` and `Composing scores` lines belong to **dedup**,
+not to the scan. Both ops were restored together by the 2026-08-24 resume fix, so
+two whole-library passes landed on the same spinning disks at once. They hold
+separate `ConcurrencyKey`s, so nothing serializes them.
+
+> **Caveat on the table.** Wall clock is attributed to the log line preceding
+> each gap. With 48 workers logging concurrently that is suggestive, not proof.
+> The *counts* (7,911 groups, 268 AI timeouts, 119,145 dedup lines, 202/202 mark
+> matches) are solid; the hour splits are approximate.
+
+### 3c. Is the diff predicate strong enough?
+
+`entry.Mtime == mtime && entry.Size == size && !entry.NeedsRescan`.
+
+- **Missing a real change:** possible only for an in-place edit that preserves
+  byte size *and* restores mtime. Not a practical concern here.
+- **Falsely invalidating:** any tool that touches mtime forces a full re-read of
+  that file, and **nothing in the logs would reveal it**. This is the direction
+  that matters, and it is unobservable today — see the instrumentation gap.
+
 ### 4. The denominator grows during the run.
 
 `progress_total` over one run: 40,111 → 44,439 → 57,417 → 58,812 → 59,617 →
@@ -155,6 +210,23 @@ New/changed books are promoted into the library immediately after stage 2 with a
 flag on the existing row (`library_state` already exists and carries values such
 as `suspicious`) marking them as awaiting the deep pass. **No new table.** The
 book is visible and browsable straight away; the deep pass fills in the rest.
+
+## What to fix first (independent of this design)
+
+Ranked by measured cost against effort. **None of these require the staging work
+below**, and the staging work does not deliver them:
+
+1. **The 268 AI parsing timeouts** — ~14% of the run spent failing and retrying
+   LLM calls. Largest single win, fully independent.
+2. **Stop `dedup.full-scan` and `library.scan` running concurrently.** Two
+   whole-library I/O passes on the same spindles, with no shared
+   `ConcurrencyKey` to serialize them.
+3. **A skipped/processed counter.** Cheapest of the three and the reason the
+   first three diagnoses of this problem were all wrong.
+
+The staged pipeline below stands on its own merits — a non-blocking scan, a
+holding area, and honest progress reporting — but it is **not** the fix for the
+5-6 hour runtime. Recording that explicitly so it is not sold as one.
 
 ## Non-goals
 
