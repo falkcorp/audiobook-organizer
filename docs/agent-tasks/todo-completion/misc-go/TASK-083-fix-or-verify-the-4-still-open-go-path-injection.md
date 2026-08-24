@@ -1,9 +1,14 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-083-fix-or-verify-the-4-still-open-go-path-injection.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 935ef220-7739-4aed-a9b3-42a761c667dc -->
 <!-- last-edited: 2026-08-23 -->
 
-# TASK-083 — Fix or verify the 4 still-open go/path-injection findings (1 of the original 5 is already suppressed) (SEC-CODEQL-BACKLOG)
+# TASK-083 — Fix or verify the still-open go/path-injection findings (SEC-CODEQL-BACKLOG)
+
+> **Count deliberately not in this title.** It said "the 4 still-open" through
+> v2.0.0 and was wrong: 5 were open when measured on 2026-08-24, two of which the
+> brief did not list. Enumerate the rule live (command in the status block below)
+> and work what you measure — do not trust a number written into a heading.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · misc-go subagent · **Why:** 4 similar findings needing the same allow-list-gate pattern already used successfully in service_mutation.go — mechanical once the pattern is confirmed, but each site touches file-mutating code. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
@@ -34,13 +39,49 @@ git rebase origin/main
 > | #1105 | `internal/server/handlers/filesystem.go` | **DONE** — dismissed via API by #2781 |
 > | **#1477** | `internal/fileops/safe_operations.go:134` | **OPEN — a REAL bug.** Your work. |
 > | **#1478** | `internal/fileops/safe_operations.go:175` | **OPEN — a REAL bug.** Your work. |
+> | #1104 | `internal/audiobooks/service_mutation.go:63` | OPEN — **do NOT touch.** See FALSE CLAIM 2. |
+> | **#1603** | `internal/fileops/hash.go:33` | **OPEN — TRIAGE FIRST.** Added 2026-08-24; see below. |
+> | **#1543** | `internal/metafetch/service.go:321` | **OPEN — TRIAGE FIRST.** Added 2026-08-24; see below. |
 >
 > Re-confirm before starting (state, not memory):
 > ```bash
-> for n in 1429 1105 1477 1478; do printf '%s ' "$n"; \
+> for n in 1429 1105 1477 1478 1104 1603 1543; do printf '%s ' "$n"; \
 >   gh api /repos/falkcorp/audiobook-organizer/code-scanning/alerts/$n \
 >   -q '.state + " " + .most_recent_instance.location.path'; done
 > ```
+>
+> ### ⚠️ ADDED 2026-08-24 — this brief's alert list was INCOMPLETE
+>
+> **Do not treat the table above as the universe of open findings. Enumerate the
+> rule live, then work what you measure.**
+>
+> v2.0.0 enumerated the five alerts named in the original `TODO.md` item
+> (`#1477 #1478 #1429 #1105 #1104`) and reported "4 still-open". That set was
+> never the live set. Measured 2026-08-24, `go/path-injection` had **5 open
+> alerts**, and two of them appear nowhere in v2.0.0:
+>
+> ```bash
+> gh api '/repos/falkcorp/audiobook-organizer/code-scanning/alerts?state=open&per_page=100' \
+>   --paginate -q '.[] | select(.rule.id=="go/path-injection") |
+>   "#\(.number)\t\(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
+> ```
+>
+> Both predate this brief — **#1603** was created 2026-08-21 and **#1543** on
+> 2026-08-15, while v2.0.0 was written 2026-08-23. They were not missed because
+> they were new; they were missed because the list was copied from the `TODO.md`
+> item instead of queried. This is the same failure the brief already warns about
+> for line numbers, applied to the alert set itself: **a brief's list is what its
+> author saw, not what exists.** An anchor-by-text re-verify cannot catch it,
+> because a missing entry has no anchor to fail on — only a live count can.
+>
+> **#1603 and #1543 are UNTRIAGED. Neither is confirmed a real bug nor a false
+> positive.** Do not assume they share `#1477`/`#1478`'s root cause (a containment
+> root derived from the tainted value) — that conclusion was reached by reading
+> `safe_operations.go`, and neither of these is in that file. Triage each on its
+> own evidence and report what you find. If one is a real bug, fix it; if it is a
+> false positive, dismiss it via the **code-scanning API** (never `lgtm[]` — see
+> FALSE CLAIM 1). If triage runs long, report them as open with your findings
+> rather than rushing a dismissal.
 >
 > **FALSE CLAIM 1 — "`lgtm[]` suppresses the finding".** It suppresses nothing
 > in this repo; it is the legacy LGTM.com mechanism GitHub code scanning never
