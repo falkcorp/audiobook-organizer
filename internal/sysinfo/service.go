@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-08-18
+// last-edited: 2026-08-24
 
 package sysinfo
 
@@ -327,8 +327,11 @@ func (ss *SystemService) CollectSystemLogs(level, search string, limit, offset i
 	}
 
 	// Newest first. This runs over the FULL collected set before the
-	// offset/limit slice below, so it is the whole log population, not a page --
-	// the O(n^2) swap loop it replaces scaled with every operation retained.
+	// offset/limit slice below, so it sorts the whole collected population
+	// rather than one page. That population is bounded -- GetRecentOperations
+	// caps it at 50 operations above -- but each operation contributes all of
+	// its log entries, so the set being sorted is much larger than 50 and is not
+	// bounded by the caller's page size.
 	sort.SliceStable(allLogs, func(a, b int) bool {
 		return allLogs[a].Timestamp.After(allLogs[b].Timestamp)
 	})
