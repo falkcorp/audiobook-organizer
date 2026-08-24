@@ -1,5 +1,5 @@
 // file: internal/database/batch_upsert_aggregates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d41f6b2-70e8-4c35-b1a7-38f0c92e64d5
 // last-edited: 2026-08-24
 
@@ -216,6 +216,54 @@ func TestBatchUpsertBookFilesRecomputesAggregatesOncePerBook(t *testing.T) {
 				"the single recompute should have written the aggregates exactly once")
 		})
 	}
+}
+
+// TestDeletingEveryFileKeepsTheBookDuration pins what the partial-data rule
+// actually does when a book loses all of its files, because the comment on
+// DeleteBookFilesForBook claimed the opposite.
+//
+// That comment read: "The book likely has Duration=0 after deletion, which is
+// correct — nothing to sum." But RecomputeBookAggregates' partial-data rule fires
+// on exactly this input: when no file carries a duration and the book already has
+// a non-zero one, the old value is PRESERVED and a warning is logged, precisely so
+// a transient missing-file event cannot destroy hard-won duration data.
+//
+// So deleting every file leaves Duration untouched, not zeroed. Both statements
+// cannot be true; this test settles which one the code implements. It is written
+// against the shared recompute path rather than the delete method's own wording so
+// it keeps holding if that call site moves.
+func TestDeletingEveryFileKeepsTheBookDuration(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	book, err := store.CreateBook(&Book{Title: "Loses Its Files", FilePath: "/lib/loses"})
+	require.NoError(t, err)
+
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID:   book.ID,
+		FilePath: "/lib/loses/track1.m4b",
+		Duration: 1234,
+		FileSize: 5_000_000,
+	}))
+
+	withFiles, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, withFiles.Duration)
+	require.Equal(t, 1234, *withFiles.Duration)
+
+	require.NoError(t, store.DeleteBookFilesForBook(book.ID))
+
+	remaining, err := store.GetBookFiles(book.ID)
+	require.NoError(t, err)
+	require.Empty(t, remaining, "every file should be gone")
+
+	after, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.Duration,
+		"the partial-data rule preserves a populated Duration when no file carries one")
+	require.Equal(t, 1234, *after.Duration,
+		"deleting every file must NOT zero the book's Duration — the partial-data "+
+			"rule deliberately keeps the last known good value")
 }
 
 // TestBatchUpsertBookFilesAttributesTheAffectedBookNotTheRequestedOne guards the
