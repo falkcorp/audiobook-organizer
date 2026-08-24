@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.11.0
+// version: 3.12.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -806,6 +806,70 @@ func (p *PebbleStore) ListWaitingDepsOps() (rows []OperationV2Row, err error) {
 			continue
 		}
 		if row.Status == "waiting_deps" {
+			result = append(result, row)
+		}
+	}
+	return result, iter.Error()
+}
+
+// isResumableV2Status reports whether a v2 operation row in this status should be
+// handed to the registry's startup resume sweep (registry.resumeAfterStartup).
+//
+// WHY THIS EXISTS AT ALL — READ BEFORE "SIMPLIFYING" IT BACK TO THE ACTIVE INDEX.
+// The sweep used to take its candidates from ListActiveOperationsV2, which reads
+// the opv2:act: index. UpdateOperationV2Status DELETES that index key for any
+// status that is not running/queued, so the instant a shutdown stamps
+// "interrupted_quiesced" the row leaves the index and the sweep can never see it
+// again. Boot then logs "no active ops to resume", which reads like "nothing was
+// interrupted" rather than "I am structurally blind to interrupted rows".
+//
+// That is not hypothetical: a library.scan killed by a deploy on 2026-08-17 sat
+// at interrupted_quiesced and never came back, and it happened AGAIN on
+// 2026-08-24 (op 01M0RZPXBFCWVQQ1N2PGTE8C04, 25,880 files, stranded ~4h). The
+// 2026-08-17 fix widened the *v1* predicate (isResumableOpStatus in
+// pebble_store_operations.go) to match the "interrupted" prefix — but library.scan
+// is v2-native and takes the registry path, which never consults that predicate.
+// Widening a predicate cannot fix a sweep that does not read it.
+//
+// interrupted_dropped and interrupted_ask are deliberately EXCLUDED: both are
+// decisions the sweep itself already made on a previous boot (ResumePolicy=drop,
+// or "awaiting user decision"). Re-including them would relitigate a settled
+// outcome on every restart, and interrupted_ask would resume without the user
+// ever answering. Only interrupted_quiesced — the status minted for every policy
+// that is NOT drop — is genuinely unfinished business.
+func isResumableV2Status(status string) bool {
+	return status == "queued" || status == "running" || status == "interrupted_quiesced"
+}
+
+// ListResumableOperationsV2 returns the rows the startup resume sweep should
+// consider: queued, running, and interrupted_quiesced.
+//
+// Unlike ListActiveOperationsV2 this scans the whole opv2:op: keyspace rather
+// than the opv2:act: index, because the rows that most need resuming are exactly
+// the ones the index has dropped. ListActiveOperationsV2 is deliberately left
+// alone — four other callers (the scheduler's in-flight guard, the AI
+// same-mode guard, the enqueue dedupe, and CountRunningByPluginV2) depend on it
+// meaning strictly "queued or running", and a quiesced row from a week ago must
+// not read as in-flight to any of them.
+func (p *PebbleStore) ListResumableOperationsV2() (rows []OperationV2Row, err error) {
+	defer recoverPebbleClosed("ListResumableOperationsV2", &err)
+	prefix := []byte("opv2:op:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var result []OperationV2Row
+	for iter.First(); iter.Valid(); iter.Next() {
+		var row OperationV2Row
+		if err := json.Unmarshal(iter.Value(), &row); err != nil {
+			continue
+		}
+		if isResumableV2Status(row.Status) {
 			result = append(result, row)
 		}
 	}

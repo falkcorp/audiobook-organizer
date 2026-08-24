@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package registry_test
 
@@ -203,6 +203,24 @@ func (f *fakeStore) ListActiveOperationsV2() ([]database.OperationV2Row, error) 
 	var result []database.OperationV2Row
 	for _, op := range f.ops {
 		if op.Status == "queued" || op.Status == "running" {
+			result = append(result, op)
+		}
+	}
+	return result, nil
+}
+
+// ListResumableOperationsV2 mirrors the Pebble implementation's predicate:
+// queued|running|interrupted_quiesced, scanned over every row rather than over
+// the active index. Keeping the two in step matters — the whole defect this
+// method exists to fix was the sweep and the store disagreeing about which rows
+// are resumable.
+func (f *fakeStore) ListResumableOperationsV2() ([]database.OperationV2Row, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result []database.OperationV2Row
+	for _, op := range f.ops {
+		switch op.Status {
+		case "queued", "running", "interrupted_quiesced":
 			result = append(result, op)
 		}
 	}

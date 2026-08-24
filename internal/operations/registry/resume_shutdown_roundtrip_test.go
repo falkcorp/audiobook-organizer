@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_shutdown_roundtrip_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b5c4a19-7e2d-4f83-9a61-3c8d5e7f012a
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package registry_test
 
@@ -24,35 +24,37 @@ func newRoundtripRegistry(store *fakeStore, workers int) *registry.Registry {
 	})
 }
 
-// TestResume_RealShutdownLeavesNothingForTheSweep is the test the existing
-// resume suite cannot be: it never writes a status into the store by hand.
+// TestResume_RealShutdownIsResumedByTheSweep is the test the existing resume
+// suite cannot be: it never writes a status into the store by hand.
 //
 // Every case in resume_test.go begins at insertRunningOp (resume_test.go:22),
 // which writes Status:"running" directly and then calls Start. That fixture
 // encodes the very assumption the suite exists to check -- that an interrupted
 // run is left in the store as "running". It is not.
 //
-// This test pins the PR1/PR2 BOUNDARY, and each half is deliberate:
+// THIS IS THE END-TO-END REGRESSION TEST FOR OPS-V2-RESUME-BLIND. It was written
+// with assertions (2) and (3) inverted, documenting the gap while it stood; both
+// have now been flipped to require the fix. The two halves:
 //
-//   - RECORDED CORRECTLY (PR1, this branch). A graceful Shutdown cancels the
-//     run. Before this branch executeRun classified that as an ordinary
-//     ctxCanceled and wrote "canceled", losing the fact that the server -- not a
-//     user -- ended the run. finalStatusForCanceledRun now distinguishes the two
-//     and writes interruptedStatus(resumePolicy), so a ResumeRestart op shuts
-//     down as "interrupted_quiesced".
+//   - RECORDED CORRECTLY (PR1, #2793). A graceful Shutdown cancels the run.
+//     executeRun used to classify that as an ordinary ctxCanceled and write
+//     "canceled", losing the fact that the server -- not a user -- ended the run.
+//     finalStatusForCanceledRun distinguishes the two and writes
+//     interruptedStatus(resumePolicy), so a ResumeRestart op shuts down as
+//     "interrupted_quiesced".
 //
-//   - STILL INVISIBLE (PR2, not this branch). UpdateOperationV2Status deletes
-//     the opv2:act: key for any status that is not running|queued
-//     (pebble_store_ops_v2.go:277), and resumeAfterStartup reads only
-//     ListActiveOperationsV2. So the correctly-labelled row is STILL not seen by
-//     the sweep and no ResumePolicy is consulted. Assertions (2) and (3) below
-//     are INVERTED on purpose to pin that: they assert the op does NOT come
-//     back, which is still the behaviour, so this test runs and passes today
-//     rather than skipping.
+//   - RESUMED (PR2, this branch). resumeAfterStartup now takes its candidates
+//     from ListResumableOperationsV2, which scans the opv2:op: keyspace and
+//     includes interrupted_quiesced, instead of ListActiveOperationsV2, whose
+//     opv2:act: index UpdateOperationV2Status had already dropped the row from
+//     (pebble_store_ops_v2.go). The correctly-labelled row is now seen and its
+//     declared ResumePolicy is finally consulted.
 //
-// When PR2 lands, (2) and (3) are what must flip. See OPS-V2-RESUME-BLIND in
-// todo.d/20260823-v2-resume-sweep-is-blind-to-interrupted-rows.md.
-func TestResume_RealShutdownLeavesNothingForTheSweep(t *testing.T) {
+// Assertion (2) still requires the ACTIVE set to be empty. That is deliberate,
+// not a leftover: ListActiveOperationsV2 means "in flight" and four other callers
+// depend on it, so the fix deliberately did NOT widen it. The two sets diverging
+// here is the fix working, not a bug.
+func TestResume_RealShutdownIsResumedByTheSweep(t *testing.T) {
 	store := newFakeStore()
 	r1 := newRoundtripRegistry(store, 2)
 
@@ -103,19 +105,33 @@ func TestResume_RealShutdownLeavesNothingForTheSweep(t *testing.T) {
 			got, "interrupted_quiesced")
 	}
 
-	// (2) ...but it has STILL left the set resumeAfterStartup reads, because
-	//     interrupted_quiesced is neither running nor queued. This is the PR2
-	//     gap, asserted here so it stays visible rather than assumed fixed.
+	// (2) The row has left the ACTIVE set -- correctly, and permanently.
+	//     interrupted_quiesced is neither running nor queued, and
+	//     ListActiveOperationsV2 must keep meaning "in flight" for the scheduler's
+	//     in-flight guard, the AI same-mode guard and the enqueue dedupe.
 	active, err := store.ListActiveOperationsV2()
 	if err != nil {
 		t.Fatalf("ListActiveOperationsV2: %v", err)
 	}
 	if len(active) != 0 {
-		t.Errorf("ListActiveOperationsV2 returned %d rows after shutdown, want 0", len(active))
+		t.Errorf("ListActiveOperationsV2 returned %d rows after shutdown, want 0 "+
+			"(a quiesced row must not read as in-flight)", len(active))
 	}
 
-	// (3) A fresh registry over the same store therefore resumes nothing, even
-	//     though the def declares ResumeRestart.
+	//     ...but the RESUMABLE set must still hold it. This is the assertion that
+	//     separates the fix from the defect: before PR2 both sets were the same
+	//     query and the row was simply gone.
+	resumable, err := store.ListResumableOperationsV2()
+	if err != nil {
+		t.Fatalf("ListResumableOperationsV2: %v", err)
+	}
+	if len(resumable) != 1 || resumable[0].ID != opID {
+		t.Fatalf("ListResumableOperationsV2 = %+v, want exactly the quiesced op %s; "+
+			"the sweep cannot resume a row it cannot see", resumable, opID)
+	}
+
+	// (3) A fresh registry over the same store therefore DOES resume it, because
+	//     the def declares ResumeRestart.
 	var reran atomic.Bool
 	def2 := def
 	def2.Run = func(context.Context, json.RawMessage, registry.Reporter) error {
@@ -132,23 +148,24 @@ func TestResume_RealShutdownLeavesNothingForTheSweep(t *testing.T) {
 	defer func() { _ = r2.Shutdown(context.Background()) }()
 	time.Sleep(300 * time.Millisecond)
 
-	// INVERTED ON PURPOSE -- this documents the gap rather than the guarantee.
-	// ResumeRestart says "resume me" and it does not happen. When
-	// OPS-V2-RESUME-BLIND is fixed, FLIP this to require reran==true and delete
-	// this comment: the test then becomes the regression test for the fix.
-	if reran.Load() {
-		t.Fatalf("the op resumed after a graceful shutdown -- OPS-V2-RESUME-BLIND " +
-			"(todo.d/20260823-v2-resume-sweep-is-blind-to-interrupted-rows.md) appears " +
-			"to be fixed; invert this assertion")
+	// THE LOAD-BEARING ASSERTION. ResumeRestart says "resume me"; before this
+	// branch it silently did not happen. A failure here means the sweep is blind
+	// to interrupted_quiesced rows again -- check that resumeAfterStartup still
+	// reads ListResumableOperationsV2 and not the active index.
+	if !reran.Load() {
+		t.Fatal("a ResumeRestart op did NOT resume after a graceful shutdown: " +
+			"OPS-V2-RESUME-BLIND has regressed. resumeAfterStartup must take its " +
+			"candidates from ListResumableOperationsV2 (which includes " +
+			"interrupted_quiesced), not ListActiveOperationsV2.")
 	}
 }
 
-// TestResume_ShutdownTimeoutLeavesQuiescedAndStillInvisible covers the other
-// shutdown branch -- registry.go:1075, where the drain deadline expires and the
-// row is written interrupted_quiesced by interruptedStatus. No test touches that
-// branch today. It is likewise not running|queued, so it too leaves the active
-// index and the sweep still sees nothing.
-func TestResume_ShutdownTimeoutLeavesQuiescedAndStillInvisible(t *testing.T) {
+// TestResume_ShutdownTimeoutLeavesQuiescedAndResumable covers the other shutdown
+// branch -- registry.go:1075, where the drain deadline expires and the row is
+// written interrupted_quiesced by interruptedStatus. It is likewise not
+// running|queued, so it too leaves the active index; the point of this test is
+// that leaving the active index no longer means leaving the RESUMABLE set.
+func TestResume_ShutdownTimeoutLeavesQuiescedAndResumable(t *testing.T) {
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
 		WatchdogInterval: 30 * time.Second,
@@ -203,7 +220,16 @@ func TestResume_ShutdownTimeoutLeavesQuiescedAndStillInvisible(t *testing.T) {
 	}
 	if len(active) != 0 {
 		t.Errorf("interrupted_quiesced row still in the active set (%d rows); "+
-			"if this now holds the row, OPS-V2-RESUME-BLIND may be fixed", len(active))
+			"it must not read as in-flight", len(active))
+	}
+	resumable, err := store.ListResumableOperationsV2()
+	if err != nil {
+		t.Fatalf("ListResumableOperationsV2: %v", err)
+	}
+	if len(resumable) != 1 || resumable[0].ID != opID {
+		t.Fatalf("ListResumableOperationsV2 = %+v, want the timed-out op %s; "+
+			"a drain-deadline quiesce must be resumable too, not just a clean cancel",
+			resumable, opID)
 	}
 
 	close(release)

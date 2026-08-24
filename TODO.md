@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.40.1 -->
+<!-- version: 10.41.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -1045,7 +1045,7 @@ into one of the curated sections below, is a normal direct edit.
 
       Found by review of #2794, 2026-08-23. Pre-existing; outside that diff.
 
-- [ ] **OPS-V2-RESUME-BLIND** `resumeAfterStartup` cannot see any interrupted v2
+- [x] **OPS-V2-RESUME-BLIND** `resumeAfterStartup` cannot see any interrupted v2
       operation, so `ResumePolicy` is only consulted after a hard kill. This is
       pre-existing and affects **every** v2 op, not just maintenance.
 
@@ -1099,6 +1099,30 @@ into one of the curated sections below, is a normal direct edit.
       the sweep see interrupted rows changes startup behaviour for all of them on a
       path that has never been exercised. Needs its own change, its own tests, and
       a decision about whether a `canceled` op should be resumable at all.
+
+      **DONE 2026-08-24 (PR #2844).** `ListResumableOperationsV2` scans the
+      `opv2:op:` keyspace for `queued|running|interrupted_quiesced`;
+      `resumeAfterStartup` reads it instead of the active index.
+      `ListActiveOperationsV2` was deliberately NOT widened — the scheduler's
+      in-flight guard, the AI same-mode guard, `EnqueueOp`'s dedupe and
+      `CountRunningByPluginV2` all need it to keep meaning "in flight", and a
+      quiesced row from last week must not read as in-flight to any of them.
+
+      **The `canceled` decision: NO.** `canceled` is an operator's deliberate
+      stop and stays excluded, as do `interrupted_dropped` and `interrupted_ask`
+      — the sweep already decided those on a previous boot, and resuming an
+      `interrupted_ask` row would answer for the user. Pinned in
+      `TestListResumableOperationsV2_StatusMembership`.
+
+      **The ResumeRequeue concern above was real and is handled by
+      `supersedeStaleQuiesced`.** Prod held **23** quiesced rows over 30 days —
+      21 `library.scan` + 2 `maintenance.dedupe-book-file-rows` — and
+      `resumeRestart` flips a row straight to `queued` without going through
+      `EnqueueOp`, so the ConcurrencyKey dedupe would NOT have caught them: the
+      naive fix launches 21 concurrent full library scans on one boot. The sweep
+      now keeps only the newest interrupted run per def, and a live queued/running
+      row beats every interrupted one. Measured blast radius on the next restart:
+      2 defs, 1 op each.
 
 - [x] **TIMELINE-FILTER-INERT** `GET /api/v1/operations/timeline` silently
       ignores `def_id` and `limit`. Either honour them or reject unknown query
