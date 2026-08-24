@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-24-the-list-the-merge-trusted-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2f6b81d4-9a07-4c3e-85b1-703de9c2af58 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -87,12 +87,44 @@ reported, so **seven** different merge and cleanup paths are covered instead of 
 series pruning, duplicate-series cleanup, the deduplication tools, and the series
 renumbering job.
 
+## The fix was wrong the first time, and that is the part worth reading
+
+The first version of this fix shipped with a hole in it, found in review before it merged.
+
+It checked whether the fast index was short, then read from the on-disk database instead.
+Correct as far as it went. But *one of the three things that can make the index short* is
+the database holding a book record that cannot be read at all — and the fall-back read
+skipped unreadable records without saying so. So on that one trigger, the "safe" path
+returned exactly the same short list, the merge deleted the series anyway, and the log
+recorded that it had fallen back to safety.
+
+The fix had a second, older gap in the same read: books are looked up over a range of
+keys that, read literally, only covers IDs starting with a digit. Every ID the app
+generates starts with a digit, so this had never bitten — but an ID supplied from
+outside could start with a letter, and such a book was simply invisible to the merge.
+A different part of the codebase found and fixed this same bug in the same key range
+one day earlier; this read had not been updated.
+
+**Why it was missed:** the fall-back read is an *existing* function that was not changed
+by this fix — it was only given a new job. Nothing in the change showed it, because the
+newly-inadequate code was not part of the change. That is the general lesson: **giving
+old code a more important job silently transfers every safety assumption ever written
+about its old job, and no diff will show you that.**
+
+All checks passed on the flawed version, because no test data contained an unreadable
+record. Green tests answered "did anything break," not "is this correct."
+
 ## Confidence
 
-Four new tests, each written to fail against the old code. All four were then re-checked
-by deliberately re-breaking the fix in four different ways to confirm the tests actually
-notice — they do, in all four cases.
+Seven new tests. The three added after review were each confirmed to **fail against the
+code as it stood** before the fix was written — the only way to know a test reaches the
+thing it claims to check.
 
-The pre-existing test suite for this area, notably, would **not** have caught it. Those
+The fix was then re-broken eight different ways to confirm the tests notice. Seven of the
+eight were caught. The eighth — a storage-layer read error part-way through — cannot be
+triggered without fault-injection machinery this code does not have, so it is protected
+by inspection only, and is recorded here rather than rounded up to "all covered."
+
+The pre-existing test suite for this area would **not** have caught any of it. Those
 tests only ever run against a healthy index, so they pass identically before and after —
 which would have read as "still verified" while covering none of this.
