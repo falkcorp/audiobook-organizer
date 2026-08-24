@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package scanner
 
@@ -1004,7 +1004,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				}
 			} else {
 				// Single-pass extraction: open file once for tags + mediainfo + hash.
-				meta, mi, fileHash, pfErr := ProcessFile(filePath)
+				// Bounded: ProcessFile's chain is uncancellable syscalls, and a
+				// malformed container stalled prod's scan on the same file for 3
+				// days. A timeout arrives here as an ordinary pfErr and takes the
+				// existing fallback + fail-count path below.
+				meta, mi, fileHash, pfErr := ProcessFileWithTimeout(ctx, filePath)
 				if pfErr != nil {
 					scanLog.Warn("ProcessFile failed for %s: %v", filePath, pfErr)
 					fallbackUsed = true
