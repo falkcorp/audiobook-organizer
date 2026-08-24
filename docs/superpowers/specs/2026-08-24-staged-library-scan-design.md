@@ -1,5 +1,5 @@
 <!-- file: docs/superpowers/specs/2026-08-24-staged-library-scan-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c7f76dfd-5447-4c73-a9a6-b77f62db8736 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -112,6 +112,12 @@ are dropped here and never touched again this run.
 ones that had no mark before. That single change is what closes the ~40% gap, and
 it is worth landing on its own even if the rest of this design is rejected.
 
+For the **new** and **changed** sets only, stage 2 then reads the tag header —
+and nothing else. No hashing, no ffprobe, no AI fallback. This is what lets a
+book enter the holding area with a real title, author and series instead of an
+empty row, and it is bounded: the tag header is a single small read at the front
+of the file, not a full-content pass.
+
 ### Stage 3 — Deep pass (expensive, bounded)
 
 Only new + changed files. Tag read, hashing, mediainfo, AI fallback, chapter
@@ -143,6 +149,8 @@ book is visible and browsable straight away; the deep pass fills in the rest.
   all-marked fixture cannot observe the defect.
 - Stage 3 leaves an `OverrideLocked` field untouched.
 - Stage 1 performs no file opens (assert via a counting fake).
+- Stage 2 reads the tag header for new/changed files but never hashes and
+  never invokes ffprobe (assert via counting fakes on both).
 - Resume across a stage boundary keeps stage-1/2 results.
 
 ## Rollback
