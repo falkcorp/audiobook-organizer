@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package database
 
@@ -184,9 +184,16 @@ func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 	// The loop above exits on end-of-range OR on an iteration error, and the
 	// two are indistinguishable without this check. Returning a truncated map
 	// with a nil error would answer "nothing else references anything" -- the
-	// permissive answer -- to callers that delete on the strength of it. Every
-	// other Pebble scan in this package checks iter.Error(); this one is the
-	// counter a delete guard consults, so it least of all may skip it.
+	// permissive answer -- to callers that delete on the strength of it. This
+	// is the counter a delete guard consults, so it least of all may skip it.
+	//
+	// This used to add "every other Pebble scan in this package checks
+	// iter.Error()". That was true when written and FALSE within nine days:
+	// getBooksBySeriesIDFull became a second delete-guard-consulted scan on
+	// 2026-08-24 and checked nothing. A survey of sibling code is a claim with
+	// an expiry date, and nothing re-checks it -- so the reason to be strict
+	// here is stated on its own terms above, and does not lean on what the
+	// neighbours happen to do this week.
 	if err := iter.Error(); err != nil {
 		_ = iter.Close()
 		return nil, fmt.Errorf("series ref scan truncated, refusing to answer from a partial count: %w", err)
