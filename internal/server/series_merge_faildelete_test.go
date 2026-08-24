@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -296,4 +297,91 @@ func seriesPruneMergeFixture(keepID, mergeID int, primary, altRip string) (*data
 		return b, nil
 	}
 	return mock, assignments
+}
+
+// TestExecuteSeriesPrune_AFailedCountDisqualifiesTheGroup pins the canonical
+// vote.
+//
+// The vote picks which of several duplicate series survives; every other series
+// in the group is merged away and DELETED. A series whose book count failed to
+// load used to count as zero books, so it lost — and losing means deletion.
+//
+// The fixture is the damaging shape: series 1 holds 400 books, series 2 is a
+// two-book typo of it, and the count for series 1 errors. Under the old
+// behaviour series 2 won on bc=2 > 0, the 400 books were repointed into the typo,
+// and series 1 — the real one, with every external reference to it — was deleted,
+// with the run reporting success.
+//
+// Skipping the group costs a deferred merge and is retryable. Deleting the wrong
+// survivor is not recoverable from the run summary.
+func TestExecuteSeriesPrune_AFailedCountDisqualifiesTheGroup(t *testing.T) {
+	const (
+		realID = 1 // the 400-book series whose count fails
+		typoID = 2 // the 2-book near-duplicate that would win by default
+	)
+
+	s := newSeriesPruneServer(t)
+	mock := &database.MockStore{}
+	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{
+			{ID: realID, Name: "Discworld"},
+			{ID: typoID, Name: "  discworld "},
+		}, nil
+	}
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		if id == realID {
+			return nil, errors.New("simulated: transient read failure")
+		}
+		return []database.BookCore{{ID: "typo-a"}, {ID: "typo-b"}}, nil
+	}
+	// ONLY the vote getter fails. AllVersions succeeds and returns the real 400
+	// books, because that is what makes this test able to fail: if the repoint
+	// getter errored too, the merge would abort for an unrelated reason and the
+	// assertions below would pass whether or not the vote disqualifies the group.
+	// Measured — with both getters failing, removing the disqualification left the
+	// test green.
+	mock.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == realID {
+			out := make([]database.BookCore, 0, 400)
+			for i := range 400 {
+				out = append(out, database.BookCore{ID: fmt.Sprintf("real-%d", i)})
+			}
+			return out, nil
+		}
+		return []database.BookCore{{ID: "typo-a"}, {ID: "typo-b"}}, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := realID
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+
+	var deleted []int
+	mock.DeleteSeriesFunc = func(id int) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+	var repointed []string
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		repointed = append(repointed, id)
+		return b, nil
+	}
+
+	store := seriesRefCountingStore{MockStore: mock, refCounts: map[int]int{realID: 400, typoID: 2}}
+	err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, "")
+	if err == nil {
+		t.Fatal("a failed canonical count was not reported; the run looks successful while a " +
+			"group was silently left unmerged (or worse, merged the wrong way)")
+	}
+
+	for _, id := range deleted {
+		if id == realID {
+			t.Fatalf("series %d was DELETED because its book count could not be read. A read "+
+				"error must not decide which duplicate survives — it made the real series "+
+				"lose the vote to a 2-book near-duplicate.", realID)
+		}
+	}
+	if len(repointed) > 0 {
+		t.Errorf("books were repointed (%v) for a group whose canonical series could not be "+
+			"determined; the merge must not proceed on an unresolved vote", repointed)
+	}
 }
