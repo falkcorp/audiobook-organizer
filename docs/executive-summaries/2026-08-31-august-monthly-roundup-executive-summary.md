@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -839,6 +839,71 @@ and the test has been rebuilt around the real recorded reply. The fix was then d
 sabotaged four different ways to confirm the new test actually notices — including
 restoring the original bug, which it now catches.
 
+## 22. Three nights of housekeeping that never happened (Aug 21–23)
+
+Every night at 5am the organiser runs a maintenance window: a list of twelve
+housekeeping jobs that tidy up after the day's work — refreshing the duplicate
+caches, clearing out temporary files, emptying the trash, pruning old logs,
+optimising the database.
+
+For at least three consecutive nights, **none of the twelve ran.** Not one.
+(Three is what the records still held when this was measured — it is a floor,
+not a count. The failure had no reason to start on the 21st.)
+
+What makes this worth writing down is how it failed. The jobs themselves were
+perfectly healthy. The duplicate-refresh job — the first on the list — started
+on time and finished successfully, all 14,948 authors processed, every single
+night. The problem was the supervisor: the part of the system whose only job is
+to stand and watch each task finish so it can start the next one.
+
+Five seconds into watching the very first task, the supervisor crashed. And
+because the supervisor was the thing holding the list, everything after that
+first job simply never started. The nightly report recorded the whole window as
+"failed, 0 of 12," while the one job that *had* run sat elsewhere in the
+records marked "completed."
+
+### Why it crashed
+
+Earlier in the summer the organiser moved its job-tracking to a new system.
+The supervisor was never updated: it kept looking up each job in the *old*
+filing cabinet, using a reference number issued by the *new* one. It was
+always going to come back empty.
+
+The specific trap is that "I looked and found nothing" and "I looked and
+everything went fine" were reported the same way — as an absence of any error.
+The supervisor checked whether something had gone wrong, was told no, and
+proceeded as though it were holding a record it had never actually received.
+
+### What was fixed
+
+The supervisor now reads from the current system. Two other problems came out
+with it:
+
+- The obvious quick fix — "if there's no record, stop waiting" — would have
+  been considerably worse than the crash. It would have made the supervisor
+  stop waiting *instantly*, launching all twelve jobs simultaneously instead of
+  one after another, **and reporting success while doing it.** A crash is at
+  least visible. That was avoided deliberately.
+- The supervisor did not recognise two of the ways a job can legitimately end
+  — most importantly the ordinary "the server restarted while I was working"
+  ending, which is how the library scan finishes on most nights. Even with the
+  crash fixed, it would have waited forever on those.
+
+Interrupted jobs are now also reported honestly rather than as successes, and
+the nightly report distinguishes "never started" from "started and did not
+finish" — previously both were filed under the same heading.
+
+### One caveat, deliberately on the record
+
+At the time of writing this fix is confirmed by inspection, **not** by
+observation. All three recorded crashes happened before the currently-running
+version was installed, and no maintenance window has run since. The first thing
+that will genuinely confirm it is the next 5am.
+
+That distinction is being written down rather than smoothed over, because a
+merged fix plus a convincing explanation is exactly the combination that gets
+recorded as "verified" when nothing has actually been verified yet.
+
 ## Themes worth carrying into next month
 
 1. **A silent fallback is worse than a loud failure.** The transcription outage, the
@@ -858,6 +923,13 @@ restoring the original bug, which it now catches.
    The collections work justified a decision with "we checked, the conflicting thing
    does not exist" — true when written, false one commit later, in the same change. A
    check that runs is worth more than a check that was run once and written down.
+   The nightly-maintenance crash on 23 August is the same lesson twice over. The note
+   attached to the change that caused it listed exactly where its new object was used —
+   and the list was already missing the one caller that would go on to crash. And
+   somewhere else in the same area, a second note described the resulting hazard
+   precisely, by name, and then routed only its own code around it, leaving the shared
+   version broken for everyone else. Writing a warning down is not the same as acting on
+   it, and fixing your own path is not the same as fixing the path.
 5. **A check that exists is not a check that runs.** Three separate examples surfaced on
    20 August alone: a guard on the plug-in toolkit that ran only on developers' own
    machines, a body of code kept behind a switch that no build ever turned on, and a code
