@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-08-23
 
@@ -18,14 +18,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
 
 // ---- param types -------------------------------------------------------
 // These types mirror the JSON wire shapes defined in server/{library_core_ops,
 // duplicates_ops}.go. They are intentionally minimal — only the fields used
 // when the scheduler triggers the operations.
-
-type libraryScanParams struct{}
 
 type libraryOrganizeParams struct{}
 
@@ -126,7 +125,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 					}
 				}
 			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.scan", libraryScanParams{})
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.scan", scanner.LibraryScanParams{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue library.scan: %w", enqErr)
 			}
@@ -154,6 +153,90 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return config.AppConfig.Scheduled.LibraryScan.OnStartup || config.AppConfig.ScanOnStartup
 		},
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibraryScan },
+	})
+
+	// library_scan_full is the WEEKLY FULL SWEEP: a library.scan with both
+	// force_update and include_root_dir set, so every file is re-read and
+	// re-hashed instead of being skipped as unchanged.
+	//
+	// Its schedule does NOT come from GetInterval. GetInterval here is only a
+	// DUE-CHECK cadence (default hourly); the actual weekly gap is enforced in
+	// TriggerFn against a timestamp persisted in the settings store. See
+	// full_sweep.go for why: scheduler.Start's ticker is in-memory, so any
+	// interval longer than the process uptime silently never fires, and a
+	// deploy-per-day cadence makes 168h unreachable.
+	//
+	// It shares library.scan's ConcurrencyKey with the incremental task. That
+	// is deliberate and safe: EnqueueOp's dedupe compares MARSHALLED PARAMS
+	// byte-for-byte, and the incremental enqueues {} while this enqueues
+	// {"force_update":true,"include_root_dir":true}. Unequal params queue a
+	// second row rather than collapsing into the running op, so a sweep that
+	// lands mid-incremental is DELAYED, never dropped.
+	ts.registerTask(TaskDefinition{
+		Name:        "library_scan_full",
+		Description: "Weekly full library sweep (force_update: re-reads and re-hashes every file)",
+		Category:    "library",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			period := time.Duration(config.AppConfig.Scheduled.LibraryScanFull.PeriodHours) * time.Hour
+
+			last, found := ts.loadLastFullSweep()
+			if !found {
+				// Never run (or the stored value was unreadable). Seed the
+				// clock and skip: the first tick after a deploy must not kick
+				// off an unannounced multi-hour re-hash of the whole library.
+				ts.saveLastFullSweep(time.Now())
+				slog.Info("library_scan_full: no prior sweep recorded; seeding the clock and waiting a full period",
+					"periodHours", config.AppConfig.Scheduled.LibraryScanFull.PeriodHours, "source", source)
+				return nil, nil
+			}
+			if !fullSweepDue(last, time.Now(), period) {
+				return nil, nil
+			}
+
+			// Same skip-if-active guard as the incremental scan, keyed to this
+			// task's own previous run.
+			if prev := ts.previousRunID("library_scan_full"); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						slog.Info("library_scan_full: previous sweep still active, skipping this tick",
+							"op", prev, "status", row.Status, "source", source)
+						return nil, nil
+					}
+				}
+			}
+
+			forceUpdate, includeRoot := true, true
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.scan", scanner.LibraryScanParams{
+				ForceUpdate:    &forceUpdate,
+				IncludeRootDir: &includeRoot,
+			})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue full library.scan: %w", enqErr)
+			}
+			ts.setPreviousRunID("library_scan_full", v2ID)
+			// Stamped on ENQUEUE, not completion — see saveLastFullSweep.
+			ts.saveLastFullSweep(time.Now())
+			slog.Info("library_scan_full: enqueued full sweep", "op", v2ID, "since", last, "source", source)
+			return v2ScheduledOp(v2ID, "scan"), nil
+		},
+		IsEnabled: func() bool {
+			return config.AppConfig.Scheduled.LibraryScanFull.Enabled
+		},
+		GetInterval: func() time.Duration {
+			if !config.AppConfig.Scheduled.LibraryScanFull.Enabled {
+				return 0
+			}
+			// Due-check cadence, NOT the sweep period.
+			mins := config.AppConfig.Scheduled.LibraryScanFull.Interval
+			if mins <= 0 {
+				return 0
+			}
+			return time.Duration(mins) * time.Minute
+		},
 	})
 
 	ts.registerTask(TaskDefinition{

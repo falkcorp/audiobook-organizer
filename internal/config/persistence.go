@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-08-21
 
@@ -1292,6 +1292,22 @@ func applySetting(key, value, typ string) error {
 		case "scheduled_library_scan_on_startup":
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.Scheduled.LibraryScan.OnStartup = b
+			}
+		// library_scan_full is the weekly FULL sweep. Its "interval" is the
+		// DUE-CHECK cadence in minutes, NOT the gap between sweeps -- that is
+		// period_hours. See config.LibraryScanFullConfig for why the two are
+		// separate rather than a single ticker interval.
+		case "scheduled_library_scan_full_enabled":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.Scheduled.LibraryScanFull.Enabled = b
+			}
+		case "scheduled_library_scan_full_interval":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.Scheduled.LibraryScanFull.Interval = i
+			}
+		case "scheduled_library_scan_full_period_hours":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.Scheduled.LibraryScanFull.PeriodHours = i
 			}
 		case "scheduled_dedup_refresh_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {

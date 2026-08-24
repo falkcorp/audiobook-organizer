@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.84.0
+// version: 1.85.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-23
 
@@ -603,6 +603,36 @@ type ScheduledTaskConfig struct {
 	OnStartup bool `json:"on_startup" mapstructure:"on_startup"`
 }
 
+// LibraryScanFullConfig drives the periodic FULL library sweep -- a
+// library.scan with force_update AND include_root_dir set, which re-reads and
+// re-hashes every file rather than skipping unchanged ones.
+//
+// It deliberately does NOT reuse ScheduledTaskConfig, because a full sweep
+// cannot be driven by a plain ticker. scheduler.Start builds an in-memory
+// time.NewTicker(interval) with no persisted last-run time, so an interval
+// longer than the process's uptime never fires at all -- and it fires nothing
+// while logging a healthy-looking "Scheduled task interval" line, which is the
+// exact silent-drop shape the scheduler's own comments were written about.
+// Production restarted 2026-08-24 07:24 EDT, so a 168h ticker would have been
+// reset before it ever elapsed.
+//
+// Instead the two durations are separated:
+//   - Interval    is a short DUE-CHECK cadence and keeps ordinary ticker
+//     semantics, so it is always far below any realistic uptime.
+//   - PeriodHours is how long between actual sweeps, evaluated against a
+//     timestamp persisted in the settings store (library_scan_full_last_run).
+//     That comparison is restart-safe by construction.
+type LibraryScanFullConfig struct {
+	Enabled bool `json:"enabled" mapstructure:"enabled"`
+
+	// Interval is MINUTES BETWEEN DUE CHECKS, not between sweeps. Each check is
+	// a single settings read and is almost always a no-op.
+	Interval int `json:"interval" mapstructure:"interval"`
+
+	// PeriodHours is HOURS BETWEEN SWEEPS. 168 = weekly.
+	PeriodHours int `json:"period_hours" mapstructure:"period_hours"`
+}
+
 // AutoUpdateConfig holds settings for the automatic update checker.
 type AutoUpdateConfig struct {
 	Enabled      bool   `json:"enabled"       mapstructure:"enabled"`
@@ -618,16 +648,20 @@ type ScheduledTasksConfig struct {
 	// of this family it ships ENABLED with a non-zero interval: without it
 	// nothing in the process ever discovers a newly added book on its own
 	// (the fsnotify watcher is opt-in and best-effort).
-	LibraryScan              ScheduledTaskConfig `json:"library_scan"                mapstructure:"library_scan"`
-	DedupRefresh             ScheduledTaskConfig `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
-	LabelRefinement          ScheduledTaskConfig `json:"label_refinement"            mapstructure:"label_refinement"`
-	AuthorSplit              ScheduledTaskConfig `json:"author_split"                mapstructure:"author_split"`
-	DbOptimize               ScheduledTaskConfig `json:"db_optimize"                 mapstructure:"db_optimize"`
-	MetadataRefresh          ScheduledTaskConfig `json:"metadata_refresh"            mapstructure:"metadata_refresh"`
-	ResolveProductionAuthors ScheduledTaskConfig `json:"resolve_production_authors"  mapstructure:"resolve_production_authors"`
-	SeriesPrune              ScheduledTaskConfig `json:"series_prune"                mapstructure:"series_prune"`
-	AIDedupBatch             ScheduledTaskConfig `json:"ai_dedup_batch"              mapstructure:"ai_dedup_batch"`
-	Reconcile                ScheduledTaskConfig `json:"reconcile"                   mapstructure:"reconcile"`
+	LibraryScan ScheduledTaskConfig `json:"library_scan"                mapstructure:"library_scan"`
+
+	// LibraryScanFull is the weekly FULL sweep. See LibraryScanFullConfig for
+	// why it has its own type rather than joining the family above.
+	LibraryScanFull          LibraryScanFullConfig `json:"library_scan_full" mapstructure:"library_scan_full"`
+	DedupRefresh             ScheduledTaskConfig   `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
+	LabelRefinement          ScheduledTaskConfig   `json:"label_refinement"            mapstructure:"label_refinement"`
+	AuthorSplit              ScheduledTaskConfig   `json:"author_split"                mapstructure:"author_split"`
+	DbOptimize               ScheduledTaskConfig   `json:"db_optimize"                 mapstructure:"db_optimize"`
+	MetadataRefresh          ScheduledTaskConfig   `json:"metadata_refresh"            mapstructure:"metadata_refresh"`
+	ResolveProductionAuthors ScheduledTaskConfig   `json:"resolve_production_authors"  mapstructure:"resolve_production_authors"`
+	SeriesPrune              ScheduledTaskConfig   `json:"series_prune"                mapstructure:"series_prune"`
+	AIDedupBatch             ScheduledTaskConfig   `json:"ai_dedup_batch"              mapstructure:"ai_dedup_batch"`
+	Reconcile                ScheduledTaskConfig   `json:"reconcile"                   mapstructure:"reconcile"`
 }
 
 // Config holds application configuration
@@ -1370,6 +1404,12 @@ func InitConfig() {
 	viper.SetDefault("scheduled.library_scan.enabled", true)
 	viper.SetDefault("scheduled.library_scan.interval", 360)
 	viper.SetDefault("scheduled.library_scan.on_startup", false)
+	// The full sweep ships ENABLED but does NOT run on first boot: with no
+	// stored timestamp the scheduler seeds one and waits a full period, so
+	// deploying this never kicks off an unannounced multi-hour re-hash.
+	viper.SetDefault("scheduled.library_scan_full.enabled", true)
+	viper.SetDefault("scheduled.library_scan_full.interval", 60)
+	viper.SetDefault("scheduled.library_scan_full.period_hours", 168)
 	viper.SetDefault("scheduled.dedup_refresh.enabled", false)
 	viper.SetDefault("scheduled.dedup_refresh.interval", 360)
 	viper.SetDefault("scheduled.dedup_refresh.on_startup", false)
@@ -1403,6 +1443,9 @@ func InitConfig() {
 	viper.BindEnv("scheduled.library_scan.enabled", "SCHEDULED_LIBRARY_SCAN_ENABLED")                               //nolint:errcheck
 	viper.BindEnv("scheduled.library_scan.interval", "SCHEDULED_LIBRARY_SCAN_INTERVAL")                             //nolint:errcheck
 	viper.BindEnv("scheduled.library_scan.on_startup", "SCHEDULED_LIBRARY_SCAN_ON_STARTUP")                         //nolint:errcheck
+	viper.BindEnv("scheduled.library_scan_full.enabled", "SCHEDULED_LIBRARY_SCAN_FULL_ENABLED")                     //nolint:errcheck
+	viper.BindEnv("scheduled.library_scan_full.interval", "SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL")                   //nolint:errcheck
+	viper.BindEnv("scheduled.library_scan_full.period_hours", "SCHEDULED_LIBRARY_SCAN_FULL_PERIOD_HOURS")           //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
@@ -1959,6 +2002,11 @@ func InitConfig() {
 					Interval:  viper.GetInt("scheduled.library_scan.interval"),
 					OnStartup: viper.GetBool("scheduled.library_scan.on_startup"),
 				},
+				LibraryScanFull: LibraryScanFullConfig{
+					Enabled:     viper.GetBool("scheduled.library_scan_full.enabled"),
+					Interval:    viper.GetInt("scheduled.library_scan_full.interval"),
+					PeriodHours: viper.GetInt("scheduled.library_scan_full.period_hours"),
+				},
 				DedupRefresh: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.dedup_refresh.enabled"),
 					Interval:  viper.GetInt("scheduled.dedup_refresh.interval"),
@@ -2512,6 +2560,17 @@ func ResetToDefaults() {
 					Enabled:   true,
 					Interval:  360,
 					OnStartup: false,
+				},
+				// NOTE: this literal is a SECOND source of truth for defaults,
+				// parallel to the viper.SetDefault calls. A field added there
+				// but not here is silently ZERO after a factory reset -- which
+				// for a scheduled task means "enabled but no ticker", the exact
+				// never-runs-and-never-says-so failure the scheduler's own
+				// comments were written about.
+				LibraryScanFull: LibraryScanFullConfig{
+					Enabled:     true,
+					Interval:    60,
+					PeriodHours: 168,
 				},
 			},
 
