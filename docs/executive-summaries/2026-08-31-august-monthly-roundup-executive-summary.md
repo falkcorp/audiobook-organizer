@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.18.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -1069,29 +1069,61 @@ Both now say plainly which parts were verified and which were not.
 
 A book shows a total running time and a total size. Those are not stored facts —
 they are sums of the individual files underneath, and they have to be re-added
-whenever the files change. Every way of changing a book's files did that
-afterwards. Except one.
+whenever the files change. Adding, editing and deleting a file all did that
+afterwards. The bulk path did not.
 
-The exception was the bulk path: the one used when the system rewrites many files
-at once, which is exactly what a library-wide repair job does. It wrote every file
-correctly and never re-added the totals. So the parent book kept whatever number it
-had from the last single-file edit, or from the day it was first imported.
+The bulk path is the one used when the system rewrites many files at once, which is
+exactly what a library-wide repair job does. It wrote every file correctly and never
+re-added the totals. So the parent book kept whatever number it had from the last
+single-file edit, or from the day it was first imported.
 
 Nothing announced this, because from the system's point of view nothing failed. The
 write succeeded. The files were right. Only the two summary numbers on the book were
 quietly out of date. The unpleasant consequence is what it does to a repair job: a
-run that correctly fixes the duration of every file in the library finishes, reports
-success, and leaves every book still displaying the old total. Checking afterwards
-makes the repair look like it did nothing — which invites running it again, to the
-same non-effect.
+run that correctly fixes every file it touches finishes, reports success, and leaves
+the books still displaying the old totals. Checking afterwards makes the repair look
+like it did nothing — which invites running it again, to the same non-effect.
+
+One repair job had already hit this and worked around it privately: the duration
+repair does its own second pass to re-add the totals, with a note explaining that the
+bulk path would not do it. So the gap was known, in one place, by one author, and
+never fixed where it lived — every other user of the bulk path kept the bug.
+
+That workaround is being kept rather than removed, for a reason worth stating: it is
+the only place where a failure to re-add the totals is reported loudly enough to stop
+the job. The bulk path's version does its best and writes a warning if it cannot. So
+the two are not duplicates — one is the fix, the other is the alarm.
 
 The bulk path now re-adds the totals once per affected book, after the write lands.
 Once per book matters: re-adding the totals means re-reading all of that book's
 files, so doing it once per file turns writing a 200-file audiobook into roughly
-twenty thousand reads instead of two hundred. That is the same shape of problem as
-the one in section 25, in a different part of the system, and it was measured on
-real production logs before being fixed — one repair job accounted for 92% of all
-this work observed, with a single book having its totals recalculated 1,189 times.
+twenty thousand reads instead of two hundred — the same shape of problem as the one
+in section 25, in a different part of the system.
+
+Fixing that then exposed a second problem sitting right behind it: **the scanner was
+erasing the totals it had just computed.** When it sets up a book's files it loads the
+book once at the start, writes the files, and then writes that original copy back in
+order to tidy up the book's stored location. That copy still holds the totals from
+before the write — and the save routine, which protects nine other fields from being
+blanked this way, does not protect these two. So the numbers were calculated correctly
+and then overwritten with nothing, inside a single operation, for every single-file
+audiobook imported. The scanner now re-reads the book before that last save, and says
+so in the log if it cannot.
+
+This is worth noting as a pattern rather than an incident: the first fix was correct and
+would still have appeared to do nothing on the most common path, because something
+downstream quietly undid it. Shipping it without checking the callers would have counted
+as a success.
+
+**A note on what was and was not measured here**, because it is easy to run two
+findings together. Production logs were examined, and they identified a *different*
+and larger instance of this same waste: one repair job, re-adding a book's totals
+once per file it creates, accounting for the overwhelming majority of the observed
+recalculations. **That one is not fixed by this change and is still open.** The bulk
+path described above was found by reading the code, not by that measurement — in
+fact the measurement specifically ruled it out as a source, precisely because it
+never re-added the totals at all. Two related problems, one fixed here; the
+measurement belongs to the other one.
 
 Two smaller things were settled while confirming the fix, both of which had been
 easy to assume wrong:
@@ -1104,6 +1136,14 @@ easy to assume wrong:
   erase a duration that was expensive to determine. A note in the code claimed the
   opposite, confidently enough to plan against; it has been corrected and the real
   behaviour written down as a test.
+
+And one further gap was found while checking the above, **not yet fixed**: moving
+files from one book to another updates neither book's totals. Because it moves
+running time and size *out* of one book and *into* another, both are left wrong
+afterwards — the source still counting what it no longer has, the destination not
+counting what it now does. It has eight callers, including the merge and version-swap
+paths. It is recorded for a follow-up rather than folded into this change, since it is
+a different method with a different set of callers to check.
 
 ## Themes worth carrying into next month
 
