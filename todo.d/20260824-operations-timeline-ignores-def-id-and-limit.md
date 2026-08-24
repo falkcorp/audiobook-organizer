@@ -1,6 +1,12 @@
-- [ ] **TIMELINE-FILTER-INERT** `GET /api/v1/operations/timeline` silently
+- [x] **TIMELINE-FILTER-INERT** `GET /api/v1/operations/timeline` silently
       ignores `def_id` and `limit`. Either honour them or reject unknown query
       keys — the current behaviour returns a plausible wrong answer.
+      **Fixed by honouring them, 2026-08-24.** Both are now read; `def_id` is
+      filtered across the whole window and `limit` applied after it, so the
+      "filter a page the store already cut" trap below is closed rather than
+      re-shaped. The dead twin was deleted with the fix. Trap-by-trap status is
+      recorded at the bottom of this entry — **trap 2 is deliberately still
+      open**, so read that before treating this as fully closed.
 
       The handler (`internal/server/handlers/operations_v2.go:145-159`) reads
       **only** `since`, defaulting to **15m**, and passes a hardcoded 200 row
@@ -67,22 +73,38 @@
       ```
 
       **But rejecting unknown keys fixes only ONE of three traps.** Do not close
-      this entry on the 400 alone:
+      this entry on the 400 alone. Status as shipped 2026-08-24 — the fix
+      honoured the parameters rather than rejecting unknown keys, so trap 1 is
+      closed by a different route than this entry anticipated:
 
-      1. **Inert `def_id`/`limit`** — fixed by a 400 on unknown keys. ✅
-      2. **`since` defaults to 15m** — *not* fixed. A bare
-         `GET /operations/timeline` has no unknown key to reject, still silently
-         measures a quarter hour, still returns a plausible small answer. This
-         is the half that caused the `maintenance.window` undercount. Because
-         the sole caller always passes `since` explicitly, **making `since`
-         required (400 if absent) breaks nothing** and closes the more dangerous
-         hole.
-      3. **The 200 cap** — *not* fixed. A full page still reads as a complete
-         census. The structural answer is to make the response describe its own
-         scope, e.g. `{"data":{…,"since":"168h","window_start":"…",
-         "truncated":true}}`. An answer that states what it looked at cannot be
-         misread as a census, and it defends against the next caller who never
-         reads this entry.
+      1. ✅ **Inert `def_id`/`limit`** — **CLOSED.** Both are read.
+         `def_id` filters the whole window and `limit` is applied afterwards, so
+         the obvious "push limit into the store" version — which would drop
+         QUEUED rows first, since they sort last — is pinned shut by
+         `TestGetOperationTimeline_DefIDFiltersTheWholeWindowNotJustTheFirstPage`.
+         An unusable `limit` is now a 400 rather than a silent fall-back to the
+         default, and a negative `since` is a 400 rather than a future window.
+      2. ⚠️ **`since` defaults to 15m** — **STILL OPEN, deliberately.** A bare
+         `GET /operations/timeline` still measures a quarter hour. It is no
+         longer *invisible*: every reply states `since` and `window_start`, so
+         the undercount is legible in the response that carries it. Making
+         `since` required is still the stronger fix and still breaks nothing
+         (the sole caller always passes it) — it was left out because it is a
+         breaking change to a live API that nobody asked for. Decide separately.
+      3. ✅ **The 200 cap** — **CLOSED.** The reply reports `matched` (the
+         pre-limit total) and `truncated`, computed by counting matches before
+         trimming — the only way to tell "exactly `limit` existed" from "there
+         were more", which `len(rows)==limit` cannot. A scan that hits the
+         server's internal 5000-row bound reports `scan_capped`, marking the
+         total a floor.
+
+      ⚠️ **One claim in this entry was overstated.** It said the existing test
+      coverage for this endpoint exercises code that never runs. The dead twin
+      did have its own tests — but `internal/server/handlers/operations_v2_test.go`
+      also existed and drove the LIVE handler. The twin's tests were duplicate
+      coverage, not the only coverage. The deletion still stands: two
+      implementations of one endpoint, one unreachable, is a trap regardless of
+      where the tests point.
 
       Related: [[feedback_operations_timeline_hardcodes_limit_200]],
       [[feedback_verify_the_instrument_with_a_bogus_value]],

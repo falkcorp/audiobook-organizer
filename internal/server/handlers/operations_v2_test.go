@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package handlers_test
 
@@ -59,7 +59,10 @@ func TestOperationsV2Handler_GetOperationTimeline_NilStore(t *testing.T) {
 func TestOperationsV2Handler_GetOperationTimeline_Success(t *testing.T) {
 	store := databasemocks.NewMockOpsV2Store(t)
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	store.EXPECT().ListOperationsV2Since(mock.Anything, 200).Return([]database.OperationV2Row{
+	// 5000, not 200: def_id is filtered in the handler, so the store must be asked
+	// for the whole window rather than a pre-trimmed page. See
+	// operations_v2_timeline_test.go for the test that pins why.
+	store.EXPECT().ListOperationsV2Since(mock.Anything, 5000).Return([]database.OperationV2Row{
 		{ID: "op1", DefID: "library.scan", Status: "queued"},
 	}, nil)
 	// Timeline calls displayNameFor + notifyLevelFor → ActiveDefs (status != running, so no GetCurrentItem).
