@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
-// last-edited: 2026-07-30
+// last-edited: 2026-08-24
 
 package database
 
