@@ -115,31 +115,42 @@ func truncatingStoreWithFixture(t *testing.T, seriesID int) (*PebbleStore, *erro
 // the merge getter. This is the scan a series merge repoints books from before
 // DeleteSeries runs, so a silently short answer strands every book it missed.
 func TestGetBooksBySeriesIDAllVersions_RefusesOnATruncatedScan(t *testing.T) {
-	p, toggle := truncatingStoreWithFixture(t, 7001)
+	// Two independent handles, not one reused after toggling the fault off.
+	// A DB that has just surfaced a real read error is not something this
+	// test should trust for a follow-up "recovery" read either -- and under
+	// the full package suite it measurably doesn't: Pebble kept reporting the
+	// same backing file as errored on a SECOND read after Off(), evidently
+	// caching failure state on that file beyond the single injected call.
+	// That's Pebble's own retry policy, not a property of the code under
+	// test, so the control below proves the point a different way: a
+	// SEPARATE store, seeded identically, that never saw the fault at all.
+	failing, toggle := truncatingStoreWithFixture(t, 7001)
 	const seriesID = 7001
 
 	// Force the Pebble arm. With a healthy memdb the getter never reaches the
 	// scan under test.
-	p.UseMemDB = false
+	failing.UseMemDB = false
 
 	// Injection goes on BEFORE the first read of this fresh store. A read
-	// afterward would populate the block cache and the assertion below would
-	// pass from cache, having exercised nothing.
+	// beforehand would populate the block cache and the assertion below
+	// would pass from cache, having exercised nothing.
 	toggle.On()
+	defer toggle.Off() // Close() reads; must not still be injecting.
 
-	_, err := p.GetBooksBySeriesIDAllVersions(seriesID)
+	_, err := failing.GetBooksBySeriesIDAllVersions(seriesID)
 	require.Error(t, err,
 		"a scan cut short by an I/O error must not return its partial list with a nil error; "+
 			"the caller repoints books off this list and then deletes the series")
 	require.Contains(t, err.Error(), "truncated",
 		"the error must name truncation, so an operator can tell it from a decode failure")
 
-	// Recovery, not merely a second failure mode: proves the error above came
+	// Control, not merely a second failure mode: proves the error above came
 	// from the injected fault and not from a structurally broken scan.
-	toggle.Off()
-	after, err := p.GetBooksBySeriesIDAllVersions(seriesID)
+	healthy, _ := truncatingStoreWithFixture(t, 7001)
+	healthy.UseMemDB = false
+	after, err := healthy.GetBooksBySeriesIDAllVersions(seriesID)
 	require.NoError(t, err)
-	require.Len(t, after, 12, "the scan must succeed once the fault clears")
+	require.Len(t, after, 12, "the scan must succeed against an unfaulted store")
 }
 
 // TestGetAllSeriesBookRefCounts_RefusesOnATruncatedScan is the same assertion
@@ -147,19 +158,22 @@ func TestGetBooksBySeriesIDAllVersions_RefusesOnATruncatedScan(t *testing.T) {
 // short list: a series absent from the map is the affirmative "referenced by
 // nothing, safe to delete" signal three callers act on.
 func TestGetAllSeriesBookRefCounts_RefusesOnATruncatedScan(t *testing.T) {
-	p, toggle := truncatingStoreWithFixture(t, 7002)
+	// See the sibling test above for why this uses two independent handles
+	// rather than toggling the fault off on the one that already saw it.
+	failing, toggle := truncatingStoreWithFixture(t, 7002)
 	const seriesID = 7002
 
 	toggle.On()
+	defer toggle.Off() // Close() reads; must not still be injecting.
 
-	_, err := p.getAllSeriesBookRefCountsPebble()
+	_, err := failing.getAllSeriesBookRefCountsPebble()
 	require.Error(t, err,
 		"a truncated count that returns nil error reports 'referenced by nothing' for "+
 			"every series whose rows were never reached")
 	require.Contains(t, err.Error(), "truncated")
 
-	toggle.Off()
-	after, err := p.getAllSeriesBookRefCountsPebble()
+	healthy, _ := truncatingStoreWithFixture(t, 7002)
+	after, err := healthy.getAllSeriesBookRefCountsPebble()
 	require.NoError(t, err)
-	require.Equal(t, 12, after[seriesID], "the count must succeed once the fault clears")
+	require.Equal(t, 12, after[seriesID], "the count must succeed against an unfaulted store")
 }
