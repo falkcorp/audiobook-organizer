@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.63.0
+// version: 1.64.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -1880,11 +1880,40 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		}
 	}
 
-	// Normalize book.FilePath to directory if it currently points to a file
+	// Normalize book.FilePath to directory if it currently points to a file.
+	//
+	// Re-read the book instead of writing back dbBook, which was loaded at the top
+	// of this function and is now stale. BatchUpsertBookFiles above recomputes the
+	// book's Duration and FileSize and writes them via UpdateBook; dbBook still
+	// carries the pre-batch values (nil on a first import). UpdateBook's
+	// preserve-on-nil guard covers Description, VersionNotes, the five BookSig*
+	// fields, Author and Series — it does NOT cover Duration or FileSize, so a nil
+	// on either is written through as nil and silently destroys what the recompute
+	// just stored.
+	//
+	// This branch fires when Book.FilePath points at a file rather than a
+	// directory, i.e. single-file audiobooks — so without the re-read every
+	// single-file book the scanner imports would have its totals computed and then
+	// erased inside this one function.
 	if statErr == nil && !info.IsDir() {
 		dirPath := filepath.Dir(bookFilePath)
-		dbBook.FilePath = dirPath
-		if _, updateErr := getStore().UpdateBook(dbBook.ID, dbBook); updateErr != nil {
+		toUpdate := dbBook
+		if fresh, gerr := getStore().GetBookByID(dbBook.ID); gerr == nil && fresh != nil {
+			toUpdate = fresh
+		} else if gerr != nil {
+			// Fall back to the stale snapshot: a book whose FilePath still points
+			// at a file is misfiled for every later path-based lookup, which is
+			// worse than losing a derived total. Nothing re-derives that total on
+			// its own — maintenance.recompute-book-aggregates is one-shot and
+			// refuses to run once its sentinel is set (see todo.d) — so the values
+			// stay wrong until some other write to this book's files recomputes
+			// them. Log it rather than lose it silently.
+			scanLog.Warn("could not re-read book %s before FilePath normalization; "+
+				"writing the pre-batch snapshot, which may reset Duration/FileSize: %v",
+				dbBook.ID, gerr)
+		}
+		toUpdate.FilePath = dirPath
+		if _, updateErr := getStore().UpdateBook(toUpdate.ID, toUpdate); updateErr != nil {
 			scanLog.Warn("failed to normalize FilePath for book %s: %v", dbBook.ID, updateErr)
 		}
 	}
