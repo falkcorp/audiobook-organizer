@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-06-23
+// last-edited: 2026-08-24
 
 package server
 
@@ -28,7 +28,15 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/soft-deleted", s.perm(auth.PermLibraryView), audiobooksH.ListSoftDeletedAudiobooks)
 	protected.DELETE("/audiobooks/purge-soft-deleted", s.perm(auth.PermLibraryDelete), audiobooksH.PurgeSoftDeletedAudiobooks)
 	protected.POST("/audiobooks/:id/restore", s.perm(auth.PermLibraryOrganize), audiobooksH.RestoreAudiobook)
-	protected.POST("/audiobooks/:id/rescan", s.perm(auth.PermLibraryEditMetadata), audiobooksH.RescanAudiobook)
+	// reconcile-files re-stats the book's files and corrects FileSize. It does
+	// NOT re-read anything. /rescan is kept as a DEPRECATED alias for the same
+	// handler: the old name always meant this, so repointing it at the new
+	// force-rescan behaviour would silently change what existing callers do.
+	protected.POST("/audiobooks/:id/reconcile-files", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ReconcileAudiobookFiles)
+	protected.POST("/audiobooks/:id/rescan", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ReconcileAudiobookFiles)
+	// force-rescan is the real per-book forced re-read: it sets NeedsRescan and
+	// the next scan re-reads exactly this book.
+	protected.POST("/audiobooks/:id/force-rescan", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ForceRescanAudiobook)
 	protected.GET("/audiobooks/:id", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobook)
 	protected.GET("/audiobooks/:id/tags", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobookTags)
 	protected.PUT("/audiobooks/:id", s.perm(auth.PermLibraryEditMetadata), audiobooksH.UpdateAudiobook)
