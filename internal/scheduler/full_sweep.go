@@ -1,14 +1,16 @@
 // file: internal/scheduler/full_sweep.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a0bad6dd-4723-4b3b-8a78-9072a26b4bcd
 // last-edited: 2026-08-24
 
 package scheduler
 
 import (
+	"errors"
+	"log/slog"
 	"time"
 
-	"log/slog"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // fullSweepLastRunSetting is the settings key holding the RFC3339 timestamp of
@@ -77,7 +79,15 @@ func (ts *TaskScheduler) loadLastFullSweep() (time.Time, bool, error) {
 		return time.Time{}, false, nil
 	}
 	setting, err := store.GetSetting(fullSweepLastRunSetting)
-	if err != nil {
+	// A MISSING KEY ARRIVES AS AN ERROR, not as (nil, nil): PebbleStore.GetSetting
+	// wraps ErrSettingNotFound (internal/database/settings.go), and that type
+	// exists precisely so callers stop telling the two apart by error string.
+	// Treating every error as a backend failure would make the normal first-boot
+	// path "decline without seeding" -- the clock would never be written and the
+	// sweep would never run at all. The mock returns (nil, nil) for a missing
+	// key, so no test built on it can observe that; the nil check below is the
+	// mock's shape, the errors.Is is production's.
+	if err != nil && !errors.Is(err, database.ErrSettingNotFound) {
 		return time.Time{}, false, err
 	}
 	if setting == nil {
@@ -123,16 +133,22 @@ func (ts *TaskScheduler) seedFullSweepClock(t time.Time) {
 	}
 }
 
-// stampFullSweepRun records a sweep that was just enqueued.
+// stampFullSweepRun records that a sweep is about to be enqueued, and REPORTS
+// FAILURE so the caller can refuse to enqueue.
 //
-// Stamped at ENQUEUE, not at completion: stamping on completion would
+// Stamped at enqueue rather than at completion: stamping on completion would
 // re-trigger the sweep on every due-check for as long as a sweep kept failing,
-// turning one broken run into an hourly retry of a multi-hour job. A failure
-// here is bounded -- at worst the sweep is enqueued again next check, and
-// library.scan's ConcurrencyKey serializes it.
-func (ts *TaskScheduler) stampFullSweepRun(t time.Time) {
-	if err := ts.setFullSweepTimestamp(t); err != nil {
-		slog.Warn("library_scan_full: failed to record the sweep just enqueued; "+
-			"it may be enqueued again on the next due check", "err", err)
-	}
+// turning one broken run into an hourly retry of a multi-hour job.
+//
+// It must return the error rather than warn, because a failed stamp is NOT
+// self-limiting. An earlier version claimed library.scan's ConcurrencyKey
+// bounded it; that is false. ConcurrencyKey serializes ACTIVE runs, and
+// EnqueueOp's dedupe scans ListActiveOperationsV2 -- a COMPLETED sweep is in
+// neither. So a swallowed stamp failure means: sweep finishes, next hourly
+// check reads the still-stale timestamp, enqueues another full force_update
+// sweep, forever. That is a continuous whole-library re-hash, and a running
+// scan clobbers metadata applied while it is in flight. This path has to fail
+// closed.
+func (ts *TaskScheduler) stampFullSweepRun(t time.Time) error {
+	return ts.setFullSweepTimestamp(t)
 }

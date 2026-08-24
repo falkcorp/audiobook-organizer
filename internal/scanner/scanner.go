@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -83,6 +83,7 @@ var (
 	scanCacheStatErrCount   atomic.Int64 // write-back abandoned: os.Stat failed
 	scanCacheLookupErrCount atomic.Int64 // write-back abandoned: GetBookByFilePath returned an error
 	scanCacheNoRowCount     atomic.Int64 // write-back abandoned: no book row exists at this path
+	scanCachePanicCount     atomic.Int64 // write-back recovered from a panic (nil-wrapping store interface)
 )
 
 // Skip-decision counters. shouldSkipFile used to return a bare bool with no
@@ -590,12 +591,17 @@ func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) (
 // suspicious-file copy used a bare `defer func() { recover() }()` that swallowed
 // the panic, the main one logged it. Unifying keeps the logging recover.
 //
-// Consequence worth stating because it is NOT a pure de-duplication: this
-// helper re-stats, so the suspicious-file path now costs one extra os.Stat and
-// gains a failure mode it did not have -- a file deleted between the outer stat
-// and the write-back now increments scanCacheStatErrCount instead of passing
-// silently. That is the intended direction (the outer FileInfo can be stale by
-// the time the write happens), but it is a behaviour change, not a refactor.
+// fi is the FileInfo the caller already holds, or nil to stat internally. The
+// suspicious-file path MUST pass its own, and this is not an optimisation.
+// That path stats a file, finds it under the minimum-size threshold, marks it
+// LibraryState="suspicious", and then hashes the whole file -- a wide window in
+// which a still-downloading file can grow past the threshold. Stamping the
+// cache with a re-stat's POST-growth mtime/size makes the next scan's
+// classifySkipFile (which compares only NeedsRescan/Mtime/Size, never
+// LibraryState) skip the file, so it stays flagged suspicious permanently.
+// Stamping the size the decision was actually made on leaves a mismatch, the
+// next scan re-reads, and the flag clears itself. Partially-written files are
+// not hypothetical here: 41.8% of book_file rows have no bytes.
 //
 // The three causes are counted individually because the fixes differ and the
 // volumes differ by orders of magnitude: a stat error is a race with a moving
@@ -605,12 +611,15 @@ func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) (
 // cache entry no matter how many times they are scanned. Only the last is
 // self-perpetuating, and it selects for exactly the files that are most
 // expensive to process.
-func writeBackScanCache(filePath string, scanLog logger.Logger) {
+func writeBackScanCache(filePath string, fi os.FileInfo, scanLog logger.Logger) {
 	// Recover guard: getStore() may return a non-nil interface wrapping a nil
 	// concrete pointer (happens in tests).
 	defer func() {
 		if r := recover(); r != nil {
-			scanLog.Warn("scan cache update recovered from panic: %v", r)
+			// Sampled: if getStore() ever returns a non-nil interface wrapping
+			// a nil pointer this fires once per file, and an unsampled Warn
+			// across a 44k-file library buries everything else in the log.
+			warnSampled(&scanCachePanicCount, scanLog, "scan cache update recovered from panic: %v", r)
 		}
 	}()
 
@@ -619,11 +628,14 @@ func writeBackScanCache(filePath string, scanLog logger.Logger) {
 		return
 	}
 
-	fi, statErr := os.Stat(filePath)
-	if statErr != nil {
-		warnSampled(&scanCacheStatErrCount, scanLog,
-			"scan cache write-back skipped for %s: stat failed: %v (file will be re-read next scan)", filePath, statErr)
-		return
+	if fi == nil {
+		var statErr error
+		fi, statErr = os.Stat(filePath)
+		if statErr != nil {
+			warnSampled(&scanCacheStatErrCount, scanLog,
+				"scan cache write-back skipped for %s: stat failed: %v (file will be re-read next scan)", filePath, statErr)
+			return
+		}
 	}
 
 	dbBook, dbErr := store.GetBookByFilePath(filePath)
@@ -905,6 +917,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	scanCacheStatErrStart := scanCacheStatErrCount.Load()
 	scanCacheLookupErrStart := scanCacheLookupErrCount.Load()
 	scanCacheNoRowStart := scanCacheNoRowCount.Load()
+	scanCachePanicStart := scanCachePanicCount.Load()
 	skipUnchangedStart := skipUnchangedCount.Load()
 	readCacheMissStart := readCacheMissCount.Load()
 	readChangedStart := readChangedCount.Load()
@@ -1058,7 +1071,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 						scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
 					}
 					scanLog.Warn("suspicious file (%d bytes, threshold %d): %s", fi.Size(), threshold, filePath)
-					writeBackScanCache(filePath, scanLog)
+					writeBackScanCache(filePath, fi, scanLog)
 					return
 				}
 			}
@@ -1313,7 +1326,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					scanLog.Warn("chapter persistence failed for %s: %v", books[idx].FilePath, err)
 				}
 				// Update scan cache so next incremental scan skips this file.
-				writeBackScanCache(books[idx].FilePath, scanLog)
+				writeBackScanCache(books[idx].FilePath, nil, scanLog)
 			}
 		}(i)
 	}
@@ -1359,6 +1372,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		// scan cache learns to key on paths rather than book rows.
 		scanLog.Warn("scan summary: %d scan-cache write-backs skipped because no book row exists at the path "+
 			"(these files are re-read and re-hashed on every scan)", d)
+	}
+	if d := scanCachePanicCount.Load() - scanCachePanicStart; d > 0 {
+		scanLog.Warn("scan summary: %d scan-cache write-backs recovered from a panic", d)
 	}
 
 	// Skip-rate summary. Logged UNCONDITIONALLY, unlike the error counters

@@ -1,5 +1,5 @@
 // file: internal/scheduler/full_sweep_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a8eab374-460f-4ba3-816a-4e5d365ca8f6
 // last-edited: 2026-08-24
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -251,4 +252,73 @@ func TestFullSweepManualTriggerBypassesDueCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, manual, "a manual trigger must run regardless of the period")
 	require.Len(t, *inserted, 1)
+}
+
+// TestFullSweepSeedsOnErrSettingNotFound is the regression test for a fix that
+// was briefly WORSE than the bug it replaced.
+//
+// Separating "store error" from "never run" is correct, but PebbleStore.
+// GetSetting reports a MISSING KEY as a wrapped ErrSettingNotFound rather than
+// (nil, nil). Treating every non-nil error as a backend failure therefore made
+// the normal first-boot path decline WITHOUT seeding, so the clock was never
+// written and the sweep could never become due -- permanently, silently.
+//
+// The mock returns (nil, nil) for a missing key, which production never does,
+// so this asserts against the real error shape on purpose.
+func TestFullSweepSeedsOnErrSettingNotFound(t *testing.T) {
+	restore := config.Snapshot()
+	t.Cleanup(func() { config.AppConfig = restore })
+	config.ResetToDefaults()
+
+	store := dbmocks.NewMockStore(t)
+	store.EXPECT().GetSetting(fullSweepLastRunSetting).
+		Return(nil, fmt.Errorf("setting not found: %s: %w", fullSweepLastRunSetting, database.ErrSettingNotFound)).
+		Maybe()
+
+	var seeded []string
+	store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(k, v, typ string, secret bool) error {
+			seeded = append(seeded, k)
+			return nil
+		}).Maybe()
+
+	ts, inserted := fullSweepHarness(t, store)
+	task, ok := ts.GetTask("library_scan_full")
+	require.True(t, ok)
+
+	op, err := task.TriggerFn(operations.TriggerScheduled)
+	require.NoError(t, err)
+	assert.Nil(t, op, "a first tick seeds the clock rather than sweeping")
+	assert.Empty(t, *inserted)
+	assert.Equal(t, []string{fullSweepLastRunSetting}, seeded,
+		"a missing key must SEED the clock — declining without seeding wedges the schedule forever")
+}
+
+// TestFullSweepRefusesToEnqueueWhenTheClockCannotBePersisted pins the
+// fail-closed ordering.
+//
+// Enqueue-then-stamp fails OPEN. Once a sweep COMPLETES it is in neither
+// ListActiveOperationsV2 nor the ConcurrencyKey's active set, so nothing
+// dedupes the next due-check against it: a swallowed stamp failure means a
+// whole-library force_update re-hash running back to back forever. Skipping one
+// sweep is the cheaper failure, so the stamp happens first and aborts.
+func TestFullSweepRefusesToEnqueueWhenTheClockCannotBePersisted(t *testing.T) {
+	restore := config.Snapshot()
+	t.Cleanup(func() { config.AppConfig = restore })
+	config.ResetToDefaults()
+
+	store := dbmocks.NewMockStore(t)
+	store.EXPECT().GetSetting(fullSweepLastRunSetting).Return(pastSweepSetting(2*testWeek), nil).Maybe()
+	store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.New("pebble: read-only")).Maybe()
+
+	ts, inserted := fullSweepHarness(t, store)
+	task, ok := ts.GetTask("library_scan_full")
+	require.True(t, ok)
+
+	op, err := task.TriggerFn(operations.TriggerScheduled)
+	require.Error(t, err, "an unpersistable clock must surface, not warn")
+	assert.Contains(t, err.Error(), "re-enqueue")
+	assert.Nil(t, op)
+	assert.Empty(t, *inserted, "no sweep may be enqueued when its clock cannot be recorded")
 }
