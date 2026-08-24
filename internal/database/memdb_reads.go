@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package database
 
@@ -480,7 +480,32 @@ func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]Bo
 // deliberate and it means AllVersions closes only the non-primary half of the
 // orphaning hazard; the unfiltered SeriesRefCounts guard is still load-bearing
 // for the trashed half. See internal/database/series_getter_conformance_test.go.
+//
+// This is the ONE series getter that refuses to answer from a memdb known to be
+// missing rows, and the asymmetry with GetBooksBySeriesIDCore is the whole
+// point. Until 2026-08-24 requireTablesComplete was wired into two places —
+// author_bookref.go and series_bookref.go — and BOTH are reference COUNTERS,
+// which only report. The getter that actually authorizes a repoint-then-delete
+// had no guard at all: the code that observes was protected, the code that acts
+// was not. A short answer here is not a slightly-wrong number, it is a book the
+// merge never repoints followed by a DeleteSeries on the row it still holds.
+//
+// The guard belongs on this wrapper and NOT on the shared getBooksBySeriesID
+// body. Core is the listing view; pushing the check down would make every
+// series page fall through to a full Pebble scan for the rest of the process's
+// life (a lost row "stays short until restart" — see the log text in
+// series_bookref.go), which is a permanent hot-path regression on a
+// degraded-but-serving process. The merge path is the only caller for which a
+// short answer is destructive rather than merely incomplete.
+//
+// Callers reaching this through PebbleStore never see the refusal: that wrapper
+// falls through to the authoritative Pebble scan, because memdb loss is
+// recoverable and aborting a merge that could be completed correctly is a worse
+// outcome than doing it from the slower source.
 func (m *MemStore) GetBooksBySeriesIDAllVersions(seriesID int, limit, offset int) ([]BookCore, error) {
+	if err := m.requireTablesComplete("books by series (merge path)", memTableBooks); err != nil {
+		return nil, err
+	}
 	return m.getBooksBySeriesID(seriesID, limit, offset, false)
 }
 

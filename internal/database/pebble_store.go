@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.137.0
+// version: 1.138.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package database
 
@@ -1843,9 +1843,35 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 // the non-primary half of the orphaning hazard; the unfiltered SeriesRefCounts
 // counter is still what covers trashed rows.
 // See internal/database/series_getter_conformance_test.go.
+// A memdb known to be missing rows is NOT consulted here, and unlike the
+// listing getter above this one repairs itself rather than refusing: memdb
+// loss is recoverable because the authoritative Pebble scan is right there, and
+// aborting a merge that could be completed correctly is the worse outcome. Same
+// shape as GetAllSeriesBookRefCounts in series_bookref.go — including the
+// single p.mem() load, so a concurrent Reset cannot pair one MemStore's refusal
+// with its replacement's (empty) loss map in the log line.
+//
+// This is the only membership getter with the guard, and that is deliberate:
+// see MemStore.GetBooksBySeriesIDAllVersions for why pushing it down to the
+// shared body would turn every series LISTING request into a full Pebble scan
+// for the rest of the process's life.
+//
+// Any other error is propagated unchanged — falling back on an unrecognized
+// failure would be guessing at its cause.
 func (p *PebbleStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetBooksBySeriesIDAllVersions(seriesID, 0, 0)
+	if m := p.mem(); p.UseMemDB && m != nil {
+		cores, err := m.GetBooksBySeriesIDAllVersions(seriesID, 0, 0)
+		if err == nil {
+			return cores, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		// Error, not Warn: this does not clear without a restart, and every
+		// caller of this getter is a repoint-then-delete path. A short answer
+		// here deletes a series while a live book still holds its ID.
+		slog.Error("books by series (merge path): memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
+			"error", err, "series_id", seriesID, "lost_rows", m.LostRows())
 	}
 	books, err := p.getBooksBySeriesIDFull(seriesID, false)
 	if err != nil {
