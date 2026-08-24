@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
 // version: 1.9.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
 
@@ -167,14 +168,22 @@ func (ts *TaskScheduler) registerAllTasks() {
 	// deploy-per-day cadence makes 168h unreachable.
 	//
 	// It shares library.scan's ConcurrencyKey with the incremental task. That
-	// is deliberate and safe: EnqueueOp's dedupe compares MARSHALLED PARAMS
-	// byte-for-byte, and the incremental enqueues {} while this enqueues
+	// is deliberate and safe: EnqueueOp's dedupe falls through to a
+	// byte-for-byte comparison of the MARSHALLED PARAMS, and the incremental
+	// enqueues {} while this enqueues
 	// {"force_update":true,"include_root_dir":true}. Unequal params queue a
 	// second row rather than collapsing into the running op, so a sweep that
 	// lands mid-incremental is DELAYED, never dropped.
+	//
+	// That byte-compare is reached only because library.scan sets neither
+	// DedupeQueuedRuns nor Schedule -- either one short-circuits sameWork to
+	// true (registry.go, EnqueueOp) and would silently collapse the sweep into
+	// the running incremental, i.e. dropped rather than delayed. Adding either
+	// to library.scan breaks this task. TestFullSweepEnqueuesForceUpdateParams
+	// pins the params half; the def-shape half is a standing constraint.
 	ts.registerTask(TaskDefinition{
 		Name:        "library_scan_full",
-		Description: "Weekly full library sweep (force_update: re-reads and re-hashes every file)",
+		Description: "Weekly full library sweep — re-reads and re-hashes every file. The interval is how often it CHECKS whether a sweep is due; the gap between sweeps is scheduled.library_scan_full.period_hours (default 168h).",
 		Category:    "library",
 		TriggerFn: func(source string) (*database.Operation, error) {
 			store := ts.deps.Store()
@@ -195,17 +204,40 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, nil
 			}
 
-			last, found := ts.loadLastFullSweep()
-			if !found {
-				// Never run (or the stored value was unreadable). Seed the
-				// clock and skip: the first tick after a deploy must not kick
+			// Serialize the whole load-check-enqueue-stamp sequence: a ticker
+			// tick and a manual trigger arriving together could otherwise both
+			// read "due" and enqueue two full sweeps.
+			ts.fullSweepMu.Lock()
+			defer ts.fullSweepMu.Unlock()
+
+			// A manual trigger means a person pressed Run, and it BYPASSES the
+			// due-check. Applying the schedule to a manual press made the
+			// button a no-op that still answered 202 "task triggered" on any
+			// day but the due one, and left no way at all to force a sweep.
+			manual := source == operations.TriggerManual
+
+			last, found, loadErr := ts.loadLastFullSweep()
+			switch {
+			case loadErr != nil:
+				// Decline WITHOUT seeding. Seeding here would push the sweep
+				// out a full period on every transient store hiccup, which is
+				// enough to stop it ever firing.
+				slog.Warn("library_scan_full: cannot read the last-run timestamp; declining this tick "+
+					"WITHOUT re-seeding the clock, so a transient store error does not postpone the sweep",
+					"err", loadErr, "source", source)
+				return nil, nil
+			case !found && manual:
+				// No clock yet, but a person asked for it explicitly.
+				slog.Info("library_scan_full: no prior sweep recorded; running now because this was triggered manually",
+					"source", source)
+			case !found:
+				// Seed and skip: the first tick after a deploy must not kick
 				// off an unannounced multi-hour re-hash of the whole library.
-				ts.saveLastFullSweep(time.Now())
+				ts.seedFullSweepClock(time.Now())
 				slog.Info("library_scan_full: no prior sweep recorded; seeding the clock and waiting a full period",
 					"periodHours", config.AppConfig.Scheduled.LibraryScanFull.PeriodHours, "source", source)
 				return nil, nil
-			}
-			if !fullSweepDue(last, time.Now(), period) {
+			case !fullSweepDue(last, time.Now(), period) && !manual:
 				return nil, nil
 			}
 
@@ -230,8 +262,8 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, fmt.Errorf("failed to enqueue full library.scan: %w", enqErr)
 			}
 			ts.setPreviousRunID("library_scan_full", v2ID)
-			// Stamped on ENQUEUE, not completion — see saveLastFullSweep.
-			ts.saveLastFullSweep(time.Now())
+			// Stamped on ENQUEUE, not completion — see stampFullSweepRun.
+			ts.stampFullSweepRun(time.Now())
 			slog.Info("library_scan_full: enqueued full sweep", "op", v2ID, "since", last, "source", source)
 			return v2ScheduledOp(v2ID, "scan"), nil
 		},

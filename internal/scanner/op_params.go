@@ -1,5 +1,5 @@
 // file: internal/scanner/op_params.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b46c14ae-5979-4407-8149-e85b7a04dc2b
 // last-edited: 2026-08-24
 
@@ -9,14 +9,23 @@ package scanner
 //
 // It lives here, in the domain package, rather than next to the OperationDef in
 // internal/server, because BOTH internal/server and internal/scheduler enqueue
-// library.scan and internal/server imports internal/scheduler -- so the
-// scheduler can never import the server back. Until 2026-08-24 the scheduler
-// worked around that cycle with a hand-copy (`type libraryScanParams struct{}`)
-// coupled to the real type only by JSON tags. That is the mirror pattern the
-// dedup ops were burned by twice: seriesPruneOpParams drifted silently, once
-// declaring a field the op had stopped reading and once omitting a field the
-// real type had. The fix there was to host the params in internal/dedup and
-// share one type; this is the same fix for the same reason.
+// library.scan while internal/server imports internal/scheduler -- so the
+// scheduler can never import the server back.
+//
+// Until 2026-08-24 the scheduler worked around that cycle with its own
+// `type libraryScanParams struct{}`. That empty struct had no fields and so
+// could not drift; it was correct precisely because {} was the wire shape the
+// incremental scan wanted. The weekly full sweep needs real fields, and adding
+// them to a local copy is what would have reintroduced the drift risk: the copy
+// would be coupled to the real type only by JSON tags, with nothing to fail if
+// they diverged. internal/scheduler's own comment on the dedup params records
+// that shape going wrong -- seriesPruneOpParams simultaneously declared a
+// legacy_op_id the op had stopped reading and omitted Detail, which the real
+// type has. That one was caught before it changed any behaviour; a silent
+// force_update that marshalled fine and did nothing would not have been.
+//
+// The fix there was to host the params in internal/dedup and share one type.
+// This is the same fix for the same reason.
 //
 // Keep it a plain struct with no scanner-internal dependencies: it is a wire
 // shape, and anything that makes it awkward to import is a reason for a caller

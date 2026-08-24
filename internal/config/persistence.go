@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
 // version: 1.34.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-08-21
+// last-edited: 2026-08-24
 
 package config
 

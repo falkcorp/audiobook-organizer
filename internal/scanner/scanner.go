@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.60.0
+// version: 1.61.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -70,13 +70,16 @@ var (
 
 	// The three ways a scan-cache write-back can be abandoned BEFORE
 	// UpdateScanCache is ever called. Until 2026-08-24 all three were dropped
-	// on the floor by a single `if ... statErr == nil` / `dbErr == nil &&
-	// dbBook != nil` chain with no else, so a store error, a missing row and a
-	// vanished file were indistinguishable from a successful write -- and each
-	// one leaves the path with no cache entry, which GetScanCacheMap treats as
-	// "never scanned" FOREVER (it skips rows whose LastScanMtime is nil).
-	// The result is a file re-read and re-hashed on every scan for the life of
-	// the library, reported as nothing.
+	// on the floor by a `dbErr == nil && dbBook != nil` chain with no else, so
+	// a store error, a missing row and a vanished file were indistinguishable
+	// from a successful write.
+	//
+	// All three leave the path with no cache entry for that run, and
+	// GetScanCacheMap skips rows whose LastScanMtime is nil, so all three cost
+	// a re-read next scan. Only scanCacheNoRowCount is PERMANENT: a stat error
+	// or a store error is transient and the next scan writes the entry, but a
+	// path with no book row can never acquire one however often it is scanned.
+	// See writeBackScanCache for why.
 	scanCacheStatErrCount   atomic.Int64 // write-back abandoned: os.Stat failed
 	scanCacheLookupErrCount atomic.Int64 // write-back abandoned: GetBookByFilePath returned an error
 	scanCacheNoRowCount     atomic.Int64 // write-back abandoned: no book row exists at this path
@@ -580,15 +583,28 @@ func ScanDirectory(ctx context.Context, rootDir string, scanLog logger.Logger) (
 // writeBackScanCache stamps the scan cache for filePath so the next incremental
 // scan can skip it.
 //
-// Both call sites used to inline a near-identical copy of this, and both copies
-// silently abandoned the write on three separate conditions. They are counted
-// individually now because the fixes differ and the volumes differ by orders of
-// magnitude: a stat error is a race with a moving file, a lookup error is a
-// store problem, and "no row" is structural -- saveBookToDatabase returns early
-// without creating a row for a file that duplicates an already-version-linked
-// book, so those paths can NEVER acquire a cache entry no matter how many times
-// they are scanned. Only the last one is self-perpetuating, and it selects for
-// exactly the files that are most expensive to process.
+// This replaces two inlined copies, which were similar but NOT identical: the
+// main path abandoned the write on three conditions (stat, lookup, no row)
+// while the suspicious-file path had only two, because it reused an os.FileInfo
+// its enclosing scope had already taken. They also recovered differently -- the
+// suspicious-file copy used a bare `defer func() { recover() }()` that swallowed
+// the panic, the main one logged it. Unifying keeps the logging recover.
+//
+// Consequence worth stating because it is NOT a pure de-duplication: this
+// helper re-stats, so the suspicious-file path now costs one extra os.Stat and
+// gains a failure mode it did not have -- a file deleted between the outer stat
+// and the write-back now increments scanCacheStatErrCount instead of passing
+// silently. That is the intended direction (the outer FileInfo can be stale by
+// the time the write happens), but it is a behaviour change, not a refactor.
+//
+// The three causes are counted individually because the fixes differ and the
+// volumes differ by orders of magnitude: a stat error is a race with a moving
+// file, a lookup error is a store problem, and "no row" is structural --
+// saveBookToDatabase returns early without creating a row for a file that
+// duplicates an already-version-linked book, so those paths can NEVER acquire a
+// cache entry no matter how many times they are scanned. Only the last is
+// self-perpetuating, and it selects for exactly the files that are most
+// expensive to process.
 func writeBackScanCache(filePath string, scanLog logger.Logger) {
 	// Recover guard: getStore() may return a non-nil interface wrapping a nil
 	// concrete pointer (happens in tests).

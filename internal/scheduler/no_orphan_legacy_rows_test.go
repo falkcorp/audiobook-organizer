@@ -1,7 +1,7 @@
 // file: internal/scheduler/no_orphan_legacy_rows_test.go
 // version: 1.3.0
 // guid: 1e6d90b4-73af-4c25-8d10-b2c4f9a05e37
-// last-edited: 2026-08-22
+// last-edited: 2026-08-24
 
 package scheduler
 

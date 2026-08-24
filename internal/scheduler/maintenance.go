@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
 // version: 1.2.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-06-16
+// last-edited: 2026-08-24
 
 package scheduler
 
