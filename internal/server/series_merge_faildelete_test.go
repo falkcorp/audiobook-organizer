@@ -1,5 +1,5 @@
 // file: internal/server/series_merge_faildelete_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c9e17ab-52d3-4f80-b6a1-9e35b7c0284f
 // last-edited: 2026-08-24
 
@@ -8,6 +8,8 @@ package server
 import (
 	"context"
 	"errors"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -40,7 +42,7 @@ func TestExecuteSeriesPrune_DoesNotDeleteAfterAFailedRepoint(t *testing.T) {
 	)
 
 	s := newSeriesPruneServer(t)
-	mock := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
+	mock, assignments := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
 
 	var repointed []string
 	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
@@ -48,6 +50,9 @@ func TestExecuteSeriesPrune_DoesNotDeleteAfterAFailedRepoint(t *testing.T) {
 			return nil, errors.New("simulated write failure")
 		}
 		if b.SeriesID != nil {
+			// Write through to the live state so the membership getters reflect it,
+			// exactly as a real store would.
+			assignments[id] = *b.SeriesID
 			repointed = append(repointed, id)
 		}
 		return b, nil
@@ -60,8 +65,22 @@ func TestExecuteSeriesPrune_DoesNotDeleteAfterAFailedRepoint(t *testing.T) {
 	}
 
 	store := seriesRefCountingStore{MockStore: mock, refCounts: map[int]int{keepID: 2, mergeID: 2}}
-	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err != nil {
-		t.Fatalf("executeSeriesPrune must absorb a per-book write failure, not abort: %v", err)
+	// Two things at once, and they are not the same thing.
+	//
+	// The run must NOT abort on a per-book write failure — it keeps going and the
+	// assertions below prove it processed the whole group. But it must REPORT the
+	// failure, because the refusal it just made ends "Re-run after resolving the
+	// errors above" and until 2026-08-24 the function returned nil regardless, so
+	// the caller marked the operation "success" and emitted "Series prune
+	// completed". An instruction to re-run, delivered on a run that reported
+	// itself green, reaches nobody.
+	err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, "")
+	if err == nil {
+		t.Fatal("executeSeriesPrune returned nil after REFUSING a delete; the caller marks that success " +
+			"and nobody learns the merge needs re-running")
+	}
+	if !strings.Contains(err.Error(), "REFUSING to delete") {
+		t.Errorf("the error must name the refusal so the operator knows what to fix, got: %v", err)
 	}
 
 	// Guard against a vacuous pass: if the merge never ran at all, the absence
@@ -95,19 +114,24 @@ func TestExecuteSeriesPrune_DoesNotDeleteWhenABookDoesNotResolve(t *testing.T) {
 	)
 
 	s := newSeriesPruneServer(t)
-	mock := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
+	mock, assignments := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
 
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		if id == altRip {
 			return nil, nil // found by the getter, gone by the point-get
 		}
-		sid := mergeID
-		return &database.Book{ID: id, SeriesID: &sid}, nil
+		sid, ok := assignments[id]
+		if !ok {
+			return nil, nil
+		}
+		s := sid
+		return &database.Book{ID: id, SeriesID: &s}, nil
 	}
 
 	var repointed []string
 	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
 		if b.SeriesID != nil {
+			assignments[id] = *b.SeriesID
 			repointed = append(repointed, id)
 		}
 		return b, nil
@@ -120,8 +144,11 @@ func TestExecuteSeriesPrune_DoesNotDeleteWhenABookDoesNotResolve(t *testing.T) {
 	}
 
 	store := seriesRefCountingStore{MockStore: mock, refCounts: map[int]int{keepID: 2, mergeID: 2}}
-	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err != nil {
-		t.Fatalf("executeSeriesPrune: %v", err)
+	// As above: the unresolvable book must not abort the run, but it must make the
+	// run report failure rather than a silent "success".
+	err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, "")
+	if err == nil {
+		t.Fatal("executeSeriesPrune returned nil after refusing a delete over an unresolvable book")
 	}
 
 	if len(repointed) == 0 {
@@ -196,7 +223,51 @@ func TestMergeSeriesGroupHelper_DoesNotDeleteWhenABookDoesNotResolve(t *testing.
 // above: same normalized name so phase 1 groups them, equal Core counts so the
 // lower ID wins the canonical vote, and getters that disagree by exactly one
 // alternate rip on the series being merged away.
-func seriesPruneMergeFixture(keepID, mergeID int, primary, altRip string) *database.MockStore {
+//
+// BOTH membership getters derive from the returned `assignments` map, which
+// UpdateBook mutates. This is not incidental — it is what makes the fixture able
+// to fail.
+//
+// The getters used to return STATIC slices, so `GetBooksBySeriesIDCore(mergeID)`
+// kept answering `[primary]` forever, even after `primary` had been repointed
+// away. That kept one specific mutant alive: swapping phase 2's unfiltered
+// `refCounts[ser.ID]` back to the filtered `len(GetBooksBySeriesIDCore(ser.ID))`
+// — precisely the bug that produced 6,893 phantom series IDs in production —
+// left the whole suite green, because the static getter reported 1 remaining
+// book for a series that in reality had none Core could see. A real store would
+// have answered 0, phase 2 would have deleted the series, and the alternate rip
+// would have been stranded.
+//
+// A fixture that cannot reach a code path cannot host a mutant on it, and a
+// mutation score only ever covers the mutants the fixture makes reachable.
+func seriesPruneMergeFixture(keepID, mergeID int, primary, altRip string) (*database.MockStore, map[string]int) {
+	// Live book→series state. The whole point is that reads reflect writes.
+	assignments := map[string]int{
+		"keeper-book": keepID,
+		primary:       mergeID,
+		altRip:        mergeID,
+	}
+	// altRip is a non-primary version: the Core (listing) getter hides it, the
+	// AllVersions (complete-set) getter does not. That single disagreement is the
+	// subject of these tests.
+	nonPrimary := map[string]bool{altRip: true}
+
+	booksIn := func(seriesID int, includeNonPrimary bool) []database.BookCore {
+		ids := make([]string, 0, len(assignments))
+		for id, sid := range assignments {
+			if sid != seriesID || (!includeNonPrimary && nonPrimary[id]) {
+				continue
+			}
+			ids = append(ids, id)
+		}
+		sort.Strings(ids) // map iteration order is random; keep results stable
+		out := make([]database.BookCore, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, database.BookCore{ID: id})
+		}
+		return out
+	}
+
 	mock := &database.MockStore{}
 	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
 		return []database.Series{
@@ -205,26 +276,24 @@ func seriesPruneMergeFixture(keepID, mergeID int, primary, altRip string) *datab
 		}, nil
 	}
 	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
-		switch id {
-		case keepID:
-			return []database.BookCore{{ID: "keeper-book"}}, nil
-		case mergeID:
-			return []database.BookCore{{ID: primary}}, nil
-		}
-		return nil, nil
+		return booksIn(id, false), nil
 	}
 	mock.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
-		switch id {
-		case keepID:
-			return []database.BookCore{{ID: "keeper-book"}}, nil
-		case mergeID:
-			return []database.BookCore{{ID: primary}, {ID: altRip}}, nil
-		}
-		return nil, nil
+		return booksIn(id, true), nil
 	}
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
-		sid := mergeID
-		return &database.Book{ID: id, SeriesID: &sid}, nil
+		sid, ok := assignments[id]
+		if !ok {
+			return nil, nil
+		}
+		s := sid
+		return &database.Book{ID: id, SeriesID: &s}, nil
 	}
-	return mock
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if b.SeriesID != nil {
+			assignments[id] = *b.SeriesID
+		}
+		return b, nil
+	}
+	return mock, assignments
 }

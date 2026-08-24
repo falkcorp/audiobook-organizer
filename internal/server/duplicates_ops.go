@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-08-24
 
@@ -26,6 +26,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -795,19 +796,60 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			_ = progress.Log("info", fmt.Sprintf("Renamed/merged series; organizing %d affected books...", len(affectedBookIDs)), nil)
 
 			log2 := logger.NewWithActivityLog("series-normalize", store)
+			organizeFailed := 0
 			for _, bookID := range affectedBookIDs {
 				if ctx.Err() != nil {
 					op.SetStatus("failed")
 					logging.Error(ctx, "series normalization cancelled", "err", ctx.Err())
-					return ctx.Err()
+					// errors.Join, not a bare ctx.Err(): if the normalize pass already
+					// returned a real failure (a list of series whose rename failed),
+					// returning only "context canceled" discards the only durable record
+					// of which rows still need attention. Both are non-nil here, so the
+					// join keeps the actionable one.
+					return errors.Join(opErr, ctx.Err())
 				}
 				book, bErr := store.GetBookByID(bookID)
-				if bErr != nil || book == nil {
+				if bErr != nil {
+					organizeFailed++
+					_ = progress.Log("warn", fmt.Sprintf(
+						"book %s could not be loaded and was NOT organized; its series row changed but its files did not move: %v",
+						bookID, bErr), nil)
+					continue
+				}
+				// book == nil is "could not resolve", NOT "absent", and it was silently
+				// skipped before. The Pebble store returns (nil, nil) on ErrNotFound,
+				// and affectedBookIDs came from the memdb-backed membership getter,
+				// which can list a row a later point-get cannot hydrate. Dropping it
+				// here meant the book was counted in "organizing the N books it
+				// collected" and never organized, with no line naming it anywhere.
+				//
+				// Sixty lines away in duplicates_helpers.go the identical divergence is
+				// counted as repointFailed and blocks a delete. Here it counted as
+				// nothing.
+				if book == nil {
+					organizeFailed++
+					logging.Error(ctx, "book listed as affected does not resolve; its series row changed but its files were NOT organized",
+						"book_id", bookID, "op", "series-normalize")
+					_ = progress.Log("warn", fmt.Sprintf(
+						"book %s does not resolve; its series row changed but its files were NOT organized", bookID), nil)
 					continue
 				}
 				if _, oErr := s.organizeService.ReOrganizeInPlace(book, log2); oErr != nil {
+					organizeFailed++
 					_ = progress.Log("warn", fmt.Sprintf("organize failed for book %s: %v", bookID, oErr), nil)
 				}
+			}
+			// Folded into the operation's outcome rather than left in the log. A
+			// re-run cannot recover these: normalize is idempotent on the series NAME,
+			// so once the rename has committed a second run computes no actions and
+			// never revisits the book. Silence here is permanent.
+			if organizeFailed > 0 {
+				organizeErr := fmt.Errorf("%d of %d affected books were not organized; their series rows changed but their files did not move, and a re-run will not retry them because the series names are already normalized",
+					organizeFailed, len(affectedBookIDs))
+				logging.Error(ctx, "series normalization could not organize every affected book",
+					"failed", organizeFailed, "total", len(affectedBookIDs))
+				_ = progress.Log("warn", organizeErr.Error(), nil)
+				opErr = errors.Join(opErr, organizeErr)
 			}
 
 			if len(affectedBookIDs) > 0 {

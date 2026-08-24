@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_handlers_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9c1e2f3a-4b5d-6e7f-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-08-24
 
@@ -28,7 +28,10 @@ func TestComputeSeriesNormalizeActions_Basic(t *testing.T) {
 		return []database.BookCore{{ID: fmt.Sprintf("book-%d", id)}}, nil
 	}
 
-	actions := computeSeriesNormalizeActions(store)
+	actions, err := computeSeriesNormalizeActions(store)
+	if err != nil {
+		t.Fatalf("computeSeriesNormalizeActions: %v", err)
+	}
 
 	for _, a := range actions {
 		if a.OldName == "Discworld" {
@@ -82,7 +85,10 @@ func TestComputeSeriesNormalizeActions_FlaggedCase(t *testing.T) {
 		return []database.BookCore{{ID: "book-10"}}, nil
 	}
 
-	actions := computeSeriesNormalizeActions(store)
+	actions, err := computeSeriesNormalizeActions(store)
+	if err != nil {
+		t.Fatalf("computeSeriesNormalizeActions: %v", err)
+	}
 	if len(actions) != 0 {
 		t.Errorf("expected 0 actions for clean series, got %d: %+v", len(actions), actions)
 	}
