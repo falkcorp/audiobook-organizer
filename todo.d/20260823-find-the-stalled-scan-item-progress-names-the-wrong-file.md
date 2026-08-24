@@ -20,22 +20,64 @@
       last of the other ~9 workers to complete. `Past Life Hero Book 3.m4b` is a
       book that scanned fine.
 
-      **Measured evidence** (all 9 prod `library.scan` rows, 2026-08-21..23,
-      pulled by a parallel session): the numerator pins at **14912** (7 rows) or
-      **14916** (2 rows) while the denominator drifts 40109 → 40089. The named
-      item **varies across at least three titles** at the same pinned count —
-      `Past Life Hero Book 3.m4b` (5×), `Noelle Stevenson - Nimona.mp3` (1×),
-      `Orson Scott Card ... Shadow of the Hegemon` (1×). A varying name at a
-      fixed count is exactly what the defer above predicts.
+      **Measured evidence — re-pulled 2026-08-24 over a 7-day window.** An
+      earlier version of this entry used a 9-row population; the correct one is
+      **21 rows**. The instrument was the problem, see below.
 
-      Status is `interrupted_quiesced` on 8 rows and `canceled` on 1 — **not**
-      `abandoned`. `resume_count` is 0 on every row, and `current_phase` /
-      `current_item` are `None` on every row, so the prose in `progress_message`
-      is currently the only phase signal there is.
+      The stall count is **not** a single value. It steps *down* over the week
+      while the denominator grows:
 
-      Two rows are a different shape and must not be folded in: `01M0KQ1J` at
-      49280/49280 `"Reading tags"` (different phase, different denominator) and
-      `01M0QCBV` at 3/6 `"AI parsing batch 3/6"` (the 6-item scan, not the walk).
+      | pin | rows | window | denominator |
+      |---|---|---|---|
+      | **16416** | 7 | Aug 18 08:07 – Aug 20 04:17 | 40084 → 40088 |
+      | **14916** | 3 | Aug 20 10:17 – Aug 21 21:08 | 40088 → 40089 |
+      | **14912** | 4 | Aug 22 09:08 – Aug 23 20:48 | 40090 → 40109 |
+
+      That shape is important and it argues against a single poisoned file. A
+      fixed bad input at sorted position N would hold N, or drift *up* as books
+      sort in ahead of it. This drifts **down** — it stalls progressively
+      earlier while the library grows.
+
+      **Not one `library.scan` in 7 days reached completion.** 20 of 21 rows end
+      `interrupted_quiesced`, 1 ends `canceled`. There is no `completed` row in
+      the window at all.
+
+      The named item varies across at least five titles at these pinned counts —
+      `Imagining Elsewhere.m4b` (5×), `Past Life Hero Book 3.m4b` (5×),
+      `Ryan DeBruyn - Endarkened Spire` (2×), `Noelle Stevenson - Nimona.mp3`,
+      `Orson Scott Card ... Shadow of the Hegemon` — exactly as the defer above
+      predicts.
+
+      **The instrument lied, and it is worth knowing how.**
+      `GET /api/v1/operations/timeline` reads **only** `since` (default **15m**).
+      `def_id` and `limit` are not parameters; Gin drops unknown query keys
+      silently. Verified with a bogus value on 2026-08-24 rather than by reading
+      the handler:
+
+      ```
+      since=168h                        -> 148 rows
+      since=168h&def_id=library.scan    -> 148 rows
+      since=168h&def_id=TOTAL_NONSENSE  -> 148 rows   <-- inert
+      since=168h&limit=5                -> 148 rows   <-- inert
+      (no params)                       ->   1 row    <-- the 15m default
+      ```
+
+      So a query written as `?def_id=library.scan&limit=200` silently asks for
+      *the last 15 minutes of everything*. See
+      [[20260824-operations-timeline-ignores-def-id-and-limit]]. Also note the
+      payload nests two deep — `{"data":{"operations":[…]}}` — so a parser
+      reading top-level `operations` gets 1.
+
+      Re-pull with `since=168h` and filter client-side. 148 < the 200 row cap,
+      so that window is a real count; `since=240h` and `336h` both hit the cap
+      and truncate the **old** end, leaving anything before Aug 17 unmeasured.
+
+      Rows in other phases must not be folded in with the `"Processed:"` rows.
+      Four are `"Reading tags"` at N/N with wildly different denominators —
+      49280, 132260, 22400, 61380 — because that phase counts *files* with a
+      growing denominator, so N/N means "still discovering", not "finished".
+      Two more are `"AI parsing batch"` (3/6 and 1/18), a different op shape
+      entirely.
 
       **What to do, in order:**
       1. Report the item being *started*, not only the one completed. Sending the
