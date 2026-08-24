@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.91.0
+// version: 1.92.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package database
 
@@ -254,6 +254,7 @@ type MockStore struct {
 	SetOperationV2StatusIfQueuedFunc func(id, newStatus string) (bool, error)
 	CountRunningByPluginV2Func       func(plugin string) (int, error)
 	ListActiveOperationsV2Func       func() ([]OperationV2Row, error)
+	ListResumableOperationsV2Func    func() ([]OperationV2Row, error)
 	IncrementResumeCountV2Func       func(id string) error
 	SetOperationV2ResultFunc         func(id string, resultData string) error
 	InsertOpStrikeV2Func             func(row OpStrikeV2Row) error
@@ -3163,6 +3164,12 @@ func (m *MockStore) CountRunningByPluginV2(plugin string) (int, error) {
 func (m *MockStore) ListActiveOperationsV2() ([]OperationV2Row, error) {
 	if m.ListActiveOperationsV2Func != nil {
 		return m.ListActiveOperationsV2Func()
+	}
+	return nil, nil
+}
+func (m *MockStore) ListResumableOperationsV2() ([]OperationV2Row, error) {
+	if m.ListResumableOperationsV2Func != nil {
+		return m.ListResumableOperationsV2Func()
 	}
 	return nil, nil
 }

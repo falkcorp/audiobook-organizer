@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-06-24
+// last-edited: 2026-08-24
 
 package registry
 
@@ -19,8 +19,8 @@ import (
 const reconcileScanDefID = "reconcile_scan"
 
 // resumeAfterStartup is called from Start() before the dispatcher begins.
-// It walks operations_v2 rows with status='queued' or status='running' and
-// applies the def's ResumePolicy:
+// It walks operations_v2 rows with status='queued', 'running' or
+// 'interrupted_quiesced' and applies the def's ResumePolicy:
 //
 //   - ResumeRestart: increment resume_count, dispatch with saved state.
 //   - ResumeRequeue: clear state, re-insert as a fresh queued op.
@@ -30,17 +30,31 @@ const reconcileScanDefID = "reconcile_scan"
 //
 // Special: any op whose def_id is "reconcile_scan" is always dropped,
 // matching existing server_lifecycle.go behaviour.
+//
+// CANDIDATES COME FROM ListResumableOperationsV2, NOT ListActiveOperationsV2.
+// The active index drops a row the moment its status stops being queued/running,
+// so every interrupted_quiesced op was invisible here and never came back. See
+// isResumableV2Status in pebble_store_ops_v2.go for the full incident history.
 func (r *Registry) resumeAfterStartup(ctx context.Context) {
-	rows, err := r.store.ListActiveOperationsV2()
+	rows, err := r.store.ListResumableOperationsV2()
 	if err != nil {
-		r.logger.Warn("registry: resumeAfterStartup: failed to list active ops", "error", err)
+		r.logger.Warn("registry: resumeAfterStartup: failed to list resumable ops", "error", err)
 		return
 	}
 	if len(rows) == 0 {
-		r.logger.Info("registry: resumeAfterStartup: no active ops to resume")
+		r.logger.Info("registry: resumeAfterStartup: no resumable ops")
 		return
 	}
-	r.logger.Info("registry: resumeAfterStartup: processing active ops", "count", len(rows))
+
+	rows, superseded := supersedeStaleQuiesced(rows)
+	for _, sup := range superseded {
+		r.resumeDrop(sup.ID, "superseded: a newer run of this op exists")
+	}
+	if len(superseded) > 0 {
+		r.logger.Info("registry: resumeAfterStartup: dropped superseded quiesced ops",
+			"count", len(superseded))
+	}
+	r.logger.Info("registry: resumeAfterStartup: processing resumable ops", "count", len(rows))
 
 	for _, row := range rows {
 		row := row // capture
@@ -80,6 +94,56 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 			r.resumeDrop(row.ID, "ResumePolicy=unspecified")
 		}
 	}
+}
+
+// supersedeStaleQuiesced splits the sweep's candidates into the ones to act on
+// and the interrupted_quiesced ones that a newer run has made obsolete.
+//
+// WHY: including interrupted_quiesced rows means a def accumulates one candidate
+// per interrupted run, forever — prod held 21 quiesced library.scan rows built up
+// over a month of deploys. Handing all of them to ResumeRestart would launch 21
+// concurrent full library scans on a single boot, which is far worse than the
+// stall this fix exists to cure. The enqueue-time ConcurrencyKey dedupe does not
+// help: resumeRestart flips the row straight to "queued" and never goes through
+// Enqueue.
+//
+// The rule, per def_id:
+//
+//   - A queued/running row always wins. It is the live request; every
+//     interrupted_quiesced row for that def is stale by construction.
+//   - Otherwise the newest interrupted_quiesced row wins and the rest are
+//     superseded. Ops carry ULID ids, which sort lexicographically by creation
+//     time, so max(ID) is the most recently created run.
+//
+// Rows that are queued or running are NEVER superseded — this function only ever
+// removes interrupted_quiesced rows, so the pre-existing sweep behaviour for the
+// in-flight set is unchanged.
+func supersedeStaleQuiesced(rows []database.OperationV2Row) (keep, superseded []database.OperationV2Row) {
+	// Winner per def among the quiesced rows, and whether the def has a live row.
+	hasLive := make(map[string]bool, len(rows))
+	newestQuiesced := make(map[string]string, len(rows))
+	for _, row := range rows {
+		if row.Status == "interrupted_quiesced" {
+			if row.ID > newestQuiesced[row.DefID] {
+				newestQuiesced[row.DefID] = row.ID
+			}
+			continue
+		}
+		hasLive[row.DefID] = true
+	}
+
+	for _, row := range rows {
+		if row.Status != "interrupted_quiesced" {
+			keep = append(keep, row)
+			continue
+		}
+		if hasLive[row.DefID] || row.ID != newestQuiesced[row.DefID] {
+			superseded = append(superseded, row)
+			continue
+		}
+		keep = append(keep, row)
+	}
+	return keep, superseded
 }
 
 // resumeRestart increments resume_count, merges any saved checkpoint state

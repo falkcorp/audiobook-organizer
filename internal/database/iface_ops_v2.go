@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-22
+// last-edited: 2026-08-24
 
 package database
 
@@ -148,7 +148,17 @@ type OpV2QueueStore interface {
 	// ListQueuedOperationsV2 returns queued ops ordered by priority DESC, queued_at ASC.
 	ListQueuedOperationsV2() ([]OperationV2Row, error)
 	// ListActiveOperationsV2 returns ops with status 'queued' or 'running'.
+	//
+	// This is the IN-FLIGHT set, read from the opv2:act: index. It is NOT the
+	// resume set: an interrupted_quiesced row has already been removed from that
+	// index and will never appear here. Use ListResumableOperationsV2 for the
+	// startup resume sweep.
 	ListActiveOperationsV2() ([]OperationV2Row, error)
+	// ListResumableOperationsV2 returns ops the startup resume sweep should
+	// consider: 'queued', 'running', or 'interrupted_quiesced'. Scans the full
+	// opv2:op: keyspace rather than the active index, because a quiesced row is
+	// precisely the row the index has dropped.
+	ListResumableOperationsV2() ([]OperationV2Row, error)
 	// ListOperationsV2Since returns all operations whose queued_at timestamp is
 	// at or after the given time, ordered by started_at DESC NULLS LAST,
 	// queued_at DESC. At most limit rows are returned (0 = use a safe default).

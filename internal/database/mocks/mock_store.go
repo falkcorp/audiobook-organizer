@@ -3118,6 +3118,61 @@ func (_c *MockOpsV2Store_ListQueuedOperationsV2_Call) RunAndReturn(run func() ([
 	return _c
 }
 
+// ListResumableOperationsV2 provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) ListResumableOperationsV2() ([]database.OperationV2Row, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListResumableOperationsV2")
+	}
+
+	var r0 []database.OperationV2Row
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.OperationV2Row, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.OperationV2Row); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.OperationV2Row)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOpsV2Store_ListResumableOperationsV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListResumableOperationsV2'
+type MockOpsV2Store_ListResumableOperationsV2_Call struct {
+	*mock.Call
+}
+
+// ListResumableOperationsV2 is a helper method to define mock.On call
+func (_e *MockOpsV2Store_Expecter) ListResumableOperationsV2() *MockOpsV2Store_ListResumableOperationsV2_Call {
+	return &MockOpsV2Store_ListResumableOperationsV2_Call{Call: _e.mock.On("ListResumableOperationsV2")}
+}
+
+func (_c *MockOpsV2Store_ListResumableOperationsV2_Call) Run(run func()) *MockOpsV2Store_ListResumableOperationsV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_ListResumableOperationsV2_Call) Return(operationV2Rows []database.OperationV2Row, err error) *MockOpsV2Store_ListResumableOperationsV2_Call {
+	_c.Call.Return(operationV2Rows, err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_ListResumableOperationsV2_Call) RunAndReturn(run func() ([]database.OperationV2Row, error)) *MockOpsV2Store_ListResumableOperationsV2_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListWaitingDepsOps provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) ListWaitingDepsOps() ([]database.OperationV2Row, error) {
 	ret := _mock.Called()
@@ -21623,6 +21678,61 @@ func (_c *MockStore_ListQueuedOperationsV2_Call) Return(operationV2Rows []databa
 }
 
 func (_c *MockStore_ListQueuedOperationsV2_Call) RunAndReturn(run func() ([]database.OperationV2Row, error)) *MockStore_ListQueuedOperationsV2_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListResumableOperationsV2 provides a mock function for the type MockStore
+func (_mock *MockStore) ListResumableOperationsV2() ([]database.OperationV2Row, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListResumableOperationsV2")
+	}
+
+	var r0 []database.OperationV2Row
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.OperationV2Row, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.OperationV2Row); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.OperationV2Row)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListResumableOperationsV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListResumableOperationsV2'
+type MockStore_ListResumableOperationsV2_Call struct {
+	*mock.Call
+}
+
+// ListResumableOperationsV2 is a helper method to define mock.On call
+func (_e *MockStore_Expecter) ListResumableOperationsV2() *MockStore_ListResumableOperationsV2_Call {
+	return &MockStore_ListResumableOperationsV2_Call{Call: _e.mock.On("ListResumableOperationsV2")}
+}
+
+func (_c *MockStore_ListResumableOperationsV2_Call) Run(run func()) *MockStore_ListResumableOperationsV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_ListResumableOperationsV2_Call) Return(operationV2Rows []database.OperationV2Row, err error) *MockStore_ListResumableOperationsV2_Call {
+	_c.Call.Return(operationV2Rows, err)
+	return _c
+}
+
+func (_c *MockStore_ListResumableOperationsV2_Call) RunAndReturn(run func() ([]database.OperationV2Row, error)) *MockStore_ListResumableOperationsV2_Call {
 	_c.Call.Return(run)
 	return _c
 }
