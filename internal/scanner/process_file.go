@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 // Package scanner provides file scanning and processing utilities for the
 // audiobook organizer. ProcessFile is the single-pass entry point that opens
@@ -60,6 +60,87 @@ var chapterStoreAssertErrCount atomic.Int64
 //
 // Existing callers of metadata.ExtractMetadata, mediainfo.Extract, and
 // ComputeFileHash are unaffected — those functions continue to work as before.
+// processFileTimeout is the per-file wall-clock cap for ProcessFile.
+//
+// ProcessFile's chain (os.Stat -> os.Open -> tag.ReadFrom -> SHA-256 read) is
+// entirely blocking syscalls and third-party parsing that do NOT respect Go
+// context cancellation. tag.ReadFrom in particular walks an MP4 atom tree whose
+// lengths come from the file itself, so a malformed or truncated container can
+// make it spin or attempt an enormous read with no way to interrupt it.
+//
+// This is not hypothetical. Prod library.scan stalled at the SAME item across 9
+// runs over 3 days (2026-08-21..23): the numerator stuck at 14912 while the
+// denominator drifted 40109 -> 40089, ending each run with "abandoned: op
+// goroutine did not exit within grace after context cancellation". A fixed
+// numerator with a moving denominator is a deterministic hang on one specific
+// input, not a race, and "did not exit after cancellation" is what an
+// uncancellable syscall looks like from the outside.
+//
+// The bound is deliberately generous rather than tight. It exists to convert an
+// INFINITE hang into a normal per-file failure, not to police slow files: the
+// legitimate worst case is a full SHA-256 of a 100 MB file plus a tag read over
+// a network filesystem, which is tens of seconds on a bad link. 120s leaves
+// several times that headroom, so a timeout here means genuinely stuck.
+//
+// The goroutine is intentionally leaked on timeout -- it will unblock whenever
+// the kernel or the parser recovers. This mirrors extractWithTimeout in
+// internal/plugins/maintenance/duration_reextract.go, which documented this
+// exact hazard for mediainfo.Extract and then guarded only its own call site.
+const processFileTimeout = 120 * time.Second
+
+// ProcessFileWithTimeout runs ProcessFile under processFileTimeout and honours
+// ctx, so a scan can be cancelled between files and cannot be stalled forever by
+// one of them.
+//
+// Callers on a scan path must use this rather than ProcessFile directly. A
+// timeout is returned as an ordinary error, which the scanner already handles:
+// it falls back to filename-derived metadata and increments the per-file scan
+// fail counter that feeds auto-quarantine.
+func ProcessFileWithTimeout(ctx context.Context, filePath string) (*metadata.Metadata, *mediainfo.MediaInfo, string, error) {
+	return processFileBounded(ctx, filePath, processFileTimeout, ProcessFile)
+}
+
+// processFileBounded is the testable core of ProcessFileWithTimeout: the work
+// function and the timeout are parameters so the timeout and cancellation arms
+// can be exercised without a file that actually hangs. Nothing that hangs on
+// demand exists on disk, and a test that cannot reach the timeout arm is not
+// testing the fix.
+func processFileBounded(
+	ctx context.Context,
+	filePath string,
+	timeout time.Duration,
+	work func(string) (*metadata.Metadata, *mediainfo.MediaInfo, string, error),
+) (*metadata.Metadata, *mediainfo.MediaInfo, string, error) {
+	type result struct {
+		meta *metadata.Metadata
+		mi   *mediainfo.MediaInfo
+		hash string
+		err  error
+	}
+	// Buffered so the goroutine can always send and exit even after we have
+	// given up on it. An unbuffered channel here would turn every timeout into
+	// a PERMANENT goroutine leak rather than a temporary one.
+	ch := make(chan result, 1)
+	go func() {
+		meta, mi, hash, err := work(filePath)
+		ch <- result{meta, mi, hash, err}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case r := <-ch:
+		return r.meta, r.mi, r.hash, r.err
+	case <-timer.C:
+		return nil, nil, "", fmt.Errorf("ProcessFile: timed out after %v on %q "+
+			"(uncancellable read; the file is likely malformed or the filesystem is stuck)",
+			timeout, filePath)
+	case <-ctx.Done():
+		return nil, nil, "", fmt.Errorf("ProcessFile: cancelled on %q: %w", filePath, ctx.Err())
+	}
+}
+
 func ProcessFile(filePath string) (*metadata.Metadata, *mediainfo.MediaInfo, string, error) {
 	if filePath == "" {
 		return nil, nil, "", fmt.Errorf("ProcessFile: empty file path")
