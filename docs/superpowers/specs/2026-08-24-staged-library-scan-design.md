@@ -1,5 +1,5 @@
 <!-- file: docs/superpowers/specs/2026-08-24-staged-library-scan-design.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: c7f76dfd-5447-4c73-a9a6-b77f62db8736 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -44,26 +44,33 @@ redesign must keep this, not replace it.
 Only 01:50 is a real fault: systemd `SIGKILL`ed the process after the shutdown
 timeout expired. Memory peak 7.4–7.8 GB. There is no crash loop.
 
-### 3. The cache mark covers only ~60% of the library. **This is the core defect.**
+### 3. The skip cache cannot hit on the population that is scanned. **Core defect.**
 
-Sample of 200 books fetched individually from `/api/v1/audiobooks/:id`:
+A default scan walks **import paths only**. `internal/scanner/service.go:331`
+excludes `RootDir` unless `force_update` or `include_root_dir` is set, and prod
+confirms it on every run:
 
-| condition | count | share |
-|---|---|---|
-| eligible for the skip cache (`file_path` AND `last_scan_mtime`) | 123 | 61.5% |
-| of those cached, `needs_rescan=true` (present but never skips) | 4 | 3.3% |
-| **actually skippable** | **119** | **59.5%** |
-| **re-read on every scan** | **81** | **40.5%** |
+```
+Scanning 2 total folders (2 import paths)
+Library root /mnt/bigdata/books/audiobook-organizer excluded from this incremental scan
+```
 
-Extrapolated to 56,724 books: **~23,000 books are fully re-read every tick.**
-This is the "doing the same work every time" symptom. It is a *coverage* problem,
-not a dirty-flag problem — `needs_rescan` accounts for only 4 of the 81.
+The two walked paths are `/mnt/bigdata/books/abooks` and
+`/mnt/bigdata/books/newbooks` (the latter alone holds 17,511 books).
 
-It is also not caused by write errors: 236,143 prod log lines contain **zero**
-`UpdateScanCache failed` warnings (verified against a known-good twin — 13,721
-lines match `scanner`, so the grep is live).
+But of 1,200 sampled book rows, **zero** have a `file_path` under either import
+path. Every row points at the organize destination (948) or the hands-off iTunes
+tree (251). Organize rewrites `book.FilePath` to the destination; the source file
+remains in the import path.
 
-The likely mechanism is at `internal/scanner/scanner.go:1166`:
+The consequence is structural, at `internal/scanner/scanner.go:866` and `:1166`:
+
+1. `shouldSkipFile(<source path>)` looks up `cache[<source path>]`. The cache is
+   built by `GetScanCacheMap`, keyed by `book.FilePath` — the *destination*
+   path. **Miss, every time. Nothing is ever skipped.**
+2. The write-back then does `GetBookByFilePath(<source path>)`, which returns
+   `nil` for the same reason, so `UpdateScanCache` is never called and no mark is
+   ever created. The `nil` branch logs **nothing**:
 
 ```go
 if dbBook, dbErr := store.GetBookByFilePath(books[idx].FilePath); dbErr == nil && dbBook != nil {
@@ -73,10 +80,24 @@ if dbBook, dbErr := store.GetBookByFilePath(books[idx].FilePath); dbErr == nil &
 }
 ```
 
-When `GetBookByFilePath` returns `nil` or an error, the cache entry is silently
-never written and there is no log line at all. The book is then re-read on every
-future scan, forever, with nothing to indicate it. **Confirming this mechanism is
-a prerequisite for the work below** — see Open Questions.
+It is self-perpetuating: the lookup that would record the skip fails for the same
+reason the skip failed. Every file in the import paths is fully re-read on every
+scan, forever. **This is what makes the "incremental" scan take 5-6 hours.**
+
+Two supporting negatives, so this is not confused with adjacent causes:
+
+- Not write errors: 236,143 prod log lines contain **zero** `UpdateScanCache
+  failed` warnings (verified against a known-good twin — 13,721 lines match
+  `scanner`, so the grep is live).
+- Not the dirty flag: of 123 sampled books that *do* carry a mark, only 4 (3.3%)
+  have `needs_rescan=true`.
+
+> **Superseded claim.** An earlier draft of this spec said "~40% of books carry no
+> `last_scan_mtime`, so ~23,000 are re-read every tick." That number was computed
+> over the whole library and is wrong: the unmarked books cluster in the organized
+> tree and the iTunes tree, neither of which a default scan walks, so they are not
+> re-read at all. The correct finding is narrower in population and worse in
+> effect — on the population that *is* walked, the hit rate is structurally zero.
 
 ### 4. The denominator grows during the run.
 
@@ -108,9 +129,19 @@ Compare the stage-1 list against the persisted `(last_scan_mtime, last_scan_size
 marks. Produce three sets: **new**, **changed**, **unchanged**. Unchanged files
 are dropped here and never touched again this run.
 
-**Stage 2 must write a mark for every file it decides is unchanged**, including
-ones that had no mark before. That single change is what closes the ~40% gap, and
-it is worth landing on its own even if the rest of this design is rejected.
+**Stage 2 must key the mark by the path that was actually walked.** Today the
+cache is keyed by `book.FilePath` (the organize *destination*) while the scan
+walks the *source* path, so the lookup can never hit. Stage 2 must either record
+the source path on the book row and key the cache by it, or resolve source ->
+book via the existing path index before comparing. Whichever is chosen, the
+invariant to test is: **the key written by the deep pass is the same key the diff
+looks up.**
+
+This is worth landing on its own even if the rest of this design is rejected — it
+is the whole of the 5-6 hour problem, and it does not depend on staging.
+
+Stage 2 must also write a mark for every file it declares unchanged, including
+ones that had none before, so the set converges instead of rebuilding each run.
 
 For the **new** and **changed** sets only, stage 2 then reads the tag header —
 and nothing else. No hashing, no ffprobe, no AI fallback. This is what lets a
@@ -161,9 +192,14 @@ marks are existing fields on existing rows.
 
 ## Open questions (must be answered before implementation)
 
-1. **Confirm the silent-skip mechanism** at `scanner.go:1166`. If books are
-   missing marks for a different reason, stage 2's write may not close the gap.
-   Cheapest probe: add a warn on the `dbBook == nil` branch and read one scan.
+1. ~~Confirm the silent-skip mechanism.~~ **RESOLVED 2026-08-24** — see finding
+   3. The cache is keyed by the organize destination while the scan walks the
+   source path, so both the skip lookup and the mark write-back miss. A warn on
+   the `dbBook == nil` branch is still worth adding regardless, because that
+   branch currently fails silently and would hide any future recurrence.
+   **Decide:** record the source path on the book row, or resolve source -> book
+   through the path index? The first is a schema addition on an existing row; the
+   second adds a lookup to a hot loop.
 2. Should the weekly full sweep (`include_root_dir`, keeping the skip cache) be
    folded in here or shipped separately? The scheduler cannot request it today —
    `internal/scheduler/tasks.go:28` is `type libraryScanParams struct{}`, an empty
