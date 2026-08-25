@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.6.1
+// version: 1.7.0
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
-// last-edited: 2026-08-06
+// last-edited: 2026-08-25
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -120,9 +120,47 @@ describe('Library import dialog', () => {
     const importButton = await screen.findByRole('button', { name: 'Import' });
     fireEvent.click(importButton);
 
+    // organize=false is the DEFAULT, not an incidental value. Until 2026-08-25
+    // the server decoded `organize` and ignored it, so the checkbox defaulting
+    // to ON was harmless. Now that it is honored, an ON default would move
+    // files on disk for every import -- including the bulk path, which maps it
+    // over every selected file -- without anyone choosing that.
     const importFileMock = vi.mocked(api.importFile);
     await waitFor(() => {
-      expect(importFileMock).toHaveBeenCalledWith('/tmp/book.m4b', true);
+      expect(importFileMock).toHaveBeenCalledWith('/tmp/book.m4b', false);
+    });
+  });
+
+  // The other half of the default: ticking the box must actually send true.
+  // Asserting only the default would pass just as well if the checkbox were
+  // inert, which is the exact class of bug this whole change is fixing.
+  it('sends organize=true when the organize checkbox is ticked', async () => {
+    render(
+      <MemoryRouter>
+        <Library />
+      </MemoryRouter>
+    );
+
+    const openButton = await screen.findByRole('button', {
+      name: /import files/i,
+    });
+    fireEvent.click(openButton);
+
+    const pathField = await screen.findByLabelText(/import file path/i);
+    fireEvent.change(pathField, { target: { value: '/tmp/book.m4b' } });
+
+    const organizeBox = await screen.findByRole('checkbox', {
+      name: /organize into library after import/i,
+    });
+    expect(organizeBox).not.toBeChecked();
+    fireEvent.click(organizeBox);
+    expect(organizeBox).toBeChecked();
+
+    const importButton = await screen.findByRole('button', { name: 'Import' });
+    fireEvent.click(importButton);
+
+    await waitFor(() => {
+      expect(vi.mocked(api.importFile)).toHaveBeenCalledWith('/tmp/book.m4b', true);
     });
   });
 
@@ -159,7 +197,7 @@ describe('Library import dialog', () => {
     fireEvent.click(importButton);
 
     await waitFor(() => {
-      expect(api.importFile).toHaveBeenCalledWith('/tmp/book.m4b', true);
+      expect(api.importFile).toHaveBeenCalledWith('/tmp/book.m4b', false);
     });
 
     // If the cache were still populated, the post-import reload would be
