@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.19.0 -->
+<!-- version: 1.20.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -1217,6 +1217,72 @@ was in fact still running, and the finished-version marker that had blocked ever
 itself looked like a successfully published release. In both cases the summary was
 misleading and the underlying detail was not. The protective rule remains switched off
 pending a decision on the narrower exemption it needs.
+
+## 29. A filter menu offering authors with no books (Aug 25)
+
+In the Audiobookshelf apps, the library page has a filter menu — pick an author or a
+narrator and the shelf narrows to their books. Choosing an author from it frequently
+produced **an empty shelf**: no books, no error, no explanation.
+
+The menu and the Authors tab sitting next to it were built from two different places.
+The Authors tab lists the authors who appear on books the library actually shows. The
+filter menu listed **every author name on file**, including thousands attached only to
+material the library no longer displays — unsorted imports whose "author" is really a
+track name, a bare year, or a "Read by …" credit left over from an old file.
+
+The gap was not small. Of 12,854 author names on file, **4,975 — 38.7% — belong to no
+book the library shows.** Every one of them was offered as something you could filter
+by, and every one returned nothing. Narrators had the same split for the same reason.
+
+Both lists now come from the same source the Authors and Narrators tabs use, so what the
+filter menu offers is exactly what the library can show you. Work done in July had
+already built that shared list precisely so these two views could not disagree; the
+filter menu was simply never moved onto it.
+
+### The authors list also ignored the sort you asked for
+
+Sorting the Authors tab by number of books, or reversing the order, did nothing. The
+request was accepted, and — as in §27 above, the second instance this month — **the reply
+stated which ordering had been applied** while the list came back in alphabetical order
+regardless. Because alphabetical is what it defaults to, asking for alphabetical looked
+like proof that sorting worked.
+
+Sorting by name, last-name-first, number of books, date added and date updated now works,
+in both directions. A sort this server has no way to perform is now written to the log
+rather than quietly ignored, which is also how we will learn which orderings people
+actually reach for.
+
+### The menu was rebuilt from scratch on every page load
+
+Measured against the real library, the filter menu took **just over 7 seconds to produce,
+every single time it was requested** — and it is requested on every library page load. It
+was reading through the entire collection three separate times to gather the genre,
+language and decade lists, and keeping none of it.
+
+It is now built at most once every five minutes and shared, as the author and narrator
+lists already were.
+
+A related problem had to be fixed first. When that shared list expired, **every request
+that arrived while it was being rebuilt started its own rebuild** rather than waiting for
+the one already running. That was tolerable while the list was only needed by the Authors
+tab, which a person has to deliberately open. Putting the filter menu on the same list
+would have moved it to the ordinary page load, where several people arriving at once
+would each have set off their own full pass over the library. Rebuilds are now shared:
+the first request does the work and the rest wait for it.
+
+### Two notes, deliberately on the record
+
+The **series** list in that menu still comes from the old source and may have the same
+problem. It was left alone on purpose: nobody has measured how many of the 14,625 series
+have no visible books, and it is worth measuring before paying for another pass over the
+library to fix something that may be rare.
+
+And the test written to prove that sorting the Authors tab could not corrupt the shared
+list **turned out to prove nothing.** A routine check — deliberately breaking the code to
+confirm the tests notice — showed it passed either way, because the follow-up request it
+used to check the result quietly repaired the damage before looking. It was rewritten to
+observe the damage where it actually shows: in the filter menu. Five other checks caught
+their faults the first time.
 
 ## Themes worth carrying into next month
 
