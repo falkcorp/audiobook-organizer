@@ -1,5 +1,5 @@
 // file: internal/scanner/multifile_detector.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a3e4c8b-1d2f-4a5b-9c6d-8e0f1a2b3c4d
 // last-edited: 2026-08-24
 
@@ -18,9 +18,10 @@ package scanner
 
 import (
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/trackseq"
 )
 
 // MultiFileInfo carries the per-file information the detector needs.
@@ -58,78 +59,23 @@ func DefaultMultiFileConfig() MultiFileDetectionConfig {
 	}
 }
 
-// Compiled sequential-number patterns, applied in priority order on the
-// filename stem. Each regex must capture the sequential number in group 1,
-// optionally the total in group 2.
-var multiFileNumPatterns = []*regexp.Regexp{
-	// "Chapter 01", "chapter_05"
-	regexp.MustCompile(`(?i)\bchapter[\s_\-]+(\d{1,4})\b`),
-	// "Part 1 of 8" / "Part 1"
-	regexp.MustCompile(`(?i)\bpart[\s_\-]+(\d{1,4})(?:[\s_\-]+of[\s_\-]+(\d{1,4}))?\b`),
-	// "Track 01"
-	regexp.MustCompile(`(?i)\btrack[\s_\-]+(\d{1,4})\b`),
-	// "Disc 01" / "CD 01"
-	regexp.MustCompile(`(?i)\b(?:disc|cd)[\s_\-]+(\d{1,4})\b`),
-	// "(76 of 85)"
-	regexp.MustCompile(`\((\d{1,4})\s*of\s*(\d{1,4})\)`),
-	// "(76/85)" or "(76_85)" or "(76-85)"
-	regexp.MustCompile(`\((\d{1,4})[\s_\-\/](\d{1,4})\)`),
-	// trailing " - 1_85" / " - 1/85" / "_1_85" near end of stem
-	regexp.MustCompile(`[\s_\-](\d{1,4})[\s_\-\/](\d{1,4})$`),
-	// "01 of 85"
-	regexp.MustCompile(`(?i)\b(\d{1,4})\s+of\s+(\d{1,4})\b`),
-	// leading "01 - ", "002. ", "1_"
-	regexp.MustCompile(`^(\d{1,4})[\s_\-\.\:]`),
-	// bare "01"
-	regexp.MustCompile(`^(\d{1,4})$`),
-	// TRAILING number: "Pratchett 001", "Carpe Jugulum 03", "Foo_12".
-	//
-	// LAST in priority order on purpose. It is the loosest pattern here, so it
-	// must only be reached once every keyword-anchored and leading-number form
-	// above has declined -- otherwise it would strip the wrong number out of
-	// "Part 1 of 8".
-	//
-	// This form was missing entirely until 2026-08-24, and it is one of the most
-	// common ways a ripped audiobook names its tracks. Measured on production:
-	// a folder of 80 files named "Pratchett 001".."Pratchett 080" extracted NO
-	// sequence number from any of them, failed the pattern quorum at step 2, and
-	// so became 80 separate Book rows -- each titled with its file stem, each
-	// with the folder name as its author, each in its own version group.
-	regexp.MustCompile(`[\s_\-](\d{1,4})$`),
-}
-
 // extractSeqNumber returns (number, total) extracted from a filename stem.
 // number == 0 means no sequential number found.
+//
+// The vocabulary lives in internal/trackseq and is SHARED with the repair-side
+// classifier (itunesservice.trackNum). It used to live here, privately, and
+// diverged: this copy had no trailing-number pattern, so an 80-file folder named
+// "Pratchett 001".."Pratchett 080" extracted nothing, failed the pattern quorum
+// below, and was imported as 80 separate books -- while the repair classifier
+// could read those same filenames the whole time. trackseq.Corpus is the shared
+// case list, and TestExtractSeqNumberMatchesTheSharedCorpus asserts THIS entry
+// point against it, so the two cannot drift apart again silently.
 func extractSeqNumber(stem string) (number int, total int) {
-	for _, re := range multiFileNumPatterns {
-		m := re.FindStringSubmatch(stem)
-		if m == nil {
-			continue
-		}
-		number = atoiSafe(m[1])
-		if number <= 0 {
-			continue
-		}
-		if len(m) > 2 {
-			total = atoiSafe(m[2])
-		}
-		return number, total
+	num, tot, ok := trackseq.Extract(stem)
+	if !ok {
+		return 0, 0
 	}
-	return 0, 0
-}
-
-func atoiSafe(s string) int {
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0
-		}
-		n = n*10 + int(r-'0')
-		if n > 1_000_000 {
-			return 0
-		}
-	}
-	return n
+	return num, tot
 }
 
 // normalizeTagValue lowercases, strips diacritic-irrelevant whitespace and

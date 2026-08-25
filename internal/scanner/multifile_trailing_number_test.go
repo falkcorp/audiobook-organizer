@@ -1,5 +1,5 @@
 // file: internal/scanner/multifile_trailing_number_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e1c9a74-3b62-4d8f-9a10-2c7e4b6d8f03
 // last-edited: 2026-08-24
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/trackseq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,4 +89,25 @@ func TestTrailingNumberDoesNotGroupUnrelatedTitlesEndingInAYear(t *testing.T) {
 	ok, _ := DetectMultiFileGroup(infos, DefaultMultiFileConfig())
 	require.False(t, ok,
 		"three unrelated books whose titles end in a year were grouped into one audiobook")
+}
+
+// TestExtractSeqNumberMatchesTheSharedCorpus is half of the control that was
+// missing when this package and the repair-side classifier
+// (itunesservice.trackNum) each kept their own private copy of the same
+// judgement and silently drifted apart.
+//
+// The corpus lives in internal/trackseq. Asserting THIS package's entry point
+// against it means a future change to the shared vocabulary that breaks the
+// importer fails here, and a future private patch applied only here fails too.
+// The other half is the same corpus asserted through trackNum.
+func TestExtractSeqNumberMatchesTheSharedCorpus(t *testing.T) {
+	for _, c := range trackseq.Corpus {
+		num, total := extractSeqNumber(c.Stem)
+		if !c.OK {
+			require.Zerof(t, num, "extractSeqNumber(%q) invented a sequence number", c.Stem)
+			continue
+		}
+		require.Equalf(t, c.Num, num, "extractSeqNumber(%q) number", c.Stem)
+		require.Equalf(t, c.Total, total, "extractSeqNumber(%q) total", c.Stem)
+	}
 }
