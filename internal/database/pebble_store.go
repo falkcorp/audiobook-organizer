@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.140.0
+// version: 1.141.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-24
 
@@ -3415,13 +3415,25 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 }
 
 // sortVersions orders books with the primary version first, then by title.
+//
+// Primacy is read through EffectiveIsPrimaryVersion, NOT a raw *bool test. A nil
+// flag means "primary" everywhere else -- the memdb index is built with
+// effectiveBoolFieldIndex{Default: true}, and every listing filter goes through
+// the same helper -- so a raw `!= nil && *` here sorted a nil-flagged book BELOW
+// the group's explicit primaries while every filter still called it primary. Same
+// nil, opposite readings by layer.
+//
+// The two-return-point shape this replaces was also not a valid strict weak
+// ordering: when i and j were BOTH primary it answered true for (i,j) and true
+// for (j,i), which violates asymmetry and lets sort.Slice emit an arbitrary
+// order for the ties. Comparing the two effective values and only then falling
+// through to Title is total and deterministic.
 func sortVersions(books []Book) {
 	sort.Slice(books, func(i, j int) bool {
-		if books[i].IsPrimaryVersion != nil && *books[i].IsPrimaryVersion {
-			return true
-		}
-		if books[j].IsPrimaryVersion != nil && *books[j].IsPrimaryVersion {
-			return false
+		iPrimary := EffectiveIsPrimaryVersion(books[i].IsPrimaryVersion)
+		jPrimary := EffectiveIsPrimaryVersion(books[j].IsPrimaryVersion)
+		if iPrimary != jPrimary {
+			return iPrimary
 		}
 		return books[i].Title < books[j].Title
 	})
