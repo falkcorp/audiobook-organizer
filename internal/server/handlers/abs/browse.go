@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-25
 
@@ -1356,7 +1356,7 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 	// …/authors?sort=numBooks&desc=1 (no limit/page) answered in name order.
 	sortBy := strings.TrimSpace(c.Query("sort"))
 	desc := c.Query("desc") == "1"
-	authors = sortAuthors(authors, sortBy, desc)
+	authors, sortApplied := sortAuthors(authors, sortBy, desc)
 
 	_, hasLimit := c.GetQuery("limit")
 	_, hasPage := c.GetQuery("page")
@@ -1368,6 +1368,11 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 	total := len(authors)
 	limit := queryInt(c, "limit", total)
 	page := queryInt(c, "page", 0)
+
+	echoSort, echoDesc := sortBy, desc
+	if !sortApplied {
+		echoSort, echoDesc = "", false
+	}
 	respondJSON(c, http.StatusOK, authorsPageResponse{
 		Limit:    limit,
 		Minified: c.Query("minified") == "1",
@@ -1375,15 +1380,23 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 		// total is the FULL count, not the size of this slice — the client uses it to
 		// decide whether more pages exist.
 		Results: pageSlice(authors, limit, page),
-		// From the locals parsed above, not a second read of the query: two
-		// parses of one input that must agree is a bug waiting to be written.
+		// 🔴 THE ORDER WE ACTUALLY APPLIED, NOT THE ONE WE WERE ASKED FOR. These
+		// two fields are the server telling the client how the list is ordered.
+		// Echoing back a key we had no field for made the response ASSERT an
+		// ordering it had not applied — the same defect, in the same handler, as
+		// the sort that was parsed and then ignored.
 		//
-		// ⚠️ Still the RAW request, so an unsupported key is echoed back as if
-		// applied. Whether to echo only what was applied, or reject unknown
-		// sorts outright, is a caller-visible contract change and is filed in
-		// todo.d/20260825-abs-contributor-filter-followups.md.
-		SortBy:   sortBy,
-		SortDesc: desc,
+		// A 400 was the other candidate and is the wrong trade here. These are
+		// third-party clients we do not control, and this package's own notes
+		// record that a response a client cannot use BLANKS the Authors tab.
+		// Refusing to serve a list because we do not implement someone's sort key
+		// is a bigger harm than serving it in a different order and saying so.
+		//
+		// An unsupported key therefore reports the empty string — "the store's
+		// default order" — which is exactly what the client received, and which
+		// it can tell apart from the key it sent.
+		SortBy:   echoSort,
+		SortDesc: echoDesc,
 		Total:    total,
 	})
 }
@@ -1432,7 +1445,9 @@ func authorLess(sortBy string) func(a, b authorDTO) bool {
 // A stable sort over a name-ascending input gives ties a deterministic order
 // (two authors with the same numBooks stay in name order) rather than an
 // arbitrary one that shifts between requests and breaks pagination.
-func sortAuthors(authors []authorDTO, sortBy string, desc bool) []authorDTO {
+// The second return reports whether the REQUESTED order was applied. The caller
+// needs it to describe the response honestly; see the echo in LibraryAuthors.
+func sortAuthors(authors []authorDTO, sortBy string, desc bool) ([]authorDTO, bool) {
 	// The index is ALREADY name-ascending, so the no-parameter request — by far
 	// the most common, and the one the 93-page jump-to-letter burst issues — can
 	// skip both the allocation and the sort. At 12,854 authors that is a fresh
@@ -1442,13 +1457,13 @@ func sortAuthors(authors []authorDTO, sortBy string, desc bool) []authorDTO {
 	// Returning the shared slice is safe HERE for the same reason it was safe
 	// before this function existed: every caller only reads it. It is the
 	// SORTING that must not touch the shared slice, not the returning.
-	if desc == false && (sortBy == "" || sortBy == "name") {
-		return authors
+	if !desc && (sortBy == "" || sortBy == "name") {
+		return authors, true
 	}
 	less := authorLess(sortBy)
 	if less == nil {
 		warnUnsupportedAuthorSort(sortBy)
-		return authors
+		return authors, false
 	}
 	out := make([]authorDTO, len(authors))
 	copy(out, authors)
@@ -1458,7 +1473,7 @@ func sortAuthors(authors []authorDTO, sortBy string, desc bool) []authorDTO {
 		}
 		return less(out[i], out[j])
 	})
-	return out
+	return out, true
 }
 
 // absUnsupportedAuthorSortLastWarn rate-limits the author-sort warning.
