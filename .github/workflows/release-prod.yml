@@ -1,7 +1,7 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.9.7
+# version: 4.10.0
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-08-24
+# last-edited: 2026-08-25
 
 name: Production Release
 
@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@6acc4d0342e8b108a7cbc5c82068d90b508edec9 # main: disabled-languages + draft upsert + stable diff base
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@375d3b9e3aae2db19678edba325c2081c54a2aff # main: pin GORELEASER_CURRENT_TAG so a stable cut builds the stable tag
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false
