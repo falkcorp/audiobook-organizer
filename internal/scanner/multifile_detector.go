@@ -1,7 +1,7 @@
 // file: internal/scanner/multifile_detector.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7a3e4c8b-1d2f-4a5b-9c6d-8e0f1a2b3c4d
-// last-edited: 2026-07-12
+// last-edited: 2026-08-24
 
 // Package scanner — multi-file audiobook detection.
 //
@@ -82,6 +82,20 @@ var multiFileNumPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^(\d{1,4})[\s_\-\.\:]`),
 	// bare "01"
 	regexp.MustCompile(`^(\d{1,4})$`),
+	// TRAILING number: "Pratchett 001", "Carpe Jugulum 03", "Foo_12".
+	//
+	// LAST in priority order on purpose. It is the loosest pattern here, so it
+	// must only be reached once every keyword-anchored and leading-number form
+	// above has declined -- otherwise it would strip the wrong number out of
+	// "Part 1 of 8".
+	//
+	// This form was missing entirely until 2026-08-24, and it is one of the most
+	// common ways a ripped audiobook names its tracks. Measured on production:
+	// a folder of 80 files named "Pratchett 001".."Pratchett 080" extracted NO
+	// sequence number from any of them, failed the pattern quorum at step 2, and
+	// so became 80 separate Book rows -- each titled with its file stem, each
+	// with the folder name as its author, each in its own version group.
+	regexp.MustCompile(`[\s_\-](\d{1,4})$`),
 }
 
 // extractSeqNumber returns (number, total) extracted from a filename stem.
