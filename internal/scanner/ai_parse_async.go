@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -456,7 +456,13 @@ func primaryVersionOf(store scanBookLookup, row *database.Book) (*database.Book,
 // rescan burned its batches against an exhausted-credit key. Routing through
 // EffectiveLLMMode makes the operator's setting the thing that decides, and
 // keeps this in step with the "llmparser" service in internal/ai/register.go.
-func newAIParser(scanLog logger.Logger) (*ai.OpenAIParser, bool) {
+// newAIParser builds the parser the scan and the queued operation both use.
+//
+// It returns the aiBatchParser INTERFACE rather than *ai.OpenAIParser because
+// openai-fallback-local resolves to a parserChain, not to a single client. Both
+// callers only ever hand the result to runAIBatchPhase, which already takes the
+// interface, so nothing loses a capability by this.
+func newAIParser(scanLog logger.Logger) (aiBatchParser, bool) {
 	if !config.AppConfig.EnableAIParsing {
 		return nil, false
 	}
@@ -465,10 +471,7 @@ func newAIParser(scanLog logger.Logger) (*ai.OpenAIParser, bool) {
 	case config.AIBackendModeDisabled:
 		scanLog.Info("AI parsing skipped: llm_mode is disabled")
 	case config.AIBackendModeLocal:
-		baseURL := cfg.AIBackend.LocalBaseURL
-		if baseURL == "" {
-			baseURL = cfg.Embedding.BaseURL
-		}
+		baseURL := localLLMBaseURL(cfg)
 		if baseURL == "" {
 			scanLog.Warn("AI parsing enabled with llm_mode=local but no local base URL is configured")
 			return nil, false
@@ -480,7 +483,59 @@ func newAIParser(scanLog logger.Logger) (*ai.OpenAIParser, bool) {
 			return parser, true
 		}
 		scanLog.Warn("failed to initialize local LLM parser, AI fallback disabled")
-	default: // openai, openai-fallback-local
+	case config.AIBackendModeOpenAIFallbackLocal:
+		// The mode existed as a constant for months with nothing acting on it:
+		// it fell into the `default` arm below and behaved as plain openai, so
+		// selecting it bought exactly nothing. This is the trigger its own doc
+		// comment claimed was "wired by the error-classification layer".
+		var rungs []parserRung
+
+		if cfg.OpenAIAPIKey != "" {
+			if p := ai.NewOpenAIParser(cfg, cfg.OpenAIAPIKey, true); p != nil && p.IsEnabled() {
+				rungs = append(rungs, parserRung{name: "openai", parser: p})
+			}
+		}
+
+		// The local rung is built LAZILY, inside ensure. Constructing it here
+		// would pay for a backend that a healthy scan never asks for, and once
+		// this rung learns to start a daemon (the next stage) that cost stops
+		// being theoretical.
+		//
+		// It is skipped rather than attempted when no local backend is
+		// configured. A rung with no model behind it cannot answer, and
+		// pulling one mid-scan is a decision rather than a fallback -- the
+		// books go to the queue instead, which is what the directive asks for
+		// when a local backend cannot be started.
+		if baseURL := localLLMBaseURL(cfg); baseURL != "" {
+			model := cfg.AIBackend.LocalLLMModel
+			rungs = append(rungs, parserRung{
+				name: "local",
+				ensure: func(context.Context) (aiBatchParser, bool) {
+					if model == "" {
+						scanLog.Warn("local LLM fallback skipped: a base URL is configured (%s) but no model is set", baseURL)
+						return nil, false
+					}
+					p := ai.NewOpenAIParserWithBaseURL(cfg, "ollama", baseURL, model, true)
+					if p == nil || !p.IsEnabled() {
+						return nil, false
+					}
+					return p, true
+				},
+			})
+		}
+
+		switch len(rungs) {
+		case 0:
+			scanLog.Warn("AI parsing enabled with llm_mode=openai-fallback-local but neither an OpenAI key nor a local base URL is configured")
+			return nil, false
+		case 1:
+			scanLog.Info("AI parsing using the %q backend only; llm_mode=openai-fallback-local has nothing to fall back to", rungs[0].name)
+		default:
+			scanLog.Info("AI parsing chain initialized: %s", rungNames(rungs))
+		}
+		return newParserChain(scanLog, rungs...), true
+
+	default: // openai
 		if cfg.OpenAIAPIKey == "" {
 			scanLog.Warn("AI parsing enabled but OpenAI API key is not configured")
 			return nil, false
@@ -503,4 +558,24 @@ func saveBookAndReportPath(ctx context.Context, book *Book) (string, error) {
 		return "", err
 	}
 	return book.FilePath, nil
+}
+
+// localLLMBaseURL resolves the local backend's endpoint. The embedding base URL
+// is the fallback because a deployment that runs a local Ollama for embeddings
+// already has one running, and requiring it to be configured twice is how the
+// two drift apart.
+func localLLMBaseURL(cfg *config.Config) string {
+	if cfg.AIBackend.LocalBaseURL != "" {
+		return cfg.AIBackend.LocalBaseURL
+	}
+	return cfg.Embedding.BaseURL
+}
+
+// rungNames renders a chain's rungs in the order they will be tried.
+func rungNames(rungs []parserRung) string {
+	names := make([]string, len(rungs))
+	for i, r := range rungs {
+		names[i] = r.name
+	}
+	return strings.Join(names, " -> ")
 }
