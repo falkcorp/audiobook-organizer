@@ -1603,17 +1603,56 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 	if p.Limit <= 0 || end > len(ids) {
 		end = len(ids)
 	}
-	page := ids[p.Offset:end]
 
-	books, err := h.library.GetBooksByIDs(page)
+	// A sort has to be applied to the WHOLE filtered set before the page is
+	// cut out of it. Sorting after slicing would only order the rows already
+	// on screen, which looks like it works on page 1 and is wrong everywhere
+	// else.
+	//
+	// That costs a fetch of every book in the group instead of one page, so it
+	// is paid only when a sort is actually requested. With no sort the group's
+	// own order stands -- for a series that is reading sequence, which is a
+	// better default than any field the client could ask for.
+	sortField := absSortField(c.Query("sort"))
+
+	var (
+		books []database.Book
+		order []string
+		err   error
+	)
+	if sortField == "" {
+		order = ids[p.Offset:end]
+		books, err = h.library.GetBooksByIDs(order)
+	} else {
+		var all []database.Book
+		all, err = h.library.GetBooksByIDs(ids)
+		if err == nil {
+			database.SortBooks(all, sortField, c.Query("desc") != "1")
+			if p.Offset < len(all) {
+				hi := end
+				if hi > len(all) {
+					hi = len(all)
+				}
+				all = all[p.Offset:hi]
+			} else {
+				all = nil
+			}
+			books = all
+			order = make([]string, len(books))
+			for i := range books {
+				order[i] = books[i].ID
+			}
+		}
+	}
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not load library items")
 		return
 	}
-	// GetBooksByIDs need not preserve the requested order, and series order is
-	// meaningful, so it is restored explicitly rather than trusted.
-	pos := make(map[string]int, len(page))
-	for i, id := range page {
+	// GetBooksByIDs need not preserve the requested order, and both the group
+	// order and the sorted order are meaningful, so it is restored explicitly
+	// rather than trusted.
+	pos := make(map[string]int, len(order))
+	for i, id := range order {
 		pos[id] = i
 	}
 	sort.SliceStable(books, func(a, b int) bool { return pos[books[a].ID] < pos[books[b].ID] })
