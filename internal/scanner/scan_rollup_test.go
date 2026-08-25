@@ -7,8 +7,8 @@ package scanner
 
 import (
 	"errors"
-	"math"
 	"io/fs"
+	"math"
 	"os"
 	"testing"
 	"time"
