@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -188,15 +189,81 @@ func absItemFilterBase() database.BookSummaryFilter {
 	}
 }
 
+// absSortFields maps the dotted sort keys Audiobookshelf clients send to the
+// store's sort field names.
+//
+// The previous implementation was a single substring test for "title", so
+// EVERY other sort the client offered -- year, author, narrator, added date,
+// duration, size -- left SortBy empty. An empty SortBy does not error: it
+// falls through memdb_summaries.go's switch to the IsPrimaryVersion index,
+// which iterates in book-ID order. The client asked for a sort, got 200 OK,
+// got the right rows, and got them in an arbitrary order with nothing
+// anywhere reporting a problem.
+//
+// Keys are matched on the last dotted segment, case-insensitively, so both
+// `media.metadata.publishedYear` and a bare `publishedYear` resolve.
+var absSortFields = map[string]string{
+	"title":               "title",
+	"titleignorearticles": "title",
+	"publishedyear":       "year",
+	"authorname":          "author",
+	"authornamelf":        "author",
+	"narratorname":        "narrator",
+	"seriesname":          "series",
+	"addedat":             "created_at",
+	"updatedat":           "updated_at",
+	"duration":            "duration",
+	"size":                "file_size",
+}
+
+// absSortField resolves an ABS sort query parameter to a store sort field.
+// Returns "" when the key is unrecognised.
+func absSortField(sort string) string {
+	sort = strings.TrimSpace(strings.ToLower(sort))
+	if sort == "" {
+		return ""
+	}
+	if i := strings.LastIndex(sort, "."); i >= 0 {
+		sort = sort[i+1:]
+	}
+	return absSortFields[sort]
+}
+
 func absItemFilter(c *gin.Context) database.BookSummaryFilter {
 	f := absItemFilterBase()
 	f.SortAscending = c.Query("desc") != "1"
-	// Only "title" is index-backed; anything else falls through to store default
-	// ordering rather than pretending to honour a sort we cannot do cheaply.
-	if strings.Contains(strings.ToLower(c.Query("sort")), "title") {
-		f.SortBy = "title"
-	}
+	// NOTE: a mapped field still only streams if its memdb sort index is
+	// enabled (config.EnabledSortIndexes; "title" is always indexed). When it
+	// is not, the store falls back to unordered iteration -- which is the bug
+	// this mapping exists to fix -- so the store-side default must list the
+	// fields this map can produce. See config.EnabledSortIndexes.
+	f.SortBy = absSortField(c.Query("sort"))
+	warnUnindexedSort(f.SortBy, c.Query("sort"))
 	return f
+}
+
+// absUnindexedSortWarned rate-limits the warning below to once per field per
+// process, so a client polling the library cannot flood the log.
+var absUnindexedSortWarned sync.Map
+
+// warnUnindexedSort reports a sort we accepted but cannot actually perform.
+//
+// "title" is always indexed. Every other field needs its memdb sort index
+// enabled (config.EnabledSortIndexes, empty by default); without it the store
+// silently iterates unordered. Silence is precisely how this shipped
+// undetected -- the client got 200 OK and arbitrary order -- so say it once
+// rather than let a wrong answer stay quiet.
+func warnUnindexedSort(field, raw string) {
+	if field == "" || field == "title" || database.CanPushDownSort(field) {
+		return
+	}
+	if _, seen := absUnindexedSortWarned.LoadOrStore(field, true); seen {
+		return
+	}
+	slog.Warn("abs: client requested a sort whose memdb index is disabled; results will be UNORDERED",
+		"sort_param", raw,
+		"sort_field", field,
+		"remediation", "add it to enabled_sort_indexes and restart")
 }
 
 // countItems returns the filtered item count, cached for absItemsCountTTL.
