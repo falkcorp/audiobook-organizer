@@ -1,5 +1,5 @@
 // file: internal/server/reconcile.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // HTTP adapters — all logic in internal/reconcile
 
@@ -74,27 +74,37 @@ func (s *Server) latestReconcileScan(c *gin.Context) {
 	// new runs no longer write one.
 	ops := recentReconcileScans(store, 200)
 
-	for _, op := range ops {
-		// Return the operation with its result_data if completed
-		if op.Status == "completed" && op.ResultData != nil {
-			var preview reconcile.ReconcilePreviewResult
-			if err := json.Unmarshal([]byte(*op.ResultData), &preview); err == nil {
-				httputil.RespondWithOK(c, gin.H{
-					"operation": op,
-					"preview":   preview,
-				})
-				return
-			}
-		}
-		// Return op status if still running or failed
-		httputil.RespondWithOK(c, gin.H{
-			"operation": op,
-			"preview":   nil,
-		})
+	// Only the newest op is ever considered. This was written as a loop over all
+	// 200, but every path through the body returned on the first iteration, so
+	// the rest were unreachable -- staticcheck SA4004, which made `make ci` red.
+	// Written as an index so the behaviour is stated rather than implied.
+	//
+	// NOTE: this preserves the existing behaviour exactly, including a latent
+	// flaw it carries -- a completed scan whose ResultData fails to unmarshal
+	// answers with preview:nil instead of falling back to an older scan that
+	// would parse. Fixing that changes what this endpoint returns, which is an
+	// API decision for this lane's owner; filed as
+	// todo.d/20260825-latest-reconcile-scan-hides-older-usable-previews.md.
+	if len(ops) == 0 {
+		httputil.RespondWithOK(c, gin.H{"operation": nil, "preview": nil})
 		return
 	}
 
-	httputil.RespondWithOK(c, gin.H{"operation": nil, "preview": nil})
+	op := ops[0]
+	if op.Status == "completed" && op.ResultData != nil {
+		var preview reconcile.ReconcilePreviewResult
+		if err := json.Unmarshal([]byte(*op.ResultData), &preview); err == nil {
+			httputil.RespondWithOK(c, gin.H{
+				"operation": op,
+				"preview":   preview,
+			})
+			return
+		}
+	}
+	httputil.RespondWithOK(c, gin.H{
+		"operation": op,
+		"preview":   nil,
+	})
 }
 
 func (s *Server) startReconcile(c *gin.Context) {

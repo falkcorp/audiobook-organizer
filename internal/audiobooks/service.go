@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-18
+// last-edited: 2026-08-25
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -277,23 +277,4 @@ func derefInt64(i *int64) int64 {
 		return 0
 	}
 	return *i
-}
-
-// cmpTime compares two *time.Time values, treating nil as zero time.
-func cmpTime(a, b *time.Time) int {
-	ta := time.Time{}
-	tb := time.Time{}
-	if a != nil {
-		ta = *a
-	}
-	if b != nil {
-		tb = *b
-	}
-	if ta.Before(tb) {
-		return -1
-	}
-	if ta.After(tb) {
-		return 1
-	}
-	return 0
 }
