@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
 // last-edited: 2026-08-24
 
@@ -55,7 +55,7 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
 
 	dir := t.TempDir()
-	segs := writeSegments(t, dir, "part01.mp3")
+	segs := writeSegments(t, dir, "part01.mp3", "already-known.mp3")
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
@@ -73,13 +73,28 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 		return nil
 	})
 
+	// The KNOWN-GOOD TWIN. This row already carries a title and an author, which
+	// closes the AI nomination gate, so this book is NOT a candidate and the scan
+	// must stamp it normally. Without it the cache assertion below cannot tell
+	// "the stamp was correctly withheld" from "the query never finds anything" --
+	// which is exactly how the first version of this test passed against a mutant
+	// that stamped every book.
+	authorID, err := resolveAuthorID("A Known Author")
+	require.NoError(t, err)
+	require.NotNil(t, authorID)
+	_, err = store.CreateBook(&database.Book{
+		FilePath: segs[1],
+		Title:    "Already Known",
+		AuthorID: authorID,
+	})
+	require.NoError(t, err)
+
 	// Series is empty and the store has no prior row carrying title+author, so
-	// this book is nominated as an AI candidate.
-	books := []Book{{
-		FilePath: segs[0],
-		Format:   ".mp3",
-		Title:    "A Book Without A Series",
-	}}
+	// the FIRST book is nominated as an AI candidate.
+	books := []Book{
+		{FilePath: segs[0], Format: ".mp3", Title: "A Book Without A Series"},
+		{FilePath: segs[1], Format: ".mp3", Title: "Already Known", Author: "A Known Author"},
+	}
 	require.NoError(t, ProcessBooksParallel(t.Context(), books, 1, nil, nil))
 
 	require.Lenf(t, queued, 1,

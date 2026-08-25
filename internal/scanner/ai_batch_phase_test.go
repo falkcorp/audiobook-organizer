@@ -156,3 +156,48 @@ func TestRunAIBatchPhase_HonoursContextCancellation(t *testing.T) {
 		t.Errorf("issued %d batches on a cancelled context", got)
 	}
 }
+
+// nilResultParser returns a well-formed response in which every entry is nil --
+// the LLM answered, but had nothing to say about these filenames.
+type nilResultParser struct{}
+
+func (nilResultParser) ParseBatch(_ context.Context, filenames []string) ([]*ai.ParsedMetadata, error) {
+	return make([]*ai.ParsedMetadata, len(filenames)), nil
+}
+
+// TestRunAIBatchPhaseSavesBooksTheLLMHadNothingFor is what stops an unparseable
+// filename churning forever.
+//
+// The save call is also what reports the path to stamp into the scan cache, and
+// the scan deliberately withholds that stamp for every book it nominates. So a
+// book skipped here is never marked attempted: the next scan re-reads it, the
+// nomination gate re-queues it, and the same filename goes back to the LLM on
+// every scan for the life of the library. This repo has already burned an API
+// key on a scan feedback loop once.
+func TestRunAIBatchPhaseSavesBooksTheLLMHadNothingFor(t *testing.T) {
+	books := []Book{{FilePath: "/x/unparseable-1.m4b"}, {FilePath: "/x/unparseable-2.m4b"}}
+	cands := []int{0, 1}
+
+	var mu sync.Mutex
+	var saved []string
+	save := func(_ context.Context, b *Book) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		saved = append(saved, b.FilePath)
+		return b.FilePath, nil
+	}
+
+	summary := runAIBatchPhase(context.Background(), nilResultParser{}, books, cands, logger.New("test"), save)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(saved) != 2 {
+		t.Fatalf("want both books saved so they are recorded as ATTEMPTED, got %d: %v", len(saved), saved)
+	}
+	if summary.BooksParsed != 2 {
+		t.Errorf("summary must count an attempted book even when the LLM returned nothing: BooksParsed=%d", summary.BooksParsed)
+	}
+	if summary.Aborted() {
+		t.Error("a batch that answered with no metadata is not an abort")
+	}
+}
