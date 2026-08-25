@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
 // last-edited: 2026-08-24
 
@@ -112,12 +112,19 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 	// PROMISED turns every dropped, aborted or cancelled batch into permanent
 	// silent loss. The AI phase writes this stamp instead, once a parse has
 	// actually been attempted.
+	// GetScanCacheMap is keyed by FILE PATH, not by row ID -- see
+	// database/pebble_store_scancache.go. Keying this lookup on the ID is how the
+	// first version of this assertion passed against the mutant it was written to
+	// kill: the lookup found nothing whatever the code did.
 	cache, err := store.GetScanCacheMap()
 	require.NoError(t, err)
-	row, err := store.GetBookByFilePath(segs[0])
-	require.NoError(t, err)
-	require.NotNil(t, row)
-	_, stamped := cache[row.ID]
+
+	_, twinStamped := cache[segs[1]]
+	require.Truef(t, twinStamped,
+		"the known-good twin was not stamped either, so the assertion below proves "+
+			"nothing about the candidate -- this query cannot see a stamp at all. cache=%v", cache)
+
+	_, stamped := cache[segs[0]]
 	require.False(t, stamped,
 		"the scan stamped the scan cache for a book whose AI parse has only been queued; "+
 			"a dropped batch would now be unrecoverable and the next scan would skip the file")

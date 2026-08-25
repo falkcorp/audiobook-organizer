@@ -146,7 +146,10 @@ func TestRunAIBatchPhase_HonoursContextCancellation(t *testing.T) {
 	cancel()
 
 	done := make(chan struct{})
-	go func() { defer close(done); runAIBatchPhase(ctx, f, books, cands, logger.New("test"), saveBookAndReportPath) }()
+	go func() {
+		defer close(done)
+		runAIBatchPhase(ctx, f, books, cands, logger.New("test"), saveBookAndReportPath)
+	}()
 	select {
 	case <-done:
 	case <-time.After(20 * time.Second):

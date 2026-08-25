@@ -13,13 +13,16 @@ checked before a deploy.
       deliberate (work is never dropped) but it is a regression to the old
       behaviour and the warning is the only signal.
 
-- [ ] **Confirm queued results land on the version-group PRIMARY.** Pick a book
-      that auto-organize copied during the same scan and whose Series the AI
-      filled. The Series must be on the organized/primary row, not the
-      `organized_source` row still sitting at the import path.
-      `saveAIFieldsToPrimary` resolves the group and writes only the fields still
-      empty there. This is the case unit tests cannot see: they all stub the
-      saver, which is exactly how the bug got as far as it did.
+- [ ] **Confirm queued results land on the version-group PRIMARY.** This is the
+      SECONDARY path and it is the one with no production evidence behind it.
+      `saveAIFieldsToPrimary` resolves the row by ID first, which is correct on
+      its own for the common case; the group redirect only fires when that row
+      turns out to have been demoted to a non-primary member. Pick a book that
+      auto-organize COPIED (not renamed in place) during the same scan and whose
+      Series the AI filled: the Series must be on the organized/primary row, not
+      the `organized_source` row still sitting at the import path. Unit tests
+      cannot see this — they all stub the saver, which is how the bug got as far
+      as it did.
 
 - [ ] **Decide what to do about organize running before the parse.** Named as a
       known regression in the changelog: auto-organize fires when the scan ends,
