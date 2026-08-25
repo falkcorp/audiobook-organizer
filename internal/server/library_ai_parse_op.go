@@ -1,5 +1,5 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
 // last-edited: 2026-08-24
 
@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
@@ -92,7 +92,16 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 				return nil
 			}
 			_ = reporter.UpdateProgress(0, len(p.Books), fmt.Sprintf("Parsing %d filename(s) with the configured LLM...", len(p.Books)))
-			if err := scanner.RunAIParseForBooks(ctx, p.Books, logger.New("ai_parse")); err != nil {
+			// Bridge the reporter in rather than using logger.New: runAIBatchPhase
+			// stamps progress per LLM batch via log.UpdateProgress, and a bare
+			// StandardLogger sends those stamps to stdout where the registry
+			// cannot see them. The watchdog cancels an op that reports no
+			// progress for ProgressTimeout, and a 200-book batch is ~10 LLM calls
+			// of up to 30s each -- comfortably past it. This phase is already on
+			// record for that failure: it is why library.scan could finish its
+			// entire file walk and still be canceled for inactivity.
+			opLog := operations.LoggerFromReporter(registryProgressAdapter{r: reporter})
+			if err := scanner.RunAIParseForBooks(ctx, p.Books, opLog); err != nil {
 				return err
 			}
 			_ = reporter.UpdateProgress(len(p.Books), len(p.Books), fmt.Sprintf("Parsed %d filename(s)", len(p.Books)))
