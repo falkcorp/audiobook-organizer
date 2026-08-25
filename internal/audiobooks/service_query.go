@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-08-25
 
@@ -55,16 +55,37 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 	if len(filters) > 0 {
 		f = filters[0]
 	}
-	hasSorting := f.SortBy != ""
+	// An unrecognised sort_by is NOT a sort. sort_by reaches here straight
+	// from the query string (see server/audiobooks_helpers.go), and testing
+	// only `!= ""` made a typo expensive: it set heavySorting, which zeroes
+	// the store's limit/offset and pulls the WHOLE filtered library back, and
+	// then applySorting did nothing at all because SortBooks has no comparator
+	// for the field. A full-corpus fetch to produce the same rows the cheap
+	// path returns.
+	//
+	// Requiring a real comparator changes no response: the order was already
+	// whatever the store handed back, and it still is — the page is just
+	// chosen by the store instead of after materialising everything. This is
+	// deliberately NOT a rejection: sort_by has always accepted anything, and
+	// turning an accepted request into an error is a caller-visible change
+	// that belongs to whoever owns the API contract.
+	hasSorting := f.SortBy != "" && database.CanSortBooksBy(f.SortBy)
+
 	// Sorts backed by a memdb sorted index are pushed down and streamed;
-	// everything else still needs the heavy materialise-the-whole-set path.
+	// everything else materialises the match set in the store and sorts it
+	// there (see MemStore.GetBookSummaries).
 	//
 	// This used to be hardcoded as `f.SortBy == "title"`. It now asks the
 	// database package, because that is where the indexes are declared —
 	// with the hardcoded string, adding an index would have silently built a
-	// structure that nothing ever queried. Nine sort keys qualify today
-	// (author, narrator, series, year, created_at, updated_at, duration,
-	// file_size, bitrate, plus their alias spellings).
+	// structure that nothing ever queried.
+	//
+	// Do NOT re-add author/series to the list of what qualifies: this comment
+	// named them until 2026-08-25, by which point they had been removed from
+	// sortIndexForField precisely because no indexer can see the name (see
+	// hydrateSortNames). The count and the list are left out here on purpose —
+	// they were stale within one commit of being written, and the map is one
+	// jump away.
 	sortPushdownable := database.CanPushDownSort(f.SortBy)
 	heavySorting := hasSorting && !sortPushdownable
 	hasPerUser := len(f.PerUserFilters) > 0 && f.UserID != ""
@@ -270,29 +291,28 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			// go through pushdown with predicates, reducing fetched rows from
 			// ~68K (unfiltered) to only the filtered subset (e.g. ~38K primary).
 			if bsf, pushdownOK, pebbleLookups := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc); pushdownOK {
-				// bsf carries the sort for every key database.CanSortBooksBy
-				// accepts, and a store with the filtered-summary capability
-				// orders the match set and paginates it. When that is true, ask
-				// for the PAGE rather than the whole filtered set.
+				// Always ask for the PAGE. bsf carries the sort for every key
+				// database.CanSortBooksBy accepts, and a store with the
+				// filtered-summary capability orders the match set and
+				// paginates it, so there is nothing left for this function to
+				// choose rows with.
 				//
-				// Pulling the whole set back is what the zeroing below does, and
-				// it is expensive twice over: the store materialises the matches
-				// to sort them, and then bookSummariesToBooks rebuilds every one
-				// of them here as a database.Book. Book is 904 bytes against
-				// BookSummary's 240, so a 68K-row library costs ~61 MB in this
-				// function alone -- to then throw all but `limit` of them away.
+				// This used to pass (0, 0) whenever heavySorting was set, to
+				// fetch everything and sort here. That is expensive twice over:
+				// the store materialises the matches to sort them, and then
+				// bookSummariesToBooks rebuilds every one as a database.Book.
+				// Book is 904 bytes against BookSummary's 240, so a 68K-row
+				// library rebuilt ~61 MB of Book values to keep `limit` of them.
 				//
-				// No capability check is needed: when the store lacks it,
-				// summariesPushdownFiltered ignores these arguments entirely
-				// (it calls GetAllBookSummaries(0, 0)) and reports
-				// didPushdown=false, so the post-filter path below still owns
-				// pagination.
-				storeOrdersThePage := bsf.SortBy != ""
-				pdLimit, pdOffset := limit, offset
-				if heavySorting && !storeOrdersThePage {
-					pdLimit, pdOffset = 0, 0
-				}
-				summaries, didPushdown, sErr := svc.summariesPushdownFiltered(pdLimit, pdOffset, bsf)
+				// It is also no longer reachable: heavySorting now implies
+				// CanSortBooksBy (see hasSorting above), which implies bsf
+				// carries the sort, which implies the store ordered the page.
+				//
+				// When the store lacks the capability these arguments are
+				// ignored entirely (summariesPushdownFiltered calls
+				// GetAllBookSummaries(0, 0)) and didPushdown is false, so the
+				// post-filter path below still owns filtering and pagination.
+				summaries, didPushdown, sErr := svc.summariesPushdownFiltered(limit, offset, bsf)
 				if sErr == nil && summaries != nil {
 					books = bookSummariesToBooks(summaries)
 				}
@@ -319,24 +339,14 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					// the post-filter pass unconditionally once the store has
 					// pushed the filter down — never re-apply it.
 					hasPostFilters = false
-					if heavySorting {
-						// storeOrdersThePage: the store ordered the match set
-						// and returned THIS page of it. Nothing left to do, and
-						// doing anything would break it — re-sorting an ordered
-						// page corrupts it (see the tiebreaker note above), and
-						// re-paginating it is the "page 2 returns zero rows"
-						// bug: re-slicing a ≤limit page by the original offset.
-						//
-						// Otherwise the key is one SortBooks does not know, so
-						// bsf carried no sort and the full set came back.
-						// applySorting is a documented no-op for an unknown
-						// field; paginate what we have.
-						if !storeOrdersThePage {
-							applySorting(books, f)
-							books = paginateFilteredBooks(books, limit, offset)
-						}
-						alreadySortedAndPaginated = true
-					}
+					// The store ordered the match set and returned THIS page
+					// of it, so nothing further may touch either property.
+					// Re-sorting an ordered page corrupts it (the ID
+					// tiebreaker rewrites it into insertion order once the
+					// comparator reads a field BookSummary dropped), and
+					// re-paginating it is the "page 2 returns zero rows" bug:
+					// re-slicing a ≤limit page by the original offset.
+					alreadySortedAndPaginated = true
 				}
 			} else {
 				// pushdownOK == false is only reachable when tag→ID

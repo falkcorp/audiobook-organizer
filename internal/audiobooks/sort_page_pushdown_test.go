@@ -1,5 +1,5 @@
 // file: internal/audiobooks/sort_page_pushdown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b4d7e21c-5f38-4a90-8c16-2e7d93f5a4b1
 // last-edited: 2026-08-25
 
@@ -96,11 +96,18 @@ func TestSortedRequestAsksTheStoreForOnePage(t *testing.T) {
 	require.Equal(t, []string{"r4", "r5"}, order)
 }
 
-// TestUnknownSortStillFetchesTheFullSet is the negative control. Without it,
-// the assertion above would also pass if the service simply always forwarded
-// limit/offset -- including on the path where it must NOT, because it still
-// owes the caller an in-memory pass.
-func TestUnknownSortStillFetchesTheFullSet(t *testing.T) {
+// TestUnknownSortIsNotAFullScan covers the other half of the geometry.
+//
+// sort_by arrives straight from the query string, so an unrecognised value is
+// a typo, not an attack -- but it used to cost a full-corpus fetch: any
+// non-empty sort_by set heavySorting, which zeroed the store's limit/offset to
+// pull the whole filtered library back, and then applySorting did nothing at
+// all because SortBooks has no comparator for the field. The expensive path
+// produced exactly the rows the cheap path produces.
+//
+// The response is deliberately unchanged: an unknown sort is still ACCEPTED
+// and still returns the store's own order. Only the cost changed.
+func TestUnknownSortIsNotAFullScan(t *testing.T) {
 	ps, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
@@ -110,12 +117,50 @@ func TestUnknownSortStillFetchesTheFullSet(t *testing.T) {
 	spy := &spgSpyStore{PebbleStore: ps}
 	svc := NewAudiobookService(spy)
 
-	// SortBooks has no comparator for this, so bsf carries no sort and the
-	// store cannot have ordered anything.
-	_, err = svc.GetAudiobooks(context.Background(), 2, 0, "", nil, nil,
+	got, err := svc.GetAudiobooks(context.Background(), 2, 1, "", nil, nil,
 		ListFilters{SortBy: "not_a_sortable_field", SortOrder: "asc"})
 	require.NoError(t, err)
 	require.Positive(t, spy.calls)
-	require.Equal(t, 0, spy.gotLimit,
-		"an unsortable key must still pull the full set: the service owes an in-memory pass the store cannot do")
+	require.Equal(t, 2, spy.gotLimit,
+		"an unrecognised sort_by must not pull the whole library back to sort it by nothing")
+	require.Equal(t, 1, spy.gotOffset)
+	require.Len(t, got, 2)
+
+	// And it returns the same rows as asking for no sort at all -- the point
+	// is that nothing about the ANSWER changed, only the cost.
+	spy2 := &spgSpyStore{PebbleStore: ps}
+	unsorted, err := NewAudiobookService(spy2).GetAudiobooks(
+		context.Background(), 2, 1, "", nil, nil, ListFilters{})
+	require.NoError(t, err)
+	require.Len(t, unsorted, 2)
+	ids := func(bs []database.Book) []string {
+		out := make([]string, 0, len(bs))
+		for _, b := range bs {
+			out = append(out, b.ID)
+		}
+		return out
+	}
+	require.Equal(t, ids(unsorted), ids(got),
+		"an unknown sort must answer exactly as no sort does")
+}
+
+// TestSpyRecordsRealPageGeometry is the negative control for both tests above.
+// Without it, they would also pass against a spy that recorded constants, or a
+// service that happened to forward one hard-coded page size.
+func TestSpyRecordsRealPageGeometry(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ps.WaitForWarmup()
+	spgSeed(t, ps, 6)
+
+	for _, tc := range []struct{ limit, offset int }{{1, 0}, {3, 2}, {5, 1}} {
+		spy := &spgSpyStore{PebbleStore: ps}
+		svc := NewAudiobookService(spy)
+		_, err := svc.GetAudiobooks(context.Background(), tc.limit, tc.offset, "", nil, nil,
+			ListFilters{SortBy: "genre", SortOrder: "asc"})
+		require.NoError(t, err)
+		require.Equalf(t, tc.limit, spy.gotLimit, "limit %d/%d", tc.limit, tc.offset)
+		require.Equalf(t, tc.offset, spy.gotOffset, "offset %d/%d", tc.limit, tc.offset)
+	}
 }
