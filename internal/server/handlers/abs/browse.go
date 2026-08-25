@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-25
 
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -279,8 +280,33 @@ func warnUnindexedSort(field, raw string) {
 }
 
 // absUnsupportedSortWarned rate-limits the warning below to once per raw sort
-// string per process.
-var absUnsupportedSortWarned sync.Map
+// string per process, and absUnsupportedSortDistinct bounds how many distinct
+// strings it will ever remember.
+//
+// 🚨 The bound is not tidiness, it is the whole reason this pair exists. The
+// key is the RAW query parameter, which is client-supplied and unbounded —
+// unlike absUnindexedSortWarned, whose key is a mapped field name and can only
+// ever take one of the handful of values in absSortFields. Keyed on raw input
+// with no cap, `?sort=<random>` in a loop grows this map until the process
+// dies, and it is an unauthenticated GET that does it. Caught by review before
+// this shipped.
+//
+// 64 is chosen to be far above the number of distinct sorts any real client
+// menu can emit (the ABS client offers 14) and far below anything that matters
+// for memory. Past the cap the warning stops rather than the map growing: the
+// gap has already been reported 64 different ways, and the 65th spelling is
+// not new information.
+const absUnsupportedSortDistinctCap = 64
+
+// absUnsupportedSortRawLogMax bounds what reaches the log line. The raw value
+// is echoed back, so it is also the one place a long query string could bloat
+// the log.
+const absUnsupportedSortRawLogMax = 64
+
+var (
+	absUnsupportedSortWarned   sync.Map
+	absUnsupportedSortDistinct atomic.Int64
+)
 
 // warnUnsupportedSort reports a sort the client asked for that this server has
 // no field for at all.
@@ -309,13 +335,32 @@ func warnUnsupportedSort(field, raw string) {
 	if field != "" || strings.TrimSpace(raw) == "" {
 		return
 	}
+	// Check the cap BEFORE storing, so the map cannot grow past it.
+	if absUnsupportedSortDistinct.Load() >= absUnsupportedSortDistinctCap {
+		return
+	}
 	if _, seen := absUnsupportedSortWarned.LoadOrStore(raw, true); seen {
 		return
 	}
+	// Concurrent callers can each pass the check above; the winner of this
+	// increment is the last one allowed to log.
+	if absUnsupportedSortDistinct.Add(1) > absUnsupportedSortDistinctCap {
+		return
+	}
 	slog.Warn("abs: client requested a sort this server has no field for; the page is returned in the store's default order",
-		"sort_param", raw,
+		"sort_param", absTruncateForLog(raw, absUnsupportedSortRawLogMax),
 		"supported", absSupportedSortParams(),
 		"remediation", "none available to an operator -- this needs a mapping in absSortFields, or a field that does not exist yet")
+}
+
+// absTruncateForLog bounds a client-supplied string before it reaches a log
+// line, marking it when it has been cut so a reader does not mistake the
+// truncation for the value the client actually sent.
+func absTruncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…(truncated)"
 }
 
 // absSupportedSortParams lists the sort parameters absSortFields recognises,

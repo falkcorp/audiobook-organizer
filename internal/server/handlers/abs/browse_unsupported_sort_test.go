@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_unsupported_sort_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a9f4d13-8b07-4e56-91c2-5d3e08a7f6b4
 // last-edited: 2026-08-25
 
@@ -7,6 +7,7 @@ package abs
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +48,15 @@ func busCtx(q string) *gin.Context {
 func busReset() {
 	absUnsupportedSortWarned = sync.Map{}
 	absUnindexedSortWarned = sync.Map{}
+	absUnsupportedSortDistinct.Store(0)
+}
+
+// busDistinctKeys counts what the rate-limiter is actually holding, which is
+// the thing that must stay bounded.
+func busDistinctKeys() int {
+	n := 0
+	absUnsupportedSortWarned.Range(func(_, _ any) bool { n++; return true })
+	return n
 }
 
 func TestUnsupportedSortIsReported(t *testing.T) {
@@ -114,4 +124,52 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 			t.Errorf("a second, distinct unsupported sort was suppressed: got %d warnings, want 2", n)
 		}
 	})
+}
+
+// TestUnsupportedSortCacheIsBounded is the security regression.
+//
+// The rate-limiter is keyed on the RAW query parameter, which is
+// client-supplied and unbounded — unlike absUnindexedSortWarned, whose key is a
+// mapped field name that can only take one of the values in absSortFields. With
+// no cap, `?sort=<random>` in a loop grows the map until the process dies, on an
+// unauthenticated GET. Caught by review before it shipped.
+func TestUnsupportedSortCacheIsBounded(t *testing.T) {
+	busReset()
+	_, restore := busCapture(t)
+	defer restore()
+
+	const attempts = absUnsupportedSortDistinctCap * 10
+	for i := 0; i < attempts; i++ {
+		absItemFilter(busCtx(fmt.Sprintf("sort=media.metadata.junk%d", i)))
+	}
+
+	held := busDistinctKeys()
+	if held > absUnsupportedSortDistinctCap {
+		t.Errorf("rate-limiter holds %d distinct client-supplied keys after %d requests; "+
+			"cap is %d — this is the unbounded-growth path", held, attempts, absUnsupportedSortDistinctCap)
+	}
+	// And the cap must be the reason, not a coincidence of the fixture.
+	if held < absUnsupportedSortDistinctCap {
+		t.Errorf("only %d keys held after %d distinct sorts; the fixture is not "+
+			"reaching the cap, so it cannot prove the cap works", held, attempts)
+	}
+}
+
+// TestUnsupportedSortLogValueIsTruncated keeps a client from bloating the log
+// line it triggers: the raw value is echoed back into it.
+func TestUnsupportedSortLogValueIsTruncated(t *testing.T) {
+	busReset()
+	buf, restore := busCapture(t)
+	defer restore()
+
+	long := strings.Repeat("z", absUnsupportedSortRawLogMax*4)
+	absItemFilter(busCtx("sort=" + long))
+
+	got := buf.String()
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("an oversized sort_param reached the log untruncated:\n%.200s", got)
+	}
+	if strings.Contains(got, long) {
+		t.Error("the full client-supplied string was logged verbatim")
+	}
 }
