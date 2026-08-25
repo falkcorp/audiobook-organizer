@@ -56,11 +56,22 @@ const (
 // held constant so a failure points at the wiring rather than the fixture.
 func doImportFile(t *testing.T, organize bool, rootDir string, enq handlers.SplitBookOpEnqueuer) (*httptest.ResponseRecorder, *fakeFileImporter) {
 	t.Helper()
+	// AuthorResolved: true is the HAPPY path, and must be stated explicitly.
+	// Its zero value is false, which now declines the organize -- so a fixture
+	// that forgot this field would make every organize test below assert the
+	// refusal path while appearing to test the success path.
+	return doImportFileAs(t, organize, rootDir, enq, true)
+}
+
+// doImportFileAs is doImportFile with authorResolved under the test's control.
+func doImportFileAs(t *testing.T, organize bool, rootDir string, enq handlers.SplitBookOpEnqueuer, authorResolved bool) (*httptest.ResponseRecorder, *fakeFileImporter) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	imp := &fakeFileImporter{resp: &importer.ImportFileResponse{
-		ID:       importedBookID,
-		Title:    "Some Audiobook",
-		FilePath: importedFilePath,
+		ID:             importedBookID,
+		Title:          "Some Audiobook",
+		FilePath:       importedFilePath,
+		AuthorResolved: authorResolved,
 	}}
 	h := handlers.NewFilesystemHandler(
 		nil, nil, nil, imp, enq, nil, rootDir, false,
@@ -281,5 +292,61 @@ func TestImportFile_FailedImportEnqueuesNothing(t *testing.T) {
 	}
 	if enq.calls != 0 {
 		t.Fatalf("must not enqueue an organize for a book that was never created, got %d", enq.calls)
+	}
+}
+
+// THE SECOND GATE. Closing the book_file gate was not enough: an untagged
+// import produces a book with no author, and FilterBooksNeedingOrganization
+// defers those (internal/organizer/service.go:715) rather than baking the
+// placeholder into the path. Queueing an op guaranteed to hit that gate, and
+// handing back an op id for it, is the same lie this PR exists to remove --
+// worse than the old bare 201, because it actively asserts an organize.
+//
+// Found by two independent reviewers; neither the handler tests nor the
+// importer tests could see it, because it lives in the gap between them.
+func TestImportFile_NoResolvedAuthorDeclinesOrganize(t *testing.T) {
+	enq := &autoscanEnqueuer{returnID: "op-1"}
+	w, imp := doImportFileAs(t, true, "/library", enq, false)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("the import must still succeed, got %d: %s", w.Code, w.Body.String())
+	}
+	if imp.calls != 1 {
+		t.Fatalf("expected the import to run, got %d calls", imp.calls)
+	}
+	if enq.calls != 0 {
+		t.Fatalf("must not queue an organize the filter is guaranteed to defer, got %d", enq.calls)
+	}
+	if strings.Contains(w.Body.String(), "organize_operation_id") {
+		t.Fatalf("must not advertise an op id for an organize that will not happen: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "organize_skipped") {
+		t.Fatalf("the refusal must be reported: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "author") {
+		t.Fatalf("the reason must name the cause so it is actionable: %s", w.Body.String())
+	}
+}
+
+// A resolved author must NOT block the organize -- the complement, without
+// which the test above passes just as well if the handler refused everything.
+func TestImportFile_ResolvedAuthorStillOrganizes(t *testing.T) {
+	enq := &autoscanEnqueuer{returnID: "op-1"}
+	_, _ = doImportFileAs(t, true, "/library", enq, true)
+	if enq.calls != 1 {
+		t.Fatalf("a book with a resolved author must still organize, got %d enqueues", enq.calls)
+	}
+}
+
+// EnqueueOp returning ("", nil) must not be advertised as a queued organize.
+func TestImportFile_EmptyOpIDIsNotAdvertised(t *testing.T) {
+	enq := &autoscanEnqueuer{returnID: ""}
+	w, _ := doImportFile(t, true, "/library", enq)
+
+	if strings.Contains(w.Body.String(), "organize_operation_id") {
+		t.Fatalf("an empty op id must not be advertised: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "organize_skipped") {
+		t.Fatalf("must report that no trackable organize was queued: %s", w.Body.String())
 	}
 }

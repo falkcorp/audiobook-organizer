@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
 // last-edited: 2026-08-25
 
@@ -9,6 +9,16 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Library } from './Library';
 import * as api from '../services/api';
 import { useLibraryCache } from '../stores/useLibraryCache';
+
+// The component gets `toast` from ToastProvider, which this test does not
+// mount -- so a toast renders nowhere in the DOM and cannot be asserted by
+// text. Capture the calls instead. hoisted, because vi.mock is hoisted above
+// the imports it would otherwise close over.
+const toastSpy = vi.hoisted(() => vi.fn());
+vi.mock('../components/toast/ToastProvider', () => ({
+  useToast: () => ({ toast: toastSpy }),
+  ToastProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
 
 vi.mock('../services/api', () => {
   class ApiError extends Error {
@@ -162,6 +172,53 @@ describe('Library import dialog', () => {
     await waitFor(() => {
       expect(vi.mocked(api.importFile)).toHaveBeenCalledWith('/tmp/book.m4b', true);
     });
+  });
+
+  // A DECLINED organize must reach the user. The server answers 201 with an
+  // organize_skipped reason when it will not queue one; before this, api.importFile
+  // was typed as Book and Library discarded the resolved value entirely, so all
+  // three of the server's carefully-written reasons were unreachable and the user
+  // saw "Import started successfully." for an import that organized nothing.
+  it('warns instead of reporting success when the server declined the organize', async () => {
+    // The spy is module-scoped and shared across this file's tests; without
+    // clearing, the negative assertion below sees an earlier test's success
+    // toast and fails for a reason that has nothing to do with this one.
+    toastSpy.mockClear();
+    vi.mocked(api.importFile).mockResolvedValueOnce({
+      id: 'book-1',
+      title: 'Test Book',
+      file_path: '/tmp/book.m4b',
+      organize_skipped: 'root_dir is not configured',
+    });
+
+    render(
+      <MemoryRouter>
+        <Library />
+      </MemoryRouter>
+    );
+
+    const openButton = await screen.findByRole('button', { name: /import files/i });
+    fireEvent.click(openButton);
+    const pathField = await screen.findByLabelText(/import file path/i);
+    fireEvent.change(pathField, { target: { value: '/tmp/book.m4b' } });
+    const organizeBox = await screen.findByRole('checkbox', {
+      name: /organize into library after import/i,
+    });
+    fireEvent.click(organizeBox);
+    fireEvent.click(await screen.findByRole('button', { name: 'Import' }));
+
+    // The reason itself must reach the user -- not just "something went wrong",
+    // and not a success message.
+    await waitFor(() => {
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.stringContaining('root_dir is not configured'),
+        'warning'
+      );
+    });
+    expect(toastSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('Import started successfully'),
+      'success'
+    );
   });
 
   it('clears useLibraryCache before reloading after a file import (library-cache-bug)', async () => {

@@ -948,7 +948,26 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         targets.map((path) => api.importFile(path, importFileOrganize))
       );
       const failures = results.filter((result) => result.status === 'rejected');
-      if (failures.length === 0) {
+
+      // Surface a DECLINED organize. The server answers 201 with an
+      // `organize_skipped` reason when it will not queue one (no root_dir, no
+      // resolved author, registry unavailable, enqueue failed). Reporting only
+      // rejected promises would show "Import started successfully." for an
+      // import that imported fine and organized nothing -- the same silent
+      // shape as the bug that made this flag worth wiring at all.
+      const skipReasons = results
+        .filter((r) => r.status === 'fulfilled')
+        .map((r) => (r as PromiseFulfilledResult<api.ImportFileResult>).value?.organize_skipped)
+        .filter((reason): reason is string => Boolean(reason));
+
+      if (failures.length === 0 && skipReasons.length > 0) {
+        // Distinct reasons, so N files failing the same gate read as one cause.
+        const distinct = Array.from(new Set(skipReasons));
+        toast(
+          `Imported ${targets.length === 1 ? 'the file' : `${targets.length} files`}, but did not organize: ${distinct.join('; ')}`,
+          'warning'
+        );
+      } else if (failures.length === 0) {
         toast(
           targets.length === 1
             ? 'Import started successfully.'

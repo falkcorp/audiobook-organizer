@@ -6,6 +6,7 @@
 package importer
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,26 +15,43 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// stageFixture copies the repo's sample audiobook into a temp dir and registers
-// that dir as the only allowed import path, so ValidateUserPath admits it.
+// stageFixture writes a synthetic .m4b into a temp dir and registers that dir
+// as the only allowed import path, so ValidateUserPath admits it. It returns
+// the dir and the file path.
 //
-// A real audio file, not a stub: ImportFile runs metadata.ExtractMetadata
-// before it ever reaches CreateBook, so a zero-byte .m4b would fail out early
-// and the test would pass for the wrong reason — never exercising the code
-// under test at all.
+// DELIBERATELY NOT the repo's testdata/fixtures/test_sample.m4b, and the
+// reasoning is worth keeping because the obvious choice is wrong twice over:
+//
+//  1. It would not test more. ExtractMetadata does NOT error on an unparseable
+//     file — measured, not assumed: given 74 bytes of ASCII it returns a nil
+//     error and derives Title from the filename. So nothing on this path
+//     depends on the bytes being real audio. (The committed fixture carries no
+//     artist/title/track tags either, so even fetched it exercises no tag
+//     parsing.) An earlier version of this comment claimed a stub "would fail
+//     out early"; that was false.
+//
+//  2. It would test LESS, in CI. testdata/fixtures/*.m4b is Git LFS-tracked
+//     (.gitattributes:1) and NO workflow passes `lfs: true` to
+//     actions/checkout, so on CI that path holds a 129-byte pointer beginning
+//     "version https://git-lfs.github.com/spec/v1". Every assertion below
+//     would still pass against it — Format comes from the extension, FileSize
+//     is 129 which is > 0 — i.e. green for the wrong reason, invisibly.
+//
+// What these tests actually need is a file that exists, has a supported
+// extension, and has a known size. Synthesising it says so honestly and makes
+// the tests independent of whether LFS was fetched.
+//
+// The repo-wide half of (2) — nine other test files and testutil.CopyFixture
+// share the blind spot — is filed in todo.d rather than fixed here.
 func stageFixture(t *testing.T) (dir, path string) {
 	t.Helper()
-	src := filepath.Join("..", "..", "testdata", "fixtures", "test_sample.m4b")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		t.Skipf("fixture %s unavailable: %v", src, err)
-	}
-	if len(data) == 0 {
-		t.Fatalf("fixture %s is empty — it cannot exercise metadata extraction", src)
-	}
 	dir = t.TempDir()
 	path = filepath.Join(dir, "sample-audiobook.m4b")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	// Enough bytes to have a distinctive, non-zero size. The leading ftyp box
+	// is cosmetic — nothing on this path parses it.
+	body := append([]byte("\x00\x00\x00\x1cftypM4A \x00\x00\x02\x00M4A isomiso2"),
+		bytes.Repeat([]byte("audio-payload"), 64)...)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatalf("stage fixture: %v", err)
 	}
 	return dir, path
