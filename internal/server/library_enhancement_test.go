@@ -1,7 +1,7 @@
 // file: internal/server/library_enhancement_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0336376b-882f-41df-b8ab-7e27526cdb1d
-// last-edited: 2026-05-01
+// last-edited: 2026-08-25
 
 package server
 
@@ -491,11 +491,13 @@ func TestServerSideSorting(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		titles := extractTitles(t, w)
 		require.Len(t, titles, 4)
-		// nil (0) < 1800 < 3600 < 7200
-		assert.Equal(t, "NoGenreBook", titles[0])
-		assert.Equal(t, "Middle Ground", titles[1])
-		assert.Equal(t, "Zebra Adventures", titles[2])
-		assert.Equal(t, "Alpha Quest", titles[3])
+		// 1800 < 3600 < 7200, then the unknown duration. A book with no
+		// duration is not a zero-length book, so it ranks after every known
+		// value rather than ahead of them -- see database.SortBooks.
+		assert.Equal(t, "Middle Ground", titles[0])
+		assert.Equal(t, "Zebra Adventures", titles[1])
+		assert.Equal(t, "Alpha Quest", titles[2])
+		assert.Equal(t, "NoGenreBook", titles[3])
 	})
 
 	t.Run("sort by narrator ascending", func(t *testing.T) {
@@ -506,11 +508,11 @@ func TestServerSideSorting(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		titles := extractTitles(t, w)
 		require.Len(t, titles, 4)
-		// "" (nil) < Aaron < Charlie < Michael
-		assert.Equal(t, "NoGenreBook", titles[0])
-		assert.Equal(t, "Alpha Quest", titles[1])
-		assert.Equal(t, "Zebra Adventures", titles[2])
-		assert.Equal(t, "Middle Ground", titles[3])
+		// Aaron < Charlie < Michael, then the unknown narrator last.
+		assert.Equal(t, "Alpha Quest", titles[0])
+		assert.Equal(t, "Zebra Adventures", titles[1])
+		assert.Equal(t, "Middle Ground", titles[2])
+		assert.Equal(t, "NoGenreBook", titles[3])
 	})
 
 	t.Run("sort by created_at", func(t *testing.T) {
@@ -555,9 +557,11 @@ func TestServerSideSorting(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code, "sorting should handle nil fields gracefully")
 		titles := extractTitles(t, w)
+		// A nil field must never drop the row from the page ...
 		require.Len(t, titles, 4)
-		// nil narrator sorts before any non-nil narrator
-		assert.Equal(t, "NoGenreBook", titles[0])
+		// ... and must land in one deterministic place: last, ascending.
+		assert.Equal(t, "NoGenreBook", titles[3])
+		assert.NotContains(t, titles[:3], "NoGenreBook")
 	})
 }
 
