@@ -898,7 +898,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const handleManualImport = () => {
     setImportFilePath('');
     setImportFilePaths([]);
-    setImportFileOrganize(true);
+    // THIS is the effective default, not the useState above: the dialog resets
+    // its state every time it opens, so the initial value never survives. Both
+    // are false so there is no path back to on. See the comment on the useState
+    // declaration for why organizing on import is opt-in.
+    setImportFileOrganize(false);
     setImportFileDialogOpen(true);
   };
 
