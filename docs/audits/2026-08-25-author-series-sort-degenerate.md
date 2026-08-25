@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-25-author-series-sort-degenerate.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 4.0.0 -->
 <!-- guid: 9d3f6b28-4c17-4e85-a0b9-7f2e5c1d8a64 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -164,3 +164,76 @@ does reach it. `TestMemdbSortedSummaryPage` covers it and kills the mutant
 - `TestEverySortKeyIsCovered` fails if a new key has no fixture.
 - `TestAuthorAndSeriesAreNotIndexable` fails if either key is re-added to
   `sortIndexForField`.
+
+## What the first fix missed (review of #2893, fixed in #2911)
+
+A review agent run on #2893's own diff found the same mechanism firing in two
+more places. Both were reproduced by measurement before being fixed. Recording
+them because the shape — *fixing one of N sites of a mechanism and declaring the
+class closed* — is the thing to watch for, not the sort bug itself.
+
+### The default config was the broken one
+
+#2893 fixed the branch taken when a sort has **no** index. A sort **with** an
+index takes the light branch (`CanPushDownSort` true ⇒ `heavySorting` false),
+which never set `alreadySortedAndPaginated`, so the store's ordered page was
+re-sorted by the trailing `applySorting` and the ID tiebreaker rewrote it into
+insertion order. Affected exactly the keys that are indexable AND absent from
+`BookSummary`: `year`, `bitrate`, `bitrate_kbps`.
+
+```
+field=year     index enabled  -> [rank1 rank2 rank0]   insertion order
+field=year     index disabled -> [rank0 rank1 rank2]   ok (#2893's path)
+field=narrator index enabled  -> [rank0 rank1 rank2]   ok (BookSummary carries it)
+```
+
+**Enabling the index is what broke the sort**, and `enabled_sort_indexes`
+defaults to `{"year"}` — so a stock install had one index enabled and it was
+the corrupted one. #2893 "fixed" `author` on this same path only incidentally,
+by removing it from the default so it fell through to the other branch.
+
+**Why the whole suite was green: no test in the repo called
+`database.SetEnabledSortIndexes`.** The enabled set was empty in every test, so
+100% of them — including the 23-key enumeration added in #2893 and
+mutation-tested — ran the unindexed route. The enumeration was exhaustive along
+the key axis and blind along the route axis.
+
+### The Pebble fallback never resolved the name
+
+`sortedSummaryPagePebble` sorted `Book`s decoded straight from Pebble rows,
+where `Author`/`Series` are nil unless a past writer inlined one. #2893 made
+this worse rather than better: the service now skips its own sort on the
+strength of `HonorsEveryBookSummaryFilter`, whose doc block #2893 had widened
+to promise ordering. `UseMemDB=false` is the abandoned-warmup state and is
+permanent for the process. Fixed by resolving both by ID, batched, mirroring
+the memdb side.
+
+## Follow-up: an unknown sort_by cost a full-corpus fetch
+
+`hasSorting` tested only `f.SortBy != ""`, and `sort_by` arrives straight from
+the query string. A typo therefore set `heavySorting`, which zeroed the store's
+limit/offset to pull the whole filtered library back — after which
+`applySorting` did nothing, because `SortBooks` has no comparator for the
+field. The expensive path returned exactly the rows the cheap path returns.
+
+Requiring a real comparator changes no response. The request is still accepted
+and still answers in the store's own order; only the cost changed. Rejecting it
+would be a caller-visible contract change and was deliberately not done here.
+
+That also made `heavySorting && !storeOrdersThePage` unsatisfiable —
+`heavySorting` now implies `CanSortBooksBy`, which implies `bsf` carries the
+sort, which implies the store ordered the page — so the branch was removed
+rather than left reading like a live case.
+
+### Mutation matrix (follow-up)
+
+| Mutant | Result |
+|---|---|
+| restore the limit/offset zeroing | KILLED — both known-sort page tests |
+| restore zeroing AND revert `hasSorting` | KILLED — unknown-sort test, store got `limit=0` |
+| revert `hasSorting` alone | **SURVIVES** — and correctly so |
+
+The last row is recorded rather than papered over: with the zeroing gone, the
+unknown-sort request is already cheap, so `hasSorting` alone no longer controls
+that cost. What it still buys is routing — an unknown sort takes the light
+branch, which can serve from the list cache.
