@@ -1,13 +1,15 @@
 <!-- file: docs/diagnostics/2026-08-24-scan-adds-no-new-books-root-cause.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 3.0.0 -->
 <!-- guid: 60ab5a31-b0bf-4055-985b-a4b16604e8a6 -->
 <!-- last-edited: 2026-08-24 -->
 
 # Why your new books never appear
 
-**The scan IS finding them and IS adding them. They are in the database right now.
-They are invisible because every single one is marked "not the primary version",
-and the library page only shows primary versions.**
+**The scan IS finding them and IS adding them. They are in the database right now.**
+Two separate things are wrong: the rows it writes are structurally malformed (one
+book per track, folder name as author, filename as title), and 536 books sit in
+version groups that elect no primary, which makes them unreachable from a library
+page that shows primary versions only.
 
 Nothing was changed on the server. This is a diagnosis.
 
@@ -50,19 +52,34 @@ A version group with exactly one member, where that member is marked non-primary
 has **no primary at all**. The library page requests primary-only by default. So
 nothing in that group can ever be returned. The books exist and cannot be reached.
 
-## The scale
+## The scale — measured, and smaller than it first looked
 
-Measured live:
+I first reported "16,460 books are invisible." **That was wrong**, and the correction
+matters because it changes the remedy.
+
+16,460 is the count of books with `is_primary_version = false`. Most of those are
+*legitimate* secondary versions — `organized_source` rows and similar — sitting in a
+group that DOES have a primary, and reachable through it. That is the design working.
+
+The real question is how many books sit in a group with **no primary at all**. The
+repair job answers it directly. `POST /api/v1/operations/elect-missing-primaries?dry_run=true`
+(read-only; the handler defaults to dry-run) against prod:
 
 | | count |
 |---|---|
-| primary | 44,772 |
-| **non-primary (invisible by default)** | **16,460** |
-| total | 61,232 |
+| total checked | 61,281 |
+| groups scanned | 29,668 |
+| **groups with no primary** | **312** |
+| — of those, singleton groups | 261 |
+| — of those, multi-member groups | 51 |
+| **books trapped (genuinely unreachable)** | **536** |
+| books with no version group at all | 5,840 |
+| errors | 0 |
 
-44,772 + 16,460 = 61,232, so that partitions the library exactly.
+**536 books are truly unreachable, not 16,460.** Two orders of magnitude smaller.
 
-**16,460 books are in the database and hidden from the default view.**
+Note separately that **5,840 books have no version group at all**. The election does
+not touch those; they are a different population and may matter more than the 536.
 
 ## What was NOT wrong — two dead ends, recorded so nobody re-walks them
 
@@ -101,9 +118,10 @@ active when it is silently falling through to one branch.
 
 ## What needs to happen
 
-1. **Elect a primary for every single-member version group.** A group of one whose
-   only member is non-primary is unreachable by construction. This is the change that
-   makes the existing 16,460 visible.
+1. **Elect a primary for the 312 groups that have none.** The repair op already exists
+   and is wired: `POST /api/v1/operations/elect-missing-primaries?dry_run=false`
+   (requires settings-manage). The dry run above is what it would do. This frees the
+   536 trapped books. **Not run — a mutating prod repair is the owner's call.**
 2. **Stop creating one book per track.** Multi-file books must group into one record.
 3. **Stop using the folder name as the author and the filename as the title.**
 
