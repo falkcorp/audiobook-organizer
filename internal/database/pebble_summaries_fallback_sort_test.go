@@ -48,19 +48,26 @@ type sortFixture struct {
 	title string
 }
 
-// seedSortBooks creates books whose titles run in DESCENDING order, so
-// insertion order is the reverse of ascending title order and neither
-// coincides with the Pebble key order the fallback walks in.
+// seedSortBooks creates books in an order that is neither ascending nor
+// descending by title.
+//
+// Both halves of that matter, and the second half was learned the hard way.
+// Seeding in descending order makes the store's natural (key) order coincide
+// with a correct DESCENDING result, so every descending assertion passes
+// whether or not the sort ran at all — a mutation that disabled sorting
+// entirely still left those subtests green. An unsorted fixture can only
+// observe a missing sort in the directions its own layout does not already
+// reproduce, so the layout has to reproduce neither.
 func seedSortBooks(t *testing.T, p *PebbleStore) []sortFixture {
 	t.Helper()
 
 	fixtures := []sortFixture{
-		{title: "Zulu Station"},
-		{title: "Yankee Ridge"},
-		{title: "Xenon Drift"},
 		{title: "Whiskey Lane"},
-		{title: "Victor Reach"},
+		{title: "Zulu Station"},
 		{title: "Uniform Sky"},
+		{title: "Yankee Ridge"},
+		{title: "Victor Reach"},
+		{title: "Xenon Drift"},
 	}
 	for i := range fixtures {
 		f := &fixtures[i]
@@ -131,13 +138,21 @@ func TestGetAllBookSummariesFiltered_FallbackHonorsSortBy(t *testing.T) {
 			// without the sort doing anything — the test would be inert and
 			// look green. Establish that the two orders actually differ
 			// before trusting any of them.
-			t.Run("FixtureGuard_UnsortedOrderDiffers", func(t *testing.T) {
+			t.Run("FixtureGuard_UnsortedOrderDiffersBothWays", func(t *testing.T) {
 				natural, err := p.GetAllBookSummariesFiltered(0, 0, BookSummaryFilter{})
 				require.NoError(t, err)
 				require.Len(t, natural, len(wantAsc))
-				require.NotEqual(t, wantAsc, summaryTitlesInOrder(natural),
-					"%s: unsorted order already equals sorted order — this "+
-						"fixture cannot observe a missing sort", backend)
+				got := summaryTitlesInOrder(natural)
+				// Checking only ascending is not enough: a fixture seeded in
+				// descending order makes "no sort" and "correct descending
+				// sort" the same sequence, and the descending subtests below
+				// then hold for a store that never sorts.
+				require.NotEqual(t, wantAsc, got,
+					"%s: unsorted order already equals ASCENDING order — this "+
+						"fixture cannot observe a missing ascending sort", backend)
+				require.NotEqual(t, wantDesc, got,
+					"%s: unsorted order already equals DESCENDING order — this "+
+						"fixture cannot observe a missing descending sort", backend)
 			})
 
 			t.Run("FullPageAscending", func(t *testing.T) {
