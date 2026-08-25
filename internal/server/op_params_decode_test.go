@@ -1,7 +1,7 @@
 // file: internal/server/op_params_decode_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a7c1e93-2d84-4f60-b1a7-9e3c05d8f271
-// last-edited: 2026-08-22
+// last-edited: 2026-08-24
 
 package server
 
@@ -70,6 +70,15 @@ func w3allOps() []w3registrar {
 		// in-repo template the fix was modelled on ---
 		{"library.transcode", (*Server).RegisterLibraryTranscodeOp, false},
 		{"library.import", (*Server).RegisterLibraryImportOp, false},
+
+		// --- added 2026-08-24 with the op itself ---
+		//
+		// library.ai-parse carries a batch of scanner.Book values, the largest
+		// params blob any op in this table takes. A decode that failed open
+		// would run the LLM over a zero-value batch: zero books, so no work and
+		// no error, and the scan's candidates would vanish with the operation
+		// reporting success.
+		{"library.ai-parse", (*Server).RegisterLibraryAIParseOp, false},
 
 		// --- the 8 dedup ops, added 2026-08-22 when they went v2-native ---
 		//
