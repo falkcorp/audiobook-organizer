@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-25
 
@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -274,39 +275,53 @@ func warnUnindexedSort(field, raw string) {
 		return
 	}
 	slog.Warn("abs: sort has no memdb index; the store must materialise the match set to order it (results are correct, but this costs more per request)",
-		"sort_param", raw,
+		"sort_param", absTruncateForLog(raw, absSortRawLogMax),
 		"sort_field", field,
 		"remediation", "add it to enabled_sort_indexes and restart ONLY if this sort is hot enough to justify the index's memory and insert-throughput cost")
 }
 
-// absUnsupportedSortWarned rate-limits the warning below to once per raw sort
-// string per process, and absUnsupportedSortDistinct bounds how many distinct
-// strings it will ever remember.
+// absUnsupportedSortLastWarn holds the unix second at which this warning last
+// fired, and is the entire rate limiter.
 //
-// 🚨 The bound is not tidiness, it is the whole reason this pair exists. The
-// key is the RAW query parameter, which is client-supplied and unbounded —
-// unlike absUnindexedSortWarned, whose key is a mapped field name and can only
-// ever take one of the handful of values in absSortFields. Keyed on raw input
-// with no cap, `?sort=<random>` in a loop grows this map until the process
-// dies, and it is an unauthenticated GET that does it. Caught by review before
-// this shipped.
+// 🚨 It deliberately remembers NOTHING about the value the client sent. The
+// first version keyed a sync.Map on the raw query parameter and capped the
+// number of distinct keys at 64. The cap hid three separate defects rather
+// than fixing any of them:
 //
-// 64 is chosen to be far above the number of distinct sorts any real client
-// menu can emit (the ABS client offers 14) and far below anything that matters
-// for memory. Past the cap the warning stops rather than the map growing: the
-// gap has already been reported 64 different ways, and the 65th spelling is
-// not new information.
-const absUnsupportedSortDistinctCap = 64
+//   - It bounded key COUNT, not bytes. The key was the UNTRUNCATED raw
+//     parameter and MaxHeaderBytes is 1 MB, so 64 keys could retain ~64 MB for
+//     the life of the process. Truncating only the log line did nothing for
+//     the map.
+//   - Check-then-act. Load, then LoadOrStore, then Add let concurrent callers
+//     all pass the gate before any increment landed: a burst of 5,000 measured
+//     961 keys held against a cap of 64.
+//   - Worst, it could be SILENCED. 64 distinct junk spellings -- or a client
+//     that appends a cache-buster -- permanently exhausted the cap, after
+//     which every genuine future gap was answered in exactly the silence this
+//     warning exists to end.
+//
+// A time limiter has no key to poison, no cap to exhaust, and O(1) memory
+// whatever the client sends. It cannot be permanently silenced: the next
+// window always reopens.
+//
+// On severity: the earlier fix called this an UNAUTHENTICATED DoS. That was
+// wrong. handler.go registers this route behind ABSRequireAuth, and the
+// surface is Cloudflare-Access-authenticated at the edge as well. The bug was
+// real -- any authenticated client, or a leaked token, reached it -- but do
+// not restate the unauthenticated claim; it is false in both files that
+// carried it.
+var absUnsupportedSortLastWarn atomic.Int64
 
-// absUnsupportedSortRawLogMax bounds what reaches the log line. The raw value
-// is echoed back, so it is also the one place a long query string could bloat
-// the log.
-const absUnsupportedSortRawLogMax = 64
+// absUnsupportedSortWarnEvery is the minimum gap in seconds between two of
+// these warnings. A gap in sort coverage is a standing condition, not an
+// event: once a minute is ample to notice it, and it bounds the log whatever
+// a client does.
+const absUnsupportedSortWarnEvery = 60
 
-var (
-	absUnsupportedSortWarned   sync.Map
-	absUnsupportedSortDistinct atomic.Int64
-)
+// absSortRawLogMax bounds what reaches a log line. Both sort warnings echo the
+// client's raw parameter back, so this is the one place a 1 MB query string
+// could bloat the log.
+const absSortRawLogMax = 64
 
 // warnUnsupportedSort reports a sort the client asked for that this server has
 // no field for at all.
@@ -318,37 +333,47 @@ var (
 // field == "", so the case it most needed to report was the one case it
 // skipped.
 //
-// The client menu offers 14 sorts and absSortFields covers 8 of them. The
-// remainder are unsupported for different reasons, and the log line is the only
-// way anyone finds out which:
+// absSortFields holds 11 accepted parameter spellings that resolve to 9
+// distinct store fields (title and author each have two spellings). Six client
+// sorts are known to resolve to "" instead, for three different reasons, and
+// the log line is the only way anyone finds out which:
 //
-//   - File Modified — Book.LastScanMtime exists; this is a mapping away, and is
-//     filed rather than done here because adding a sort is a feature, not a fix
-//     for the silence.
-//   - Progress (×3) — per-user state (UserBookState.ProgressPct), not a Book
+//   - File Modified -- Book.LastScanMtime exists; this is a mapping away, and
+//     is filed rather than done here because adding a sort is a feature, not a
+//     fix for the silence.
+//   - Progress (×3) -- per-user state (UserBookState.ProgressPct), not a Book
 //     field. Sorting by it needs a per-user join the summary path has no shape
 //     for.
-//   - File Birthtime — no field exists on Book at all.
-//   - Randomly — deliberately unimplemented; a stable page order is required
+//   - File Birthtime -- no field exists on Book at all.
+//   - Randomly -- deliberately unimplemented; a stable page order is required
 //     for pagination to mean anything.
+//
+// An earlier version of this comment claimed the client menu offers 14 sorts
+// and that absSortFields covered 8 of them. Neither number was reconstructible
+// from the code, so both are gone: what is stated above is what the map
+// actually contains.
 func warnUnsupportedSort(field, raw string) {
 	if field != "" || strings.TrimSpace(raw) == "" {
 		return
 	}
-	// Check the cap BEFORE storing, so the map cannot grow past it.
-	if absUnsupportedSortDistinct.Load() >= absUnsupportedSortDistinctCap {
+	// The zero value means "never warned": now-0 is ~1.7e9, far past the
+	// window, so the first call always fires. A backwards wall-clock step
+	// makes this negative and silences the warning until the clock catches
+	// up -- an acceptable trade for a log limiter, and not worth a monotonic
+	// redesign.
+	now := time.Now().Unix()
+	last := absUnsupportedSortLastWarn.Load()
+	if now-last < absUnsupportedSortWarnEvery {
 		return
 	}
-	if _, seen := absUnsupportedSortWarned.LoadOrStore(raw, true); seen {
-		return
-	}
-	// Concurrent callers can each pass the check above; the winner of this
-	// increment is the last one allowed to log.
-	if absUnsupportedSortDistinct.Add(1) > absUnsupportedSortDistinctCap {
+	// Exactly one concurrent caller wins the window and the losers return.
+	// This is precisely what the old Load/LoadOrStore/Add sequence failed to
+	// do: there, every caller that passed the first gate went on to log.
+	if !absUnsupportedSortLastWarn.CompareAndSwap(last, now) {
 		return
 	}
 	slog.Warn("abs: client requested a sort this server has no field for; the page is returned in the store's default order",
-		"sort_param", absTruncateForLog(raw, absUnsupportedSortRawLogMax),
+		"sort_param", absTruncateForLog(raw, absSortRawLogMax),
 		"supported", absSupportedSortParams(),
 		"remediation", "none available to an operator -- this needs a mapping in absSortFields, or a field that does not exist yet")
 }
@@ -360,7 +385,15 @@ func absTruncateForLog(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…(truncated)"
+	// Cutting at a byte offset can land inside a multi-byte rune, which puts
+	// invalid UTF-8 into the log stream -- a slog JSON handler silently
+	// rewrites it to U+FFFD, so the corruption is not even visible downstream.
+	// Back off to the last whole rune.
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…(truncated)"
 }
 
 // absSupportedSortParams lists the sort parameters absSortFields recognises,

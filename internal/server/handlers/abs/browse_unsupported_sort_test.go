@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_unsupported_sort_test.go
-// version: 1.1.0
+// version: 2.2.0
 // guid: 2a9f4d13-8b07-4e56-91c2-5d3e08a7f6b4
 // last-edited: 2026-08-25
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,17 +24,37 @@ import (
 // means "no ordering requested" everywhere downstream — so the client gets a
 // 200 and the store's default order. warnUnindexedSort cannot report it: its
 // first line returns early on field == "", so the one case that most needed
-// reporting was the one case it skipped. The client menu offers 14 sorts and
-// the map covers 8.
+// reporting was the one case it skipped.
 //
 // bus* names are task-unique per repo convention for package-shared helpers.
 
-func busCapture(t *testing.T) (*bytes.Buffer, func()) {
+// busWriter serialises writes so the concurrency test below can share one
+// buffer. slog's own handlers lock around each write, but the buffer is read
+// from the test goroutine while workers are still finishing, so it needs its
+// own mutex regardless.
+type busWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *busWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *busWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func busCapture(t *testing.T) (*busWriter, func()) {
 	t.Helper()
-	var buf bytes.Buffer
+	w := &busWriter{}
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	return &buf, func() { slog.SetDefault(prev) }
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	return w, func() { slog.SetDefault(prev) }
 }
 
 func busCtx(q string) *gin.Context {
@@ -42,21 +63,15 @@ func busCtx(q string) *gin.Context {
 	return c
 }
 
-// busReset clears the once-per-process rate limiters so each subtest starts
-// from a state where a warning is still possible. Without it the first subtest
-// to run consumes the only warning and the rest pass for the wrong reason.
+// busReset reopens both rate limiters so each subtest starts from a state where
+// a warning is still possible. Without it the first subtest to run consumes the
+// only warning and the rest pass for the wrong reason.
+//
+// Storing 0 is what "never warned" means: now-0 is ~1.7e9 seconds, far past
+// the window, so the next call always fires.
 func busReset() {
-	absUnsupportedSortWarned = sync.Map{}
+	absUnsupportedSortLastWarn.Store(0)
 	absUnindexedSortWarned = sync.Map{}
-	absUnsupportedSortDistinct.Store(0)
-}
-
-// busDistinctKeys counts what the rate-limiter is actually holding, which is
-// the thing that must stay bounded.
-func busDistinctKeys() int {
-	n := 0
-	absUnsupportedSortWarned.Range(func(_, _ any) bool { n++; return true })
-	return n
 }
 
 func TestUnsupportedSortIsReported(t *testing.T) {
@@ -106,7 +121,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 		}
 	})
 
-	t.Run("warns once per distinct sort string", func(t *testing.T) {
+	t.Run("at most one warning per window, even for distinct values", func(t *testing.T) {
 		busReset()
 		buf, restore := busCapture(t)
 		defer restore()
@@ -114,44 +129,110 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			absItemFilter(busCtx("sort=media.metadata.fileBirthtime"))
 		}
-		if n := strings.Count(buf.String(), "no field for"); n != 1 {
-			t.Errorf("rate limit failed: %d warnings for the same sort, want 1", n)
-		}
-		// A DIFFERENT unsupported sort must still be reported — otherwise one
-		// noisy client silences every other gap.
+		// A DIFFERENT unsupported sort inside the same window is suppressed
+		// too. This is a deliberate trade and the reason it is acceptable is
+		// that it is TEMPORARY: the previous design deduplicated per distinct
+		// value, which is better diagnostics right up until 64 junk values
+		// exhausted the cap and silenced every future gap permanently.
 		absItemFilter(busCtx("sort=progress"))
+
+		if n := strings.Count(buf.String(), "no field for"); n != 1 {
+			t.Errorf("rate limit failed: %d warnings inside one window, want exactly 1", n)
+		}
+	})
+
+	t.Run("the next window reopens", func(t *testing.T) {
+		busReset()
+		buf, restore := busCapture(t)
+		defer restore()
+
+		absItemFilter(busCtx("sort=media.metadata.fileBirthtime"))
+		// Age the limiter past the window rather than sleeping a minute.
+		absUnsupportedSortLastWarn.Store(absUnsupportedSortLastWarn.Load() - absUnsupportedSortWarnEvery - 1)
+		absItemFilter(busCtx("sort=media.metadata.fileBirthtime"))
+
 		if n := strings.Count(buf.String(), "no field for"); n != 2 {
-			t.Errorf("a second, distinct unsupported sort was suppressed: got %d warnings, want 2", n)
+			t.Errorf("got %d warnings, want 2 — the limiter did not reopen, which is "+
+				"the permanent-silence failure this design exists to prevent", n)
 		}
 	})
 }
 
-// TestUnsupportedSortCacheIsBounded is the security regression.
+// TestUnsupportedSortLimiterIsConcurrencySafe is the security regression.
 //
-// The rate-limiter is keyed on the RAW query parameter, which is
-// client-supplied and unbounded — unlike absUnindexedSortWarned, whose key is a
-// mapped field name that can only take one of the values in absSortFields. With
-// no cap, `?sort=<random>` in a loop grows the map until the process dies, on an
-// unauthenticated GET. Caught by review before it shipped.
-func TestUnsupportedSortCacheIsBounded(t *testing.T) {
+// The first version of this limiter keyed a sync.Map on the RAW query
+// parameter and capped the distinct-key count at 64. That cap bounded key
+// COUNT, not bytes: the key was untruncated and MaxHeaderBytes is 1 MB, so 64
+// keys could retain ~64 MB. It was also check-then-act — Load, LoadOrStore,
+// Add — so a concurrent burst blew past the cap; 5,000 callers measured 961
+// keys held.
+//
+// Both defects are gone by construction: the limiter is a single atomic.Int64
+// holding a timestamp and retains nothing derived from client input. This test
+// pins the property that made the old design unsafe — that concurrent callers
+// could each pass the gate.
+//
+// NOTE: -race cannot catch the old bug. Load/LoadOrStore/Add on sync.Map and
+// atomic.Int64 are race-detector-clean while overshooting 15×; it was a
+// check-then-act LOGIC race, not a data race. Only counting the output finds it.
+//
+// Mutation results, measured, including the one that survives:
+//
+//   - restore the #2913 keyed-map-plus-cap design → KILLED, 3/3 runs. This is
+//     the regression that matters and the reason this test exists.
+//   - delete the window gate → KILLED.
+//   - delete the CompareAndSwap, leaving a bare Store → **SURVIVES**.
+//
+// The survivor is honest and is not worth chasing. With a single shared
+// timestamp the overshoot window is a few nanoseconds wide, so a bare Store is
+// *almost* always correct and no scheduler this test can command will reliably
+// prove otherwise. The CAS is kept because it makes "one winner per window" a
+// guarantee rather than a probability — correctness by construction, not by
+// test. Do not delete it on the grounds that nothing fails: that is exactly
+// what the measurement above says, and it is not evidence the CAS is unneeded.
+//
+// The old design overshot 15× not through a narrow race but structurally:
+// every caller had a UNIQUE key, so LoadOrStore never reported "seen" and the
+// lagging counter was the only gate.
+func TestUnsupportedSortLimiterIsConcurrencySafe(t *testing.T) {
 	busReset()
-	_, restore := busCapture(t)
+	buf, restore := busCapture(t)
 	defer restore()
 
-	const attempts = absUnsupportedSortDistinctCap * 10
-	for i := 0; i < attempts; i++ {
-		absItemFilter(busCtx(fmt.Sprintf("sort=media.metadata.junk%d", i)))
+	const workers = 500
+
+	// Build every context BEFORE the barrier. Constructing a gin context is
+	// slower than the limiter itself, so doing it after the release lets the
+	// first caller finish the whole gate before the rest arrive — the test
+	// then passes even with the CAS deleted, which is exactly the false
+	// confidence this test exists to avoid.
+	ctxs := make([]*gin.Context, workers)
+	for i := range ctxs {
+		ctxs[i] = busCtx(fmt.Sprintf("sort=media.metadata.junk%d", i))
 	}
 
-	held := busDistinctKeys()
-	if held > absUnsupportedSortDistinctCap {
-		t.Errorf("rate-limiter holds %d distinct client-supplied keys after %d requests; "+
-			"cap is %d — this is the unbounded-growth path", held, attempts, absUnsupportedSortDistinctCap)
+	var ready, wg sync.WaitGroup
+	ready.Add(workers)
+	wg.Add(workers)
+	start := make(chan struct{})
+	for i := 0; i < workers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			ready.Done()
+			<-start // every goroutine is parked here before any of them runs
+			absItemFilter(ctxs[i])
+		}(i)
 	}
-	// And the cap must be the reason, not a coincidence of the fixture.
-	if held < absUnsupportedSortDistinctCap {
-		t.Errorf("only %d keys held after %d distinct sorts; the fixture is not "+
-			"reaching the cap, so it cannot prove the cap works", held, attempts)
+	ready.Wait()
+	close(start)
+	wg.Wait()
+
+	// Exactly one, not "at most a few": the CAS admits a single winner per
+	// window. Any number above 1 means callers are passing the gate and then
+	// all logging, which is precisely the old overshoot.
+	if n := strings.Count(buf.String(), "no field for"); n != 1 {
+		t.Errorf("%d warnings from %d concurrent distinct sorts, want exactly 1 — "+
+			"concurrent callers are passing the rate-limit gate together", n, workers)
 	}
 }
 
@@ -162,7 +243,7 @@ func TestUnsupportedSortLogValueIsTruncated(t *testing.T) {
 	buf, restore := busCapture(t)
 	defer restore()
 
-	long := strings.Repeat("z", absUnsupportedSortRawLogMax*4)
+	long := strings.Repeat("z", absSortRawLogMax*4)
 	absItemFilter(busCtx("sort=" + long))
 
 	got := buf.String()
@@ -171,5 +252,66 @@ func TestUnsupportedSortLogValueIsTruncated(t *testing.T) {
 	}
 	if strings.Contains(got, long) {
 		t.Error("the full client-supplied string was logged verbatim")
+	}
+}
+
+// TestUnindexedSortLogValueIsTruncated covers the SIBLING warning.
+//
+// warnUnindexedSort is rate-limited per mapped field, so the NUMBER of lines it
+// can emit is bounded by absSortFields. That bounded the count and hid the
+// hazard: each of those lines echoed the client's raw parameter back
+// untruncated, and a sort parameter can be a megabyte. The original fix
+// hardened warnUnsupportedSort and left its twin exposed to the defect it had
+// just named.
+func TestUnindexedSortLogValueIsTruncated(t *testing.T) {
+	busReset()
+	buf, restore := busCapture(t)
+	defer restore()
+
+	// absSortField takes the LAST dotted segment, so a long prefix maps to a
+	// real field while leaving raw enormous.
+	long := strings.Repeat("z", absSortRawLogMax*4)
+	f := absItemFilter(busCtx("sort=" + long + ".duration"))
+	if f.SortBy != "duration" {
+		t.Fatalf("fixture needs a MAPPED field to reach warnUnindexedSort; got SortBy=%q", f.SortBy)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "no memdb index") {
+		t.Fatalf("fixture did not reach warnUnindexedSort — if duration became an "+
+			"enabled index, pick another unindexed field; log was:\n%.300s", got)
+	}
+	if strings.Contains(got, long) {
+		t.Error("warnUnindexedSort logged the full client-supplied string verbatim")
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("an oversized sort_param reached the log untruncated:\n%.300s", got)
+	}
+}
+
+// TestAbsTruncateForLogKeepsValidUTF8 pins the rune boundary.
+//
+// Cutting at a byte offset lands inside a multi-byte rune roughly two times in
+// three for 3-byte characters. The result is invalid UTF-8 in the log stream,
+// and a slog JSON handler rewrites it to U+FFFD silently — so the corruption
+// never surfaces as an error, it just quietly mangles the value a reader is
+// trying to diagnose from.
+func TestAbsTruncateForLogKeepsValidUTF8(t *testing.T) {
+	// Sweep every offset so the test does not depend on one lucky alignment.
+	for _, r := range []string{"日", "é", "😀"} {
+		s := strings.Repeat(r, 64)
+		for max := 1; max <= 96; max++ {
+			got := absTruncateForLog(s, max)
+			if !utf8.ValidString(got) {
+				t.Fatalf("absTruncateForLog(%q…, %d) produced invalid UTF-8: %q", r, max, got)
+			}
+		}
+	}
+
+	// Short input is returned untouched, and must not panic on the empty string.
+	for _, s := range []string{"", "abc"} {
+		if got := absTruncateForLog(s, absSortRawLogMax); got != s {
+			t.Errorf("absTruncateForLog(%q) = %q, want it unchanged", s, got)
+		}
 	}
 }
