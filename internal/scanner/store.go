@@ -1,5 +1,5 @@
 // file: internal/scanner/store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
 // last-edited: 2026-08-24
 
@@ -35,6 +35,11 @@ type scanBookLookup interface {
 	GetBookByFilePath(path string) (*database.Book, error)
 	GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// Added 2026-08-24 for the queued library.ai-parse operation: a batch that
+	// runs after auto-organize must follow the version group to the primary
+	// rather than writing to the row organize demoted. See
+	// saveAIFieldsToPrimary.
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 }
 
 type scanBookWriter interface {

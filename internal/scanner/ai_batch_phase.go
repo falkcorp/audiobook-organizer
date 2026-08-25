@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
 // last-edited: 2026-08-24
 
@@ -42,7 +42,14 @@ type aiBatchParser interface {
 // rate limits". The per-batch delay is kept and now applies per worker, so
 // the aggregate request rate rises by the worker count rather than becoming
 // unbounded.
-func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, candidates []int, log logger.Logger) {
+// save is how a parsed book is persisted. It is a parameter, not the package
+// saveBook global, because the two callers need genuinely different writes: the
+// inline scan path passes saveBook (the full scan write path, correct there),
+// while the queued library.ai-parse operation passes saveAIFieldsToPrimary,
+// which resolves the row fresh and touches only the AI-filled fields. Sharing
+// saveBook between them puts the queued batch's fields on a row organize has
+// already demoted. See saveAIFieldsToPrimary for the full reasoning.
+func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, candidates []int, log logger.Logger, save func(context.Context, *Book) error) {
 	const batchSize = 20
 	const delayBetweenBatches = 2 * time.Second
 	const maxTotalFailures = 3
@@ -156,7 +163,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 					books[idx].Publisher = aiMeta.Publisher
 				}
 
-				if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
+				if saveErr := save(ctx, &books[idx]); saveErr != nil {
 					log.Warn("failed to re-save AI-enriched book %s: %v", books[idx].FilePath, saveErr)
 				}
 			}

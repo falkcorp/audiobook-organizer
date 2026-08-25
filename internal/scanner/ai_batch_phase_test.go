@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_phase_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: db86f424-3881-4c7b-8ca5-4e00086f62cf
 // last-edited: 2026-08-24
 
@@ -66,7 +66,7 @@ func TestRunAIBatchPhase_RunsBatchesConcurrently(t *testing.T) {
 	books, cands := makeCandidates(20 * 8) // 8 batches
 	f := &fakeAIParser{delay: 60 * time.Millisecond}
 
-	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"))
+	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"), saveBook)
 
 	if f.maxSeen < 2 {
 		t.Fatalf("max concurrent batches was %d: the phase is still serial, which is "+
@@ -96,7 +96,7 @@ func TestRunAIBatchPhase_PermanentFailureAbortsRemainingBatches(t *testing.T) {
 	// itself -- only the immediate-abort path stops the run over it.
 	f := &fakeAIParser{err: errors.New("insufficient_quota: credit balance exhausted"), errNTimes: 1}
 
-	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"))
+	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"), saveBook)
 
 	if got := f.calls.Load(); got >= 40 {
 		t.Errorf("%d/40 batches ran after ONE permanent failure: a permanent failure "+
@@ -112,7 +112,7 @@ func TestRunAIBatchPhase_RepeatedFailuresAbort(t *testing.T) {
 	f := &fakeAIParser{err: errors.New("connection reset by peer")}
 
 	start := time.Now()
-	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"))
+	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"), saveBook)
 	elapsed := time.Since(start)
 
 	if got := f.calls.Load(); got >= 40 {
@@ -130,7 +130,7 @@ func TestRunAIBatchPhase_HealthyBackendCompletesEveryBatch(t *testing.T) {
 	books, cands := makeCandidates(20 * 6)
 	f := &fakeAIParser{}
 
-	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"))
+	runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"), saveBook)
 
 	if got := f.calls.Load(); got != 6 {
 		t.Errorf("expected 6 batches on a healthy backend, got %d -- the phase is "+
@@ -146,7 +146,7 @@ func TestRunAIBatchPhase_HonoursContextCancellation(t *testing.T) {
 	cancel()
 
 	done := make(chan struct{})
-	go func() { defer close(done); runAIBatchPhase(ctx, f, books, cands, logger.New("test")) }()
+	go func() { defer close(done); runAIBatchPhase(ctx, f, books, cands, logger.New("test"), saveBook) }()
 	select {
 	case <-done:
 	case <-time.After(20 * time.Second):

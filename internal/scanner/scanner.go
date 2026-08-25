@@ -1501,10 +1501,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		case err == nil:
 			// Queued. The operation saves its own results.
 		case errors.Is(err, ErrAIParseEnqueueUnavailable):
-			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog)
+			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog, saveBook)
 		default:
 			scanLog.Warn("failed to queue AI parsing (%v); parsing %d book(s) inline instead", err, len(aiCandidates))
-			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog)
+			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog, saveBook)
 		}
 	}
 
