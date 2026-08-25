@@ -1,5 +1,5 @@
 // file: internal/scanner/unknown_author_gate_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3d9a5f71-2e84-4c06-b1f3-6a05e97c2db4
 // last-edited: 2026-08-25
 
@@ -104,48 +104,55 @@ func TestRowHasRealAuthor(t *testing.T) {
 // name the empty row, the entire fix would be inert in production while every
 // other test in this file still passed.
 //
-// The duplicate is built the same way production got one: CreateAuthor is
-// check-then-create with no atomicity, so concurrent callers with the SAME name
-// each mint their own row. Measured 2026-08-25: 24 concurrent calls produced 24
-// distinct rows. That is a real defect in internal/database, filed separately;
-// here it is simply the most faithful available fixture.
+// The duplicate USED to be built by racing CreateAuthor -- it was check-then-create
+// with no atomicity, so 8 concurrent callers with the same name each minted a row.
+// That defect is now fixed (CreateAuthor serializes and re-checks under the lock),
+// so the race no longer produces a second row and this test's own precondition
+// guard correctly reported that it could no longer observe the defect.
+//
+// The fixture is now built deterministically, via UpdateAuthorName, which
+// re-points author:name: at the renamed row. That reproduces the production shape
+// exactly -- two rows sharing one name, with the index naming only one of them --
+// and it is strictly better than the race in one respect: it lets the test CHOOSE
+// which row the index names, so it can pin the worst case named above, where the
+// index points at the row that is NOT the one the books hang off.
+//
+// The duplicates remain real in production regardless of the CreateAuthor fix:
+// preventing new ones does not repair the ones already there.
 func TestPlaceholderAuthorsResolvesByNameNotByTheNameIndex(t *testing.T) {
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
 	SetStore(store)
 	t.Cleanup(func() { SetStore(nil) })
 
-	var mu sync.Mutex
-	ids := map[int]bool{}
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if a, err := store.CreateAuthor(authorname.Placeholder); err == nil && a != nil {
-				mu.Lock()
-				ids[a.ID] = true
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
+	// Row 1: the placeholder, created normally. The name index points here.
+	first, err := store.CreateAuthor(authorname.Placeholder)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	// Row 2: created under a different name, then RENAMED to the placeholder.
+	// UpdateAuthorName re-points author:name: at this row, so row 1 becomes the
+	// SHADOW -- a real placeholder row that no name lookup can ever reach. This is
+	// the production shape (ids 54845 and 54846) built deterministically.
+	second, err := store.CreateAuthor("Temporarily Not The Placeholder")
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.NotEqual(t, first.ID, second.ID, "the two fixture rows collapsed into one")
+	require.NoError(t, store.UpdateAuthorName(second.ID, authorname.Placeholder))
 
 	viaIndex, err := store.GetAuthorByName(authorname.Placeholder)
 	require.NoError(t, err)
 	require.NotNil(t, viaIndex)
 
-	// The precondition that gives this test its teeth: at least one placeholder
-	// row that the name index does NOT point at.
-	var shadow int
-	for id := range ids {
-		if id != viaIndex.ID {
-			shadow = id
-			break
-		}
-	}
-	require.NotZerof(t, shadow,
-		"only one placeholder row exists (%v), so this test cannot observe the defect", ids)
+	// The precondition that gives this test its teeth: a placeholder row the name
+	// index does NOT point at. Assert the fixture actually achieved it rather than
+	// assuming the rename won -- if UpdateAuthorName ever stopped re-pointing the
+	// index, this test would silently go back to examining a single row.
+	require.Equalf(t, second.ID, viaIndex.ID,
+		"the name index still points at row %d, so the rename did not take and there is no shadow row",
+		viaIndex.ID)
+	shadow := first.ID
+	require.NotEqual(t, shadow, viaIndex.ID, "shadow and indexed row are the same row")
 
 	oracle := newPlaceholderAuthors()
 	require.True(t, oracle.is(viaIndex.ID), "the indexed placeholder row was not recognised")
