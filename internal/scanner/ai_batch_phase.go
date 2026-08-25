@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
 // last-edited: 2026-08-24
 
@@ -49,7 +49,14 @@ type aiBatchParser interface {
 // which resolves the row fresh and touches only the AI-filled fields. Sharing
 // saveBook between them puts the queued batch's fields on a row organize has
 // already demoted. See saveAIFieldsToPrimary for the full reasoning.
-func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, candidates []int, log logger.Logger, save func(context.Context, *Book) error) {
+//
+// The returned summary is the only honest record of what happened. Every
+// failure in this phase is a log.Warn and a `return nil` -- deliberately, since
+// a dead LLM must not fail the scan -- which means the phase looks identical
+// from the outside whether it parsed every book or aborted on batch 1 of 10.
+// The queued library.ai-parse operation reports this summary into its own
+// operation record so a run that did nothing cannot show up green.
+func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, candidates []int, log logger.Logger, save func(context.Context, *Book) (string, error)) AIPhaseSummary {
 	const batchSize = 20
 	const delayBetweenBatches = 2 * time.Second
 	const maxTotalFailures = 3
@@ -66,6 +73,8 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	// failures anywhere aborts, where before 3 had to land in a row.
 	var failures atomic.Int64
 	var started atomic.Int64
+	var batchesOK, booksParsed, savesFailed atomic.Int64
+	var abortedPermanent, abortedThreshold atomic.Bool
 	aborted := make(chan struct{})
 	var abortOnce sync.Once
 	abort := func() { abortOnce.Do(func() { close(aborted) }) }
@@ -116,6 +125,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				// stop the whole phase on the first one rather than retrying
 				// it for every remaining batch.
 				if isPermanentAIFailure(aiErr) {
+					abortedPermanent.Store(true)
 					log.Warn("AI batch parsing disabled for this scan after a non-retryable error at batch %d/%d: %v — "+
 						"the remaining books keep their filename-derived metadata",
 						batchNum, totalBatches, aiErr)
@@ -124,6 +134,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				}
 
 				if failures.Add(1) >= maxTotalFailures {
+					abortedThreshold.Store(true)
 					log.Warn("AI batch parsing disabled for this scan: %d batch failures by batch %d/%d — "+
 						"the remaining books keep their filename-derived metadata",
 						failures.Load(), batchNum, totalBatches)
@@ -137,13 +148,28 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				return nil
 			}
 
-			// Each batch owns a disjoint slice of candidates, so no two
-			// workers write the same books[idx].
+			// Each batch owns a disjoint slice of candidates, so no two workers
+			// write the same books[idx].
+			//
+			// That is true of the in-memory slice and NOT of the database row.
+			// The queued path's saver redirects a demoted row to its version
+			// group's primary, so two hash-duplicate sources in one batch
+			// resolve to the same primary and two workers do a concurrent
+			// whole-row read-modify-write on it: last writer wins and the
+			// other's field is lost. Known and unfixed -- it needs row-level
+			// serialization, not a change here.
 			for i, idx := range batch {
-				if i >= len(results) || results[i] == nil {
-					continue
+				var aiMeta *ai.ParsedMetadata
+				if i < len(results) {
+					aiMeta = results[i]
 				}
-				aiMeta := results[i]
+				if aiMeta == nil {
+					// No result for this filename. Still saved below: the save
+					// is what resolves the row and reports the path to stamp,
+					// and a book the LLM could not parse must still be recorded
+					// as attempted or it is re-read and re-queued every scan.
+					aiMeta = &ai.ParsedMetadata{}
+				}
 				if books[idx].Title == "" && aiMeta.Title != "" {
 					books[idx].Title = aiMeta.Title
 				}
@@ -163,11 +189,29 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 					books[idx].Publisher = aiMeta.Publisher
 				}
 
-				if saveErr := save(ctx, &books[idx]); saveErr != nil {
+				stampPath, saveErr := save(ctx, &books[idx])
+				if saveErr != nil {
+					savesFailed.Add(1)
 					log.Warn("failed to re-save AI-enriched book %s: %v", books[idx].FilePath, saveErr)
+				}
+				booksParsed.Add(1)
+
+				// A parse has now been ATTEMPTED for this book, which is what
+				// earns the scan-cache stamp the scan deliberately withheld
+				// when it nominated the book (see the stamp site in
+				// ProcessBooksParallel).
+				//
+				// Stamped on the path the SAVER reports, which is the row's
+				// current one -- the path in this batch's params may have been
+				// renamed out from under it by organize. An empty string means
+				// the save could not resolve a row at all; leaving that
+				// unstamped is right, since nothing was recorded anywhere.
+				if stampPath != "" {
+					writeBackScanCache(stampPath, nil, log)
 				}
 			}
 
+			batchesOK.Add(1)
 			log.Info("AI batch %d-%d complete (%d results)", start, end, len(results))
 			time.Sleep(delayBetweenBatches)
 			return nil
@@ -179,4 +223,56 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	if err := aiGroup.Wait(); err != nil && ctx.Err() == nil {
 		log.Warn("AI batch parsing phase ended early: %v", err)
 	}
+
+	return AIPhaseSummary{
+		BooksNominated:   len(candidates),
+		BatchesTotal:     totalBatches,
+		BatchesOK:        int(batchesOK.Load()),
+		BatchesFailed:    int(failures.Load()),
+		BooksParsed:      int(booksParsed.Load()),
+		SavesFailed:      int(savesFailed.Load()),
+		AbortedPermanent: abortedPermanent.Load(),
+		AbortedThreshold: abortedThreshold.Load(),
+	}
+}
+
+// AIPhaseSummary is what runAIBatchPhase actually did, as opposed to what its
+// (always nil) error return suggests.
+type AIPhaseSummary struct {
+	// Disabled means the batch never ran because AI parsing is switched off.
+	// Distinct from a zero-count run, which means it ran and found nothing.
+	Disabled         bool
+	BooksNominated   int
+	BatchesTotal     int
+	BatchesOK        int
+	BatchesFailed    int
+	BooksParsed      int
+	SavesFailed      int
+	AbortedPermanent bool
+	AbortedThreshold bool
+}
+
+// Aborted reports whether the phase stopped short, leaving nominated books
+// unparsed. This -- not "did any field change" -- is what makes a queued run a
+// failure: a healthy library where every candidate was already filled in by
+// another path legitimately changes nothing, and must not be reported as an
+// error.
+func (s AIPhaseSummary) Aborted() bool { return s.AbortedPermanent || s.AbortedThreshold }
+
+// String renders the summary in the same shape as the scan's own
+// "scan summary:" line, which is the established idiom for per-run counters
+// in this package.
+func (s AIPhaseSummary) String() string {
+	if s.Disabled {
+		return fmt.Sprintf("ai parse summary: skipped %d book(s), AI parsing is not enabled", s.BooksNominated)
+	}
+	msg := fmt.Sprintf("ai parse summary: %d/%d book(s) parsed in %d/%d batches; %d batch failure(s), %d save failure(s)",
+		s.BooksParsed, s.BooksNominated, s.BatchesOK, s.BatchesTotal, s.BatchesFailed, s.SavesFailed)
+	switch {
+	case s.AbortedPermanent:
+		msg += "; ABORTED on a non-retryable backend error -- the remaining books keep their filename-derived metadata"
+	case s.AbortedThreshold:
+		msg += "; ABORTED after hitting the batch failure threshold -- the remaining books keep their filename-derived metadata"
+	}
+	return msg
 }

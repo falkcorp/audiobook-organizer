@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.67.0
+// version: 1.68.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -1107,6 +1107,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			// is a generic part number (e.g. "01 Part 1 of 67.mp3"), use folder path
 			// hierarchy combined with first-file tags for richer metadata.
 			fallbackUsed := false
+			// Set when this book is handed to the AI filename-parsing phase.
+			// It defers this book's scan-cache stamp; see the stamp site below.
+			nominatedForAI := false
 			filePath := books[idx].FilePath
 
 			// Suspicious-file guard: single files below MinBookSizeBytes skip heavy processing.
@@ -1335,6 +1338,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					}
 				}
 				if needsAI {
+					nominatedForAI = true
 					aiCandidatesMu.Lock()
 					aiCandidates = append(aiCandidates, idx)
 					aiCandidatesMu.Unlock()
@@ -1393,7 +1397,30 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					scanLog.Warn("chapter persistence failed for %s: %v", books[idx].FilePath, err)
 				}
 				// Update scan cache so next incremental scan skips this file.
-				writeBackScanCache(books[idx].FilePath, nil, scanLog)
+				//
+				// EXCEPT for books handed to the AI filename-parsing phase. The
+				// stamp means "this file is fully processed, skip it next time",
+				// and for an AI candidate that is a promise, not a fact: the
+				// parse now happens in a queued operation that can be dropped on
+				// restart, aborted by a permanent LLM failure, or stopped by the
+				// batch failure threshold. Stamping here would make the next scan
+				// skip the file at classifySkipFile -- which returns BEFORE the
+				// nomination check above -- so the book would never be
+				// re-nominated and would keep its empty fields permanently, with
+				// a healthy skip rate in the log.
+				//
+				// So the AI phase owns the stamp for its own candidates and
+				// writes it once a parse has been ATTEMPTED for the book (see
+				// runAIBatchPhase), whatever the parse returned. Attempted, not
+				// succeeded: a filename the LLM legitimately cannot parse must
+				// still stop being re-read, or it churns every scan forever.
+				// Anything that stops the phase short leaves the stamp unwritten,
+				// the next scan re-reads the file, and the nomination gate --
+				// which clears itself once the DB row has a title and an author
+				// -- decides whether to queue it again.
+				if !nominatedForAI {
+					writeBackScanCache(books[idx].FilePath, nil, scanLog)
+				}
 			}
 		}(i)
 	}
@@ -1478,12 +1505,16 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			reRead.cacheMiss, reRead.changed, reRead.dirty, reRead.statErr, reRead.cacheOff)
 	}
 
-	if ctxErr != nil {
-		return ctxErr
-	}
-
 	// Hand the AI candidates to the background queue if one is wired, and only
 	// parse them inline when it is not.
+	//
+	// Deliberately ABOVE the ctxErr return below. Enqueuing is a short database
+	// write on a detached context, so it is safe on a cancelled scan -- and a
+	// cancelled scan is exactly when this matters: ctxErr is set whenever
+	// cancellation lands while the dispatch loop is still running, which is the
+	// common shape, and returning first would silently drop every candidate the
+	// scan had nominated so far. It stays below wg.Wait(), because it reads
+	// books and aiCandidates, which the workers write.
 	//
 	// Inline is the fallback, not the preference: this phase is a sequence of LLM
 	// round trips with a 2s delay between batches, and it runs while the scan
@@ -1496,16 +1527,28 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// skipping the AI phase would leave books permanently unparsed with nothing
 	// in the log tying it to the queue.
 	if aiEnabled && len(aiCandidates) > 0 {
-		err := enqueueAIParse(ctx, books, aiCandidates, scanLog)
+		queued, err := enqueueAIParse(ctx, books, aiCandidates, scanLog)
 		switch {
 		case err == nil:
-			// Queued. The operation saves its own results.
+			// Queued. The operation saves its own results and stamps the scan
+			// cache for each book it attempts.
 		case errors.Is(err, ErrAIParseEnqueueUnavailable):
-			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog, saveBook)
+			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog, saveBookAndReportPath)
 		default:
-			scanLog.Warn("failed to queue AI parsing (%v); parsing %d book(s) inline instead", err, len(aiCandidates))
-			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog, saveBook)
+			// Only the candidates that were NOT accepted. The chunks already
+			// queued cannot be recalled, and parsing them inline as well would
+			// pay for every one of those books twice at the LLM.
+			remaining := aiCandidates[min(queued, len(aiCandidates)):]
+			scanLog.Warn("failed to queue AI parsing after %d of %d candidate(s) (%v); parsing the remaining %d inline",
+				queued, len(aiCandidates), err, len(remaining))
+			if len(remaining) > 0 {
+				runAIBatchPhase(ctx, aiParser, books, remaining, scanLog, saveBookAndReportPath)
+			}
 		}
+	}
+
+	if ctxErr != nil {
+		return ctxErr
 	}
 
 	// After processing all books, try to match series using external APIs for uncertain cases

@@ -1,5 +1,5 @@
 // file: internal/server/library_ai_parse_op_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 32147e60-f02b-47a1-8b05-cf56ca320f50
 // last-edited: 2026-08-24
 
@@ -33,8 +33,8 @@ func aiParseTestReg(t *testing.T) *opsregistry.Registry {
 // global this registration writes.
 func restoreEnqueueHook(t *testing.T) {
 	t.Helper()
-	prev := scanner.EnqueueAIParseFn
-	t.Cleanup(func() { scanner.EnqueueAIParseFn = prev })
+	prev := scanner.SetEnqueueAIParse(nil)
+	t.Cleanup(func() { scanner.SetEnqueueAIParse(prev) })
 }
 
 // TestLibraryAIParseOpWiresTheScannerHookForTheServersOwnRegistry is the other
@@ -46,24 +46,22 @@ func restoreEnqueueHook(t *testing.T) {
 // to blocking on the LLM -- which no existing test observes.
 func TestLibraryAIParseOpWiresTheScannerHookForTheServersOwnRegistry(t *testing.T) {
 	restoreEnqueueHook(t)
-	scanner.EnqueueAIParseFn = nil
 
 	reg := aiParseTestReg(t)
 	s := &Server{opRegistry: reg}
 	require.NoError(t, s.RegisterLibraryAIParseOp(reg))
 
-	require.NotNil(t, scanner.EnqueueAIParseFn,
+	require.True(t, scanner.EnqueueAIParseWired(),
 		"the scan has no way to queue AI parsing and will block on the LLM inline")
 }
 
 func TestLibraryAIParseOpSkipsWiringForAForeignRegistry(t *testing.T) {
 	restoreEnqueueHook(t)
-	scanner.EnqueueAIParseFn = nil
 
 	// A zero-value Server, as the params-decode contract table uses.
 	require.NoError(t, (&Server{}).RegisterLibraryAIParseOp(aiParseTestReg(t)))
 
-	require.Nil(t, scanner.EnqueueAIParseFn,
+	require.False(t, scanner.EnqueueAIParseWired(),
 		"registering against a throwaway registry left the live hook pointing at it")
 }
 
@@ -113,6 +111,7 @@ type aiParseStubReporter struct {
 	opsregistry.Reporter
 	mu       sync.Mutex
 	messages []string
+	logs     []string
 }
 
 func (r *aiParseStubReporter) UpdateProgress(_, _ int, message string) error {
@@ -120,6 +119,23 @@ func (r *aiParseStubReporter) UpdateProgress(_, _ int, message string) error {
 	defer r.mu.Unlock()
 	r.messages = append(r.messages, message)
 	return nil
+}
+
+// Log records what the op writes into the OPERATION record, as opposed to the
+// process log. The distinction is the whole point of the summary reporting: the
+// AI phase's own failures are log.Warn + nil return, so without reporter.Log an
+// aborted run finishes green with the evidence only in journalctl.
+func (r *aiParseStubReporter) Log(_ slog.Level, message string, _ ...slog.Attr) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, message)
+	return nil
+}
+
+func (r *aiParseStubReporter) logged() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.logs...)
 }
 
 func (r *aiParseStubReporter) seen() []string {
@@ -162,7 +178,7 @@ func TestLibraryAIParseOpReportsPerBatchProgressToTheReporter(t *testing.T) {
 
 	rep := &aiParseStubReporter{}
 	require.NoError(t, def.Run(context.Background(),
-		[]byte(`{"books":[{"FilePath":"/lib/a.m4b"}]}`), rep))
+		[]byte(`{"books":[{"id":"bk1","file_path":"/lib/a.m4b"}]}`), rep))
 
 	var sawBatch bool
 	for _, m := range rep.seen() {
@@ -172,4 +188,27 @@ func TestLibraryAIParseOpReportsPerBatchProgressToTheReporter(t *testing.T) {
 	}
 	require.True(t, sawBatch,
 		"per-batch progress never reached the reporter; the watchdog will cancel long batches. seen=%v", rep.seen())
+
+	// The same run must leave a truthful summary in the OPERATION record.
+	//
+	// The backend is a closed port, so every batch failed. Before this, the op
+	// finished by stamping "Parsed 1 filename(s)" regardless -- because every
+	// failure inside the AI phase is a log.Warn and a nil return, and
+	// LoggerFromReporter only forwards UpdateProgress, so the warnings went to
+	// the process log. A wedged LLM produced a green operation claiming it had
+	// parsed everything.
+	var sawSummary bool
+	for _, m := range rep.logged() {
+		if strings.Contains(m, "ai parse summary:") && strings.Contains(m, "batch failure") {
+			sawSummary = true
+		}
+	}
+	require.True(t, sawSummary,
+		"the operation record has no summary of what actually happened; a failed run is indistinguishable from a clean one. logged=%v", rep.logged())
+
+	// And nothing may claim a parse that did not happen.
+	for _, m := range rep.seen() {
+		require.NotContains(t, m, "Parsed 1 filename(s)",
+			"the op reported a fabricated success count after every batch failed")
+	}
 }

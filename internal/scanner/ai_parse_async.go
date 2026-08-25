@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
 // last-edited: 2026-08-24
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -32,7 +33,68 @@ import (
 // (that would be an import cycle), so internal/server sets this at startup. When
 // it is nil -- unit tests, the CLI scanner, any embedder that never wires it --
 // the scan keeps the old inline behaviour and nothing changes.
-var EnqueueAIParseFn func(ctx context.Context, books []Book) error
+//
+// Guarded by enqueueAIParseMu rather than being a bare global: it is written at
+// server construction and read from every scan worker goroutine. The package
+// already has this exact pattern for the store (pkgStoreMu / SetStore) for the
+// same reason.
+var (
+	enqueueAIParseMu sync.RWMutex
+	enqueueAIParseFn func(ctx context.Context, books []AIParseCandidate) error
+)
+
+// SetEnqueueAIParse wires (or with nil, unwires) the queue hook. It returns the
+// previous value so a caller that installs a hook can restore it -- the test
+// binary constructs many servers, and without a restore the last one to run
+// leaves a torn-down registry wired for everything after it.
+func SetEnqueueAIParse(fn func(ctx context.Context, books []AIParseCandidate) error) func(ctx context.Context, books []AIParseCandidate) error {
+	enqueueAIParseMu.Lock()
+	defer enqueueAIParseMu.Unlock()
+	prev := enqueueAIParseFn
+	enqueueAIParseFn = fn
+	return prev
+}
+
+// EnqueueAIParseWired reports whether a queue is wired. Exported so the server
+// package can assert its own registration actually took effect: an unwired hook
+// is not an error anywhere, it just silently reverts scans to blocking on the
+// LLM inline.
+func EnqueueAIParseWired() bool {
+	return getEnqueueAIParse() != nil
+}
+
+func getEnqueueAIParse() func(ctx context.Context, books []AIParseCandidate) error {
+	enqueueAIParseMu.RLock()
+	defer enqueueAIParseMu.RUnlock()
+	return enqueueAIParseFn
+}
+
+// AIParseCandidate is one book as it rides in the operation's params.
+//
+// It carries the database row ID, and that is the whole point. The first cut of
+// this keyed on FilePath, which does not survive the gap between enqueue and
+// run: OrganizeOneBook sends every book under RootDir -- i.e. every book in a
+// normal library scan -- through ReOrganizeInPlace, which is a true
+// safeRename. By the time the queued batch ran, the path in its params named
+// nothing, GetBookByFilePath returned no row, and the parse was discarded with
+// no error and no log line. An ID survives both the rename and the
+// copy-and-demote that CreateOrganizedVersion does.
+//
+// The field set is measured, not assumed: ai_batch_phase.go reads FilePath,
+// Title, Author, Series, Position, Narrator and Publisher, and the saver writes
+// the same seven. A full Book would drag SegmentFiles and SegmentHashes into
+// the params row -- megabytes of paths and hashes per batch that nothing on
+// this path reads.
+type AIParseCandidate struct {
+	ID        string  `json:"id"`
+	FilePath  string  `json:"file_path"`
+	Title     string  `json:"title,omitzero"`
+	Author    string  `json:"author,omitzero"`
+	Series    string  `json:"series,omitzero"`
+	Position  int     `json:"position,omitzero"`
+	Narrator  string  `json:"narrator,omitzero"`
+	Publisher string  `json:"publisher,omitzero"`
+}
 
 // ErrAIParseEnqueueUnavailable is returned by enqueueAIParse when no queue has
 // been wired. It is a signal to run inline, not a failure.
@@ -51,41 +113,74 @@ const aiParseEnqueueChunk = 200
 
 // enqueueAIParse hands the AI candidates to the queue in chunks.
 //
-// It copies the candidate books out of the caller's slice rather than passing
-// indices, because by the time the operation runs the scan that produced `books`
-// is long finished and its slice is gone. The copy is what gets serialized into
-// the operation's params.
-func enqueueAIParse(ctx context.Context, books []Book, candidates []int, scanLog logger.Logger) error {
-	enqueue := EnqueueAIParseFn
+// It resolves each candidate to its database row ID here, while the scan's paths
+// are still live -- this runs inside ProcessBooksParallel, and AutoOrganizeFn
+// (which renames files) does not run until after it returns. A candidate with no
+// row is DROPPED rather than queued with an empty ID: saveBookToDatabase returns
+// early without creating a row for a file that duplicates an already
+// version-linked book, and there is nothing for the batch to write to.
+//
+// It returns the number of LEADING candidates it successfully queued. A
+// candidate list longer than one chunk becomes several operations, and an
+// enqueue failure part-way through leaves the earlier chunks queued -- they are
+// already accepted work and cannot be recalled. Returning the boundary lets the
+// caller fall back to inline parsing for the remainder ONLY, instead of
+// re-parsing books that are already sitting in the queue and paying for every
+// one of them twice at the LLM.
+func enqueueAIParse(ctx context.Context, books []Book, candidates []int, scanLog logger.Logger) (int, error) {
+	enqueue := getEnqueueAIParse()
 	if enqueue == nil {
-		return ErrAIParseEnqueueUnavailable
+		return 0, ErrAIParseEnqueueUnavailable
+	}
+	store := getStore()
+	if store == nil {
+		return 0, ErrAIParseEnqueueUnavailable
 	}
 
-	batch := make([]Book, 0, aiParseEnqueueChunk)
+	queued := 0
+	noRow := 0
+	batch := make([]AIParseCandidate, 0, aiParseEnqueueChunk)
+	// pending counts candidate-list positions consumed into the current batch,
+	// including any dropped below, so `queued` stays an index into `candidates`
+	// rather than a count of books.
+	pending := 0
 	flush := func() error {
-		if len(batch) == 0 {
-			return nil
+		if len(batch) > 0 {
+			if err := enqueue(ctx, batch); err != nil {
+				return err
+			}
+			scanLog.Info("queued %d book(s) for background AI filename parsing", len(batch))
+			batch = make([]AIParseCandidate, 0, aiParseEnqueueChunk)
 		}
-		if err := enqueue(ctx, batch); err != nil {
-			return err
-		}
-		scanLog.Info("queued %d book(s) for background AI filename parsing", len(batch))
-		batch = make([]Book, 0, aiParseEnqueueChunk)
+		queued += pending
+		pending = 0
 		return nil
 	}
 
 	for _, idx := range candidates {
+		pending++
 		if idx < 0 || idx >= len(books) {
 			continue
 		}
-		batch = append(batch, aiParseCandidate(books[idx]))
+		row, err := store.GetBookByFilePath(books[idx].FilePath)
+		if err != nil || row == nil {
+			noRow++
+			continue
+		}
+		batch = append(batch, aiParseCandidate(row.ID, books[idx]))
 		if len(batch) >= aiParseEnqueueChunk {
 			if err := flush(); err != nil {
-				return err
+				return queued, err
 			}
 		}
 	}
-	return flush()
+	if err := flush(); err != nil {
+		return queued, err
+	}
+	if noRow > 0 {
+		scanLog.Warn("AI parse: %d of %d candidate(s) had no database row and were not queued", noRow, len(candidates))
+	}
+	return queued, nil
 }
 
 // aiParseCandidate strips a Book down to what the AI phase actually reads and
@@ -98,8 +193,9 @@ func enqueueAIParse(ctx context.Context, books []Book, candidates []int, scanLog
 // multiple megabytes of paths and hashes into a single op row -- none of which
 // any code on this path reads. Carrying them would also make the params blob a
 // second, stale copy of data the scan already wrote.
-func aiParseCandidate(b Book) Book {
-	return Book{
+func aiParseCandidate(id string, b Book) AIParseCandidate {
+	return AIParseCandidate{
+		ID:        id,
 		FilePath:  b.FilePath,
 		Title:     b.Title,
 		Author:    b.Author,
@@ -107,6 +203,19 @@ func aiParseCandidate(b Book) Book {
 		Position:  b.Position,
 		Narrator:  b.Narrator,
 		Publisher: b.Publisher,
+	}
+}
+
+// book renders the candidate as the Book the AI phase mutates in place.
+func (c AIParseCandidate) book() Book {
+	return Book{
+		FilePath:  c.FilePath,
+		Title:     c.Title,
+		Author:    c.Author,
+		Series:    c.Series,
+		Position:  c.Position,
+		Narrator:  c.Narrator,
+		Publisher: c.Publisher,
 	}
 }
 
@@ -119,21 +228,33 @@ func aiParseCandidate(b Book) Book {
 //
 // Returns nil when AI parsing is disabled: a queued batch that arrives after the
 // operator turned AI off is not an error, it is work that no longer needs doing.
-func RunAIParseForBooks(ctx context.Context, books []Book, scanLog logger.Logger) error {
-	if len(books) == 0 {
-		return nil
+func RunAIParseForBooks(ctx context.Context, cands []AIParseCandidate, scanLog logger.Logger) (AIPhaseSummary, error) {
+	if len(cands) == 0 {
+		return AIPhaseSummary{}, nil
 	}
 	parser, enabled := newAIParser(scanLog)
 	if !enabled {
-		scanLog.Info("AI parse batch of %d book(s) skipped: AI parsing is not enabled", len(books))
-		return nil
+		scanLog.Info("AI parse batch of %d book(s) skipped: AI parsing is not enabled", len(cands))
+		return AIPhaseSummary{BooksNominated: len(cands), Disabled: true}, nil
 	}
-	candidates := make([]int, len(books))
-	for i := range books {
+
+	// The AI phase mutates Book values in place, so build the slice once and
+	// key the row IDs off the element ADDRESSES. Keying off FilePath would
+	// reintroduce, one layer down, exactly the path-identity assumption that
+	// carrying an ID exists to remove.
+	books := make([]Book, len(cands))
+	idByBook := make(map[*Book]string, len(cands))
+	candidates := make([]int, len(cands))
+	for i := range cands {
+		books[i] = cands[i].book()
+		idByBook[&books[i]] = cands[i].ID
 		candidates[i] = i
 	}
-	runAIBatchPhase(ctx, parser, books, candidates, scanLog, saveAIFieldsToPrimary)
-	return nil
+
+	save := func(ctx context.Context, b *Book) (string, error) {
+		return saveAIFieldsToPrimary(ctx, idByBook[b], b)
+	}
+	return runAIBatchPhase(ctx, parser, books, candidates, scanLog, save), nil
 }
 
 // saveAIFieldsToPrimary writes what the AI filled in, and nothing else.
@@ -167,15 +288,28 @@ func RunAIParseForBooks(ctx context.Context, books []Book, scanLog logger.Logger
 //
 // So this resolves the row fresh, follows the version group to its primary, and
 // UpdateBooks only the fields that are still empty there.
-func saveAIFieldsToPrimary(_ context.Context, book *Book) error {
+func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, error) {
 	store := getStore()
 	if store == nil {
-		return errors.New("no store configured")
+		return "", errors.New("no store configured")
 	}
 
-	row, err := store.GetBookByFilePath(book.FilePath)
-	if err != nil {
-		return fmt.Errorf("look up %s: %w", book.FilePath, err)
+	var row *database.Book
+	var err error
+	if id != "" {
+		row, err = store.GetBookByID(id)
+		if err != nil {
+			return "", fmt.Errorf("look up book %s: %w", id, err)
+		}
+	}
+	if row == nil {
+		// No ID (an inline caller) or the row was deleted under it. Fall back to
+		// the path, which still works for the inline phase and for anything the
+		// organizer has not touched.
+		row, err = store.GetBookByFilePath(book.FilePath)
+		if err != nil {
+			return "", fmt.Errorf("look up %s: %w", book.FilePath, err)
+		}
 	}
 	if row == nil {
 		// The scan normalizes a multi-file book's row to its parent directory,
@@ -184,17 +318,28 @@ func saveAIFieldsToPrimary(_ context.Context, book *Book) error {
 		if recovered := recoverNormalizedBookPath(book.FilePath); recovered != "" {
 			row, err = store.GetBookByFilePath(recovered)
 			if err != nil {
-				return fmt.Errorf("look up recovered path %s: %w", recovered, err)
+				return "", fmt.Errorf("look up recovered path %s: %w", recovered, err)
 			}
 		}
 	}
 	if row == nil {
-		// Not an error: the row can legitimately be gone by the time the batch
-		// runs (deleted, merged by dedup). Nothing to write.
-		return nil
+		// The row can legitimately be gone by the time the batch runs (deleted,
+		// merged by dedup), so this is not an error -- but it is not nothing
+		// either. Logged because the previous version returned a bare nil here,
+		// which made a systematic resolution failure across every book in every
+		// batch look exactly like a library where nothing needed writing.
+		aiParseLog.Warn("AI parse: no row for %s (id %q); parse discarded", book.FilePath, id)
+		return "", nil
 	}
 
-	if target := primaryVersionOf(store, row); target != nil {
+	target, verr := primaryVersionOf(store, row)
+	if verr != nil {
+		// Deliberately not fatal: writing to the row we have is better than
+		// dropping the parse. Logged so a systematic failure is visible as
+		// something other than metadata quietly landing on demoted rows.
+		aiParseLog.Warn("AI parse: could not resolve the primary version for %s (%v); writing to the row as found, which may be a demoted organized_source", book.FilePath, verr)
+	}
+	if target != nil {
 		row = target
 	}
 
@@ -206,7 +351,7 @@ func saveAIFieldsToPrimary(_ context.Context, book *Book) error {
 	if (row.AuthorID == nil || *row.AuthorID == 0) && book.Author != "" {
 		authorID, aerr := resolveAuthorID(book.Author)
 		if aerr != nil {
-			return fmt.Errorf("resolve author %q: %w", book.Author, aerr)
+			return "", fmt.Errorf("resolve author %q: %w", book.Author, aerr)
 		}
 		if authorID != nil {
 			row.AuthorID = authorID
@@ -216,7 +361,7 @@ func saveAIFieldsToPrimary(_ context.Context, book *Book) error {
 	if row.SeriesID == nil && book.Series != "" {
 		seriesID, serr := resolveSeriesID(book.Series, row.AuthorID)
 		if serr != nil {
-			return fmt.Errorf("resolve series %q: %w", book.Series, serr)
+			return "", fmt.Errorf("resolve series %q: %w", book.Series, serr)
 		}
 		if seriesID != nil {
 			row.SeriesID = seriesID
@@ -238,12 +383,22 @@ func saveAIFieldsToPrimary(_ context.Context, book *Book) error {
 		changed = true
 	}
 
+	// The row's CURRENT path is what gets stamped into the scan cache, not the
+	// one the params carried -- organize may have renamed the file since. An
+	// unchanged row still returns its path: a book the LLM had nothing to say
+	// about has still been ATTEMPTED, and must stop being re-read.
 	if !changed {
-		return nil
+		return row.FilePath, nil
 	}
-	_, uerr := store.UpdateBook(row.ID, row)
-	return uerr
+	if _, uerr := store.UpdateBook(row.ID, row); uerr != nil {
+		return "", uerr
+	}
+	return row.FilePath, nil
 }
+
+// aiParseLog is the logger for the queued path's own diagnostics -- the ones
+// that must be visible even when no scan is running.
+var aiParseLog = logger.New("ai_parse")
 
 // isBlankPtr treats a nil pointer and a pointer to "" as equally empty. Both
 // occur: the extractor writes a pointer to the empty string when a tag is
@@ -253,28 +408,37 @@ func isBlankPtr(s *string) bool {
 }
 
 // primaryVersionOf returns the primary member of row's version group, or nil
-// when row is already primary, is in no group, or the group cannot be read.
+// when row is already primary or is in no group.
 //
-// Fails OPEN -- a group it cannot resolve leaves the caller writing to the row
-// it already has, which is the pre-existing behaviour rather than a dropped
-// update.
-func primaryVersionOf(store scanBookLookup, row *database.Book) *database.Book {
+// A group it cannot read is returned as an ERROR, not as a silent nil. Failing
+// open is still the right call -- skipping the write loses the update too -- but
+// it must not be silent: `row` in that case is the demoted organized_source row,
+// so a failure here writes the AI fields somewhere the UI never shows them, and
+// that is precisely the bug this function exists to prevent. A transient store
+// read error would otherwise reinstate it with a successful UpdateBook and
+// nothing anywhere saying so.
+func primaryVersionOf(store scanBookLookup, row *database.Book) (*database.Book, error) {
 	if row.VersionGroupID == nil || *row.VersionGroupID == "" {
-		return nil
+		return nil, nil
 	}
 	if row.IsPrimaryVersion != nil && *row.IsPrimaryVersion {
-		return nil
+		return nil, nil
 	}
 	members, err := store.GetBooksByVersionGroup(*row.VersionGroupID)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read version group %s: %w", *row.VersionGroupID, err)
 	}
 	for i := range members {
 		if members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
-			return &members[i]
+			return &members[i], nil
 		}
 	}
-	return nil
+	// A group with no primary member. CreateOrganizedVersion always sets the
+	// flag explicitly, so this is a group formed by some other path -- and a nil
+	// IsPrimaryVersion serializes as ABSENT, not false, so "no member is
+	// primary" and "no member says" are the same shape here. Fall through to
+	// the caller's own row rather than guessing which member wins.
+	return nil, nil
 }
 
 // newAIParser builds the AI fallback parser from the configured LLM backend.
@@ -329,4 +493,14 @@ func newAIParser(scanLog logger.Logger) (*ai.OpenAIParser, bool) {
 		scanLog.Warn("failed to initialize OpenAI parser, AI fallback disabled")
 	}
 	return nil, false
+}
+
+// saveBookAndReportPath adapts the inline scan's saveBook to the phase's saver
+// signature. The inline path runs before AutoOrganizeFn, so the book's own
+// FilePath is still the row's path and is the right thing to stamp.
+func saveBookAndReportPath(ctx context.Context, book *Book) (string, error) {
+	if err := saveBook(ctx, book); err != nil {
+		return "", err
+	}
+	return book.FilePath, nil
 }
