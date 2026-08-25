@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-18
+// last-edited: 2026-08-24
 
 package organizer
 
@@ -41,6 +41,10 @@ type OrganizerBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	MarkNeedsRescan(bookID string) error
+	// DeleteBook is here only to roll back a half-built organized copy. It is
+	// NOT a general delete path for this package -- CreateOrganizedVersion is
+	// the sole caller, and only on a failure it has already logged.
+	DeleteBook(id string) error
 }
 
 // OrganizerBookFileStore is the per-file half: the organizer repoints file rows
@@ -49,6 +53,9 @@ type OrganizerBookFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	CreateBookFile(file *database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
+	// BatchCreateBookFiles writes a book's copied file rows atomically, so a
+	// partial failure cannot leave the organized copy owning some of its audio.
+	BatchCreateBookFiles(files []*database.BookFile) error
 }
 
 // OrganizerContributorStore reads the author/narrator/tag associations that the
@@ -1338,6 +1345,55 @@ func resolveOrganizedFilePath(srcPath string, planned map[string]string, log log
 }
 
 // CreateOrganizedVersion creates a new book record for the organized copy and links it to the original.
+// rollbackOrganizedVersion undoes a partially-built organized copy after the
+// per-file copy failed, so the caller can return an error instead of falling
+// through to the version-group handover that demotes the original.
+//
+// Order matters: the author links and the book row go first, then the files on
+// disk. If the process dies midway, a row with no file is recoverable (a rescan
+// re-reads it); a file with no row is invisible to the library and is what the
+// next organize would collide with.
+//
+// WHAT THIS DOES NOT CLEAN, deliberately:
+//   - The book_file rows. There are none — BatchCreateBookFiles is atomic, so a
+//     failed copy wrote zero rows. A CreateBookFile loop here would have needed
+//     per-row cleanup AND an iTunes PID restore; that is why the loop was replaced.
+//   - The BookPathChange row RecordPathChange wrote for this book ID. Path
+//     changes are read per book, so a deleted book's changes are unreachable
+//     rather than wrong, and no interface method exposes deleting one. It is an
+//     orphan audit row, and it is the reason this is called a rollback and not a
+//     transaction.
+//
+// DeleteBook does NOT delete book_file or book_authors rows (pebble_store.go:2811
+// tears down seven index families and neither of those), which is why the author
+// links are cleared explicitly rather than left to it.
+func (orgSvc *Service) rollbackOrganizedVersion(newBookID, newPath string, isDir bool, log logger.Logger) {
+	if newBookID != "" {
+		// SetBookAuthors with no authors clears the links this function copied.
+		if err := orgSvc.db.SetBookAuthors(newBookID, nil); err != nil {
+			log.Warn("organize: rollback could not clear author links for %s: %v", newBookID, err)
+		}
+		if err := orgSvc.db.DeleteBook(newBookID); err != nil {
+			log.Warn("organize: rollback could not delete the organized book row %s: %v — a book with no files is now in the library", newBookID, err)
+		}
+	}
+
+	// Same containment guard as the CreateBook-failure path above: only ever
+	// remove something we are certain organize just wrote under the library root.
+	// Organize COPIES (organizer.go:287 returns mode "copy") and the original
+	// survives as the source row, so removing the copy destroys no audio.
+	if newPath == "" || config.AppConfig.RootDir == "" || !strings.HasPrefix(newPath, config.AppConfig.RootDir) {
+		return
+	}
+	if isDir {
+		if err := os.RemoveAll(newPath); err != nil {
+			log.Warn("organize: rollback could not remove the organized directory %s: %v", newPath, err)
+		}
+	} else if err := os.Remove(newPath); err != nil {
+		log.Warn("organize: rollback could not remove the organized file %s: %v", newPath, err)
+	}
+}
+
 func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Book, newPath string, isDir bool, operationID string, log logger.Logger) (*database.Book, error) {
 	newBookID := ulid.Make().String()
 	isPrimary := true
@@ -1500,13 +1556,33 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 	// while OrganizeBookDirectory also kept filepath.Base; now that the file
 	// naming pattern decides the destination filename, guessing here would write
 	// every organized book_file row a path with no file at it.
-	if bookFiles, err := orgSvc.db.GetBookFiles(book.ID); err == nil && len(bookFiles) > 0 {
+	// Both halves of this are load-bearing, and until 2026-08-24 neither was.
+	//
+	// The read error was discarded by an `err == nil` guard and the write error
+	// by `_ =`, and BOTH fell through to the version-group handover below, which
+	// demotes the ORIGINAL to organized_source and non-primary. So a failure here
+	// produced a version group whose PRIMARY row owned no audio while the row that
+	// still had the files was marked as the superseded source. Nothing logged, and
+	// the function returned success.
+	//
+	// A zero-length result is NOT a failure: books with no book_file rows are
+	// normal here (that is what ensureSingleFileBookFile backfills). Only a read
+	// error and a write error abort.
+	bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID)
+	if bfErr != nil {
+		log.Error("organize: cannot read book files for %s (%s): %v — rolling back the organized copy", book.Title, book.ID, bfErr)
+		orgSvc.rollbackOrganizedVersion(newBookID, newPath, isDir, log)
+		return nil, fmt.Errorf("read book files for %s: %w", book.ID, bfErr)
+	}
+	if len(bookFiles) > 0 {
 		var planned map[string]string
 		if isDir {
-			if planned, err = org.PlanFilePaths(book, bookFiles); err != nil {
-				log.Warn("organize: cannot plan organized file paths for %s (%s): %v — per-file rows will keep their source paths", book.Title, book.ID, err)
+			var planErr error
+			if planned, planErr = org.PlanFilePaths(book, bookFiles); planErr != nil {
+				log.Warn("organize: cannot plan organized file paths for %s (%s): %v — per-file rows will keep their source paths", book.Title, book.ID, planErr)
 			}
 		}
+		newFiles := make([]*database.BookFile, 0, len(bookFiles))
 		for _, bf := range bookFiles {
 			newBF := bf
 			newBF.ID = ulid.Make().String()
@@ -1519,7 +1595,21 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 			if newBF.FilePath != "" {
 				newBF.ITunesPath = orgSvc.ComputeITunesPath(newBF.FilePath)
 			}
-			_ = orgSvc.db.CreateBookFile(&newBF)
+			newFiles = append(newFiles, &newBF)
+		}
+		// BatchCreateBookFiles rather than a CreateBookFile loop, for two reasons
+		// beyond the single aggregate recompute it was written for. It returns an
+		// error instead of offering one to discard; and its write is ATOMIC, which
+		// is what makes this rollback simple. `newBF := bf` copies
+		// ITunesPersistentID wholesale, so every row here stages a PID transfer off
+		// the original's file row -- with a per-row loop, a failure at row K would
+		// leave rows 1..K-1 having already moved their PID to a row this rollback
+		// then deletes, stranding the PID exactly as #2872 fixed. Atomic means a
+		// failure transfers no PID at all, so there is nothing to restore.
+		if err := orgSvc.db.BatchCreateBookFiles(newFiles); err != nil {
+			log.Error("organize: failed to copy %d book file row(s) to the organized copy of %s (%s): %v — rolling back", len(newFiles), book.Title, book.ID, err)
+			orgSvc.rollbackOrganizedVersion(newBookID, newPath, isDir, log)
+			return nil, fmt.Errorf("copy book files for %s: %w", book.ID, err)
 		}
 	}
 
