@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.43.0
+// version: 2.44.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-08-20
 
@@ -54,6 +54,8 @@ import (
 	// the plugins register themselves with the serviceregistry. The
 	// container's PostInit calls Plugin.Register(opRegistry) for each.
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/oklog/ulid/v2"
+
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
@@ -918,70 +920,7 @@ func NewServer(store database.Store) *Server {
 	server.scanService.PostScanFn = server.quarantineSvc.AutoQuarantineFailedScans
 
 	// Wire post-folder auto-organize hook (breaks scanner→organizer import cycle).
-	server.scanService.AutoOrganizeFn = func(ctx context.Context, books []scanner.Book, l logger.Logger) {
-		if len(books) == 0 {
-			return
-		}
-		if !config.AppConfig.AutoOrganize || config.AppConfig.RootDir == "" {
-			if config.AppConfig.AutoOrganize {
-				l.Warn("Auto-organize enabled but root_dir not set")
-			}
-			return
-		}
-		org := organizer.NewOrganizer(&config.AppConfig)
-		org.SetStore(server.storeForWiring())
-		organized := 0
-		// Counted, not just skipped. "Auto-organize complete: 0 organized" told
-		// an operator nothing about WHY zero — on 2026-08-11 it hid 588
-		// multi-file routing failures and 3,194 occupied-target collisions.
-		var failed, lookupErrors, notInDB int
-		for i := range books {
-			if l.IsCanceled() {
-				break
-			}
-			dbBook, err := server.store.GetBookByFilePath(books[i].FilePath)
-			if err != nil {
-				// A lookup ERROR and a book that genuinely is not in the DB are
-				// different things, and collapsing them into one bare `continue`
-				// hid both. Count and log them separately.
-				lookupErrors++
-				if lookupErrors <= 10 {
-					l.Warn("Auto-organize: DB lookup failed for %s: %v", books[i].FilePath, err)
-				}
-				continue
-			}
-			if dbBook == nil {
-				notInDB++
-				continue
-			}
-			// OrganizeOneBook, not Organizer.OrganizeBook: the latter is the
-			// SINGLE-FILE path and returns an error for any book whose
-			// file_path is a directory. This hook called it unconditionally, so
-			// every multi-file book failed here — 588 of them in one production
-			// run on 2026-08-11.
-			newPath, err := server.organizeService.OrganizeOneBook(org, dbBook, l)
-			if err != nil {
-				l.Warn("Organize failed for %s: %v", dbBook.Title, err)
-				failed++
-				continue
-			}
-			if newPath != dbBook.FilePath {
-				oldPath := dbBook.FilePath
-				dbBook.FilePath = newPath
-				scanner.ApplyOrganizedFileMetadata(dbBook, newPath)
-				if _, err := server.store.UpdateBook(dbBook.ID, dbBook); err != nil {
-					l.Error("Failed to update path for %s: %v — rolling back", dbBook.Title, err)
-					if rbErr := os.Rename(newPath, oldPath); rbErr != nil {
-						l.Error("CRITICAL: rollback failed for %s: file at %s, DB expects %s", dbBook.ID, newPath, oldPath)
-					}
-				} else {
-					organized++
-				}
-			}
-		}
-		l.Info("Auto-organize complete: %d organized, %d failed, %d not in DB, %d lookup errors (of %d scanned)",
-			organized, failed, notInDB, lookupErrors, len(books))
-	}
+	server.scanService.AutoOrganizeFn = server.autoOrganizeScannedBooks
 
 	// Note: the search index is opened in Start(), not here, so
 	// tests that construct a Server without calling Start don't
@@ -1195,4 +1134,146 @@ func (s *Server) markDuplicatesFlaggedDirty(reason string) {
 	if qd, ok := database.AsCapability[quickQueryDirtier](s.Ops()); ok {
 		qd.MarkQuickQueryDirty("duplicates_flagged", reason)
 	}
+}
+
+// autoOrganizeScannedBooks is the post-scan auto-organize hook, wired to
+// scanService.AutoOrganizeFn. It is a named method rather than an inline
+// closure so it can be tested: as a closure it was unreachable from any test,
+// which is how it ran its own incorrect copy of the organize database logic for
+// as long as it did.
+func (server *Server) autoOrganizeScannedBooks(ctx context.Context, books []scanner.Book, l logger.Logger) {
+	if len(books) == 0 {
+		return
+	}
+	if !config.AppConfig.AutoOrganize || config.AppConfig.RootDir == "" {
+		if config.AppConfig.AutoOrganize {
+			l.Warn("Auto-organize enabled but root_dir not set")
+		}
+		return
+	}
+	// Resolve the scanned books to IDs and hand them to the REAL organize
+	// pipeline. This hook used to run its own: OrganizeOneBook (which does
+	// the file operation and NO database work at all) followed by a
+	// hand-written FilePath update.
+	//
+	// That hand-written half was wrong in three ways, and PerformOrganize
+	// has been getting all three right the whole time:
+	//
+	//   - It never created the organized VERSION row. organizeBooks routes
+	//     an out-of-root book to CreateOrganizedVersion, which creates a row
+	//     for the organized copy, clones its BookFiles using paths from the
+	//     same planner the copy used, version-links the two, and marks the
+	//     original non-primary. Auto-organize instead repointed the single
+	//     row at the copy and left the source untracked on disk -- to be
+	//     rediscovered and version-linked by a LATER scan, by hashing, for a
+	//     relationship that was known here.
+	//   - It never transitioned LibraryState. ApplyOrganizedFileMetadata
+	//     does not set it (checked, not assumed), so an auto-organized book
+	//     stayed "imported" forever and never reached "organized" or
+	//     "organized_source".
+	//   - It wrote no OperationChange rows, so auto-organize was not
+	//     undoable while the manual path was.
+	//
+	// Request.BookIDs already means "only organize these books", so the
+	// scoping this hook needs costs nothing. autoBackup inside
+	// PerformOrganize is rate-limited by autoBackupMinInterval, so running
+	// it per scan does not back up the database every time.
+	ids := make([]string, 0, len(books))
+	// Counted, not just skipped. "Auto-organize complete: 0 organized" told
+	// an operator nothing about WHY zero — on 2026-08-11 it hid 588
+	// multi-file routing failures and 3,194 occupied-target collisions.
+	var lookupErrors, notInDB, backfilledFiles int
+	for i := range books {
+		if l.IsCanceled() {
+			break
+		}
+		dbBook, err := server.store.GetBookByFilePath(books[i].FilePath)
+		if err != nil {
+			// A lookup ERROR and a book that genuinely is not in the DB are
+			// different things, and collapsing them into one bare `continue`
+			// hid both. Count and log them separately.
+			lookupErrors++
+			if lookupErrors <= 10 {
+				l.Warn("Auto-organize: DB lookup failed for %s: %v", books[i].FilePath, err)
+			}
+			continue
+		}
+		if dbBook == nil {
+			notInDB++
+			continue
+		}
+		// A book outside RootDir with no book_files is SKIPPED by
+		// FilterBooksNeedingOrganization ("rely on book_files to determine
+		// readiness"). The scan path only creates book_files for DIRECTORY and
+		// MULTI-FILE books -- createBookFilesForBook is never called for a
+		// genuinely single-file book -- so without this, handing work to the
+		// real pipeline would silently stop auto-organizing every single-file
+		// book. The old hand-rolled path bypassed that filter entirely, which
+		// is the only reason it appeared to work.
+		//
+		// The row is honest data: the book has exactly this one file. The
+		// durable fix is for the SCAN to give every book its book_files rather
+		// than the organize hook backfilling them here; filed in todo.d.
+		if ensured, eerr := server.ensureSingleFileBookFile(dbBook); eerr != nil {
+			l.Warn("Auto-organize: could not ensure book_file for %s: %v (it will be skipped by the organize filter)", dbBook.Title, eerr)
+		} else if ensured {
+			backfilledFiles++
+		}
+		ids = append(ids, dbBook.ID)
+	}
+
+	if len(ids) == 0 {
+		l.Info("Auto-organize complete: 0 organizable, %d not in DB, %d lookup errors (of %d scanned)",
+			notInDB, lookupErrors, len(books))
+		return
+	}
+
+	if err := server.organizeService.PerformOrganize(ctx, &organizer.Request{BookIDs: ids}, l); err != nil {
+		l.Error("Auto-organize failed for %d book(s): %v", len(ids), err)
+		return
+	}
+	l.Info("Auto-organize complete: %d handed to the organize pipeline, %d book_file rows backfilled, %d not in DB, %d lookup errors (of %d scanned)",
+		len(ids), backfilledFiles, notInDB, lookupErrors, len(books))
+}
+
+// ensureSingleFileBookFile gives a single-file book the one book_file row the
+// organize filter requires, and reports whether it created one.
+//
+// It is deliberately narrow: it does nothing when the book already has rows,
+// and nothing when FilePath is not a regular file. In particular it does NOT
+// go through scanner.createBookFilesForBook, which also NORMALIZES
+// Book.FilePath to the containing directory -- correct for a multi-file book,
+// wrong for a single-file one, and not a side effect the organize hook should
+// be triggering.
+func (server *Server) ensureSingleFileBookFile(book *database.Book) (bool, error) {
+	if book == nil || book.FilePath == "" {
+		return false, nil
+	}
+	existing, err := server.store.GetBookFiles(book.ID)
+	if err != nil {
+		return false, err
+	}
+	if len(existing) > 0 {
+		return false, nil
+	}
+	info, statErr := os.Stat(book.FilePath)
+	if statErr != nil || info.IsDir() {
+		// A directory book with no rows is a different problem and must not be
+		// papered over with a single row pointing at the folder.
+		return false, nil
+	}
+	ext := strings.ToLower(filepath.Ext(book.FilePath))
+	bf := &database.BookFile{
+		ID:               ulid.Make().String(),
+		BookID:           book.ID,
+		FilePath:         book.FilePath,
+		OriginalFilename: filepath.Base(book.FilePath),
+		Format:           strings.TrimPrefix(ext, "."),
+		FileSize:         info.Size(),
+		TrackNumber:      1,
+	}
+	if cerr := server.store.CreateBookFile(bf); cerr != nil {
+		return false, cerr
+	}
+	return true, nil
 }
