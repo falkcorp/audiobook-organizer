@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
 // last-edited: 2026-08-24
 
@@ -8,9 +8,12 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -107,7 +110,148 @@ func RunAIParseForBooks(ctx context.Context, books []Book, scanLog logger.Logger
 	for i := range books {
 		candidates[i] = i
 	}
-	runAIBatchPhase(ctx, parser, books, candidates, scanLog)
+	runAIBatchPhase(ctx, parser, books, candidates, scanLog, saveAIFieldsToPrimary)
+	return nil
+}
+
+// saveAIFieldsToPrimary writes what the AI filled in, and nothing else.
+//
+// The inline AI phase saves through saveBookToDatabase, and that is correct
+// there: it runs inside the scan, on a freshly-walked book, before anything has
+// organized it. Neither assumption survives the move to a queued operation, and
+// both fail silently:
+//
+//   - WRONG ROW. saveBookToDatabase keys on FilePath. The scan's AutoOrganizeFn
+//     (scanner/service.go:526) runs strictly after ProcessBooksParallel returns,
+//     and organize COPIES: CreateOrganizedVersion makes a new row primary and
+//     demotes the source to IsPrimaryVersion=false / organized_source, leaving
+//     the source row sitting at exactly the path this batch carries. So a
+//     path-keyed write lands on the demoted row while the primary -- the record
+//     the UI shows -- keeps the empty field. CreateOrganizedVersion snapshots
+//     Title/AuthorID/SeriesID/Narrator at creation, so it cannot pick the value
+//     up afterwards either.
+//
+//   - WRONG SIDE EFFECTS. saveBookToDatabase is the full scan write path: dedup,
+//     version grouping, path normalization, the RootDir-gated primary branch.
+//     Re-running all of it minutes later, on a stale path, for the sake of a
+//     title string is not an update, it is a second import.
+//
+// The blast radius is narrower than it looks, and worth stating so nobody
+// "simplifies" this back: organize DEFERS books with no resolvable author
+// (organizer/service.go:708), so the candidates nominated for an empty Title or
+// Author are still unorganized when the batch runs and would have been fine. The
+// ones that bite are candidates that already had a good author and were
+// nominated for an empty Series -- those organize immediately.
+//
+// So this resolves the row fresh, follows the version group to its primary, and
+// UpdateBooks only the fields that are still empty there.
+func saveAIFieldsToPrimary(_ context.Context, book *Book) error {
+	store := getStore()
+	if store == nil {
+		return errors.New("no store configured")
+	}
+
+	row, err := store.GetBookByFilePath(book.FilePath)
+	if err != nil {
+		return fmt.Errorf("look up %s: %w", book.FilePath, err)
+	}
+	if row == nil {
+		// The scan normalizes a multi-file book's row to its parent directory,
+		// so a batch queued with a segment path finds nothing here. Same
+		// recovery the scan itself uses.
+		if recovered := recoverNormalizedBookPath(book.FilePath); recovered != "" {
+			row, err = store.GetBookByFilePath(recovered)
+			if err != nil {
+				return fmt.Errorf("look up recovered path %s: %w", recovered, err)
+			}
+		}
+	}
+	if row == nil {
+		// Not an error: the row can legitimately be gone by the time the batch
+		// runs (deleted, merged by dedup). Nothing to write.
+		return nil
+	}
+
+	if target := primaryVersionOf(store, row); target != nil {
+		row = target
+	}
+
+	changed := false
+	if row.Title == "" && book.Title != "" {
+		row.Title = book.Title
+		changed = true
+	}
+	if (row.AuthorID == nil || *row.AuthorID == 0) && book.Author != "" {
+		authorID, aerr := resolveAuthorID(book.Author)
+		if aerr != nil {
+			return fmt.Errorf("resolve author %q: %w", book.Author, aerr)
+		}
+		if authorID != nil {
+			row.AuthorID = authorID
+			changed = true
+		}
+	}
+	if row.SeriesID == nil && book.Series != "" {
+		seriesID, serr := resolveSeriesID(book.Series, row.AuthorID)
+		if serr != nil {
+			return fmt.Errorf("resolve series %q: %w", book.Series, serr)
+		}
+		if seriesID != nil {
+			row.SeriesID = seriesID
+			changed = true
+			if row.SeriesSequence == nil && book.Position > 0 {
+				pos := book.Position
+				row.SeriesSequence = &pos
+			}
+		}
+	}
+	if isBlankPtr(row.Narrator) && book.Narrator != "" {
+		n := book.Narrator
+		row.Narrator = &n
+		changed = true
+	}
+	if isBlankPtr(row.Publisher) && book.Publisher != "" {
+		pub := book.Publisher
+		row.Publisher = &pub
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+	_, uerr := store.UpdateBook(row.ID, row)
+	return uerr
+}
+
+// isBlankPtr treats a nil pointer and a pointer to "" as equally empty. Both
+// occur: the extractor writes a pointer to the empty string when a tag is
+// present but blank.
+func isBlankPtr(s *string) bool {
+	return s == nil || strings.TrimSpace(*s) == ""
+}
+
+// primaryVersionOf returns the primary member of row's version group, or nil
+// when row is already primary, is in no group, or the group cannot be read.
+//
+// Fails OPEN -- a group it cannot resolve leaves the caller writing to the row
+// it already has, which is the pre-existing behaviour rather than a dropped
+// update.
+func primaryVersionOf(store scanBookLookup, row *database.Book) *database.Book {
+	if row.VersionGroupID == nil || *row.VersionGroupID == "" {
+		return nil
+	}
+	if row.IsPrimaryVersion != nil && *row.IsPrimaryVersion {
+		return nil
+	}
+	members, err := store.GetBooksByVersionGroup(*row.VersionGroupID)
+	if err != nil {
+		return nil
+	}
+	for i := range members {
+		if members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
+			return &members[i]
+		}
+	}
 	return nil
 }
 
