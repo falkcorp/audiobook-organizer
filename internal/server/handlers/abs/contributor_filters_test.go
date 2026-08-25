@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/contributor_filters_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8c1d54-9a20-4e7b-b6d1-8c4a2f01e9b7
 // last-edited: 2026-08-25
 
@@ -406,4 +406,49 @@ func TestFilterData_ExpiresWithTheIndexItWasBuiltFrom(t *testing.T) {
 			"the index expired at T=5m and this T=6m request still served the cached "+
 			"document (genre scans %d -> %d)", before, after)
 	}
+}
+
+// 🔴 TestAuthors_EchoReportsTheOrderActuallyApplied.
+//
+// sortBy/sortDesc are the server telling the client how the list is ordered.
+// Echoing back a key we have no field for makes the response ASSERT an ordering
+// it did not apply — the same defect, in the same handler, as the sort that was
+// parsed and then ignored. Fixing the sort while leaving the echo raw would have
+// left the lie intact for exactly the keys that still do not work.
+func TestAuthors_EchoReportsTheOrderActuallyApplied(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+	base := "/api/libraries/" + w.libraryID() + "/authors?limit=100&page=0"
+
+	t.Run("an unsupported key is not echoed as applied", func(t *testing.T) {
+		code, body, raw := w.req(t, http.MethodGet, base+"&sort=fileBirthtime&desc=1", nil)
+		// Deliberately NOT a 400: these are third-party clients, and a response
+		// they cannot use blanks the Authors tab. Serving the list in a stated
+		// order is the smaller harm.
+		if code != http.StatusOK {
+			t.Fatalf("an unsupported sort must still serve the list, got %d %s", code, raw)
+		}
+		if got, _ := body["sortBy"].(string); got != "" {
+			t.Fatalf("response claims it sorted by %q; nothing of the kind was applied: %s", got, raw)
+		}
+		if got, _ := body["sortDesc"].(bool); got {
+			t.Fatalf("response claims descending order; the list is in the store default order: %s", raw)
+		}
+	})
+
+	t.Run("a supported key is echoed unchanged", func(t *testing.T) {
+		_, body, raw := w.req(t, http.MethodGet, base+"&sort=numBooks&desc=1", nil)
+		if got, _ := body["sortBy"].(string); got != "numBooks" {
+			t.Fatalf("sortBy = %q, want numBooks: %s", got, raw)
+		}
+		if got, _ := body["sortDesc"].(bool); !got {
+			t.Fatalf("sortDesc = false, want true: %s", raw)
+		}
+		// Guards the lazy fix — reporting "" for everything would pass the
+		// subtest above while telling every client nothing at all.
+		names := authorNames(t, body, "results")
+		if len(names) == 0 || names[0] != "Zed Author" {
+			t.Fatalf("echo says numBooks-descending but the list is %v", names)
+		}
+	})
 }
