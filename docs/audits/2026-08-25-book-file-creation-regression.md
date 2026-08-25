@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-25-book-file-creation-regression.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 09f65679-4e03-4f95-89a2-07c015489f11 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -9,7 +9,7 @@
 was running.** A book row with no `book_file` rows has no route to any audio, so
 this is the mechanism behind "new books get added but I can't listen to them".
 
-Roughly **13,000 books created since 2026-08-14 are in this state.**
+A census puts it at **12,525 books with no `book_file` rows — 20.4% of the library.**
 
 ## The boundary
 
@@ -33,10 +33,95 @@ anchor rather than a small-sample artifact. 2026-08-12 and 2026-08-13 have **no 
 at all** — a two-day gap immediately before the collapse, which points at a deploy or
 configuration change rather than code that silently rotted.
 
-## What the mechanism is not
 
-Three candidate mechanisms were tested and eliminated. Recording them so they are not
-re-proposed.
+## ROOT CAUSE (found 2026-08-25, after the first version of this document)
+
+**A single production configuration value: `chapter_consolidation_threshold_min = 0`.**
+The intended default is `10`. `0` means "disable consolidation" — that is documented
+behaviour of the field, not a bug in itself.
+
+Verified three ways:
+
+| leg | evidence |
+|---|---|
+| the guard | `internal/scanner/chapter_consolidation.go:50-54` — `if thresholdMin <= 0 { return filesToBooks(files) }`, i.e. **one Book per file, no `SegmentFiles`** |
+| the live value | `GET /api/v1/config` -> `chapter_consolidation_threshold_min = 0` (`root_dir = /mnt/bigdata/books/audiobook-organizer`) |
+| the intended default | `viper.SetDefault("chapter_consolidation_threshold_min", 10)` at `config.go:1392`, and `config.go:811` declares the field with **no `omitempty`** |
+
+### The chain
+
+1. A multi-file book's files mostly carry **no album tag**. Measured on the book found
+   ping-ponging in the production log (`01KZR9D70KWZH8HG1M4G3SRCWE`,
+   `.../Unknown Author/Star Wars_ Darth Plagueis/`): **223 of 224 mp3s have no album
+   tag**; track numbers are present. With no album they cannot be grouped by album —
+   correct behaviour — so they fall into `noAlbum`.
+2. `noAlbum` is handed to `consolidateChapterGroups` (`scanner.go:2556`), which is the
+   last chance to reassemble them into one book.
+3. With the threshold at `0` that function returns immediately: **one Book per file**.
+   The ">= 3 files sharing a numbered base title" logic never runs.
+4. Each such Book is a FILE path arriving at site 1487 with `len(SegmentFiles) == 1`,
+   so the `if len(books[idx].SegmentFiles) > 1` gate is false and
+   **`createBookFilesForBook` is never called at all.** Zero `book_file` rows,
+   deterministically.
+5. Because each file also became its own book row, the same value produces the
+   track-titled fragment rows.
+
+One config value produces **both** populations described below.
+
+### Independent corroboration from the production log
+
+Read with the exact allowed command (`sudo /usr/bin/journalctl -u
+audiobook-organizer.service`; adding `--since` or `--no-pager` breaks the NOPASSWD sudo
+rule and returns nothing). A 2-minute window of the live scan:
+
+- **117** `scanner: re-linking book` events, **96 of them for the same book id**, each
+  repointing that one row to a different track (`07_10-...mp3`, `07_13-...mp3`,
+  `08_01-...mp3`).
+
+That is one multi-file book being processed as ~96 separate books. It is also
+creation-side evidence that touches **no read endpoint**, which settles
+"rows are missing" versus "rows are hidden by a read filter" in favour of missing: a
+read filter cannot explain a log line that was never written.
+
+### Scale (census, not a sample)
+
+`GET /api/v1/maintenance/book-file-hash-stats`, cross-checked against
+`maintenance/acoustid-stats` which independently reports the same `total_files`:
+
+| | |
+|---|---|
+| total books | 61,490 |
+| **books with no `book_file` rows** | **12,525 (20.4%)** |
+| total `book_file` rows | 545,932 |
+
+Caveats carried from the session that produced it: it is not verified whether
+`books_with_no_files` excludes soft-deleted rows, and 20.4% library-wide is **not** the
+post-boundary rate — it is diluted by a healthy pre-boundary majority.
+
+### What is still NOT established
+
+**When and how the value became `0`.** `/var/lib/audiobook-organizer/config.yaml` is 724
+bytes with mtime `2026-08-24T01:24:08` — after the boundary, so it dates the last write,
+not the flip. The file is `0600` owned by `audiobook` and `sudo cat` is not in the
+NOPASSWD allowlist, so its contents could not be read. That it is only 724 bytes means it
+is a **partial** config; combined with the missing `omitempty`, a write from a
+partially-populated struct would persist a hard `0` that then beats viper's default on
+every subsequent load. That is a plausible mechanism, **not a demonstrated one**.
+
+### Fixing it
+
+Setting the value to `10` fixes **future scans only**. The 12,525 books already written
+without `book_file` rows, and the fragment rows, are existing damage needing a separate
+repair. Production config is not changed by this document.
+
+Worth treating as a defect in its own right: a partial config write can silently and
+permanently disable a grouping path with **no log line and no startup warning**. The
+absence of any signal is why this ran for eleven days behind a green test suite.
+
+## Mechanisms considered on the way, and how each resolved
+
+Recorded because each is plausible enough to be re-proposed, and because two of the
+three were confidently believed before a control killed them.
 
 **Not duplicate rows starving each other.** 1,714 file paths carry more than one book
 row (5,313 rows). Of today's orphaned books, 11 of 13 had a peer row at the same path
@@ -48,14 +133,15 @@ peer holding files was created pre-boundary; every orphan post-boundary. Duplica
 is chronic and flat across the boundary (April 8.1% duplicate share, August 9.5%) and
 cannot produce a 90-100% failure rate.
 
-**Not the `len(SegmentFiles) > 1` gate, for directory books.** Site 1487 in
-`ProcessBooksParallel` is gated, so a book arriving there with <= 1 segment gets no
-call at all — that is real, and it is what #2926 fixes at save time. But it does not
-explain this population: a book whose path is a directory takes the branch at
-`scanner.go:1224`, where site 1285 calls `createBookFilesForBook(dirPath, nil, ...)`
-**unconditionally**. The only earlier exit is `firstFile == ""`, which returns *before*
-`saveBook`, so such a book would have no row at all — and these books have rows. For
-directory books the call is made and fails inside.
+**The `len(SegmentFiles) > 1` gate — eliminated for directory books, but it IS the
+mechanism for file-path books.** This was scoped too narrowly in v1 of this document.
+A book whose path is a *directory* takes the branch at `scanner.go:1224` and reaches
+site 1285 unconditionally, so the gate cannot explain that population — that part
+stands. But the far larger population arrives as *file* paths (one per track, because
+consolidation is disabled), hits the gate at site 1487, and gets **no call at all**.
+The gate is longstanding and unchanged in the window; what changed is the config that
+started feeding it single-file books. #2926 fixes the gate's single-file case at save
+time but is not deployed.
 
 **Not an outright `book:path:` index break.** `GetBookByFilePath`
 (`pebble_store.go:1316`) is a pure index lookup, and `createBookFilesForBook` calls it
