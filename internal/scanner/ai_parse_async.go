@@ -86,14 +86,14 @@ func getEnqueueAIParse() func(ctx context.Context, books []AIParseCandidate) err
 // the params row -- megabytes of paths and hashes per batch that nothing on
 // this path reads.
 type AIParseCandidate struct {
-	ID        string  `json:"id"`
-	FilePath  string  `json:"file_path"`
-	Title     string  `json:"title,omitzero"`
-	Author    string  `json:"author,omitzero"`
-	Series    string  `json:"series,omitzero"`
-	Position  int     `json:"position,omitzero"`
-	Narrator  string  `json:"narrator,omitzero"`
-	Publisher string  `json:"publisher,omitzero"`
+	ID        string `json:"id"`
+	FilePath  string `json:"file_path"`
+	Title     string `json:"title,omitzero"`
+	Author    string `json:"author,omitzero"`
+	Series    string `json:"series,omitzero"`
+	Position  int    `json:"position,omitzero"`
+	Narrator  string `json:"narrator,omitzero"`
+	Publisher string `json:"publisher,omitzero"`
 }
 
 // ErrAIParseEnqueueUnavailable is returned by enqueueAIParse when no queue has
