@@ -47,6 +47,28 @@ func TestExtractInfoFromPathKeepsARealAuthor(t *testing.T) {
 		"a real author was dropped: the placeholder guard is matching too broadly")
 }
 
+// TestExtractInfoFromPathDoesNotSubstituteTheTitleForTheAuthor pins a regression
+// this fix introduced and then backed out.
+//
+// Clearing the placeholder BEFORE the directory fallback (rather than on the
+// defer, after it) opens that fallback for organized books. The organizer's
+// layout is <root>/<author>/<title>/<file>, so the immediate parent is the
+// TITLE, and the book ends up attributed to itself: Author = "Pratchett 036".
+//
+// That is worse than the bug being fixed. The placeholder at least announces
+// itself -- authorname.IsPlaceholder can find it, and this whole change is built
+// on being able to. A title masquerading as an author closes the same gate and
+// is indistinguishable from a real one.
+func TestExtractInfoFromPathDoesNotSubstituteTheTitleForTheAuthor(t *testing.T) {
+	b := &Book{FilePath: "/mnt/bigdata/books/audiobook-organizer/Unknown Author/Pratchett 036/Pratchett 036 - Unknown Author.mp3"}
+	extractInfoFromPath(b)
+
+	require.NotEqual(t, "Pratchett 036", b.Author,
+		"the book's own title was recorded as its author -- the directory fallback fired on an "+
+			"organized path, where the immediate parent is the title, not the author")
+	require.Empty(t, b.Author, "expected no author at all for a book whose author is genuinely unknown")
+}
+
 func TestRowHasRealAuthor(t *testing.T) {
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()

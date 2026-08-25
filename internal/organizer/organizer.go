@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-23
+// last-edited: 2026-08-25
 
 package organizer
 
