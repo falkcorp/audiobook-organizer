@@ -720,19 +720,53 @@ class GitHubAPI:
             return None
 
     def get_codeql_alerts(self, state: str = "open") -> list[dict[str, Any]]:
-        """Fetch CodeQL security alerts."""
-        url = f"https://api.github.com/repos/{self.repo}/code-scanning/alerts"
-        params = {"state": state, "per_page": 100}
+        """Fetch every CodeQL security alert, following pagination.
 
-        try:
-            response = requests.get(
-                url, headers=self.headers, params=params, timeout=10
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            print(f"Error fetching CodeQL alerts: {e}", file=sys.stderr)
-            return []
+        This used to issue a single request with per_page=100 and return the
+        first page. Measured 2026-08-24 against this repo: 327 open alerts, so
+        it returned 100 and process_codeql_alerts filed issues for 100 while
+        printing "Found 100 open CodeQL alerts". A truncated list still
+        produces a plausible number, which is why nobody noticed.
+
+        Same page-walk as get_all_issues above -- a short page ends the walk,
+        because the API cannot hand back fewer than per_page items unless it
+        has run out.
+        """
+        all_alerts: list[dict[str, Any]] = []
+        page = 1
+        per_page = 100
+
+        while True:
+            url = f"https://api.github.com/repos/{self.repo}/code-scanning/alerts"
+            params = {"state": state, "per_page": per_page, "page": page}
+
+            try:
+                response = requests.get(
+                    url, headers=self.headers, params=params, timeout=10
+                )
+                response.raise_for_status()
+
+                alerts = response.json()
+                if not alerts:
+                    break
+
+                all_alerts.extend(alerts)
+
+                if len(alerts) < per_page:
+                    break
+
+                page += 1
+            except requests.RequestException as e:
+                # Return what we have rather than nothing: a partial alert list
+                # still files real issues, whereas [] silently reports "no
+                # alerts" and looks identical to a clean scan.
+                print(
+                    f"Error fetching CodeQL alerts (page {page}): {e}",
+                    file=sys.stderr,
+                )
+                break
+
+        return all_alerts
 
 
 class IssueUpdateProcessor:
