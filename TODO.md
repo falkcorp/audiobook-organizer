@@ -814,7 +814,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       pattern to copy. Do this before anything wires the op to a production
       trigger.
 
-- [ ] **DEDUP-SERIES-MERGE-STRAND** Three series-merge paths *outside*
+- [x] **DEDUP-SERIES-MERGE-STRAND** Three series-merge paths *outside*
       `internal/dedup/series_dedup.go` had the shape TASK-029 / PR #2821 fixed
       inside it: a merge calls `GetBooksBySeriesIDCore(fromID)` — the listing
       getter, which excludes non-primary versions — repoints every book it sees
@@ -1515,7 +1515,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       `internal/reconcile/reconcile.go:1406` (`AssignOrphanVGs` mints a fresh
       single-member group, so there are no pre-existing members to miss).
 
-- [ ] **RESUME-SWEEP-INDEX-CONSTRAINT** Whatever fixes the v2 resume sweep's
+- [x] **RESUME-SWEEP-INDEX-CONSTRAINT** Whatever fixes the v2 resume sweep's
       blindness to `interrupted_*` rows, it must **not** widen the `opv2:act:`
       index. Use a separate key prefix.
 
@@ -4310,7 +4310,7 @@ step 4 propagates to the server package with no edit there.
       `TestWarmupCounts_CountRowsNotPebbleKeys`, which fails with
       `expected: 4, actual: 20` against the old counting.
 
-- [ ] **VGBACKFILL-BOUNDS-FRAGILE** Separately, and still worth doing: the
+- [x] **VGBACKFILL-BOUNDS-FRAGILE** Separately, and still worth doing: the
       version-group backfill's iterator bounds `book:0` .. `book:;` admit only
       IDs whose first byte is `0x30`–`0x3A`. That is correct today only because
       every production book ID happens to be a ULID starting with `0`. It is
@@ -5406,8 +5406,19 @@ Duration=0 after deletion, which is correct". It does not — the partial-data r
 preserves a populated Duration when no remaining file carries one. Now pinned by
 `TestDeletingEveryFileKeepsTheBookDuration`.
 
-**Still open: the `CreateBookFile`-per-row half**, i.e. the 92.1% above. See the
-attribution table for where it actually comes from.
+**Partly closed (2026-08-24).** The 92.1% site — `maintenance.createBookFileFor` in
+relink's `ShapeDirectory` loop — was converted by #2866: `relink_unlinked.go:369` now
+calls `store.BatchCreateBookFiles(bfs)`, which coalesces to one recompute per book at
+`pebble_store_bookfiles.go` (`notifyBookFileChanges(affectedBooks)`). A test pins it —
+reverting to the per-row loop fails with "RecomputeBookAggregates ran 3 times for 3
+files, want exactly 1".
+
+**Still open, and NOT the 92.1%:**
+- `CreateBookFile` (the singular form) still recomputes per row.
+- The generic `store.BeginAggregateBatch()` scope proposed below was never built — the
+  symbol does not exist anywhere in the repo.
+
+See the attribution table for where the calls actually come from.
 
 ### ⚠️ Attribution is NOT established — do not repeat this mistake
 
@@ -5764,7 +5775,7 @@ Measured by a full 63,870-book census against production, correcting the figures
       is good: 472 of 7,154 `vg-` groups have no primary versus 7 of 17,635 unprefixed —
       a ~166x enrichment. Note `vg-` groups are NOT mostly singletons (12,877 books across
       7,154 groups; 1,905 singletons), so a repair that assumes singleton-ness is unsafe.
-- [ ] **`is_primary_version` in the payload disagrees with the filter for 2,776 books.**
+- [x] **`is_primary_version` in the payload disagrees with the filter for 2,776 books.**
       Books with no `version_group_id` are returned by `is_primary_version=true` while
       their own serialized field is **ABSENT** — not `false`. Nothing is hidden by this,
       but any client reading the field instead of calling the filter will disagree with
@@ -5975,7 +5986,7 @@ Follow-ups this surfaced:
 
 ### Author delete paths guard with the listing counter, same shape as the series bug
 
-- [ ] **`BulkDeleteAuthors` and `DeleteEmptyAuthor` decide "is this author empty?"
+- [x] **`BulkDeleteAuthors` and `DeleteEmptyAuthor` decide "is this author empty?"
   with `GetBooksByAuthorIDCore`**, which `internal/database/memdb_reads.go:529`
   documents as a *listing* view — it applies the primary-version filter and
   returns only live books. The repo already knows this is the wrong getter for
@@ -6405,7 +6416,7 @@ primary-only by design (`GetBooksByAuthorIDCore` is the LISTING view — see
 consulted, while a nil-flag book survives the index (nil→true) and is then
 handed to a post-filter that calls it false.
 
-- [ ] Decide the single meaning of a nil `IsPrimaryVersion` and apply it in both
+- [x] Decide the single meaning of a nil `IsPrimaryVersion` and apply it in both
       places. `Default: true` is already the storage answer, so the post-filter
       is the side that should change — but confirm before flipping, because
       22,552 books currently answer to `false` library-wide and some of those
@@ -6469,7 +6480,7 @@ returning no rows (its cited mechanism: the store treats limit 0 as "nothing",
       Plus four independent mutations each killing a distinct test. Only the
       GitHub-side result (lint, frontend, changelog-check) is unread.
 
-- [ ] **`opstate:<id>:params` keys are never swept.** `runMaintenanceJob` now
+- [x] **`opstate:<id>:params` keys are never swept.** `runMaintenanceJob` now
       persists a small params blob (~90 bytes) per maintenance run so a restart
       can resume faithfully. `DeleteOperationState` clears both `opstate:<id>`
       and `opstate:<id>:params`, but only two of the 34 jobs
@@ -7880,7 +7891,7 @@ Explicitly LOW priority — per-book is fine for now.
   repair through the review queue rather than blind-applying; this is far smaller
   than it looks from the UI, where the impression is driven mostly by the empty
   authors and (until #2512) the compound narrator entries.
-- [ ] **`DeleteAuthor`'s junction cleanup is dead code.** It iterates the
+- [x] **`DeleteAuthor`'s junction cleanup is dead code.** It iterates the
   `book_author:` keyspace (singular). Nothing in the repo writes that keyspace — the
   live data is the per-book `book_authors:<bookID>` array — and the iterator bounds
   (`book_author:` → `book_author;`) exclude the plural form anyway. So deleting an
