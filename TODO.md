@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.42.1 -->
+<!-- version: 10.43.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -10706,6 +10707,23 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       instead.** Owner directive, 2026-08-08: *"we are never to get above 10
       RCs. Right now we have massive changes all bunched together. Doing it that
       way we have consistent releases."*
+
+      **2026-08-25 — the rule was unfollowable, and that is why it was broken.**
+      Not a discipline failure: cutting a stable release was structurally
+      impossible. Two blockers, both invisible from the release run's own status:
+      (1) an abandoned attempt had left an EMPTY DRAFT holding `v0.219.2` in
+      reserve — 0 assets, `publishedAt=null`, and **no tag on the remote** — so
+      every later attempt found the name taken; and (2) org ruleset 17321418
+      blocked tag deletion, so the routine RC purge could never run, which is
+      how the count reached **271 RCs / 955 tags**. Backlog purged to 13/13;
+      **`v0.219.2` published 06:52Z with 11 assets and tag `499ae78d6`**,
+      verified by asset count rather than by a green run.
+      ⚠️ Do NOT check this box yet: the ruleset is still OFF, so the purge that
+      keeps the count under 10 is running unguarded. Re-enable 17321418 with
+      `exclude: ["refs/tags/v*-rc.*"]` first — owner deferred that on 2026-08-25
+      ("don't care about the ruleset right now"). Ticking this box before then
+      would record a rule as sustainable when the mechanism that sustains it is
+      switched off.
 
       **What triggered this.** On 2026-08-08 the repo was sitting on
       **`v0.217.9-rc.87`** — eighty-seven release candidates on a single

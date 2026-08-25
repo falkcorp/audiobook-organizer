@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.18.0 -->
+<!-- version: 1.19.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-24 -->
+<!-- last-edited: 2026-08-25 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-24 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-25 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the 29 dated summaries in this directory
 from 2026-08-04 to 2026-08-19, linked inline below.
@@ -1145,6 +1145,79 @@ counting what it now does. It has eight callers, including the merge and version
 paths. It is recorded for a follow-up rather than folded into this change, since it is
 a different method with a different set of callers to check.
 
+## 27. Sorting the library mostly did nothing (Aug 25)
+
+The library page offers 23 ways to sort. **Ten of them, plus three alternate spellings
+of the same options, did not sort at all.** Choosing "sort by author" returned the books
+in whatever order they happened to be stored in. So did sorting by series, year, genre,
+language, publisher, format quality, edition, bitrate and sample rate. Sorting by title,
+narrator, length, file size and file type worked, and always had.
+
+Nothing about the page suggested a problem. The request succeeded, the right books came
+back, the count was right — only the order was meaningless. There was no error to notice
+and no warning to read, which is why this survived so long unreported.
+
+The cause was three separate pieces of the system each behaving reasonably. The part that
+receives the request only ever told the storage layer about *one* of the sort options, so
+the storage layer never learned which sort the reader had asked for. The storage layer,
+for its part, assumed that whoever asked would do the sorting. And whoever asked could
+not: by the time the books reached it, they had been trimmed down to a summary that no
+longer carried the author, the genre, the year, or most of the other things being sorted
+on. Each piece was individually correct. The gap was in the space between them, which is
+exactly where no one was looking.
+
+There is a detail here worth stating plainly, because it makes the failure worse than it
+first sounds. When two books tie in a sort, the system falls back to putting them in the
+order they were added. That is a sensible rule. But when *every* book ties — which is what
+happens when the thing being sorted on is missing — that fallback quietly reorders the
+whole list. The storage layer had, in some cases, already produced a correctly sorted
+list; the final step then threw that away and replaced it with "order added". A cruder
+implementation would have left the correct answer alone.
+
+All 23 options now sort, including on later pages: asking for the second page of books by
+author now returns the books that genuinely belong there, rather than an arbitrary handful
+arranged neatly.
+
+Two things were checked rather than assumed. First, every one of the 23 options was tested
+individually, through the same path the app uses, and each was confirmed to produce the
+right order — the fix was not declared done on the strength of the two or three that were
+easy to check. Second, the new tests were deliberately broken, one at a time, to confirm
+they would actually notice if the bug came back. Four out of five broke the tests as
+intended. **The fifth did not**, and that gap has been closed with an additional test. A
+test that has never been seen to fail is not yet known to work.
+
+That last point deserves emphasis, because the existing tests are the reason this shipped.
+Two of them looked like thorough sorting tests. They checked that sorting the same list
+twice gives the same answer, and that sorting does not lose or duplicate any books. Both of
+those things are perfectly true of a sort that does nothing whatsoever. The tests were not
+weak or careless — they were simply asking questions that the broken behaviour could answer
+correctly.
+
+## 28. The release that could not be cut (Aug 25)
+
+Alongside the above, the process for publishing a finished version of the application was
+repaired. Release candidates — the interim builds made on the way to a finished version —
+had been accumulating without ever being cleared out: **271 of them, against 955 leftover
+version markers.** More seriously, the step that publishes a *finished* version had been
+failing silently, so no finished version could be issued at all.
+
+Two things were blocking it. A previously abandoned attempt had left an empty placeholder
+holding the version number in reserve, so every later attempt found the name already taken.
+And a repository-wide rule intended to protect version markers from deletion was also
+preventing the routine cleanup of interim ones, which is how they had grown to 271 in the
+first place.
+
+The backlog was cleared to 13, and version **v0.219.2** is now published with all four
+platform builds and their verification file attached.
+
+Worth recording honestly: this was confirmed by checking that the published version
+actually has the downloadable files attached to it, not merely that the publishing job
+reported success. An earlier check in the same session reported the job as failing when it
+was in fact still running, and the finished-version marker that had blocked everything had
+itself looked like a successfully published release. In both cases the summary was
+misleading and the underlying detail was not. The protective rule remains switched off
+pending a decision on the narrower exemption it needs.
+
 ## Themes worth carrying into next month
 
 1. **A silent fallback is worse than a loud failure.** The transcription outage, the
@@ -1179,3 +1252,12 @@ a different method with a different set of callers to check.
    Writing a new check is the easy half; the project has no rule that one must be
    reachable by the automated system before it counts, and until it does, the green tick
    answers a narrower question than anybody reading it assumes.
+6. **A test can ask a question the bug answers correctly.** The sorting failure on 25
+   August shipped past two tests that looked like thorough coverage of sorting. They
+   checked that sorting twice gives the same answer, and that sorting loses no books.
+   Both are true of a sort that does nothing at all. This is a different failure from the
+   four above: those were checks that did not run, or ran in the wrong place. This one ran,
+   in the right place, and passed honestly — it was simply not asking whether anything got
+   sorted. The useful habit is to ask, of any test, what a do-nothing implementation would
+   do to it. If the answer is "pass", the test is describing something other than the thing
+   that matters.
