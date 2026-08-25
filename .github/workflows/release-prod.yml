@@ -1,7 +1,7 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.9.6
+# version: 4.9.7
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-07-06
+# last-edited: 2026-08-24
 
 name: Production Release
 
@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main: changelog.d collect step (org rollout)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@6acc4d0342e8b108a7cbc5c82068d90b508edec9 # main: disabled-languages + draft upsert + stable diff base
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false
@@ -51,6 +51,9 @@ jobs:
       go-enabled: true
       frontend-enabled: true
       docker-enabled: true
+      # Not a Python distributable: pyproject.toml holds only Black's config.
+      # Docker stays ON here, unlike prerelease.yml.
+      disabled-languages: 'python'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
       go-experiment: 'jsonv2'
