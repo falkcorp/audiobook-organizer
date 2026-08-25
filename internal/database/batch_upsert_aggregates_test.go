@@ -1,138 +1,31 @@
 // file: internal/database/batch_upsert_aggregates_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d41f6b2-70e8-4c35-b1a7-38f0c92e64d5
 // last-edited: 2026-08-24
 
 package database
 
 import (
-	"bytes"
-	"log/slog"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
 )
 
-// captureAggregateLogs redirects the default logger into a buffer for the
-// duration of one test and returns a reader for it.
-//
-// Counting log lines is the point, not a convenience. RecomputeBookAggregates is
-// reached through notifyBookFileChange, which is unexported and has no return
-// value, so there is no seam to inject a counter into. Its log lines are the only
-// observable record of how many times it ran.
-//
-// A test that only checked the final Duration/FileSize would pass whether the
-// recompute ran once or once per row — and "once per row" is precisely the O(N^2)
-// this exists to prevent. The final values cannot distinguish those two cases.
-//
-// The handler is pinned at LevelDebug because that distinction lives entirely in
-// the Debug-level "no change needed" line: a redundant recompute produces no
-// Info-level output at all. At the default level this capture would be blind to
-// exactly the regression it exists to detect. See countAggregateInvocations.
-//
-// slog.SetDefault is process-global, so a test using this must NOT call
-// t.Parallel.
-func captureAggregateLogs(t *testing.T) func() string {
-	t.Helper()
-
-	var mu sync.Mutex
-	var buf bytes.Buffer
-
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(
-		&syncWriter{mu: &mu, buf: &buf},
-		&slog.HandlerOptions{Level: slog.LevelDebug},
-	)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	return func() string {
-		mu.Lock()
-		defer mu.Unlock()
-		return buf.String()
-	}
-}
-
-// syncWriter serialises writes from the logger, which RecomputeBookAggregates may
-// reach from more than one goroutine in other suites.
-type syncWriter struct {
-	mu  *sync.Mutex
-	buf *bytes.Buffer
-}
-
-func (w *syncWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf.Write(p)
-}
-
-// countAggregateInvocations returns how many times RecomputeBookAggregates RAN
-// for bookID, whether or not it changed anything.
-//
-// Invocations, not writes, are the quantity that matters, and the difference is
-// the whole point of this helper. Every invocation calls GetBookFiles and reads
-// the book's ENTIRE file set; that read is the O(N^2) cost. But only the first
-// invocation of a run finds anything to change — the rest compute the same sums,
-// hit the "no change needed" early return, and never emit the "updated" line.
-//
-// Counting "updated" therefore reports 1 whether the recompute ran once or once
-// per row. A mutant that dropped the per-book de-duplication and recomputed N
-// times passed a version of this suite that counted writes.
-//
-// WHY AN EXPLICIT LIST AND NOT A "RecomputeBookAggregates" SUBSTRING TEST: the
-// obvious matcher over-counts, and it was measured doing so. One invocation can
-// emit THREE lines carrying both that token and book_id — the two partial-data
-// warnings ("no files have Duration", "no files have FileSize") and then the
-// terminal "no change needed", because preserving both existing values means
-// nothing changed. Seed a book with real aggregates, batch-upsert its row with
-// Duration 0 and FileSize 0, and this returned 3 for a single call.
-//
-// It reads correctly today only because every fixture file carries a positive
-// duration AND a positive size. Adding one unprobed (zero-duration) file — a
-// realistic edit — would break the counts and the failure would look exactly
-// like a coalescing regression while being a counting artifact.
-//
-// So match only the mutually exclusive TERMINAL outcomes: every invocation
-// reaches exactly one of these, and none of them is a partial-data warning.
-// Anything added to RecomputeBookAggregates that returns by another route must
-// be added here too, or invocations will be under-counted.
-var aggregateTerminalMarkers = []string{
-	"RecomputeBookAggregates updated",
-	"RecomputeBookAggregates: no change needed",
-	"RecomputeBookAggregates book not found, skipping",
-	"notifyBookFileChange RecomputeBookAggregates failed",
-}
+// These three delegate to internal/database/aggtest, which owns the real
+// implementations and the TerminalMarkers contract. They were defined here until
+// internal/plugins/maintenance needed them too — a test helper in this package's
+// _test files cannot cross a package boundary, and copying them would fork
+// TerminalMarkers. Kept as local names so the ~27 call sites in this package did
+// not have to churn; read aggtest's doc comments before using either counter.
+func captureAggregateLogs(t *testing.T) func() string { return aggtest.Capture(t) }
 
 func countAggregateInvocations(logs, bookID string) int {
-	n := 0
-	for _, line := range strings.Split(logs, "\n") {
-		if !strings.Contains(line, "book_id="+bookID) {
-			continue
-		}
-		for _, marker := range aggregateTerminalMarkers {
-			if strings.Contains(line, marker) {
-				n++
-				break
-			}
-		}
-	}
-	return n
+	return aggtest.CountInvocations(logs, bookID)
 }
 
-// countAggregateWrites returns how many times an aggregate WRITE was logged for
-// bookID — i.e. how often the sums actually changed. Distinct from
-// countAggregateInvocations; see the note there before using either.
-func countAggregateWrites(logs, bookID string) int {
-	n := 0
-	for _, line := range strings.Split(logs, "\n") {
-		if strings.Contains(line, "RecomputeBookAggregates updated") &&
-			strings.Contains(line, "book_id="+bookID) {
-			n++
-		}
-	}
-	return n
-}
+func countAggregateWrites(logs, bookID string) int { return aggtest.CountWrites(logs, bookID) }
 
 // sumStoredFileAggregates reads back what the store actually holds for bookID.
 //
