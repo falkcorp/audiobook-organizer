@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -59,7 +59,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -307,6 +306,41 @@ func firstBareFilterFieldParam(c *gin.Context) (string, bool) {
 	return found[0], true
 }
 
+// idSetFrom turns a slice of book IDs into a set for
+// ListFilters.RestrictToIDs. It ALWAYS returns a non-nil map, including for a
+// nil or empty slice, because nil and empty mean opposite things to the store
+// walkers: nil is "no ID restriction" (list everything) and empty is "no book
+// is eligible" (list nothing). A capability-less store produces a nil slice
+// here, and answering that with "list everything" would turn a narrowing
+// request into a full-library response.
+func idSetFrom(ids []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+// intersectIDSets ANDs two RestrictToIDs sets, preserving the nil/empty
+// distinction: a nil operand means "no restriction" and yields the other set
+// unchanged, while a non-nil empty operand correctly collapses the result to
+// empty rather than being treated as absent.
+func intersectIDSets(a, b map[string]struct{}) map[string]struct{} {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	out := make(map[string]struct{}, len(a))
+	for id := range a {
+		if _, ok := b[id]; ok {
+			out[id] = struct{}{}
+		}
+	}
+	return out
+}
+
 // ListAudiobooks handles GET /audiobooks. Mirrors the original listAudiobooks:
 // has_file_errors fast-path, quick-query (missing_covers / in_import_path /
 // no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
@@ -345,14 +379,32 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	authorID := httputil.ParseQueryIntPtr(c, "author_id")
 	seriesID := httputil.ParseQueryIntPtr(c, "series_id")
 
-	// If the client asked for books with file errors, handle that fast-path here.
+	// has_file_errors and the quick-query params below both narrow the library to
+	// a set of book IDs. Each used to answer the whole request from that slice
+	// alone -- hand-paginating it and reporting its length as the count -- which
+	// silently discarded the search, the filters JSON, author_id, series_id and
+	// the sort that arrived on the SAME request.
+	//
+	// The UI reaches that combination on its own: the Dashboard links to
+	// /library?has_file_errors=true and the library query hook sends the user's
+	// active filters alongside it. The response was a 200 with plausible rows,
+	// the filter chips still lit above them, and a total belonging to a
+	// different query -- nothing surfaced that the narrowing had been dropped.
+	//
+	// Both now feed ListFilters.RestrictToIDs into the normal filtered pipeline,
+	// which ANDs the ID set with every other predicate and derives the count
+	// from the same filter. The store walkers short-circuit on the set
+	// (memdb_summaries.go, pebble_store.go), so this is not a return to
+	// scanning the library.
+	var restrictIDs map[string]struct{}
+
 	if c.Query("has_file_errors") == "true" {
 		if store == nil {
 			httputil.RespondWithInternalError(c, "database not initialized")
 			return
 		}
 		var bookIDs []string
-		// Resolved through any decorator chain — the search-index wrapper hides
+		// Resolved through any decorator chain -- the search-index wrapper hides
 		// this capability from a bare assertion.
 		if lf, ok := database.AsCapability[interface {
 			ListBooksWithFileErrors() ([]string, error)
@@ -364,37 +416,12 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 			}
 			bookIDs = ids
 		}
-
-		if bookIDs == nil {
-			// No implementation available — return empty set
-			httputil.RespondWithOK(c, gin.H{"items": []database.Book{}, "count": 0, "limit": params.Limit, "offset": params.Offset})
-			return
-		}
-
-		total := len(bookIDs)
-		start := params.Offset
-		if start < 0 {
-			start = 0
-		}
-		end := start + params.Limit
-		if params.Limit <= 0 || end > len(bookIDs) {
-			end = len(bookIDs)
-		}
-		if start > len(bookIDs) {
-			start = len(bookIDs)
-		}
-		selected := bookIDs[start:end]
-		books := make([]database.Book, 0, len(selected))
-		for _, id := range selected {
-			b, err := store.GetBookByID(id)
-			if err != nil || b == nil {
-				continue
-			}
-			books = append(books, *b)
-		}
-		enriched := h.audiobookService.EnrichAudiobooksWithNames(books)
-		httputil.RespondWithOK(c, gin.H{"items": enriched, "count": total, "limit": params.Limit, "offset": params.Offset})
-		return
+		// A store without the capability yields a non-nil EMPTY set, which the
+		// walkers read as "no book is eligible" -- the same empty answer this
+		// path gave before, now with a count that agrees with it. It must not
+		// be left nil: nil means "no restriction" and would list the whole
+		// library for a request that asked to narrow it.
+		restrictIDs = idSetFrom(bookIDs)
 	}
 
 	// Quick-query boolean params fast-path: missing_covers, in_import_path, no_isbn,
@@ -424,68 +451,11 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 			}
 			bookIDs = ids
 		}
-
-		if bookIDs == nil {
-			// Store doesn't support this method — return empty set.
-			httputil.RespondWithOK(c, gin.H{"items": []audiobookspkg.AudiobookDetail{}, "count": 0, "limit": params.Limit, "offset": params.Offset})
-			return
-		}
-
-		total := len(bookIDs)
-		start := params.Offset
-		if start < 0 {
-			start = 0
-		}
-		end := start + params.Limit
-		if params.Limit <= 0 || end > len(bookIDs) {
-			end = len(bookIDs)
-		}
-		if start > len(bookIDs) {
-			start = len(bookIDs)
-		}
-		selected := bookIDs[start:end]
-		books := make([]database.Book, 0, len(selected))
-		for _, id := range selected {
-			b, err := store.GetBookByID(id)
-			if err != nil || b == nil {
-				continue
-			}
-			books = append(books, *b)
-		}
-		enriched := h.audiobookService.EnrichAudiobooksWithNames(books)
-
-		// Batch-load all book files at once instead of per-book (N+1 optimization)
-		qqBookIDs := make([]string, len(enriched))
-		for i, book := range enriched {
-			qqBookIDs[i] = book.ID
-		}
-
-		qqBookFilesMap := make(map[string][]database.BookFileCore)
-		if qqGgf, ok := database.AsCapability[interface {
-			GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error)
-		}](store); ok {
-			if qqBfm, err := qqGgf.GetBookFilesForIDsCore(qqBookIDs); err == nil {
-				qqBookFilesMap = qqBfm
-			}
-		}
-
-		// Compute fingerprinting fields for the selected books.
-		for i, book := range enriched {
-			files := qqBookFilesMap[book.ID]
-			fpFiles := make([]fingerprint.FileWithFingerprint, len(files))
-			for j := range files {
-				fpFiles[j] = &files[j]
-			}
-			status, fpCount, coverage, lastFp := fingerprint.ComputeFingerprintFields(fpFiles)
-			enriched[i].FingerprintStatus = status
-			enriched[i].FingerprintedFileCount = fpCount
-			enriched[i].TotalFileCount = len(files)
-			enriched[i].CoveragePercent = coverage
-			enriched[i].LastFingerprintedAt = lastFp
-		}
-
-		httputil.RespondWithOK(c, gin.H{"items": enriched, "count": total, "limit": params.Limit, "offset": params.Offset})
-		return
+		// Intersected, not assigned: has_file_errors and a quick-query param can
+		// arrive on the same request, and the old code answered whichever it
+		// tested first while ignoring the other. Both are restrictions, so both
+		// have to apply.
+		restrictIDs = intersectIDSets(restrictIDs, idSetFrom(bookIDs))
 	}
 
 	// Parse optional filters
@@ -521,6 +491,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		FingerprintStatus:  httputil.ParseQueryString(c, "fingerprint_status"),
 		CoveragePercentMin: coveragePercentMin,
 		CoveragePercentMax: coveragePercentMax,
+		RestrictToIDs:      restrictIDs,
 	}
 
 	// Parse field filters from JSON query param. Per-user filters

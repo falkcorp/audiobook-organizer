@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-08-25
 
@@ -95,7 +95,20 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 	// (memdb-backed) can push it down via an indexed iteration — fetching
 	// all 68K rows to satisfy ?is_primary_version=true was the prod
 	// "library spins forever" bug.
-	hasHeavyPostFilters := f.LibraryState != "" || f.Tag != "" || len(f.Tags) > 0 || len(f.FieldFilters) > 0 || hasPerUser || heavySorting || hasFingerprintingFilters
+	// RestrictToIDs has to make a query "heavy", not merely post-filtered.
+	// The light branch below calls summariesPushdown, whose filter carries only
+	// IsPrimaryVersion/SortBy/ExcludeQuarantined -- RestrictToIDs is not on it.
+	// A request holding ONLY an ID restriction (?has_file_errors=true with no
+	// other filter) would therefore push down nothing, set didPushdown=true on
+	// the strength of the type assertion, and skip the post-filter on that
+	// basis: the entire library, for a request that asked to narrow it.
+	//
+	// "Heavy" does not mean fetch-everything here. The heavy branch calls
+	// summariesPushdownFiltered with the REAL limit/offset and the full
+	// BookSummaryFilter, and the store walkers short-circuit on an ID set
+	// (memdb_summaries.go, pebble_store.go), so the restricted query stays a
+	// page-sized walk.
+	hasHeavyPostFilters := f.LibraryState != "" || f.Tag != "" || len(f.Tags) > 0 || len(f.FieldFilters) > 0 || hasPerUser || heavySorting || hasFingerprintingFilters || f.RestrictToIDs != nil
 	hasPostFilters := hasHeavyPostFilters || f.IsPrimaryVersion != nil || sortPushdownable
 
 	// When heavy post-filters are active, fetch all and filter in memory.
@@ -416,6 +429,17 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					continue
 				}
 				if _, ok := tagBookIDs[b.ID]; !ok {
+					continue
+				}
+			}
+			// ANDed independently of tags, so it is applied whether or not a
+			// tag filter is present. Test the map for nil rather than for
+			// emptiness: nil means "no ID restriction", while a non-nil empty
+			// set legitimately excludes every book, and len()==0 cannot tell
+			// those apart. Same nil/empty contract as
+			// database.BookSummaryFilter.RestrictToIDs.
+			if f.RestrictToIDs != nil {
+				if _, ok := f.RestrictToIDs[b.ID]; !ok {
 					continue
 				}
 			}

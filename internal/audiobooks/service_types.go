@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-08-20
+// last-edited: 2026-08-25
 
 package audiobooks
 
@@ -94,6 +94,17 @@ type ListFilters struct {
 	FingerprintStatus  string // "none", "partial", "complete", or "" for any
 	CoveragePercentMin *int   // minimum coverage percentage (inclusive)
 	CoveragePercentMax *int   // maximum coverage percentage (inclusive)
+	// RestrictToIDs, when non-nil, limits the result to books whose ID is in
+	// the set. It is ANDed with every other predicate, including the tag
+	// intersection, so a caller can narrow an ID-shaped query (the
+	// has_file_errors and quick-query fast paths) without losing the search,
+	// field filters, sort or pagination the same request asked for.
+	//
+	// nil and empty are DIFFERENT, matching database.BookSummaryFilter: nil
+	// means "no ID restriction", while non-nil-but-empty means "no book is
+	// eligible" and correctly yields an empty page with a count of 0. Never
+	// test this with len() alone.
+	RestrictToIDs map[string]struct{}
 }
 
 // UpdateAudiobookRequest represents parameters for updating an audiobook

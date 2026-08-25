@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-08-25
 
@@ -841,7 +841,20 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 	// predicates without extra I/O.
 
 	// Tag intersection → ID set. Empty set ⇒ no matches (walker short-circuits).
+	//
+	// Seeded from f.RestrictToIDs so a caller-supplied ID set (the
+	// has_file_errors / quick-query fast paths) is ANDed with the tags rather
+	// than replacing them or being replaced by them. The loop below mutates
+	// this map with delete(), so copy rather than aliasing the caller's set.
+	// A non-nil empty seed stays non-nil empty, which is the "no book is
+	// eligible" signal the walkers short-circuit on.
 	var restrictIDs map[string]struct{}
+	if f.RestrictToIDs != nil {
+		restrictIDs = make(map[string]struct{}, len(f.RestrictToIDs))
+		for id := range f.RestrictToIDs {
+			restrictIDs[id] = struct{}{}
+		}
+	}
 	tagsToMatch := f.Tags
 	if len(tagsToMatch) == 0 && f.Tag != "" {
 		tagsToMatch = []string{f.Tag}
