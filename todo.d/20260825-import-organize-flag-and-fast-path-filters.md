@@ -65,15 +65,32 @@
       `RestrictToIDs` is reachable from this handler before committing to it;
       the fallback is to reject the combination with a 400.
 
-- [ ] **Prune the merged worktrees under `.worktrees/`.** There are ~21, several
-      already merged, and they are not merely untidy — they actively corrupt
-      investigation. `grep -rn` from the repo root descends into all of them, so
-      a search returns hits from up to 22 divergent snapshots with no signal as
-      to which is live. On 2026-08-25 this produced two false findings in one
-      agent report: a bug was reported at
-      `internal/server/audiobooks_helpers.go`, a file **deleted** by `faf755ffa`
-      and surviving only in three stale worktrees, and a second finding
-      described code fixed nine commits earlier. Both cited `file:line` anchors
-      that resolved cleanly, which is exactly what makes the failure silent.
-      Until this is cleaned, agent instructions should say "verify against
-      `origin/main`" rather than "search the repo".
+- [x] **Prune the merged worktrees under `.worktrees/`.** Done 2026-08-25: 22 →
+      6, each one content-verified with `git cherry origin/main HEAD` before
+      removal rather than trusted on its PR being MERGED. That check earned its
+      keep — `scan-cache-spec` held a commit that never landed despite #2868
+      being merged (a rebase-merge silent drop, same as #2831), rescued as
+      `6c54bb9d4`. Left in place: three worktrees with uncommitted work and two
+      with real unmerged commits.
+
+      The reason to keep the count low: `grep -rn` from the repo root descends
+      into every worktree, so a search returns hits from many divergent
+      snapshots with no signal as to which is live, and an agent told to
+      "search the repo" cannot tell them apart. Agent instructions should say
+      "verify against `origin/main`".
+
+      ⚠️ **Correction to how this item was originally filed.** It claimed a bug
+      had been reported against `internal/server/audiobooks_helpers.go`, "a file
+      deleted by `faf755ffa` surviving only in stale worktrees". That is wrong
+      in both halves: the file **exists** at `origin/main`, and `faf755ffa`
+      **added** it. The error came from running `git log --diff-filter=AD` — A
+      *or* D — seeing a single commit, and reading it as the D. `--diff-filter=A`
+      alone shows it was an addition.
+
+      The item's conclusion survives its evidence, but only partly, so the
+      honest version is: one finding in that sweep was genuinely stale (it
+      described code fixed nine commits earlier, from a local `main` that was
+      nine commits behind), and the citation I dismissed as pointing into a
+      graveyard was in fact a valid path I had not read. The lesson is narrower
+      than first written and cuts both ways — a stale tree does corrupt agent
+      findings, and so does a hasty refutation of one.
