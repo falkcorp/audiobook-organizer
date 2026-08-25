@@ -1,3 +1,8 @@
+<!-- file: .claude/skills/server-bootstrap/references/bootstrap-api.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: b8a2de28-0304-4440-9d73-c79f227e1235 -->
+<!-- last-edited: 2026-08-25 -->
+
 # Bootstrap API Reference
 
 ## POST /api/v1/auth/bootstrap
@@ -20,18 +25,23 @@ Exchanges a one-time bootstrap token for a full-privilege API key.
 
 ```json
 {
-  "api_key": "abbs_xxxxxxxxxxxxx",
-  "key_id": "ulid-...",
-  "user_id": "ulid-...",
-  "username": "admin",
-  "scopes": ["all"],
-  "message": "Bootstrap token consumed. This key will not be shown again.",
-  "generated_password": "Word-Word-Word-123",
-  "password_message": "Admin account created. Change this password after logging in."
+  "data": {
+    "api_key": "abbs_xxxxxxxxxxxxx",
+    "key_id": "ulid-...",
+    "user_id": "ulid-...",
+    "username": "admin",
+    "scopes": ["all"],
+    "message": "Bootstrap token consumed. This key will not be shown again.",
+    "expires_at": "2026-09-24T12:00:00Z",
+    "generated_password": "Word-Word-Word-123",
+    "password_message": "Admin account created. Change this password after logging in."
+  }
 }
 ```
 
-- **api_key**: The actual API token to use in subsequent requests. Store securely. Only shown once.
+- The API wraps successful responses in the standard `data` envelope. Extract
+  the bearer key with `jq -er '.data.api_key'`.
+- **data.api_key**: The actual API token to use in subsequent requests. Store securely. Only shown once.
 - **key_id**: Internal ID for the key.
 - **user_id**: Admin user ID.
 - **username**: Always "admin" for bootstrap-created users.
@@ -90,11 +100,13 @@ expires_at=1716470400
 Only one bootstrap token is valid at a time. To get a new token:
 
 ```bash
-sudo systemctl restart audiobook-organizer.service
-# Wait ~90s for startup, then read the token from the 0600 file (it is no
-# longer logged in plaintext — pen-test CRIT-1):
-sudo cat /var/lib/audiobook-organizer/.bootstrap-token
+ssh -tt <server> 'sudo systemctl restart audiobook-organizer.service; sleep 90; sudo cat /var/lib/audiobook-organizer/.bootstrap-token'
 ```
+
+The 90-second delay must occur before `cat`. The previous token file can remain
+visible during initialization, so reading it immediately after the restart can
+return a stale token that the new process rejects. Production sudo also requires
+the SSH pseudo-terminal supplied by `-tt`.
 
 The journalctl line now only confirms *when* a token was written and where:
 ```

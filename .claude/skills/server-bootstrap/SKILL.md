@@ -2,6 +2,10 @@
 name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
+<!-- file: .claude/skills/server-bootstrap/SKILL.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
+<!-- last-edited: 2026-08-25 -->
 
 # Server Bootstrap
 
@@ -16,15 +20,17 @@ Server IP: <user will prompt>
 ```
 
 The skill will:
-1. SSH to the server and restart `audiobook-organizer.service`
-2. **Wait 90 seconds** for the service to fully initialize — this server takes ~52 seconds to register all plugins before writing the bootstrap token. Do NOT read the token file until the wait is complete.
+1. SSH to the server and restart `audiobook-organizer.service`.
+2. **Wait 90 seconds before reading the token file.** The previous file may remain visible while the service initializes; reading immediately after `systemctl restart` can return that stale token and cause a `401 invalid bootstrap token` response.
 3. Read the bootstrap token from the **`.bootstrap-token` file** (the raw token is no longer logged to journalctl — pen-test finding CRIT-1):
    ```bash
    # Path is <data-dir>/.bootstrap-token, where <data-dir> is the directory
    # holding the PebbleDB. On prod the DB is /var/lib/audiobook-organizer/audiobooks.pebble,
    # so the token file is /var/lib/audiobook-organizer/.bootstrap-token.
    # The file is mode 0600 owned by the service user, so sudo is required.
-   ssh <server> 'sudo cat /var/lib/audiobook-organizer/.bootstrap-token'
+   # Production sudo requires a pseudo-terminal. Keep the delay between restart
+   # and cat so this reads the newly written token rather than the previous file.
+   ssh -tt <server> 'sudo systemctl restart audiobook-organizer.service; sleep 90; sudo cat /var/lib/audiobook-organizer/.bootstrap-token'
    ```
 4. POST to `/api/v1/auth/bootstrap` to exchange token for API key
 5. Write key + expiry to `.claude/.api-token` (shared, .gitignored)
@@ -57,14 +63,20 @@ curl -sk -X POST https://<server>:8484/api/v1/auth/bootstrap \
 Returns:
 ```json
 {
-  "api_key": "abbs_xxxxx",
-  "key_id": "...",
-  "user_id": "...",
-  "username": "admin",
-  "scopes": ["all"],
-  "expires_at": "2026-08-02T12:00:00Z"
+  "data": {
+    "api_key": "abbs_xxxxx",
+    "key_id": "...",
+    "user_id": "...",
+    "username": "admin",
+    "scopes": ["all"],
+    "expires_at": "2026-09-24T12:00:00Z"
+  }
 }
 ```
+
+The API uses the standard success envelope, so extract the bearer key with
+`jq -er '.data.api_key'`, not `.api_key`. The bootstrap token is consumed by a
+successful exchange even if a client subsequently fails to parse the response.
 
 `expires_at` is the server-side expiry of the issued key (default 30 days,
 config `bootstrap_key_ttl_days`; SEC-1/PROC-6). This is unrelated to the
@@ -75,7 +87,9 @@ See [references/bootstrap-api.md](references/bootstrap-api.md) for full API deta
 
 ## Troubleshooting
 
-- **Token file missing / empty**: The service takes ~52 seconds to start on this server. If `sudo cat .../.bootstrap-token` returns nothing or "No such file", you read it too early — wait and retry. Do NOT restart again; just wait and re-read.
+- **Token file missing / empty**: The service takes time to initialize and write the fresh file. Wait before reading it.
+- **`401 invalid bootstrap token` immediately after restart**: The token file was read before the fresh startup token replaced the previous file. Restart once, wait 90 seconds, then read and exchange the new value.
+- **Successful exchange but `.api_key` is empty**: Parse `.data.api_key`; all successful API responses use the standard `data` envelope. The one-time bootstrap token has already been consumed, so restart and repeat if the issued key was discarded.
 - **Permission denied reading the token file**: The file is mode 0600 owned by the service user — use `sudo cat`. If sudo is unavailable, `journalctl` will show the `token_file` path but not the value; you'll need filesystem access to that path.
 - **"Token expired"**: Server restart required. The bootstrap token has a fixed 10-minute TTL from service startup.
 - **SSH connection fails**: Check server IP and network connectivity.
