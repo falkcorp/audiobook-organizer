@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.42.0 -->
+<!-- version: 10.42.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-24 -->
+<!-- last-edited: 2026-08-25 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,550 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+## AI filename parsing is queued now — what to verify after deploy
+
+`library.ai-parse` landed on 2026-08-24. The scan no longer parses filenames
+inline; it queues batches of 200 candidates that run one at a time behind their
+own ConcurrencyKey. Two things need eyes on real data, and neither can be
+checked before a deploy.
+
+- [ ] **Confirm a real scan actually queues.** After deploying, run a scan and
+      check `GET /api/v1/operations/timeline` for `library.ai-parse` rows. The
+      scan log also prints `queued N book(s) for background AI filename parsing`
+      per batch. If instead the log says `failed to queue AI parsing (...)` the
+      hook fell back to inline and the scan is blocking again — the fallback is
+      deliberate (work is never dropped) but it is a regression to the old
+      behaviour and the warning is the only signal.
+
+- [ ] **Confirm queued results land on the version-group PRIMARY.** This is the
+      SECONDARY path and it is the one with no production evidence behind it.
+      `saveAIFieldsToPrimary` resolves the row by ID first, which is correct on
+      its own for the common case; the group redirect only fires when that row
+      turns out to have been demoted to a non-primary member. Pick a book that
+      auto-organize COPIED (not renamed in place) during the same scan and whose
+      Series the AI filled: the Series must be on the organized/primary row, not
+      the `organized_source` row still sitting at the import path. Unit tests
+      cannot see this — they all stub the saver, which is how the bug got as far
+      as it did.
+
+- [ ] **Decide what to do about organize running before the parse.** Named as a
+      known regression in the changelog: auto-organize fires when the scan ends,
+      which is now before the queued parsing drains, so a book organized in the
+      same scan is filed using pre-AI metadata. `{series}` is the visible one —
+      the row gets the series, the file stays in a non-series folder, and nothing
+      re-organizes it. Worst on a first import, where every book is a candidate
+      because no row exists yet. The fix is for `library.ai-parse` to re-organize
+      the books it materially changed (`internal/server` already imports
+      organizer, so it can call `OrganizeOneBook` directly) — but that moves
+      files on the strength of an op's output and needs a deliberate decision,
+      not a drive-by.
+
+- [ ] **Two books from one version group in one batch can lose a field.** The
+      saver redirects a demoted row to its group's primary, so two hash-duplicate
+      sources in the same batch have two workers doing a concurrent whole-row
+      read-modify-write on the same primary: last writer wins. Needs row-level
+      serialization. Noted in `ai_batch_phase.go`; narrow enough that it was left
+      unfixed deliberately.
+
+- [ ] **Watch the params row size once.** A batch carries only the seven fields
+      the AI phase reads (`aiParseCandidate` strips SegmentFiles/SegmentHashes),
+      so 200 books should be tens of KB, not MB. Worth one look at a real op row
+      to confirm nothing re-widened it.
+
+## Update Deluge when the organizer moves a book's files
+
+Prerequisite for migrating away from directory-normalized `Book.FilePath` (option B in
+`docs/superpowers/specs/2026-08-24-per-file-scan-cache-design.md`).
+
+When the organizer relocates a book's files, Deluge is not told. Any torrent still
+seeding those files breaks, because Deluge keeps pointing at the old location. Today
+this is masked for the in-root case (`ReOrganizeInPlace` is a true `os.Rename` within
+the library) but it is a real hazard as soon as moves become the normal path.
+
+- [ ] Decide the mechanism: Deluge `move_storage` per torrent vs. re-announce, and what
+      happens when a torrent covers only some of a book's files
+- [ ] Decide failure policy: does a Deluge update failure roll the move back, or is the
+      move committed and the mismatch reported? (Compare the existing organize rollback,
+      which `os.Rename`s the file back on a DB write failure.)
+- [ ] Wire it into the organize path, not just the manual move endpoint
+- [ ] Only then schedule option B
+
+Related: the version-linking issue below — organize already knows both the old and new
+path at move time, but does not record the relationship; a later scan rediscovers the
+original file and version-links it after the fact.
+
+## 🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration
+
+Found 2026-08-24 by mutation-testing PR #2861. The duplicate rows are **pre-existing** and
+not created by that change; what changed is where the damage lands.
+
+`internal/database/pebble_store_bookfiles.go` — `BatchUpsertBookFiles` matches an existing
+row via `GetBookFileByPath`, which reads `s.db.Get`, i.e. **committed** state. Row 2 of a
+batch therefore cannot see row 1 sitting in the still-uncommitted `pebble.Batch`. Two rows
+sharing a `FilePath` in one batch both miss the match, both get fresh ULIDs, and both land
+under distinct `book_file:<bookID>:<id>` keys.
+
+Measured on a two-row batch sharing one path:
+
+```
+rows stored for the duplicated path: 2
+resulting Book.Duration: 1200   (single-row truth: 600)
+```
+
+Before #2861 the duplication stayed confined to `book_file` rows that nothing summed.
+`BatchUpsertBookFiles` now recomputes aggregates, so the duplicate is summed into
+`Book.Duration` and `Book.FileSize` and becomes visible to users.
+
+**This is not a regression to revert.** Never recomputing was strictly worse. But the
+duplication is now user-visible and should be fixed at the source.
+
+### Why the test suite cannot see it
+
+`sumStoredFileAggregates` in `batch_upsert_aggregates_test.go` derives expected values from
+the **stored** rows, so a duplicated row is summed on both sides of the comparison and the
+assertion still balances. That derivation is deliberate — it is what makes the helper
+survive `normalizeBookFileDuration` (CONS-18) rewriting durations on the way in — so this is
+a known blind spot rather than a test defect. It is now named as one in the helper's doc.
+
+### Fix
+
+De-duplicate within the batch: keep a `map[string]*BookFile` keyed on `FilePath` (and on
+iTunes PID, which has the same read-committed problem) for the rows already staged in this
+batch, and merge a later row into the earlier one instead of writing a second key.
+
+- [ ] Dedup by FilePath within a single batch, before staging
+- [ ] Same for iTunes PID — `enforceBookFilePIDUniqueness` has the identical read-committed gap
+- [ ] Regression test: batch two rows with one path, assert 1 stored row and the un-doubled total
+- [ ] Decide whether existing duplicate rows need a repair pass, and measure how many exist
+
+## Scan cache is keyed per-book but the skip decision is per-file
+
+Multi-file books are re-read and re-hashed on **every** scan. Normalizing a book's
+`FilePath` to its directory (which is correct for the book) destroys the cache key for
+every file inside it. Two independent causes, both measured 2026-08-24 — fixing either
+alone changes nothing:
+
+1. **Key grain.** `GetScanCacheMap` (`internal/database/pebble_store_scancache.go:44`)
+   keys on `book.FilePath` — the directory. The walk emits, and `classifySkipFile`
+   (`internal/scanner/scanner.go:539`) looks up, the **segment file** path. Grouping makes
+   zero store calls, so it cannot know the row moved. Every lookup misses.
+2. **Value grain.** `writeBackScanCache` is handed the **directory** to stat, so the stored
+   size is the directory inode's (128 bytes observed) rather than the segment's. Even with
+   keys aligned, the `entry.Size != size` comparison at `scanner.go:546` fails.
+
+Measured second-scan verdict: `skippedUnchanged=0 cacheMiss=1`.
+
+Fix direction: key the scan cache per **book_file** rather than per book. Relates to the
+per-file transcription/backfill grain work. Needs a design decision before implementation —
+do not bolt a second cache onto the book row.
+
+- [ ] Decide per-file scan-cache keying and write it up before coding
+- [ ] Confirm whether the directory-rooted book branch (`scanner.go:1229`, never calls
+      `writeBackScanCache` at all) folds into the same fix
+- [ ] Open question, not yet measured: does the real `saveBookToDatabase` create a
+      **duplicate row** for an already-normalized multi-file book on rescan? A simplified
+      stub did; production's segment-hash dedup may re-link instead. Measure before assuming.
+
+- [ ] **Fix the RC-ordinal guard's 200-release truncation window.**
+      `prerelease.yml`'s `check-rc-ordinal` job enumerates with
+      `gh release list --repo "$REPO" --limit 200`, but the repo has 464 releases.
+      It has only ever reported correctly because `gh release list` is newest-first
+      and the base being counted is always the newest one, so the window happens to
+      contain it. `v0.218.1` reached 180 RCs -- 90% of the way to silently
+      under-counting on the one job whose entire purpose is counting. This is the
+      same truncation pattern already replaced with `gh api --paginate` in
+      `cleanup-rc-releases.yml`.
+      Not urgent: after the backlog purge, counts drop to <=3 per base.
+      Cost is more than a one-line swap -- `gh api` returns `tag_name`/`prerelease`
+      where `gh release list --json` returns `tagName`/`isPrerelease`, so
+      `.github/scripts/check-rc-ordinal.sh` and its tests move with it.
+      Found while hardening the purge (#2877); the guard became load-bearing for
+      the first time in #2875, having been skipped for months.
+
+## 🔴 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it
+
+Found 2026-08-24 while auditing the aggregate-recompute safety net for PR #2861. Not
+fixed there — different file, different call path.
+
+`internal/maintenance/jobs/recompute_book_aggregates.go` short-circuits on the one-time
+sentinel:
+
+```go
+// Check the one-time backfill sentinel. If already done and Force is false,
+// report the count of books that would be processed and return early.
+if !dryRun && pebbleStore.IsBookAggregatesBackfillDone() {
+    slog.Info("... skipping. Use Force=true to override.")
+    reporter.Log("info", "Backfill already completed — skipped. Use Force=true to override.", nil)
+    return nil
+}
+```
+
+**`Force` is not in that condition, and is never read anywhere in `Run`.** It is declared
+once, in `DefaultParams` (`:51`), and that is the only mention outside comments and the
+two operator-facing strings above. The parameter cannot even arrive: the sole call site,
+`internal/server/maintenance_job_op.go:187`, passes `p.DryRun` from
+`maintenanceJobOpParams`, which has exactly one field — `DryRun bool`. A submitted
+`{"force": true}` is discarded before it reaches the job.
+
+Net effect: **once the sentinel is set, this job can never run again**, and the escape
+hatch it prints to the operator does nothing. The comment at `:75` describes a guard
+condition the code does not implement.
+
+### Why it matters more than it looks
+
+`notifyBookFileChange` (`internal/database/pebble_store_book_aggregates.go:180-189`)
+justifies swallowing recompute errors partly on the grounds that "the backfill job acts
+as a safety net for any misses." That net is inert once the sentinel is set. A batch write
+whose recompute fails for N books logs N warnings, reports success, and the documented
+remedy refuses to run.
+
+Timing note, so this is not overstated: before the 2026-08-19
+`resolveAggregatesBackfillMarker` fix, prod fell through to `runViaInterface`, which never
+writes the sentinel — so the net was accidentally live. It is now one clean non-dry run
+away from permanent disablement. **Whether prod's sentinel is currently set was NOT
+verified.**
+
+### Fix
+
+Either wire `Force` through (`maintenanceJobOpParams` needs the field, `Job.Run` needs to
+carry it, and the sentinel check needs `&& !force`), or delete the parameter and both log
+lines that promise it. Do not leave a third state where the flag exists and lies.
+
+- [ ] Decide: wire `Force` through, or remove it and correct the two operator messages
+- [ ] Check prod: is `system:backfill:book_aggregates_v1_done` currently set?
+- [ ] Re-check `notifyBookFileChange`'s "backfill job acts as a safety net" clause once resolved
+
+## Repair the book rows that were written one-per-track
+
+The multi-file detector could not read a trailing sequence number (`Name 001`),
+so any folder named that way was imported as one book PER TRACK. Fixed for new
+scans on 2026-08-24, but **preventing the corruption is not repairing it** — the
+rows already written stay wrong, and nothing re-groups them.
+
+Confirmed on the production library:
+
+- `/mnt/bigdata/books/newbooks/audiobooks/Terry Pratchett Carpe Jugulum/` — 80
+  files on disk, 80 book rows in the DB, titled `Pratchett 001`…`Pratchett 080`
+- each row took the **folder name** as its author: `Terry Pratchett Carpe Jugulum`
+- each row got its own `version_group_id` with `is_primary_version=false`
+
+- [ ] **Measure the real size of the affected population first.** One folder is
+      known. The query is books whose siblings share a directory and whose titles
+      are file stems — do NOT assume it is only newbooks, and do not estimate it
+      from the 80.
+
+- [ ] **Decide the repair shape with the user before writing it.** Collapsing a
+      per-track group means merging N rows into 1 and deleting N-1, re-deriving
+      the title from the folder, re-resolving the author, and rebuilding one
+      version group. That is destructive and it is not a drive-by.
+
+- [ ] **Check whether the author is correct once grouping works.** The folder-name
+      author (`Terry Pratchett Carpe Jugulum`) is downstream of the grouping
+      failure and is expected to improve when the folder becomes one book, but
+      that has NOT been verified — do not assume the grouping fix closed it.
+
+## Scan cache: size and fix the "no book row at this path" population
+
+`writeBackScanCache` (`internal/scanner/scanner.go`) now counts three previously
+silent write-back abandonments. One of them, `scanCacheNoRowCount`, is
+structural rather than an error, and needs follow-up work.
+
+### What it measures
+
+`saveBookToDatabase` has two early `return nil` paths for a file that duplicates
+an already-version-linked book — one in the single-file dedup branch, one in the
+multi-file branch. Neither creates a row at the scanned path. With no row,
+`GetBookByFilePath` returns nil, so no scan-cache entry is ever written, so
+`GetScanCacheMap` (which skips rows with a nil `LastScanMtime`) never sees the
+path, so the file is re-read **and re-hashed** on every scan for the life of the
+library. It is self-perpetuating and it selects for the files that are most
+expensive to process.
+
+### Do NOT conflate this with the 12.8% figure
+
+The 12.8% of books lacking `last_scan_mtime` was sampled from **book rows**.
+Files with no row at all are structurally invisible to that measurement. These
+are disjoint populations and fixing one will not move the other. The weekly
+`force_update` sweep does not cover this one either: a sweep re-writes cache
+entries for files that *get* a row, and these never do.
+
+### Tasks
+
+- [ ] Read `scanCacheNoRowCount` off a completed production scan summary to size
+      the population. Until that number exists this is unquantified — do not
+      assume it is either negligible or large.
+- [x] ~~Decide where scan state for a row-less path should live.~~
+      **DECIDED 2026-08-24: a path-keyed scan-cache keyspace, independent of
+      book rows — built INSIDE the staged pipeline's enumerate/diff phase, not
+      as a standalone change.** The user chose the more correct shape and
+      sequenced it deliberately: building it now against the current scanner
+      would mean building it twice, because the diff phase needs the same
+      path-keyed state. Do NOT create a row for the duplicate path (the rejected
+      alternative below) — it changes import semantics and risks regrowing the
+      dedup backlog.
+
+      The two candidates as they were weighed:
+      - a path-keyed scan-cache keyspace, independent of book rows. This is the
+        more correct shape (the scanner walks *files*; the cache is keyed by
+        *book rows*, and the mismatch is the root cause) and it has a natural
+        home in the staged pipeline's enumerate/diff phase rather than as a
+        bolt-on. See `docs/superpowers/specs/2026-08-24-staged-library-scan-design.md`.
+      - create a row for the duplicate path. Symmetric with the non-linked
+        branch, which *does* create a row — but it changes import semantics,
+        surfaces files that are currently invisible in the library, and risks
+        regrowing the dedup backlog that is being worked separately. Do not do
+        this unilaterally.
+- [ ] Also check `scanCacheStatErrCount` and `scanCacheLookupErrCount` on the
+      same run. A non-trivial lookup-error count means a store problem that was
+      invisible before 2026-08-24 and is a different bug.
+- [ ] Note when sizing: version-linking is *a* cause of a row-less path, not
+      *the* cause. There is at least a third early `return nil` with the same
+      effect — the blocked-hash skip in `saveBookToDatabase`. Any estimate that
+      attributes the whole `scanCacheNoRowCount` figure to duplicate files will
+      be wrong.
+
+- [ ] **Decide how a forced per-book rescan gets picked up immediately.**
+      `POST /audiobooks/:id/force-rescan` (#2856) sets `NeedsRescan`, which is
+      precise — one book, not the 1,458 files in `newbooks/audiobooks` — but it
+      defers to the next scan tick, up to 6 hours away. The obvious fix, giving
+      folder-scoped scans their own `ConcurrencyKey`, is **unsafe**: dispatcher
+      Gate 3b records the 2026-08-07 incident where two ops doing whole-row
+      read-modify-write on the same rows silently lost fields, and a full scan
+      walks every import path so the scopes overlap in the normal case. Gate 3b
+      cannot be narrowed either — `Writes []Resource` is a static field on the
+      OperationDef, so no invocation can declare "I touch only book X".
+      Three options, written up in
+      `docs/superpowers/specs/2026-08-24-staged-library-scan-design.md`:
+      accept the delay; build a bounded single-book re-read path outside
+      `library.scan` (needs a new serialization mechanism); or make the full
+      scan short enough that queueing behind it is fine — the staged pipeline,
+      which is the root fix.
+
+- [x] **~~Add a per-book last-scanned timestamp before building the 6-day age gate.~~**
+      **RESOLVED 2026-08-24 by decision, not by code — no new field is needed.**
+      This task assumed COOLDOWN semantics ("don't re-read a file we scanned in
+      the last 6 days"), which is the only one of the three readings that needs a
+      per-book *scanned-at* timestamp. The user chose **HYBRID** instead: a new
+      or unknown file is scanned immediately, and a file the library already
+      knows about is re-read only once its **mtime** is more than 6 days old.
+      `LastScanMtime` already carries exactly that, so the gate shipped against
+      existing fields.
+
+      Two claims in the original text did NOT survive the decision, and are
+      recorded here so they are not re-derived:
+
+      - *"a new field makes every existing row read 'never scanned', so the first
+        tick after deploy re-reads the whole library"* — moot, there is no new
+        field.
+      - *"The gate belongs on the cache-miss path, not as an OR arm on the
+        unchanged path"* — this is the QUIESCENCE reading, which the user
+        explicitly rejected because it would delay discovery of a newly added
+        book by six days. The gate deliberately sits on the **changed** branch:
+        cache-miss is read immediately, `NeedsRescan` is checked first so a
+        forced rescan bypasses it, and `force_update` passes a nil cache so a
+        full sweep never consults it.
+
+      Shipped in `classifySkipFile` / `rescanFreshCutoff`
+      (`internal/scanner/scanner.go`) behind `min_rescan_age_hours`, default 144,
+      `-1` disables.
+
+- [ ] **Watch `too-fresh` in the scan summary on the first real run after deploy.**
+      The gate is new and its skip reason is reported separately from
+      `unchanged` precisely because it means *deferred* work rather than work
+      correctly avoided. A run where `too-fresh` is a large fraction means
+      something is churning the library — that is a finding, not a success. If
+      it is near zero, the gate is inert on this library and the 144h default is
+      the wrong number.
+
+## Scan/rescan lane — what is left after the rescan-age gate
+
+The age gate (`min_rescan_age_hours`) shipped. These are the remaining items in
+the same lane, in the order the user sequenced them on 2026-08-24.
+
+### Blocked on a deploy, not on code
+
+- [ ] **Deploy `main` and trigger the first `library_scan_full` sweep via "Run now".**
+      The user chose this over restarting the canceled scan. It is **not
+      currently possible**: prod's binary was built 2026-08-24 07:23 EDT and the
+      sweep merged at 16:08 EDT, so `library_scan_full` does not exist on the
+      running server — its live task list has 27 tasks and the sweep is not one
+      of them. Verified against `GET /api/v1/tasks`, not inferred from the merge.
+
+      Order matters and is forced: deploy **once**, after the age gate merges,
+      then trigger. Two deploys would mean the second one kills an in-flight
+      40k-file `force_update` sweep. Deploy from the **primary checkout**, never
+      from a worktree — gitignored `deploy/local.conf` / `Makefile.local` are
+      absent in a worktree and `make deploy` can silently truncate prod's config.
+
+      Note the pre-existing hazard while it runs: a scan clobbers metadata
+      applied while it is in flight, so nothing may be applied during the sweep.
+
+- [ ] **The prod `library.scan` canceled at 8,367/40,108 stays canceled.**
+      Explicitly decided — the full sweep subsumes it (`force_update` +
+      `include_root_dir` covers every file), so restarting it would be duplicate
+      work. Recorded so it is not "discovered" again as an anomaly.
+
+### The real fix, and the home for the path-keyed cache
+
+- [ ] **Implement the staged library scan pipeline.** Spec is on main at
+      `docs/superpowers/specs/2026-08-24-staged-library-scan-design.md` v5.0.0:
+      enumerate → diff → holding area → deep pass; flags on existing rows rather
+      than a new table; fast pass is stat + tag-header read with no hashing and
+      no ffprobe; deep pass covers only new/changed files, newest first, and must
+      honour `OverrideLocked`.
+
+      This is the root fix for forced-rescan immediacy, and it is where the
+      **path-keyed scan-cache keyspace** belongs (see
+      `20260824-scan-cache-path-population.md` — the decision is made, the
+      sequencing is "inside the diff phase"). Building that keyspace standalone
+      first means building it twice.
+
+### Measurement that needs a real run
+
+- [ ] **Read `scanCacheNoRowCount`, `scanCacheStatErrCount` and
+      `scanCacheLookupErrCount` off the first completed scan summary.** All three
+      were silent before 2026-08-24 and none has ever been observed on real data.
+      Until then the row-less population is unquantified — do not assume it is
+      either negligible or large. A non-trivial `lookupErr` is a store problem
+      and a different bug.
+
+- [ ] **Read `too-fresh` off the same summary.** New in the age-gate PR, and
+      reported separately from `unchanged` because it is deferred work rather
+      than work correctly avoided. Near-zero means the 144h default is inert on
+      this library; a large fraction means something is churning it.
+
+### resume-sweep — never started, needs the user's go-ahead
+
+- [ ] **resume-sweep PR1: `userCanceled` marker on `runHandle` + correct shutdown
+      status, recorded-only, no auto-resume.** The worktree does not exist. This
+      is purely observational — it records what happened, it does not change
+      resume behaviour — but the user has not released it.
+
+- [ ] **resume-sweep PR2 — do NOT ship without the user's explicit say-so.**
+      Standing instruction, restated 2026-08-24.
+
+## `CreateAuthor` is check-then-create with no atomicity — mints duplicate author rows
+
+`PebbleStore.CreateAuthor` (`internal/database/pebble_store_authors.go`) calls
+`GetAuthorByName` and, on a miss, mints a new row. The two steps are not atomic,
+so concurrent callers with the same name each create their own row.
+
+**Measured 2026-08-25:** 24 concurrent `CreateAuthor` calls with an identical
+name produced **24 distinct author rows**, reproducibly across three runs. This
+is not an occasional race — the dedup check almost never observes a concurrent
+write.
+
+The scanner resolves authors from inside its worker pool, so an import that first
+meets an author on several books at once mints a row per worker. Production has
+two rows named `Unknown Author` (54845 with 0 books, 54846 with 2,128), and
+17,947 author rows in total. Consistent with the earlier finding that ~212
+authors' books carry a dangling `AuthorID`.
+
+Consequences beyond the duplicate rows themselves: the `author:name:` index maps
+a normalized name to exactly one id, so every duplicate beyond the indexed one is
+unreachable by name lookup. Any logic that identifies an author by resolving its
+name to an id is wrong for those rows — this already nearly made the
+`Unknown Author` nomination-gate fix inert (see
+`docs/audits/2026-08-25-unknown-author-feedback-loop.md`).
+
+- [ ] Make the lookup and insert atomic (single Pebble batch with a conditional
+      write), so a concurrent caller cannot mint a second row.
+- [ ] Decide how to merge the duplicate author rows already present, and whether
+      book `AuthorID`s pointing at unindexed duplicates should be repointed at
+      the indexed row.
+- [ ] Add a concurrency test asserting N concurrent `CreateAuthor` calls with one
+      name yield exactly one row. A serial test cannot observe this.
+
+Lane: `internal/database`. Found from the scanner side while fixing the
+`Unknown Author` gate; deliberately not fixed there.
+
+## The directory author fallback reads the TITLE as the author on organized books
+
+`extractAuthorFromDirectory` (present in BOTH `internal/metadata/metadata.go` and
+`internal/scanner/scanner.go`) takes the file's **immediate** parent directory as
+the author.
+
+The organizer's own layout is `<root>/<author>/<title>/<file>`. So for an
+organized book the immediate parent is the **title**, and the fallback attributes
+the book to an "author" that is really its own title.
+
+Measured 2026-08-25:
+
+```
+extractFromFilename("/mnt/bigdata/books/audiobook-organizer/Unknown Author/Some Book/Some Book.mp3")
+  -> Artist = "Some Book"
+```
+
+This is a strong candidate for the junk-author census in
+`docs/audits/2026-08-25-unknown-author-feedback-loop.md`: 4,643 of 17,947 author
+rows (25.9%) are not people, and many are plainly titles — `Rings Haven`,
+`The Sapphire Crescent`, `Avatars Dance 1`, `19 - Apocalypse`. Every one is a
+non-nil `AuthorID` that closes the AI nomination gate, so each mis-attributed
+book is locked out of ever being corrected.
+
+Compounded by `CreateAuthor` being racy
+(`todo.d/20260825-createauthor-check-then-create-race.md`): each junk name also
+mints one or more real author rows.
+
+- [ ] Decide the correct rule. The author is the **grandparent** under the
+      organizer's own layout, but an unorganized import may legitimately have the
+      author as the immediate parent. It likely needs to be layout-aware (is this
+      path under `RootDir`?) rather than positional.
+- [ ] Apply it in both copies, or collapse the two parsers into one — they are
+      already divergent copies of the same logic.
+- [ ] Quantify how many of the 4,643 junk author rows came from this specific
+      path before deciding on a repair.
+
+Found while fixing the `Unknown Author` placeholder loop; deliberately out of
+scope there.
+
+## `recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics
+
+`recoverPebbleClosed` (`internal/database/pebble_store_ops_v2.go:776`) exists to
+turn "registry torn down without Shutdown" panics into errors. It recovers **only**
+`pebble.ErrClosed` and deliberately re-panics anything else, so real bugs are not
+masked.
+
+A write to a closing store does not surface `pebble.ErrClosed`. It surfaces the
+WAL writer's own error:
+
+```
+panic: pebble/record: closed LogWriter [recovered, repanicked]
+```
+
+`[recovered, repanicked]` is the proof — the guard ran, `errors.Is(recErr,
+pebble.ErrClosed)` was false, and it re-raised. So the guard is a no-op on this
+leg.
+
+Observed in CI 2026-08-25, `Minimal CI / Go Tests (short, race)`, run
+32819653444, failing `internal/server`. Stack:
+
+```
+dbReporter.flushLoop -> dbReporter.flushProgressLazy -> UpdateOpProgressV2
+  -> pebbleSetJSON -> pebble.DB.Set -> commitWrite -> panic
+```
+
+The guard's own doc lists the legs it was built from — `ListWaitingDepsOps`,
+`ListQueuedOperationsV2`, `UpdateOpProgressV2` — which were all observed as
+**reads**. `UpdateOpProgressV2` also writes, and that path was never exercised
+into the guard.
+
+This is a **flaky test failure, not a product bug in the caller**: the reporter's
+background flush loop races store teardown, so it fires only when the timing
+lines up. It will keep failing PRs at random until fixed.
+
+- [ ] Widen the sentinel check to cover the WAL-write error as well as
+      `pebble.ErrClosed`, without widening it to "any panic" (the doc is explicit
+      that masking real bugs is not acceptable). `record.ErrClosedLogWriter`, or
+      a string check as a last resort, plus a test that writes to a closed store.
+- [ ] Better: make the registry's `dbReporter` stop its flush loop before the
+      store closes, so the guard is not load-bearing in tests at all. The guard's
+      own warning text ("likely a registry torn down without Shutdown") already
+      names this as the real cause.
+
+Lane: `internal/database` / `internal/operations/registry`. Found from an
+unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
 
 - [ ] **SEC-BACKUP-ABSPATH** Decide whether the backup restore path should
       *reject* absolute tar entry names rather than normalise them.
