@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-08-23
 
@@ -37,6 +37,7 @@ type mergeBookFileStore interface {
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	CreateBookFile(file *database.BookFile) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
+	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error
 }
 
 type mergeAuthorStore interface {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
 // last-edited: 2026-08-24
 
@@ -101,6 +101,9 @@ type regroupBookMutator interface {
 // regroupFileMover moves book_file rows between books. Shared by both paths.
 type regroupFileMover interface {
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
+	// Bulk form: both regroup paths move files in a loop, so they use this to
+	// pay one recompute per book instead of two per file.
+	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error
 }
 
 // fsRegroupFileStore is the filesystem path's own file surface: it creates and

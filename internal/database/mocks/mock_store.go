@@ -23266,6 +23266,63 @@ func (_c *MockStore_MoveBookFilesToBook_Call) RunAndReturn(run func(fileIDs []st
 	return _c
 }
 
+// MoveBookFilesToBookBulk provides a mock function for the type MockStore
+func (_mock *MockStore) MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error {
+	ret := _mock.Called(moves, targetBookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MoveBookFilesToBookBulk")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func([]database.BookFileMove, string) error); ok {
+		r0 = returnFunc(moves, targetBookID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_MoveBookFilesToBookBulk_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MoveBookFilesToBookBulk'
+type MockStore_MoveBookFilesToBookBulk_Call struct {
+	*mock.Call
+}
+
+// MoveBookFilesToBookBulk is a helper method to define mock.On call
+//   - moves []database.BookFileMove
+//   - targetBookID string
+func (_e *MockStore_Expecter) MoveBookFilesToBookBulk(moves any, targetBookID any) *MockStore_MoveBookFilesToBookBulk_Call {
+	return &MockStore_MoveBookFilesToBookBulk_Call{Call: _e.mock.On("MoveBookFilesToBookBulk", moves, targetBookID)}
+}
+
+func (_c *MockStore_MoveBookFilesToBookBulk_Call) Run(run func(moves []database.BookFileMove, targetBookID string)) *MockStore_MoveBookFilesToBookBulk_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []database.BookFileMove
+		if args[0] != nil {
+			arg0 = args[0].([]database.BookFileMove)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_MoveBookFilesToBookBulk_Call) Return(err error) *MockStore_MoveBookFilesToBookBulk_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_MoveBookFilesToBookBulk_Call) RunAndReturn(run func(moves []database.BookFileMove, targetBookID string) error) *MockStore_MoveBookFilesToBookBulk_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MoveSegmentsToBook provides a mock function for the type MockStore
 func (_mock *MockStore) MoveSegmentsToBook(segmentIDs []string, targetBookNumericID int) error {
 	ret := _mock.Called(segmentIDs, targetBookNumericID)

@@ -1480,58 +1480,100 @@ func (s *PebbleStore) GetBookFileByID(bookID, fileID string) (*BookFile, error) 
 // deliberate. In the merge flow the drained source is deleted immediately after,
 // so the retained value is discarded with it.
 func (s *PebbleStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
+	return s.MoveBookFilesToBookBulk([]BookFileMove{{FileIDs: fileIDs, SourceBookID: sourceBookID}}, targetBookID)
+}
+
+// BookFileMove names one source book and the rows to take from it.
+type BookFileMove struct {
+	// FileIDs are book_file row IDs that currently belong to SourceBookID.
+	FileIDs []string
+	// SourceBookID is the book those rows are moving away from.
+	SourceBookID string
+}
+
+// MoveBookFilesToBookBulk moves rows from MANY source books into one target in a
+// single atomic batch, recomputing each distinct book's aggregates exactly ONCE.
+//
+// WHY THIS EXISTS: the three regroup/merge callers move files in a loop — and two
+// of them move ONE FILE PER CALL. Once MoveBookFilesToBook started recomputing
+// both books (which it must, or the totals are simply wrong), a regroup moving
+// 2,000 files would pay 4,000 recomputes, each re-reading the target's entire and
+// steadily growing file set. That is the same O(N^2) shape that took
+// dedup.full-scan silent for 3+ hours on 2026-07-05. Coalescing here keeps the
+// correctness fix from buying itself a performance regression.
+//
+// Semantics are otherwise identical to calling MoveBookFilesToBook once per move:
+// every row must currently exist under its stated source, and any miss fails the
+// whole batch without writing anything.
+func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID string) error {
+	if len(moves) == 0 {
+		return nil
+	}
+
 	batch := s.db.NewBatch()
 
 	// Retained so the post-commit memdb refresh can replay exactly the rows that
 	// were written, rather than re-reading them under their new keys.
-	moved := make([]*BookFile, 0, len(fileIDs))
+	moved := make([]*BookFile, 0, len(moves))
 
-	for _, fid := range fileIDs {
-		f, err := s.getBookFileByID(sourceBookID, fid)
-		if err != nil {
-			batch.Close()
-			return fmt.Errorf("file not found: %s: %w", fid, err)
-		}
-		if f == nil {
-			batch.Close()
-			return fmt.Errorf("file not found: %s", fid)
+	// Distinct books touched, in first-seen order. The target is seeded first so
+	// it is recomputed even when every move turns out to be a self-move.
+	affected := []string{targetBookID}
+	seen := map[string]struct{}{targetBookID: {}}
+
+	for _, mv := range moves {
+		for _, fid := range mv.FileIDs {
+			f, err := s.getBookFileByID(mv.SourceBookID, fid)
+			if err != nil {
+				batch.Close()
+				return fmt.Errorf("file not found: %s: %w", fid, err)
+			}
+			if f == nil {
+				batch.Close()
+				return fmt.Errorf("file not found: %s", fid)
+			}
+
+			// Delete old primary key
+			oldKey := []byte(fmt.Sprintf("book_file:%s:%s", mv.SourceBookID, fid))
+			if err := batch.Delete(oldKey, nil); err != nil {
+				batch.Close()
+				return err
+			}
+
+			// Delete old secondary indexes
+			if err := s.deleteBookFileSecondaryIndexes(batch, f); err != nil {
+				batch.Close()
+				return err
+			}
+
+			// Update book ID and write under new primary key
+			f.BookID = targetBookID
+			f.UpdatedAt = time.Now()
+
+			data, err := json.Marshal(f)
+			if err != nil {
+				batch.Close()
+				return err
+			}
+			newKey := []byte(fmt.Sprintf("book_file:%s:%s", targetBookID, fid))
+			if err := batch.Set(newKey, data, nil); err != nil {
+				batch.Close()
+				return err
+			}
+
+			// Re-create secondary indexes with updated bookID
+			if err := writeBookFileSecondaryIndexes(batch, f); err != nil {
+				batch.Close()
+				return err
+			}
+
+			moved = append(moved, f)
 		}
 
-		// Delete old primary key
-		oldKey := []byte(fmt.Sprintf("book_file:%s:%s", sourceBookID, fid))
-		if err := batch.Delete(oldKey, nil); err != nil {
-			batch.Close()
-			return err
+		if _, ok := seen[mv.SourceBookID]; !ok && mv.SourceBookID != "" {
+			seen[mv.SourceBookID] = struct{}{}
+			affected = append(affected, mv.SourceBookID)
 		}
-
-		// Delete old secondary indexes
-		if err := s.deleteBookFileSecondaryIndexes(batch, f); err != nil {
-			batch.Close()
-			return err
-		}
-
-		// Update book ID and write under new primary key
-		f.BookID = targetBookID
-		f.UpdatedAt = time.Now()
-
-		data, err := json.Marshal(f)
-		if err != nil {
-			batch.Close()
-			return err
-		}
-		newKey := []byte(fmt.Sprintf("book_file:%s:%s", targetBookID, fid))
-		if err := batch.Set(newKey, data, nil); err != nil {
-			batch.Close()
-			return err
-		}
-
-		// Re-create secondary indexes with updated bookID
-		if err := writeBookFileSecondaryIndexes(batch, f); err != nil {
-			batch.Close()
-			return err
-		}
-
-		moved = append(moved, f)
 	}
 
 	if err := batch.Commit(pebble.Sync); err != nil {
@@ -1563,15 +1605,12 @@ func (s *PebbleStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, target
 		s.UpsertBookFileToMemDB(f)
 	}
 
-	// Both sides, in one call. Passing them together rather than as two
-	// notifyBookFileChange calls means a failure on either book is reported by
-	// the same aggregated Error, and a self-move (source == target, which the
-	// regroup callers can produce) recomputes once instead of twice.
-	books := []string{sourceBookID}
-	if targetBookID != sourceBookID {
-		books = append(books, targetBookID)
-	}
-	s.notifyBookFileChanges(books)
+	// Every distinct book touched, in ONE call. Passing them together rather than
+	// as per-book notifyBookFileChange calls means a failure on any of them is
+	// reported by the same aggregated Error, and a self-move (source == target,
+	// which the regroup callers can produce) is deduped by `seen` into a single
+	// recompute rather than two.
+	s.notifyBookFileChanges(affected)
 	return nil
 }
 

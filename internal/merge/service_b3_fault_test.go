@@ -1,5 +1,5 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.0.0
+// version: 1.3.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
 // last-edited: 2026-07-18
 
@@ -96,6 +96,30 @@ func (f *b3FaultStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targe
 		return fmt.Errorf("b3 injected MoveBookFilesToBook failure")
 	}
 	return f.Store.MoveBookFilesToBook(fileIDs, sourceBookID, targetBookID)
+}
+
+// MoveBookFilesToBookBulk must honour the SAME injection as the singular form.
+//
+// ⚠️ This override is load-bearing, and its absence is silent. b3FaultStore
+// embeds database.Store, so an un-overridden method falls through to the REAL
+// store and the fault simply never fires — the test then asserts against a
+// perfectly successful combine. That is exactly what happened when
+// CombineBooks moved from the singular call to this one: the injection was
+// bypassed, combine succeeded, and TestB3_CombineBooks_MoveBookFilesToBookError
+// stopped testing anything. If a caller is ever routed through a third variant,
+// override it here too.
+//
+// Fails on the FIRST matching source rather than filtering the batch: the real
+// implementation is atomic, so a batch containing one doomed move writes nothing
+// at all, and partially applying the others here would model behaviour the store
+// does not have.
+func (f *b3FaultStore) MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error {
+	for _, mv := range moves {
+		if f.failMoveBookFilesToBookFor[mv.SourceBookID] {
+			return fmt.Errorf("b3 injected MoveBookFilesToBook failure")
+		}
+	}
+	return f.Store.MoveBookFilesToBookBulk(moves, targetBookID)
 }
 
 func (f *b3FaultStore) DeleteBook(id string) error {

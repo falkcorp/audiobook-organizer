@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 1.6.0
+// version: 1.10.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-08-19
 
@@ -230,7 +230,45 @@ func (p *Plugin) applyFSRegroup(ctx context.Context, store fsRegroupStore, targe
 			continue
 		}
 
-		// Attach one BookFile per member chapter file (ordered) to the survivor.
+		// PASS 1: resolve every member's existing row once, and collect the
+		// cross-book reattaches so they move in ONE batch.
+		//
+		// MoveBookFilesToBook recomputes both of its books on every call, so
+		// reattaching in the per-member loop below cost two full re-reads of the
+		// survivor's growing file set per member. The rows are resolved here
+		// anyway, so batching the moves costs one extra pass over Members and
+		// removes that entirely.
+		resolved := make([]*database.BookFile, len(t.Members))
+		failedReattach := make(map[string]bool)
+		reattach := make([]database.BookFileMove, 0, len(t.Members))
+		for order, m := range t.Members {
+			existing, _ := store.GetBookFileByPath(m.FilePath)
+			resolved[order] = existing
+			if existing != nil && existing.BookID != survivor.ID {
+				reattach = append(reattach, database.BookFileMove{
+					FileIDs: []string{existing.ID}, SourceBookID: existing.BookID,
+				})
+			}
+		}
+		if len(reattach) > 0 {
+			if err := store.MoveBookFilesToBookBulk(reattach, survivor.ID); err != nil {
+				// Atomic, so nothing moved. Fall back per file so one bad row
+				// cannot cost the survivor every other chapter's audio — the
+				// resilience the per-member loop always had.
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"bulk reattach of %d files -> %s failed (%v); retrying per file", len(reattach), survivor.ID, err))
+				for _, mv := range reattach {
+					id := mv.FileIDs[0]
+					if err := store.MoveBookFilesToBook(mv.FileIDs, mv.SourceBookID, survivor.ID); err != nil {
+						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reattach file %s -> %s failed: %v", id, survivor.ID, err))
+						failedReattach[id] = true
+						errCount++
+					}
+				}
+			}
+		}
+
+		// PASS 2: attach one BookFile per member chapter file (ordered) to the survivor.
 		for order, m := range t.Members {
 			var size int64
 			if fi, serr := os.Stat(m.FilePath); serr == nil {
@@ -246,14 +284,13 @@ func (p *Plugin) applyFSRegroup(ctx context.Context, store fsRegroupStore, targe
 			// RawTags/hashes — the BookFile primary key embeds the bookID, so an in-place
 			// UpdateBookFile cannot change owners; MoveBookFilesToBook re-keys it), then set
 			// the chapter track order (which also syncs memdb). Otherwise create a fresh row.
-			existing, _ := store.GetBookFileByPath(m.FilePath)
+			existing := resolved[order]
 			if existing != nil {
-				if existing.BookID != survivor.ID {
-					if err := store.MoveBookFilesToBook([]string{existing.ID}, existing.BookID, survivor.ID); err != nil {
-						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reattach file %s -> %s failed: %v", m.FilePath, survivor.ID, err))
-						errCount++
-						continue
-					}
+				if failedReattach[existing.ID] {
+					// Its move failed in the batch pass above, which already
+					// counted and logged it. Leave the row on its old book
+					// rather than writing survivor-shaped fields onto it.
+					continue
 				}
 				existing.BookID = survivor.ID
 				existing.TrackNumber = order + 1

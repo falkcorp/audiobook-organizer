@@ -516,6 +516,43 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	// BookFile so the combined book owns ALL its files explicitly.
 	res.FilesMoved += ms.ensureOwnFile(survivor)
 
+	// Move every absorbed book's files onto the survivor in ONE batch, before the
+	// per-book loop below.
+	//
+	// MoveBookFilesToBook recomputes both of its books, so moving inside the loop
+	// recomputed the survivor once per absorbed book — each one re-reading the
+	// survivor's entire, steadily growing file set. Batching pays a single
+	// recompute per distinct book for the whole combine.
+	//
+	// Failure semantics are unchanged: the loop returned immediately on a move
+	// error, and the batch is atomic, so a failure here writes nothing and returns
+	// the same way. No per-book fallback, deliberately — a partially-moved combine
+	// is exactly what the old early return existed to prevent.
+	movedFiles := make(map[string][]string, len(bookIDs))
+	{
+		bulk := make([]database.BookFileMove, 0, len(bookIDs))
+		for _, id := range bookIDs {
+			if id == primaryID {
+				continue
+			}
+			files, _ := ms.db.GetBookFiles(id)
+			if len(files) == 0 {
+				continue
+			}
+			ids := make([]string, len(files))
+			for i := range files {
+				ids[i] = files[i].ID
+			}
+			movedFiles[id] = ids
+			bulk = append(bulk, database.BookFileMove{FileIDs: ids, SourceBookID: id})
+		}
+		if len(bulk) > 0 {
+			if err := ms.db.MoveBookFilesToBookBulk(bulk, survivor.ID); err != nil {
+				return nil, fmt.Errorf("move files -> %s: %w", survivor.ID, err)
+			}
+		}
+	}
+
 	for _, id := range bookIDs {
 		if id == primaryID {
 			continue
@@ -526,21 +563,20 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 		}
 
 		// Attach this book's files to the survivor.
-		files, _ := ms.db.GetBookFiles(id)
-		if len(files) > 0 {
-			ids := make([]string, len(files))
-			for i := range files {
-				ids[i] = files[i].ID
-			}
-			if err := ms.db.MoveBookFilesToBook(ids, id, survivor.ID); err != nil {
-				return nil, fmt.Errorf("move files %s->%s: %w", id, survivor.ID, err)
-			}
+		//
+		// The move itself already happened in the batched pre-pass above;
+		// movedFiles carries the ids it took from this book. Batching it there
+		// matters because MoveBookFilesToBook recomputes BOTH of its books, so
+		// moving per absorbed book here would recompute the survivor once per
+		// absorbed book, each time re-reading its whole and growing file set.
+		ids := movedFiles[id]
+		if len(ids) > 0 {
 			// Carry each moved file's sync_file identity (ino) onto the
 			// survivor. Still inside mergeSerializeMu and well before the
 			// hard delete below, matching the FollowMerge call's own
 			// placement and rationale.
 			FollowFileMove(ms.db, id, survivor.ID, ids)
-			res.FilesMoved += len(files)
+			res.FilesMoved += len(ids)
 		} else if book.FilePath != "" {
 			res.FilesMoved += ms.attachVirtualFile(book, survivor.ID)
 		}
