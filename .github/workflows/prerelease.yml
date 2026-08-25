@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 2.11.0
+# version: 2.12.0
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-08-22
+# last-edited: 2026-08-24
 
 name: Prerelease on Merge
 
@@ -28,18 +28,22 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main: changelog.d collect step (org rollout)
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@6acc4d0342e8b108a7cbc5c82068d90b508edec9 # main: disabled-languages + draft upsert + stable diff base
     with:
       release-type: 'auto'
       prerelease: true
       draft: false
       go-enabled: true
       frontend-enabled: true
-      # NOTE: docker-enabled: false does not actually skip Docker --
-      # reusable-release.yml treats false as "auto" (auto-detects the
-      # Dockerfile and builds anyway), so prerelease builds have always
-      # built Docker images despite this flag. Pre-existing, not fixed here.
+      # docker-enabled/python-enabled are "force ON" switches: false means
+      # "auto-detect", not "never". That made "never build this" unexpressible,
+      # so prereleases built Docker anyway and ran a Python release pipeline
+      # off a pyproject.toml that only holds Black's line-length config
+      # (no [project] table, no pytest) -- `pytest: command not found`, exit
+      # 127, which failed the whole run and skipped Create GitHub Release.
+      # disabled-languages is the explicit opt-out (ghcommon #350).
       docker-enabled: false
+      disabled-languages: 'python,docker'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
       go-experiment: 'jsonv2'
