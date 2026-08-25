@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -938,7 +938,17 @@ func TestCoverage_ScanCache(t *testing.T) {
 
 	bookID := createTestBook(t, store, "Scan Book", "/tmp/scan.m4b", nil, nil)
 
-	// Update scan cache
+	// The scan cache is keyed on book_file rows, not book rows -- it is consulted
+	// per FILE during the walk. A book with no file row therefore contributes
+	// nothing, which is why this test creates one. Before that change this test
+	// passed with no book_file row at all, because the map was built from book
+	// rows; that is the exact grain confusion the per-file cache removes.
+	require.NoError(t, store.CreateBookFile(&BookFile{
+		BookID: bookID, FilePath: "/tmp/scan.m4b",
+	}))
+
+	// Update scan cache. This stamps the book AND mirrors onto its single file row,
+	// which is the only reason the entry below appears.
 	err := store.UpdateScanCache(bookID, 1234567890, 999)
 	require.NoError(t, err)
 
@@ -946,9 +956,18 @@ func TestCoverage_ScanCache(t *testing.T) {
 	cacheMap, err := store.GetScanCacheMap()
 	require.NoError(t, err)
 	entry, ok := cacheMap["/tmp/scan.m4b"]
-	assert.True(t, ok)
+	assert.True(t, ok, "the stamp did not reach the file row; the scanner would re-read this file every scan")
 	assert.Equal(t, int64(1234567890), entry.Mtime)
 	assert.Equal(t, int64(999), entry.Size)
+
+	// A book with no file rows contributes no entry. Pinning the new contract
+	// explicitly, so this cannot silently revert to book-keying.
+	orphanID := createTestBook(t, store, "No Files", "/tmp/orphan.m4b", nil, nil)
+	require.NoError(t, store.UpdateScanCache(orphanID, 111, 222))
+	cacheMap, err = store.GetScanCacheMap()
+	require.NoError(t, err)
+	_, ok = cacheMap["/tmp/orphan.m4b"]
+	assert.False(t, ok, "a book with no book_file row must not appear in a file-keyed scan cache")
 
 	// Mark needs rescan
 	err = store.MarkNeedsRescan(bookID)

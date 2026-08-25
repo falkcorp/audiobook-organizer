@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.91.0
+// version: 2.92.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-08-22
+// last-edited: 2026-08-24
 
 package database
 
@@ -836,6 +836,37 @@ type BookFile struct {
 	// shape when the store moves to encoding/json/v2. See
 	// internal/database/scan_state.go for the measured table.
 	Scan ScanState `json:"scan,omitzero"`
+	// --- per-file scan cache (per docs/plans/2026-08-24-per-file-scan-cache-design.md) ---
+	//
+	// The scan cache was keyed per BOOK while the skip decision is made per FILE,
+	// during the walk, before any book is known. For a single-file book the two
+	// grains coincide; for a multi-file book they diverge the moment
+	// createBookFilesForBook normalizes Book.FilePath to the containing directory.
+	// The result is arithmetic, not an anomaly: an 80-file audiobook has ONE book
+	// row, so a per-file write-back that looks the book up BY PATH can stamp at
+	// most 1 file in 80 and the other 79 are re-read and re-hashed on every scan,
+	// forever. Measured on prod 2026-08-24: "436 of 500 scan-cache write-backs
+	// skipped because no book row exists at the path".
+	//
+	// POINTERS are the load-bearing choice, and they are what actually separates
+	// "never scanned" (nil) from "scanned and measured zero". A real 0-byte file
+	// exists and must not read as unscanned. The compiler enforces this: changing
+	// any of these three to a value type fails to build at 7 sites (measured), so
+	// the distinction cannot be erased by accident and needs no test to defend it.
+	//
+	// omitzero rather than omitempty is deliberate but is NOT what prevents that
+	// corruption, and an earlier draft of this comment wrongly claimed it was.
+	// The ScanState hazard documented above is real for VALUE types -- v2's
+	// omitempty means "encodes to an empty JSON value", so a bare int64/bool
+	// would start emitting 0/false. It does not apply to a pointer: nil encodes
+	// to null, which v2 does omit. Measured both ways, under GOEXPERIMENT=jsonv2
+	// and without it, omitempty here is presently equivalent. omitzero is kept
+	// because it means one thing in both encoders and stays correct if one of
+	// these fields is ever changed to a value type -- defence in depth, not the
+	// defence.
+	LastScanMtime *int64 `json:"last_scan_mtime,omitzero"`
+	LastScanSize  *int64 `json:"last_scan_size,omitzero"`
+	NeedsRescan   *bool  `json:"needs_rescan,omitzero"`
 	// PostMetadataHash is the SHA-256 of the file immediately after a metadata
 	// tag write. It differs from OriginalFileHash because tag writes add/change
 	// bytes in the header. Store it so pre-write identity is always recoverable.
