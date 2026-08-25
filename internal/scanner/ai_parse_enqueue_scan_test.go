@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -59,12 +59,27 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
+	// The fake saver gives every book its one book_file row, because the scan
+	// cache is keyed on book_file rows rather than book rows: a book with no file
+	// row has no cache entry at all, so BOTH assertions below would pass
+	// vacuously -- the candidate would read as "not stamped" simply because
+	// nothing could ever stamp it. Both books must be STAMPABLE for the
+	// withheld-stamp assertion to mean anything.
+	//
+	// This is also the production shape. A genuinely single-file book gets its row
+	// from ensureSingleFileBookFile (or, for rows predating that, the scan-cache
+	// backfill); createBookFilesForBook is never called for one.
 	saveBook = func(_ context.Context, book *Book) error {
 		if existing, err := store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
 			return nil
 		}
-		_, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
-		return err
+		created, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
+		if err != nil {
+			return err
+		}
+		return store.CreateBookFile(&database.BookFile{
+			BookID: created.ID, FilePath: created.FilePath, TrackNumber: 1,
+		})
 	}
 
 	var queued []AIParseCandidate
@@ -82,12 +97,17 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 	authorID, err := resolveAuthorID("A Known Author")
 	require.NoError(t, err)
 	require.NotNil(t, authorID)
-	_, err = store.CreateBook(&database.Book{
+	twin, err := store.CreateBook(&database.Book{
 		FilePath: segs[1],
 		Title:    "Already Known",
 		AuthorID: authorID,
 	})
 	require.NoError(t, err)
+	// The twin needs its file row for the same reason as above: it is the control
+	// that proves the cache query can see a stamp at all.
+	require.NoError(t, store.CreateBookFile(&database.BookFile{
+		BookID: twin.ID, FilePath: segs[1], TrackNumber: 1,
+	}))
 
 	// Series is empty and the store has no prior row carrying title+author, so
 	// the FIRST book is nominated as an AI candidate.

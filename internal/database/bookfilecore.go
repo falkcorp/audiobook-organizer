@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-08-23
+// last-edited: 2026-08-24
 
 package database
 
@@ -103,6 +103,18 @@ type BookFileCore struct {
 	TranscribeStatus       *string    `json:"transcribe_status,omitempty"`
 	TranscribeError        *string    `json:"transcribe_error,omitempty"`
 	TranscribeAttemptedAt  *time.Time `json:"transcribe_attempted_at,omitempty"`
+
+	// Per-file scan cache. RETAINED rather than stripped: the stripped set is the
+	// heavy fingerprint/transcript strings, and these are three small scalars that
+	// the scan path queries on every walk -- "small and queryable", which is the
+	// stated rule for staying on Core.
+	//
+	// Retaining them also keeps the projection safe to round-trip. A field absent
+	// from Core reads back as its zero value, so stripping these would let any
+	// Core-derived write erase a scan stamp; the file would then re-read forever.
+	LastScanMtime *int64 `json:"last_scan_mtime,omitzero"`
+	LastScanSize  *int64 `json:"last_scan_size,omitzero"`
+	NeedsRescan   *bool  `json:"needs_rescan,omitzero"`
 }
 
 // Core returns the BookFileCore projection of f — every BookFile field that
@@ -159,5 +171,8 @@ func (f *BookFile) Core() BookFileCore {
 		TranscribeStatus:               f.TranscribeStatus,
 		TranscribeError:                f.TranscribeError,
 		TranscribeAttemptedAt:          f.TranscribeAttemptedAt,
+		LastScanMtime:                  f.LastScanMtime,
+		LastScanSize:                   f.LastScanSize,
+		NeedsRescan:                    f.NeedsRescan,
 	}
 }
