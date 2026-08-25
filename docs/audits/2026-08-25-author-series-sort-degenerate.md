@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-25-author-series-sort-degenerate.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 3.0.0 -->
 <!-- guid: 9d3f6b28-4c17-4e85-a0b9-7f2e5c1d8a64 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -103,3 +103,64 @@ fields are visible to the store's own walker and only 2 need name resolution.
   permutation. The properties chosen cannot observe this class of defect.
 - `TestSortIndexOrderMatchesComparator` compares the memdb index against the
   comparator. Both sides read the same nil pointer, so they agree on garbage.
+
+## Fix
+
+Three changes, because three things had to be true at once:
+
+1. `buildBookSummaryFilterWithLookupCount` (`service_filtering.go`) set
+   `bsf.SortBy` **only** when the key was exactly `"title"`. Every other sort
+   was never communicated to the store at all, so the store's ordered path
+   could not run no matter what it was capable of. It now passes the sort
+   whenever `database.CanSortBooksBy` accepts the key.
+2. `MemStore.GetBookSummaries` paginated during an unordered walk when no index
+   could stream the sort. It now materialises the match set, sorts it, and then
+   paginates — mirroring `sortedSummaryPagePebble`, added for the Pebble twin
+   in #2892.
+3. `GetAudiobooks`'s heavy-sort branch re-sorted the result. This was the
+   damaging one: `applySorting` breaks ties on book ID, so a set the store had
+   *correctly ordered* was rewritten into ID order by the tiebreaker. It now
+   skips its own sort when the store carried the sort.
+
+`author` and `series` were removed from `sortIndexForField`. Those indexes
+could not be made correct — an indexer receives only `*Book`, whose
+`Author`/`Series` are nil in memdb — so they filed the whole library under one
+empty key. The name is resolved instead by `hydrateSortNames`, which holds the
+txn and can read the `authors`/`series` tables. `enabled_sort_indexes` no
+longer defaults to including `author`, which would otherwise warn on every
+startup about a value the application itself shipped.
+
+### Measured after
+
+All 16 probed keys return `[rank0 rank1 rank2]` ascending, and the correct
+reverse descending. `limit=1` at `offset=0,1,2` returns rows 0,1,2 of the
+**ordered** set for every key.
+
+### Mutation matrix
+
+Each mutant was `go vet`-clean before running; a mutant that does not compile
+proves nothing.
+
+| Mutant | Result |
+|---|---|
+| service re-sorts the store's ordered set | KILLED — 26 subtests |
+| store told only about `title` | KILLED — 26 subtests |
+| memdb walker never materialises | KILLED — 40 subtests |
+| author/series names not hydrated | KILLED — 4 subtests |
+| paginate before sorting | **SURVIVED** → see below |
+
+The last one survived the service-level suite and had to be killed by a new
+store-level test. `GetAudiobooks` zeroes `limit`/`offset` for these sorts and
+paginates the full set itself, so the store's own pagination is unreachable
+from that path — while every other caller of `GetAllBookSummariesFiltered`
+does reach it. `TestMemdbSortedSummaryPage` covers it and kills the mutant
+(2 subtests).
+
+## Guards left behind
+
+- `TestEverySortKeyOrdersBooks` / `TestEverySortKeyPaginatesTheOrderedSet`
+  enumerate `database.SortableBookFields()` rather than a hand-written list, so
+  a comparator added later without a working path fails on arrival.
+- `TestEverySortKeyIsCovered` fails if a new key has no fixture.
+- `TestAuthorAndSeriesAreNotIndexable` fails if either key is re-added to
+  `sortIndexForField`.
