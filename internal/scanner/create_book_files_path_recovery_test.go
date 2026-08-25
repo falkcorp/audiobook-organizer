@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_recovery_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d81f0a6-2c57-4b93-9e6a-71cf05d8b2ae
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -73,7 +73,7 @@ func TestCreateBookFilesForBookRecoversAnAlreadyNormalizedRow(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, orphan, "precondition: the segment path must NOT resolve")
 
-	got := createBookFilesForBook(segs[0], segs, logger.New("test"))
+	got := createBookFilesForBook(segs[0], segs, logger.New("test"), normalizeToDirectory)
 
 	if got != dir {
 		t.Fatalf("createBookFilesForBook(%q) = %q, want the directory %q -- "+
@@ -105,7 +105,7 @@ func TestCreateBookFilesForBookDoesNotRecoverAForeignBook(t *testing.T) {
 	// A book lives at the directory, but it owns only `unrelated.mp3`.
 	seedNormalizedBook(t, store, dir, stranger, "Some Other Book")
 
-	got := createBookFilesForBook(segs[0], segs, logger.New("test"))
+	got := createBookFilesForBook(segs[0], segs, logger.New("test"), normalizeToDirectory)
 
 	if got != "" {
 		t.Fatalf("createBookFilesForBook(%q) = %q, but the book at that directory does "+
@@ -134,7 +134,7 @@ func TestProcessBooksParallelDirectoryBookKeepsItsPath(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
 	config.AppConfig.SupportedExtensions = []string{".mp3"}
 
-	if got := createBookFilesForBook(dir, segs, logger.New("test")); got != "" {
+	if got := createBookFilesForBook(dir, segs, logger.New("test"), normalizeToDirectory); got != "" {
 		t.Fatalf("a directory-rooted book reported a move to %q; the normalization guard "+
 			"is !info.IsDir(), so a directory must never move", got)
 	}

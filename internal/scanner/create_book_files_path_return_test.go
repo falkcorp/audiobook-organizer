@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_return_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2b41c8-93ad-4e05-b6d1-8c0e5a72f394
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -56,7 +56,7 @@ func TestCreateBookFilesForBookReturnsThePathTheRowMovedTo(t *testing.T) {
 	book, err := store.CreateBook(&database.Book{FilePath: seg1, Title: "Multi Part Book"})
 	require.NoError(t, err)
 
-	moved := createBookFilesForBook(seg1, []string{seg1, seg2}, logger.New("test"))
+	moved := createBookFilesForBook(seg1, []string{seg1, seg2}, logger.New("test"), normalizeToDirectory)
 
 	if moved == "" {
 		t.Fatal("createBookFilesForBook normalized the row but reported no move; " +
@@ -107,7 +107,7 @@ func TestCreateBookFilesForBookReportsNoMoveWhenAlreadyNormalized(t *testing.T) 
 	_, err := store.CreateBook(&database.Book{FilePath: dir, Title: "Already Normalized"})
 	require.NoError(t, err)
 
-	moved := createBookFilesForBook(dir, []string{seg1, seg2}, logger.New("test"))
+	moved := createBookFilesForBook(dir, []string{seg1, seg2}, logger.New("test"), normalizeToDirectory)
 
 	if moved != "" {
 		t.Errorf("reported a move to %q for a row that did not move; "+
@@ -146,7 +146,7 @@ func TestCreateBookFilesForBookReportsNoMoveWhenUpdateBookFails(t *testing.T) {
 	store.EXPECT().UpdateBook("book-1", mock.Anything).
 		Return(nil, fmt.Errorf("pebble: write failed"))
 
-	moved := createBookFilesForBook(seg1, []string{seg1, seg2}, logger.New("test"))
+	moved := createBookFilesForBook(seg1, []string{seg1, seg2}, logger.New("test"), normalizeToDirectory)
 
 	if moved != "" {
 		t.Errorf("reported a move to %q after UpdateBook FAILED; the row is still at %q",

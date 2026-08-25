@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -773,7 +773,7 @@ func TestCreateBookFilesForBookNilStore(t *testing.T) {
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
 	// Should return immediately without panic
-	createBookFilesForBook("/tmp/test.m4b", nil, defaultLog)
+	createBookFilesForBook("/tmp/test.m4b", nil, defaultLog, normalizeToDirectory)
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,6 +1385,20 @@ func TestProcessBooksParallelSaveWithScanCacheUpdate(t *testing.T) {
 	store.EXPECT().UpdateScanCache("b1", mock.Anything, mock.Anything).Return(nil).Maybe()
 	store.EXPECT().ResetScanFailCount(mock.Anything).Return(nil).Maybe()
 
+	// This book is a single m4b with no SegmentFiles, so it now takes the
+	// single-file branch and acquires a book_file row. GetBookFiles is the
+	// "already created?" check; it must report none so the create proceeds.
+	store.EXPECT().GetBookFiles("b1").Return(nil, nil).Maybe()
+
+	// NOT .Maybe(). Every other expectation in this test is optional, so the
+	// test asserted only that ProcessBooksParallel returned no error -- it would
+	// pass just as happily if nothing had been written at all. Requiring this
+	// call gives it one real assertion: a genuinely single-file book gets
+	// exactly one book_file row, at its own path.
+	store.EXPECT().BatchUpsertBookFiles(mock.MatchedBy(func(bfs []*database.BookFile) bool {
+		return len(bfs) == 1 && bfs[0].FilePath == p && bfs[0].BookID == "b1"
+	})).Return(nil).Once()
+
 	books := []Book{{FilePath: p, Format: ".m4b"}}
 	err := ProcessBooksParallel(t.Context(), books, 1, nil, nil)
 	assert.NoError(t, err)
@@ -1613,7 +1627,7 @@ func TestCreateBookFilesForBookWithStore(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
 
-	createBookFilesForBook(bookPath, nil, defaultLog)
+	createBookFilesForBook(bookPath, nil, defaultLog, normalizeToDirectory)
 }
 
 func TestCreateBookFilesForBookExistingFiles(t *testing.T) {
@@ -1631,7 +1645,7 @@ func TestCreateBookFilesForBookExistingFiles(t *testing.T) {
 	store.EXPECT().GetBookFiles("book-1").Return([]database.BookFile{{ID: "bf-1"}}, nil)
 
 	// Should return early since files already exist
-	createBookFilesForBook("/tmp/book.m4b", nil, defaultLog)
+	createBookFilesForBook("/tmp/book.m4b", nil, defaultLog, normalizeToDirectory)
 }
 
 func TestCreateBookFilesForBookNotFound(t *testing.T) {
@@ -1644,7 +1658,7 @@ func TestCreateBookFilesForBookNotFound(t *testing.T) {
 	store.EXPECT().GetBookByFilePath("/tmp/missing.m4b").Return(nil, nil)
 
 	// Should return early since book not found
-	createBookFilesForBook("/tmp/missing.m4b", nil, defaultLog)
+	createBookFilesForBook("/tmp/missing.m4b", nil, defaultLog, normalizeToDirectory)
 }
 
 func TestCreateBookFilesWithSegmentFiles(t *testing.T) {
@@ -1668,7 +1682,7 @@ func TestCreateBookFilesWithSegmentFiles(t *testing.T) {
 	store.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 	store.EXPECT().BatchUpsertBookFiles(mock.Anything).Return(nil)
 
-	createBookFilesForBook(tmp, []string{seg1, seg2}, defaultLog)
+	createBookFilesForBook(tmp, []string{seg1, seg2}, defaultLog, normalizeToDirectory)
 }
 
 // ---------------------------------------------------------------------------
