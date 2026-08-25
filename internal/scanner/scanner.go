@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.69.0
+// version: 1.70.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-25
 
@@ -1282,7 +1282,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					// call is ever changed to pass a FILE the discard becomes a
 					// silent bug. TestProcessBooksParallelDirectoryBookKeepsItsPath
 					// pins the current behaviour.
-					_ = createBookFilesForBook(dirPath, nil, scanLog)
+					_ = createBookFilesForBook(dirPath, nil, scanLog, normalizeToDirectory)
 					// Chapters must be persisted AFTER the book files exist —
 					// the multi-file synthesis path reads BookFile durations to
 					// build the cumulative timeline. Never fatal to the scan.
@@ -1484,9 +1484,30 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					// does NOT yet make the next scan SKIP the book -- see the
 					// SCOPE paragraph on createBookFilesForBook for the two
 					// grain mismatches that still defeat that.
-					if moved := createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, books[idx].SegmentHashes); moved != "" {
+					if moved := createBookFilesForBook(books[idx].FilePath, books[idx].SegmentFiles, scanLog, normalizeToDirectory, books[idx].SegmentHashes); moved != "" {
 						books[idx].FilePath = moved
 					}
+				} else {
+					// GENUINELY SINGLE-FILE BOOKS. This branch did not exist, so
+					// createBookFilesForBook was never called for them and they
+					// got no book_file row at all -- the gap
+					// ensureSingleFileBookFile backfills from the organize hook.
+					//
+					// It became load-bearing when the scan cache moved to
+					// book_file rows: GetScanCacheMap now iterates book_file:*
+					// and UpdateBookFileScanCache resolves a row BY PATH, so a
+					// book with no file row has no cache entry to read and no
+					// row to stamp. Every single-file book would be re-read and
+					// re-hashed on every scan, forever -- the same defect the
+					// per-file cache was built to fix, arriving through the
+					// other door.
+					//
+					// keepFilePath, NOT normalizeToDirectory: a single-file
+					// book's row belongs at its file. Normalizing it to the
+					// parent directory is wrong on its own terms (two books can
+					// share a directory) and would also undo the thing that
+					// makes these books work today.
+					createSingleFileBookFile(&books[idx], scanLog)
 				}
 				// Persist chapters. Deliberately OUTSIDE the SegmentFiles>1 block
 				// so it also runs for genuinely-single-file books, whose embedded
@@ -2037,7 +2058,58 @@ func recoverNormalizedBookPath(bookFilePath string) string {
 // closing that needs per-file cache keying, which is tracked separately. What
 // this function's return value fixes is chapter persistence and the no-row
 // counter -- both real, neither a skip.
-func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, knownHashes ...map[string]string) string {
+// createSingleFileBookFile gives a genuinely single-file book its one
+// book_file row, without moving the book row to its parent directory.
+//
+// Two things it deliberately does, both of which look like they could be
+// dropped and cannot:
+//
+//  1. It passes the file EXPLICITLY rather than letting createBookFilesForBook
+//     scan the directory. With a nil segment list that function reads the whole
+//     containing folder and turns every audio file in it into a row for THIS
+//     book -- fine when the folder is the book, catastrophic when two
+//     single-file books share one folder, which is the ordinary case for an
+//     unorganized library.
+//
+//  2. It stats first and does nothing for a directory. A book whose FilePath is
+//     a directory but which has no book_file rows is a different defect, and
+//     papering over it with a single row pointing at the folder would make the
+//     scan cache stamp a directory inode's mtime and size -- the exact VALUE
+//     grain mismatch the per-file cache exists to remove.
+//
+// Failure is never fatal to the scan: the book is already saved, and a missing
+// book_file row costs an incremental skip, not data.
+func createSingleFileBookFile(book *Book, scanLog logger.Logger) {
+	if book == nil || book.FilePath == "" {
+		return
+	}
+	info, err := os.Stat(book.FilePath)
+	if err != nil || info.IsDir() {
+		return
+	}
+	// SegmentFiles is empty for a genuinely single-file book, so fall back to
+	// the book's own path. A len==1 SegmentFiles whose element differs from
+	// FilePath would file the row somewhere the book-grain stamp mirror cannot
+	// match (it requires files[0].FilePath == book.FilePath) -- but the scanner
+	// cannot construct that shape: all four places that set SegmentFiles set
+	// FilePath = segs[0] alongside it. Checked 2026-08-25; if a fifth site
+	// appears that breaks the invariant, this needs to pass book.FilePath.
+	segs := book.SegmentFiles
+	if len(segs) == 0 {
+		segs = []string{book.FilePath}
+	}
+	createBookFilesForBook(book.FilePath, segs, scanLog, keepFilePath, book.SegmentHashes)
+}
+
+// normalizeToDirectory / keepFilePath name createBookFilesForBook's
+// normalizeBookPath argument at the call sites, because a bare true/false there
+// says nothing about which of the two very different behaviours is wanted.
+const (
+	normalizeToDirectory = true
+	keepFilePath         = false
+)
+
+func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes ...map[string]string) string {
 	if getStore() == nil {
 		return ""
 	}
@@ -2181,7 +2253,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 	// directory, i.e. single-file audiobooks — so without the re-read every
 	// single-file book the scanner imports would have its totals computed and then
 	// erased inside this one function.
-	if statErr == nil && !info.IsDir() {
+	if normalizeBookPath && statErr == nil && !info.IsDir() {
 		dirPath := filepath.Dir(bookFilePath)
 		toUpdate := dbBook
 		if fresh, gerr := getStore().GetBookByID(dbBook.ID); gerr == nil && fresh != nil {

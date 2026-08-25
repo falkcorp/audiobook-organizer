@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_aggregates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a7c9e14-5d82-4b06-9f31-c2e8a5407db6
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -58,7 +58,7 @@ func TestCreateBookFilesForBookKeepsAggregatesAfterPathNormalization(t *testing.
 
 	// segmentFiles is passed explicitly so this does not depend on
 	// config.AppConfig.SupportedExtensions being populated by another test.
-	createBookFilesForBook(audioPath, []string{audioPath}, logger.New("test"))
+	createBookFilesForBook(audioPath, []string{audioPath}, logger.New("test"), normalizeToDirectory)
 
 	got, err := store.GetBookByID(book.ID)
 	if err != nil {
