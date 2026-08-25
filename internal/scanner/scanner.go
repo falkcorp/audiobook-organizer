@@ -1752,7 +1752,21 @@ func extractInfoFromPath(book *Book) {
 		book.Title = baseName
 	}
 
-	// Extract author from directory name
+	// NOTE: the placeholder is deliberately NOT cleared here, before this
+	// fallback -- only on the defer at the top, after this has run.
+	//
+	// Clearing it first looks like an improvement (a book at
+	// ".../Terry Pratchett/Mort - Unknown Author.mp3" would recover its author
+	// from the directory) and is actively harmful under the organizer's own
+	// layout, which is <root>/<author>/<title>/<file>. The IMMEDIATE parent is
+	// then the TITLE, so opening this fallback yields
+	// Author = "Pratchett 036" -- the book's own title as its author. That is
+	// strictly worse than the placeholder: it still closes the AI nomination
+	// gate, and unlike the placeholder nothing downstream can recognise it as
+	// junk. Measured 2026-08-25; the guard test below pins it.
+	//
+	// The directory fallback becomes safe once
+	// todo.d/20260825-directory-fallback-reads-title-as-author.md is fixed.
 	if book.Author == "" {
 		book.Author = extractAuthorFromDirectory(path)
 	}
@@ -1773,6 +1787,11 @@ func extractAuthorFromDirectory(filePath string) string {
 
 	// Skip common non-author directory names
 	skipDirs := map[string]bool{
+		// The organizer's own placeholder directory. Reading it back as an author
+		// is what made an authorless book look authored and locked it out of AI
+		// re-parsing; see internal/authorname.
+		strings.ToLower(authorname.Placeholder): true,
+
 		"books": true, "audiobooks": true, "newbooks": true, "downloads": true,
 		"media": true, "audio": true, "library": true, "collection": true,
 		"import": true, "imports": true, "organized": true,

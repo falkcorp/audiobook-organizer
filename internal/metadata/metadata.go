@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 
 package metadata
@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/dhowden/tag"
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
@@ -771,9 +772,25 @@ func extractFromFilename(filePath string) Metadata {
 		metadata.Title = filename
 	}
 
+	// The organizer names an authorless book "<title> - Unknown Author.ext", so
+	// the parse above happily hands back the placeholder as the author. Recording
+	// it launders the system's own "we could not determine this" into a value
+	// indistinguishable from a real author, and the AI nomination gate then skips
+	// the book forever. Cleared HERE, before the directory fallback, so a book at
+	// ".../Terry Pratchett/Mort - Unknown Author.mp3" still recovers the real
+	// author from its directory instead of being left blank.
+	if authorname.IsPlaceholder(metadata.Artist) {
+		metadata.Artist = ""
+	}
+
 	// If we still don't have an artist, try to get from parent directory
 	if metadata.Artist == "" {
 		metadata.Artist = extractAuthorFromDirectory(filePath)
+	}
+
+	// And the directory itself is usually literally "Unknown Author".
+	if authorname.IsPlaceholder(metadata.Artist) {
+		metadata.Artist = ""
 	}
 
 	if metadata.SeriesIndex == 0 {

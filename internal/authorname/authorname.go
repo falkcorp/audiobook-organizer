@@ -1,18 +1,26 @@
 // file: internal/authorname/authorname.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2b7c14-9a36-4f81-b0d7-2c93e845af60
 // last-edited: 2026-08-25
 
 // Package authorname holds the one author name the system writes to mean "we
 // could not resolve an author".
 //
-// It exists as its own package because three packages had independently
+// It exists as its own package because four packages had independently
 // hardcoded the same literal and could not see each other: internal/organizer
-// (as the path fallback that names the directory), internal/maintenance/jobs
-// (as a path prefix to sweep), and -- by reading it back out of a filename --
-// internal/scanner. A literal duplicated across packages that never import one
-// another cannot be kept in step, and the cost of it drifting is that a book
+// (the path fallback that names the directory), internal/maintenance/jobs (a
+// path prefix to sweep), internal/quarantine (the same fallback for failed
+// files), and -- by reading it back out of a filename -- both internal/scanner
+// and internal/metadata. A literal duplicated across packages that never import
+// one another cannot be kept in step, and the cost of it drifting is that a book
 // silently acquires the placeholder as a real author.
+//
+// NOTE: this unifies the LITERAL only. The filename/directory author parser
+// itself still exists twice, in internal/scanner and internal/metadata, as
+// divergent copies (parseFilenameForAuthor, extractAuthorFromDirectory,
+// looksLikePersonName). Collapsing those is filed separately; until then a fix
+// to one is not a fix to the other, which is exactly how the first version of
+// this change came to be inert on the path that produces the bug.
 //
 // Depends on nothing but the standard library, so any package may import it.
 package authorname

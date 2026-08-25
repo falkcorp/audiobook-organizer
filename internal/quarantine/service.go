@@ -1,7 +1,7 @@
 // file: internal/quarantine/service.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-07
+// last-edited: 2026-08-25
 
 package quarantine
 
@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -84,7 +85,7 @@ func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 		return fmt.Errorf("RootDir not configured")
 	}
 
-	author := "Unknown Author"
+	author := authorname.Placeholder
 	if book.Author != nil && book.Author.Name != "" {
 		author = sanitizeDirName(book.Author.Name)
 	}

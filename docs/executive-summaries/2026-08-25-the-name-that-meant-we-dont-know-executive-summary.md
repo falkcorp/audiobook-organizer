@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-25-the-name-that-meant-we-dont-know-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: c41f8b7d-3e29-4a65-8d10-9f2b6e0a35c7 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -31,7 +31,8 @@ diagnosis, and this report.
 - So the one group of books that most needed an author was the exact group the
   repair feature skipped. **They could never be fixed.** Not by rescanning, not by
   waiting, not by turning anything on.
-- **3,407 books** in the library were in this state.
+- Thousands of books in the library are in this state. The exact count is given
+  below, and getting to a number we trust took three attempts.
 
 ## Why it would not have fixed itself
 
@@ -57,6 +58,12 @@ away.
   from the same filename, as before.
 - The "does this book need an author?" check now **treats the placeholder as no
   author at all**, so these books are offered to the automatic repair again.
+- Crucially, this had to be done in **two** places. The app has two separate
+  copies of the code that reads names out of file paths, and the first version of
+  this fix only corrected one of them — the one that almost never runs. The
+  automatic repair would have been invited to look at the book, produced the right
+  answer, and had it **discarded on arrival**, because the placeholder was still
+  sitting in the author field. A review pass caught that before it shipped.
 - The name itself had been written out separately in three different parts of the
   codebase that could not see one another. It is now defined **once**, so the three
   cannot drift apart and reopen this.
@@ -66,12 +73,18 @@ away.
 Two things, stated plainly so they are not mistaken for solved:
 
 1. **The books already in this state are not repaired by this change.** The change
-   stops new books falling in, and it re-opens the door so the repair feature will
-   consider the existing 3,407. Actually correcting them is separate work, still to
-   be agreed. Encouragingly, for at least some of them the app **already stores the
-   correct author elsewhere in the record** — so that repair may not need any
-   outside lookup at all.
-2. **A separate, unrelated outage was found while investigating.** The machine that
+   stops new books falling in and re-opens the door so the repair feature will
+   consider them. Actually correcting them is separate work, still to be agreed.
+   Encouragingly, for at least some of them the app **already stores the correct
+   author elsewhere in the record** — on 80 confirmed books it holds
+   "Terry Pratchett" in one field while the field the repair check consults says
+   "Unknown Author" — so that repair may need no outside lookup at all.
+2. **Re-opening the door is not the same as walking through it.** The scan skips
+   files it has already seen and recorded as unchanged, and that skip happens
+   *before* the "does this book need an author?" check. So an affected book is
+   only reconsidered when its file changes or a full rescan is run — not on the
+   next ordinary scan.
+3. **A separate, unrelated outage was found while investigating.** The machine that
    does the automatic author lookups was unreachable from the server — powered off
    or off the network. That is why recent scans logged timeouts. It needs to be
    switched back on; no code change affects it. Books missed purely because of that
