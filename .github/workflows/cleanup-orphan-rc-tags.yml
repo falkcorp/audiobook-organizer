@@ -1,0 +1,142 @@
+# file: .github/workflows/cleanup-orphan-rc-tags.yml
+# version: 1.0.0
+# guid: 3e7c1a94-6b52-4d08-9f31-8a2d5c60e7b4
+# last-edited: 2026-08-24
+
+name: Cleanup Orphan RC Tags
+
+# An "orphan" RC tag is a `vX.Y.Z-rc.N` git tag with NO GitHub release
+# attached. `cleanup-rc-releases.yml` cannot remove these: it enumerates
+# *releases* and deletes each one's tag alongside it, so a tag whose release
+# is already gone is invisible to it.
+#
+# Measured 2026-08-24: 955 RC tags, 271 with a release => 684 orphans, some
+# from RC series abandoned as far back as v0.206.1. They are inert -- nothing
+# reads them (the notes diff base resolves the newest *stable* tag, and the
+# RC-count guard counts releases, not tags) -- but they bloat every clone and
+# every `git ls-remote`.
+#
+# Manual dispatch only. This never runs on a release event: it is a backlog
+# sweep, not steady-state hygiene, and steady-state is already covered by
+# cleanup-rc-releases.yml deleting each release's tag with it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (list only, delete nothing)'
+        required: false
+        type: boolean
+        default: true
+      max_deletions:
+        description: 'Safety cap on deletions this run (0 = no cap)'
+        required: false
+        type: string
+        default: '0'
+
+concurrency:
+  group: cleanup-orphan-rc-tags
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup-orphan-tags:
+    name: Delete RC tags that have no release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete orphan RC tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          MAX_DELETIONS: ${{ inputs.max_deletions }}
+        run: |
+          set -euo pipefail
+
+          DRY_RUN="${DRY_RUN_INPUT:-true}"
+          CAP="${MAX_DELETIONS:-0}"
+          echo "Dry run: $DRY_RUN    Cap: $CAP (0 = no cap)"
+          if [ "$DRY_RUN" != "false" ]; then
+            echo "::notice::DRY RUN - nothing will be deleted."
+          fi
+
+          # Both sides paginate. A fixed --limit is what let the RC backlog grow
+          # unnoticed in the first place (this repo has 464 releases and 2365
+          # tags, well past gh's default page and past any hand-picked cap).
+          gh api --paginate "repos/${REPO}/git/matching-refs/tags/" \
+            --jq '.[].ref | sub("^refs/tags/"; "")' \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || true; } \
+            | sort -u > /tmp/rc_tags.txt
+
+          gh api --paginate "repos/${REPO}/releases" \
+            --jq '.[].tag_name' \
+            | sort -u > /tmp/release_tags.txt
+
+          # Orphan = an RC tag with no release of the same name. `comm -23`
+          # needs both inputs sorted the same way; both are `sort -u` above.
+          comm -23 /tmp/rc_tags.txt /tmp/release_tags.txt > /tmp/orphans.txt
+
+          TAGS=$(wc -l < /tmp/rc_tags.txt | tr -d ' ')
+          RELS=$(wc -l < /tmp/release_tags.txt | tr -d ' ')
+          ORPH=$(wc -l < /tmp/orphans.txt | tr -d ' ')
+          echo "RC tags: $TAGS    releases: $RELS    orphans: $ORPH"
+
+          # Guard the instrument: if a bug made every RC tag look orphaned we
+          # would delete the tags of live releases. Any tag that HAS a release
+          # must not be in the orphan list -- assert that positively.
+          if [ "$ORPH" -gt 0 ] && [ "$RELS" -gt 0 ]; then
+            LEAKED=$(comm -12 /tmp/orphans.txt /tmp/release_tags.txt | wc -l | tr -d ' ')
+            if [ "$LEAKED" != "0" ]; then
+              echo "::error::$LEAKED tag(s) with a release leaked into the orphan list - refusing to delete."
+              exit 1
+            fi
+          fi
+
+          DELETED=0; FAILED=0; SKIPPED=0
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            if [ "$CAP" != "0" ] && [ "$DELETED" -ge "$CAP" ]; then
+              SKIPPED=$((SKIPPED + 1)); continue
+            fi
+            if [ "$DRY_RUN" = "false" ]; then
+              # Tolerated, not fatal: hundreds of mutating calls in one loop
+              # will meet GitHub's secondary rate limit. Deleting a ref is
+              # idempotent, so a re-run finishes whatever this run missed.
+              if gh api -X DELETE "repos/${REPO}/git/refs/tags/${tag}" --silent 2>/dev/null; then
+                DELETED=$((DELETED + 1))
+                [ $((DELETED % 50)) -eq 0 ] && echo "  ... $DELETED deleted"
+              else
+                echo "::warning::failed to delete tag $tag -- re-run to retry"
+                FAILED=$((FAILED + 1))
+              fi
+              sleep 0.5
+            else
+              DELETED=$((DELETED + 1))
+            fi
+          done < /tmp/orphans.txt
+
+          echo
+          if [ "$DRY_RUN" = "false" ]; then
+            echo "Done. Deleted $DELETED orphan tag(s), $FAILED failed, $SKIPPED skipped by cap."
+            if [ "$FAILED" -gt 0 ]; then
+              echo "::warning::$FAILED deletion(s) failed -- re-run this workflow to finish the tail."
+            fi
+          else
+            echo "[dry-run] Would delete $DELETED orphan tag(s) ($SKIPPED beyond cap)."
+            echo "[dry-run] Nothing was deleted."
+            echo "First 20:"; head -20 /tmp/orphans.txt | sed 's/^/  /'
+          fi
+
+          {
+            printf '## Orphan RC tag cleanup\n\n'
+            printf '| Metric | Value |\n|---|---|\n'
+            printf '| Mode | %s |\n' "$([ "$DRY_RUN" = "false" ] && echo "LIVE" || echo "dry-run")"
+            printf '| RC tags | %s |\n' "$TAGS"
+            printf '| Releases | %s |\n' "$RELS"
+            printf '| Orphans | %s |\n' "$ORPH"
+            printf '| Deleted | %s |\n' "$DELETED"
+            printf '| Failed | %s |\n' "$FAILED"
+            printf '| Skipped (cap) | %s |\n' "$SKIPPED"
+          } >> "$GITHUB_STEP_SUMMARY"
