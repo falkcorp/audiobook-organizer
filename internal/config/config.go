@@ -1079,12 +1079,12 @@ type Config struct {
 	// Enable the fields that are actually
 	// sorted by, and measure warmup afterwards.
 	//
-	// Defaults to the six the ABS library browser sorts by (year, author,
-	// created_at, updated_at, duration, file_size). Before that default
-	// existed this was empty, and the ABS handler's sort keys resolved to
-	// indexes that were never registered -- so every non-title sort returned
-	// unordered rows behind a 200 OK. Setting it back to empty restores that:
-	// only title streams.
+	// Defaults to {"year", "author"} -- the reported sort plus the one other
+	// field a library is commonly sorted by. Before that default existed this
+	// was empty, and the ABS handler's sort keys resolved to indexes that were
+	// never registered, so every non-title sort returned unordered rows behind
+	// a 200 OK. Kept deliberately narrow because each index taxes scan insert
+	// throughput; see the SetDefault call for the reasoning.
 	EnabledSortIndexes []string `json:"enabled_sort_indexes" mapstructure:"enabled_sort_indexes"`
 }
 
@@ -1253,20 +1253,25 @@ func ApplyEnvAuthoritativeConfig() {
 func InitConfig() {
 	// Set core defaults
 	viper.SetDefault("database_type", "pebble")
-	// Sort indexes the ABS library browser needs. Its "Sort By" menu offers 14
-	// options; the store can back 8 of them (Title is always indexed, plus the
-	// six here and Author (Last, First), which shares the author index). The
-	// rest -- File Birthtime, File Modified, Progress:*, Randomly -- have no
-	// store index and stay unordered.
+	// Sort indexes for the ABS library browser.
 	//
-	// Without these enabled the handler maps sort=media.metadata.publishedYear
+	// Without one of these the handler maps sort=media.metadata.publishedYear
 	// to "year" and the store STILL iterates unordered: 200 OK, right rows,
-	// arbitrary order, nothing logged. Measured ~19 MB per key at ~48.9k books,
-	// so this is ~114 MB. narrator/series/bitrate are not in the client's menu
-	// and stay off. Read at store-open, so a change needs a restart.
-	viper.SetDefault("enabled_sort_indexes", []string{
-		"year", "author", "created_at", "updated_at", "duration", "file_size",
-	})
+	// arbitrary order, nothing logged. So the mapping in the ABS handler and
+	// this list have to move together.
+	//
+	// DELIBERATELY NARROW. "year" is the reported bug; "author" is the only
+	// other field anyone sorts a library by. The client's menu also offers
+	// Date Added / Last Updated / Duration / File Size, and the store could
+	// index all four -- they are left OFF because each memdb sorted index costs
+	// ~19 MB at ~48.9k books AND go-memdb path-copies nodes on every insert, so
+	// each one taxes the scan write path. A library scan is the heaviest write
+	// workload here (~456k items in a full run), and scan ingest is the thing
+	// currently being debugged, so speculative indexes are not worth an
+	// unattributable throughput regression. Enabling one later is this line.
+	//
+	// Read at store-open: changing it requires a restart, not a config reload.
+	viper.SetDefault("enabled_sort_indexes", []string{"year", "author"})
 	viper.SetDefault("enable_sqlite3_i_know_the_risks", false)
 	viper.SetDefault("setup_complete", false)
 

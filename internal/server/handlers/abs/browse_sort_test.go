@@ -119,50 +119,59 @@ func TestAbsItemFilterSort(t *testing.T) {
 // unindexed and unordered, with the only signal a startup line nobody reads.
 // Assert the names round-trip through the store's own validator.
 func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
-	defaults := []string{"year", "author", "created_at", "updated_at", "duration", "file_size"}
+	// Must match config.go's viper.SetDefault("enabled_sort_indexes", ...).
+	defaults := []string{"year", "author"}
 
 	if unknown := database.SetEnabledSortIndexes(defaults); len(unknown) > 0 {
 		t.Fatalf("config default names the store does not recognise: %v", unknown)
 	}
 	t.Cleanup(func() { database.SetEnabledSortIndexes(defaults) })
 
-	// Every sort the client's "Sort By" menu offers AND the store can back
-	// must actually be push-downable with the defaults above. These are the
-	// keys the owner can pick in the app, so an unindexed one here is a
-	// user-visible "sorting does nothing".
-	//
-	// absSortFields is a translation table and deliberately maps more than
-	// this -- narrator and series are ABS browse dimensions that are not in
-	// the items menu. Those resolve to a real store field and warn if their
-	// index is off; they are not asserted here because enabling an index is a
-	// memory decision (~19 MB each), not a correctness one.
-	menu := map[string]string{
+	// Sorts that must actually be ORDERED for the user. "title" is always
+	// indexed and not configurable; year is the reported bug; author is the
+	// other field a library is commonly sorted by.
+	for key, want := range map[string]string{
 		"media.metadata.title":         "title",
+		"media.metadata.publishedYear": "year",
 		"media.metadata.authorName":    "author",
 		"media.metadata.authorNameLF":  "author",
-		"media.metadata.publishedYear": "year",
-		"addedAt":                      "created_at",
-		"updatedAt":                    "updated_at",
-		"media.duration":               "duration",
-		"size":                         "file_size",
-	}
-	for key, want := range menu {
+	} {
 		got := absSortField(key)
 		if got != want {
 			t.Errorf("absSortField(%q) = %q, want %q", key, got, want)
 			continue
 		}
-		if got == "title" {
-			continue // always indexed, not configurable
+		if got != "title" && !database.CanPushDownSort(got) {
+			t.Errorf("sort %q -> %q is NOT push-downable; the app would show unordered results", key, got)
 		}
-		if !database.CanPushDownSort(got) {
-			t.Errorf("menu sort %q -> %q is NOT push-downable with the default indexes; the app would show unordered results", key, got)
+	}
+
+	// Sorts the client menu offers that we deliberately leave UNINDEXED,
+	// because each index taxes scan insert throughput. They must still map to
+	// a real store field so warnUnindexedSort can name it -- but they are
+	// expected to be off.
+	//
+	// This half of the assertion is what makes the trade-off explicit: if
+	// someone widens the default later, this fails and they have to
+	// acknowledge the insert-throughput cost rather than drift into it.
+	for key, want := range map[string]string{
+		"addedAt":        "created_at",
+		"updatedAt":      "updated_at",
+		"media.duration": "duration",
+		"size":           "file_size",
+	} {
+		got := absSortField(key)
+		if got != want {
+			t.Errorf("absSortField(%q) = %q, want %q", key, got, want)
+			continue
+		}
+		if database.CanPushDownSort(got) {
+			t.Errorf("sort %q -> %q is indexed, but the default is deliberately narrow; update this test AND config.go's comment together", key, got)
 		}
 	}
 
 	// Negative control: a bogus name must be REPORTED, not silently accepted.
-	// If this passes with an empty result the validator is inert and the
-	// assertion above proves nothing.
+	// If the validator were inert, the first assertion would prove nothing.
 	if unknown := database.SetEnabledSortIndexes([]string{"year", "definitely_not_a_field"}); len(unknown) != 1 {
 		t.Fatalf("validator did not report a bogus field: unknown=%v", unknown)
 	}
