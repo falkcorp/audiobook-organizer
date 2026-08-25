@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.30.0
+// version: 3.31.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package server
 
@@ -1575,6 +1575,10 @@ func (s *Server) setupRoutes() {
 			protected.POST("/operations/merge-novg-duplicates", s.perm(auth.PermSettingsManage), s.mergeNoVGDuplicatesHandler)
 			protected.POST("/operations/assign-orphan-vgs", s.perm(auth.PermSettingsManage), s.assignOrphanVGsHandler)
 			protected.POST("/operations/elect-missing-primaries", s.perm(auth.PermSettingsManage), s.electMissingPrimariesHandler)
+			// Must be run once BEFORE deploying the per-file scan-cache reader:
+			// until it has, every book_file row reads as "never scanned" and the
+			// first scan re-reads the whole library. See scan_cache_backfill.go.
+			protected.POST("/operations/backfill-scan-cache", s.perm(auth.PermSettingsManage), s.backfillScanCacheHandler)
 
 			// Import routes
 			protected.POST("/import/collision-preview", s.perm(auth.PermLibraryView), s.handleImportCollisionPreview)
