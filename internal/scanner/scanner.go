@@ -501,6 +501,10 @@ const (
 	reasonChanged                     // re-read: mtime or size differs
 	reasonDirty                       // re-read: NeedsRescan set
 	reasonTooFresh                    // skipped: changed, but inside the rescan-age window
+	// re-read: os.Stat failed, which is no evidence the file is unchanged.
+	// Added 2026-08-24 with classifySkipBook: the single-file path counted this
+	// inline at the call site, which left the rollup with no way to report it.
+	reasonStatErr
 )
 
 // rescanFreshCutoff returns the mtime at or below which a CHANGED file is
@@ -561,6 +565,81 @@ func classifySkipFile(filePath string, mtime int64, size int64, cache map[string
 	return true, reasonUnchanged
 }
 
+// classifySkipBook applies classifySkipFile across every file a book owns and
+// skips the book only if EVERY one of them is skippable.
+//
+// Skipping is per FILE; processing is per BOOK. A book with six files where five
+// are unchanged and one changed must still be reprocessed in full, because its
+// duration, size and chapter timeline are all functions of the whole set.
+// Deciding the other way -- reprocessing only the changed file -- silently
+// corrupts exactly the aggregates RecomputeBookAggregates' partial-data rule
+// exists to protect.
+//
+// The file set comes from the WALK (Book.SegmentFiles), never from Book.FilePath.
+// That is deliberate and load-bearing: the per-file scan cache is a stepping
+// stone to dropping Book.FilePath normalisation entirely, and a rollup that
+// grouped by book path would re-introduce the dependency the schema change is
+// paying to remove. TestClassifySkipBookIgnoresTheBookPath pins it -- the rollup
+// must stay CORRECT when Book.FilePath is stale, empty or wrong, not merely
+// avoid mentioning it.
+//
+// The reported reason is the FIRST file that refused to skip. A book re-read
+// because one segment changed is attributed "changed", not to whatever the other
+// five happened to be, so the summary names the reason a caller would act on.
+//
+// stat is injected so the decision is testable without touching a filesystem.
+func classifySkipBook(files []string, cache map[string]database.ScanCacheEntry, freshCutoff int64,
+	stat func(string) (os.FileInfo, error),
+) (bool, skipReason) {
+	if len(files) == 0 {
+		return false, reasonCacheMiss
+	}
+	// A cache-disabled run is decided once for the whole book: consulting it per
+	// file would report cacheOff N times for one book and inflate the summary.
+	if cache == nil {
+		return false, reasonCacheOff
+	}
+	deferred := false
+	for _, f := range files {
+		fi, err := stat(f)
+		if err != nil {
+			// A stat failure is no evidence the file is unchanged, so it forces
+			// the re-read -- same rule the single-file path already applies.
+			return false, reasonStatErr
+		}
+		skip, reason := classifySkipFile(f, fi.ModTime().Unix(), fi.Size(), cache, freshCutoff)
+		if !skip {
+			return false, reason
+		}
+		// tooFresh also skips, but it means "changed, come back later" rather
+		// than "nothing to do". Collapsing it into unchanged here would hide
+		// deferred work in the skip total -- and the run summary breaks the two
+		// apart precisely so a library that is churning does not read as a
+		// cache doing its job.
+		if reason == reasonTooFresh {
+			deferred = true
+		}
+	}
+	if deferred {
+		return true, reasonTooFresh
+	}
+	return true, reasonUnchanged
+}
+
+// scanFileSetFor returns every file the scan considers part of this book.
+//
+// SegmentFiles is the walk's own grouping and is the authority when present. It
+// is used in preference to Book.FilePath on purpose: see classifySkipBook.
+func scanFileSetFor(b *Book) []string {
+	if len(b.SegmentFiles) > 0 {
+		return b.SegmentFiles
+	}
+	if b.FilePath == "" {
+		return nil
+	}
+	return []string{b.FilePath}
+}
+
 // recordSkipDecision counts one classifySkipFile verdict.
 func recordSkipDecision(reason skipReason) {
 	switch reason {
@@ -576,6 +655,8 @@ func recordSkipDecision(reason skipReason) {
 		readChangedCount.Add(1)
 	case reasonDirty:
 		readDirtyCount.Add(1)
+	case reasonStatErr:
+		readStatErrCount.Add(1)
 	}
 }
 
@@ -1081,25 +1162,24 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				globalScanCacheMu.RLock()
 				cache := globalScanCache
 				globalScanCacheMu.RUnlock()
-				switch {
-				case cache == nil:
-					// force_update nils the cache for the whole run.
-					readCacheOffCount.Add(1)
-				default:
-					fi, statErr := os.Stat(books[idx].FilePath)
-					if statErr != nil {
-						// Falling through to a full re-read here is deliberate
-						// (a stat failure is no evidence the file is unchanged),
-						// but it was previously indistinguishable from a cache
-						// miss in the logs.
-						readStatErrCount.Add(1)
-						break
-					}
-					skip, reason := classifySkipFile(books[idx].FilePath, fi.ModTime().Unix(), fi.Size(), cache, freshCutoff)
-					recordSkipDecision(reason)
-					if skip {
-						return // progress deferred func will still fire
-					}
+				// Decide over EVERY file this book owns, not just its
+				// representative one. Until 2026-08-24 this consulted
+				// books[idx].FilePath alone, so a 6-file book whose segment 5
+				// changed was skipped whole because segment 1 had not: the
+				// changed audio never reached the row, and the duration and
+				// chapter aggregates kept describing the previous contents.
+				//
+				// The file list comes from the walk, so it is correct even
+				// before the per-file scan cache lands. Note what it does NOT
+				// change on its own: a multi-file book's segments have no
+				// cache entry today (the cache is keyed per BOOK), so they
+				// report cacheMiss and the book is re-read exactly as it is
+				// now. That is the grain mismatch, and closing it is the
+				// per-file cache's job, not this rollup's.
+				skip, reason := classifySkipBook(scanFileSetFor(&books[idx]), cache, freshCutoff, os.Stat)
+				recordSkipDecision(reason)
+				if skip {
+					return // progress deferred func will still fire
 				}
 			}
 
