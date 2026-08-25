@@ -238,6 +238,24 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			// (didPushdown=false), keep the post-filter so IsPrimary is applied.
 			if didPushdown {
 				hasPostFilters = false
+				// The store ORDERED this page as well as paginating it, so the
+				// trailing applySorting must not run on it either.
+				//
+				// This arm is reached when the sort streams from an index, so
+				// it looks like the safe case — it is the opposite. The keys
+				// that can be indexed but are absent from BookSummary (year,
+				// bitrate, bitrate_kbps) come back correctly ordered from the
+				// store and are then re-sorted here against fields
+				// bookSummariesToBooks did not carry. Every pair ties, and
+				// SortBooks' ID tiebreaker rewrites the store's correct answer
+				// into insertion order. ENABLING an index was what broke the
+				// sort: with the index off, the request takes the heavy branch
+				// below, which already skips its own re-sort.
+				//
+				// "year" is the shipped default for enabled_sort_indexes, so
+				// this was the one sort key a default install had enabled.
+				// See docs/audits/2026-08-25-author-series-sort-degenerate.md.
+				alreadySortedAndPaginated = true
 			}
 		} else {
 			// Heavy-filter pushdown: build a BookSummaryFilter that
@@ -252,11 +270,26 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			// go through pushdown with predicates, reducing fetched rows from
 			// ~68K (unfiltered) to only the filtered subset (e.g. ~38K primary).
 			if bsf, pushdownOK, pebbleLookups := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc); pushdownOK {
-				// Non-title sorts can't be pushed to memdb's title radix index,
-				// so fetch the FULL filtered set (pdLimit/pdOffset zeroed) and
-				// sort+paginate in application memory below.
+				// bsf carries the sort for every key database.CanSortBooksBy
+				// accepts, and a store with the filtered-summary capability
+				// orders the match set and paginates it. When that is true, ask
+				// for the PAGE rather than the whole filtered set.
+				//
+				// Pulling the whole set back is what the zeroing below does, and
+				// it is expensive twice over: the store materialises the matches
+				// to sort them, and then bookSummariesToBooks rebuilds every one
+				// of them here as a database.Book. Book is 904 bytes against
+				// BookSummary's 240, so a 68K-row library costs ~61 MB in this
+				// function alone -- to then throw all but `limit` of them away.
+				//
+				// No capability check is needed: when the store lacks it,
+				// summariesPushdownFiltered ignores these arguments entirely
+				// (it calls GetAllBookSummaries(0, 0)) and reports
+				// didPushdown=false, so the post-filter path below still owns
+				// pagination.
+				storeOrdersThePage := bsf.SortBy != ""
 				pdLimit, pdOffset := limit, offset
-				if heavySorting {
+				if heavySorting && !storeOrdersThePage {
 					pdLimit, pdOffset = 0, 0
 				}
 				summaries, didPushdown, sErr := svc.summariesPushdownFiltered(pdLimit, pdOffset, bsf)
@@ -287,28 +320,21 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					// pushed the filter down — never re-apply it.
 					hasPostFilters = false
 					if heavySorting {
-						// The fetch above returned the full filtered set,
-						// unpaginated (pdLimit/pdOffset were zeroed) — but
-						// ALREADY ORDERED whenever bsf carried the sort, which
-						// is every key database.CanSortBooksBy accepts.
+						// storeOrdersThePage: the store ordered the match set
+						// and returned THIS page of it. Nothing left to do, and
+						// doing anything would break it — re-sorting an ordered
+						// page corrupts it (see the tiebreaker note above), and
+						// re-paginating it is the "page 2 returns zero rows"
+						// bug: re-slicing a ≤limit page by the original offset.
 						//
-						// Re-sorting an ordered set here does not merely waste
-						// work, it CORRUPTS it. applySorting breaks ties on
-						// book ID, and every comparator for a field that
-						// BookSummary drops (author, series, year, genre,
-						// language, publisher, codec, quality, edition,
-						// bitrate, sample_rate) reads "" on every row of
-						// bookSummariesToBooks output — so every pair ties and
-						// the tiebreaker rewrites the store's correct answer
-						// into ID order. That is how "sort by author" returned
-						// books in insertion order with a 200 and no error
-						// surface. Measured: 13 of the 23 keys in
-						// bookSortComparators. See
-						// docs/audits/2026-08-25-author-series-sort-degenerate.md.
-						if bsf.SortBy == "" {
+						// Otherwise the key is one SortBooks does not know, so
+						// bsf carried no sort and the full set came back.
+						// applySorting is a documented no-op for an unknown
+						// field; paginate what we have.
+						if !storeOrdersThePage {
 							applySorting(books, f)
+							books = paginateFilteredBooks(books, limit, offset)
 						}
-						books = paginateFilteredBooks(books, limit, offset)
 						alreadySortedAndPaginated = true
 					}
 				}
