@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.8.0
+# version: 3.9.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-08-24
+# last-edited: 2026-08-25
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -285,22 +285,34 @@ jobs:
       - name: Install mockery
         run: go install github.com/vektra/mockery/v3@v3.7.4
 
+      # `git diff` compares the working tree against the INDEX, so it is blind
+      # to files that are not tracked yet. That is precisely the case this job
+      # most needs to catch: adding an interface and forgetting to commit its
+      # generated mock leaves a brand-new UNTRACKED file, which `git diff`
+      # reports as no change and the check passes green. `git status
+      # --porcelain` lists untracked entries (as `??`) alongside modified ones,
+      # so it sees both halves of "stale".
       - name: Check mockery mocks are fresh
         run: |
           set -e
           mockery
-          if ! git diff --quiet -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go 2>/dev/null; then
+          MOCK_PATHS=(':(glob)internal/**/mocks/**' 'internal/ai/mock_*_test.go' 'internal/metadata/mock_*_test.go')
+          CHANGED=$(git status --porcelain --untracked-files=all -- "${MOCK_PATHS[@]}")
+          if [ -n "$CHANGED" ]; then
             echo "❌ Committed mocks are stale. Run 'make mocks' and commit."
-            git diff --stat -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go
+            echo "$CHANGED"
             exit 1
           fi
           echo "✅ Mocks are up to date"
 
       - name: Check go generate mocks (database)
         run: |
+          set -e
           go generate ./internal/database/...
-          if ! git diff --exit-code internal/database/mocks/; then
+          CHANGED=$(git status --porcelain --untracked-files=all -- internal/database/mocks/)
+          if [ -n "$CHANGED" ]; then
             echo "❌ MockStore is stale. Run 'make mocks' and commit."
+            echo "$CHANGED"
             exit 1
           fi
           echo "✅ Database mocks are fresh"
