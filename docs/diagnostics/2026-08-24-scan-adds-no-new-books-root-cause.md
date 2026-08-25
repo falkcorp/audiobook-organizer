@@ -1,5 +1,5 @@
 <!-- file: docs/diagnostics/2026-08-24-scan-adds-no-new-books-root-cause.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 4.0.0 -->
 <!-- guid: 60ab5a31-b0bf-4055-985b-a4b16604e8a6 -->
 <!-- last-edited: 2026-08-24 -->
 
@@ -80,6 +80,41 @@ repair job answers it directly. `POST /api/v1/operations/elect-missing-primaries
 
 Note separately that **5,840 books have no version group at all**. The election does
 not touch those; they are a different population and may matter more than the 536.
+
+## A second invisible population — and a second repair that was never run
+
+The election above only repairs books that HAVE a version group. Books with no group
+are counted (`BooksWithoutGroup`) and skipped.
+
+So a book that is **ungrouped AND explicitly non-primary** is invisible to the default
+library view *and* untouched by the election. Measured: sampling the non-primary set,
+such books exist and are tightly clustered — **73 of them**, in offsets 11,800–12,199,
+including *A Game of Thrones*. (Verified reproducible: the same offset returns the same
+35 rows and the same first title across three consecutive runs, so this is a real
+cluster and not unstable pagination. Nine other offsets across the range returned zero,
+which is why a sparse sample missed it entirely.)
+
+That state is incoherent on its face: a book that belongs to no version group cannot
+meaningfully be the *non-primary version* of anything.
+
+**A repair for exactly this already exists and has never been run:**
+`internal/maintenance/jobs/normalize_primary_flags.go`, job id `normalize-primary-flags`
+— *"Write explicit is_primary_version=true for ungrouped books whose flag is nil
+(effective-true) or incoherently false."* Its line 76 case is `!*b.IsPrimaryVersion &&
+!grouped`, which is precisely this population. It has a dry-run mode.
+
+## Summary: two repairs exist, neither has ever been run
+
+| population | count | repair | run? |
+|---|---|---|---|
+| books in groups with no primary | **536** (312 groups) | `elect-missing-primaries` | never |
+| ungrouped but explicitly non-primary | **~73** | `normalize-primary-flags` | never |
+
+Both are wired, both default to dry-run, and both are one authenticated POST away.
+**Neither was run here — mutating prod rows is the owner's decision.**
+
+This does not fix the malformed rows the scan writes; it makes the already-ingested
+books reachable. The malformed-row defects are separate and scanner-side.
 
 ## What was NOT wrong — two dead ends, recorded so nobody re-walks them
 
