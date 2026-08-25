@@ -1,16 +1,36 @@
 # file: .github/workflows/cleanup-rc-releases.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
-# last-edited: 2026-05-15
+# last-edited: 2026-08-24
 
 name: Cleanup Old RC Releases
+
+# OWNERSHIP: this workflow is the single owner of RC purging for this repo.
+# github-common's reusable-release.yml has its own "Clean up superseded drafts
+# and prereleases" step (RC_KEEP_COUNT=5, superseded-by-stable scope). Two
+# purge systems firing on different policies makes RC counts impossible to
+# attribute, so that step is being neutralized for this repo separately.
 
 on:
   release:
     types: [published]
+  # Manual entry point. The delete path below had never executed successfully
+  # (297 skipped / 3 failed / 0 succeeded before 2026-08-24), so it needs a way
+  # to be exercised against live data without waiting for a stable cut.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Stable tag whose RCs should be cleaned (e.g. v0.218.1)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Print what would be deleted without deleting anything'
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
-  group: cleanup-rc-${{ github.event.release.tag_name }}
+  group: cleanup-rc-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: true
 
 permissions:
@@ -19,44 +39,110 @@ permissions:
 jobs:
   cleanup-old-rcs:
     name: Keep latest 3 RCs for released version
-    # Only run when a stable (non-prerelease) release is published
-    if: ${{ !github.event.release.prerelease }}
+    # Run on a manual dispatch, or when a stable (non-prerelease) release is
+    # published. RC publishes trigger this workflow too and must not purge.
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
       - name: Delete old RC releases for this version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          # Passed raw, NOT through a `x && 'a' || 'b'` ternary. That pattern
+          # collapses a boolean false to the fallback branch, which is exactly
+          # how reusable-release.yml made `false` unreachable for its six
+          # language flags. Bash does the branching below instead.
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          KEEP: '3'
         run: |
+          set -euo pipefail
+
+          # Release-triggered runs stay in dry-run until a human has reviewed a
+          # real delete list. Flip the `else` branch to "false" to arm it.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            DRY_RUN="${DRY_RUN_INPUT:-true}"
+          else
+            DRY_RUN="true"
+          fi
+
           # Strip any -rc.N suffix to get the base version (e.g. v0.216.6)
           BASE="${TAG%%-rc.*}"
-          echo "Published release: $TAG  →  base version: $BASE"
+          echo "Published release: $TAG  ->  base version: $BASE"
+          echo "Keep count: $KEEP    Dry run: $DRY_RUN"
 
-          # Fetch all RC releases for this version series, sorted newest-first by RC number
-          # shellcheck disable=SC2016  # $base is a jq variable (--arg), not a shell variable
-          RELEASES=$(gh release list --repo "$REPO" --limit 200 \
-            --json tagName,isPrerelease \
-            --jq --arg base "$BASE" \
-            '[.[] | select(.isPrerelease and (.tagName | test("^" + $base + "-rc\\.[0-9]+$")))]
-             | sort_by(.tagName | gsub(".*-rc\\."; "") | tonumber)
-             | reverse
-             | .[].tagName')
+          if [ "$DRY_RUN" != "false" ]; then
+            echo "::notice::DRY RUN - nothing will be deleted."
+          fi
 
-          echo "RC releases found (newest first):"
-          echo "$RELEASES"
+          # Escape dots so the version can't act as a regex wildcard.
+          BASE_RE=$(printf '%s' "$BASE" | sed 's/\./\\./g')
 
-          KEEP=3
+          # Enumerate with `gh api --paginate`, not `gh release list --limit N`.
+          # This repo has 460+ releases; any fixed limit silently truncates, and
+          # a truncated list is what let duplicate same-tag drafts pile up in
+          # reusable-release.yml. Pagination has no ceiling to outgrow.
+          #
+          # The filter runs in a real `jq` on the far side of a pipe, because
+          # `gh --jq` accepts ONE expression and has no `--arg`. The previous
+          # revision wrote `--jq --arg base "$BASE" '...'`, so gh parsed `--arg`
+          # as the expression and `base` as a subcommand, dying with
+          # `unknown command "base" for "gh release list"` on all 3 stable cuts.
+          #
+          # `grep || true` guards the no-match case: grep exits 1 when nothing
+          # matches, which under `set -o pipefail` would abort the job instead
+          # of cleanly reporting "nothing to do".
+          RELEASES=$(
+            gh api --paginate "repos/${REPO}/releases" \
+              --jq '.[] | select(.prerelease) | .tag_name' \
+            | { grep -E "^${BASE_RE}-rc\.[0-9]+$" || true; } \
+            | sort -V -r
+          )
+
+          if [ -z "$RELEASES" ]; then
+            echo "No RC releases found for $BASE - nothing to do."
+            exit 0
+          fi
+
+          echo "RC releases found for $BASE (newest first):"
+          echo "$RELEASES" | sed 's/^/  /'
+
           COUNT=0
+          DELETED=0
+          KEPT=0
           while IFS= read -r tag; do
-            [[ -z "$tag" ]] && continue
+            [ -z "$tag" ] && continue
             COUNT=$((COUNT + 1))
-            if (( COUNT > KEEP )); then
-              echo "Deleting: $tag"
+
+            if [ "$COUNT" -le "$KEEP" ]; then
+              echo "Keeping:  $tag  (${COUNT}/${KEEP})"
+              KEPT=$((KEPT + 1))
+              continue
+            fi
+
+            if [ "$DRY_RUN" = "false" ]; then
+              echo "Deleting: $tag (+tag)"
               gh release delete "$tag" --repo "$REPO" --yes --cleanup-tag
             else
-              echo "Keeping:  $tag  (${COUNT}/${KEEP})"
+              echo "[dry-run] would delete: $tag (+tag)"
             fi
+            DELETED=$((DELETED + 1))
           done <<< "$RELEASES"
 
-          echo "Done. Kept ${KEEP} (or fewer) RCs, deleted $((COUNT > KEEP ? COUNT - KEEP : 0))."
+          echo
+          if [ "$DRY_RUN" = "false" ]; then
+            echo "Done. Kept $KEPT, deleted $DELETED of $COUNT RC releases (and their tags)."
+          else
+            echo "[dry-run] Would keep $KEPT, delete $DELETED of $COUNT RC releases (and their tags)."
+            echo "[dry-run] Nothing was deleted."
+          fi
+
+          {
+            printf '## RC cleanup for %s\n\n' "$BASE"
+            printf '| Metric | Value |\n|---|---|\n'
+            printf '| Mode | %s |\n' "$([ "$DRY_RUN" = "false" ] && echo "LIVE" || echo "dry-run")"
+            printf '| RCs found | %s |\n' "$COUNT"
+            printf '| Kept | %s |\n' "$KEPT"
+            printf '| Deleted | %s |\n' "$DELETED"
+          } >> "$GITHUB_STEP_SUMMARY"
