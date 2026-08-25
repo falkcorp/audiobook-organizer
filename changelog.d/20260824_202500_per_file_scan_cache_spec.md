@@ -1,0 +1,3 @@
+### Added
+
+- **A written plan for making repeat scans fast.** Books made of several files are currently re-read and re-fingerprinted from scratch on every scan, however recently they were checked. The reason is now understood and measured, and the fix is written up for review before any code changes: the scanner remembers what it has already read per *book*, but decides what to skip per *file*, and those two stop matching as soon as a multi-file book is filed under its folder. The plan also records what has to happen before a larger follow-up change (telling Deluge when files move) so that work is not started in the wrong order.
