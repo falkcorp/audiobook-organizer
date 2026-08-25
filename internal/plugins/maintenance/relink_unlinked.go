@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
 // last-edited: 2026-08-24
 
@@ -395,6 +395,16 @@ func buildBookFileFor(b *database.Book, path string, durationSec, track int) *da
 	var size int64
 	if st, err := os.Stat(path); err == nil {
 		size = st.Size()
+	} else {
+		// Do NOT leave this silent. RecomputeBookAggregates only sums files with
+		// FileSize > 0, and its partial-data guard fires only when NO file has a
+		// size. So one successful stat among ten failures is the dangerous case:
+		// the guard does not fire, and the book's FileSize is overwritten with a
+		// badly understated total, with no warning at any layer. On this library's
+		// NFS-backed layout a permission change, an offline mount, or a file
+		// removed between readDirNames and here all reach this branch.
+		slog.Warn("relink: stat failed; row will carry FileSize=0 and understate the book's total",
+			"book_id", b.ID, "path", path, "error", err)
 	}
 	return &database.BookFile{
 		BookID:           b.ID,
