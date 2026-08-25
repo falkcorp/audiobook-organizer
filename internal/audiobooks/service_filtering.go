@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-23
+// last-edited: 2026-08-25
 
 package audiobooks
 

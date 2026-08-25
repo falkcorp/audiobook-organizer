@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.86.0
+// version: 1.87.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package config
 
@@ -1053,9 +1053,17 @@ type Config struct {
 	// sorted secondary index, turning "sort by X" from a
 	// materialise-the-whole-filtered-set-and-sort into a streaming walk.
 	//
-	// Recognised: author, narrator, series, year, created_at, updated_at,
-	// duration, file_size, bitrate. ("title" is always indexed and is not
-	// configurable.) Unknown names are ignored with a warning.
+	// Recognised: narrator, year, created_at, updated_at, duration, file_size,
+	// bitrate. ("title" is always indexed and is not configurable.) Unknown
+	// names are ignored with a warning.
+	//
+	// author and series are NOT recognised and cannot be. Their indexes are
+	// built by an indexer that receives only *Book, and the *Book held in
+	// memdb has Author and Series nil'd by stripBookForMemdb, so such an index
+	// sorts the whole library under one empty key. Those two sorts are served
+	// by resolving the name from the authors/series tables while materialising
+	// the match set — correct, and it costs no index. See
+	// hydrateSortNames in internal/database/memdb_summaries.go.
 	//
 	// ⚠️ DEFAULT IS EMPTY, AND THAT IS DELIBERATE. Each index costs real
 	// memory, measured rather than estimated at 100,000 books:
@@ -1079,12 +1087,16 @@ type Config struct {
 	// Enable the fields that are actually
 	// sorted by, and measure warmup afterwards.
 	//
-	// Defaults to {"year", "author"} -- the reported sort plus the one other
-	// field a library is commonly sorted by. Before that default existed this
-	// was empty, and the ABS handler's sort keys resolved to indexes that were
-	// never registered, so every non-title sort returned unordered rows behind
-	// a 200 OK. Kept deliberately narrow because each index taxes scan insert
-	// throughput; see the SetDefault call for the reasoning.
+	// Defaults to {"year"}. Before any default existed this was empty, and the
+	// ABS handler's sort keys resolved to indexes that were never registered,
+	// so every non-title sort returned unordered rows behind a 200 OK. Kept
+	// deliberately narrow because each index taxes scan insert throughput; see
+	// the SetDefault call for the reasoning.
+	//
+	// An absent index no longer means an unordered result: a sort with no
+	// index materialises the match set and sorts it before paginating, so this
+	// setting is now purely a speed/memory tradeoff rather than a correctness
+	// one.
 	EnabledSortIndexes []string `json:"enabled_sort_indexes" mapstructure:"enabled_sort_indexes"`
 }
 
@@ -1271,7 +1283,14 @@ func InitConfig() {
 	// unattributable throughput regression. Enabling one later is this line.
 	//
 	// Read at store-open: changing it requires a restart, not a config reload.
-	viper.SetDefault("enabled_sort_indexes", []string{"year", "author"})
+	// "author" was removed from this default on 2026-08-25. It named an index
+	// that could not be correct: a memdb indexer sees only *Book, and
+	// stripBookForMemdb nils Book.Author, so the index ordered every row in
+	// the library under the same empty key. Sorting by author now resolves the
+	// name from the authors table on the materialise-and-sort path instead.
+	// Leaving it here would print an "unknown entry ignored" warning on every
+	// startup, for a value the application itself shipped.
+	viper.SetDefault("enabled_sort_indexes", []string{"year"})
 	viper.SetDefault("enable_sqlite3_i_know_the_risks", false)
 	viper.SetDefault("setup_complete", false)
 

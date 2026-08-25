@@ -1,5 +1,5 @@
 // file: internal/database/memdb_sort_indexers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c8a6f31-9b07-4de5-a142-70e3d95cb864
 // last-edited: 2026-08-25
 //
@@ -174,11 +174,40 @@ func TestCanPushDownSort_FollowsEnabledSet(t *testing.T) {
 	}
 }
 
+// TestAuthorAndSeriesAreNotIndexable states the rule positively, so that
+// re-adding either key to sortIndexForField fails here rather than shipping a
+// sorted walk that returns arbitrary order.
+//
+// A memdb indexer is handed only *Book, and the *Book stored in memdb has
+// Author and Series nil'd by stripBookForMemdb. An index over either therefore
+// files every book in the library under the same empty key. Both sorts are
+// served instead by resolving the name from the authors/series tables while
+// materialising the match set -- see hydrateSortNames in memdb_summaries.go.
+func TestAuthorAndSeriesAreNotIndexable(t *testing.T) {
+	for _, f := range []string{"author", "series"} {
+		if _, ok := sortIndexForField[f]; ok {
+			t.Errorf("sortIndexForField[%q] exists: an indexer sees only *Book, whose "+
+				"Author/Series are stripped, so this index orders the whole library "+
+				"under one empty key", f)
+		}
+		// Still sortable -- just not by streaming an index.
+		if !CanSortBooksBy(f) {
+			t.Errorf("CanSortBooksBy(%q) = false; the comparator must remain", f)
+		}
+	}
+	enableAllSortIndexes(t)
+	for _, f := range []string{"author", "series"} {
+		if CanPushDownSort(f) {
+			t.Errorf("CanPushDownSort(%q) = true even with every index enabled", f)
+		}
+	}
+}
+
 func TestCanPushDownSort(t *testing.T) {
 	enableAllSortIndexes(t)
 	// Indexed — must be pushdownable, or the index is built and never used.
 	for _, f := range []string{
-		"title", "author", "narrator", "series", "year",
+		"title", "narrator", "year",
 		"created_at", "updated_at", "duration", "file_size", "bitrate",
 		"duration_seconds", "bitrate_kbps", "file_size_bytes",
 	} {

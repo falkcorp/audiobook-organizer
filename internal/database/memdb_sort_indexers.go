@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sort_indexers.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5e7d1b94-08c6-4a32-bf51-9d2e6c0a374b
-// last-edited: 2026-08-11
+// last-edited: 2026-08-25
 //
 // Sorted secondary indexes for the library list.
 //

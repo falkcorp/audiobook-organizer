@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_sort_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4e2f81-3a76-4b50-8d19-6e2b7c05af34
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package abs
 
@@ -120,21 +120,32 @@ func TestAbsItemFilterSort(t *testing.T) {
 // Assert the names round-trip through the store's own validator.
 func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
 	// Must match config.go's viper.SetDefault("enabled_sort_indexes", ...).
-	defaults := []string{"year", "author"}
+	//
+	// "author" was in this default until 2026-08-25 and was removed from both
+	// sides: the index it named could not be correct, because a memdb indexer
+	// sees only *Book and stripBookForMemdb nils Book.Author, so it ordered
+	// every row under one empty key. Sorting by author is now served by
+	// resolving the name while materialising the match set.
+	defaults := []string{"year"}
 
 	if unknown := database.SetEnabledSortIndexes(defaults); len(unknown) > 0 {
 		t.Fatalf("config default names the store does not recognise: %v", unknown)
 	}
 	t.Cleanup(func() { database.SetEnabledSortIndexes(defaults) })
 
-	// Sorts that must actually be ORDERED for the user. "title" is always
-	// indexed and not configurable; year is the reported bug; author is the
-	// other field a library is commonly sorted by.
+	// Sorts that stream from an index. "title" is always indexed and not
+	// configurable; year is the reported bug.
+	//
+	// The author entries moved OUT of this group on 2026-08-25, and the reason
+	// is not that author sorting got worse. Being unindexed no longer implies
+	// being unordered: a sort with no index now materialises the match set and
+	// orders it before paginating, so this group asserts a performance
+	// property (it streams) rather than a correctness one (it is ordered).
+	// Order itself is asserted end-to-end for every key in
+	// internal/audiobooks/sort_every_field_test.go.
 	for key, want := range map[string]string{
 		"media.metadata.title":         "title",
 		"media.metadata.publishedYear": "year",
-		"media.metadata.authorName":    "author",
-		"media.metadata.authorNameLF":  "author",
 	} {
 		got := absSortField(key)
 		if got != want {
@@ -149,7 +160,8 @@ func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
 	// Sorts the client menu offers that we deliberately leave UNINDEXED,
 	// because each index taxes scan insert throughput. They must still map to
 	// a real store field so warnUnindexedSort can name it -- but they are
-	// expected to be off.
+	// expected to be off. Unindexed costs a materialise-and-sort, not
+	// correctness.
 	//
 	// This half of the assertion is what makes the trade-off explicit: if
 	// someone widens the default later, this fails and they have to
@@ -159,6 +171,12 @@ func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
 		"updatedAt":      "updated_at",
 		"media.duration": "duration",
 		"size":           "file_size",
+		// author cannot be indexed at all, not merely "not yet": an indexer
+		// receives only *Book and stripBookForMemdb nils Book.Author, so the
+		// index would file the whole library under one empty key. It is sorted
+		// by resolving the name while materialising the match set.
+		"media.metadata.authorName":   "author",
+		"media.metadata.authorNameLF": "author",
 	} {
 		got := absSortField(key)
 		if got != want {
