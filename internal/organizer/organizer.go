@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -373,7 +374,7 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 // 23,622 times — see docs/audits/2026-08-13-mass-reorganize-duplicated-14tb-
 // under-unknown-author.md. Rename/copy paths must gate on HasResolvedAuthor
 // before using a target built from this.
-const placeholderAuthor = "Unknown Author"
+const placeholderAuthor = authorname.Placeholder
 
 // resolveAuthorName returns the book's effective author name, following
 // AuthorID when the Author object is not populated. Empty string means the
