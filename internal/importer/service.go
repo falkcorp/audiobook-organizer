@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-08-25
 
@@ -59,6 +59,11 @@ type importBookStore interface {
 	CreateBook(book *database.Book) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookByFileHash(hash string) (*database.Book, error)
+	// CreateBookFile was ABSENT until 2026-08-25, which is why imported books
+	// had a row and audio on disk and nothing connecting the two. The gap was
+	// invisible precisely because it was an interface gap: nothing in this
+	// package could call the method, so nothing looked like it was failing to.
+	CreateBookFile(file *database.BookFile) error
 }
 
 type Store interface {
@@ -278,6 +283,56 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		Format: created.Format, Source: "imported",
 	}); verErr != nil {
 		slog.Warn("create ingest version", "id", created.ID, "err", verErr)
+	}
+
+	// Give the imported book its book_file row.
+	//
+	// Without this the book row exists and the audio exists and NOTHING
+	// CONNECTS THEM. Nine packages create book_file rows — merge, maintenance,
+	// organizer, itunes, metafetch, and the scan path via
+	// server.ensureSingleFileBookFile — and this one did not. The capability
+	// was not even in importBookStore, so it could not have.
+	//
+	// The immediate consequence was that organize-on-import is INERT:
+	// FilterBooksNeedingOrganization (organizer/service.go:689-696) drops any
+	// book whose FilePath is outside RootDir and which has zero book_files,
+	// counting it into skippedMissingFiles behind a log.Debug. An imported file
+	// is outside RootDir BY DEFINITION — that is what importing means — so
+	// every import-triggered organize would have been silently skipped, and the
+	// handler would still have reported a queued op id.
+	//
+	// This is always the single-file shape: ImportFile rejects directories
+	// above, and fileInfo/ext are the values already computed for that check.
+	// It therefore does NOT go through scanner.createBookFilesForBook, which
+	// also normalizes Book.FilePath to the containing directory — correct for a
+	// multi-file book, wrong here. Same reasoning as
+	// server.ensureSingleFileBookFile, which exists to backfill exactly this
+	// gap after the fact.
+	//
+	// VersionID is deliberately left unset, matching every other creation path
+	// (only versions/fingerprint.go populates it today).
+	//
+	// A failure here does NOT fail the import. The book row is already
+	// committed, so returning an error would tell the caller to retry an import
+	// that already succeeded, duplicating the book. Warn loudly instead — this
+	// is the row everything downstream depends on.
+	bf := &database.BookFile{
+		BookID:           created.ID,
+		FilePath:         created.FilePath,
+		OriginalFilename: filepath.Base(created.FilePath),
+		Format:           strings.TrimPrefix(ext, "."),
+		FileSize:         fileInfo.Size(),
+		TrackNumber:      1,
+		TrackCount:       meta.TrackTotal,
+		DiscNumber:       meta.DiscNumber,
+		DiscCount:        meta.DiscTotal,
+	}
+	if meta.TrackNumber > 0 {
+		bf.TrackNumber = meta.TrackNumber
+	}
+	if bfErr := is.db.CreateBookFile(bf); bfErr != nil {
+		slog.Warn("import: could not create book_file row — the book has no route to its audio, and organize will skip it",
+			"book_id", created.ID, "path", created.FilePath, "err", bfErr)
 	}
 
 	// Provision ITL track via the injected iTunes service.
