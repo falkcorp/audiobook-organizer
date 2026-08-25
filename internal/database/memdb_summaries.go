@@ -1,7 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
-// last-edited: 2026-08-23
+// last-edited: 2026-08-25
 
 package database
 
@@ -127,6 +127,28 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		sortIdx = sortIndexForField[f.SortBy]
 	}
 
+	// Ordering is a predicate too. When no index can stream f.SortBy but
+	// SortBooks understands it, the page has to be chosen from the ORDERED
+	// match set — so collect every match first and sort before paginating.
+	//
+	// The walk below is index order, not sort order, so consuming offset/limit
+	// during it picks an arbitrary window. Whoever sorts that window afterwards
+	// gets a page that looks perfectly ordered and holds the wrong rows: "the
+	// 50 shortest books" comes back as 50 books in correct duration order that
+	// are not the 50 shortest, 200 OK, no error surface.
+	//
+	// This is NOT something the caller can do instead. The service receives
+	// []BookSummary, and BookSummary drops most of what is sortable — author,
+	// series, year, genre, language, publisher, codec, quality, edition,
+	// bitrate and sample_rate are all absent from it (see BookSummary and
+	// audiobooks.bookSummaryToBook). Sorting there compares "" against "" for
+	// every row and returns the input untouched. Measured before this change:
+	// 13 of the 23 keys in bookSortComparators ordered nothing at all through
+	// GetAudiobooks. Do NOT move this back up the stack — see
+	// docs/audits/2026-08-25-author-series-sort-degenerate.md.
+	materialise := sortIdx == "" && CanSortBooksBy(f.SortBy)
+	var matches []Book
+
 	switch {
 	case sortIdx != "":
 		if f.SortAscending {
@@ -232,6 +254,13 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 			continue
 		}
 
+		// Materialising: take every match, unpaginated. The sort below
+		// decides which rows the page holds.
+		if materialise {
+			matches = append(matches, *b)
+			continue
+		}
+
 		if skipped < offset {
 			skipped++
 			continue
@@ -270,7 +299,92 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 			break
 		}
 	}
+
+	if materialise {
+		// author/series sort on a name the row does not carry: memdb strips
+		// both pointers (stripBookForMemdb) so every book would compare as "".
+		// Resolve them from the same txn before sorting.
+		if err := hydrateSortNames(txn, matches, f.SortBy); err != nil {
+			return nil, err
+		}
+		SortBooks(matches, f.SortBy, f.SortAscending)
+		if offset >= len(matches) {
+			return []BookSummary{}, nil
+		}
+		end := len(matches)
+		if limit > 0 && offset+limit < end {
+			end = offset + limit
+		}
+		page := matches[offset:end]
+		sorted := make([]BookSummary, len(page))
+		for i := range page {
+			sorted[i] = bookToSummary(&page[i])
+		}
+		return sorted, nil
+	}
+
 	return out, nil
+}
+
+// memFirstLookup is the one memdb operation hydrateSortNames needs. Taking an
+// interface keeps this file free of a memdb import for a single call.
+type memFirstLookup interface {
+	First(table, index string, args ...interface{}) (interface{}, error)
+}
+
+// hydrateSortNames fills in the Author/Series pointer that stripBookForMemdb
+// cleared, but only for the sort that actually reads it. Every other sort key
+// reads a field the memdb row still carries, so this is a no-op for them.
+//
+// Sorting by author is the reason this exists: the memdb sort index for author
+// is built by an indexer that receives only *Book, and the *Book in memdb has
+// Author=nil, so the index orders every row under the same empty key. A name
+// can only be resolved by something holding the txn — which is this function,
+// not the indexer.
+func hydrateSortNames(txn memFirstLookup, books []Book, sortBy string) error {
+	switch sortBy {
+	case "author":
+		cache := make(map[int]*Author)
+		for i := range books {
+			id := books[i].AuthorID
+			if id == nil {
+				continue
+			}
+			a, seen := cache[*id]
+			if !seen {
+				obj, err := txn.First(memTableAuthors, memIdxID, *id)
+				if err != nil {
+					return fmt.Errorf("memdb author lookup for sort: %w", err)
+				}
+				if av, ok := obj.(*Author); ok {
+					a = av
+				}
+				cache[*id] = a
+			}
+			books[i].Author = a
+		}
+	case "series":
+		cache := make(map[int]*Series)
+		for i := range books {
+			id := books[i].SeriesID
+			if id == nil {
+				continue
+			}
+			sv, seen := cache[*id]
+			if !seen {
+				obj, err := txn.First(memTableSeries, memIdxID, *id)
+				if err != nil {
+					return fmt.Errorf("memdb series lookup for sort: %w", err)
+				}
+				if s2, ok := obj.(*Series); ok {
+					sv = s2
+				}
+				cache[*id] = sv
+			}
+			books[i].Series = sv
+		}
+	}
+	return nil
 }
 
 // CountBookSummaries returns the number of rows that would be returned by

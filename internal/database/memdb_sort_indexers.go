@@ -343,10 +343,17 @@ func CanPushDownSort(field string) bool {
 	return sortIndexEnabled(field)
 }
 
+// author and series are deliberately ABSENT. A memdb indexer receives only
+// *Book, and the *Book in memdb has Author and Series nil'd by
+// stripBookForMemdb, so an index on either orders every row in the library
+// under the same empty key — a sorted walk that returns arbitrary order while
+// reporting itself as pushed down. Listing them here is what routed those two
+// sorts onto that index instead of the materialise-and-sort path that can
+// resolve a name from the txn (see hydrateSortNames in memdb_summaries.go).
+// Re-adding a key here requires an indexer that can see the name, which an
+// indexer taking *Book cannot.
 var sortIndexForField = map[string]string{
-	"author":           memIdxSortAuthor,
 	"narrator":         memIdxSortNarrator,
-	"series":           memIdxSortSeries,
 	"year":             memIdxSortYear,
 	"created_at":       memIdxSortCreatedAt,
 	"updated_at":       memIdxSortUpdatedAt,
