@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_async_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d0871769-241c-463d-91ac-02ba0dac2f94
 // last-edited: 2026-08-24
 
@@ -163,5 +163,58 @@ func TestRunAIParseForBooksIsANoopWhenAIParsingIsDisabled(t *testing.T) {
 func TestRunAIParseForBooksIsANoopOnAnEmptyBatch(t *testing.T) {
 	if err := RunAIParseForBooks(context.Background(), nil, logger.New("test")); err != nil {
 		t.Fatalf("want nil for an empty batch, got %v", err)
+	}
+}
+
+// TestEnqueueAIParseStripsFieldsTheAIPhaseNeverReads bounds the operation's
+// params row. A multi-file book carries every segment path and every segment
+// hash; a batch of 200 of them would serialize megabytes into a single op row,
+// none of which anything on this path reads. It would also make the params blob
+// a second, stale copy of data the scan already persisted.
+func TestEnqueueAIParseStripsFieldsTheAIPhaseNeverReads(t *testing.T) {
+	books := []Book{{
+		FilePath:      "/lib/book.m4b",
+		Title:         "Kept",
+		Author:        "Kept",
+		Series:        "Kept",
+		Position:      3,
+		Narrator:      "Kept",
+		Publisher:     "Kept",
+		SegmentFiles:  []string{"/lib/p1.mp3", "/lib/p2.mp3"},
+		SegmentHashes: map[string]string{"/lib/p1.mp3": "deadbeef"},
+		FileHash:      "cafebabe",
+		Format:        ".m4b",
+		Duration:      12345,
+	}}
+
+	var got []Book
+	withEnqueueHook(t, func(_ context.Context, batch []Book) error {
+		got = append(got, batch...)
+		return nil
+	})
+	if err := enqueueAIParse(context.Background(), books, []int{0}, logger.New("test")); err != nil {
+		t.Fatalf("enqueueAIParse: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("want 1 book, got %d", len(got))
+	}
+	b := got[0]
+
+	// The seven fields the AI phase and its saver actually touch.
+	if b.FilePath != "/lib/book.m4b" || b.Title != "Kept" || b.Author != "Kept" ||
+		b.Series != "Kept" || b.Position != 3 || b.Narrator != "Kept" || b.Publisher != "Kept" {
+		t.Fatalf("a field the AI phase reads was dropped: %+v", b)
+	}
+
+	// Everything else must be gone.
+	if b.SegmentFiles != nil {
+		t.Errorf("SegmentFiles rode along into the op params: %v", b.SegmentFiles)
+	}
+	if b.SegmentHashes != nil {
+		t.Errorf("SegmentHashes rode along into the op params: %v", b.SegmentHashes)
+	}
+	if b.FileHash != "" || b.Format != "" || b.Duration != 0 {
+		t.Errorf("unread fields rode along: hash=%q format=%q duration=%d", b.FileHash, b.Format, b.Duration)
 	}
 }

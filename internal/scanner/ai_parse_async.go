@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
 // last-edited: 2026-08-24
 
@@ -78,7 +78,7 @@ func enqueueAIParse(ctx context.Context, books []Book, candidates []int, scanLog
 		if idx < 0 || idx >= len(books) {
 			continue
 		}
-		batch = append(batch, books[idx])
+		batch = append(batch, aiParseCandidate(books[idx]))
 		if len(batch) >= aiParseEnqueueChunk {
 			if err := flush(); err != nil {
 				return err
@@ -86,6 +86,28 @@ func enqueueAIParse(ctx context.Context, books []Book, candidates []int, scanLog
 		}
 	}
 	return flush()
+}
+
+// aiParseCandidate strips a Book down to what the AI phase actually reads and
+// writes, which is measured rather than assumed: ai_batch_phase.go touches
+// FilePath, Title, Author, Series, Position, Narrator and Publisher, and
+// saveAIFieldsToPrimary touches the same seven.
+//
+// This bounds the operation's params row. A Book carries SegmentFiles and
+// SegmentHashes, so a batch of segment-heavy multi-file books would serialize
+// multiple megabytes of paths and hashes into a single op row -- none of which
+// any code on this path reads. Carrying them would also make the params blob a
+// second, stale copy of data the scan already wrote.
+func aiParseCandidate(b Book) Book {
+	return Book{
+		FilePath:  b.FilePath,
+		Title:     b.Title,
+		Author:    b.Author,
+		Series:    b.Series,
+		Position:  b.Position,
+		Narrator:  b.Narrator,
+		Publisher: b.Publisher,
+	}
 }
 
 // RunAIParseForBooks parses a queued batch of books and saves what it filled in.
