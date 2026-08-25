@@ -1,11 +1,11 @@
 - [ ] **Decide what to do about the 6 ABS client sorts this server has no field
-      for.** `absSortFields` (`internal/server/handlers/abs/browse.go`) covers 8 of
-      the 14 sorts the Audiobookshelf client menu offers. The other 6 resolve to
-      `""`, which means "no ordering requested" everywhere downstream, so the
+      for.** `absSortFields` (`internal/server/handlers/abs/browse.go`) holds 11 accepted
+      parameter spellings resolving to 9 distinct store fields. Six known client
+      sorts resolve to `""` instead, which means "no ordering requested" everywhere downstream, so the
       client gets a 200 and the store's default order.
 
       As of 2026-08-25 this is at least no longer silent — `warnUnsupportedSort`
-      logs once per distinct sort string and names the supported alternatives —
+      logs at most once a minute and names the supported alternatives —
       but nothing sorts. They are unsupported for three different reasons and
       each wants a different decision:
 
