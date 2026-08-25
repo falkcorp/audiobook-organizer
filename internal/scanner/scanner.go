@@ -1130,7 +1130,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// book in the library. nil means the placeholder author has never been
 	// created in this database, in which case no row can point at it and the
 	// gate needs no exception.
-	placeholderAuthorID := lookupPlaceholderAuthorID()
+	//
+	// Guarded on aiEnabled because the gate is the only reader: a scan with AI
+	// parsing switched off must not pay for a store read it will never consult.
+	var placeholderAuthorID *int
+	if aiEnabled {
+		placeholderAuthorID = lookupPlaceholderAuthorID()
+	}
 
 	// Track books needing AI parsing for batch processing
 	var aiCandidates []int
