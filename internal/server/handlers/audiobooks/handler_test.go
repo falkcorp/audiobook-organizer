@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -50,6 +50,11 @@ type recorders struct {
 	publishedEvents  []plugin.Event
 	listResp         gin.H
 	listErr          error
+	// listFilters records the ListFilters the handler actually handed to
+	// buildListResponse. Asserting on the response body alone cannot see a
+	// dropped predicate -- the stub returns the same canned page either way.
+	listFilters     audiobookspkg.ListFilters
+	listFiltersSeen bool
 	facetsResp       gin.H
 	facetsErr        error
 	facetsCalls      int
@@ -75,7 +80,21 @@ type testDeps struct {
 // newHandler wires a Handler with fresh mocks + stub injected funcs.
 func newHandler(t *testing.T) (*audiobookshandler.Handler, testDeps) {
 	t.Helper()
-	store := audiobooksmocks.NewMockAudiobooksStore(t)
+	return newHandlerWithStore(t, nil)
+}
+
+// newHandlerWithStore is newHandler with an optional store decorator, for tests
+// that need the store to advertise a capability the bare mock does not have
+// (ListBooksWithFileErrors, GetAllBookIDsForQuickQuery). wrap receives the mock
+// and returns the value actually handed to the Handler; testDeps.store stays
+// the underlying mock so EXPECT() calls still work.
+func newHandlerWithStore(t *testing.T, wrap func(*audiobooksmocks.MockAudiobooksStore) audiobookshandler.AudiobooksStore) (*audiobookshandler.Handler, testDeps) {
+	t.Helper()
+	mockStore := audiobooksmocks.NewMockAudiobooksStore(t)
+	var store audiobookshandler.AudiobooksStore = mockStore
+	if wrap != nil {
+		store = wrap(mockStore)
+	}
 	svc := audiobooksmocks.NewMockAudiobookService(t)
 	updater := audiobooksmocks.NewMockAudiobookUpdater(t)
 	writeBack := audiobooksmocks.NewMockWriteBackEnqueuer(t)
@@ -102,6 +121,8 @@ func newHandler(t *testing.T) (*audiobookshandler.Handler, testDeps) {
 		changelog,
 		lc, fc, ac, sc,
 		func(ctx context.Context, limit, offset int, search string, authorID, seriesID *int, filters audiobookspkg.ListFilters, showQuarantined bool) (gin.H, error) {
+			rec.listFilters = filters
+			rec.listFiltersSeen = true
 			if rec.listResp == nil {
 				rec.listResp = gin.H{"items": []any{}, "count": 0, "limit": limit, "offset": offset}
 			}
@@ -131,7 +152,7 @@ func newHandler(t *testing.T) (*audiobookshandler.Handler, testDeps) {
 			rec.publishedEvents = append(rec.publishedEvents, event)
 		},
 	)
-	return h, testDeps{store, svc, updater, writeBack, metaState, metaFetch, batchSvc, changelog, lc, fc, ac, sc, rec}
+	return h, testDeps{mockStore, svc, updater, writeBack, metaState, metaFetch, batchSvc, changelog, lc, fc, ac, sc, rec}
 }
 
 // newCtx builds a gin test context for the given method/target with optional
