@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_save_target_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ade87d70-9dc4-4aee-9538-449a631e678d
 // last-edited: 2026-08-24
 
@@ -7,6 +7,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -22,6 +23,13 @@ func aiSaveStore(t *testing.T) database.Store {
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(orig); SetStore(nil) })
 	return store
+}
+
+// saveAI drops the stamp-path return so the assertions below stay about the
+// row that got written, which is what these tests are for.
+func saveAI(id string, b *Book) error {
+	_, err := saveAIFieldsToPrimary(context.Background(), id, b)
+	return err
 }
 
 func ptrBool(b bool) *bool    { return &b }
@@ -59,7 +67,7 @@ func TestSaveAIFieldsWritesToThePrimaryNotTheDemotedSource(t *testing.T) {
 
 	// The batch carries the SOURCE path, because that is the path the scan
 	// walked and nominated.
-	require.NoError(t, saveAIFieldsToPrimary(context.Background(), &Book{
+	require.NoError(t, saveAI("", &Book{
 		FilePath: source.FilePath,
 		Series:   "The Series",
 		Position: 2,
@@ -90,7 +98,7 @@ func TestSaveAIFieldsWritesToTheRowItselfWhenItIsPrimary(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, saveAIFieldsToPrimary(context.Background(), &Book{
+	require.NoError(t, saveAI("", &Book{
 		FilePath:  row.FilePath,
 		Narrator:  "A Narrator",
 		Publisher: "A Publisher",
@@ -118,7 +126,7 @@ func TestSaveAIFieldsNeverOverwritesAnExistingValue(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, saveAIFieldsToPrimary(context.Background(), &Book{
+	require.NoError(t, saveAI("", &Book{
 		FilePath: row.FilePath,
 		Title:    "AI Guessed Title",
 		Narrator: "AI Guessed Narrator",
@@ -136,7 +144,7 @@ func TestSaveAIFieldsNeverOverwritesAnExistingValue(t *testing.T) {
 func TestSaveAIFieldsToleratesAMissingRow(t *testing.T) {
 	aiSaveStore(t)
 
-	require.NoError(t, saveAIFieldsToPrimary(context.Background(), &Book{
+	require.NoError(t, saveAI("", &Book{
 		FilePath: "/nowhere/gone.m4b",
 		Title:    "Whatever",
 	}))
@@ -150,10 +158,11 @@ func TestSaveAIFieldsToleratesAMissingRow(t *testing.T) {
 type fakeGroupLookup struct {
 	scanBookLookup
 	members []database.Book
+	err     error
 }
 
 func (f fakeGroupLookup) GetBooksByVersionGroup(string) ([]database.Book, error) {
-	return f.members, nil
+	return f.members, f.err
 }
 
 func TestPrimaryVersionOfSelectsByFlagNotByPosition(t *testing.T) {
@@ -166,8 +175,9 @@ func TestPrimaryVersionOfSelectsByFlagNotByPosition(t *testing.T) {
 	}
 	row := &database.Book{ID: "decoy-1", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(false)}
 
-	got := primaryVersionOf(fakeGroupLookup{members: members}, row)
+	got, err := primaryVersionOf(fakeGroupLookup{members: members}, row)
 
+	require.NoError(t, err)
 	require.NotNil(t, got, "no primary found in a group that has one")
 	require.Equal(t, "the-primary", got.ID,
 		"selected by position instead of IsPrimaryVersion")
@@ -183,15 +193,17 @@ func TestPrimaryVersionOfFailsOpen(t *testing.T) {
 		{ID: "b", VersionGroupID: ptrStr(group)},
 	}
 
-	require.Nil(t, primaryVersionOf(
+	got, err := primaryVersionOf(
 		fakeGroupLookup{members: noPrimary},
-		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(false)}),
-		"a group with no primary must leave the write where it was")
+		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(false)})
+	require.NoError(t, err)
+	require.Nil(t, got, "a group with no primary must leave the write where it was")
 
-	require.Nil(t, primaryVersionOf(
+	got, err = primaryVersionOf(
 		fakeGroupLookup{members: noPrimary},
-		&database.Book{ID: "solo"}),
-		"a book in no version group must not be redirected")
+		&database.Book{ID: "solo"})
+	require.NoError(t, err)
+	require.Nil(t, got, "a book in no version group must not be redirected")
 
 	// A row that is already primary short-circuits BEFORE the group is read.
 	// The members list here deliberately contains a primary, and a stale one:
@@ -201,8 +213,82 @@ func TestPrimaryVersionOfFailsOpen(t *testing.T) {
 	staleGroup := []database.Book{
 		{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(true), Title: "stale copy"},
 	}
-	require.Nil(t, primaryVersionOf(
+	got, err = primaryVersionOf(
 		fakeGroupLookup{members: staleGroup},
-		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(true), Title: "fresh"}),
-		"a row that is already primary must not be redirected to a re-read copy of itself")
+		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(true), Title: "fresh"})
+	require.NoError(t, err)
+	require.Nil(t, got, "a row that is already primary must not be redirected to a re-read copy of itself")
+}
+
+// TestPrimaryVersionOfSurfacesAReadFailure: failing open here is right --
+// skipping the write loses the update too -- but it must not be SILENT. The row
+// the caller holds in that case is the demoted organized_source, so a swallowed
+// error writes the AI fields somewhere the UI never shows them and reports
+// success, which is exactly the bug primaryVersionOf exists to prevent.
+func TestPrimaryVersionOfSurfacesAReadFailure(t *testing.T) {
+	boom := errors.New("pebble is unhappy")
+	got, err := primaryVersionOf(
+		fakeGroupLookup{err: boom},
+		&database.Book{ID: "a", VersionGroupID: ptrStr("vg"), IsPrimaryVersion: ptrBool(false)})
+
+	require.ErrorIs(t, err, boom, "a group read failure must be reported, not swallowed")
+	require.Nil(t, got, "and it must still fail OPEN, leaving the caller its own row")
+}
+
+// TestSaveAIFieldsFollowsTheRowIDAcrossAnInPlaceRename is the defect that made
+// the queued path silently lossy in the normal prod configuration.
+//
+// OrganizeOneBook sends every book under RootDir -- i.e. every book in an
+// ordinary library scan -- through ReOrganizeInPlace, which is a true
+// safeRename, and then rewrites the row's FilePath. Organize runs AFTER
+// ProcessBooksParallel returns, so by the time the queued batch ran, the path in
+// its params named nothing: GetBookByFilePath returned no row, the saver
+// returned a bare nil, and the parse was discarded with no error and no log
+// line. Carrying the row ID is what survives the rename.
+func TestSaveAIFieldsFollowsTheRowIDAcrossAnInPlaceRename(t *testing.T) {
+	store := aiSaveStore(t)
+
+	const scannedPath = "/library/incoming/some file.m4b"
+	row, err := store.CreateBook(&database.Book{FilePath: scannedPath})
+	require.NoError(t, err)
+
+	// Organize renames the file and rewrites the row's path. The batch is still
+	// carrying the path it was queued with.
+	const organizedPath = "/library/Author Name/A Title/A Title.m4b"
+	row.FilePath = organizedPath
+	_, err = store.UpdateBook(row.ID, row)
+	require.NoError(t, err)
+
+	stamped, err := saveAIFieldsToPrimary(context.Background(), row.ID, &Book{
+		FilePath: scannedPath, // the dead path
+		Title:    "A Title",
+		Narrator: "A Narrator",
+	})
+	require.NoError(t, err)
+
+	got, err := store.GetBookByID(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, "A Title", got.Title,
+		"the parse was discarded: the ID did not survive the rename")
+	require.NotNil(t, got.Narrator)
+	require.Equal(t, "A Narrator", *got.Narrator)
+
+	// And the stamp must name the row's CURRENT path, not the params one --
+	// stamping the dead path writes nothing and the book is re-read forever.
+	require.Equal(t, organizedPath, stamped)
+}
+
+// TestSaveAIFieldsReportsTheStampPathForAnUnchangedRow: a book the LLM had
+// nothing to say about has still been ATTEMPTED, and must be stamped. Leaving
+// it unstamped re-reads AND re-queues the same unparseable filename on every
+// scan, which is how an LLM budget gets burned by a scan feedback loop.
+func TestSaveAIFieldsReportsTheStampPathForAnUnchangedRow(t *testing.T) {
+	store := aiSaveStore(t)
+	row, err := store.CreateBook(&database.Book{FilePath: "/lib/x.m4b", Title: "Already Set"})
+	require.NoError(t, err)
+
+	stamped, err := saveAIFieldsToPrimary(context.Background(), row.ID, &Book{FilePath: "/lib/x.m4b"})
+	require.NoError(t, err)
+	require.Equal(t, "/lib/x.m4b", stamped,
+		"an attempted-but-unchanged book must still report a path to stamp")
 }

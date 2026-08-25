@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
 // last-edited: 2026-08-24
 
@@ -67,8 +67,8 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 		return err
 	}
 
-	var queued []Book
-	withEnqueueHook(t, func(_ context.Context, batch []Book) error {
+	var queued []AIParseCandidate
+	withEnqueueHook(t, func(_ context.Context, batch []AIParseCandidate) error {
 		queued = append(queued, batch...)
 		return nil
 	})
@@ -85,4 +85,25 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 	require.Lenf(t, queued, 1,
 		"the scan did not hand its AI candidate to the queue; it parsed inline and blocked on the LLM")
 	require.Equal(t, segs[0], queued[0].FilePath)
+	require.NotEmpty(t, queued[0].ID,
+		"the candidate must carry its row ID; the path does not survive organize's in-place rename")
+
+	// And the scan must NOT have stamped the scan cache for it.
+	//
+	// This is the mechanism the op's ResumeDrop policy rests on. The stamp means
+	// "fully processed, skip next time", and classifySkipFile returns BEFORE the
+	// AI nomination check -- so a book stamped here is never re-nominated no
+	// matter how empty its fields are. Stamping a book whose parse has only been
+	// PROMISED turns every dropped, aborted or cancelled batch into permanent
+	// silent loss. The AI phase writes this stamp instead, once a parse has
+	// actually been attempted.
+	cache, err := store.GetScanCacheMap()
+	require.NoError(t, err)
+	row, err := store.GetBookByFilePath(segs[0])
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	_, stamped := cache[row.ID]
+	require.False(t, stamped,
+		"the scan stamped the scan cache for a book whose AI parse has only been queued; "+
+			"a dropped batch would now be unrecoverable and the next scan would skip the file")
 }

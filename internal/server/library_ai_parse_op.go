@@ -1,5 +1,5 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
 // last-edited: 2026-08-24
 
@@ -9,8 +9,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -19,14 +21,13 @@ import (
 
 // libraryAIParseParams carries one queued batch of books to AI-parse.
 //
-// The books are carried by value rather than by ID because the scan that
-// produced them is the only thing that knows which ones came out of metadata
-// extraction with empty fields, and it does not have IDs to give: scanner.Book
-// has no ID field at all -- it is a pre-persistence value, keyed by FilePath.
-// Re-deriving the candidate set from the database later would be a different
-// query answering a different question.
+// The candidates are carried by value -- the scan that produced them is the only
+// thing that knows which came out of metadata extraction with empty fields, and
+// re-deriving that set later would be a different query answering a different
+// question -- but each one carries its database row ID, resolved by the scan at
+// enqueue time. See scanner.AIParseCandidate for why the ID is load-bearing.
 type libraryAIParseParams struct {
-	Books []scanner.Book `json:"books"`
+	Books []scanner.AIParseCandidate `json:"books"`
 }
 
 // RegisterLibraryAIParseOp registers the "library.ai-parse" v2 OperationDef and
@@ -47,12 +48,29 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 		DefaultPriority: opsregistry.PriorityLow,
 		Cancellable:     true,
 		Isolate:         false,
-		// ResumeDrop, not ResumeRestart. A dropped batch costs nothing
-		// permanent: the books keep their empty fields, so the next scan
-		// re-nominates exactly the same candidates and queues them again. A
-		// restart would re-send LLM requests for the books the batch already
-		// finished, which costs tokens to arrive at the same rows.
+		// ResumeDrop, and the reason is NOT that a dropped batch is free -- the
+		// first version of this comment claimed the next scan would simply
+		// re-nominate the same candidates, and that was false. The scan-cache
+		// skip in ProcessBooksParallel returns BEFORE the nomination check, so
+		// a book stamped as processed is never re-nominated no matter how empty
+		// its fields are.
+		//
+		// What makes dropping safe is that the scan now WITHHOLDS that stamp for
+		// every book it nominates, and only the AI phase writes it, once a parse
+		// has actually been attempted. A dropped batch leaves its books
+		// unstamped, so the next scan re-reads and re-nominates them. Delete
+		// that mechanism and this policy becomes silent permanent loss.
+		//
+		// Bounded honestly: this covers books organize has not yet given a title
+		// and an author, which is the cohort that most needs AI. A book organize
+		// has already resolved closes the nomination gate and will not come
+		// back; that is the ordering regression named in the PR body.
 		ResumePolicy: opsregistry.ResumeDrop,
+		// Same permission library.scan declares. Without it this op is reachable
+		// by anything holding the route's blanket scan.trigger, and it is both a
+		// paid-LLM trigger and a metadata write path (the params are
+		// caller-supplied and the saver fills empty row fields from them).
+		Permissions: []auth.Permission{auth.PermScanTrigger},
 		// Serialized against itself, and only itself. A scan can queue dozens
 		// of these in a single run; with a shared key they form an orderly
 		// backlog behind one worker instead of opening dozens of concurrent
@@ -101,10 +119,33 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 			// record for that failure: it is why library.scan could finish its
 			// entire file walk and still be canceled for inactivity.
 			opLog := operations.LoggerFromReporter(registryProgressAdapter{r: reporter})
-			if err := scanner.RunAIParseForBooks(ctx, p.Books, opLog); err != nil {
+			summary, err := scanner.RunAIParseForBooks(ctx, p.Books, opLog)
+			if err != nil {
 				return err
 			}
-			_ = reporter.UpdateProgress(len(p.Books), len(p.Books), fmt.Sprintf("Parsed %d filename(s)", len(p.Books)))
+
+			// Report what actually happened, into the OPERATION record.
+			//
+			// Every failure inside the AI phase is a log.Warn and a nil return,
+			// and LoggerFromReporter only overrides UpdateProgress and With --
+			// Info/Warn go to the process log. So without this, a run that
+			// aborted on batch 1 of 10 with a revoked API key finished green,
+			// claiming it had parsed every filename, with the only evidence in
+			// journalctl on the box.
+			level := slog.LevelInfo
+			if summary.Aborted() || summary.SavesFailed > 0 || summary.BatchesFailed > 0 {
+				level = slog.LevelWarn
+			}
+			_ = reporter.Log(level, summary.String())
+			_ = reporter.UpdateProgress(summary.BooksParsed, len(p.Books), summary.String())
+
+			// Failing ONLY on an abort, never on a low change count. A healthy
+			// library where every candidate was already filled in by another
+			// path legitimately parses and changes nothing; making that red
+			// would train everyone to ignore the status.
+			if summary.Aborted() {
+				return fmt.Errorf("AI parsing stopped early: %s", summary)
+			}
 			return nil
 		},
 	}); err != nil {
@@ -131,7 +172,7 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 	// would be scans quietly going back to blocking on the LLM -- a regression
 	// with no error anywhere. This line is what makes that visible.
 	if s.opRegistry == nil || s.opRegistry != reg {
-		logging.Info(context.Background(), "library.ai-parse registered without wiring the scanner enqueue hook (not the server's own registry); scans will parse AI candidates inline")
+		logging.Warn(context.Background(), "library.ai-parse registered without wiring the scanner enqueue hook (not the server's own registry); scans will parse AI candidates inline")
 		return nil
 	}
 	// The enqueue context is deliberately NOT the scan's ctx. Enqueuing is a
@@ -139,12 +180,20 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 	// scan is canceled -- and a canceled scan is exactly when the last folder's
 	// candidates would be lost. Detaching keeps the queued work alive past the
 	// scan that nominated it.
-	scanner.EnqueueAIParseFn = func(_ context.Context, books []scanner.Book) error {
+	scanner.SetEnqueueAIParse(func(_ context.Context, books []scanner.AIParseCandidate) error {
 		enqCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, err := reg.EnqueueOp(enqCtx, "library.ai-parse", libraryAIParseParams{Books: books})
-		return err
-	}
+		opID, err := reg.EnqueueOp(enqCtx, "library.ai-parse", libraryAIParseParams{Books: books})
+		if err != nil {
+			return err
+		}
+		// Logged so a scan can be tied to the operations it spawned. Without it
+		// there is no path from "this book still has no title" back to the op
+		// that was supposed to fill it.
+		logging.Info(context.Background(), "library.ai-parse queued",
+			"op_id", opID, "books", len(books))
+		return nil
+	})
 	return nil
 }
 
