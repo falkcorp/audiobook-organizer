@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.9.4
+// version: 1.10.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-22
+// last-edited: 2026-08-25
 
 package abs
 
@@ -246,13 +246,20 @@ func absItemFilter(c *gin.Context) database.BookSummaryFilter {
 // process, so a client polling the library cannot flood the log.
 var absUnindexedSortWarned sync.Map
 
-// warnUnindexedSort reports a sort we accepted but cannot actually perform.
+// warnUnindexedSort reports a sort the store must materialise rather than
+// stream from an index. It is a COST warning, not a correctness one.
 //
-// "title" is always indexed. Every other field needs its memdb sort index
-// enabled (config.EnabledSortIndexes, empty by default); without it the store
-// silently iterates unordered. Silence is precisely how this shipped
-// undetected -- the client got 200 OK and arbitrary order -- so say it once
-// rather than let a wrong answer stay quiet.
+// It used to say the results would be unordered, and that was true when
+// written: without an index the store iterated in whatever order it walked.
+// The store now materialises the match set and sorts it before paginating, so
+// an unindexed sort is correct and merely more expensive.
+//
+// The old remediation -- "add it to enabled_sort_indexes" -- was worse than
+// useless for a while: for year and bitrate, enabling the index moved the
+// request onto a branch that re-sorted the store's ordered page into insertion
+// order, so following the advice broke the sort it was meant to fix. That is
+// fixed, but do not restore the old wording: a message that names a symptom
+// the code no longer has sends operators to change config for no reason.
 func warnUnindexedSort(field, raw string) {
 	if field == "" || field == "title" || database.CanPushDownSort(field) {
 		return
@@ -260,10 +267,10 @@ func warnUnindexedSort(field, raw string) {
 	if _, seen := absUnindexedSortWarned.LoadOrStore(field, true); seen {
 		return
 	}
-	slog.Warn("abs: client requested a sort whose memdb index is disabled; results will be UNORDERED",
+	slog.Warn("abs: sort has no memdb index; the store must materialise the match set to order it (results are correct, but this costs more per request)",
 		"sort_param", raw,
 		"sort_field", field,
-		"remediation", "add it to enabled_sort_indexes and restart")
+		"remediation", "add it to enabled_sort_indexes and restart ONLY if this sort is hot enough to justify the index's memory and insert-throughput cost")
 }
 
 // countItems returns the filtered item count, cached for absItemsCountTTL.

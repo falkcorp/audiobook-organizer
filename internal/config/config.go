@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.87.0
+// version: 1.88.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-25
 
@@ -1093,10 +1093,18 @@ type Config struct {
 	// deliberately narrow because each index taxes scan insert throughput; see
 	// the SetDefault call for the reasoning.
 	//
-	// An absent index no longer means an unordered result: a sort with no
-	// index materialises the match set and sorts it before paginating, so this
-	// setting is now purely a speed/memory tradeoff rather than a correctness
-	// one.
+	// This setting is a speed/memory tradeoff, not a correctness one — in
+	// BOTH directions, and the second direction had to be fixed to make that
+	// sentence true. An absent index is fine: the store materialises the match
+	// set and sorts it before paginating. A PRESENT index was NOT fine until
+	// 2026-08-25: enabling one moved the request onto a branch that re-sorted
+	// the store's already-ordered page against fields BookSummary does not
+	// carry, and the tie-breaker rewrote it into insertion order. That hit
+	// exactly year, bitrate and bitrate_kbps — and "year" is this very default,
+	// so a stock install had precisely one sort index enabled and it was the
+	// one being corrupted. Both routes are asserted per key by
+	// internal/audiobooks/sort_indexed_path_test.go (index on) and
+	// sort_every_field_test.go (index off).
 	EnabledSortIndexes []string `json:"enabled_sort_indexes" mapstructure:"enabled_sort_indexes"`
 }
 
