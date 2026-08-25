@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.66.0
+// version: 1.67.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-24
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -23,7 +24,6 @@ import (
 	"time"
 
 	"github.com/dhowden/tag"
-	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -1037,55 +1037,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		scanLog.Info("scan complete: %d files processed", total)
 	}()
 
-	// Build the AI fallback parser from the configured LLM backend.
-	//
-	// Until 2026-08-16 this block ignored AIBackend entirely: it constructed
-	// the cloud OpenAI parser whenever EnableAIParsing was set, passing
-	// enabled=true unconditionally. The effect was that a deployment with
-	// ai_backend.llm_mode="disabled" and a local Ollama endpoint configured
-	// still sent every scan batch to api.openai.com -- which is exactly how
-	// the 2026-08-16 rescan burned its batches against an exhausted-credit
-	// key. Routing through EffectiveLLMMode makes the operator's setting the
-	// thing that decides, and keeps this in step with the "llmparser" service
-	// in internal/ai/register.go rather than being a second, divergent copy.
-	var aiParser *ai.OpenAIParser
-	aiEnabled := false
-	if config.AppConfig.EnableAIParsing {
-		cfg := &config.AppConfig
-		switch mode := cfg.EffectiveLLMMode(); mode {
-		case config.AIBackendModeDisabled:
-			scanLog.Info("AI parsing skipped: llm_mode is disabled")
-		case config.AIBackendModeLocal:
-			baseURL := cfg.AIBackend.LocalBaseURL
-			if baseURL == "" {
-				baseURL = cfg.Embedding.BaseURL
-			}
-			if baseURL == "" {
-				scanLog.Warn("AI parsing enabled with llm_mode=local but no local base URL is configured")
-				break
-			}
-			aiParser = ai.NewOpenAIParserWithBaseURL(cfg, "ollama", baseURL, cfg.AIBackend.LocalLLMModel, true)
-			if aiParser != nil && aiParser.IsEnabled() {
-				aiEnabled = true
-				scanLog.Info("local LLM parser initialized for filename metadata fallback (base_url=%s model=%s)",
-					baseURL, cfg.AIBackend.LocalLLMModel)
-			} else {
-				scanLog.Warn("failed to initialize local LLM parser, AI fallback disabled")
-			}
-		default: // openai, openai-fallback-local
-			if cfg.OpenAIAPIKey == "" {
-				scanLog.Warn("AI parsing enabled but OpenAI API key is not configured")
-				break
-			}
-			aiParser = ai.NewOpenAIParser(cfg, cfg.OpenAIAPIKey, true)
-			if aiParser != nil && aiParser.IsEnabled() {
-				aiEnabled = true
-				scanLog.Debug("OpenAI parser initialized for filename metadata fallback")
-			} else {
-				scanLog.Warn("failed to initialize OpenAI parser, AI fallback disabled")
-			}
-		}
-	}
+	// Build the AI fallback parser from the configured LLM backend. The routing
+	// logic, and the incident that produced it, live on newAIParser in
+	// ai_parse_async.go -- shared with the queued library.ai-parse operation so
+	// the two paths cannot drift apart.
+	aiParser, aiEnabled := newAIParser(scanLog)
 
 	// Track books needing AI parsing for batch processing
 	var aiCandidates []int
@@ -1526,8 +1482,30 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		return ctxErr
 	}
 
+	// Hand the AI candidates to the background queue if one is wired, and only
+	// parse them inline when it is not.
+	//
+	// Inline is the fallback, not the preference: this phase is a sequence of LLM
+	// round trips with a 2s delay between batches, and it runs while the scan
+	// still holds the "library.scan" ConcurrencyKey. On a library-sized scan that
+	// is the difference between a scan bounded by disk speed and one bounded by
+	// the LLM. Enqueuing lets the scan finish and the parsing drain behind it.
+	//
+	// An enqueue failure falls back to inline rather than dropping the work. That
+	// restores the old blocking behaviour, which is bad but visible; silently
+	// skipping the AI phase would leave books permanently unparsed with nothing
+	// in the log tying it to the queue.
 	if aiEnabled && len(aiCandidates) > 0 {
-		runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog)
+		err := enqueueAIParse(ctx, books, aiCandidates, scanLog)
+		switch {
+		case err == nil:
+			// Queued. The operation saves its own results.
+		case errors.Is(err, ErrAIParseEnqueueUnavailable):
+			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog)
+		default:
+			scanLog.Warn("failed to queue AI parsing (%v); parsing %d book(s) inline instead", err, len(aiCandidates))
+			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog)
+		}
 	}
 
 	// After processing all books, try to match series using external APIs for uncertain cases
