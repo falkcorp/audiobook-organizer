@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-25
 
@@ -232,13 +232,18 @@ func absSortField(sort string) string {
 func absItemFilter(c *gin.Context) database.BookSummaryFilter {
 	f := absItemFilterBase()
 	f.SortAscending = c.Query("desc") != "1"
-	// NOTE: a mapped field still only streams if its memdb sort index is
-	// enabled (config.EnabledSortIndexes; "title" is always indexed). When it
-	// is not, the store falls back to unordered iteration -- which is the bug
-	// this mapping exists to fix -- so the store-side default must list the
-	// fields this map can produce. See config.EnabledSortIndexes.
+	// A mapped field is ORDERED whether or not its memdb sort index is enabled:
+	// without an index the store materialises the match set and sorts it before
+	// paginating. The index is a speed choice now, not a correctness one.
+	//
+	// This note said the opposite until 2026-08-25 -- that an unindexed field
+	// "falls back to unordered iteration" -- and it was true when written. It
+	// stopped being true without anything here changing, which is the reason
+	// the store-side default no longer has to list every field this map can
+	// produce. See config.EnabledSortIndexes.
 	f.SortBy = absSortField(c.Query("sort"))
 	warnUnindexedSort(f.SortBy, c.Query("sort"))
+	warnUnsupportedSort(f.SortBy, c.Query("sort"))
 	return f
 }
 
@@ -271,6 +276,57 @@ func warnUnindexedSort(field, raw string) {
 		"sort_param", raw,
 		"sort_field", field,
 		"remediation", "add it to enabled_sort_indexes and restart ONLY if this sort is hot enough to justify the index's memory and insert-throughput cost")
+}
+
+// absUnsupportedSortWarned rate-limits the warning below to once per raw sort
+// string per process.
+var absUnsupportedSortWarned sync.Map
+
+// warnUnsupportedSort reports a sort the client asked for that this server has
+// no field for at all.
+//
+// absSortField returns "" for anything not in absSortFields, and "" means "no
+// ordering requested" everywhere downstream -- so the request is answered in
+// the store's default order, with a 200 and, until this existed, complete
+// silence. warnUnindexedSort cannot cover it: its first line returns early on
+// field == "", so the case it most needed to report was the one case it
+// skipped.
+//
+// The client menu offers 14 sorts and absSortFields covers 8 of them. The
+// remainder are unsupported for different reasons, and the log line is the only
+// way anyone finds out which:
+//
+//   - File Modified — Book.LastScanMtime exists; this is a mapping away, and is
+//     filed rather than done here because adding a sort is a feature, not a fix
+//     for the silence.
+//   - Progress (×3) — per-user state (UserBookState.ProgressPct), not a Book
+//     field. Sorting by it needs a per-user join the summary path has no shape
+//     for.
+//   - File Birthtime — no field exists on Book at all.
+//   - Randomly — deliberately unimplemented; a stable page order is required
+//     for pagination to mean anything.
+func warnUnsupportedSort(field, raw string) {
+	if field != "" || strings.TrimSpace(raw) == "" {
+		return
+	}
+	if _, seen := absUnsupportedSortWarned.LoadOrStore(raw, true); seen {
+		return
+	}
+	slog.Warn("abs: client requested a sort this server has no field for; the page is returned in the store's default order",
+		"sort_param", raw,
+		"supported", absSupportedSortParams(),
+		"remediation", "none available to an operator -- this needs a mapping in absSortFields, or a field that does not exist yet")
+}
+
+// absSupportedSortParams lists the sort parameters absSortFields recognises,
+// so the warning names the alternatives instead of only the failure.
+func absSupportedSortParams() []string {
+	out := make([]string, 0, len(absSortFields))
+	for k := range absSortFields {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // countItems returns the filtered item count, cached for absItemsCountTTL.
