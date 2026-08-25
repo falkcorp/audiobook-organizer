@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-25-unknown-author-feedback-loop.md -->
-<!-- version: 5.0.0 -->
+<!-- version: 6.0.0 -->
 <!-- guid: 7a1c9e2f-4b83-4d16-9f52-c8e0a7d31b64 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -82,7 +82,14 @@ not part of the defect below.
 
 Because the population is heterogeneous and ordering-dependent, **the sample
 proportions above must not be extrapolated.** The only whole-population figure
-that is safe to quote is `author_id=54846` = **3,407**.
+that is safe to quote is the **scalar census: 3,598**.
+
+> ⚠️ This paragraph previously named `author_id=54846` = **3,407** as the safe
+> figure. That was stale — it survived the revision that corrected the headline
+> to 3,598, so this document quoted a withdrawn number in its body while
+> retracting it in its own table two screens earlier. Corrected 2026-08-25 after
+> an independent re-census reproduced 3,598 exactly (see below). A number that is
+> retracted in one section and relied on in another is not retracted.
 
 A separate, real, and so-far **unquantified** problem is visible in the offset-0
 sample: author rows minted out of filename fragments — `19 - Apocalypse`,
@@ -163,13 +170,91 @@ change. A repair that merges 80 fragment rows into one book but leaves the
 merged row pointing at author 54846 produces a book that is *permanently*
 unparseable by every self-healing path in the system.
 
-**The cheapest repair primitive is a scalar-vs-join reconciliation, not an AI
-re-parse.** The join slice already holds the right answer for at least some of
-these rows (`Terry Pratchett`, id 38566, on a row whose scalar points at 54846).
-That repair needs no LLM, no re-scan, and no filename heuristics — it reads a
-value the database already stores. It is cross-lane (`internal/database`,
-`internal/merge`) and belongs in the repair design, not here. Its coverage —
-how many of the 3,407 have a usable join slice — is **not yet measured**.
+**A scalar-vs-join reconciliation is the cheapest repair primitive, but it
+covers barely a third of the cohort.** Coverage is now measured; see the section
+below. It reads a value the database already stores, so it needs no LLM, no
+re-scan and no filename heuristics — but it cannot help the 64% whose join slice
+is empty. It is cross-lane (`internal/database`, `internal/merge`) and belongs in
+the repair design, not here.
+
+## Repair coverage, measured — only 36% of the cohort is recoverable locally
+
+**Measured 2026-08-25 against production. This answers the question the previous
+revision left open, and the answer is worse than that revision implied.**
+
+Method: walk every one of the **61,447** book rows at `limit=1000` (the
+server-side cap) and select on the **scalar** `author_id`. Then fetch each hit's
+detail record — the list endpoint returns `authors: null`, so the join slice is
+only visible per book — and ask whether that slice already carries a usable name.
+
+The walk covered 61,447 of 61,447 rows with **no pagination gap**, and reproduced
+the cohort at **3,598** exactly, independently of the census that first produced
+that figure. `author_id = 54845` (the empty duplicate) again matched **0** rows.
+
+| bucket | count | share | recovery route |
+| --- | --- | --- | --- |
+| join slice holds a usable author | **1,291** | 35.9% | **free** — a DB-only reconciliation |
+| join slice is EMPTY | 2,305 | 64.1% | nothing local to read |
+| join slice holds only junk fragments | 2 | 0.1% | nothing local to read |
+| join slice holds only the placeholder | 0 | 0.0% | — |
+
+Buckets sum to exactly 3,598. Roles seen across the non-empty slices: `author`
+×2,224 over 1,293 books (~1.7 per book). Representative repairs, where the scalar
+says 54846 and the slice already knows better:
+
+```
+Half a Prayer                    -> Rick Gualtieri
+Old Trials Anew                  -> Michael Chatfield
+Rains of Liscor                  -> pirateaba
+He Who Fights with Monsters 12   -> Shirtaloon, Travis Deverell
+```
+
+### For the other 2,307, the author name is absent from every local source
+
+This was tested rather than assumed, because "the AI will sort it out" is the
+obvious plan and it does not work here.
+
+Sampled 300 of the 2,307 at random (seed pinned):
+
+| | share of sample |
+| --- | --- |
+| `original_filename` is **empty** | **97.3%** |
+| `original_filename` carries anything other than the placeholder | 2.7% |
+| `file_path` sits under a literal `Unknown Author/` directory | **100%** |
+
+And the files' own tags, read with `ffprobe` on the production host over
+`artist`, `album_artist` and `composer`:
+
+| cohort | files probed | real artist tag | blank | missing on disk |
+| --- | --- | --- | --- | --- |
+| unrepairable cohort | 60 | **0** | **60** | 0 |
+| **known-good twin** (healthy books, same probe) | 30 | **30** | 0 | 0 |
+
+⚠️ **The known-good twin is the point.** A probe that returned blank for every
+file would produce the same 0/60 and read as a finding. Running the identical
+command against 30 ordinary books returned a real artist on all 30
+(`Big Finish Productions`, `Andrew Karevik`, `E.M. Hardy`, …), so the instrument
+discriminates and the blanks are real.
+
+So for ~64% of the cohort: **no scalar, no join slice, no original filename, no
+embedded tag, and a path whose author component is literally `Unknown Author`.**
+The name is not mislinked — it is gone from every local source. These rows cannot
+be repaired by reconciliation, by re-scanning, or by re-parsing a filename,
+because there is nothing left to parse.
+
+### What that means for the repair design
+
+- **Do the 1,291 first.** It is a DB-only reconciliation, needs no LLM and no
+  rescan, and is unblocked today.
+- **The remaining 2,307 need an external lookup by title**, not an AI filename
+  parse. Some titles do embed the author inline — e.g.
+  `Starship's Mage Book 14 Glynn Stewart Chimera's Star` — so an LLM pass over
+  *titles* will recover a minority, but it is a different operation from parsing
+  a filename and should not be sold as the same thing.
+- **Do not describe this repair as cheap.** The previous revision of this
+  document said the join slice "already holds the right answer" and framed the
+  repair as needing no LLM. That is true for 36% of the cohort and false for the
+  rest, and the difference was one measurement away the whole time.
 
 ## Two placeholder rows, not one — and why that nearly made the fix inert
 
