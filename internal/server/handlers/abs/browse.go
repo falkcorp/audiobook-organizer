@@ -1116,6 +1116,16 @@ func (h *Handler) contributorsCached(ctx context.Context) (*contributorIndex, er
 	return v.(*contributorIndex), nil
 }
 
+// contributorsBuiltAt reports when the cached contributor index was built.
+//
+// /filterdata stamps its own document with this so the two expire TOGETHER.
+// Matching the TTL LENGTHS is not enough — see the comment in filterDataCached.
+func (h *Handler) contributorsBuiltAt() time.Time {
+	h.authorsCacheMu.Lock()
+	defer h.authorsCacheMu.Unlock()
+	return h.authorsCacheAt
+}
+
 // contributorsFresh returns the cached contributor index while it is still within
 // absAuthorsCacheTTL, or nil when a rebuild is due.
 func (h *Handler) contributorsFresh() *contributorIndex {
@@ -1360,20 +1370,32 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 		Page:     page,
 		// total is the FULL count, not the size of this slice — the client uses it to
 		// decide whether more pages exist.
-		Results:  pageSlice(authors, limit, page),
-		SortBy:   strings.TrimSpace(c.Query("sort")),
-		SortDesc: c.Query("desc") == "1",
+		Results: pageSlice(authors, limit, page),
+		// From the locals parsed above, not a second read of the query: two
+		// parses of one input that must agree is a bug waiting to be written.
+		//
+		// ⚠️ Still the RAW request, so an unsupported key is echoed back as if
+		// applied. Whether to echo only what was applied, or reject unknown
+		// sorts outright, is a caller-visible contract change and is filed in
+		// todo.d/20260825-abs-contributor-filter-followups.md.
+		SortBy:   sortBy,
+		SortDesc: desc,
 		Total:    total,
 	})
 }
 
-// absAuthorSorts are the author-list sorts this server can actually apply.
+// authorLess returns the comparator for an author-list sort, or nil when this
+// server has no field for the requested key.
 //
-// 🔴 A DIFFERENT NAMESPACE FROM absSortFields. That map resolves ABS *book* sort
-// keys to store columns; nothing in it applies to an authorDTO, so routing an
-// author sort through it would silently resolve every key to "" and order
-// nothing. These four are exactly the fields the DTO carries that a client can
-// meaningfully order by.
+// 🔴 A DIFFERENT NAMESPACE FROM absSortFields, and routing author sorts through
+// that map would be worse than useless rather than merely inert. absSortField
+// lowercases the key and strips the last dotted segment, so "addedAt" resolves
+// to "created_at" and "updatedAt" to "updated_at" — real BOOK columns, applied
+// to an authorDTO. A wrong non-empty column is a wrong ANSWER; an unresolved ""
+// would at least fall through to a documented default order.
+//
+// These five are the fields the DTO carries that a client can meaningfully
+// order by.
 //
 // An empty sort means "name": the index is built name-ascending
 // (contributorDTOs), so ?sort=name is a no-op against the default order and
@@ -1407,6 +1429,18 @@ func authorLess(sortBy string) func(a, b authorDTO) bool {
 // (two authors with the same numBooks stay in name order) rather than an
 // arbitrary one that shifts between requests and breaks pagination.
 func sortAuthors(authors []authorDTO, sortBy string, desc bool) []authorDTO {
+	// The index is ALREADY name-ascending, so the no-parameter request — by far
+	// the most common, and the one the 93-page jump-to-letter burst issues — can
+	// skip both the allocation and the sort. At 12,854 authors that is a fresh
+	// slice plus a full stable sort per request, on a path that previously did
+	// neither.
+	//
+	// Returning the shared slice is safe HERE for the same reason it was safe
+	// before this function existed: every caller only reads it. It is the
+	// SORTING that must not touch the shared slice, not the returning.
+	if desc == false && (sortBy == "" || sortBy == "name") {
+		return authors
+	}
 	less := authorLess(sortBy)
 	if less == nil {
 		warnUnsupportedAuthorSort(sortBy)
@@ -1434,12 +1468,16 @@ var absUnsupportedAuthorSortLastWarn atomic.Int64
 //
 // Same reasoning as warnUnsupportedSort: the request is answered 200 in the
 // index's default order, so without a log nobody finds out that ?sort= was
-// ignored. The log is also the oracle for WHICH keys real clients send — the
-// list above is what authorDTO can support, not a survey of what is asked for.
+// ignored. The list above is what authorDTO can support, not a survey of what
+// clients ask for.
+//
+// ⚠️ This log is a SAMPLE, not a census. The limiter is one line per 60s across
+// all clients and all values, so only the first distinct bad key in each window
+// is ever recorded. Do not read an absence here as "nobody asked for it".
 func warnUnsupportedAuthorSort(raw string) {
-	if strings.TrimSpace(raw) == "" {
-		return
-	}
+	// No empty-string guard, deliberately: this is only reached when authorLess
+	// returned nil, and authorLess maps "" to the name comparator. A guard here
+	// could never fire, and an unreachable guard reads as load-bearing.
 	now := time.Now().Unix()
 	last := absUnsupportedAuthorSortLastWarn.Load()
 	if now-last < absUnsupportedSortWarnEvery {
@@ -1522,10 +1560,13 @@ func (h *Handler) LibraryFilterData(c *gin.Context) {
 
 // absFilterDataCacheTTL bounds how long the built /filterdata document is reused.
 //
-// Matched to absAuthorsCacheTTL rather than tuned separately: the two documents
-// are now built from the same contributor index, and giving them different
-// windows would make them disagree about the author list for the difference.
-const absFilterDataCacheTTL = 5 * time.Minute
+// DERIVED from absAuthorsCacheTTL, not a matching literal: the two documents are
+// built from the same contributor index, and a future retune of one would
+// silently unmatch them while this comment went on claiming they agreed.
+//
+// Equal length is only half of it — filterDataCached also stamps the document
+// with the INDEX's build time so the two expire together. See there.
+const absFilterDataCacheTTL = absAuthorsCacheTTL
 
 // filterDataCached builds the filter document at most once per TTL.
 //
@@ -1540,13 +1581,68 @@ func (h *Handler) filterDataCached(ctx context.Context) *filterDataResponse {
 		if resp := h.filterDataFresh(); resp != nil {
 			return resp, nil
 		}
-		resp := h.buildFilterData(context.WithoutCancel(ctx))
+		resp, builtAt, complete := h.buildFilterData(context.WithoutCancel(ctx))
+
 		h.filterDataMu.Lock()
-		h.filterDataCache, h.filterDataCachedAt = resp, h.now()
-		h.filterDataMu.Unlock()
+		defer h.filterDataMu.Unlock()
+
+		// 🔴 A DEGRADED DOCUMENT IS NEVER PUBLISHED AS FRESH. buildFilterData
+		// falls back to an empty list per source rather than failing the request,
+		// which was the right cost when it was paid ONCE PER REQUEST. Caching
+		// promoted it: stamping a degraded build would pin one transient store
+		// error into a 200 for the whole TTL, silently, because filterDataFresh
+		// then short-circuits and the error is never logged again.
+		//
+		// Worse, it would recreate the exact drift this endpoint was moved onto
+		// the contributor index to remove — contributorsCached does NOT cache its
+		// error, so /authors recovers on its very next request while /filterdata
+		// would still be serving "this library has no authors".
+		//
+		// Serving the LAST GOOD document beats serving an empty one: an empty
+		// list is not the absence of a filter, it is an affirmative claim that
+		// the library has no authors, and LoadedAt would timestamp that claim as
+		// current. A stale document is at least true of some moment, and it
+		// carries the LoadedAt to say which.
+		if !complete {
+			if prev := h.filterDataCache; prev != nil {
+				return prev, nil
+			}
+			return resp, nil
+		}
+
+		// 🔴 STAMPED WITH THE CONTRIBUTOR INDEX'S BUILD TIME, NOT h.now(). Equal
+		// TTL LENGTHS do not align PHASES: stamping independently lets this
+		// document outlive the index it was built from by up to a full TTL, so
+		// /filterdata would serve the author list /authors had already replaced.
+		// Expiring with the index is what actually makes the two agree.
+		h.filterDataCache, h.filterDataCachedAt = resp, builtAt
 		return resp, nil
 	})
-	return v.(*filterDataResponse)
+	if resp, ok := v.(*filterDataResponse); ok && resp != nil {
+		return resp
+	}
+	// Unreachable today: the closure above returns a non-nil document on every
+	// path. Guarded anyway because the bare assertion would panic through gin's
+	// recovery the moment anyone adds a `return nil, err` to it.
+	return emptyFilterData(msEpoch(h.now()))
+}
+
+// emptyFilterData is the all-keys-present, all-lists-empty document.
+//
+// Every one of the eight lists is decoded non-optionally by the client
+// (§1.8.6), so a document is never allowed to omit a key.
+func emptyFilterData(loadedAt int64) *filterDataResponse {
+	return &filterDataResponse{
+		Authors:          []idNameDTO{},
+		Genres:           []string{},
+		Languages:        []string{},
+		LoadedAt:         loadedAt,
+		Narrators:        []string{},
+		PublishedDecades: []string{},
+		Publishers:       []string{},
+		Series:           []idNameDTO{},
+		Tags:             []string{},
+	}
 }
 
 // filterDataFresh returns the cached document while it is within the TTL.
@@ -1561,28 +1657,35 @@ func (h *Handler) filterDataFresh() *filterDataResponse {
 
 // buildFilterData assembles the filter document.
 //
+// Returns the document, the contributor index's build time to stamp it with, and
+// whether EVERY source succeeded. The caller needs that third value: a degraded
+// document must not be cached as fresh (see filterDataCached).
+//
 // 🔴 EVERY SOURCE DEGRADES TO AN EMPTY LIST RATHER THAN FAILING THE REQUEST, and
 // that is deliberate even though the sibling /authors returns 500 on the same
 // error. filterdata is decoration fetched during the library page load: a 500
 // here blanks the page, while a missing filter dropdown costs the user one way
-// to narrow a list they can still see. The asymmetry is the point — but every
-// swallow now LOGS, which is what made the previous version indistinguishable
-// from a library that genuinely had no authors.
-func (h *Handler) buildFilterData(ctx context.Context) *filterDataResponse {
-	resp := &filterDataResponse{
-		Authors:   []idNameDTO{},
-		Genres:    []string{},
-		Languages: []string{},
-		// Stamped when the document was BUILT, not when it was served. A cached
-		// document honestly reports the age of the data in it; re-stamping per
-		// request would claim a freshness the contents do not have.
-		LoadedAt:         msEpoch(h.now()),
-		Narrators:        []string{},
-		PublishedDecades: []string{},
-		Publishers:       []string{},
-		Series:           []idNameDTO{},
-		Tags:             []string{},
+// to narrow a list they can still see.
+//
+// The asymmetry is the point — but a degraded document is a CLAIM, not a gap:
+// "authors: []" says this library has no authors, and LoadedAt dates the claim.
+// So every swallow logs, AND the result is marked incomplete so it is served for
+// this request only rather than pinned for the TTL. Both halves are required;
+// the logging alone was what the first version of this shipped with, and a log
+// line nobody is watching does not stop a wrong answer being cached.
+func (h *Handler) buildFilterData(ctx context.Context) (resp *filterDataResponse, builtAt time.Time, complete bool) {
+	complete = true
+	degraded := func(what string, err error) {
+		complete = false
+		// "err", not "error": the rest of this package keys error logs on "err"
+		// (browse.go:714, browse.go:1824, stats.go), and a structured-log query
+		// or alert rule on that field would not match a different key.
+		slog.Warn("abs: filterdata source unavailable; serving the last good list for it, and NOT caching this build",
+			"source", what, "err", err)
 	}
+
+	resp = emptyFilterData(0)
+	builtAt = h.now()
 
 	// 🔴 AUTHORS AND NARRATORS COME FROM THE CONTRIBUTOR INDEX, NOT FROM
 	// GetAllAuthors/ListNarrators. Those return every row in the store, including
@@ -1594,8 +1697,11 @@ func (h *Handler) buildFilterData(ctx context.Context) *filterDataResponse {
 	// cannot drift"; /filterdata was simply never moved onto it. Sourcing it here
 	// makes the filter list exactly the list /authors and /narrators serve.
 	if idx, err := h.contributorsCached(ctx); err != nil {
-		slog.Error("abs: filterdata could not build the contributor index; serving empty author and narrator filters", "error", err)
+		degraded("contributor-index", err)
 	} else {
+		// The document expires with the index it was built from, not five
+		// minutes after this request happened to arrive.
+		builtAt = h.contributorsBuiltAt()
 		for _, a := range idx.authors {
 			resp.Authors = append(resp.Authors, idNameDTO{ID: a.ID, Name: a.Name})
 		}
@@ -1609,14 +1715,14 @@ func (h *Handler) buildFilterData(ctx context.Context) *filterDataResponse {
 	// Series is still row-derived: it has no entry in the contributor index, so
 	// moving it is a separate change with its own measurement, not a drive-by.
 	if series, err := h.library.GetAllSeries(); err != nil {
-		slog.Error("abs: filterdata could not list series; serving an empty series filter", "error", err)
+		degraded("series", err)
 	} else {
 		for _, s := range series {
 			resp.Series = append(resp.Series, idNameDTO{ID: strconv.Itoa(s.ID), Name: s.Name})
 		}
 	}
 	if genres, err := h.library.GetDistinctGenres(); err != nil {
-		slog.Error("abs: filterdata could not list genres; serving an empty genre filter", "error", err)
+		degraded("genres", err)
 	} else {
 		for _, g := range genres {
 			if g = strings.TrimSpace(g); g != "" {
@@ -1624,9 +1730,13 @@ func (h *Handler) buildFilterData(ctx context.Context) *filterDataResponse {
 			}
 		}
 	}
-	resp.PublishedDecades = h.publishedDecades()
+	if decades, err := h.publishedDecades(); err != nil {
+		degraded("published-decades", err)
+	} else {
+		resp.PublishedDecades = decades
+	}
 	if langs, err := h.library.GetDistinctLanguages(); err != nil {
-		slog.Error("abs: filterdata could not list languages; serving an empty language filter", "error", err)
+		degraded("languages", err)
 	} else {
 		for _, l := range langs {
 			if l = strings.TrimSpace(l); l != "" {
@@ -1634,7 +1744,7 @@ func (h *Handler) buildFilterData(ctx context.Context) *filterDataResponse {
 			}
 		}
 	}
-	return resp
+	return resp, builtAt, complete
 }
 
 // filterDataScanLimit bounds the projection scan behind publishedDecades.
@@ -1652,11 +1762,15 @@ const filterDataScanLimit = 5000
 // reproduce that: "NaN" is an ABS bug, the field is decorative, and emitting a real
 // decade is both honest and what a client can filter on. Books with no usable year
 // contribute nothing rather than a junk bucket.
-func (h *Handler) publishedDecades() []string {
+func (h *Handler) publishedDecades() ([]string, error) {
 	out := []string{}
+	// 🔴 THIS ONE USED TO SWALLOW SILENTLY, inside the very function whose
+	// comment claimed every swallow logs. It returned an empty decade list with
+	// no log at any level, and once /filterdata gained a cache that empty list
+	// would have been served for the whole TTL with nothing in the logs at all.
 	books, err := h.library.GetAllBooksCore(filterDataScanLimit, 0)
 	if err != nil {
-		return out
+		return out, err
 	}
 	seen := map[string]bool{}
 	for i := range books {
@@ -1674,7 +1788,7 @@ func (h *Handler) publishedDecades() []string {
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // ── GET /api/libraries/:libraryId/search ────────────────────────────────────
