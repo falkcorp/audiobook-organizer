@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-25-unknown-author-feedback-loop.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 7a1c9e2f-4b83-4d16-9f52-c8e0a7d31b64 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -10,26 +10,68 @@
 ## The headline
 
 `"Unknown Author"` is not an empty value that the system knows to fill in later.
-It is a **materialized author row** (`author_id = 54846`, 3,407 books hang off it)
-whose name organize also **bakes into the filename**. Every downstream check that
-asks "does this book have an author?" answers **yes**. The library therefore
-cannot heal these books, and powering the LLM host back on will not change that.
+It is a **materialized author row** (`author_id = 54846`) whose name organize
+also **bakes into the filename**. Every downstream check that asks "does this
+book have an author?" answers **yes**, so the library cannot heal these books,
+and powering the LLM host back on will not change that.
 
-## Measurements
+**The gated population is 3,407 books, not 25,304.** An earlier draft of this
+document led with 25,304 and that number does not mean what it looks like — see
+the next section before quoting either figure.
+
+## Measurements, and what they do and do not mean
 
 | Query | Count |
 | --- | --- |
 | `GET /audiobooks` (no filter) | 61,412 |
 | `search=ZZQQBOGUSXYZ` (bogus control) | 0 |
+| `search=ZZQQBOGUS Author` (OR control) | 0 |
 | `search=Pratchett` | 685 |
 | `search=Unknown Author` | 25,304 |
-| `author_id=54846` | 3,407 |
+| **`author_id=54846`** | **3,407** |
 
-The bogus control returns 0 and the unfiltered baseline returns 61,412, so
-`search=` is a live filter and these counts are real. **`q=` is inert** — it
-returns the full 61,412 for any value. Do not measure with `q=`.
+Instrument notes, because two of these are traps:
 
-A representative row:
+- **`q=` is inert.** It returns the full 61,412 for any value, including
+  nonsense. Never count with it. `search=` is the live filter: the bogus
+  control returns 0 and the unfiltered baseline returns 61,412.
+- **`search=` AND-combines tokens; it is not a phrase match.** `ZZQQBOGUS Author`
+  returns 0 (so tokens are AND'd, not OR'd), but `Author Unknown` returns the
+  same 25,304 as `Unknown Author` (so order is not significant).
+
+**The 25,304 is dominated by a stale path, not a broken author.** Sampling the
+matched set at two different offsets gives very different pictures:
+
+| Sample | at `author_id=54846` | typical `author_name` of the rest |
+| --- | --- | --- |
+| offset 0, n=1000 | 237 (24%) | junk: `19 - Apocalypse`, `Rings Haven`, `?` |
+| offset 12000, n=600 | 25 (4%) | **correct**: `Michael Chatfield`, `M. R. Forbes` |
+
+The offset-12000 rows look like this — a correct author on a row whose file is
+still parked under the placeholder directory:
+
+```
+author_name = "Michael Chatfield"
+file_path   = /mnt/bigdata/books/audiobook-organizer/Unknown Author/Sixth Realm, Part 2/...
+```
+
+Those books are catalogued correctly and merely **misfiled on disk**: organize
+ran while the author was unknown, the author was resolved later, and nothing
+re-organized the file. They need a re-organize, not an AI re-parse, and they are
+not part of the defect below.
+
+Because the population is heterogeneous and ordering-dependent, **the sample
+proportions above must not be extrapolated.** The only whole-population figure
+that is safe to quote is `author_id=54846` = **3,407**.
+
+A separate, real, and so-far **unquantified** problem is visible in the offset-0
+sample: author rows minted out of filename fragments — `19 - Apocalypse`,
+`18 - Ascension`, `2 - The Old Republic Revan`, `Rings Haven`, `?`. These are
+title/track fragments that `extractInfoFromPath`'s `" - "` split promoted to
+authors. Every one of them is a non-nil `AuthorID` and therefore closes the same
+gate. Their whole-population count is not measured here.
+
+A representative placeholder row:
 
 ```
 id          = 01KZRB0D90QNXHYR88ER2SX05C
@@ -43,7 +85,8 @@ authors     = [ {38566 "Terry Pratchett" author}, {47587 "Carpe Jugulum" author}
 Note the last line: **the join slice already carries the correct author.** The
 scalar `book.AuthorID` points at the placeholder while the join slice holds
 "Terry Pratchett". Repairing the author does not require the LLM.
-(`Carpe Jugulum` is a book title mis-ingested as an author — a separate defect.)
+(`Carpe Jugulum` is a book title mis-ingested as an author — the same
+fragment-to-author defect noted above.)
 
 ## The loop, in three sites
 
@@ -99,3 +142,22 @@ The repair of the shattered per-track rows must clear the placeholder author
 change. A repair that merges 80 fragment rows into one book but leaves the
 merged row pointing at author 54846 produces a book that is *permanently*
 unparseable by every self-healing path in the system.
+
+**The cheapest repair primitive is a scalar-vs-join reconciliation, not an AI
+re-parse.** The join slice already holds the right answer for at least some of
+these rows (`Terry Pratchett`, id 38566, on a row whose scalar points at 54846).
+That repair needs no LLM, no re-scan, and no filename heuristics — it reads a
+value the database already stores. It is cross-lane (`internal/database`,
+`internal/merge`) and belongs in the repair design, not here. Its coverage —
+how many of the 3,407 have a usable join slice — is **not yet measured**.
+
+## Scope note: why site 1 is deliberately not fixed
+
+Sites 2 and 3 are scanner bugs: the scanner reads back a value the system itself
+wrote and then treats it as user-supplied truth. Those are fixable in place.
+
+Site 1 is not a bug in the same sense. Organize needs *some* directory name for
+a book with no resolvable author, and a placeholder is a defensible choice.
+Changing it alters on-disk naming policy for every future organize and would
+move files that are already on disk. That is a user decision with physical blast
+radius, not autonomous flaw-fixing, and it is deliberately left alone here.
