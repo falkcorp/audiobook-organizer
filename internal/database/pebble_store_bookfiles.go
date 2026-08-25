@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-24
 
@@ -183,34 +183,80 @@ func (s *PebbleStore) HasLSHIndex(bookFileID string) bool {
 	return len(val) > 0 && val[0] == fingerprint.LSHIndexVersion
 }
 
-// enforceBookFilePIDUniqueness guarantees that at most one book_file row carries
-// a given iTunes persistent ID. If `file` carries a non-empty PID already held by
-// a DIFFERENT row, ownership is TRANSFERRED to `file` by clearing the PID from the
-// prior owner (via the existing ClearITunesPID primitive, which also fixes the
-// prior owner's secondary index). Only the itunes_persistent_id DB field is
-// touched — never an audio file, never the prior row's other data. Called from the
-// CreateBookFile mint path (the only place a new row with a PID is minted without
-// the by-PID collapse that BatchUpsertBookFiles already does). A no-op when the PID
-// is empty or already uniquely owned by this same row.
-func (s *PebbleStore) enforceBookFilePIDUniqueness(file *BookFile) error {
+// stagePIDTransfer guarantees that at most one book_file row carries a given
+// iTunes persistent ID, staging the whole transfer INTO the caller's batch.
+//
+// If `file` carries a non-empty PID already held by a DIFFERENT row, ownership is
+// TRANSFERRED to `file`: the prior owner's row is rewritten with its PID fields
+// cleared and its secondary indexes rebuilt, all as operations on `batch`. Only
+// itunes_persistent_id and itunes_path are touched — never an audio file, never
+// the prior row's other data. A no-op (nil, nil) when the PID is empty or already
+// uniquely owned by this same row.
+//
+// WHY THIS TAKES A BATCH. This replaced enforceBookFilePIDUniqueness, which did
+// the transfer through ClearITunesPID -> UpdateBookFile — and that commits a batch
+// of its OWN. Both callers ran it BEFORE committing their own write, so a failure
+// anywhere after it (marshal, batch.Set, or the commit) left the prior owner's PID
+// erased while the row meant to take it was never stored: a PID lost by BOTH rows,
+// silently. Staging into the caller's batch makes the transfer land exactly when
+// the row taking the PID lands, or not at all.
+//
+// ORDERING IS LOAD-BEARING. This stages a Delete of book_file_pid:<PID>, and the
+// caller stages a Set of that same key for `file`. Pebble applies batch operations
+// in sequence order, not key order, so the caller MUST call this BEFORE writing
+// `file`'s own secondary indexes. Reversing the two deletes the index just written
+// and the PID resolves to nothing.
+//
+// SAFE TO REWRITE THE PRIOR ROW WHOLESALE because it comes from getBookFileByID,
+// a direct Pebble read of the primary key — the full stored value, not the slim
+// memdb projection. UpdateBookFile needs preserve-on-nil guards for
+// AcoustIDFingerprint and IntroTranscription precisely because its caller may hand
+// it a stripped row; here the struct written back IS the stored row, so those
+// guards would be no-ops. Do not repoint this at a memdb read.
+//
+// The returned prior owner (nil when nothing transferred) is the caller's to
+// refresh in memdb and recompute AFTER a successful commit. This function performs
+// no post-commit side effects, because nothing is committed when it returns.
+func (s *PebbleStore) stagePIDTransfer(batch *pebble.Batch, file *BookFile) (*BookFile, error) {
 	if file == nil || file.ITunesPersistentID == "" {
-		return nil
+		return nil, nil
 	}
 	prior, err := s.GetBookFileByPID(file.ITunesPersistentID)
 	if err != nil {
-		return fmt.Errorf("CreateBookFile: PID-uniqueness lookup for %q: %w", file.ITunesPersistentID, err)
+		return nil, fmt.Errorf("stagePIDTransfer: PID-uniqueness lookup for %q: %w", file.ITunesPersistentID, err)
 	}
 	if prior == nil || prior.ID == file.ID {
-		return nil // unowned, or already owned by this same row
+		return nil, nil // unowned, or already owned by this same row
 	}
-	if _, err := s.ClearITunesPID(file.ITunesPersistentID); err != nil {
-		return fmt.Errorf("CreateBookFile: transfer PID %q from prior owner %s: %w",
-			file.ITunesPersistentID, prior.ID, err)
+
+	// Drop the prior owner's indexes (book_file_pid:<PID> among them) before its
+	// row is rewritten, exactly as UpdateBookFile does.
+	if err := s.deleteBookFileSecondaryIndexes(batch, prior); err != nil {
+		return nil, fmt.Errorf("stagePIDTransfer: drop indexes of prior owner %s: %w", prior.ID, err)
 	}
+
+	prior.ITunesPersistentID = ""
+	prior.ITunesPath = ""
+	prior.UpdatedAt = time.Now()
+
+	data, err := marshalBookFileDropSegs(prior)
+	if err != nil {
+		return nil, fmt.Errorf("stagePIDTransfer: marshal prior owner %s: %w", prior.ID, err)
+	}
+	priorKey := []byte(fmt.Sprintf("book_file:%s:%s", prior.BookID, prior.ID))
+	if err := batch.Set(priorKey, data, nil); err != nil {
+		return nil, fmt.Errorf("stagePIDTransfer: rewrite prior owner %s: %w", prior.ID, err)
+	}
+	// Rebuilds every index except book_file_pid, which is skipped now that the PID
+	// is empty — that is what releases the PID for `file` to claim.
+	if err := writeBookFileSecondaryIndexes(batch, prior); err != nil {
+		return nil, fmt.Errorf("stagePIDTransfer: reindex prior owner %s: %w", prior.ID, err)
+	}
+
 	slog.Info("book_file PID uniqueness: transferred to new row",
 		"pid", file.ITunesPersistentID, "priorOwner", prior.ID, "priorBook", prior.BookID,
 		"newFile", file.ID, "newBook", file.BookID)
-	return nil
+	return prior, nil
 }
 
 // CreateBookFile stores a new BookFile, generating a ULID if the ID is empty.
@@ -244,7 +290,16 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 	// itunes_persistent_id DB field moves; no audio file is touched. The new
 	// (organized) row is the one a relocate repoints the ITL track at, so it is the
 	// correct owner. See docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md.
-	if err := s.enforceBookFilePIDUniqueness(file); err != nil {
+	//
+	// The transfer is STAGED into this row's own batch rather than committed
+	// separately, so the prior owner loses the PID only if this row is stored and
+	// takes it. It must run before writeBookFileSecondaryIndexes below, which sets
+	// the same book_file_pid key this deletes; see stagePIDTransfer.
+	batch := s.db.NewBatch()
+
+	priorPIDOwner, err := s.stagePIDTransfer(batch, file)
+	if err != nil {
+		batch.Close()
 		return err
 	}
 
@@ -253,10 +308,9 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 	// UpsertBookFileToMemDB below.
 	data, err := marshalBookFileDropSegs(file)
 	if err != nil {
+		batch.Close()
 		return err
 	}
-
-	batch := s.db.NewBatch()
 
 	key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
 	if err := batch.Set(key, data, nil); err != nil {
@@ -278,6 +332,17 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 	// Recompute book-level Duration/FileSize aggregates now that a file was added.
 	// Best-effort: the file write already committed; don't fail on aggregate errors.
 	s.notifyBookFileChange(file.BookID)
+	// The prior PID owner's row changed in the same commit, so refresh it too.
+	// Its aggregates cannot have moved (clearing a PID touches neither Duration nor
+	// FileSize), but the recompute is kept because ClearITunesPID -> UpdateBookFile
+	// did exactly this before, and dropping it is an optimisation to make on its own
+	// terms rather than a silent rider on an atomicity fix.
+	if priorPIDOwner != nil {
+		s.UpsertBookFileToMemDB(priorPIDOwner)
+		if priorPIDOwner.BookID != file.BookID {
+			s.notifyBookFileChange(priorPIDOwner.BookID)
+		}
+	}
 	return nil
 }
 
@@ -300,6 +365,15 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 // The write is atomic: on any error nothing is committed and no book is
 // recomputed, so a partial failure cannot leave aggregates describing rows that
 // were never stored.
+//
+// That claim was FALSE when first written (#2866). The PID-uniqueness step went
+// through ClearITunesPID, which commits a batch of its own, so a failure on row K
+// discarded this batch while rows 1..K-1 had already stripped the PID off their
+// prior owners — lost by the old row and never gained by the new one. It held only
+// because the sole caller (relink's ShapeDirectory loop) builds rows via
+// buildBookFileFor, which sets no ITunesPersistentID, so the transfer never ran.
+// stagePIDTransfer now stages that work into THIS batch, so the claim is true for
+// a caller that does supply PIDs.
 func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 	if len(files) == 0 {
 		return nil
@@ -312,7 +386,7 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 	affectedBooks := make([]string, 0, len(files))
 	seenBooks := make(map[string]struct{}, len(files))
 
-	// enforceBookFilePIDUniqueness resolves the prior owner via a COMMITTED read,
+	// stagePIDTransfer resolves the prior owner via a COMMITTED read,
 	// so it cannot see a row staged earlier in this same batch. Two rows sharing a
 	// PID would therefore both pass and both be written, silently breaking the very
 	// invariant that function exists to hold. Track PIDs within the call and refuse
@@ -320,6 +394,9 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 	seenPIDs := make(map[string]string, len(files))
 
 	staged := make([]*BookFile, 0, len(files))
+	// Prior PID owners rewritten by this batch. They need the same post-commit
+	// memdb refresh the staged rows get; nothing else in this loop tracks them.
+	var clearedPriorOwners []*BookFile
 	for _, file := range files {
 		if file == nil {
 			continue
@@ -351,11 +428,21 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 			seenPIDs[file.ITunesPersistentID] = file.ID
 		}
 
-		// Transfers the PID from any prior COMMITTED owner. Writes outside this
-		// batch, exactly as CreateBookFile does.
-		if err := s.enforceBookFilePIDUniqueness(file); err != nil {
+		// Transfers the PID from any prior COMMITTED owner, staged INTO this batch
+		// so the transfer and the row taking the PID commit together. Must precede
+		// this row's writeBookFileSecondaryIndexes below, which re-Sets the same
+		// book_file_pid key; see stagePIDTransfer.
+		prior, err := s.stagePIDTransfer(batch, file)
+		if err != nil {
 			batch.Close()
 			return err
+		}
+		if prior != nil {
+			clearedPriorOwners = append(clearedPriorOwners, prior)
+			if _, ok := seenBooks[prior.BookID]; !ok && prior.BookID != "" {
+				seenBooks[prior.BookID] = struct{}{}
+				affectedBooks = append(affectedBooks, prior.BookID)
+			}
 		}
 
 		// T020: drop AcoustIDSeg0..6 from the stored value via a copy; the original
@@ -396,6 +483,12 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 	s.MarkQuickQueryDirty("no_fingerprints", "batch_create_book_files")
 	for _, file := range staged {
 		s.UpsertBookFileToMemDB(file)
+	}
+	// Prior PID owners were rewritten by the same commit, so their memdb rows are
+	// stale in exactly the way the staged rows' would be. Their books are already
+	// in affectedBooks, so the recompute below covers them.
+	for _, prior := range clearedPriorOwners {
+		s.UpsertBookFileToMemDB(prior)
 	}
 
 	// ONE recompute per affected book, not one per row — the whole point of this
