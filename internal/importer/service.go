@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-08-19
+// last-edited: 2026-08-25
 
 package importer
 
@@ -114,7 +114,20 @@ func NewImportService(db Store) *ImportService {
 
 type ImportFileRequest struct {
 	FilePath string `json:"file_path" binding:"required"`
-	Organize bool   `json:"organize"`
+	// Organize is honored by the HTTP LAYER ONLY —
+	// handlers.FilesystemHandler.ImportFile enqueues a library.organize op for
+	// the created book. ImportFile below does not read it and must not: the
+	// importer has no organizer dependency, and organizing inline would bypass
+	// the op registry's concurrency gate.
+	//
+	// A non-HTTP caller therefore gets no organize from setting this. That is
+	// why deluge_discovery.go:95 passes false explicitly rather than relying on
+	// the zero value — it documents that the field was considered. If you add
+	// another direct caller of ImportFile, honor this yourself or leave it
+	// false; do not assume the service acts on it. It was decoded and ignored
+	// everywhere until 2026-08-25, which is exactly the bug this comment exists
+	// to stop recurring.
+	Organize bool `json:"organize"`
 }
 
 type ImportFileResponse struct {

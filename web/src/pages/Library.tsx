@@ -374,7 +374,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [importFileDialogOpen, setImportFileDialogOpen] = useState(false);
   const [importFilePath, setImportFilePath] = useState('');
   const [importFilePaths, setImportFilePaths] = useState<string[]>([]);
-  const [importFileOrganize, setImportFileOrganize] = useState(true);
+  // Defaults OFF. Until 2026-08-25 the server decoded `organize` and ignored
+  // it, so this defaulting to ON was harmless. Now that it is honored, an ON
+  // default would move files on disk for every import — including the bulk
+  // path below, which maps it over every selected file — without anyone
+  // choosing that. Organizing on import is opt-in.
+  const [importFileOrganize, setImportFileOrganize] = useState(false);
   const [importFileInProgress, setImportFileInProgress] = useState(false);
   const [manualImportDialogOpen, setManualImportDialogOpen] = useState(false);
   const [manualImportPath, setManualImportPath] = useState('');

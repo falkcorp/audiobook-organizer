@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-08-23
+// last-edited: 2026-08-25
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -373,7 +373,72 @@ func (h *FilesystemHandler) ImportFile(c *gin.Context) {
 		}))
 	}
 
-	httputil.RespondWithCreated(c, result)
+	// req.Organize used to be decoded here and read NOWHERE — not by this
+	// handler and not by importer.ImportFile — while the UI checkbox at
+	// web/src/pages/Library.tsx defaulted to ON. Every user who left the box
+	// ticked got a 201, no warning, and no organize.
+	if !req.Organize {
+		httputil.RespondWithCreated(c, result)
+		return
+	}
+
+	// Honored by ENQUEUEING library.organize rather than organizing inline: the
+	// op carries ConcurrencyKey "library.organize" (so an import-triggered
+	// organize can never run alongside a library-wide one), cancellation, a 4h
+	// timeout, permission and capability checks, and the operation rows the UI
+	// already renders. An inline organizer call from this handler would have
+	// none of those, and would push an organizer dependency into the importer.
+	//
+	// req.Organize is deliberately NOT ANDed with h.autoOrganize. That snapshot
+	// governs AUTOMATIC organize — the post-scan hook, where no user is in the
+	// loop. Ticking this box is explicit per-request intent, the same class as
+	// pressing "Organize Library", which is likewise not gated on it. ANDing
+	// them would make an explicitly-ticked checkbox silently do nothing: this
+	// same bug wearing a different condition.
+	resp := gin.H{"id": result.ID, "title": result.Title, "file_path": result.FilePath}
+	if opID, skipped := h.enqueueImportOrganize(c, result.ID); skipped != "" {
+		resp["organize_skipped"] = skipped
+	} else {
+		resp["organize_operation_id"] = opID
+	}
+	httputil.RespondWithCreated(c, resp)
+}
+
+// enqueueImportOrganize queues a library.organize run for one freshly-imported
+// book. It returns (opID, "") when a run was queued, or ("", reason) when none
+// was — the caller reports the reason rather than leaving a bare 201 to imply
+// an organize that never happened.
+//
+// The book is identified by ID, never by path: OrganizeOneBook os.Renames the
+// file under RootDir, so a FilePath captured before the run is stale after it.
+//
+// There is deliberately NO synchronous fallback for a nil enqueuer, unlike the
+// folder-create path above. A nil enqueuer and a failed enqueue mean the same
+// thing here — the import succeeded, the organize did not happen — and both are
+// reported rather than inferred.
+func (h *FilesystemHandler) enqueueImportOrganize(c *gin.Context, bookID string) (string, string) {
+	if h.rootDir == "" {
+		// organizer.ensureUnderRoot already fails closed on an empty root
+		// (filepath.Clean("") is ".", which no generated relative path
+		// prefix-matches), so nothing would be moved to a CWD-relative path.
+		// This guard exists so the caller is not handed an op id for a run
+		// guaranteed to fail every book. Mirrors the precedent above.
+		slog.Warn("import: organize requested but root_dir is not set", "book_id", bookID)
+		return "", "root_dir is not configured"
+	}
+	if h.opEnqueuer == nil {
+		slog.Warn("import: organize requested but the operation registry is unavailable", "book_id", bookID)
+		return "", "operation registry unavailable"
+	}
+	opID, err := h.opEnqueuer.EnqueueOp(c.Request.Context(), "library.organize", libraryOrganizeParams{
+		BookIDs: []string{bookID},
+	})
+	if err != nil {
+		slog.Warn("import: organize enqueue failed; the book was imported but not organized",
+			"book_id", bookID, "err", err)
+		return "", "enqueue failed"
+	}
+	return opID, ""
 }
 
 // -----------------------------------------------------------------------
@@ -392,4 +457,26 @@ func (h *FilesystemHandler) ImportFile(c *gin.Context) {
 type folderAutoScanParams struct {
 	FolderPath string `json:"folder_path"`
 	FolderID   int    `json:"folder_id"`
+}
+
+// libraryOrganizeParams are the parameters for a library.organize op. Like
+// folderAutoScanParams above, this mirrors a struct in internal/server
+// (server.libraryOrganizeParams, library_core_ops.go:31) and is redeclared here
+// to avoid importing that package.
+//
+// ⚠️ THE COMPILER CANNOT CHECK THIS PAIR — see the warning on
+// folderAutoScanParams. If you change either struct, change the other in the
+// same commit.
+//
+// All four fields are mirrored even though this handler only ever sets BookIDs.
+// The registry's ConcurrencyKey dedupe BYTE-COMPARES marshalled params against
+// the active op's stored params (registry.go:632-670), so the shape this
+// produces is not private to this call site — keeping it identical to the
+// canonical struct means a field added there cannot silently change what this
+// site's bytes compare against.
+type libraryOrganizeParams struct {
+	FolderPath         *string  `json:"folder_path,omitempty"`
+	BookIDs            []string `json:"book_ids,omitempty"`
+	FetchMetadataFirst bool     `json:"fetch_metadata_first"`
+	SyncITunesFirst    bool     `json:"sync_itunes_first"`
 }
