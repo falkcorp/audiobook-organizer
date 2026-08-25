@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-22
+// last-edited: 2026-08-25
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/singleflight"
 )
 
 // ABSUserStore ABSUserStore reads and updates the user rows the ABS auth flow touches.
@@ -335,6 +336,18 @@ type Handler struct {
 	authorsCache   *contributorIndex
 	authorsCacheAt time.Time
 
+	// 🔴 THE TTL ALONE IS NOT ENOUGH — it bounds how OFTEN the index is rebuilt,
+	// not how MANY rebuilds run at once. contributorsCached deliberately builds
+	// outside authorsCacheMu (see its comment), so without this every request
+	// that arrives while the cache is cold starts its own full-library scan.
+	//
+	// That was survivable while /authors was the only trigger: it is reached by
+	// tapping the Authors tab. /filterdata is on the library PAGE LOAD path, so
+	// making it a second caller turns a rare herd into a routine one. The group
+	// coalesces concurrent cold callers onto ONE build; the winner's result is
+	// shared with every waiter.
+	authorsCacheSF singleflight.Group
+
 	// seriesBooksCache maps series id → the visible books in that series.
 	//
 	// Built by ONE pass over the visible set rather than one lookup per series.
@@ -346,6 +359,24 @@ type Handler struct {
 	seriesBooksCacheMu sync.Mutex
 	seriesBooksCache   map[int]seriesBooksBuilt
 	seriesBooksCacheAt time.Time
+
+	// filterDataCache holds the whole /filterdata document.
+	//
+	// 🔴 IT WAS UNCACHED AND IT IS NOT CHEAP. Measured against production
+	// (68K rows) on 2026-08-25: 7.17s and 6.57s on two CONSECUTIVE calls — the
+	// second no faster than the first, which is what "no cache at all" looks
+	// like from outside. GetDistinctGenres and GetDistinctLanguages each walk
+	// the entire book:* keyspace and json.Unmarshal every row to read ONE
+	// field, and publishedDecades scans another 5000, so the endpoint pays
+	// three library scans per request on the page-load path.
+	//
+	// Cached as ONE document for the same reason authorsCache is one pointer:
+	// the eight lists are published together or not at all. Readers only ever
+	// serialize it, never mutate it.
+	filterDataMu       sync.Mutex
+	filterDataCache    *filterDataResponse
+	filterDataCachedAt time.Time
+	filterDataSF       singleflight.Group
 
 	// now and newID are injectable for deterministic tests.
 	now   func() time.Time

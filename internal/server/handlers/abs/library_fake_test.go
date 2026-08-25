@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-08-22
+// last-edited: 2026-08-25
 
 package abs_test
 
@@ -63,6 +63,21 @@ type fakeLibrary struct {
 	// full-library count scan is cached rather than repeated per request.
 	countFiltered int
 	authorCounts  int
+
+	// genreScans counts GetDistinctGenres calls. It is the /filterdata build
+	// counter: that call walks the whole book:* keyspace and json.Unmarshals
+	// every row to read one field, and it runs once per build.
+	genreScans int
+
+	// contributorBuilds counts contributor-index builds. GetAuthorsByBookIDs is
+	// called exactly once per build, so it is the build counter.
+	contributorBuilds int
+
+	// contributorGate, when non-nil, blocks every index build until it is closed.
+	// It exists so a test can hold builds open and observe how MANY start — the
+	// TTL bounds how often the index is rebuilt, never how many rebuilds run at
+	// once, and those are different failures.
+	contributorGate chan struct{}
 
 	// failSeriesCounts injects an error on GetAllSeriesBookCounts() for testing.
 	failSeriesCounts bool
@@ -158,6 +173,46 @@ func (f *fakeLibrary) addNarrators(names ...string) {
 		if target != "" {
 			f.bookNarr[target] = append(f.bookNarr[target], n)
 		}
+	}
+}
+
+// contributorBuildCount reports how many contributor-index builds have started.
+// genreCalls reports how many times the whole-keyspace genre scan ran.
+func (f *fakeLibrary) genreCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.genreScans
+}
+
+func (f *fakeLibrary) contributorBuildCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.contributorBuilds
+}
+
+// holdContributorBuilds makes every index build block until the returned func is
+// called, so a test can inspect how many builds are in flight at once.
+func (f *fakeLibrary) holdContributorBuilds() func() {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.contributorGate = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
+}
+
+// addOrphanNarrators seeds narrator ROWS attached to no book at all.
+//
+// Deliberately distinct from addNarrators, which attaches to the first seeded
+// book: ListNarrators returns every row in the store, while the ABS narrator
+// list is derived from the visible books' junction rows. A fixture where those
+// two agree cannot tell the sources apart, which is how /filterdata went on
+// serving store rows unnoticed.
+func (f *fakeLibrary) addOrphanNarrators(names ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, name := range names {
+		f.narrators = append(f.narrators, database.Narrator{ID: len(f.narrators) + i + 1, Name: name})
 	}
 }
 
@@ -352,6 +407,17 @@ func (f *fakeLibrary) GetBookFiles(bookID string) ([]database.BookFile, error) {
 
 func (f *fakeLibrary) GetAuthorsByBookIDs(_ context.Context, ids []string) (map[string][]database.Author, error) {
 	f.mu.Lock()
+	f.contributorBuilds++
+	gate := f.contributorGate
+	f.mu.Unlock()
+	// Counted BEFORE blocking, so a concurrent caller that starts its own build
+	// is visible while every build is still held open. Blocking first would let
+	// the count read 1 simply because the others had not got there yet.
+	if gate != nil {
+		<-gate
+	}
+
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := map[string][]database.Author{}
 	for _, id := range ids {
@@ -440,6 +506,9 @@ func (f *fakeLibrary) ListNarrators() ([]database.Narrator, error) {
 }
 
 func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
+	f.mu.Lock()
+	f.genreScans++
+	f.mu.Unlock()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	seen := map[string]bool{}
