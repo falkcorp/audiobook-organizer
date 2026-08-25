@@ -1104,8 +1104,12 @@ func (h *Handler) contributorsCached(ctx context.Context) (*contributorIndex, er
 		h.authorsCacheMu.Lock()
 		// Stamped AFTER the build, not before. The old code captured the time at
 		// entry and stored that, which charged the scan's own duration against the
-		// TTL: a 9.5s build (measured in production) left the entry 9.5s stale the
-		// moment it was published.
+		// TTL: a 9.5s build left the entry 9.5s stale the moment it was published.
+		//
+		// 9.5s is a cold /authors call measured against production on 2026-08-25.
+		// WarmContributors below carries an older, undated "~6s" for the same
+		// build; both are plausible for a library that has grown, so neither is
+		// corrected here — but do not read either as current without re-measuring.
 		h.authorsCache, h.authorsCacheAt = idx, h.now()
 		h.authorsCacheMu.Unlock()
 		return idx, nil

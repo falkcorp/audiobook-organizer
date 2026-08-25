@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.20.0 -->
+<!-- version: 1.21.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -1256,19 +1256,24 @@ actually reach for.
 
 Measured against the real library, the filter menu took **just over 7 seconds to produce,
 every single time it was requested** — and it is requested on every library page load. It
-was reading through the entire collection three separate times to gather the genre,
-language and decade lists, and keeping none of it.
+was reading through the entire collection twice over to gather the genre and language
+lists, plus a bounded third pass for the decade list, and keeping none of it.
 
 It is now built at most once every five minutes and shared, as the author and narrator
 lists already were.
 
 A related problem had to be fixed first. When that shared list expired, **every request
 that arrived while it was being rebuilt started its own rebuild** rather than waiting for
-the one already running. That was tolerable while the list was only needed by the Authors
-tab, which a person has to deliberately open. Putting the filter menu on the same list
-would have moved it to the ordinary page load, where several people arriving at once
-would each have set off their own full pass over the library. Rebuilds are now shared:
-the first request does the work and the rest wait for it.
+the one already running — so several people opening the library within the same few
+seconds each set off their own full pass over it.
+
+An earlier draft of this entry said that had been harmless until now, because only the
+Authors tab used that list and a person has to deliberately open it. **That was wrong, and
+it is worth correcting rather than quietly dropping.** The home shelves, the search box and
+the filtered book views were already using the same list. The pile-up was not a risk the
+filter-menu change would have introduced; it was already happening, and the change would
+have made it more frequent. Rebuilds are now shared: the first request does the work and
+the rest wait for it.
 
 ### Two notes, deliberately on the record
 

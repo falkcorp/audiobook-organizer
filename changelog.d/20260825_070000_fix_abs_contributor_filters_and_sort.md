@@ -39,6 +39,7 @@ and shared, like the author and narrator lists already were.
 
 Separately, when that shared list did need rebuilding, every request that
 arrived in the meantime started its own rebuild rather than waiting for the one
-already running. With the filter menu now using the same list, that would have
-happened on ordinary page loads, so rebuilds are now shared: the first request
-does the work and the rest wait for it.
+already running — so several people opening the library at the same moment each
+set off their own full pass over it. That was already happening: the home
+shelves, the search box and the filtered book views all use that list. Rebuilds
+are now shared: the first request does the work and the rest wait for it.
