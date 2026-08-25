@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-25-unknown-author-feedback-loop.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 3.0.0 -->
 <!-- guid: 7a1c9e2f-4b83-4d16-9f52-c8e0a7d31b64 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -150,6 +150,72 @@ That repair needs no LLM, no re-scan, and no filename heuristics — it reads a
 value the database already stores. It is cross-lane (`internal/database`,
 `internal/merge`) and belongs in the repair design, not here. Its coverage —
 how many of the 3,407 have a usable join slice — is **not yet measured**.
+
+## Two placeholder rows, not one — and why that nearly made the fix inert
+
+There are **two** author rows named `Unknown Author`:
+
+| id | book_count |
+| --- | --- |
+| 54845 | 0 |
+| 54846 | 2,128 |
+
+`GetAuthorByName` resolves through an `author:name:<normalized>` index that maps
+one normalized name to exactly **one** id, so it can only ever return one of
+them. The first version of this fix compared the row's `AuthorID` against that
+single resolved id — which guards one row and leaves every book under the other
+permanently gated. Had the index named the empty row, **the entire fix would
+have been inert in production while every test passed.**
+
+The check now resolves the author row's own name via `GetAuthorByID` and asks
+`authorname.IsPlaceholder`, so it is correct for any number of duplicate rows.
+`TestPlaceholderAuthorsResolvesByNameNotByTheNameIndex` pins it, and a mutant
+restoring the id comparison fails it.
+
+## `CreateAuthor` is check-then-create with no atomicity
+
+This is how the duplicate rows arise, and it is a defect in its own right.
+
+`PebbleStore.CreateAuthor` calls `GetAuthorByName` and, on a miss, mints a new
+row. Two callers with the same name can both miss. Measured 2026-08-25 with a
+direct probe: **24 concurrent `CreateAuthor` calls with an identical name
+produced 24 distinct author rows**, reproducibly across three runs — not an
+occasional race, a near-total failure of the dedup check under concurrency.
+
+The scanner resolves authors from inside its worker pool, so a library import
+that first encounters an author on several books at once mints a row per worker.
+This is a plausible contributor to the 17,947 author rows and is consistent with
+the previously-recorded finding that ~212 authors' books carry a dangling
+`AuthorID`.
+
+It lives in `internal/database` and is **not fixed here** — filed as
+`todo.d/20260825-createauthor-check-then-create-race.md`. The fix needs the
+lookup and the insert in one atomic batch, plus a decision about merging the
+duplicate rows already present.
+
+## Junk authors: measured
+
+The fragment-derived authors noted above are no longer unquantified. Classifying
+all 17,947 author rows into disjoint tiers:
+
+| tier | authors | books |
+| --- | --- | --- |
+| leading track/volume number (`19 - Apocalypse`) | 1,720 | 1,199 |
+| the `Unknown Author` placeholder | 2 | 2,128 |
+| bare number (`07`) | 2 | 1 |
+| punctuation / entity only (`&#169`, `?`) | 29 | 26 |
+| trailing number (`Avatars Dance 1`, `Book 1`) | 2,890 | 1,212 |
+| **total** | **4,643** | **4,566** |
+
+**25.9% of all author rows are not people.** They account for 4,566 of the
+53,790 attributed books (8.5%). Every one of them is a non-nil `AuthorID` and so
+closes the same nomination gate the placeholder did — the fix here addresses only
+the placeholder tier (2,128 books); the other ~2,438 remain gated behind authors
+that are really title and track fragments.
+
+The tiers are conservative and pattern-based, so treat them as a floor: a name
+like `Rings Haven` is a mis-parsed title but matches no pattern here and is not
+counted.
 
 ## Scope note: why site 1 is deliberately not fixed
 

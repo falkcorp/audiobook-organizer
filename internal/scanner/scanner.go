@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.68.0
+// version: 1.69.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -1133,9 +1133,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	//
 	// Guarded on aiEnabled because the gate is the only reader: a scan with AI
 	// parsing switched off must not pay for a store read it will never consult.
-	var placeholderAuthorID *int
+	var placeholders *placeholderAuthors
 	if aiEnabled {
-		placeholderAuthorID = lookupPlaceholderAuthorID()
+		placeholders = newPlaceholderAuthors()
 	}
 
 	// Track books needing AI parsing for batch processing
@@ -1430,7 +1430,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 						// non-zero ID, so the bare non-nil check below used to
 						// pass for a book whose author is precisely unknown --
 						// which is the one case AI parsing exists to fix.
-						if dbExisting.Title != "" && rowHasRealAuthor(dbExisting.AuthorID, placeholderAuthorID) {
+						if dbExisting.Title != "" && rowHasRealAuthor(dbExisting.AuthorID, placeholders) {
 							needsAI = false
 						}
 					}
@@ -3115,39 +3115,68 @@ func nullablePtr(s string) *string {
 	return &s
 }
 
-// lookupPlaceholderAuthorID resolves the placeholder author's row ID, or nil if
-// this database has never had to create one.
+// placeholderAuthors answers "is this author row the placeholder?" for the
+// duration of one scan.
 //
-// It deliberately does NOT create the row. Creating it here would mint the very
-// row the gate is trying to treat as absent, on any database that had so far
-// avoided it.
-func lookupPlaceholderAuthorID() *int {
-	store := getStore()
-	if store == nil {
-		return nil
+// It resolves by NAME, from the row's own id, rather than by comparing against a
+// single id looked up once from the author:name: index. That distinction is load
+// bearing and was measured, not assumed: production carries TWO author rows both
+// named "Unknown Author" (54845 with no books, 54846 with 2,128), and the name
+// index can only point at one of them. A check keyed on whichever id
+// GetAuthorByName returns guards exactly one row and silently leaves every book
+// under the other one gated -- which, had the index named the empty row, would
+// have made this whole fix inert in production while every test still passed.
+//
+// Answers are cached because the gate runs once per book and author rows repeat
+// heavily; the mutex is required because the gate runs inside the scan's worker
+// pool.
+type placeholderAuthors struct {
+	mu    sync.Mutex
+	known map[int]bool
+}
+
+func newPlaceholderAuthors() *placeholderAuthors {
+	return &placeholderAuthors{known: make(map[int]bool)}
+}
+
+// is reports whether authorID is an author row carrying the placeholder name.
+//
+// An unreadable or missing row answers false: the gate's job is to decide
+// whether AI parsing is pointless, and "we could not tell" is not grounds for
+// skipping a book. It never CREATES the placeholder row -- doing so would mint,
+// on a database that had so far avoided it, the exact row this treats as absent.
+func (p *placeholderAuthors) is(authorID int) bool {
+	if p == nil {
+		return false
 	}
-	author, err := store.GetAuthorByName(authorname.Placeholder)
-	if err != nil || author == nil {
-		return nil
+	p.mu.Lock()
+	cached, ok := p.known[authorID]
+	p.mu.Unlock()
+	if ok {
+		return cached
 	}
-	id := author.ID
-	return &id
+
+	result := false
+	if store := getStore(); store != nil {
+		if author, err := store.GetAuthorByID(authorID); err == nil && author != nil {
+			result = authorname.IsPlaceholder(author.Name)
+		}
+	}
+
+	p.mu.Lock()
+	p.known[authorID] = result
+	p.mu.Unlock()
+	return result
 }
 
 // rowHasRealAuthor reports whether a book row's scalar author is one that makes
 // AI parsing pointless. The placeholder does not count: a book filed under it is
 // exactly a book whose author still needs resolving.
-//
-// placeholderID may be nil, meaning this database has no placeholder author row
-// and every non-zero ID is therefore a real one.
-func rowHasRealAuthor(authorID *int, placeholderID *int) bool {
+func rowHasRealAuthor(authorID *int, placeholders *placeholderAuthors) bool {
 	if authorID == nil || *authorID == 0 {
 		return false
 	}
-	if placeholderID != nil && *placeholderID == *authorID {
-		return false
-	}
-	return true
+	return !placeholders.is(*authorID)
 }
 
 func resolveAuthorID(authorName string) (*int, error) {
