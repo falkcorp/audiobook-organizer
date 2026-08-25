@@ -1,5 +1,5 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
 // last-edited: 2026-08-24
 
@@ -40,6 +40,12 @@ type BookFileWriter interface {
 	UpsertBookFile(file *BookFile) error
 	BatchUpsertBookFiles(files []*BookFile) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
+	// MoveBookFilesToBookBulk moves rows from MANY source books into one target
+	// in one atomic batch, recomputing each distinct book's aggregates ONCE.
+	// Prefer it to calling MoveBookFilesToBook in a loop: the singular form
+	// recomputes both of its books on every call, so a per-file loop pays two
+	// full re-reads of the target's file set per file.
+	MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID string) error
 }
 
 // BookFileDeleter removes book_file rows.

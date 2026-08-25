@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-19
 
@@ -268,12 +268,42 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			created++
 		}
 
-		for _, m := range a.Moves {
-			if err := store.MoveBookFilesToBook([]string{m.FileID}, m.From, target); err != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("move file %s %s->%s failed: %v", m.FileID, m.From, target, err))
-				errCount++
-				continue
+		// Move this group's files in ONE batch. Each MoveBookFilesToBook call
+		// recomputes both of its books, so the previous per-file loop cost two
+		// full re-reads of the target's growing file set per file — an O(N^2)
+		// shape on a plan that can carry thousands of moves. The bulk form pays
+		// one recompute per distinct book for the whole group.
+		movedOK := a.Moves
+		if len(a.Moves) > 0 {
+			bulk := make([]database.BookFileMove, 0, len(a.Moves))
+			for _, m := range a.Moves {
+				bulk = append(bulk, database.BookFileMove{FileIDs: []string{m.FileID}, SourceBookID: m.From})
 			}
+			if err := store.MoveBookFilesToBookBulk(bulk, target); err != nil {
+				// The bulk form is atomic, so NOTHING moved. Fall back to the
+				// per-file loop rather than failing the whole group: a plan is
+				// frozen ahead of the apply, so a single file that vanished in
+				// between must not block every other move in the group. This is
+				// the resilience the per-file loop always had; the batch is only
+				// the fast path.
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"bulk move of %d files -> %s failed (%v); retrying per file", len(bulk), target, err))
+				// Fresh slice, NOT movedOK[:0] — movedOK aliases a.Moves here, and
+				// truncate-then-append would rewrite the frozen plan's own backing
+				// array underneath the caller.
+				movedOK = make([]itunesservice.FileMove, 0, len(a.Moves))
+				for _, m := range a.Moves {
+					if err := store.MoveBookFilesToBook([]string{m.FileID}, m.From, target); err != nil {
+						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("move file %s %s->%s failed: %v", m.FileID, m.From, target, err))
+						errCount++
+						continue
+					}
+					movedOK = append(movedOK, m)
+				}
+			}
+		}
+
+		for _, m := range movedOK {
 			if err := store.ReassignExternalID("itunes", m.PID, target); err != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reassign pid %s->%s failed: %v", m.PID, target, err))
 				errCount++

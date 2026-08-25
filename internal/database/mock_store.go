@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.93.0
+// version: 1.94.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-24
 
@@ -515,6 +515,7 @@ type MockStore struct {
 	UpsertBookFileFunc                      func(file *BookFile) error
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
 	MoveBookFilesToBookFunc                 func(fileIDs []string, sourceBookID, targetBookID string) error
+	MoveBookFilesToBookBulkFunc             func(moves []BookFileMove, targetBookID string) error
 	GetDuplicateFilesByHashFunc             func(limit int) ([]DuplicateFileGroup, error)
 	GetBookBySegmentFileHashFunc            func(hash string) (*Book, error)
 	SetBookFileHashFunc                     func(id, hash string) error
@@ -2976,6 +2977,29 @@ func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {
 func (m *MockStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
 	if m.MoveBookFilesToBookFunc != nil {
 		return m.MoveBookFilesToBookFunc(fileIDs, sourceBookID, targetBookID)
+	}
+	return nil
+}
+
+// MoveBookFilesToBookBulk falls back to replaying each move through
+// MoveBookFilesToBookFunc so that tests written before the bulk method existed
+// keep observing their moves.
+//
+// ⚠️ DO NOT USE THAT FALLBACK TO ASSERT COALESCING. Replaying per move is exactly
+// the shape the bulk method exists to eliminate, so a test that leaves
+// MoveBookFilesToBookBulkFunc nil and counts calls to the singular hook cannot
+// tell a coalesced implementation from a per-move loop — it is blind by
+// construction. Set MoveBookFilesToBookBulkFunc to assert anything about
+// batching, and see move_bookfiles_aggregates_test.go for counting recomputes
+// against a real store instead.
+func (m *MockStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID string) error {
+	if m.MoveBookFilesToBookBulkFunc != nil {
+		return m.MoveBookFilesToBookBulkFunc(moves, targetBookID)
+	}
+	for _, mv := range moves {
+		if err := m.MoveBookFilesToBook(mv.FileIDs, mv.SourceBookID, targetBookID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

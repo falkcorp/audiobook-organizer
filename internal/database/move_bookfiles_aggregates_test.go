@@ -1,5 +1,5 @@
 // file: internal/database/move_bookfiles_aggregates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b41d7e2-3f95-4c60-a1d8-6e0937b2c5f4
 // last-edited: 2026-08-24
 
@@ -152,4 +152,125 @@ func TestMoveBookFilesToBookRefreshesMemDB(t *testing.T) {
 		}
 	}
 	require.True(t, seen, "fixture is vacuous: the moved row is absent from the memdb projection entirely")
+}
+
+// TestMoveBookFilesToBookBulkRecomputesOncePerBook is the reason the bulk form
+// exists.
+//
+// Once MoveBookFilesToBook started recomputing both of its books — which it must,
+// or the totals are wrong — the three regroup/merge callers that move files in a
+// loop would have paid two full re-reads of the target's growing file set PER
+// FILE. Two of them move one file per call. The bulk form collapses that to one
+// recompute per distinct book.
+//
+// Counted as invocations, not writes: only the first recompute of a run finds
+// anything to change, so a per-move regression still logs exactly one "updated".
+func TestMoveBookFilesToBookBulkRecomputesOncePerBook(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	target, err := store.CreateBook(&Book{Title: "Bulk Target", FilePath: "/lib/bk/t"})
+	require.NoError(t, err)
+
+	// Three sources, two files each, and each source keeps one file so its own
+	// aggregate stays observable after the move.
+	type srcSpec struct {
+		book  *Book
+		moved []string
+	}
+	srcs := make([]*srcSpec, 0, 3)
+	moves := make([]BookFileMove, 0, 3)
+	for i := range 3 {
+		b, err := store.CreateBook(&Book{Title: "Bulk Src", FilePath: "/lib/bk/s" + string(rune('1'+i))})
+		require.NoError(t, err)
+
+		var movedIDs []string
+		for j := range 2 {
+			f := &BookFile{
+				BookID:      b.ID,
+				FilePath:    "/lib/bk/s" + string(rune('1'+i)) + "/t" + string(rune('1'+j)) + ".m4b",
+				Duration:    100 * (j + 1),
+				FileSize:    int64(1_000 * (j + 1)),
+				TrackNumber: j + 1,
+			}
+			require.NoError(t, store.CreateBookFile(f))
+			if j == 0 {
+				movedIDs = append(movedIDs, f.ID) // move the first, keep the second
+			}
+		}
+		srcs = append(srcs, &srcSpec{book: b, moved: movedIDs})
+		moves = append(moves, BookFileMove{FileIDs: movedIDs, SourceBookID: b.ID})
+	}
+
+	readLogs := captureAggregateLogs(t)
+	require.NoError(t, store.MoveBookFilesToBookBulk(moves, target.ID))
+	logs := readLogs()
+
+	// THE ASSERTION. Three sources plus the target is four books; a per-move
+	// implementation would recompute the target three times.
+	require.Equal(t, 1, countAggregateInvocations(logs, target.ID),
+		"the target must be recomputed ONCE for the whole bulk, not once per move — this is the O(N^2) guard")
+	for _, s := range srcs {
+		require.Equal(t, 1, countAggregateInvocations(logs, s.book.ID),
+			"each source must be recomputed exactly once")
+	}
+
+	// And the rows and totals are right, so the count above is not measuring a
+	// method that simply did nothing.
+	stored, err := store.GetBookFiles(target.ID)
+	require.NoError(t, err)
+	require.Len(t, stored, 3, "the target must own one file from each of the three sources")
+
+	wantDur, wantSize := sumStoredFileAggregates(t, store, target.ID)
+	require.Positive(t, wantDur, "fixture must produce a non-zero duration or the assertion is vacuous")
+	tb, err := store.GetBookByID(target.ID)
+	require.NoError(t, err)
+	require.NotNil(t, tb.Duration)
+	require.Equal(t, wantDur, *tb.Duration)
+	require.NotNil(t, tb.FileSize)
+	require.Equal(t, wantSize, *tb.FileSize)
+
+	for _, s := range srcs {
+		left, err := store.GetBookFiles(s.book.ID)
+		require.NoError(t, err)
+		require.Len(t, left, 1, "each source keeps its un-moved file")
+		sb, err := store.GetBookByID(s.book.ID)
+		require.NoError(t, err)
+		require.NotNil(t, sb.Duration)
+		require.Equal(t, left[0].Duration, *sb.Duration, "source total must drop to its remaining file")
+	}
+}
+
+// TestMoveBookFilesToBookBulkIsAtomic pins the failure contract the three callers
+// reason about: a miss anywhere fails the whole batch and writes nothing.
+//
+// Both regroup callers fall back to a per-file loop when this errors, and that
+// fallback is only correct if the batch truly wrote nothing first — otherwise the
+// retry would move some rows twice.
+func TestMoveBookFilesToBookBulkIsAtomic(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	target, err := store.CreateBook(&Book{Title: "Atomic Target", FilePath: "/lib/at/t"})
+	require.NoError(t, err)
+	src, err := store.CreateBook(&Book{Title: "Atomic Source", FilePath: "/lib/at/s"})
+	require.NoError(t, err)
+
+	good := &BookFile{BookID: src.ID, FilePath: "/lib/at/s/t1.m4b", Duration: 100, FileSize: 1_000}
+	require.NoError(t, store.CreateBookFile(good))
+
+	err = store.MoveBookFilesToBookBulk([]BookFileMove{
+		{FileIDs: []string{good.ID}, SourceBookID: src.ID},
+		{FileIDs: []string{"does-not-exist"}, SourceBookID: src.ID},
+	}, target.ID)
+	require.Error(t, err, "a file that does not resolve under its stated source must fail the batch")
+	require.Contains(t, err.Error(), "does-not-exist")
+
+	stored, err := store.GetBookFiles(target.ID)
+	require.NoError(t, err)
+	require.Empty(t, stored, "a refused batch must move no rows at all")
+
+	left, err := store.GetBookFiles(src.ID)
+	require.NoError(t, err)
+	require.Len(t, left, 1, "the good row must still be on its original book")
 }

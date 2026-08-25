@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-08-24
 
@@ -70,6 +70,7 @@ type opsBookFileWriter interface {
 	DeleteBookFile(id string) error
 	DeleteBookFilesByIDs(ids []string) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID string, targetBookID string) error
+	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error
 	SetBookFileHash(id string, hash string) error
 	UpdateBookFile(id string, file *database.BookFile) error
 }
