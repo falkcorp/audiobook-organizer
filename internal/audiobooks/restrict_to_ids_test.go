@@ -1,5 +1,5 @@
 // file: internal/audiobooks/restrict_to_ids_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2f5b91-3ac6-4e18-b520-9f4e6c8a1d33
 // last-edited: 2026-08-25
 
@@ -182,4 +182,57 @@ func TestRestrictToIDsNilAndEmptyDiffer(t *testing.T) {
 	if emptyTotal != -1 {
 		require.Equal(t, 0, emptyTotal)
 	}
+}
+
+// nonConformingStore hides the filteredSummaryStore capability. It embeds the
+// database.Store INTERFACE rather than *database.PebbleStore, so
+// HonorsEveryBookSummaryFilter (which is not on that interface) is not
+// promoted, and it deliberately does not implement StoreUnwrapper, so
+// AsCapability stops at the wrapper instead of reaching the real store.
+//
+// The result is didPushdown=false: the documented fallback where the store
+// returns everything unfiltered and the service "must re-apply filters in
+// memory -- slower, but correct". Without a test on this side, the
+// post-filter application of RestrictToIDs is unreachable code that a mutation
+// matrix reports as SURVIVING, because every other fixture uses a real
+// PebbleStore, which conforms.
+type nonConformingStore struct {
+	database.Store
+}
+
+func TestRestrictToIDsSurvivesTheNonPushdownFallback(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ps.WaitForWarmup()
+
+	fixtures := seedPushdownBooks(t, ps)
+	svc := NewAudiobookService(&nonConformingStore{Store: ps})
+
+	restrict := pdRestrictSet(fixtures, func(i int, _ pushdownFixture) bool { return i%3 == 0 })
+	inRestrict := func(f pushdownFixture) bool { _, ok := restrict[f.id]; return ok }
+
+	want := pdReferencePage(fixtures, inRestrict, "", 1000, 0)
+	require.NotEmpty(t, want)
+	require.Less(t, len(want), len(fixtures), "restriction must be a proper subset")
+
+	got, _, err := svc.GetAudiobooksWithTotal(
+		context.Background(), 1000, 0, "", nil, nil, ListFilters{RestrictToIDs: restrict})
+	require.NoError(t, err)
+	require.Equal(t, want, pdGotIDs(got),
+		"the fallback promises to re-apply filters in memory; RestrictToIDs must be one of them")
+
+	// nil still means "no restriction" on this path too.
+	all, _, err := svc.GetAudiobooksWithTotal(
+		context.Background(), 1000, 0, "", nil, nil, ListFilters{RestrictToIDs: nil})
+	require.NoError(t, err)
+	require.Len(t, all, len(fixtures), "nil must not narrow anything on the fallback path")
+
+	// ...and non-nil empty still means "no book is eligible". Testing the map
+	// with len() instead of against nil collapses these two and returns the
+	// whole library for a request that asked to narrow it.
+	none, _, err := svc.GetAudiobooksWithTotal(
+		context.Background(), 1000, 0, "", nil, nil, ListFilters{RestrictToIDs: map[string]struct{}{}})
+	require.NoError(t, err)
+	require.Empty(t, none, "an empty restriction must exclude everything on the fallback path")
 }
