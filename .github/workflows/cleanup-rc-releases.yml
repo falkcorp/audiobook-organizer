@@ -1,5 +1,5 @@
 # file: .github/workflows/cleanup-rc-releases.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
 # last-edited: 2026-08-24
 
@@ -111,6 +111,7 @@ jobs:
           COUNT=0
           DELETED=0
           KEPT=0
+          FAILED=0
           while IFS= read -r tag; do
             [ -z "$tag" ] && continue
             COUNT=$((COUNT + 1))
@@ -123,16 +124,34 @@ jobs:
 
             if [ "$DRY_RUN" = "false" ]; then
               echo "Deleting: $tag (+tag)"
-              gh release delete "$tag" --repo "$REPO" --yes --cleanup-tag
+              # Deliberately NOT fatal. Each delete is two mutating API calls
+              # (release + git ref), so a full backlog purge is hundreds in a
+              # tight loop and GitHub's secondary rate limit will reject some.
+              # Under `set -e` a bare call would abort mid-purge and report a
+              # red job that looks like a broken fix rather than "re-run me".
+              # The operation is idempotent -- an already-deleted tag simply
+              # is not in the next run's enumeration -- so tolerate, count,
+              # and let a re-run finish the tail.
+              if gh release delete "$tag" --repo "$REPO" --yes --cleanup-tag; then
+                DELETED=$((DELETED + 1))
+              else
+                echo "::warning::failed to delete $tag -- re-run this workflow to retry"
+                FAILED=$((FAILED + 1))
+              fi
+              # Pace mutating calls to stay under the secondary rate limit.
+              sleep 1
             else
               echo "[dry-run] would delete: $tag (+tag)"
+              DELETED=$((DELETED + 1))
             fi
-            DELETED=$((DELETED + 1))
           done <<< "$RELEASES"
 
           echo
           if [ "$DRY_RUN" = "false" ]; then
             echo "Done. Kept $KEPT, deleted $DELETED of $COUNT RC releases (and their tags)."
+            if [ "$FAILED" -gt 0 ]; then
+              echo "::warning::$FAILED delete(s) failed -- re-run this workflow to finish the tail."
+            fi
           else
             echo "[dry-run] Would keep $KEPT, delete $DELETED of $COUNT RC releases (and their tags)."
             echo "[dry-run] Nothing was deleted."
@@ -145,4 +164,5 @@ jobs:
             printf '| RCs found | %s |\n' "$COUNT"
             printf '| Kept | %s |\n' "$KEPT"
             printf '| Deleted | %s |\n' "$DELETED"
+            printf '| Failed | %s |\n' "$FAILED"
           } >> "$GITHUB_STEP_SUMMARY"
