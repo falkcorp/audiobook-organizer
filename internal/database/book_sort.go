@@ -1,5 +1,5 @@
 // file: internal/database/book_sort.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c1f7a52-9d84-4e6b-b0a7-2f5c8e1d4a93
 // last-edited: 2026-08-25
 //
@@ -167,6 +167,25 @@ var bookSortComparators = map[string]func(a, b *Book) int{
 func CanSortBooksBy(field string) bool {
 	_, ok := bookSortComparators[field]
 	return ok
+}
+
+// SortableBookFields returns every key SortBooks understands, sorted for a
+// stable iteration order.
+//
+// Exported for tests that must cover the WHOLE set rather than a list someone
+// maintains by hand. A hand-listed set is how 13 of these keys shipped
+// ordering nothing: the fields were sortable in principle, nothing asserted
+// each one actually ordered anything end to end, and the two tests that looked
+// like they covered sorting checked stability and permutation -- properties an
+// all-equal comparator satisfies perfectly. Enumerating from the map means a
+// comparator added without a working path fails on arrival.
+func SortableBookFields() []string {
+	out := make([]string, 0, len(bookSortComparators))
+	for field := range bookSortComparators {
+		out = append(out, field)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SortBooks orders books in place by field.
