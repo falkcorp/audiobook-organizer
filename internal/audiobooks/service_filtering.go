@@ -18,136 +18,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// sortFieldMap maps sort keys to comparison functions.
-// Each function returns <0 if a<b, 0 if equal, >0 if a>b.
-var sortFieldMap = map[string]func(a, b *database.Book) int{
-	"title": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(a.Title), strings.ToLower(b.Title))
-	},
-	"author": func(a, b *database.Book) int {
-		an := ""
-		bn := ""
-		if a.Author != nil {
-			an = a.Author.Name
-		}
-		if b.Author != nil {
-			bn = b.Author.Name
-		}
-		return strings.Compare(strings.ToLower(an), strings.ToLower(bn))
-	},
-	"narrator": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.Narrator)), strings.ToLower(derefStr(b.Narrator)))
-	},
-	"series": func(a, b *database.Book) int {
-		an := ""
-		bn := ""
-		if a.Series != nil {
-			an = a.Series.Name
-		}
-		if b.Series != nil {
-			bn = b.Series.Name
-		}
-		return strings.Compare(strings.ToLower(an), strings.ToLower(bn))
-	},
-	"genre": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.Genre)), strings.ToLower(derefStr(b.Genre)))
-	},
-	"year": func(a, b *database.Book) int {
-		ay := derefInt(a.AudiobookReleaseYear)
-		by := derefInt(b.AudiobookReleaseYear)
-		if ay == 0 {
-			ay = derefInt(a.PrintYear)
-		}
-		if by == 0 {
-			by = derefInt(b.PrintYear)
-		}
-		return ay - by
-	},
-	"language": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.Language)), strings.ToLower(derefStr(b.Language)))
-	},
-	"publisher": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.Publisher)), strings.ToLower(derefStr(b.Publisher)))
-	},
-	"format": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(a.Format), strings.ToLower(b.Format))
-	},
-	"duration": func(a, b *database.Book) int {
-		return derefInt(a.Duration) - derefInt(b.Duration)
-	},
-	"bitrate": func(a, b *database.Book) int {
-		return derefInt(a.Bitrate) - derefInt(b.Bitrate)
-	},
-	"file_size": func(a, b *database.Book) int {
-		diff := derefInt64(a.FileSize) - derefInt64(b.FileSize)
-		if diff < 0 {
-			return -1
-		}
-		if diff > 0 {
-			return 1
-		}
-		return 0
-	},
-	"codec": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.Codec)), strings.ToLower(derefStr(b.Codec)))
-	},
-	"created_at": func(a, b *database.Book) int {
-		return cmpTime(a.CreatedAt, b.CreatedAt)
-	},
-	"updated_at": func(a, b *database.Book) int {
-		return cmpTime(a.UpdatedAt, b.UpdatedAt)
-	},
-	"library_state": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.LibraryState)), strings.ToLower(derefStr(b.LibraryState)))
-	},
-	"quality": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.Quality)), strings.ToLower(derefStr(b.Quality)))
-	},
-	"edition": func(a, b *database.Book) int {
-		return strings.Compare(strings.ToLower(derefStr(a.Edition)), strings.ToLower(derefStr(b.Edition)))
-	},
-	// Aliases for frontend field names (e.g. SortField enum uses suffixed variants)
-	"duration_seconds": func(a, b *database.Book) int {
-		return derefInt(a.Duration) - derefInt(b.Duration)
-	},
-	"bitrate_kbps": func(a, b *database.Book) int {
-		return derefInt(a.Bitrate) - derefInt(b.Bitrate)
-	},
-	"file_size_bytes": func(a, b *database.Book) int {
-		diff := derefInt64(a.FileSize) - derefInt64(b.FileSize)
-		if diff < 0 {
-			return -1
-		}
-		if diff > 0 {
-			return 1
-		}
-		return 0
-	},
-	"sample_rate_hz": func(a, b *database.Book) int {
-		return derefInt(a.SampleRate) - derefInt(b.SampleRate)
-	},
-}
-
-// applySorting sorts a slice of books in-place based on the filter's SortBy and SortOrder.
+// applySorting sorts a slice of books in-place based on the filter's SortBy
+// and SortOrder.
+//
+// The ordering rule itself lives in database.SortBooks, which is also what the
+// memdb sorted indexes are built from. It used to live here as a private
+// sortFieldMap kept in step with the indexes by a comment; it was not in step
+// (unknown values sorted first here and last there). Delegating means the
+// pushdown and materialise paths cannot disagree, because there is only one
+// rule to disagree with.
 func applySorting(books []database.Book, f ListFilters) {
 	if f.SortBy == "" {
 		return
 	}
-	cmpFn, ok := sortFieldMap[f.SortBy]
-	if !ok {
-		return
-	}
-	sort.SliceStable(books, func(i, j int) bool {
-		result := cmpFn(&books[i], &books[j])
-		if result == 0 {
-			// Tiebreaker: sort by ID for stable ordering
-			result = strings.Compare(books[i].ID, books[j].ID)
-		}
-		if f.SortOrder == "desc" {
-			return result > 0
-		}
-		return result < 0
-	})
+	database.SortBooks(books, f.SortBy, f.SortOrder != "desc")
 }
 
 // paginateFilteredBooks slices books to the given offset/limit window.
