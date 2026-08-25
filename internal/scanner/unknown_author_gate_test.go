@@ -1,14 +1,17 @@
 // file: internal/scanner/unknown_author_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d9a5f71-2e84-4c06-b1f3-6a05e97c2db4
 // last-edited: 2026-08-25
 
 package scanner
 
 import (
+	"context"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,4 +102,99 @@ func TestLookupPlaceholderAuthorIDFindsAnExistingRow(t *testing.T) {
 	got := lookupPlaceholderAuthorID()
 	require.NotNil(t, got, "the placeholder author exists but the lookup did not find it")
 	require.Equal(t, created.ID, *got)
+}
+
+// TestScanNominatesABookWhoseOnlyAuthorIsThePlaceholder covers the GATE CALL
+// SITE, which the unit tests above cannot reach.
+//
+// rowHasRealAuthor passing its own table proves nothing about whether
+// ProcessBooksParallel actually consults it: a mutant restoring the old inline
+// `dbExisting.AuthorID != nil && *dbExisting.AuthorID != 0` check leaves every
+// unit test in this file green. That is the same failure this package already
+// shipped once, on the AI-enqueue test, and it is why this test exists.
+func TestScanNominatesABookWhoseOnlyAuthorIsThePlaceholder(t *testing.T) {
+	SetScanner(nil)
+	t.Cleanup(func() { SetScanner(nil) })
+
+	store, cleanup := setupPebbleStore(t)
+	defer cleanup()
+	origStore := database.GetGlobalStore()
+	database.SetGlobalStore(store)
+	SetStore(store)
+	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+
+	oldExts := config.AppConfig.SupportedExtensions
+	oldAI := config.AppConfig.EnableAIParsing
+	oldBackend := config.AppConfig.AIBackend
+	t.Cleanup(func() {
+		config.AppConfig.SupportedExtensions = oldExts
+		config.AppConfig.EnableAIParsing = oldAI
+		config.AppConfig.AIBackend = oldBackend
+	})
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	config.AppConfig.EnableAIParsing = true
+	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
+	config.AppConfig.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
+	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+
+	dir := t.TempDir()
+	segs := writeSegments(t, dir, "placeholder-authored.mp3", "really-authored.mp3")
+
+	oldSaver := saveBook
+	t.Cleanup(func() { saveBook = oldSaver })
+	saveBook = func(_ context.Context, book *Book) error {
+		if existing, err := store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
+			return nil
+		}
+		_, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
+		return err
+	}
+
+	// The book under test: a title, and an author that is ONLY the placeholder.
+	placeholderID, err := resolveAuthorID(authorname.Placeholder)
+	require.NoError(t, err)
+	require.NotNil(t, placeholderID)
+	_, err = store.CreateBook(&database.Book{
+		FilePath: segs[0],
+		Title:    "A Book Whose Author Is Unknown",
+		AuthorID: placeholderID,
+	})
+	require.NoError(t, err)
+
+	// The KNOWN-GOOD TWIN: a real author, which must still close the gate. Without
+	// it, a mutant that nominates every book would pass the assertion below.
+	realID, err := resolveAuthorID("Terry Pratchett")
+	require.NoError(t, err)
+	require.NotNil(t, realID)
+	require.NotEqual(t, *placeholderID, *realID, "the fixture cannot distinguish the two authors")
+	_, err = store.CreateBook(&database.Book{
+		FilePath: segs[1],
+		Title:    "A Book With A Real Author",
+		AuthorID: realID,
+	})
+	require.NoError(t, err)
+
+	var queued []AIParseCandidate
+	withEnqueueHook(t, func(_ context.Context, batch []AIParseCandidate) error {
+		queued = append(queued, batch...)
+		return nil
+	})
+
+	books := []Book{
+		{FilePath: segs[0], Format: ".mp3", Title: "A Book Whose Author Is Unknown"},
+		{FilePath: segs[1], Format: ".mp3", Title: "A Book With A Real Author", Author: "Terry Pratchett"},
+	}
+	require.NoError(t, ProcessBooksParallel(t.Context(), books, 1, nil, nil))
+
+	paths := make(map[string]bool, len(queued))
+	for _, c := range queued {
+		paths[c.FilePath] = true
+	}
+
+	require.Truef(t, paths[segs[0]],
+		"the book whose only author is the placeholder was NOT nominated for AI parsing; "+
+			"it is permanently unhealable. queued=%v", paths)
+	require.Falsef(t, paths[segs[1]],
+		"the book with a real author WAS nominated, so the assertion above proves nothing -- "+
+			"this scan nominates everything. queued=%v", paths)
 }
