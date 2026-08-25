@@ -1,5 +1,35 @@
-- [ ] **Decide whether `POST /import/file`'s `organize` flag should be wired or
-      removed.** The web UI offers "Organize into library after import" as a
+- [x] **Decide whether `POST /import/file`'s `organize` flag should be wired or
+      removed.** Decided 2026-08-25: **wired**, option (1), with the blast
+      radius handled rather than accepted. The user made the call on the one
+      sub-decision the code could not: the flag is honored on its own and is
+      **not** ANDed with `auto_organize` (prod has `auto_organize=false`, so
+      ANDing would have made an explicitly-ticked checkbox silently do nothing
+      — this same bug wearing a different condition), and the checkbox now
+      **defaults OFF** so no import moves files unless someone chose it.
+      Honored by enqueueing `library.organize` with `BookIDs=[created.ID]`
+      rather than calling `PerformOrganize` inline, so it inherits the op's
+      ConcurrencyKey, cancellation, timeout and permission checks; the ID (not
+      a path) satisfies the `os.Rename` warning below.
+
+      ⚠️ **The wiring alone would have been INERT, and this is the part worth
+      keeping.** `FilterBooksNeedingOrganization`
+      (`internal/organizer/service.go:689-696`) drops any book whose `FilePath`
+      is outside `RootDir` and which has **zero `book_files` rows**, counting
+      it into `skippedMissingFiles` behind a `log.Debug`. An imported file is
+      outside `RootDir` by definition — that is what importing means. And
+      `internal/importer` created no `book_file` rows at all: `CreateBookFile`
+      was not on `importBookStore`, so no call site could exist to look broken.
+      An imported book therefore had a row, and audio on disk, and nothing
+      connecting the two — which also means no route to playback, not just no
+      organize. Fixed in the same PR. Verified the filter is on the live path
+      (`PerformOrganize:334` calls it), and confirmed with another lane that
+      this is a **separate defect** from the scanner-path `book_file`
+      regression (that one has a hard Aug 14 boundary and an all-scan sample;
+      this one is structural and presumably always existed).
+
+      Lesson worth carrying: a feature can be inert because of a missing row
+      three packages away, and every test that asserts "the op was enqueued"
+      passes anyway. The original UI offering was:
       checkbox that **defaults to on** (`web/src/pages/Library.tsx:377`,
       `useState(true)`), sends it on every import including bulk ones
       (`Library.tsx:939` maps `api.importFile(path, importFileOrganize)` over

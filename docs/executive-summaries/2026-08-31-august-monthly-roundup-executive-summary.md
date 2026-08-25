@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.21.0 -->
+<!-- version: 1.22.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -1289,6 +1289,48 @@ used to check the result quietly repaired the damage before looking. It was rewr
 observe the damage where it actually shows: in the filter menu. Five other checks caught
 their faults the first time.
 
+## 30. A checkbox that promised to file your books away (Aug 25)
+
+The import screen offers a box: "Organize into library after import." It was ticked by
+default. Ticking it sent the instruction to the server, the server read the instruction,
+and then discarded it. The import succeeded, a success message appeared, and the file
+stayed exactly where it was. Nobody was told. Anyone who imported a book on the
+assumption it had been filed away would have found it, eventually, wherever they left it.
+
+Making the box work turned out to be the smaller half of the job. Underneath it sat a
+second problem that would have made the fix look like it worked while doing nothing at
+all.
+
+When a book is added to the library, the system records two things: the book, and the
+link between that book and the audio file it plays. Books added by scanning a folder get
+both. Books added by file import got only the first. The audio was on disk, the book was
+in the library, and nothing joined them. That link is what everything downstream follows
+— playback, the file list, and the organizing pass itself. The organizing pass skips any
+book it cannot see a file for, silently, because a book with no known files is not
+something it can safely move.
+
+So an imported book was, in the one respect that mattered here, invisible to the feature
+being fixed. Wiring the checkbox would have produced a system that accepted the
+instruction, started a real organizing job, reported a job number, and organized nothing
+— a more convincing version of the same failure. Both halves are fixed together, because
+either alone is still a promise not kept.
+
+The missing link was not a line of code someone deleted. The import code had never been
+given the ability to create that link in the first place: the capability simply was not
+among the things it was allowed to do. That is why it never looked broken to anyone
+reading it. There was no failed attempt to notice, no error to log, and nothing in the
+file that a reviewer could point at and call wrong. The absence was the bug.
+
+A related fault in the scanning path, with the same symptom and a different cause, was
+found the same morning by separate work and is being fixed separately. They are genuinely
+two bugs, and it was worth the ten minutes spent confirming that rather than assuming one
+explanation covered both.
+
+One deliberate change of default came with this. Because the box now really does move
+files on disk, it no longer starts ticked. The setting on this library has automatic
+organizing switched off, and a box that arrives pre-ticked is not a choice anyone made.
+Organizing on import is now something you opt into.
+
 ## Themes worth carrying into next month
 
 1. **A silent fallback is worse than a loud failure.** The transcription outage, the
@@ -1332,3 +1374,12 @@ their faults the first time.
    sorted. The useful habit is to ask, of any test, what a do-nothing implementation would
    do to it. If the answer is "pass", the test is describing something other than the thing
    that matters.
+7. **A feature can be inert because of a missing row three packages away.** The import
+   checkbox on 25 August would have passed every test written for it — the instruction was
+   read, the job was started, the job number was returned — while organizing nothing,
+   because the book it named was missing a link that a different part of the system was
+   responsible for creating. The tests that would naturally be written for "does the
+   checkbox work" all ask about the near end of the chain. None of them ask whether the
+   far end can act on what arrives. This is the counterpart to theme 6: there the test
+   asked a question the bug answered correctly; here the test asked the right question of
+   the wrong component.
