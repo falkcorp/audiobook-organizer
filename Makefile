@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.24.0
+# version: 2.25.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-24
+# last-edited: 2026-08-25
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -340,13 +340,25 @@ mocks-check:
 ## mutation. Do not reintroduce this target; add cases to mocks-check instead.
 
 ## staticcheck: Run staticcheck (install: go install honnef.co/go/tools/cmd/staticcheck@latest)
+#
+# This used to SKIP with "staticcheck not installed" and let `make ci` continue,
+# which meant the gate reported green on every machine that lacked the binary --
+# indistinguishable, from the output, from a machine where it ran and passed.
+# Three findings sat on main behind that skip. staticcheck is not run by the PR
+# workflows either (ci.yml's go-lint job runs golangci-lint), so `make ci` is the
+# only place it gates a change before merge: a silent skip here is a silent skip
+# everywhere. Now it fails, the way oplint/sdkguard/fmt-check already do.
 staticcheck:
-	@echo "==> Running staticcheck..."
-	@if command -v staticcheck >/dev/null 2>&1; then \
-		staticcheck ./... && echo "==> staticcheck passed."; \
-	else \
-		echo "==> staticcheck not installed, skipping."; \
+	@echo "🔍 Running staticcheck..."
+	@if ! command -v staticcheck >/dev/null 2>&1; then \
+		echo "❌ staticcheck is not installed, and this gate must not report green without running."; \
+		echo ""; \
+		echo "Install it with:"; \
+		echo "  go install honnef.co/go/tools/cmd/staticcheck@latest"; \
+		exit 1; \
 	fi
+	@staticcheck ./...
+	@echo "✅ staticcheck passed"
 
 ## oplint: Run plugin import lint
 oplint:
