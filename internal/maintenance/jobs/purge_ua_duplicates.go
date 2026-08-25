@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
@@ -70,7 +71,7 @@ func (j *purgeUADuplicatesJob) Run(ctx context.Context, store maintenance.JobSto
 	if root == "" {
 		return fmt.Errorf("purge-unknown-author-duplicates: RootDir not configured")
 	}
-	uaPrefix := filepath.Join(root, "Unknown Author") + string(filepath.Separator)
+	uaPrefix := filepath.Join(root, authorname.Placeholder) + string(filepath.Separator)
 
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {

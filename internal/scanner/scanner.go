@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/dhowden/tag"
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -1124,6 +1125,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// the two paths cannot drift apart.
 	aiParser, aiEnabled := newAIParser(scanLog)
 
+	// Resolved once here rather than per book: the nomination gate runs inside
+	// the worker loop and this would otherwise be an extra store read for every
+	// book in the library. nil means the placeholder author has never been
+	// created in this database, in which case no row can point at it and the
+	// gate needs no exception.
+	placeholderAuthorID := lookupPlaceholderAuthorID()
+
 	// Track books needing AI parsing for batch processing
 	var aiCandidates []int
 	var aiCandidatesMu sync.Mutex
@@ -1412,7 +1420,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				needsAI := true
 				if getStore() != nil {
 					if dbExisting, dbErr := getStore().GetBookByFilePath(books[idx].FilePath); dbErr == nil && dbExisting != nil {
-						if dbExisting.Title != "" && dbExisting.AuthorID != nil && *dbExisting.AuthorID != 0 {
+						// The placeholder is a real author row with a real,
+						// non-zero ID, so the bare non-nil check below used to
+						// pass for a book whose author is precisely unknown --
+						// which is the one case AI parsing exists to fix.
+						if dbExisting.Title != "" && rowHasRealAuthor(dbExisting.AuthorID, placeholderAuthorID) {
 							needsAI = false
 						}
 					}
@@ -1641,6 +1653,25 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 // extractInfoFromPath tries to extract author and title information from the file path
 func extractInfoFromPath(book *Book) {
+	// The organizer files a book with no resolvable author under a placeholder
+	// directory, and its naming scheme puts the author in the filename too --
+	// so an organized authorless book is literally named
+	// "<title> - Unknown Author.mp3". Parsing that back out launders the
+	// system's own "I don't know" into an author indistinguishable from one a
+	// human supplied, and the resulting non-nil AuthorID then closes the AI
+	// nomination gate below, so the book can never be re-parsed. Measured on
+	// production 2026-08-25: 3,407 books sat behind that closed gate.
+	//
+	// Cleared on a defer rather than at each assignment because this function
+	// returns from several branches; a guard per branch is one a future branch
+	// can miss. The title half of the parse is still wanted, so only the author
+	// is dropped.
+	defer func() {
+		if authorname.IsPlaceholder(book.Author) {
+			book.Author = ""
+		}
+	}()
+
 	path := book.FilePath
 
 	// Remove the extension
@@ -3076,6 +3107,41 @@ func nullablePtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// lookupPlaceholderAuthorID resolves the placeholder author's row ID, or nil if
+// this database has never had to create one.
+//
+// It deliberately does NOT create the row. Creating it here would mint the very
+// row the gate is trying to treat as absent, on any database that had so far
+// avoided it.
+func lookupPlaceholderAuthorID() *int {
+	store := getStore()
+	if store == nil {
+		return nil
+	}
+	author, err := store.GetAuthorByName(authorname.Placeholder)
+	if err != nil || author == nil {
+		return nil
+	}
+	id := author.ID
+	return &id
+}
+
+// rowHasRealAuthor reports whether a book row's scalar author is one that makes
+// AI parsing pointless. The placeholder does not count: a book filed under it is
+// exactly a book whose author still needs resolving.
+//
+// placeholderID may be nil, meaning this database has no placeholder author row
+// and every non-zero ID is therefore a real one.
+func rowHasRealAuthor(authorID *int, placeholderID *int) bool {
+	if authorID == nil || *authorID == 0 {
+		return false
+	}
+	if placeholderID != nil && *placeholderID == *authorID {
+		return false
+	}
+	return true
 }
 
 func resolveAuthorID(authorName string) (*int, error) {
