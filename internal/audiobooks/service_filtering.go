@@ -977,8 +977,19 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		MarkedForDeletion:  markedForDeletion,
 		Predicate:          predicate,
 	}
-	if f.SortBy == "title" {
-		bsf.SortBy = "title"
+	// Hand the store the sort whenever it can honor it, not just for title.
+	// The store chooses the page from the ORDERED match set; we cannot, because
+	// what comes back is []BookSummary and BookSummary drops most sortable
+	// fields (author, series, year, genre, language, publisher, codec, quality,
+	// edition, bitrate, sample_rate). Sorting those here compares "" to "" on
+	// every row and silently returns the input order — measured at 13 of the 23
+	// keys in bookSortComparators before this changed. See
+	// docs/audits/2026-08-25-author-series-sort-degenerate.md.
+	//
+	// Gating on "title" alone meant the store was never even told which sort
+	// was requested, so its own ordered path could not run.
+	if database.CanSortBooksBy(f.SortBy) {
+		bsf.SortBy = f.SortBy
 		bsf.SortAscending = sortAsc
 	}
 	return bsf, true, pebbleLookupsPtr

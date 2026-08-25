@@ -288,13 +288,26 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					hasPostFilters = false
 					if heavySorting {
 						// The fetch above returned the full filtered set,
-						// unpaginated and unsorted (pdLimit/pdOffset were
-						// zeroed). Sort it now, then paginate ourselves —
-						// mirrors the title-sort branch's filter-then-sort-
-						// then-paginate semantics. alreadySortedAndPaginated
-						// skips the redundant trailing applySorting call
-						// below.
-						applySorting(books, f)
+						// unpaginated (pdLimit/pdOffset were zeroed) — but
+						// ALREADY ORDERED whenever bsf carried the sort, which
+						// is every key database.CanSortBooksBy accepts.
+						//
+						// Re-sorting an ordered set here does not merely waste
+						// work, it CORRUPTS it. applySorting breaks ties on
+						// book ID, and every comparator for a field that
+						// BookSummary drops (author, series, year, genre,
+						// language, publisher, codec, quality, edition,
+						// bitrate, sample_rate) reads "" on every row of
+						// bookSummariesToBooks output — so every pair ties and
+						// the tiebreaker rewrites the store's correct answer
+						// into ID order. That is how "sort by author" returned
+						// books in insertion order with a 200 and no error
+						// surface. Measured: 13 of the 23 keys in
+						// bookSortComparators. See
+						// docs/audits/2026-08-25-author-series-sort-degenerate.md.
+						if bsf.SortBy == "" {
+							applySorting(books, f)
+						}
 						books = paginateFilteredBooks(books, limit, offset)
 						alreadySortedAndPaginated = true
 					}
