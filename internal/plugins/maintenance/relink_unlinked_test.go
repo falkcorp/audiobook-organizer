@@ -6,6 +6,7 @@
 package maintenance
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -13,8 +14,14 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 )
 
-// TestRelinkOne_Directory_CreatesEveryTrackAndAggregatesOnce covers relinkOne's
+// TestRelinkOne_Directory_CreatesEveryTrackAndSumsTheBook covers relinkOne's
 // multi-file path, which had no test at all before the batch conversion.
+//
+// RENAMED 2026-08-24. This was called "...AndAggregatesOnce", which it never
+// checked — MEASURED: it passes unchanged against a per-row implementation that
+// recomputes three times. The name asserted a property the body did not test,
+// which is worse than no test, because it reads as covered. The "once" claim now
+// lives in TestRelinkOne_Directory_UsesTheBatchPath, which fails on that mutant.
 //
 // It creates one book_file per audio file in the folder and, because those rows
 // are now written as one batch, re-adds the book's totals once rather than once
@@ -25,7 +32,7 @@ import (
 // duration at 0 on purpose — seeding the book's total onto every track would
 // multiply the runtime by the track count — so maintenance.duration-backfill
 // fills it in later.
-func TestRelinkOne_Directory_CreatesEveryTrackAndAggregatesOnce(t *testing.T) {
+func TestRelinkOne_Directory_CreatesEveryTrackAndSumsTheBook(t *testing.T) {
 	s, err := database.NewPebbleStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
@@ -143,5 +150,93 @@ func TestRelinkOne_Directory_SkipsABookThatAlreadyOwnsFiles(t *testing.T) {
 	}
 	if len(stored) != len(files) {
 		t.Fatalf("stored rows = %d, want %d — re-running the repair duplicated rows", len(stored), len(files))
+	}
+}
+
+// TestRelinkOne_Directory_UsesTheBatchPath pins the thing this lane exists to
+// protect, and that the two tests above do NOT protect.
+//
+// MEASURED: reverting relinkOne's directory branch to the old per-row
+// createBookFileFor loop leaves BOTH of the tests above green. They assert the
+// rows exist and that the book's FileSize equals their sum — and a per-row loop
+// produces exactly the same rows and exactly the same sum, just at 3 aggregate
+// recomputes instead of 1. The test literally named "...AndAggregatesOnce" never
+// checked "once". The only observable that separates the two implementations is
+// WHICH store method the call site reaches, so that is what this asserts.
+//
+// ⚠️ BatchCreateBookFilesFunc MUST be set. database.MockStore's
+// BatchCreateBookFiles falls back to looping CreateBookFileFunc per row when the
+// batch hook is nil — the mock IMPLEMENTS the regression shape — so a version of
+// this test that left it unset would be blind by construction and pass either way.
+func TestRelinkOne_Directory_UsesTheBatchPath(t *testing.T) {
+	files := []string{"Chapter 01.mp3", "Chapter 02.mp3", "Chapter 03.mp3"}
+	dir := makeFolder(t, files...)
+
+	var batches [][]*database.BookFile
+	store := &database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			return &database.Book{ID: id, Title: "Batched Book", FilePath: dir}, nil
+		},
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) { return nil, nil },
+		CreateBookFileFunc: func(*database.BookFile) error {
+			t.Error("relinkOne called CreateBookFile per row — the aggregate coalescing regressed")
+			return nil
+		},
+		BatchCreateBookFilesFunc: func(f []*database.BookFile) error {
+			batches = append(batches, f)
+			return nil
+		},
+	}
+
+	n, err := relinkOne(store, linkintegrity.Finding{
+		BookID: "book-1", FilePath: dir, Shape: linkintegrity.ShapeDirectory,
+	})
+	if err != nil {
+		t.Fatalf("relinkOne: %v", err)
+	}
+	if n != len(files) {
+		t.Fatalf("created = %d, want %d", n, len(files))
+	}
+	if len(batches) != 1 {
+		t.Fatalf("BatchCreateBookFiles called %d times, want exactly 1 for one book", len(batches))
+	}
+	if len(batches[0]) != len(files) {
+		t.Fatalf("batch carried %d rows, want %d — every track must go in the SAME batch",
+			len(batches[0]), len(files))
+	}
+}
+
+// TestRelinkOne_Directory_ReportsZeroWhenTheBatchFails pins behaviour this lane
+// newly introduced and left untested.
+//
+// The old per-row loop could return a partial count. The batch is atomic, so a
+// failure means NOTHING was written and the honest answer is 0 — the count feeds
+// the op's reported repair total, so returning len(bfs) here would inflate it
+// with rows that do not exist.
+func TestRelinkOne_Directory_ReportsZeroWhenTheBatchFails(t *testing.T) {
+	dir := makeFolder(t, "Chapter 01.mp3", "Chapter 02.mp3")
+
+	store := &database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			return &database.Book{ID: id, Title: "Doomed", FilePath: dir}, nil
+		},
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) { return nil, nil },
+		CreateBookFileFunc: func(*database.BookFile) error {
+			t.Error("relinkOne fell back to per-row creation on batch failure")
+			return nil
+		},
+		BatchCreateBookFilesFunc: func([]*database.BookFile) error {
+			return errors.New("injected batch failure")
+		},
+	}
+
+	n, err := relinkOne(store, linkintegrity.Finding{
+		BookID: "book-1", FilePath: dir, Shape: linkintegrity.ShapeDirectory,
+	})
+	if err == nil {
+		t.Fatal("a failed batch must surface as an error")
+	}
+	if n != 0 {
+		t.Fatalf("created = %d, want 0 — the batch is atomic, so nothing was written", n)
 	}
 }
