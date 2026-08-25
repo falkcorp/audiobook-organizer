@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-08-25
 
@@ -139,6 +139,24 @@ type ImportFileResponse struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	FilePath string `json:"file_path"`
+	// AuthorResolved reports whether this import produced a book with a usable
+	// author. It is not decoration: organizer.FilterBooksNeedingOrganization
+	// DEFERS any book for which HasResolvedAuthor is false
+	// (internal/organizer/service.go:715, internal/organizer/organizer.go:404),
+	// because renaming an author-less book would bake the placeholder into its
+	// path -- the 2026-08-11 mass-reorganize mechanism.
+	//
+	// The HTTP layer uses this to decline an organize up front rather than
+	// queue an op that is structurally guaranteed to skip the book and then
+	// report success. Without it, organize-on-import stayed silently inert for
+	// untagged files even after the book_file gate below was closed -- two
+	// gates, and closing one is not closing the other.
+	//
+	// This reports a FACT this function computed (did the book get an author),
+	// not a re-implementation of the organizer's rule. If the two ever diverge
+	// the failure is a queued op that defers, i.e. the old behavior, not
+	// something worse.
+	AuthorResolved bool `json:"author_resolved"`
 }
 
 func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse, error) {
@@ -288,10 +306,14 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// Give the imported book its book_file row.
 	//
 	// Without this the book row exists and the audio exists and NOTHING
-	// CONNECTS THEM. Nine packages create book_file rows — merge, maintenance,
-	// organizer, itunes, metafetch, and the scan path via
-	// server.ensureSingleFileBookFile — and this one did not. The capability
-	// was not even in importBookStore, so it could not have.
+	// CONNECTS THEM. Every other path that ingests audio creates book_file
+	// rows — merge, itunes, metafetch, organizer, both maintenance packages,
+	// and the scan path via server.ensureSingleFileBookFile — and this one did
+	// not. The capability was not even in importBookStore, so it could not have.
+	//
+	// (An earlier draft said "nine packages". Measured: seven, before this
+	// change added the eighth. The count was never load-bearing, so it is now a
+	// list that can be checked rather than a number that quietly rots.)
 	//
 	// The immediate consequence was that organize-on-import is INERT:
 	// FilterBooksNeedingOrganization (organizer/service.go:689-696) drops any
@@ -366,9 +388,10 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	}
 
 	return &ImportFileResponse{
-		ID:       created.ID,
-		Title:    created.Title,
-		FilePath: created.FilePath,
+		ID:             created.ID,
+		Title:          created.Title,
+		FilePath:       created.FilePath,
+		AuthorResolved: created.AuthorID != nil || created.Author != nil,
 	}, nil
 }
 

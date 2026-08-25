@@ -1,5 +1,5 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
 // last-edited: 2026-08-25
 
@@ -396,7 +396,7 @@ func (h *FilesystemHandler) ImportFile(c *gin.Context) {
 	// them would make an explicitly-ticked checkbox silently do nothing: this
 	// same bug wearing a different condition.
 	resp := gin.H{"id": result.ID, "title": result.Title, "file_path": result.FilePath}
-	if opID, skipped := h.enqueueImportOrganize(c, result.ID); skipped != "" {
+	if opID, skipped := h.enqueueImportOrganize(c, result.ID, result.AuthorResolved); skipped != "" {
 		resp["organize_skipped"] = skipped
 	} else {
 		resp["organize_operation_id"] = opID
@@ -416,7 +416,22 @@ func (h *FilesystemHandler) ImportFile(c *gin.Context) {
 // folder-create path above. A nil enqueuer and a failed enqueue mean the same
 // thing here — the import succeeded, the organize did not happen — and both are
 // reported rather than inferred.
-func (h *FilesystemHandler) enqueueImportOrganize(c *gin.Context, bookID string) (string, string) {
+func (h *FilesystemHandler) enqueueImportOrganize(c *gin.Context, bookID string, authorResolved bool) (string, string) {
+	if !authorResolved {
+		// The SECOND gate, and the one that kept organize-on-import inert for
+		// untagged files even after the book_file gate was closed.
+		// FilterBooksNeedingOrganization defers any book whose author does not
+		// resolve (internal/organizer/service.go:715) rather than baking the
+		// placeholder into its path -- the 2026-08-11 mass-reorganize
+		// mechanism. That deferral is CORRECT; queueing an op that is
+		// guaranteed to hit it, and then reporting an op id for it, is not.
+		//
+		// Declining here is the same contract as the guards below: the import
+		// succeeded, the organize did not, and the caller is told which.
+		slog.Warn("import: organize requested but the book has no resolved author; organize would defer it",
+			"book_id", bookID)
+		return "", "book has no resolved author — fetch metadata first, then organize"
+	}
 	if h.rootDir == "" {
 		// organizer.ensureUnderRoot already fails closed on an empty root
 		// (filepath.Clean("") is ".", which no generated relative path
@@ -437,6 +452,16 @@ func (h *FilesystemHandler) enqueueImportOrganize(c *gin.Context, bookID string)
 		slog.Warn("import: organize enqueue failed; the book was imported but not organized",
 			"book_id", bookID, "err", err)
 		return "", "enqueue failed"
+	}
+	if opID == "" {
+		// EnqueueOp returns ("", nil) for a Batchable def, whose id is assigned
+		// at flush time (internal/operations/registry/registry.go:621).
+		// library.organize is not Batchable today, so this cannot fire -- but
+		// this handler's whole contract is "never advertise an organize that
+		// did not happen", and an empty organize_operation_id would do exactly
+		// that if the def ever gained the flag.
+		slog.Warn("import: organize enqueued with no op id; not advertising one", "book_id", bookID)
+		return "", "organize queued without a trackable id"
 	}
 	return opID, ""
 }

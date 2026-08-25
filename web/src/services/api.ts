@@ -2575,7 +2575,27 @@ export async function moveSegments(
 }
 
 // File Import
-export async function importFile(filePath: string, organize = false): Promise<Book> {
+
+/**
+ * What POST /import/file actually returns. The server sends id/title/file_path
+ * plus, when `organize` was requested, EITHER organize_operation_id (queued) OR
+ * organize_skipped (declined, with the reason).
+ *
+ * This used to be typed as plain `Book`, which was an over-claim on the three
+ * fields and — once the server started reporting organize outcomes — silently
+ * discarded them. The server writes three distinct refusal reasons; before this
+ * type existed, no consumer could read any of them, so a declined organize
+ * still showed the caller "Import started successfully."
+ */
+export interface ImportFileResult extends Partial<Book> {
+  id: string;
+  title: string;
+  file_path: string;
+  organize_operation_id?: string;
+  organize_skipped?: string;
+}
+
+export async function importFile(filePath: string, organize = false): Promise<ImportFileResult> {
   const response = await apiFetch(`${API_BASE}/import/file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
