@@ -111,9 +111,48 @@ func (p *PebbleStore) GetAuthorByName(name string) (*Author, error) {
 	return p.GetAuthorByID(id)
 }
 
+// CreateAuthor returns the author with this name, creating it if absent.
+//
+// The lookup and the insert are serialized, because they used to not be and the
+// window was not narrow: measured on 2026-08-25, 24 concurrent calls with an
+// IDENTICAL name produced 24 distinct author rows, reproducibly. The dedup check
+// essentially never observed a concurrent write.
+//
+// That is worse than a few redundant rows. The author:name:<normalized> index maps
+// one name to exactly ONE id, so every duplicate beyond the indexed one is
+// UNREACHABLE by name lookup -- any code resolving a name to an id is then
+// silently working on a different row than the one the books hang off. Production
+// shows the shape already: two rows both named "Unknown Author", one with 0 books
+// and one with 2,128.
+//
+// It bites in normal operation rather than under stress: the scanner resolves
+// authors from inside its worker pool, once per book, so an import that first
+// meets an author across several books at once mints a row per worker.
+//
+// This mirrors reviewMu, which exists in this same store for exactly this failure
+// on review items: concurrent same-key writes duplicating rows.
 func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
-	// Check if author already exists
+	// Fast path: an existing author needs no lock. This is the overwhelmingly
+	// common case -- authors are resolved once per book but created once per
+	// author -- so the lock must not sit on every resolve.
 	existing, err := p.GetAuthorByName(name)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	p.authorMu.Lock()
+	defer p.authorMu.Unlock()
+
+	// Re-check UNDER the lock. This is the entire fix: another goroutine may have
+	// created this author between the fast-path miss above and acquiring the lock,
+	// and without this re-read we would mint a second row for it. GetAuthorByName
+	// reads the author:name index straight from Pebble, so it sees any committed
+	// write; and because UpsertAuthorToMemDB below runs before the lock is
+	// released, a waiter observes both the durable row and the memdb projection.
+	existing, err = p.GetAuthorByName(name)
 	if err != nil {
 		return nil, err
 	}

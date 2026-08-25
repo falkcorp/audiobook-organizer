@@ -108,6 +108,7 @@ type PebbleStore struct {
 	counterMu                sync.Mutex // protects nextID read-modify-write
 	opsMu                    sync.Mutex // serializes v2 op CAS operations (SetOperationV2StatusIfQueued)
 	reviewMu                 sync.Mutex // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
+	authorMu                 sync.Mutex // serializes author creation so concurrent same-name writes can't duplicate rows (pebble_store_authors.go)
 	fileProvMu               sync.Mutex // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
 	opsLogSeq                int64      // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string     // organized library root; set via SetRootDir after config load
