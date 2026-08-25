@@ -21,6 +21,25 @@ checked before a deploy.
       empty there. This is the case unit tests cannot see: they all stub the
       saver, which is exactly how the bug got as far as it did.
 
+- [ ] **Decide what to do about organize running before the parse.** Named as a
+      known regression in the changelog: auto-organize fires when the scan ends,
+      which is now before the queued parsing drains, so a book organized in the
+      same scan is filed using pre-AI metadata. `{series}` is the visible one —
+      the row gets the series, the file stays in a non-series folder, and nothing
+      re-organizes it. Worst on a first import, where every book is a candidate
+      because no row exists yet. The fix is for `library.ai-parse` to re-organize
+      the books it materially changed (`internal/server` already imports
+      organizer, so it can call `OrganizeOneBook` directly) — but that moves
+      files on the strength of an op's output and needs a deliberate decision,
+      not a drive-by.
+
+- [ ] **Two books from one version group in one batch can lose a field.** The
+      saver redirects a demoted row to its group's primary, so two hash-duplicate
+      sources in the same batch have two workers doing a concurrent whole-row
+      read-modify-write on the same primary: last writer wins. Needs row-level
+      serialization. Noted in `ai_batch_phase.go`; narrow enough that it was left
+      unfixed deliberately.
+
 - [ ] **Watch the params row size once.** A batch carries only the seven fields
       the AI phase reads (`aiParseCandidate` strips SegmentFiles/SegmentHashes),
       so 200 books should be tens of KB, not MB. Worth one look at a real op row
