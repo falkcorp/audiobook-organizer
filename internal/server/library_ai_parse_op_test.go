@@ -1,5 +1,5 @@
 // file: internal/server/library_ai_parse_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 32147e60-f02b-47a1-8b05-cf56ca320f50
 // last-edited: 2026-08-24
 
@@ -8,8 +8,11 @@ package server
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -105,8 +108,68 @@ func TestLibraryAIParseOpAcceptsAnEmptyBatchWithoutFailing(t *testing.T) {
 	require.NoError(t, def.Run(context.Background(), []byte(`{"books":[]}`), &aiParseStubReporter{}))
 }
 
-// aiParseStubReporter records nothing; the empty-batch path only calls
-// UpdateProgress.
-type aiParseStubReporter struct{ opsregistry.Reporter }
+// aiParseStubReporter records the progress messages it is given.
+type aiParseStubReporter struct {
+	opsregistry.Reporter
+	mu       sync.Mutex
+	messages []string
+}
 
-func (aiParseStubReporter) UpdateProgress(int, int, string) error { return nil }
+func (r *aiParseStubReporter) UpdateProgress(_, _ int, message string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.messages = append(r.messages, message)
+	return nil
+}
+
+func (r *aiParseStubReporter) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.messages...)
+}
+
+// TestLibraryAIParseOpReportsPerBatchProgressToTheReporter guards the op against
+// the registry watchdog.
+//
+// runAIBatchPhase stamps progress per LLM batch through log.UpdateProgress. If
+// the op hands it a bare logger.New instead of a reporter-backed one, those
+// stamps go to stdout and the registry never sees them -- and the watchdog
+// cancels an op that reports nothing for ProgressTimeout. A 200-book batch is
+// ~10 LLM calls of up to 30s each, comfortably past it. This phase already
+// caused exactly that failure once: it is why library.scan could finish its
+// whole file walk and still be canceled for inactivity.
+//
+// The backend points at a closed port, so the batch fails fast. That is fine --
+// the stamp under test is emitted BEFORE the call, deliberately, for this reason.
+func TestLibraryAIParseOpReportsPerBatchProgressToTheReporter(t *testing.T) {
+	restoreEnqueueHook(t)
+
+	oldAI := config.AppConfig.EnableAIParsing
+	oldBackend := config.AppConfig.AIBackend
+	t.Cleanup(func() {
+		config.AppConfig.EnableAIParsing = oldAI
+		config.AppConfig.AIBackend = oldBackend
+	})
+	config.AppConfig.EnableAIParsing = true
+	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
+	config.AppConfig.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
+	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+
+	reg := aiParseTestReg(t)
+	require.NoError(t, (&Server{opRegistry: reg}).RegisterLibraryAIParseOp(reg))
+	def, ok := reg.Def("library.ai-parse")
+	require.True(t, ok)
+
+	rep := &aiParseStubReporter{}
+	require.NoError(t, def.Run(context.Background(),
+		[]byte(`{"books":[{"FilePath":"/lib/a.m4b"}]}`), rep))
+
+	var sawBatch bool
+	for _, m := range rep.seen() {
+		if strings.Contains(m, "AI parsing batch") {
+			sawBatch = true
+		}
+	}
+	require.True(t, sawBatch,
+		"per-batch progress never reached the reporter; the watchdog will cancel long batches. seen=%v", rep.seen())
+}
