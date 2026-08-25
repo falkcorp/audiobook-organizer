@@ -284,3 +284,140 @@ func TestBatchCreateBookFilesEmptyIsNoop(t *testing.T) {
 	require.Zero(t, countAggregateInvocations(readLogs(), book.ID),
 		"an empty batch must not recompute anything")
 }
+
+// TestBatchCreateBookFilesRefusalLeavesPriorPIDOwnerIntact is the test the
+// original duplicate-PID test could not be.
+//
+// That test's fixture had NO prior committed owner of the PID, so
+// enforceBookFilePIDUniqueness found nothing to transfer and the one path that
+// could break atomicity was never entered. It asserted "a refused batch must
+// write no rows at all" against GetBookFiles(book) — and the leak landed on a
+// DIFFERENT book's row, so that assertion stayed green through the bug.
+//
+// The leak: the PID transfer used to run per row through ClearITunesPID →
+// UpdateBookFile, which commits its own batch and recomputes its own book. Row 0
+// transferred and committed; row 1 tripped the duplicate check; the batch was
+// discarded — and an unrelated book was left with its PID stripped, pointing at a
+// row that never came to exist.
+func TestBatchCreateBookFilesRefusalLeavesPriorPIDOwnerIntact(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	const sharedPID = "PID-SHARED"
+
+	// The bystander: a DIFFERENT book that already owns the PID.
+	bystander, err := store.CreateBook(&Book{Title: "Bystander", FilePath: "/lib/by"})
+	require.NoError(t, err)
+	owned := &BookFile{
+		BookID: bystander.ID, FilePath: "/lib/by/t1.m4b",
+		ITunesPersistentID: sharedPID, Duration: 100, FileSize: 1_000,
+	}
+	require.NoError(t, store.CreateBookFile(owned))
+
+	target, err := store.CreateBook(&Book{Title: "Target", FilePath: "/lib/tg"})
+	require.NoError(t, err)
+
+	readLogs := captureAggregateLogs(t)
+
+	// Two rows sharing the PID: refused. Row 0 would previously have transferred
+	// the PID off the bystander and COMMITTED that before row 1 was rejected.
+	err = store.BatchCreateBookFiles([]*BookFile{
+		{BookID: target.ID, FilePath: "/lib/tg/t1.m4b", ITunesPersistentID: sharedPID, Duration: 200, FileSize: 2_000},
+		{BookID: target.ID, FilePath: "/lib/tg/t2.m4b", ITunesPersistentID: sharedPID, Duration: 300, FileSize: 3_000},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), sharedPID)
+
+	// THE ASSERTION THE OLD FIXTURE COULD NOT MAKE: the bystander is untouched.
+	stillOwned, err := store.GetBookFileByPID(sharedPID)
+	require.NoError(t, err)
+	require.NotNil(t, stillOwned,
+		"the PID was stripped from its prior owner by a batch that then refused — the transfer committed outside the batch")
+	require.Equal(t, owned.ID, stillOwned.ID, "the PID must still resolve to its original row")
+	require.Equal(t, bystander.ID, stillOwned.BookID)
+
+	// And the bystander's book was never recomputed on behalf of a batch that
+	// wrote nothing.
+	require.Zero(t, countAggregateInvocations(readLogs(), bystander.ID),
+		"a refused batch must not recompute an unrelated book's aggregates")
+
+	// The target gained nothing.
+	stored, err := store.GetBookFiles(target.ID)
+	require.NoError(t, err)
+	require.Empty(t, stored, "a refused batch must write no rows at all")
+}
+
+// TestBatchCreateBookFilesTransfersPIDAtomically covers the success path the fix
+// reshaped: the transfer now happens inside the batch rather than through
+// UpdateBookFile's own commit.
+func TestBatchCreateBookFilesTransfersPIDAtomically(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	const movingPID = "PID-MOVES"
+
+	from, err := store.CreateBook(&Book{Title: "From", FilePath: "/lib/fr"})
+	require.NoError(t, err)
+	oldRow := &BookFile{
+		BookID: from.ID, FilePath: "/lib/fr/t1.m4b",
+		ITunesPersistentID: movingPID, Duration: 100, FileSize: 1_000,
+	}
+	require.NoError(t, store.CreateBookFile(oldRow))
+
+	to, err := store.CreateBook(&Book{Title: "To", FilePath: "/lib/to"})
+	require.NoError(t, err)
+
+	readLogs := captureAggregateLogs(t)
+
+	require.NoError(t, store.BatchCreateBookFiles([]*BookFile{
+		{BookID: to.ID, FilePath: "/lib/to/t1.m4b", ITunesPersistentID: movingPID, Duration: 200, FileSize: 2_000},
+	}))
+
+	// The PID now resolves to the new row, exactly once.
+	nowOwned, err := store.GetBookFileByPID(movingPID)
+	require.NoError(t, err)
+	require.NotNil(t, nowOwned)
+	require.Equal(t, to.ID, nowOwned.BookID, "the PID must have transferred to the new owner")
+
+	// The prior row survives, minus the PID.
+	oldStored, err := store.GetBookFiles(from.ID)
+	require.NoError(t, err)
+	require.Len(t, oldStored, 1, "the prior owner's row must not be deleted, only stripped of the PID")
+	require.Empty(t, oldStored[0].ITunesPersistentID)
+
+	// Clearing a PID changes neither Duration nor FileSize, so the prior owner's
+	// book must NOT be recomputed. The old path did recompute it, once per
+	// PID-carrying row, inside the method whose entire purpose is coalescing.
+	logs := readLogs()
+	require.Zero(t, countAggregateInvocations(logs, from.ID),
+		"clearing a PID does not change any aggregate; recomputing the prior owner is pure waste")
+	require.Equal(t, 1, countAggregateInvocations(logs, to.ID),
+		"the receiving book is recomputed exactly once")
+}
+
+// TestBatchCreateBookFilesRefusesEmptyBookID pins that a row belonging to no book
+// is refused rather than silently orphaned.
+//
+// It used to be written under the key "book_file::<id>", invisible to
+// GetBookFiles, counted in no aggregate, and — because the notify was guarded on
+// a non-empty BookID — logged nothing at all. CreateBookFile at least reaches
+// RecomputeBookAggregates("") and warns "book not found, skipping".
+func TestBatchCreateBookFilesRefusesEmptyBookID(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	book, err := store.CreateBook(&Book{Title: "Has Rows", FilePath: "/lib/hr"})
+	require.NoError(t, err)
+
+	err = store.BatchCreateBookFiles([]*BookFile{
+		{BookID: book.ID, FilePath: "/lib/hr/t1.m4b", Duration: 100, FileSize: 1_000},
+		{BookID: "", FilePath: "/lib/hr/orphan.m4b", Duration: 200, FileSize: 2_000},
+	})
+	require.Error(t, err, "a row with no BookID must be refused, not silently orphaned")
+	require.Contains(t, err.Error(), "empty BookID")
+
+	// Refused before anything was staged, so the valid sibling was not written.
+	stored, err := store.GetBookFiles(book.ID)
+	require.NoError(t, err)
+	require.Empty(t, stored, "validation runs before staging, so a refusal writes nothing")
+}
