@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-08-24
 
@@ -62,17 +62,45 @@ type opsFileAndPathReader interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
-// opsBookFileWriter creates, moves and mutates book files.
-type opsBookFileWriter interface {
+// opsBookFileMutator creates and updates book_file rows.
+type opsBookFileMutator interface {
 	BatchUpsertBookFiles(files []*database.BookFile) error
 	CreateBookFile(file *database.BookFile) error
 	BatchCreateBookFiles(files []*database.BookFile) error
-	DeleteBookFile(id string) error
-	DeleteBookFilesByIDs(ids []string) error
-	MoveBookFilesToBook(fileIDs []string, sourceBookID string, targetBookID string) error
-	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error
 	SetBookFileHash(id string, hash string) error
 	UpdateBookFile(id string, file *database.BookFile) error
+}
+
+// opsBookFileDeleter removes book_file rows.
+type opsBookFileDeleter interface {
+	DeleteBookFile(id string) error
+	DeleteBookFilesByIDs(ids []string) error
+}
+
+// opsBookFileMover reassigns book_file rows between books.
+//
+// This is row reassignment, NOT an on-disk move: no file is relocated, only the
+// book a row belongs to changes. Both forms recompute every affected book's
+// aggregates; prefer the bulk one from any loop, because the singular form
+// recomputes both of its books on every call.
+type opsBookFileMover interface {
+	MoveBookFilesToBook(fileIDs []string, sourceBookID string, targetBookID string) error
+	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error
+}
+
+// opsBookFileWriter creates, moves and mutates book files.
+//
+// Split into the three interfaces above on 2026-08-24, when adding
+// MoveBookFilesToBookBulk took it to 9 declared entries and over the
+// interfacebloat limit of 8. The name is retained as their composition so the
+// method set stays byte-identical and no consumer moves — the type checker
+// verifies that, because every implementation fails to compile if a method were
+// dropped or re-signatured in the regrouping. Same shape as the
+// BookFileReader/Writer/Deleter split in internal/database.
+type opsBookFileWriter interface {
+	opsBookFileMutator
+	opsBookFileDeleter
+	opsBookFileMover
 }
 
 // opsAuthorStore reads and mutates authors.
