@@ -822,6 +822,16 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 	//
 	// It also fetched all ~68K summaries before filtering. Filtering during
 	// the walk means only matched rows are ever projected.
+	//
+	// Ordering is a predicate too. When f.SortBy names a sort this store can
+	// satisfy, the page has to be chosen from the ORDERED match set, which
+	// means materialising every match before paginating: the walk is Pebble
+	// key order, so stopping at offset+limit would pick an arbitrary window
+	// and sorting it afterwards yields a convincingly ordered page of the
+	// wrong rows. See the sorted branch below.
+	if CanSortBooksBy(f.SortBy) {
+		return p.sortedSummaryPagePebble(limit, offset, f)
+	}
 	out := make([]BookSummary, 0, summaryPageCap(limit))
 	skipped := 0
 	err := p.walkFilteredBooksPebble(f, func(b *Book) bool {
@@ -840,6 +850,50 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 	return out, nil
 }
 
+// sortedSummaryPagePebble serves the ordered variant of the Pebble fallback:
+// collect every match, order it with the same comparator the memdb indexes
+// and the service layer use, then cut the page.
+//
+// This gives up the early exit the unsorted branch gets, and that cost is the
+// point rather than an oversight. The alternative -- stop at offset+limit in
+// key order, then sort those rows -- is what the light-filter path in
+// AudiobookService.GetAudiobooks used to do to this store's output, and it
+// fails silently: the page is internally well ordered, so nothing downstream
+// can tell it holds an arbitrary slice of the library. A caller that asked
+// for "the 50 oldest books" got 50 books sorted by year that were not the 50
+// oldest, with a 200 and no error surface.
+//
+// Only the degraded path pays for it. When memdb is available
+// GetAllBookSummariesFiltered returns above without reaching here, and that
+// path streams the sort straight off a sorted index.
+func (p *PebbleStore) sortedSummaryPagePebble(limit, offset int, f BookSummaryFilter) ([]BookSummary, error) {
+	matches := make([]Book, 0, 256)
+	if err := p.walkFilteredBooksPebble(f, func(b *Book) bool {
+		// The walker reuses its Book across iterations, so store a copy.
+		matches = append(matches, *b)
+		return true
+	}); err != nil {
+		return nil, err
+	}
+
+	SortBooks(matches, f.SortBy, f.SortAscending)
+
+	if offset >= len(matches) {
+		return []BookSummary{}, nil
+	}
+	end := len(matches)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	page := matches[offset:end]
+
+	out := make([]BookSummary, len(page))
+	for i := range page {
+		out[i] = bookToSummary(&page[i])
+	}
+	return out, nil
+}
+
 // HonorsEveryBookSummaryFilter is a marker declaring that this store applies
 // EVERY predicate on BookSummaryFilter — on both the memdb path and the
 // Pebble fallback — and that its returned page is already paginated against
@@ -853,6 +907,15 @@ func (p *PebbleStore) GetAllBookSummariesFiltered(limit, offset int, f BookSumma
 // subset satisfied that assertion just as well as one that applied
 // everything, and the skipped post-filter pass was the only thing that would
 // have caught it.
+//
+// "EVERY predicate" includes SortBy/SortAscending. They are fields on
+// BookSummaryFilter, so a page in the wrong ORDER breaks this claim exactly
+// as a page with the wrong ROWS does, and the caller skips its own sort on
+// the strength of it. That clause went unhonoured on the Pebble fallback
+// until sortedSummaryPagePebble was added: the marker was written against an
+// enumerated list of row predicates, and ordering was never counted as one of
+// them. If you extend BookSummaryFilter, this marker is a promise you have
+// just widened.
 //
 // Do not add this method to a store that filters partially. Omitting it is
 // safe: the caller falls back to fetching unfiltered and post-filtering
@@ -904,9 +967,18 @@ func summaryPageCap(limit int) int {
 // memdb path rather than only in the fallback.
 //
 // Sorting is NOT applied here — the walk is Pebble key order regardless of
-// f.SortBy, unchanged from the previous fallback. Callers needing an ordered
-// page sort in application memory. See TODO: the fallback silently ignores
-// f.SortBy the same way it used to silently ignore the filters.
+// f.SortBy. This function is shared with the count path, which has no use for
+// an order, so ordering belongs to the row path: see sortedSummaryPagePebble,
+// which collects this walk's output and sorts it before paginating.
+//
+// Do NOT restore the previous instruction to have callers "sort in
+// application memory" instead. That comment stood while
+// HonorsEveryBookSummaryFilter simultaneously told those callers the page was
+// already ordered and paginated, so the one caller it addressed
+// (AudiobookService.GetAudiobooks) skipped its own sort by design and then
+// re-sorted the finished page — producing a well-ordered page of arbitrary
+// rows. An instruction in a comment is not a control; the guarantee has to be
+// enforced where the page is cut.
 func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*Book) bool) error {
 	// A non-nil but empty RestrictToIDs means "no book is eligible" — return
 	// before opening an iterator, mirroring memdb's short-circuit.

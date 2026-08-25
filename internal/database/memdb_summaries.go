@@ -21,11 +21,16 @@ type BookSummaryFilter struct {
 	IsPrimaryVersion  *bool
 	MarkedForDeletion *bool // nil → exclude deleted (default behavior)
 
-	// SortBy selects which memdb index drives iteration. Empty string means
-	// "any order" (currently equivalent to ID-sorted). Only "title" is
-	// honored today — other sort keys fall through to the service-level
-	// in-memory sort path. The memdb title index is a sorted radix tree, so
-	// iterating it is O(offset+limit), not O(n).
+	// SortBy selects which sorted index drives iteration. Empty string means
+	// "any order" (currently equivalent to ID-sorted). "title" always
+	// streams; every other field streams only while its index is enabled
+	// (sortIndexEnabled, mirroring CanPushDownSort) and otherwise falls
+	// through to a materialise-and-sort path. A memdb sort index is a sorted
+	// radix tree, so iterating it is O(offset+limit), not O(n).
+	//
+	// Stores answering this filter must honor SortBy or decline the
+	// HonorsEveryBookSummaryFilter marker — ordering is a predicate, and the
+	// service layer skips its own sort when a store claims the page is final.
 	SortBy string
 	// SortAscending controls iteration direction when SortBy is set.
 	// True (or zero value with SortBy=="title") = A→Z; false = Z→A.
