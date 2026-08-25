@@ -876,6 +876,10 @@ func (p *PebbleStore) sortedSummaryPagePebble(limit, offset int, f BookSummaryFi
 		return nil, err
 	}
 
+	if err := p.hydrateSortNamesPebble(matches, f.SortBy); err != nil {
+		return nil, err
+	}
+
 	SortBooks(matches, f.SortBy, f.SortAscending)
 
 	if offset >= len(matches) {
@@ -892,6 +896,83 @@ func (p *PebbleStore) sortedSummaryPagePebble(limit, offset int, f BookSummaryFi
 		out[i] = bookToSummary(&page[i])
 	}
 	return out, nil
+}
+
+// hydrateSortNamesPebble fills in Author/Series by ID for the sort that reads
+// them. The memdb twin is hydrateSortNames in memdb_summaries.go; this is the
+// Pebble-fallback half, and it exists for the same reason with a different
+// cause.
+//
+// A Book decoded from a Pebble row MAY carry an inline author — the field is
+// json:"author,omitempty" and a writer that set it round-trips it — but it is
+// not guaranteed to, and a row written without one yields Author == nil. Every
+// such book then compares equal under the author comparator, so the whole page
+// sorts as one tie and comes back in Pebble key order. Resolving from AuthorID
+// makes the answer independent of what any past writer happened to inline, and
+// makes both store paths agree.
+//
+// Batched: one GetAuthorsByIDs/GetSeriesByIDs for the whole match set, not a
+// lookup per book. Distinct authors are far fewer than books.
+func (p *PebbleStore) hydrateSortNamesPebble(books []Book, sortBy string) error {
+	switch sortBy {
+	case "author":
+		ids := make([]int, 0, len(books))
+		seen := make(map[int]struct{}, len(books))
+		for i := range books {
+			if books[i].AuthorID == nil {
+				continue
+			}
+			if _, dup := seen[*books[i].AuthorID]; dup {
+				continue
+			}
+			seen[*books[i].AuthorID] = struct{}{}
+			ids = append(ids, *books[i].AuthorID)
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		byID, err := p.GetAuthorsByIDs(ids)
+		if err != nil {
+			return fmt.Errorf("resolve author names for sort: %w", err)
+		}
+		for i := range books {
+			if books[i].AuthorID == nil {
+				continue
+			}
+			if a, ok := byID[*books[i].AuthorID]; ok && a != nil {
+				books[i].Author = a
+			}
+		}
+	case "series":
+		ids := make([]int, 0, len(books))
+		seen := make(map[int]struct{}, len(books))
+		for i := range books {
+			if books[i].SeriesID == nil {
+				continue
+			}
+			if _, dup := seen[*books[i].SeriesID]; dup {
+				continue
+			}
+			seen[*books[i].SeriesID] = struct{}{}
+			ids = append(ids, *books[i].SeriesID)
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		byID, err := p.GetSeriesByIDs(ids)
+		if err != nil {
+			return fmt.Errorf("resolve series names for sort: %w", err)
+		}
+		for i := range books {
+			if books[i].SeriesID == nil {
+				continue
+			}
+			if sv, ok := byID[*books[i].SeriesID]; ok && sv != nil {
+				books[i].Series = sv
+			}
+		}
+	}
+	return nil
 }
 
 // HonorsEveryBookSummaryFilter is a marker declaring that this store applies
