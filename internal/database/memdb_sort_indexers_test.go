@@ -1,16 +1,23 @@
 // file: internal/database/memdb_sort_indexers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c8a6f31-9b07-4de5-a142-70e3d95cb864
-// last-edited: 2026-08-09
+// last-edited: 2026-08-25
 //
 // Tests for the sorted secondary indexes.
 //
-// The high-value test here is TestSortIndexOrderMatchesComparator: the
-// indexed walk and the materialise-and-sort path must produce the SAME
-// order, because which one runs depends on whether a filter happened to be
-// active. If they diverge, "sort by duration" silently returns a different
-// order depending on unrelated query parameters — the kind of bug that is
-// nearly impossible to spot by hand.
+// ⚠️ TestSortIndexOrderMatchesComparator does NOT test what its name says.
+// It builds its expected order from encodeSortableString and this file's own
+// accessors, so it compares the index against ITSELF and passes however the
+// other path behaves. It also only ever asks for ascending. It is still a
+// useful test — it proves the indexed walk agrees with the encoding and that
+// no book falls out of an index — but it is not a cross-path check.
+//
+// The claim it used to make ("the indexed walk and the materialise-and-sort
+// path must produce the SAME order") went unverified long enough for the two
+// to diverge in opposite directions on every nullable field. The real
+// cross-path conformance test is TestIndexedWalkAndSortBooksAgree in
+// book_sort_conformance_test.go, which compares against database.SortBooks in
+// both directions.
 
 package database
 
@@ -216,6 +223,9 @@ func TestSortIndexNamesExistInSchema(t *testing.T) {
 // and the in-memory comparator sort must agree; which path runs depends on
 // unrelated query parameters, so a divergence shows up as an order that
 // changes when you add a filter.
+// TestSortIndexOrderMatchesComparator checks the indexed walk against this
+// file's own accessors — an internal-consistency check, not a cross-path one.
+// See the file header; the cross-path test lives in book_sort_conformance_test.go.
 func TestSortIndexOrderMatchesComparator(t *testing.T) {
 	enableAllSortIndexes(t)
 	m, err := NewMemStore()
