@@ -55,10 +55,10 @@ type recorders struct {
 	// dropped predicate -- the stub returns the same canned page either way.
 	listFilters     audiobookspkg.ListFilters
 	listFiltersSeen bool
-	facetsResp       gin.H
-	facetsErr        error
-	facetsCalls      int
-	extIDStore       audiobookshandler.ExternalIDStore
+	facetsResp      gin.H
+	facetsErr       error
+	facetsCalls     int
+	extIDStore      audiobookshandler.ExternalIDStore
 }
 
 type testDeps struct {
