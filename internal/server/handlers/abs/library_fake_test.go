@@ -64,13 +64,25 @@ type fakeLibrary struct {
 	countFiltered int
 	authorCounts  int
 
-	// genreScans counts GetDistinctGenres calls. It is the /filterdata build
-	// counter: that call walks the whole book:* keyspace and json.Unmarshals
-	// every row to read one field, and it runs once per build.
+	// genreScans counts GetDistinctGenres calls: the whole book:* keyspace,
+	// json.Unmarshalling every row to read one field.
+	//
+	// ⚠️ It is the /filterdata build counter ONLY for tests that do not touch
+	// /search — LibrarySearch calls GetDistinctGenres too (browse.go), and a
+	// test that hits it would inflate this and silently weaken the assertion.
 	genreScans int
 
-	// contributorBuilds counts contributor-index builds. GetAuthorsByBookIDs is
-	// called exactly once per build, so it is the build counter.
+	// genreGate, when non-nil, blocks every genre scan until closed. Because
+	// GetDistinctGenres runs once per /filterdata build, holding it lets a test
+	// see how many filterdata builds start at once.
+	genreGate chan struct{}
+
+	// contributorBuilds counts GetAuthorsByBookIDs calls. contributorDTOs calls
+	// it exactly once per index build.
+	//
+	// ⚠️ It is the build counter ONLY for tests that do not touch /items or
+	// /personalized — loadItemViews (mapper.go) calls it too, so a test that
+	// hits those inflates this and weakens the herd assertion.
 	contributorBuilds int
 
 	// contributorGate, when non-nil, blocks every index build until it is closed.
@@ -176,7 +188,28 @@ func (f *fakeLibrary) addNarrators(names ...string) {
 	}
 }
 
-// contributorBuildCount reports how many contributor-index builds have started.
+// setListErr injects an error into the book-summary read path.
+//
+// 🔴 NOTHING SET listErr BEFORE THIS. The field existed and gated three getters,
+// but no test in the package ever turned it on, so every error branch that
+// depends on it — including all five degradation branches in buildFilterData —
+// was unreachable by the suite. A guard that exists reads as covered.
+func (f *fakeLibrary) setListErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listErr = err
+}
+
+// holdFilterDataBuilds blocks every genre scan until the returned func is called.
+func (f *fakeLibrary) holdFilterDataBuilds() func() {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.genreGate = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
+}
+
 // genreCalls reports how many times the whole-keyspace genre scan ran.
 func (f *fakeLibrary) genreCalls() int {
 	f.mu.Lock()
@@ -184,14 +217,18 @@ func (f *fakeLibrary) genreCalls() int {
 	return f.genreScans
 }
 
+// contributorBuildCount reports how many contributor-index builds have started.
 func (f *fakeLibrary) contributorBuildCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.contributorBuilds
 }
 
-// holdContributorBuilds makes every index build block until the returned func is
-// called, so a test can inspect how many builds are in flight at once.
+// holdContributorBuilds blocks every GetAuthorsByBookIDs call until the returned
+// func is called, so a test can inspect how many builds are in flight at once.
+//
+// ⚠️ That is BROADER than "index builds": loadItemViews calls it too, so a test
+// that holds the gate and then requests /items or /personalized will hang.
 func (f *fakeLibrary) holdContributorBuilds() func() {
 	gate := make(chan struct{})
 	f.mu.Lock()
@@ -211,8 +248,12 @@ func (f *fakeLibrary) holdContributorBuilds() func() {
 func (f *fakeLibrary) addOrphanNarrators(names ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i, name := range names {
-		f.narrators = append(f.narrators, database.Narrator{ID: len(f.narrators) + i + 1, Name: name})
+	// len(f.narrators) already grows with each append, so the old `+ i` in this
+	// formula double-counted and produced ids 1, 3, 5… colliding with
+	// addNarrators. Inert today (the ABS narrator path keys on narratorID(name),
+	// not the row id) but not worth leaving to become load-bearing.
+	for _, name := range names {
+		f.narrators = append(f.narrators, database.Narrator{ID: len(f.narrators) + 1, Name: name})
 	}
 }
 
@@ -508,7 +549,12 @@ func (f *fakeLibrary) ListNarrators() ([]database.Narrator, error) {
 func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
 	f.mu.Lock()
 	f.genreScans++
+	gate := f.genreGate
 	f.mu.Unlock()
+	// Counted BEFORE blocking, for the same reason GetAuthorsByBookIDs is.
+	if gate != nil {
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	seen := map[string]bool{}

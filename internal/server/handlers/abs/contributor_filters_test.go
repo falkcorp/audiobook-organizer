@@ -1,11 +1,12 @@
 // file: internal/server/handlers/abs/contributor_filters_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8c1d54-9a20-4e7b-b6d1-8c4a2f01e9b7
 // last-edited: 2026-08-25
 
 package abs_test
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"sync"
@@ -212,10 +213,14 @@ func TestFilterData_BuiltOncePerTTL(t *testing.T) {
 // 🔴 TestContributorIndex_ConcurrentColdCallersBuildOnce is the thundering herd.
 //
 // The TTL bounds how OFTEN the index is rebuilt, never how MANY rebuilds run at
-// once, and those are different failures. This was survivable while /authors was
-// the only trigger — it needs a tap on the Authors tab. Putting /filterdata on
-// the same index makes the library PAGE LOAD a trigger, so N clients arriving on
-// a cold cache would each start their own full-library scan.
+// once, and those are different failures. N clients arriving on a cold cache
+// each started their own full-library scan.
+//
+// 🔴 THIS WAS ALREADY LIVE BEFORE /filterdata WAS MOVED ONTO THE INDEX — eight
+// call sites already reached it, including Personalized (the ABS home shelves)
+// and LibrarySearch. An earlier version of this comment said /authors was the
+// only trigger and needed a deliberate tab tap; that was wrong, and it made the
+// bug sound rarer than it is.
 func TestContributorIndex_ConcurrentColdCallersBuildOnce(t *testing.T) {
 	w := newWriteHarness(t)
 	seedContributors(t, w)
@@ -260,5 +265,145 @@ func TestContributorIndex_ConcurrentColdCallersBuildOnce(t *testing.T) {
 	wg.Wait()
 	if n := w.seed.lib.contributorBuildCount(); n != 1 {
 		t.Fatalf("contributor index built %d times, want exactly 1", n)
+	}
+}
+
+// 🔴 TestFilterData_DegradedDocumentIsNotCached is the caching blocker.
+//
+// buildFilterData degrades each source to an empty list rather than failing the
+// request. That was the right cost when it was paid ONCE PER REQUEST. Adding a
+// cache promoted it: stamping a degraded build pins one transient store error
+// into a 200 for the whole TTL, and because filterDataFresh then short-circuits,
+// the error is never logged again either.
+//
+// It also recreates the exact drift this endpoint was moved onto the contributor
+// index to REMOVE: contributorsCached does not cache its error, so /authors
+// recovers on its very next request while /filterdata would still be insisting
+// the library has no authors.
+func TestFilterData_DegradedDocumentIsNotCached(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+
+	w.seed.lib.setListErr(errors.New("store unavailable"))
+	_, degraded, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+	if got := authorNames(t, degraded, "authors"); len(got) != 0 {
+		t.Fatalf("expected a degraded document while the store is failing, got %v", got)
+	}
+
+	// The store recovers. The very next request must rebuild, not serve the
+	// pinned empty document for the rest of the TTL.
+	w.seed.lib.setListErr(nil)
+	_, body, raw := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+	got := authorNames(t, body, "authors")
+	if len(got) == 0 {
+		t.Fatalf("filterdata pinned a degraded document past the failure that caused it; "+
+			"the store recovered and this request still returned no authors: %s", raw)
+	}
+}
+
+// TestFilterData_DegradedServesTheLastGoodDocument — an empty list is not the
+// ABSENCE of a filter, it is an affirmative claim that the library has no
+// authors, and LoadedAt dates that claim as current. A stale document is at
+// least true of some moment and says which.
+func TestFilterData_DegradedServesTheLastGoodDocument(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+
+	base := time.Now()
+	w.handler.SetClock(func() time.Time { return base })
+
+	_, good, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+	want := authorNames(t, good, "authors")
+	if len(want) == 0 {
+		t.Fatal("fixture produced no authors; the rest of this test cannot discriminate")
+	}
+
+	// Past the TTL, so the next request must rebuild — and the rebuild fails.
+	w.handler.SetClock(func() time.Time { return base.Add(10 * time.Minute) })
+	w.seed.lib.setListErr(errors.New("store unavailable"))
+
+	_, body, raw := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+	got := authorNames(t, body, "authors")
+	if !equalStrings(got, want) {
+		t.Fatalf("a failed rebuild replaced the last good author list with %v, want %v — "+
+			"the client is now told this library has no authors: %s", got, want, raw)
+	}
+}
+
+// TestFilterData_ConcurrentColdCallersBuildOnce — /filterdata has its own
+// singleflight group, and TestFilterData_BuiltOncePerTTL is sequential, so
+// nothing else in this package ever runs filterDataCached from two goroutines.
+func TestFilterData_ConcurrentColdCallersBuildOnce(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+
+	release := w.seed.lib.holdFilterDataBuilds()
+	defer release()
+
+	const callers = 8
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+		}()
+	}
+	close(start)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for w.seed.lib.genreCalls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	settle := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(settle) {
+		if n := w.seed.lib.genreCalls(); n > 1 {
+			release()
+			wg.Wait()
+			t.Fatalf("%d concurrent cold callers started %d filterdata builds, want 1", callers, n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	release()
+	wg.Wait()
+	if n := w.seed.lib.genreCalls(); n != 1 {
+		t.Fatalf("filterdata document built %d times, want exactly 1", n)
+	}
+}
+
+// 🔴 TestFilterData_ExpiresWithTheIndexItWasBuiltFrom — equal TTL LENGTHS do not
+// align PHASES.
+//
+// The two caches are stamped independently, so a document stamped at its own
+// build time can outlive the contributor index it was built from by up to a full
+// TTL, and serve an author list /authors has already replaced. Stamping the
+// document with the INDEX's build time is what actually makes them agree.
+func TestFilterData_ExpiresWithTheIndexItWasBuiltFrom(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+
+	base := time.Now()
+	w.handler.SetClock(func() time.Time { return base })
+	// Builds the contributor index at T=0.
+	w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil)
+
+	// T=4m: the index is still fresh, so the document is built FROM the T=0
+	// index. Stamped naively it would expire at T=9m; stamped with the index's
+	// build time it expires at T=5m, with the index.
+	w.handler.SetClock(func() time.Time { return base.Add(4 * time.Minute) })
+	w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+	before := w.seed.lib.genreCalls()
+
+	// T=6m: the index has expired and /authors would rebuild it. The document
+	// must expire too, or the two disagree for the next three minutes.
+	w.handler.SetClock(func() time.Time { return base.Add(6 * time.Minute) })
+	w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+
+	if after := w.seed.lib.genreCalls(); after == before {
+		t.Fatalf("the filter document outlived the contributor index it was built from: "+
+			"the index expired at T=5m and this T=6m request still served the cached "+
+			"document (genre scans %d -> %d)", before, after)
 	}
 }

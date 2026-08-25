@@ -341,11 +341,20 @@ type Handler struct {
 	// outside authorsCacheMu (see its comment), so without this every request
 	// that arrives while the cache is cold starts its own full-library scan.
 	//
-	// That was survivable while /authors was the only trigger: it is reached by
-	// tapping the Authors tab. /filterdata is on the library PAGE LOAD path, so
-	// making it a second caller turns a rare herd into a routine one. The group
-	// coalesces concurrent cold callers onto ONE build; the winner's result is
-	// shared with every waiter.
+	// 🔴 THIS HERD WAS ALREADY LIVE — it is NOT a hazard /filterdata introduced.
+	// An earlier version of this comment claimed /authors was the only trigger
+	// and that it needed a deliberate tap on the Authors tab. Both halves were
+	// false. Before /filterdata was moved onto the index there were already
+	// EIGHT call sites in browse.go, including Personalized (the ABS home
+	// shelves), LibrarySearch (typeahead-shaped) and filteredItems
+	// (?filter=authors.*|narrators.*) — none of them a deliberate tab tap.
+	//
+	// /filterdata makes one more, so the fix is more warranted than that story
+	// claimed, not less. State it correctly: the herd is pre-existing, and this
+	// change would have made a bad situation worse rather than creating it.
+	//
+	// The group coalesces concurrent cold callers onto ONE build; the winner's
+	// result is shared with every waiter.
 	authorsCacheSF singleflight.Group
 
 	// seriesBooksCache maps series id → the visible books in that series.
