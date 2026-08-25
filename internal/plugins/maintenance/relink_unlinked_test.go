@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_unlinked_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6a41d8-90b3-4c57-8e12-b5d70c3a9f46
 // last-edited: 2026-08-24
 
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 )
 
@@ -41,6 +42,10 @@ func TestRelinkOne_Directory_CreatesEveryTrackAndAggregatesOnce(t *testing.T) {
 		t.Fatalf("precondition: a freshly created book carries no FileSize, got %d", *bk.FileSize)
 	}
 
+	// Armed immediately before the call so only relinkOne's own recomputes are
+	// counted, not anything CreateBook did during setup.
+	readLogs := aggtest.Capture(t)
+
 	n, err := relinkOne(s, linkintegrity.Finding{
 		BookID:   bk.ID,
 		FilePath: dir,
@@ -48,6 +53,23 @@ func TestRelinkOne_Directory_CreatesEveryTrackAndAggregatesOnce(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("relinkOne: %v", err)
+	}
+
+	// THE ASSERTION THIS TEST IS NAMED FOR. Everything below checks that the
+	// aggregate is CORRECT; only this checks that it was computed ONCE.
+	//
+	// Those are different claims, and this test asserted only the first one until
+	// 2026-08-24 while being named ...AndAggregatesOnce. The final FileSize equals
+	// the sum of the rows whether the recompute ran once or once per row — the last
+	// one of N produces exactly the totals the only one of 1 does — so the
+	// three-per-row version of this loop passed it. Measured: 3 invocations, green.
+	//
+	// Counted as invocations rather than writes for the same reason: only the first
+	// recompute finds anything to change, so a per-row regression still emits a
+	// single "updated" line. See aggtest.CountInvocations.
+	if got := aggtest.CountInvocations(readLogs(), bk.ID); got != 1 {
+		t.Fatalf("RecomputeBookAggregates ran %d times for %d files, want exactly 1; "+
+			"the batch write is recomputing per row again", got, len(files))
 	}
 	if n != len(files) {
 		t.Fatalf("created = %d, want %d", n, len(files))
