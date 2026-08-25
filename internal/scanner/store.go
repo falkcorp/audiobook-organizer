@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-08-24
+// last-edited: 2026-08-25
 
 package scanner
 
@@ -50,6 +50,7 @@ type scanBookWriter interface {
 
 type scanEntityStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
 	CreateAuthor(name string) (*database.Author, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
