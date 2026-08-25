@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-08-24
 
@@ -419,6 +419,17 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 		}
 		file.UpdatedAt = now
 
+		// A row with no BookID belongs to no book. It would still be written, under
+		// the key "book_file::<id>", and then be invisible to GetBookFiles and
+		// counted in no aggregate. CreateBookFile at least reaches
+		// RecomputeBookAggregates("") and logs "book not found, skipping"; this path
+		// suppressed even that and returned nil. Refuse instead: it is a caller bug,
+		// it is cheap to detect, and silence is the worst of the three options.
+		if file.BookID == "" {
+			batch.Close()
+			return fmt.Errorf("BatchCreateBookFiles: row %s has an empty BookID; a book_file must belong to a book", file.ID)
+		}
+
 		if file.ITunesPersistentID != "" {
 			if prior, dup := seenPIDs[file.ITunesPersistentID]; dup {
 				batch.Close()
@@ -438,11 +449,15 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 			return err
 		}
 		if prior != nil {
+			// Deliberately NOT added to affectedBooks. Taking a PID away rewrites
+			// only ITunesPersistentID and ITunesPath; RecomputeBookAggregates
+			// derives Duration and FileSize, neither of which those fields feed.
+			// So a recompute of the prior owner's book is guaranteed to find no
+			// change and take the Debug early return -- after re-reading that
+			// book's entire file set. One wasted full read per PID-carrying row,
+			// inside the method whose whole purpose is coalescing recomputes.
+			// The memdb refresh below is what the prior owner actually needs.
 			clearedPriorOwners = append(clearedPriorOwners, prior)
-			if _, ok := seenBooks[prior.BookID]; !ok && prior.BookID != "" {
-				seenBooks[prior.BookID] = struct{}{}
-				affectedBooks = append(affectedBooks, prior.BookID)
-			}
 		}
 
 		// T020: drop AcoustIDSeg0..6 from the stored value via a copy; the original
@@ -485,8 +500,9 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 		s.UpsertBookFileToMemDB(file)
 	}
 	// Prior PID owners were rewritten by the same commit, so their memdb rows are
-	// stale in exactly the way the staged rows' would be. Their books are already
-	// in affectedBooks, so the recompute below covers them.
+	// stale in exactly the way the staged rows' would be. This upsert is the whole
+	// of what they need: their aggregates cannot have changed (see above), so they
+	// are intentionally absent from affectedBooks and get no recompute.
 	for _, prior := range clearedPriorOwners {
 		s.UpsertBookFileToMemDB(prior)
 	}
