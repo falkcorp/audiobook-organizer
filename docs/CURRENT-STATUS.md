@@ -1,5 +1,5 @@
 <!-- file: docs/CURRENT-STATUS.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 4a37ae70-9dc8-48e1-9b39-5ab3aa5cc05e -->
 <!-- last-edited: 2026-08-25 -->
 
@@ -12,23 +12,23 @@ full detail matters.
 
 ## Answer to the main question
 
-**Not until the currently running scan is terminal and production chapter
-consolidation is restored to 10; then use a canary first.  Also not yet for the
-desired “queue metadata until the LLM recovers” behavior.**
+**Yes, for a controlled canary now; do not run a new full scan until that
+canary proves the complete Book/BookFile/organize path.  Automatic metadata
+still does not durably wait for the LLM to recover.**
 
 The previously observed deployment ran `5e95fad6`, and a prior full scan
-completed `215381/215381` items with no recorded operation errors.  The newest
-forensics handoff supersedes the earlier configuration snapshot: a scan is now
-active and production currently has `chapter_consolidation_threshold_min=0`.
-That value disables the fallback that groups album-less multi-file audiobooks,
-causing one Book per track and preventing the intended multi-file BookFile
-creation path.  Do not start another full scan in this state.
+completed `215381/215381` items with no recorded operation errors.  A fresh
+production read at this update found no running or queued operations,
+`chapter_consolidation_threshold_min=10`, configured `root_dir`, and
+`organization_strategy=auto`.  That threshold restores the fallback that
+groups album-less multi-file audiobooks.
 
-After the active scan is terminal, restore the threshold using the safe,
-authenticated merge-style configuration update established in the forensics
-handoff.  Then a deliberately new audiobook can prove the actual production
-path before another full scan.  It is not enough to claim metadata will be
-applied automatically while the LLM host is down.
+Production `auto_organize` was deliberately set to `true` and read back as
+`true` in the same update.  For books outside `root_dir`, the auto strategy is
+reflink, then hardlink, then copy.  For a book already in `root_dir`, the shared
+organize path may safely rename it to its metadata-derived target; the owner
+explicitly approved that library-root behavior.  It is not enough to claim
+metadata will be applied automatically while the LLM host is down.
 
 ## User decisions recorded in this audit
 
@@ -42,12 +42,13 @@ applied automatically while the LLM host is down.
 
 | Capability | Evidence | Status |
 |---|---|---|
-| Service deployment | Production health/status was checked during this audit; it reports deployed current main and no active operations. | Ready |
+| Service deployment | Production configuration and operation timeline were rechecked at this update; no running or queued operation was returned. | Ready for canary |
 | Full filesystem scan | A `library.scan` operation completed all 215,381 items and recorded no operation error. | Previously succeeds; repeatable with canary gate |
 | New scanned single-file book gets `BookFile` | `34e679e48`; scan path calls `createSingleFileBookFile`. | Code fixed and deployed |
 | Direct import gets `BookFile` | `02cb13ed1`; importer persists the row. | Code fixed and deployed |
-| Chapter grouping is enabled | User-confirmed newest forensics reports live `chapter_consolidation_threshold_min=0`; zero disables consolidation. | Blocked until active scan is terminal and value is restored to 10 |
-| Organize flag exists and the HTTP import path honors it | Current importer/server code has an explicit `organize` setting.  Production `auto_organize` is presently false. | Available; activation is a deliberate operational choice |
+| Chapter grouping is enabled | Fresh production read reports `chapter_consolidation_threshold_min=10`; zero would disable consolidation. | Ready for canary |
+| Auto organize | Fresh production read reports `auto_organize=true`, with `organization_strategy=auto` and configured `root_dir`. | Enabled by owner direction |
+| BookFile backfill evidence | `maintenance.backfill-book-files` dry-run completed in 53 seconds. The deployed job emitted no candidate/created/error count or result payload. | Apply blocked until reporting is repaired and a dry-run is reviewable |
 
 The historical diagnosis in [the WebArchive review](audits/current-status-evidence/2026-08-25-scan-readiness-webarchive.md)
 is still useful, but its old overall “not yet” answer has a narrower current
@@ -88,34 +89,31 @@ Do not start the full scan until this canary has been observed.  The canary is
 a normal database/filesystem mutation, so it requires an operator to choose the
 test audiobook and invoke the scan.
 
-1. Wait for the current scan to become terminal.  Restore chapter consolidation
-   to 10 through the authenticated merge-style configuration update; verify the
-   stored live value before proceeding.  Do not change it mid-scan.
-2. Put one new, uniquely identifiable, well-tagged audiobook in a normal
+1. Put one new, uniquely identifiable, well-tagged audiobook in a normal
    watched/import path.  Record its original path, file count, and tags.
-3. Run the narrowest applicable scan/import path with `organize` explicitly
-   chosen.  For the desired filing behavior, choose it on; first confirm the
+2. Run the narrowest applicable scan/import path with `organize` explicitly
+   chosen.  Auto-organize is also enabled; first confirm the
    resulting destination is acceptable before scaling up.
-4. Confirm exactly the expected Book record and `BookFile` record(s) exist,
+3. Confirm exactly the expected Book record and `BookFile` record(s) exist,
    their paths resolve to real audio, and no duplicate/dead rows were created.
-5. Confirm the scan operation finishes successfully.  With the LLM unavailable,
+4. Confirm the scan operation finishes successfully.  With the LLM unavailable,
    confirm the book remains imported/playable and the metadata candidate is
    visibly pending rather than silently stamped/forgotten.  This step is
    expected to expose the durability gap above until it is fixed.
-6. Confirm metadata from embedded tags/providers is retained and, when an LLM
+5. Confirm metadata from embedded tags/providers is retained and, when an LLM
    is available later, that queued filename metadata is applied without a new
    scan.
-7. Only after steps 1–5 pass, run the full scan; monitor operation completion,
+6. Only after steps 1–5 pass, run the full scan; monitor operation completion,
    new Book/BookFile counts, and failed/interrupted operation records.
 
 ## Valid outstanding work
 
 | Priority | Item | Action |
 |---|---|---|
-| P0 | Terminal scan, then restore consolidation to 10 | The current scan must finish before the safe configuration update; verify the live value before the canary. |
-| P0 | Fresh canary proof | Perform the seven checks above before a production-wide scan. |
+| P0 | Reviewable BookFile backfill | The deployed dry-run is available and completed, but it reports no counts. Add structured candidate/created/error reporting, deploy, rerun dry-run, then apply only after review. |
+| P0 | Fresh canary proof | Perform the six checks above before a production-wide scan. |
 | P0 | Durable LLM-unavailable metadata queue | Scope and implement the requirement in the preceding section. |
-| P1 | Organize rollout | Use the explicit flag in the canary, then decide whether to change the production default from false. |
+| P1 | Organize rollout verification | Auto-organize is enabled. Use the explicit flag in the canary and verify the expected reflink/hardlink/copy or approved root-directory rename result before a full scan. |
 | P1 | Existing library repairs | The valid per-batch BookFile dedup/path/history and chapter backfill tasks remain in [TODO/CHANGELOG audit evidence](audits/current-status-evidence/2026-08-25-todo-changelog.md); revalidate before dispatch. |
 | P2 | TODO fragment reconciliation | The assembler currently reports 16 pending fragments.  Curate rather than blindly collect them; see [fragment evidence](audits/current-status-evidence/2026-08-25-todo-fragments.md). |
 | P2 | Dependabot PR #2925 | Code correction is sound and CI is mostly green, but workflow lint is failing on unrelated-looking existing style findings; see [PR evidence](audits/current-status-evidence/2026-08-25-open-prs.md). |
