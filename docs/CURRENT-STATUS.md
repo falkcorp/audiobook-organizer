@@ -1,5 +1,5 @@
 <!-- file: docs/CURRENT-STATUS.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 4a37ae70-9dc8-48e1-9b39-5ab3aa5cc05e -->
 <!-- last-edited: 2026-08-26 -->
 
@@ -49,6 +49,7 @@ metadata will be applied automatically while the LLM host is down.
 | Chapter grouping is enabled | Fresh production read reports `chapter_consolidation_threshold_min=10`; zero would disable consolidation. | Ready for canary |
 | Auto organize | Fresh production read reports `auto_organize=true`, with `organization_strategy=auto` and configured `root_dir`. | Enabled by owner direction |
 | BookFile backfill evidence | Dry-run `01M0Y65F20Z3V3HQF1N5B41GHG` found 129,824 candidates with 0 errors. Write run `01M0Y7PQWP1VA6P1CD3DHCAMJV` completed: 61,575 books scanned, 129,824 created, 0 errors. | Complete |
+| Post-repair BookFile census | `maintenance/book-file-hash-stats` reports 61,575 books, 675,882 BookFile rows, and 222 books with no files. | 12,303 no-file books repaired; 222 need targeted diagnosis |
 
 The historical diagnosis in [the WebArchive review](audits/current-status-evidence/2026-08-25-scan-readiness-webarchive.md)
 is still useful, but its old overall “not yet” answer has a narrower current
@@ -121,6 +122,7 @@ test audiobook and invoke the scan.
 |---|---|---|
 | P0 | Fresh canary proof | Perform the six checks above before a production-wide scan. |
 | P0 | Durable LLM-unavailable metadata queue | Scope and implement the requirement in the preceding section. |
+| P1 | Diagnose 222 remaining no-file books | The full backfill reduced the no-file census from 12,525 to 222. Determine whether each remaining book has a missing/unreadable/non-audio path or needs a different repair; do not rerun the broad backfill blindly. |
 | P1 | Batch future BookFile repairs | The completed repair exposed per-file aggregate recomputation for large books. A scoped batching fix is planned; validate and deploy it before another large backfill. |
 | P1 | Organize rollout verification | Auto-organize is enabled. Use the explicit flag in the canary and verify the expected reflink/hardlink/copy or approved root-directory rename result before a full scan. |
 | P1 | Existing library repairs | The valid per-batch BookFile dedup/path/history and chapter backfill tasks remain in [TODO/CHANGELOG audit evidence](audits/current-status-evidence/2026-08-25-todo-changelog.md); revalidate before dispatch. |
