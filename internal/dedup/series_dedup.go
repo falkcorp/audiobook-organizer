@@ -121,10 +121,7 @@ func enrichSeries(store Store, seriesList []database.Series, authorNameMap map[i
 		}
 		sw := SeriesWithBooks{Series: s, AuthorName: authorName}
 		if books, err := store.GetBooksBySeriesIDCore(s.ID); err == nil {
-			limit := 5
-			if len(books) < limit {
-				limit = len(books)
-			}
+			limit := min(len(books), 5)
 			for _, b := range books[:limit] {
 				cover := ""
 				if b.CoverURL != nil {

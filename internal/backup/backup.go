@@ -534,7 +534,7 @@ func cleanupOldBackups(backupDir string, maxBackups int) error {
 
 	// Delete oldest backups
 	deleteCount := len(backups) - maxBackups
-	for i := 0; i < deleteCount; i++ {
+	for i := range deleteCount {
 		if err := os.Remove(backups[i].Path); err != nil {
 			slog.Warn("backup failed to delete old backup", "filename", backups[i].Filename, "error", err)
 		}

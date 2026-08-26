@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -94,11 +95,8 @@ func (r *Registry) ByCapability(cap Capability) []Plugin {
 		if !r.enabled[id] {
 			continue
 		}
-		for _, c := range p.Capabilities() {
-			if c == cap {
-				out = append(out, p)
-				break
-			}
+		if slices.Contains(p.Capabilities(), cap) {
+			out = append(out, p)
 		}
 	}
 	return out

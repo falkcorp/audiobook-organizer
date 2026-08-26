@@ -466,13 +466,13 @@ func (h *Handler) ValidateDedupEntry(c *gin.Context) {
 	}
 
 	if h.metadataFetchService == nil {
-		httputil.RespondWithOK(c, gin.H{"results": []interface{}{}, "message": "no metadata sources configured"})
+		httputil.RespondWithOK(c, gin.H{"results": []any{}, "message": "no metadata sources configured"})
 		return
 	}
 
 	chain := h.metadataFetchService.BuildSourceChain()
 	if len(chain) == 0 {
-		httputil.RespondWithOK(c, gin.H{"results": []interface{}{}, "message": "no metadata sources configured"})
+		httputil.RespondWithOK(c, gin.H{"results": []any{}, "message": "no metadata sources configured"})
 		return
 	}
 

@@ -35,14 +35,14 @@ func (p *PebbleStore) CreatePlaylist(name string, seriesID *int, filePath string
 	}
 
 	batch := p.db.NewBatch()
-	key := []byte(fmt.Sprintf("playlist:%d", id))
+	key := fmt.Appendf(nil, "playlist:%d", id)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return nil, err
 	}
 
 	if seriesID != nil {
-		indexKey := []byte(fmt.Sprintf("playlist:series:%d", *seriesID))
+		indexKey := fmt.Appendf(nil, "playlist:series:%d", *seriesID)
 		if err := batch.Set(indexKey, []byte(strconv.Itoa(id)), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -57,7 +57,7 @@ func (p *PebbleStore) CreatePlaylist(name string, seriesID *int, filePath string
 }
 
 func (p *PebbleStore) GetPlaylistByID(id int) (*Playlist, error) {
-	key := []byte(fmt.Sprintf("playlist:%d", id))
+	key := fmt.Appendf(nil, "playlist:%d", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -75,7 +75,7 @@ func (p *PebbleStore) GetPlaylistByID(id int) (*Playlist, error) {
 }
 
 func (p *PebbleStore) GetPlaylistBySeriesID(seriesID int) (*Playlist, error) {
-	indexKey := []byte(fmt.Sprintf("playlist:series:%d", seriesID))
+	indexKey := fmt.Appendf(nil, "playlist:series:%d", seriesID)
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -111,13 +111,13 @@ func (p *PebbleStore) AddPlaylistItem(playlistID, bookID, position int) error {
 		return err
 	}
 
-	key := []byte(fmt.Sprintf("playlistitem:%d:%d", playlistID, position))
+	key := fmt.Appendf(nil, "playlistitem:%d:%d", playlistID, position)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 func (p *PebbleStore) GetPlaylistItems(playlistID int) ([]PlaylistItem, error) {
 	var items []PlaylistItem
-	prefix := []byte(fmt.Sprintf("playlistitem:%d:", playlistID))
+	prefix := fmt.Appendf(nil, "playlistitem:%d:", playlistID)
 
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,

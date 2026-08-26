@@ -65,7 +65,7 @@ func TestWriteBack_SecondPassIsANoOp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := makeTestAudioFormat(t, tc.file, tc.codec)
 
-			tagMap := map[string]interface{}{
+			tagMap := map[string]any{
 				"title":        "01 - The Long Way Home",
 				"album":        "The Long Way Home",
 				"artist":       "Test Author",
@@ -108,7 +108,7 @@ func TestWriteBack_SecondPassIsANoOp(t *testing.T) {
 func TestWriteBack_ChangedValueStillWrites(t *testing.T) {
 	path := makeTestAudioFormat(t, "changed.m4a", "aac")
 
-	initial := map[string]interface{}{
+	initial := map[string]any{
 		"title":     "01 - The Long Way Home",
 		"album":     "The Long Way Home",
 		"publisher": "Podium Audio",
@@ -118,7 +118,7 @@ func TestWriteBack_ChangedValueStillWrites(t *testing.T) {
 	}, fileops.WriteTagsSafeOptions{})
 	require.NoError(t, err)
 
-	changed := map[string]interface{}{
+	changed := map[string]any{
 		"title":     "01 - The Long Way Home",
 		"album":     "The Long Way Home",
 		"publisher": "Tantor Audio", // genuinely different

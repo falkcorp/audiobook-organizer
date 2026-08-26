@@ -56,10 +56,7 @@ func parseRetryAfter(v string) time.Duration {
 	if err != nil || n <= 0 {
 		return 0
 	}
-	d := time.Duration(n) * time.Second
-	if d > 60*time.Second {
-		d = 60 * time.Second
-	}
+	d := min(time.Duration(n)*time.Second, 60*time.Second)
 	return d
 }
 

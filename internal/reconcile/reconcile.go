@@ -915,7 +915,7 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 					slog.Warn("failed to hydrate broken book for update", "book", book.ID, "ferr", ferr)
 				} else {
 					full.LibraryState = &needsReview
-					full.MarkedForDeletion = boolPtr(true)
+					full.MarkedForDeletion = new(true)
 					full.MarkedForDeletionAt = &now
 					if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
 						slog.Warn("failed to mark broken book", "book", full.ID, "uerr", uerr)
@@ -977,7 +977,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 
 	// Helper to soft-delete a book
 	softDelete := func(book *database.Book) error {
-		book.MarkedForDeletion = boolPtr(true)
+		book.MarkedForDeletion = new(true)
 		book.MarkedForDeletionAt = &now
 		book.LibraryState = &deletedState
 		_, err := store.UpdateBook(book.ID, book)
@@ -1432,6 +1432,7 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	return result, nil
 }
 
+//go:fix inline
 func boolPtr(b bool) *bool {
-	return &b
+	return new(b)
 }

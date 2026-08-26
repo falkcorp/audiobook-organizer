@@ -146,7 +146,7 @@ func TestDedupSeries_MergesDuplicates(t *testing.T) {
 	// heavy Description field is present at write time and must be preserved.
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		sid := 2
-		return &database.Book{ID: id, SeriesID: &sid, Description: strPtr(heavyDesc)}, nil
+		return &database.Book{ID: id, SeriesID: &sid, Description: new(heavyDesc)}, nil
 	}
 	mock.UpdateBookFunc = func(id string, book *database.Book) (*database.Book, error) {
 		updatedBooks = append(updatedBooks, *book)
@@ -313,9 +313,9 @@ func newSeriesDedupFixture() *dedupFixtureStore {
 			{ID: 3, Name: "Dune"},       // no duplicate — must be untouched
 		},
 		[]database.Book{
-			{ID: "BOOK1", SeriesID: &two, Description: strPtr("heavy one")},
-			{ID: "BOOK2", SeriesID: &two, Description: strPtr("heavy two")},
-			{ID: "BOOK3", SeriesID: &three, Description: strPtr("heavy three")},
+			{ID: "BOOK1", SeriesID: &two, Description: new("heavy one")},
+			{ID: "BOOK2", SeriesID: &two, Description: new("heavy two")},
+			{ID: "BOOK3", SeriesID: &three, Description: new("heavy three")},
 		},
 	)
 }
@@ -421,7 +421,7 @@ func TestMergeSeries_BasicMerge(t *testing.T) {
 	heavyDesc := "heavy description that must survive the merge"
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		sid := mergeID
-		return &database.Book{ID: id, SeriesID: &sid, Description: strPtr(heavyDesc)}, nil
+		return &database.Book{ID: id, SeriesID: &sid, Description: new(heavyDesc)}, nil
 	}
 	mock.UpdateBookFunc = func(id string, book *database.Book) (*database.Book, error) {
 		updatedBooks = append(updatedBooks, *book)

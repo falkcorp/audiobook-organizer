@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -77,7 +78,7 @@ var actTiers = []string{"change", "debug", "audit", "info", "batch", "system", "
 func actCompactableTiers() []string { return actTiers[:len(actTiers)-1] }
 
 func actTimeKey(t time.Time, id string) []byte {
-	return []byte(fmt.Sprintf("%020d:%s", t.UnixNano(), id))
+	return fmt.Appendf(nil, "%020d:%s", t.UnixNano(), id)
 }
 
 // NewNutsActivityStore opens (or creates) a NutsDB activity store at dirPath.
@@ -226,14 +227,8 @@ func (s *NutsActivityStore) Query(_ context.Context, f ActivityFilter) ([]Activi
 	total := len(filtered)
 
 	// Paginate.
-	start := f.Offset
-	if start > len(filtered) {
-		start = len(filtered)
-	}
-	end := start + f.Limit
-	if end > len(filtered) {
-		end = len(filtered)
-	}
+	start := min(f.Offset, len(filtered))
+	end := min(start+f.Limit, len(filtered))
 	return filtered[start:end], total, nil
 }
 
@@ -361,10 +356,7 @@ func (s *NutsActivityStore) Prune(olderThan time.Time, tier string) (int, error)
 	deleted := 0
 	// Delete in batches of 500 to keep transaction size reasonable.
 	for i := 0; i < len(kvs); i += 500 {
-		end := i + 500
-		if end > len(kvs) {
-			end = len(kvs)
-		}
+		end := min(i+500, len(kvs))
 		batch := kvs[i:end]
 		if err := s.db.Update(func(tx *nutsdb.Tx) error {
 			for _, kv := range batch {
@@ -432,10 +424,7 @@ func (s *NutsActivityStore) WipeAllActivity(ctx context.Context) (int64, error) 
 		}
 		bucket := actBucket(tier)
 		for i := 0; i < len(kvs); i += 500 {
-			end := i + 500
-			if end > len(kvs) {
-				end = len(kvs)
-			}
+			end := min(i+500, len(kvs))
 			batch := kvs[i:end]
 			if err := s.db.Update(func(tx *nutsdb.Tx) error {
 				for _, kv := range batch {
@@ -716,13 +705,7 @@ func (s *NutsActivityStore) RecompactDigests(ctx context.Context) (RecompactResu
 
 	for _, c := range candidates {
 		// Check if any items need updating.
-		needsUpdate := false
-		for _, item := range c.dd.Items {
-			if isLegacyItem(item) {
-				needsUpdate = true
-				break
-			}
-		}
+		needsUpdate := slices.ContainsFunc(c.dd.Items, isLegacyItem)
 		if !needsUpdate {
 			result.Skipped++
 			continue
@@ -907,14 +890,8 @@ func (s *NutsActivityStore) queryByIndex(indexBucket string, f ActivityFilter) (
 	})
 
 	total := len(all)
-	start := f.Offset
-	if start > len(all) {
-		start = len(all)
-	}
-	end := start + f.Limit
-	if end > len(all) {
-		end = len(all)
-	}
+	start := min(f.Offset, len(all))
+	end := min(start+f.Limit, len(all))
 	return all[start:end], total, nil
 }
 
@@ -998,15 +975,11 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 			return false
 		}
 	}
-	for _, src := range f.ExcludeSources {
-		if e.Source == src {
-			return false
-		}
+	if slices.Contains(f.ExcludeSources, e.Source) {
+		return false
 	}
-	for _, tier := range f.ExcludeTiers {
-		if e.Tier == tier {
-			return false
-		}
+	if slices.Contains(f.ExcludeTiers, e.Tier) {
+		return false
 	}
 	for _, tag := range f.ExcludeTags {
 		if containsTag(e.Tags, tag) {
@@ -1017,12 +990,7 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 }
 
 func containsTag(tags []string, tag string) bool {
-	for _, t := range tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(tags, tag)
 }
 
 func boolInt(b bool) int {

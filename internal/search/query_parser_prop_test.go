@@ -159,7 +159,7 @@ func genSimpleClause(t *rapid.T) string {
 		field := pickField(t)
 		n := rapid.IntRange(2, 4).Draw(t, "altN")
 		vals := make([]string, 0, n)
-		for i := 0; i < n; i++ {
+		for range n {
 			vals = append(vals, genBareValue(t))
 		}
 		return field + ":(" + strings.Join(vals, "|") + ")"
@@ -188,7 +188,7 @@ func genValidQueryDepth(t *rapid.T, depth int) string {
 		// AND of 2-3 children.
 		n := rapid.IntRange(2, 3).Draw(t, "andN")
 		parts := make([]string, 0, n)
-		for i := 0; i < n; i++ {
+		for range n {
 			parts = append(parts, genValidQueryDepth(t, depth-1))
 		}
 		sep := rapid.SampledFrom([]string{" ", " && ", " AND "}).Draw(t, "andSep")
@@ -197,7 +197,7 @@ func genValidQueryDepth(t *rapid.T, depth int) string {
 		// OR of 2-3 children.
 		n := rapid.IntRange(2, 3).Draw(t, "orN")
 		parts := make([]string, 0, n)
-		for i := 0; i < n; i++ {
+		for range n {
 			parts = append(parts, genValidQueryDepth(t, depth-1))
 		}
 		sep := rapid.SampledFrom([]string{" || ", " OR "}).Draw(t, "orSep")

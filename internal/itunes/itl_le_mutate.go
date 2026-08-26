@@ -208,10 +208,7 @@ func RemoveLastNTracksLE(data []byte, n int) []byte {
 	// Update mlth count
 	if mlthOffset >= 0 {
 		oldCount := int(readUint32LE(result, mlthOffset+8))
-		newCount := oldCount - n
-		if newCount < 0 {
-			newCount = 0
-		}
+		newCount := max(oldCount-n, 0)
 		writeUint32LE(result, mlthOffset+8, uint32(newCount))
 	}
 
@@ -268,7 +265,7 @@ func buildMithLE(trackID int, tr ITLNewTrack) []byte {
 	// Random persistent ID (stored in reverse byte order for LE format)
 	var pid [8]byte
 	_, _ = rand.Read(pid[:])
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		buf[135-i] = pid[i]
 	}
 	return buf

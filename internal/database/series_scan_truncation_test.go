@@ -81,7 +81,7 @@ func truncatingStoreWithFixture(t *testing.T, seriesID int) (*PebbleStore, *erro
 	seed.WaitForWarmup()
 
 	yes := true
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		seq := i
 		_, err := seed.CreateBook(&Book{
 			Title:            "trunc-" + string(rune('a'+i)),

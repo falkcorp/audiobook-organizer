@@ -43,7 +43,7 @@ func TestSearchMetadata_ReturnsResults(t *testing.T) {
 	// configured and this would return 200 with results.
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Contains(t, resp["error"], "no metadata sources enabled")

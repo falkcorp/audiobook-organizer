@@ -109,9 +109,7 @@ func (m *MemStore) LastWarmupDiscardedByField() map[string]int64 {
 	m.warmCountsMu.RLock()
 	defer m.warmCountsMu.RUnlock()
 	out := make(map[string]int64, len(m.lastWarmDiscardedByField))
-	for k, v := range m.lastWarmDiscardedByField {
-		out[k] = v
-	}
+	maps.Copy(out, m.lastWarmDiscardedByField)
 	return out
 }
 
@@ -128,13 +126,9 @@ func (m *MemStore) LastWarmupCounts() (rows, scanned map[string]int) {
 	m.warmCountsMu.RLock()
 	defer m.warmCountsMu.RUnlock()
 	rows = make(map[string]int, len(m.lastWarmCounts))
-	for k, v := range m.lastWarmCounts {
-		rows[k] = v
-	}
+	maps.Copy(rows, m.lastWarmCounts)
 	scanned = make(map[string]int, len(m.lastWarmScanned))
-	for k, v := range m.lastWarmScanned {
-		scanned[k] = v
-	}
+	maps.Copy(scanned, m.lastWarmScanned)
 	return rows, scanned
 }
 
@@ -151,9 +145,7 @@ func (m *MemStore) LastWarmupDurations() map[string]time.Duration {
 	m.warmCountsMu.RLock()
 	defer m.warmCountsMu.RUnlock()
 	out := make(map[string]time.Duration, len(m.lastWarmDurations))
-	for k, v := range m.lastWarmDurations {
-		out[k] = v
-	}
+	maps.Copy(out, m.lastWarmDurations)
 	return out
 }
 
@@ -186,13 +178,9 @@ func (m *MemStore) LastWarmupBytes() (scanned, discarded map[string]int64) {
 	m.warmCountsMu.RLock()
 	defer m.warmCountsMu.RUnlock()
 	scanned = make(map[string]int64, len(m.lastWarmBytes))
-	for k, v := range m.lastWarmBytes {
-		scanned[k] = v
-	}
+	maps.Copy(scanned, m.lastWarmBytes)
 	discarded = make(map[string]int64, len(m.lastWarmDiscarded))
-	for k, v := range m.lastWarmDiscarded {
-		discarded[k] = v
-	}
+	maps.Copy(discarded, m.lastWarmDiscarded)
 	return scanned, discarded
 }
 

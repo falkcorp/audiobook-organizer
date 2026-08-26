@@ -385,7 +385,7 @@ func containmentGridStarts(maxStart int) []int {
 // directly against another signature's full fixed-length representation.
 func resampleNearest(src []uint32, start, length, targetLen int) []uint32 {
 	out := make([]uint32, targetLen)
-	for i := 0; i < targetLen; i++ {
+	for i := range targetLen {
 		idx := start + i*length/targetLen
 		if idx >= start+length {
 			idx = start + length - 1

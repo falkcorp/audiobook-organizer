@@ -102,10 +102,7 @@ func BackfillNutsActivityToPebble(
 			default:
 			}
 
-			end := i + 500
-			if end > len(kvs) {
-				end = len(kvs)
-			}
+			end := min(i+500, len(kvs))
 			batch := kvs[i:end]
 
 			if dryRun {
@@ -143,7 +140,7 @@ func BackfillNutsActivityToPebble(
 
 				// Rebuild secondary indexes.
 				if e.OperationID != "" {
-					opKey := []byte(fmt.Sprintf("act:op:%s:%020d:%s", e.OperationID, e.Timestamp.UnixNano(), entryID))
+					opKey := fmt.Appendf(nil, "act:op:%s:%020d:%s", e.OperationID, e.Timestamp.UnixNano(), entryID)
 					ref := pactIndexRef(tier, e.Timestamp, entryID)
 					if err := pebbleBatch.Set(opKey, ref, nil); err != nil {
 						pebbleBatch.Close()
@@ -151,7 +148,7 @@ func BackfillNutsActivityToPebble(
 					}
 				}
 				if e.BookID != "" {
-					bkKey := []byte(fmt.Sprintf("act:bk:%s:%020d:%s", e.BookID, e.Timestamp.UnixNano(), entryID))
+					bkKey := fmt.Appendf(nil, "act:bk:%s:%020d:%s", e.BookID, e.Timestamp.UnixNano(), entryID)
 					ref := pactIndexRef(tier, e.Timestamp, entryID)
 					if err := pebbleBatch.Set(bkKey, ref, nil); err != nil {
 						pebbleBatch.Close()

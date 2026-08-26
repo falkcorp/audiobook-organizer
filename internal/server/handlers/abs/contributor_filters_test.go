@@ -198,7 +198,7 @@ func TestFilterData_BuiltOncePerTTL(t *testing.T) {
 
 	w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
 	before := w.seed.lib.genreCalls()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if code, _, raw := w.req(t, http.MethodGet,
 			"/api/libraries/"+w.libraryID()+"/filterdata", nil); code != http.StatusOK {
 			t.Fatalf("filterdata = %d %s", code, raw)
@@ -231,13 +231,11 @@ func TestContributorIndex_ConcurrentColdCallersBuildOnce(t *testing.T) {
 	const callers = 8
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range callers {
+		wg.Go(func() {
 			<-start
 			w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil)
-		}()
+		})
 	}
 	close(start)
 
@@ -343,13 +341,11 @@ func TestFilterData_ConcurrentColdCallersBuildOnce(t *testing.T) {
 	const callers = 8
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range callers {
+		wg.Go(func() {
 			<-start
 			w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
-		}()
+		})
 	}
 	close(start)
 

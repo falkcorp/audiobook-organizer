@@ -125,7 +125,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 	slog.Info("scan-composer-tags files total, already done, to process", "opID", opID, "totalFiles", totalFiles, "alreadyDone", alreadyDone, "workItems_count", len(workItems))
 
 	reporter.SetTotal(totalFiles)
-	for i := 0; i < alreadyDone; i++ {
+	for range alreadyDone {
 		reporter.Increment()
 	}
 
@@ -145,10 +145,8 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			for w := range workCh {
 				if ctx.Err() != nil {
 					return
@@ -213,7 +211,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 				reporter.Increment()
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

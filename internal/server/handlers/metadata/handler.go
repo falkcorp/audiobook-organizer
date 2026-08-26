@@ -174,7 +174,9 @@ func (h *Handler) resolveWriteBack() WriteBackEnqueuer {
 // stringPtr is a local copy of the *string helper used by bulkFetchMetadata.
 // The server copy is package-private (server_helpers.go), so a local copy keeps
 // this package decoupled (mirrors the audiobooks ptrStr local copy).
-func stringPtr(s string) *string { return &s }
+//
+//go:fix inline
+func stringPtr(s string) *string { return new(s) }
 
 // ratingPatchRequest aliases the canonical type from internal/server/handlers
 // (no import cycle — handlers is a leaf package).
@@ -1073,7 +1075,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		if meta.Publisher != "" && !metafetch.IsGarbageValue(meta.Publisher) {
 			addFetched("publisher", meta.Publisher)
 			if shouldApply("publisher", hasBookValue("publisher")) {
-				book.Publisher = stringPtr(meta.Publisher)
+				book.Publisher = new(meta.Publisher)
 				appliedFields = append(appliedFields, "publisher")
 				didUpdate = true
 			}
@@ -1082,7 +1084,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		if meta.Language != "" && !metafetch.IsGarbageValue(meta.Language) {
 			addFetched("language", meta.Language)
 			if shouldApply("language", hasBookValue("language")) {
-				book.Language = stringPtr(meta.Language)
+				book.Language = new(meta.Language)
 				appliedFields = append(appliedFields, "language")
 				didUpdate = true
 			}
@@ -1102,14 +1104,14 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			if len(meta.ISBN) == 10 {
 				addFetched("isbn10", meta.ISBN)
 				if shouldApply("isbn10", hasBookValue("isbn10")) {
-					book.ISBN10 = stringPtr(meta.ISBN)
+					book.ISBN10 = new(meta.ISBN)
 					appliedFields = append(appliedFields, "isbn10")
 					didUpdate = true
 				}
 			} else {
 				addFetched("isbn13", meta.ISBN)
 				if shouldApply("isbn13", hasBookValue("isbn13")) {
-					book.ISBN13 = stringPtr(meta.ISBN)
+					book.ISBN13 = new(meta.ISBN)
 					appliedFields = append(appliedFields, "isbn13")
 					didUpdate = true
 				}

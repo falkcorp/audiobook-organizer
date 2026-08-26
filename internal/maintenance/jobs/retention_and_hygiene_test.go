@@ -130,10 +130,7 @@ func newDeleteTracker(ops []database.Operation) *mockDeleteTracker {
 		// full listing into one that sees nothing.
 		end := total
 		if limit > 0 {
-			end = offset + limit
-			if end > total {
-				end = total
-			}
+			end = min(offset+limit, total)
 		}
 		return ops[offset:end], total, nil
 	}

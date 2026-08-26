@@ -218,7 +218,7 @@ func TestDownsampleMaxPool_Short(t *testing.T) {
 	if len(out) != 10 {
 		t.Errorf("expected length 10, got %d", len(out))
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if out[i] != data[i] {
 			t.Errorf("mismatch at %d: expected %d, got %d", i, data[i], out[i])
 		}
@@ -503,7 +503,7 @@ func TestEncodeMask_FirstHalfReal(t *testing.T) {
 		t.Fatalf("decodeMask: %v", err)
 	}
 	halfOut := BookSignatureFixedLength / 2
-	for i := 0; i < halfOut; i++ {
+	for i := range halfOut {
 		if !bits[i] {
 			t.Errorf("first-half bit %d should be 1", i)
 		}

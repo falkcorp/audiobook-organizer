@@ -26,7 +26,7 @@ var aiTracer = otel.Tracer("audiobook-organizer/ai")
 //	  },
 //	  attribute.String("filename", filename),
 //	)
-func WithOpenAISpan(ctx context.Context, opName string, fn func(context.Context) (interface{}, error), attrs ...attribute.KeyValue) (interface{}, error) {
+func WithOpenAISpan(ctx context.Context, opName string, fn func(context.Context) (any, error), attrs ...attribute.KeyValue) (any, error) {
 	_, span := aiTracer.Start(ctx, opName, trace.WithAttributes(attrs...))
 	defer span.End()
 

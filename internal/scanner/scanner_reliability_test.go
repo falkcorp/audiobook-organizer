@@ -113,7 +113,7 @@ func TestRelScn_ConcurrentAcquireReleaseRace(t *testing.T) {
 	resetScanCacheRefsForTest(t)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -122,7 +122,7 @@ func TestRelScn_ConcurrentAcquireReleaseRace(t *testing.T) {
 			}
 			release := AcquireScanCache(cache)
 			defer release()
-			for j := 0; j < 200; j++ {
+			for j := range 200 {
 				// Worker read path (mirrors ProcessBooksParallel).
 				globalScanCacheMu.RLock()
 				c := globalScanCache

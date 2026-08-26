@@ -311,7 +311,7 @@ func TestDeleteBookFilesForBook(t *testing.T) {
 	store, bookID, cleanup := newTestStoreWithBook(t)
 	defer cleanup()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		f := &BookFile{
 			BookID:      bookID,
 			FilePath:    "/books/bulk_delete_" + string(rune('a'+i)) + ".m4b",

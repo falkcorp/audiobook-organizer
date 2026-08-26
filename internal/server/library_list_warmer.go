@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
@@ -111,17 +112,17 @@ func buildListCacheRawQuery(limit, offset int, f audiobookspkg.ListFilters) stri
 	if f.IsPrimaryVersion != nil && *f.IsPrimaryVersion {
 		add("is_primary_version", "true")
 	}
-	out := ""
+	var out strings.Builder
 	for i, p := range parts {
 		if i > 0 {
-			out += "&"
+			out.WriteString("&")
 		}
-		out += p
+		out.WriteString(p)
 	}
-	return out
+	return out.String()
 }
 
-func typeName(v interface{}) string { return fmt.Sprintf("%T", v) }
+func typeName(v any) string { return fmt.Sprintf("%T", v) }
 
 // qry is one cache-warming target. Hoisted to package scope so both the
 // eager phase (warmAudiobookListCache) and the background trickle

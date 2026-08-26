@@ -120,7 +120,7 @@ type bookStringSortIndex struct {
 	get  func(*Book) string
 }
 
-func (ix bookStringSortIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (ix bookStringSortIndex) FromObject(obj any) (bool, []byte, error) {
 	b, ok := obj.(*Book)
 	if !ok {
 		return false, nil, fmt.Errorf("%s: expected *Book, got %T", ix.name, obj)
@@ -128,7 +128,7 @@ func (ix bookStringSortIndex) FromObject(obj interface{}) (bool, []byte, error) 
 	return true, encodeSortableString(ix.get(b)), nil
 }
 
-func (ix bookStringSortIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (ix bookStringSortIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("%s: expected 1 arg, got %d", ix.name, len(args))
 	}
@@ -148,7 +148,7 @@ type bookIntSortIndex struct {
 	get  func(*Book) (int64, bool)
 }
 
-func (ix bookIntSortIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (ix bookIntSortIndex) FromObject(obj any) (bool, []byte, error) {
 	b, ok := obj.(*Book)
 	if !ok {
 		return false, nil, fmt.Errorf("%s: expected *Book, got %T", ix.name, obj)
@@ -160,7 +160,7 @@ func (ix bookIntSortIndex) FromObject(obj interface{}) (bool, []byte, error) {
 	return true, encodeSortableInt64(v), nil
 }
 
-func (ix bookIntSortIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (ix bookIntSortIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("%s: expected 1 arg, got %d", ix.name, len(args))
 	}

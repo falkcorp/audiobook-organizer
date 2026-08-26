@@ -7,6 +7,7 @@ package abs_test
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 )
 
@@ -63,12 +64,7 @@ func continueListeningIDs(t *testing.T, w *writeHarness) []string {
 }
 
 func contains(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // progressListIDs returns the libraryItemIds in GET /api/me/progress.

@@ -23,8 +23,8 @@ type AIJob struct {
 	ErrorCount     int       `json:"error_count"`
 	RowErrors      string    `json:"row_errors,omitempty"` // JSON-encoded []AIJobRowError
 	ErrorMsg       string    `json:"error_msg,omitempty"`
-	SubmittedAt    time.Time `json:"submitted_at,omitempty"`
-	CompletedAt    time.Time `json:"completed_at,omitempty"`
+	SubmittedAt    time.Time `json:"submitted_at"`
+	CompletedAt    time.Time `json:"completed_at"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 

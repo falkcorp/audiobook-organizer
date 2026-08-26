@@ -192,7 +192,7 @@ func vgCoreTitlesMatch(a, b string) bool {
 
 func vgLongWords(s string) map[string]bool {
 	set := make(map[string]bool)
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		w = strings.Trim(w, ".,;:!?\"'")
 		if len([]rune(w)) >= 4 {
 			set[w] = true

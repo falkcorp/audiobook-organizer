@@ -404,7 +404,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 			}
 		}
 
-		book.LibraryState = strPtr(imp.importLibraryState(importMode))
+		book.LibraryState = new(imp.importLibraryState(importMode))
 
 		// This book is brand new: both the external-ID lookup above and the
 		// SkipDuplicates path continue out when an existing row is found, so
@@ -415,13 +415,13 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 		// never show the book again. See ElectMissingPrimaries for the repair
 		// of rows already written this way.
 		vgID := fmt.Sprintf("vg-%s", ulid.Make().String())
-		book.VersionGroupID = strPtr(vgID)
+		book.VersionGroupID = new(vgID)
 		isPrimary := true
 		book.IsPrimaryVersion = &isPrimary
 
 		coverPath, coverErr := metadata.ExtractCoverArt(firstTrackPath)
 		if coverErr == nil && coverPath != "" {
-			book.CoverURL = strPtr("/api/v1/covers/local/" + filepath.Base(coverPath))
+			book.CoverURL = new("/api/v1/covers/local/" + filepath.Base(coverPath))
 		}
 
 		created, err := imp.store.CreateBook(book)
@@ -573,10 +573,10 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				continue
 			}
 
-			book.FileHash = strPtr(hash)
-			book.OriginalFileHash = strPtr(hash)
+			book.FileHash = new(hash)
+			book.OriginalFileHash = new(hash)
 			if importMode == itunes.ImportModeOrganized {
-				book.OrganizedFileHash = strPtr(hash)
+				book.OrganizedFileHash = new(hash)
 			}
 
 			if blocked, err := imp.store.IsHashBlocked(hash); err == nil && blocked {
@@ -861,26 +861,26 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 		}
 
 		if existing != nil && (existing.ITunesPersistentID == nil || *existing.ITunesPersistentID == "") {
-			existing.ITunesPersistentID = strPtr(persistentID)
+			existing.ITunesPersistentID = new(persistentID)
 			pidIndex[persistentID] = existing
 		}
 
 		if existing != nil {
 			changed := false
 
-			newPlayCount := intPtrLocal(firstTrack.PlayCount)
+			newPlayCount := new(firstTrack.PlayCount)
 			if existing.ITunesPlayCount == nil || *existing.ITunesPlayCount != *newPlayCount {
 				existing.ITunesPlayCount = newPlayCount
 				changed = true
 			}
 
-			newRating := intPtrLocal(firstTrack.Rating)
+			newRating := new(firstTrack.Rating)
 			if existing.ITunesRating == nil || *existing.ITunesRating != *newRating {
 				existing.ITunesRating = newRating
 				changed = true
 			}
 
-			newBookmark := int64PtrLocal(firstTrack.Bookmark)
+			newBookmark := new(firstTrack.Bookmark)
 			if existing.ITunesBookmark == nil || *existing.ITunesBookmark != *newBookmark {
 				existing.ITunesBookmark = newBookmark
 				changed = true
@@ -968,7 +968,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 				continue
 			}
 			imp.assignAuthorAndSeries(book, firstTrack)
-			book.LibraryState = strPtr("imported")
+			book.LibraryState = new("imported")
 
 			created, err := imp.store.CreateBook(book)
 			if err != nil {
@@ -1474,7 +1474,7 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 			return nil
 		}
 
-		book.LibraryState = strPtr("organized")
+		book.LibraryState = new("organized")
 		if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
 			if len(files) > 1 {
 				// C-7: a multi-file book got here via organizeMultiFileBook,
@@ -1722,10 +1722,10 @@ func (imp *Importer) applyOrganizedFileMetadata(book *database.Book, newPath str
 	if err != nil {
 		slog.Warn("failed to compute organized hash", "path", newPath, "error", err)
 	} else if hash != "" {
-		book.FileHash = strPtr(hash)
-		book.OrganizedFileHash = strPtr(hash)
+		book.FileHash = new(hash)
+		book.OrganizedFileHash = new(hash)
 		if book.OriginalFileHash == nil {
-			book.OriginalFileHash = strPtr(hash)
+			book.OriginalFileHash = new(hash)
 		}
 	}
 	if info, err := os.Stat(newPath); err == nil {
@@ -1792,7 +1792,7 @@ func (imp *Importer) linkAsVersion(existing *database.Book, importBook *database
 	importBook.VersionGroupID = existing.VersionGroupID
 	isPrimary := false
 	importBook.IsPrimaryVersion = &isPrimary
-	importBook.LibraryState = strPtr("imported")
+	importBook.LibraryState = new("imported")
 
 	created, err := imp.store.CreateBook(importBook)
 	if err != nil {
@@ -1875,11 +1875,11 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 	}
 	var releaseYear *int
 	if firstTrack.Year > 0 {
-		releaseYear = intPtrLocal(firstTrack.Year)
+		releaseYear = new(firstTrack.Year)
 	}
 	var persistentID *string
 	if firstTrack.PersistentID != "" {
-		persistentID = strPtr(firstTrack.PersistentID)
+		persistentID = new(firstTrack.PersistentID)
 	}
 
 	book := &database.Book{
@@ -1887,13 +1887,13 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 		FilePath:             bookFilePath,
 		Format:               format,
 		Duration:             duration,
-		OriginalFilename:     strPtr(filepath.Base(filePath)),
+		OriginalFilename:     new(filepath.Base(filePath)),
 		AudiobookReleaseYear: releaseYear,
 		ITunesPersistentID:   persistentID,
-		ITunesPlayCount:      intPtrLocal(firstTrack.PlayCount),
-		ITunesRating:         intPtrLocal(firstTrack.Rating),
-		ITunesBookmark:       int64PtrLocal(firstTrack.Bookmark),
-		ITunesImportSource:   strPtr(libraryPath),
+		ITunesPlayCount:      new(firstTrack.PlayCount),
+		ITunesRating:         new(firstTrack.Rating),
+		ITunesBookmark:       new(firstTrack.Bookmark),
+		ITunesImportSource:   new(libraryPath),
 	}
 
 	if !firstTrack.DateAdded.IsZero() {
@@ -1904,10 +1904,10 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 		book.ITunesLastPlayed = &lastPlayed
 	}
 	if firstTrack.AlbumArtist != "" && firstTrack.AlbumArtist != firstTrack.Artist {
-		book.Narrator = strPtr(firstTrack.AlbumArtist)
+		book.Narrator = new(firstTrack.AlbumArtist)
 	}
 	if firstTrack.Comments != "" {
-		book.Description = strPtr(firstTrack.Comments)
+		book.Description = new(firstTrack.Comments)
 	}
 	if totalSize > 0 {
 		book.FileSize = &totalSize
@@ -2114,13 +2114,11 @@ func calculatePercent(current, total int) int {
 	return pct
 }
 
-func strPtr(s string) *string      { return &s }
-func intPtrLocal(v int) *int       { return &v }
-func int64PtrLocal(v int64) *int64 { return &v }
+//go:fix inline
+func strPtr(s string) *string { return new(s) }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+//go:fix inline
+func intPtrLocal(v int) *int { return new(v) }
+
+//go:fix inline
+func int64PtrLocal(v int64) *int64 { return new(v) }

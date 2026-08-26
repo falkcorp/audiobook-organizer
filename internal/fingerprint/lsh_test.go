@@ -17,7 +17,7 @@ import (
 // with stable structure.
 func makeRaw(n int, fn func(i int) uint32) []byte {
 	raw := make([]byte, n*4)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		binary.LittleEndian.PutUint32(raw[i*4:], fn(i))
 	}
 	return raw
@@ -82,7 +82,7 @@ func TestSubprints_FivePercentBitFlipMeetsRecallThreshold(t *testing.T) {
 	totalBits := len(flipped) * 8
 	toFlip := totalBits * 5 / 100
 	flipRng := rand.New(rand.NewSource(0xfeedface))
-	for i := 0; i < toFlip; i++ {
+	for range toFlip {
 		bit := flipRng.Intn(totalBits)
 		flipped[bit/8] ^= 1 << uint(bit%8)
 	}

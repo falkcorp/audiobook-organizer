@@ -26,13 +26,13 @@ import (
 func seedSyncLibrary(t *testing.T, store *database.PebbleStore, n, filesPerBook int) []string {
 	t.Helper()
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		book, err := store.CreateBook(&database.Book{
 			Title:    fmt.Sprintf("Sync Backfill Book %d", i),
 			FilePath: fmt.Sprintf("/library/sync-%d", i),
 		})
 		require.NoError(t, err)
-		for f := 0; f < filesPerBook; f++ {
+		for f := range filesPerBook {
 			require.NoError(t, store.CreateBookFile(&database.BookFile{
 				BookID:   book.ID,
 				FilePath: fmt.Sprintf("/library/sync-%d/track-%02d.mp3", i, f),

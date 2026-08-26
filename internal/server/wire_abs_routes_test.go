@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -610,13 +611,7 @@ func TestAbsCollisionDetailReserved_BothNarrowingRules(t *testing.T) {
 func TestABSRouteListIncludesOpenIDRoutes(t *testing.T) {
 	want := []string{"GET /auth/openid", "GET /auth/openid/callback"}
 	for _, w := range want {
-		found := false
-		for _, entry := range absRouteList() {
-			if entry == w {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(absRouteList(), w)
 		if !found {
 			t.Errorf("absRouteList() is missing %q — the registered OpenID surface would again be invisible to the guard tests and the startup route log", w)
 		}

@@ -190,7 +190,7 @@ func TestPebbleActivityStore_Prune(t *testing.T) {
 
 	cutoff := time.Now().UTC().Add(-1 * time.Hour)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier: "debug", Type: "tag_write", Level: "debug",
 			Source: "writer", Summary: "old debug",
@@ -289,7 +289,7 @@ func TestPebbleActivityStore_CompactByDay_Basic(t *testing.T) {
 	day2 := time.Date(2025, 6, 11, 14, 0, 0, 0, time.UTC)
 	olderThan := time.Date(2025, 6, 12, 0, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "metadata_applied",
@@ -303,7 +303,7 @@ func TestPebbleActivityStore_CompactByDay_Basic(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "tag_written",
@@ -411,7 +411,7 @@ func TestPebbleActivityStore_CompactByDay_Truncates(t *testing.T) {
 	day := time.Date(2025, 3, 20, 6, 0, 0, 0, time.UTC)
 	olderThan := time.Date(2025, 3, 21, 0, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 600; i++ {
+	for i := range 600 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "debug",
 			Type:      "tag_written",
@@ -457,7 +457,7 @@ func TestPebbleActivityStore_CompactByDay_MergesExisting(t *testing.T) {
 	day := time.Date(2025, 5, 15, 8, 0, 0, 0, time.UTC)
 	cutoff := time.Date(2025, 5, 15, 12, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier: "change", Type: "metadata_applied", Level: "info",
 			Source: "test", Summary: "initial entry", Timestamp: day,
@@ -471,7 +471,7 @@ func TestPebbleActivityStore_CompactByDay_MergesExisting(t *testing.T) {
 	assert.Equal(t, 3, r1.EntriesDeleted)
 
 	lateDay := time.Date(2025, 5, 15, 11, 0, 0, 0, time.UTC)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_, err := s.Record(ActivityEntry{
 			Tier: "change", Type: "tag_written", Level: "info",
 			Source: "test", Summary: "late entry", Timestamp: lateDay,
@@ -508,7 +508,7 @@ func TestPebbleActivityStore_RecompactDigests(t *testing.T) {
 	day := time.Date(2025, 3, 10, 0, 0, 0, 0, time.UTC)
 
 	// Insert 3 legacy-style entries (type=system_log, no tags).
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "system_log",
@@ -641,7 +641,7 @@ func TestBackfillNutsActivityToPebble_DryRun(t *testing.T) {
 
 	// Write 5 entries across 3 tiers to NutsDB.
 	for _, tier := range []string{"change", "debug", "audit"} {
-		for i := 0; i < 1; i++ {
+		for range 1 {
 			_, err := nutsStore.Record(ActivityEntry{
 				Tier:    tier,
 				Type:    "test",
@@ -653,7 +653,7 @@ func TestBackfillNutsActivityToPebble_DryRun(t *testing.T) {
 		}
 	}
 	// Also add 2 more to change.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		_, err := nutsStore.Record(ActivityEntry{
 			Tier: "change", Type: "extra", Level: "info",
 			Source: "backfill-test", Summary: "extra",
@@ -687,7 +687,7 @@ func TestBackfillNutsActivityToPebble_Apply(t *testing.T) {
 	pebbleStore := NewPebbleActivityStore(db)
 
 	// Write 3 entries to NutsDB.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := nutsStore.Record(ActivityEntry{
 			Tier:    "change",
 			Type:    "test",

@@ -469,7 +469,7 @@ func createMinimalMP3(t *testing.T, dir string) string {
 	buf.Write([]byte{0x90, 0x00})
 
 	// Add some dummy audio data
-	for i := 0; i < 256; i++ {
+	for range 256 {
 		buf.WriteByte(0x00)
 	}
 
@@ -945,35 +945,35 @@ func TestExtract_RealMP3File(t *testing.T) {
 // mockMetadata implements tag.Metadata interface for testing
 type mockMetadata struct {
 	fileType tag.FileType
-	raw      map[string]interface{}
+	raw      map[string]any
 }
 
-func (m *mockMetadata) Format() tag.Format          { return tag.ID3v2_4 }
-func (m *mockMetadata) FileType() tag.FileType      { return m.fileType }
-func (m *mockMetadata) Title() string               { return "Test Title" }
-func (m *mockMetadata) Album() string               { return "Test Album" }
-func (m *mockMetadata) Artist() string              { return "Test Artist" }
-func (m *mockMetadata) AlbumArtist() string         { return "Test Album Artist" }
-func (m *mockMetadata) Composer() string            { return "Test Composer" }
-func (m *mockMetadata) Genre() string               { return "Test Genre" }
-func (m *mockMetadata) Year() int                   { return 2024 }
-func (m *mockMetadata) Track() (int, int)           { return 1, 10 }
-func (m *mockMetadata) Disc() (int, int)            { return 1, 1 }
-func (m *mockMetadata) Picture() *tag.Picture       { return nil }
-func (m *mockMetadata) Lyrics() string              { return "" }
-func (m *mockMetadata) Comment() string             { return "" }
-func (m *mockMetadata) Raw() map[string]interface{} { return m.raw }
+func (m *mockMetadata) Format() tag.Format     { return tag.ID3v2_4 }
+func (m *mockMetadata) FileType() tag.FileType { return m.fileType }
+func (m *mockMetadata) Title() string          { return "Test Title" }
+func (m *mockMetadata) Album() string          { return "Test Album" }
+func (m *mockMetadata) Artist() string         { return "Test Artist" }
+func (m *mockMetadata) AlbumArtist() string    { return "Test Album Artist" }
+func (m *mockMetadata) Composer() string       { return "Test Composer" }
+func (m *mockMetadata) Genre() string          { return "Test Genre" }
+func (m *mockMetadata) Year() int              { return 2024 }
+func (m *mockMetadata) Track() (int, int)      { return 1, 10 }
+func (m *mockMetadata) Disc() (int, int)       { return 1, 1 }
+func (m *mockMetadata) Picture() *tag.Picture  { return nil }
+func (m *mockMetadata) Lyrics() string         { return "" }
+func (m *mockMetadata) Comment() string        { return "" }
+func (m *mockMetadata) Raw() map[string]any    { return m.raw }
 
 func TestExtractMP3Info_WithMetadata(t *testing.T) {
 	tests := []struct {
 		name               string
-		raw                map[string]interface{}
+		raw                map[string]any
 		expectedBitrate    int
 		expectedSampleRate int
 	}{
 		{
 			name: "With bitrate and sample rate",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate":     320000,
 				"sample_rate": 48000,
 			},
@@ -982,7 +982,7 @@ func TestExtractMP3Info_WithMetadata(t *testing.T) {
 		},
 		{
 			name: "With only bitrate",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate": 256000,
 			},
 			expectedBitrate:    256,
@@ -990,13 +990,13 @@ func TestExtractMP3Info_WithMetadata(t *testing.T) {
 		},
 		{
 			name:               "No metadata (defaults)",
-			raw:                map[string]interface{}{},
+			raw:                map[string]any{},
 			expectedBitrate:    192,   // default
 			expectedSampleRate: 44100, // default
 		},
 		{
 			name: "Wrong type in metadata",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate":     "invalid",
 				"sample_rate": "invalid",
 			},
@@ -1037,13 +1037,13 @@ func TestExtractMP3Info_WithMetadata(t *testing.T) {
 func TestExtractM4AInfo_WithMetadata(t *testing.T) {
 	tests := []struct {
 		name               string
-		raw                map[string]interface{}
+		raw                map[string]any
 		expectedBitrate    int
 		expectedSampleRate int
 	}{
 		{
 			name: "With bitrate and sample rate",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate":     256000,
 				"sample_rate": 48000,
 			},
@@ -1052,7 +1052,7 @@ func TestExtractM4AInfo_WithMetadata(t *testing.T) {
 		},
 		{
 			name: "With only sample rate",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"sample_rate": 44100,
 			},
 			expectedBitrate:    128, // default
@@ -1060,13 +1060,13 @@ func TestExtractM4AInfo_WithMetadata(t *testing.T) {
 		},
 		{
 			name:               "No metadata (defaults)",
-			raw:                map[string]interface{}{},
+			raw:                map[string]any{},
 			expectedBitrate:    128,   // default
 			expectedSampleRate: 44100, // default
 		},
 		{
 			name: "Wrong type in metadata",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate":     3.14,
 				"sample_rate": "not a number",
 			},
@@ -1107,14 +1107,14 @@ func TestExtractM4AInfo_WithMetadata(t *testing.T) {
 func TestExtractFLACInfo_WithMetadata(t *testing.T) {
 	tests := []struct {
 		name               string
-		raw                map[string]interface{}
+		raw                map[string]any
 		expectedSampleRate int
 		expectedBitDepth   int
 		expectedBitrate    int
 	}{
 		{
 			name: "With sample rate and bit depth",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"sample_rate":     96000,
 				"bits_per_sample": 24,
 			},
@@ -1124,7 +1124,7 @@ func TestExtractFLACInfo_WithMetadata(t *testing.T) {
 		},
 		{
 			name: "With only sample rate",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"sample_rate": 48000,
 			},
 			expectedSampleRate: 48000,
@@ -1133,14 +1133,14 @@ func TestExtractFLACInfo_WithMetadata(t *testing.T) {
 		},
 		{
 			name:               "No metadata (defaults)",
-			raw:                map[string]interface{}{},
+			raw:                map[string]any{},
 			expectedSampleRate: 44100, // default
 			expectedBitDepth:   16,    // default
 			expectedBitrate:    1411,  // (44100 * 16 * 2) / 1000
 		},
 		{
 			name: "Wrong types",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"sample_rate":     "invalid",
 				"bits_per_sample": false,
 			},
@@ -1186,13 +1186,13 @@ func TestExtractFLACInfo_WithMetadata(t *testing.T) {
 func TestExtractOGGInfo_WithMetadata(t *testing.T) {
 	tests := []struct {
 		name               string
-		raw                map[string]interface{}
+		raw                map[string]any
 		expectedBitrate    int
 		expectedSampleRate int
 	}{
 		{
 			name: "With bitrate and sample rate",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate":     192000,
 				"sample_rate": 48000,
 			},
@@ -1201,7 +1201,7 @@ func TestExtractOGGInfo_WithMetadata(t *testing.T) {
 		},
 		{
 			name: "With only bitrate",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate": 128000,
 			},
 			expectedBitrate:    128,
@@ -1209,13 +1209,13 @@ func TestExtractOGGInfo_WithMetadata(t *testing.T) {
 		},
 		{
 			name:               "No metadata (defaults)",
-			raw:                map[string]interface{}{},
+			raw:                map[string]any{},
 			expectedBitrate:    160,   // default
 			expectedSampleRate: 44100, // default
 		},
 		{
 			name: "Wrong types",
-			raw: map[string]interface{}{
+			raw: map[string]any{
 				"bitrate":     []byte{1, 2, 3},
 				"sample_rate": map[string]int{},
 			},

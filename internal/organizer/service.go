@@ -156,7 +156,7 @@ type Service struct {
 	// Returns (result, error). Breaks the metafetch import cycle.
 	// ctx is threaded so a cancelled organize op aborts an in-flight external
 	// metadata fetch promptly.
-	FetchMetadataForBook func(ctx context.Context, bookID string) (interface{}, error)
+	FetchMetadataForBook func(ctx context.Context, bookID string) (any, error)
 }
 
 // SetWriteBackBatcher sets the iTunes write-back batcher.
@@ -199,7 +199,7 @@ func NewService(db Store) *Service {
 		},
 		ApplyOrganizedFileMetadata: func(book *database.Book, newPath string) {},
 		ComputeITunesPath:          func(_ string) string { return "" },
-		FetchMetadataForBook:       func(_ context.Context, _ string) (interface{}, error) { return nil, nil },
+		FetchMetadataForBook:       func(_ context.Context, _ string) (any, error) { return nil, nil },
 	}
 }
 
@@ -959,10 +959,8 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 
 	// Start worker goroutines
 	var wg sync.WaitGroup
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numWorkers {
+		wg.Go(func() {
 			workerOrg := orgSvc.newOrganizer()
 
 			for i := range jobs {
@@ -1147,7 +1145,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 						fmt.Sprintf("Organizing: %d/%d books", count, len(booksToOrganize)))
 				}
 			}
-		}()
+		})
 	}
 
 	// Feed jobs — cancellation checked here AND in the worker loop above.

@@ -64,8 +64,7 @@ func (b *t06TermBus) waitTerminal(t *testing.T, opID string, timeout time.Durati
 
 // TestTerminalEvent_Completed asserts op.terminal fires with status=completed.
 func TestTerminalEvent_Completed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -85,8 +84,7 @@ func TestTerminalEvent_Completed(t *testing.T) {
 
 // TestTerminalEvent_Failed asserts op.terminal fires with status=failed.
 func TestTerminalEvent_Failed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -109,8 +107,7 @@ func TestTerminalEvent_Failed(t *testing.T) {
 // TestTerminalEvent_CanceledRunning asserts op.terminal fires with
 // status=canceled when a running op's context is canceled (in-process path).
 func TestTerminalEvent_CanceledRunning(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -143,8 +140,7 @@ func TestTerminalEvent_CanceledRunning(t *testing.T) {
 // TestTerminalEvent_Abandoned asserts op.terminal fires with an interrupted_*
 // status when a run ignores cancellation and is classified as abandoned.
 func TestTerminalEvent_Abandoned(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -185,8 +181,7 @@ func TestTerminalEvent_Abandoned(t *testing.T) {
 // status=interrupted_dropped on the infinite-restart force-drop path. The
 // resume_count is set BEFORE Start so it can never race the worker pickup.
 func TestTerminalEvent_ForceDropped(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -228,8 +223,7 @@ func TestTerminalEvent_DepFailPropagation(t *testing.T) {
 		t.Fatalf("RegisterOp dep: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	params := map[string]string{"book_id": "b-term-fail"}

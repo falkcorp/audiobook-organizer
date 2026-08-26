@@ -19,8 +19,7 @@ import (
 
 // TestWorker_SuccessfulRunSetsCompleted verifies the happy path.
 func TestWorker_SuccessfulRunSetsCompleted(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -38,8 +37,7 @@ func TestWorker_SuccessfulRunSetsCompleted(t *testing.T) {
 
 // TestWorker_RunReturningErrorSetsFailed verifies error path.
 func TestWorker_RunReturningErrorSetsFailed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -66,8 +64,7 @@ func TestWorker_RunReturningErrorSetsFailed(t *testing.T) {
 // TestWorker_PanicSetsFailed verifies that a panicking Run is caught and
 // the op is marked as failed.
 func TestWorker_PanicSetsFailed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -94,8 +91,7 @@ func TestWorker_PanicSetsFailed(t *testing.T) {
 // TestWorker_IsolateReturnsSentinelError verifies that Isolate=true ops are
 // rejected with ErrSubprocessNotImplemented until UOS-03.
 func TestWorker_IsolateReturnsSentinelError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)

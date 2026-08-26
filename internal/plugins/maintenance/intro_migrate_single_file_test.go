@@ -32,14 +32,14 @@ func TestApplyBookIntroFieldsTouchesNothingElse(t *testing.T) {
 	before := dst // struct copy: the pre-state of every field
 
 	src := database.Book{
-		IntroTranscription:    strp("Dune by Frank Herbert read by Scott Brick"),
-		TranscribedTitle:      strp("Dune"),
-		TranscribedAuthor:     strp("Frank Herbert"),
-		TranscribedNarrator:   strp("Scott Brick"),
-		IntroTranscribedAt:    timep(time.Unix(1700000000, 0)),
-		TranscribeStatus:      strp("ok"),
+		IntroTranscription:    new("Dune by Frank Herbert read by Scott Brick"),
+		TranscribedTitle:      new("Dune"),
+		TranscribedAuthor:     new("Frank Herbert"),
+		TranscribedNarrator:   new("Scott Brick"),
+		IntroTranscribedAt:    new(time.Unix(1700000000, 0)),
+		TranscribeStatus:      new("ok"),
 		TranscribeError:       nil,
-		TranscribeAttemptedAt: timep(time.Unix(1700000001, 0)),
+		TranscribeAttemptedAt: new(time.Unix(1700000001, 0)),
 	}
 	applyBookIntroFieldsToFile(&dst, src)
 
@@ -48,7 +48,7 @@ func TestApplyBookIntroFieldsTouchesNothingElse(t *testing.T) {
 		allowed[f] = true
 	}
 
-	bt := reflect.TypeOf(before)
+	bt := reflect.TypeFor[database.BookFile]()
 	bv, av := reflect.ValueOf(before), reflect.ValueOf(dst)
 	var changed []string
 	for i := 0; i < bt.NumField(); i++ {
@@ -81,7 +81,7 @@ func TestApplyBookIntroFieldsTouchesNothingElse(t *testing.T) {
 // TestClassifyMigrateCandidate pins the eligibility rules — the correctness
 // story of tier 0.
 func TestClassifyMigrateCandidate(t *testing.T) {
-	book := database.Book{ID: "b1", IntroTranscription: strp("Dune by Frank Herbert")}
+	book := database.Book{ID: "b1", IntroTranscription: new("Dune by Frank Herbert")}
 	mp3 := func(id, path string) database.BookFile {
 		return database.BookFile{ID: id, BookID: "b1", FilePath: path}
 	}
@@ -121,7 +121,7 @@ func TestClassifyMigrateCandidate(t *testing.T) {
 			name: "already_migrated_is_skipped",
 			files: []database.BookFile{{
 				ID: "f1", BookID: "b1", FilePath: "/lib/a.mp3",
-				IntroTranscription: strp("already here"),
+				IntroTranscription: new("already here"),
 			}},
 			wantReason: migrateAlreadyPresent,
 		},
@@ -129,7 +129,7 @@ func TestClassifyMigrateCandidate(t *testing.T) {
 			name: "overwrite_forces_recopy",
 			files: []database.BookFile{{
 				ID: "f1", BookID: "b1", FilePath: "/lib/a.mp3",
-				IntroTranscription: strp("already here"),
+				IntroTranscription: new("already here"),
 			}},
 			overwrite:  true,
 			wantReason: "", wantTarget: "f1",
@@ -202,7 +202,7 @@ func TestMigrateOneBookReportsRowShapeBeforeTranscript(t *testing.T) {
 // transcription field to BookFile without deciding whether tier 0 should carry
 // it. Without this, a new field silently stays empty on 33,780 migrated rows.
 func TestMigratedFieldsMatchBookFileSchema(t *testing.T) {
-	bf := reflect.TypeOf(database.BookFile{})
+	bf := reflect.TypeFor[database.BookFile]()
 	for _, name := range introMigratedFields {
 		if _, ok := bf.FieldByName(name); !ok {
 			t.Errorf("introMigratedFields names %q, which BookFile does not have", name)
@@ -214,8 +214,8 @@ func TestMigratedFieldsMatchBookFileSchema(t *testing.T) {
 	for _, n := range introMigratedFields {
 		listed[n] = true
 	}
-	for i := 0; i < bf.NumField(); i++ {
-		n := bf.Field(i).Name
+	for field := range bf.Fields() {
+		n := field.Name
 		looksTranscription := len(n) >= 5 &&
 			(n[:5] == "Intro" || (len(n) >= 10 && n[:10] == "Transcribe") || (len(n) >= 11 && n[:11] == "Transcribed"))
 		if looksTranscription && !listed[n] {
@@ -249,7 +249,7 @@ func fillAllFields(t *testing.T, v reflect.Value, seed int) {
 			f.Set(reflect.MakeSlice(f.Type(), 1, 1))
 		case reflect.Map:
 			f.Set(reflect.MakeMap(f.Type()))
-		case reflect.Ptr:
+		case reflect.Pointer:
 			p := reflect.New(f.Type().Elem())
 			switch p.Elem().Kind() {
 			case reflect.String:
@@ -272,5 +272,8 @@ func fillAllFields(t *testing.T, v reflect.Value, seed int) {
 	}
 }
 
-func strp(s string) *string        { return &s }
-func timep(t time.Time) *time.Time { return &t }
+//go:fix inline
+func strp(s string) *string { return new(s) }
+
+//go:fix inline
+func timep(t time.Time) *time.Time { return new(t) }

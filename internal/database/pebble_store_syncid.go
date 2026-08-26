@@ -33,6 +33,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -111,11 +112,11 @@ func newSyncID() (string, error) {
 }
 
 func syncItemKey(syncID string) []byte {
-	return []byte(fmt.Sprintf("sync_item:%s", syncID))
+	return fmt.Appendf(nil, "sync_item:%s", syncID)
 }
 
 func syncItemBookKey(bookID string) []byte {
-	return []byte(fmt.Sprintf("sync_item:book:%s", bookID))
+	return fmt.Appendf(nil, "sync_item:book:%s", bookID)
 }
 
 // getSyncItem reads and unmarshals the sync_item:<syncID> record. Returns
@@ -215,7 +216,7 @@ func (p *PebbleStore) ResolveSyncItem(syncID string) (*SyncItem, error) {
 	visited := make(map[string]bool, maxHops)
 
 	current := syncID
-	for hop := 0; hop < maxHops; hop++ {
+	for range maxHops {
 		if visited[current] {
 			return nil, fmt.Errorf("sync item redirect chain too long or cyclic starting at %s", syncID)
 		}
@@ -343,13 +344,7 @@ func (p *PebbleStore) RecordSyncMerge(loserBookID, winnerBookID string) error {
 		return err
 	}
 
-	alreadyMerged := false
-	for _, id := range winnerItem.MergedFrom {
-		if id == loserSyncID {
-			alreadyMerged = true
-			break
-		}
-	}
+	alreadyMerged := slices.Contains(winnerItem.MergedFrom, loserSyncID)
 	if !alreadyMerged {
 		winnerItem.MergedFrom = append(winnerItem.MergedFrom, loserSyncID)
 	}

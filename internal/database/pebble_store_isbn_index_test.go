@@ -11,6 +11,7 @@ package database
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -28,7 +29,9 @@ func newPebbleStoreForISBN(t *testing.T) *PebbleStore {
 }
 
 // ptr returns a pointer to s — tiny helper for *string fields.
-func ptr(s string) *string { return &s }
+//
+//go:fix inline
+func ptr(s string) *string { return new(s) }
 
 // createTestBookWithISBN inserts a minimal Book with the given ISBNs and
 // returns its ID.
@@ -39,13 +42,13 @@ func createTestBookWithISBN(t *testing.T, s *PebbleStore, title, isbn10, isbn13,
 		FilePath: "/tmp/" + title + ".m4b",
 	}
 	if isbn10 != "" {
-		b.ISBN10 = ptr(isbn10)
+		b.ISBN10 = new(isbn10)
 	}
 	if isbn13 != "" {
-		b.ISBN13 = ptr(isbn13)
+		b.ISBN13 = new(isbn13)
 	}
 	if asin != "" {
-		b.ASIN = ptr(asin)
+		b.ASIN = new(asin)
 	}
 	created, err := s.CreateBook(b)
 	if err != nil {
@@ -110,7 +113,7 @@ func TestISBNIndex_UpdateChangesISBN(t *testing.T) {
 	updated := &Book{
 		Title:    "book-a",
 		FilePath: "/tmp/book-a.m4b",
-		ISBN13:   ptr("9780000000002"),
+		ISBN13:   new("9780000000002"),
 	}
 	if _, err := s.UpdateBook(id, updated); err != nil {
 		t.Fatalf("UpdateBook: %v", err)
@@ -230,10 +233,5 @@ func TestISBNIndex_IsBuiltFlag(t *testing.T) {
 
 // containsID is a helper that reports whether target appears in ids.
 func containsID(ids []string, target string) bool {
-	for _, id := range ids {
-		if id == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ids, target)
 }

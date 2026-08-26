@@ -7,6 +7,7 @@ package logger
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 )
@@ -14,7 +15,7 @@ import (
 // OperationStore is the subset of database.Store needed by OperationLogger.
 type OperationStore interface {
 	AddOperationLog(operationID, level, message string, details *string) error
-	CreateOperationChange(change interface{}) error
+	CreateOperationChange(change any) error
 	UpdateOperationProgress(id string, current, total int, message string) error
 }
 
@@ -114,9 +115,7 @@ func (l *OperationLogger) ChangeCounters() map[string]int {
 	l.shared.mu.Lock()
 	defer l.shared.mu.Unlock()
 	cp := make(map[string]int, len(l.shared.counters))
-	for k, v := range l.shared.counters {
-		cp[k] = v
-	}
+	maps.Copy(cp, l.shared.counters)
 	return cp
 }
 

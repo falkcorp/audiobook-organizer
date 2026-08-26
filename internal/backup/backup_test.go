@@ -793,7 +793,7 @@ func TestListBackups(t *testing.T) {
 	}
 
 	// Create 3 backups (with 1-second sleep to ensure different timestamps)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := CreateBackup(dbPath, "pebble", config)
 		if err != nil {
 			t.Fatalf("Failed to create backup %d: %v", i, err)
@@ -906,7 +906,7 @@ func TestCleanupOldBackups(t *testing.T) {
 	}
 
 	// Create 5 backups (cleanup happens automatically after each, keeping only MaxBackups=3)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, err := CreateBackup(dbPath, "test", config)
 		if err != nil {
 			t.Fatalf("Failed to create backup %d: %v", i, err)
@@ -1224,7 +1224,7 @@ func TestCreateBackupMaxBackupsZero(t *testing.T) {
 	}
 
 	// Act - Create multiple backups
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := CreateBackup(dbPath, "sqlite", config)
 		if err != nil {
 			t.Fatalf("CreateBackup %d failed: %v", i, err)
@@ -1549,7 +1549,7 @@ func TestCleanupOldBackupsExactlyAtLimit(t *testing.T) {
 	}
 
 	// Act - Create exactly 3 backups (equal to max)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := CreateBackup(dbPath, "sqlite", config)
 		if err != nil {
 			t.Fatalf("CreateBackup %d failed: %v", i, err)

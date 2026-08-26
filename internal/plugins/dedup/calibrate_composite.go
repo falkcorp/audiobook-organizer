@@ -79,7 +79,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"runtime"
+	"slices"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -171,12 +173,7 @@ var primaryKinds = []unified.SignalKind{
 }
 
 func isPrimaryKind(k unified.SignalKind) bool {
-	for _, pk := range primaryKinds {
-		if pk == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(primaryKinds, k)
 }
 
 // cloneScoreConfig deep-copies a ScoreConfig, including its Signals map, so a
@@ -184,9 +181,7 @@ func isPrimaryKind(k unified.SignalKind) bool {
 func cloneScoreConfig(cfg unified.ScoreConfig) unified.ScoreConfig {
 	out := cfg
 	out.Signals = make(map[string]unified.KindConfig, len(cfg.Signals))
-	for k, v := range cfg.Signals {
-		out.Signals[k] = v
-	}
+	maps.Copy(out.Signals, cfg.Signals)
 	return out
 }
 
@@ -262,8 +257,8 @@ func cumulativeBandStat(scores []float64, pairs []compositePair, cutMin float64,
 // bandRec is the sweep result for one tunable band.
 type bandRec struct {
 	Met      bool     `json:"met"`
-	Baseline bandStat `json:"baseline"`      // stat at the baseline band minimum
-	Rec      bandStat `json:"rec,omitempty"` // stat at the recommended minimum (valid only when Met)
+	Baseline bandStat `json:"baseline"` // stat at the baseline band minimum
+	Rec      bandStat `json:"rec"`      // stat at the recommended minimum (valid only when Met)
 }
 
 // sweepBandParallel evaluates every candidate cut-point in
@@ -300,7 +295,6 @@ func sweepBandParallel(
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for i := range cands {
-		i := i
 		g.Go(func() error {
 			select {
 			case <-gctx.Done():
@@ -789,7 +783,6 @@ func sweepConfidenceAdvisory(
 			g, gctx := errgroup.WithContext(ctx)
 			g.SetLimit(runtime.NumCPU())
 			for i := range variants {
-				i := i
 				g.Go(func() error {
 					select {
 					case <-gctx.Done():

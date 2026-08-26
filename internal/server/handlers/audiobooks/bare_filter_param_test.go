@@ -193,7 +193,7 @@ func TestFirstBareFilterFieldParam_Deterministic(t *testing.T) {
 	q := url.Values{"title": {"a"}, "genre": {"b"}, "narrator": {"c"}}.Encode()
 	first, bare := firstBareFilterFieldParam(queryCtx(t, q))
 	require.True(t, bare)
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		got, ok := firstBareFilterFieldParam(queryCtx(t, q))
 		require.True(t, ok)
 		require.Equal(t, first, got, "reported field must be stable across calls")

@@ -574,7 +574,7 @@ func TestNewRenameService(t *testing.T) {
 		t.Error("default IsProtectedPath should return false")
 	}
 	// Default FilterUnchangedTags returns input
-	tags := map[string]interface{}{"title": "X"}
+	tags := map[string]any{"title": "X"}
 	filtered := svc.FilterUnchangedTags("/file", tags)
 	if len(filtered) != 1 {
 		t.Errorf("default FilterUnchangedTags should return input, got %d entries", len(filtered))
@@ -853,7 +853,7 @@ func TestPreviewRename_BookNotFound(t *testing.T) {
 
 func TestStringHelpers(t *testing.T) {
 	t.Run("stringPtr", func(t *testing.T) {
-		p := stringPtr("hello")
+		p := new("hello")
 		if *p != "hello" {
 			t.Errorf("expected 'hello', got %q", *p)
 		}

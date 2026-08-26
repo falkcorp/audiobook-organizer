@@ -99,7 +99,7 @@ func buildOrganizeFixture(t *testing.T, n, distinctTitles int) ([]database.Book,
 	src := "/mnt/itunes/Library.xml"
 
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		title := fmt.Sprintf("Title-%d", i%distinctTitles)
 		books[i] = database.Book{
 			ID:                 fmt.Sprintf("book-%d", i),

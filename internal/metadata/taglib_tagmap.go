@@ -33,7 +33,7 @@ import (
 //
 // Returns ok=false for zero, negative, unparseable or absent values, which
 // leaves the tag out entirely — the correct conservative behaviour.
-func positiveIntTag(v interface{}) (string, bool) {
+func positiveIntTag(v any) (string, bool) {
 	switch n := v.(type) {
 	case int:
 		if n > 0 {
@@ -71,7 +71,7 @@ func positiveIntTag(v interface{}) (string, bool) {
 
 // buildWriteTagMap converts metadata map[string]interface{} to the
 // map[string][]string format that TagLib's property API expects.
-func buildWriteTagMap(metadata map[string]interface{}) map[string][]string {
+func buildWriteTagMap(metadata map[string]any) map[string][]string {
 	tags := make(map[string][]string)
 
 	if title, ok := metadata["title"].(string); ok && title != "" {

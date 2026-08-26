@@ -37,10 +37,7 @@ func LocateDanglingMtphLE(data []byte, masterTIDs map[uint32]struct{}) []MtphHit
 		return nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 
 	var hits []MtphHitLE
 	locateMtphRange(data, contentStart, contentEnd, -1, masterTIDs, &hits)
@@ -155,10 +152,7 @@ func RepairITLDropDanglingMtphLE(data []byte, hits []MtphHitLE) []byte {
 			continue
 		}
 		oldTotal := readUint32LE(result, newMiph+8)
-		newTotal := int(oldTotal) - removed
-		if newTotal < 0 {
-			newTotal = 0
-		}
+		newTotal := max(int(oldTotal)-removed, 0)
 		writeUint32LE(result, newMiph+8, uint32(newTotal))
 
 		// Many miph headers store the playlist's track-item count at
@@ -183,10 +177,7 @@ func RepairITLDropDanglingMtphLE(data []byte, hits []MtphHitLE) []byte {
 	if msdhOffset >= 0 && msdhOffset+12 <= len(result) {
 		// findMsdhByType reads from the post-splice buffer so msdhTotalLen
 		// here is the OLD value still encoded — we must subtract removed.
-		newMsdhTotal := msdhTotalLen - totalRemoved
-		if newMsdhTotal < 0 {
-			newMsdhTotal = 0
-		}
+		newMsdhTotal := max(msdhTotalLen-totalRemoved, 0)
 		writeUint32LE(result, msdhOffset+8, uint32(newMsdhTotal))
 	}
 

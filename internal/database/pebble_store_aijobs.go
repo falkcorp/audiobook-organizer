@@ -20,11 +20,11 @@ func (p *PebbleStore) CreateAIJob(job AIJob, payloadJSON []byte) error {
 	if err != nil {
 		return fmt.Errorf("CreateAIJob marshal: %w", err)
 	}
-	jobKey := []byte(fmt.Sprintf("aijob:%s", job.ID))
+	jobKey := fmt.Appendf(nil, "aijob:%s", job.ID)
 	if err := p.db.Set(jobKey, data, pebble.Sync); err != nil {
 		return fmt.Errorf("CreateAIJob set job: %w", err)
 	}
-	payloadKey := []byte(fmt.Sprintf("aijob_payload:%s", job.ID))
+	payloadKey := fmt.Appendf(nil, "aijob_payload:%s", job.ID)
 	if err := p.db.Set(payloadKey, payloadJSON, pebble.Sync); err != nil {
 		return fmt.Errorf("CreateAIJob set payload: %w", err)
 	}
@@ -33,7 +33,7 @@ func (p *PebbleStore) CreateAIJob(job AIJob, payloadJSON []byte) error {
 
 // GetAIJob retrieves a job by its ID.
 func (p *PebbleStore) GetAIJob(id string) (AIJob, error) {
-	jobKey := []byte(fmt.Sprintf("aijob:%s", id))
+	jobKey := fmt.Appendf(nil, "aijob:%s", id)
 	value, closer, err := p.db.Get(jobKey)
 	if err == pebble.ErrNotFound {
 		return AIJob{}, fmt.Errorf("ai job not found: %s", id)
@@ -51,7 +51,7 @@ func (p *PebbleStore) GetAIJob(id string) (AIJob, error) {
 
 // GetAIJobByBatchID retrieves a job using the OpenAI batch ID secondary index.
 func (p *PebbleStore) GetAIJobByBatchID(batchID string) (AIJob, error) {
-	idxKey := []byte(fmt.Sprintf("aijob_batch:%s", batchID))
+	idxKey := fmt.Appendf(nil, "aijob_batch:%s", batchID)
 	val, closer, err := p.db.Get(idxKey)
 	if err == pebble.ErrNotFound {
 		return AIJob{}, fmt.Errorf("ai job not found for batch: %s", batchID)
@@ -66,7 +66,7 @@ func (p *PebbleStore) GetAIJobByBatchID(batchID string) (AIJob, error) {
 
 // GetAIJobPayload returns the raw payload JSON stored alongside the job.
 func (p *PebbleStore) GetAIJobPayload(id string) ([]byte, error) {
-	payloadKey := []byte(fmt.Sprintf("aijob_payload:%s", id))
+	payloadKey := fmt.Appendf(nil, "aijob_payload:%s", id)
 	value, closer, err := p.db.Get(payloadKey)
 	if err == pebble.ErrNotFound {
 		return nil, fmt.Errorf("ai job payload not found: %s", id)
@@ -91,11 +91,11 @@ func (p *PebbleStore) MarkAIJobSubmitted(id, batchID string) error {
 	if err != nil {
 		return err
 	}
-	if err := p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync); err != nil {
+	if err := p.db.Set(fmt.Appendf(nil, "aijob:%s", id), data, pebble.Sync); err != nil {
 		return err
 	}
 	// Write secondary index: batch_id → job_id
-	return p.db.Set([]byte(fmt.Sprintf("aijob_batch:%s", batchID)), []byte(id), pebble.Sync)
+	return p.db.Set(fmt.Appendf(nil, "aijob_batch:%s", batchID), []byte(id), pebble.Sync)
 }
 
 // MarkAIJobCompleted sets the job status to completed/completed_with_errors and
@@ -117,7 +117,7 @@ func (p *PebbleStore) MarkAIJobCompleted(id, status string, successCount, errorC
 	if err != nil {
 		return err
 	}
-	return p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync)
+	return p.db.Set(fmt.Appendf(nil, "aijob:%s", id), data, pebble.Sync)
 }
 
 // MarkAIJobFailed sets the job status to "failed" with an error message.
@@ -133,7 +133,7 @@ func (p *PebbleStore) MarkAIJobFailed(id, errMsg string) error {
 	if err != nil {
 		return err
 	}
-	return p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync)
+	return p.db.Set(fmt.Appendf(nil, "aijob:%s", id), data, pebble.Sync)
 }
 
 // ListAIJobs returns jobs matching optional type/status filters, with

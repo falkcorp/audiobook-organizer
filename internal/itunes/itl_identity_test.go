@@ -39,7 +39,7 @@ const fxLibraryPIDHex = "48e87f59865568b0"
 // (PIDs are derived from TIDs in buildMith, so distinct TIDs => distinct PIDs).
 func disjointTracks(n int) []fxTrack {
 	tracks := make([]fxTrack, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		tracks = append(tracks, fxTrack{
 			tid:      uint32(1000 + i*10),
 			name:     fmt.Sprintf("Cloud Song %d", i),

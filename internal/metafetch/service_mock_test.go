@@ -1111,7 +1111,6 @@ func TestDurationScoreMultiplier(t *testing.T) {
 		{36000, 50400, 1.00, ">120 min delta, ratio 40.00% → no adjustment"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.desc, func(t *testing.T) {
 			got := durationScoreMultiplier(tc.bookSec, tc.candSec)
 			assert.Equal(t, tc.wantMul, got, tc.desc)

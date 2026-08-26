@@ -35,7 +35,7 @@ func TestGlobalStoreConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines * 3)
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		// Writer: mimics InitializeStore setting a new store.
 		go func() {
 			defer wg.Done()

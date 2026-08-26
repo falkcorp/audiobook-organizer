@@ -251,10 +251,7 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 		default:
 		}
 
-		end := start + batchSize
-		if end > needCount {
-			end = needCount
-		}
+		end := min(start+batchSize, needCount)
 		chunk := toReembed[start:end]
 
 		// Delete the stale entity embedding first so prepBookEmbed cannot

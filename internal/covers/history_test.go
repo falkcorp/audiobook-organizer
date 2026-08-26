@@ -8,6 +8,7 @@ package covers
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -180,10 +181,5 @@ func TestRestoreCoverFileNotFound(t *testing.T) {
 
 // Helper function
 func contains(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, target)
 }

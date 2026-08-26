@@ -394,7 +394,7 @@ func diagAddSynthetic(baseline []byte, n int, deterministicPID bool) ([]byte, Sy
 	}
 
 	tracks := make([]ITLNewTrack, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		tracks[i] = ITLNewTrack{
 			Location: fmt.Sprintf(`file://localhost/W:/audiobook-organizer/Diag%dAuthor/Diag%dBook/chapter.m4b`, i+1, i+1),
 			Name:     fmt.Sprintf("Diag Track %d", i+1),

@@ -104,10 +104,7 @@ func ScoreMatch(query, target string) int {
 	maxLen := max(len([]rune(q)), len([]rune(t)))
 	if maxLen > 0 {
 		similarity := 1.0 - float64(dist)/float64(maxLen)
-		fuzzyScore := int(similarity * 50)
-		if fuzzyScore < 0 {
-			fuzzyScore = 0
-		}
+		fuzzyScore := max(int(similarity*50), 0)
 		score = max(score, fuzzyScore)
 	}
 
@@ -117,10 +114,7 @@ func ScoreMatch(query, target string) int {
 		wLen := max(len([]rune(q)), len([]rune(w)))
 		if wLen > 0 {
 			similarity := 1.0 - float64(dist)/float64(wLen)
-			wordScore := int(similarity * 70)
-			if wordScore < 0 {
-				wordScore = 0
-			}
+			wordScore := max(int(similarity*70), 0)
 			score = max(score, wordScore)
 		}
 	}

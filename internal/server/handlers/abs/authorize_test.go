@@ -109,7 +109,7 @@ func TestAuthorizeDoesNotMintANewSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if w, _ := h.do(t, request{method: http.MethodPost, path: "/api/authorize",
 			headers: map[string]string{"Authorization": "Bearer " + access}}); w.Code != http.StatusOK {
 			t.Fatalf("call %d: got %d", i, w.Code)

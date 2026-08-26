@@ -144,7 +144,7 @@ func TestUserPlaylist_ListFilterByType(t *testing.T) {
 func TestUserPlaylist_ListPagination(t *testing.T) {
 	store := newPlaylistTestStore(t)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, _ = store.CreateUserPlaylist(&UserPlaylist{
 			Name: string(rune('a'+i)) + "-list", Type: UserPlaylistTypeStatic,
 		})

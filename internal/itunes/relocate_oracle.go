@@ -263,10 +263,7 @@ func splitMithBlocksByPID(data []byte) (map[string][]byte, error) {
 		return nil, fmt.Errorf("track section (msdh type 1) not found")
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 	mlthHeaderLen := 0
 	if contentStart+12 <= contentEnd && readTag(data, contentStart) == "mlth" {
 		mlthHeaderLen = int(readUint32LE(data, contentStart+4))

@@ -77,7 +77,7 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 	// never created on disk; if the code statted/opened it, the test would
 	// still pass today but any future regression that drops the skip would
 	// surface as a missing/readErr count mismatch below).
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		id := fmt.Sprintf("skip-has-tags-%d", i)
 		files = append(files, database.BookFile{
 			ID:       id,
@@ -87,19 +87,19 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 	}
 
 	// Empty FilePath -> skipped.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := fmt.Sprintf("skip-empty-path-%d", i)
 		files = append(files, database.BookFile{ID: id, FilePath: ""})
 	}
 
 	// Path does not exist on disk -> missing.
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		id := fmt.Sprintf("missing-%d", i)
 		files = append(files, database.BookFile{ID: id, FilePath: filepath.Join(dir, "nope", id+".mp3")})
 	}
 
 	// Exists but the extractor errors on it -> readErr.
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		id := fmt.Sprintf("readerr-%d", i)
 		p := filepath.Join(dir, "readerr", id+".mp3")
 		mustWriteFile(t, p)
@@ -107,7 +107,7 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 	}
 
 	// Exists but the extractor finds no tags -> skipped ("nothing capturable").
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		id := fmt.Sprintf("notags-%d", i)
 		p := filepath.Join(dir, "notags", id+".mp3")
 		mustWriteFile(t, p)
@@ -115,7 +115,7 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 	}
 
 	// Exists and should be successfully backfilled.
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		id := fmt.Sprintf("needs-backfill-%d", i)
 		p := filepath.Join(dir, id+".mp3")
 		mustWriteFile(t, p)

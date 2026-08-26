@@ -416,15 +416,15 @@ type BookSummary struct {
 
 // MetadataProvenanceEntry represents the source breakdown for a metadata field.
 type MetadataProvenanceEntry struct {
-	FileValue       interface{} `json:"file_value,omitempty"`
-	FetchedValue    interface{} `json:"fetched_value,omitempty"`
-	StoredValue     interface{} `json:"stored_value,omitempty"`
-	OverrideValue   interface{} `json:"override_value,omitempty"`
-	OverrideLocked  bool        `json:"override_locked"`
-	EffectiveValue  interface{} `json:"effective_value,omitempty"`
-	EffectiveSource string      `json:"effective_source,omitempty"`
-	ComparisonValue interface{} `json:"comparison_value,omitempty"`
-	UpdatedAt       *time.Time  `json:"updated_at,omitempty"`
+	FileValue       any        `json:"file_value,omitempty"`
+	FetchedValue    any        `json:"fetched_value,omitempty"`
+	StoredValue     any        `json:"stored_value,omitempty"`
+	OverrideValue   any        `json:"override_value,omitempty"`
+	OverrideLocked  bool       `json:"override_locked"`
+	EffectiveValue  any        `json:"effective_value,omitempty"`
+	EffectiveSource string     `json:"effective_source,omitempty"`
+	ComparisonValue any        `json:"comparison_value,omitempty"`
+	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
 }
 
 // Work represents a logical title-level grouping that may span multiple editions,

@@ -146,7 +146,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	}
 
 	if v := c.Query("tags"); v != "" {
-		for _, tag := range strings.Split(v, ",") {
+		for tag := range strings.SplitSeq(v, ",") {
 			tag = strings.TrimSpace(tag)
 			if tag != "" {
 				filter.Tags = append(filter.Tags, tag)
@@ -157,7 +157,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	filter.Search = c.Query("search")
 	filter.Source = c.Query("source")
 	if v := c.Query("exclude_sources"); v != "" {
-		for _, src := range strings.Split(v, ",") {
+		for src := range strings.SplitSeq(v, ",") {
 			src = strings.TrimSpace(src)
 			if src != "" {
 				filter.ExcludeSources = append(filter.ExcludeSources, src)
@@ -165,7 +165,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		}
 	}
 	if v := c.Query("exclude_tiers"); v != "" {
-		for _, tier := range strings.Split(v, ",") {
+		for tier := range strings.SplitSeq(v, ",") {
 			tier = strings.TrimSpace(tier)
 			if tier != "" {
 				filter.ExcludeTiers = append(filter.ExcludeTiers, tier)
@@ -173,7 +173,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		}
 	}
 	if v := c.Query("exclude_tags"); v != "" {
-		for _, tag := range strings.Split(v, ",") {
+		for tag := range strings.SplitSeq(v, ",") {
 			tag = strings.TrimSpace(tag)
 			if tag != "" {
 				filter.ExcludeTags = append(filter.ExcludeTags, tag)

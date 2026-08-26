@@ -145,14 +145,8 @@ func (h *Handler) ListSuspiciousDedupLabels(c *gin.Context) {
 
 	total := len(suspicious)
 	limit := clampAtoi(c.Query("limit"), 50, 1, 500)
-	offset := clampAtoi(c.Query("offset"), 0, 0, 1<<31)
-	if offset > total {
-		offset = total
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
+	offset := min(clampAtoi(c.Query("offset"), 0, 0, 1<<31), total)
+	end := min(offset+limit, total)
 
 	httputil.RespondWithOK(c, gin.H{
 		"labels": suspicious[offset:end],

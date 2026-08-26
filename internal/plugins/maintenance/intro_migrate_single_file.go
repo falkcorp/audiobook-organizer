@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -189,9 +190,7 @@ func (p *Plugin) runIntroMigrateSingleFile(ctx context.Context, rawParams json.R
 
 	mu.Lock()
 	snapshot := make(map[string]int, len(counts))
-	for k, v := range counts {
-		snapshot[k] = v
-	}
+	maps.Copy(snapshot, counts)
 	mu.Unlock()
 
 	// Report EVERY bucket, including the zeros: a reader must be able to add the

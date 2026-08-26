@@ -92,9 +92,9 @@ func probeCUDA() cudaConfig {
 		// `nvidia-smi` plain output header ("CUDA Version: X.Y").
 		headerOut, herr := exec.Command(nvidiaSMI).Output()
 		if herr == nil {
-			for _, line := range strings.Split(string(headerOut), "\n") {
-				if idx := strings.Index(line, "CUDA Version:"); idx >= 0 {
-					raw := strings.TrimSpace(line[idx+len("CUDA Version:"):])
+			for line := range strings.SplitSeq(string(headerOut), "\n") {
+				if _, after, ok := strings.Cut(line, "CUDA Version:"); ok {
+					raw := strings.TrimSpace(after)
 					// raw is like "12.4" or "11.8 "
 					raw = strings.Fields(raw)[0]
 					majStr := strings.SplitN(raw, ".", 2)[0]

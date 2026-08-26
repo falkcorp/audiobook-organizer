@@ -59,10 +59,10 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 		slog.Warn("applyMetadataToBook prevented title from being cleared for book", "id", book.ID)
 	}
 	if meta.Publisher != "" && IsBetterStringPtr(book.Publisher, meta.Publisher) {
-		book.Publisher = stringPtr(meta.Publisher)
+		book.Publisher = new(meta.Publisher)
 	}
 	if meta.Language != "" && IsBetterStringPtr(book.Language, meta.Language) {
-		book.Language = stringPtr(meta.Language)
+		book.Language = new(meta.Language)
 	}
 	// Route the year by its source KIND. meta.PublishYear is OVERLOADED:
 	// Audible/Audnexus report the audiobook RELEASE year, while Open Library /
@@ -76,16 +76,16 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 	// cross-contaminate.
 	if meta.PublishYear != 0 {
 		if meta.PublishYearIsAudiobookRelease {
-			book.AudiobookReleaseYear = intPtrHelper(meta.PublishYear)
+			book.AudiobookReleaseYear = new(meta.PublishYear)
 		} else if book.PrintYear == nil || *book.PrintYear == 0 {
-			book.PrintYear = intPtrHelper(meta.PublishYear)
+			book.PrintYear = new(meta.PublishYear)
 		}
 	}
 	if meta.CoverURL != "" {
-		book.CoverURL = stringPtr(meta.CoverURL)
+		book.CoverURL = new(meta.CoverURL)
 	}
 	if meta.Narrator != "" && !IsGarbageValue(meta.Narrator) && IsBetterStringPtr(book.Narrator, meta.Narrator) {
-		book.Narrator = stringPtr(meta.Narrator)
+		book.Narrator = new(meta.Narrator)
 	}
 
 	// Apply author if fetched data is better — resolve to AuthorID and
@@ -122,19 +122,19 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 	// Apply ISBN/ASIN
 	if meta.ISBN != "" {
 		if len(meta.ISBN) == 10 {
-			book.ISBN10 = stringPtr(meta.ISBN)
+			book.ISBN10 = new(meta.ISBN)
 		} else {
-			book.ISBN13 = stringPtr(meta.ISBN)
+			book.ISBN13 = new(meta.ISBN)
 		}
 	}
 	if meta.ASIN != "" {
-		book.ASIN = stringPtr(meta.ASIN)
+		book.ASIN = new(meta.ASIN)
 	}
 	if meta.Description != "" {
-		book.Description = stringPtr(meta.Description)
+		book.Description = new(meta.Description)
 	}
 	if meta.Genre != "" {
-		book.Genre = stringPtr(meta.Genre)
+		book.Genre = new(meta.Genre)
 	}
 
 	// Persist Audible runtime so the scan-duration-mismatch endpoint can

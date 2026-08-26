@@ -28,8 +28,7 @@ import (
 // goroutine has truly exited. It FAILS on the pre-fix code (Shutdown returns
 // after AbandonGrace while the goroutine is still alive).
 func TestShutdown_WaitsForOpGoroutineToExit(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{

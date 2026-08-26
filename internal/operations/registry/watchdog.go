@@ -183,10 +183,7 @@ func (r *Registry) watchdogCycle() {
 		// C-4: the strike threshold honors the def's own MinCheckpointInterval,
 		// with defaultMinCheckpointTimeout as the floor. The old code compared
 		// against the 5m constant alone, striking long-interval defs spuriously.
-		threshold := minInterval
-		if threshold < defaultMinCheckpointTimeout {
-			threshold = defaultMinCheckpointTimeout
-		}
+		threshold := max(minInterval, defaultMinCheckpointTimeout)
 
 		// Reference time: last_checkpoint_at if set, else started_at.
 		var refTime *time.Time

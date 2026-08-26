@@ -8,6 +8,7 @@ package transcribe
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -70,10 +71,7 @@ func markEndpointFailure(url string) {
 		poolHealth[url] = h
 	}
 	h.consecFails++
-	d := time.Duration(h.consecFails) * cooldownBase
-	if d > cooldownMax {
-		d = cooldownMax
-	}
+	d := min(time.Duration(h.consecFails)*cooldownBase, cooldownMax)
 	h.cooldownUntil = time.Now().Add(d)
 }
 
@@ -124,9 +122,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]s
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Priority < ordered[j].Priority })
 
 	remaining := make(map[string]string, len(jobs))
-	for id, path := range jobs {
-		remaining[id] = path
-	}
+	maps.Copy(remaining, jobs)
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
 
@@ -200,9 +196,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]s
 				continue
 			}
 			markEndpointSuccess(ep.URL)
-			for id, br := range r.res {
-				results[id] = br
-			}
+			maps.Copy(results, r.res)
 			// Clear the whole assigned set, not just returned IDs: the
 			// transport skips unreadable WAVs without error (same as the
 			// single-URL path), so a missing result is a skip, not a retry.
@@ -231,10 +225,7 @@ func allocateJobs(healthy []Endpoint, remaining map[string]string) []map[string]
 	pos := 0
 	for pos < len(ids) {
 		for i, ep := range healthy {
-			c := ep.Concurrency
-			if c < 1 {
-				c = 1
-			}
+			c := max(ep.Concurrency, 1)
 			take := c * whisperBatchSize
 			for n := 0; n < take && pos < len(ids); n++ {
 				if assignments[i] == nil {

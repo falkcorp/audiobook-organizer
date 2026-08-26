@@ -30,7 +30,7 @@ func TestListOperations_LimitZeroReturnsEverything(t *testing.T) {
 	// More rows than any page size the callers use, so a implementation that
 	// silently clamps to a default page cannot pass.
 	const total = 1200
-	for i := 0; i < total; i++ {
+	for i := range total {
 		_, err := store.CreateOperation(fmt.Sprintf("op-%04d", i), "scan", nil)
 		require.NoError(t, err)
 	}

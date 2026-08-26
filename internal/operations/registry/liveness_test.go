@@ -34,8 +34,7 @@ import (
 // it never calls UpdateProgress and no last_progress_at is ever written, so the
 // watchdog measures from StartedAt. That is the LoggerFromReporter shape.
 func TestWatchdog_NeverReportedGetsItsOwnStrike(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -78,8 +77,7 @@ func TestWatchdog_NeverReportedGetsItsOwnStrike(t *testing.T) {
 // first test would pass just as well if EVERY strike were relabelled
 // never_reported, which would destroy the distinction rather than draw it.
 func TestWatchdog_ReportedThenStalledIsStillStuck(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{

@@ -145,7 +145,7 @@ func TestRecentReconcileScans_QueuedScanSurvivesACrowdedOpsTable(t *testing.T) {
 	started := now.Add(-time.Minute)
 
 	var rows []database.OperationV2Row
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		rows = append(rows, database.OperationV2Row{
 			ID: "other", DefID: "library.scan", Status: "running",
 			QueuedAt: now, StartedAt: &started,
@@ -207,7 +207,7 @@ func TestRecentReconcileScans_OldLegacyScanSurvivesACrowdedV1Table(t *testing.T)
 	v1 := []database.Operation{
 		{ID: "old-scan", Type: reconcileScanLegacyType, Status: "completed", CreatedAt: now.Add(-72 * time.Hour)},
 	}
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		v1 = append(v1, database.Operation{
 			ID: "noise", Type: "scan", Status: "completed", CreatedAt: now,
 		})

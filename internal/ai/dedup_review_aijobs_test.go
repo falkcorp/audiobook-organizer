@@ -239,7 +239,7 @@ func TestSubmitDedupReviewJob_SplitsIntoSubBatches(t *testing.T) {
 	// Build 51 inputs.
 	inputs := make([]DedupPairInput, 51)
 	byIndex := make(map[int]int64, 51)
-	for i := 0; i < 51; i++ {
+	for i := range 51 {
 		inputs[i] = DedupPairInput{
 			Index:      i,
 			EntityType: "book",

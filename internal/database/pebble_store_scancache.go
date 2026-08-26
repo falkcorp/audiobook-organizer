@@ -309,7 +309,7 @@ func (p *PebbleStore) stampFileScanCache(bookID, fileID string, apply func(*Book
 
 	// Primary row only. No index churn: every indexed field is untouched above, so
 	// the existing index entries still point at this row and still hold true.
-	key := []byte(fmt.Sprintf("book_file:%s:%s", old.BookID, old.ID))
+	key := fmt.Appendf(nil, "book_file:%s:%s", old.BookID, old.ID)
 	if err := p.db.Set(key, data, pebble.Sync); err != nil {
 		return err
 	}
@@ -491,13 +491,13 @@ func (p *PebbleStore) RecordPathChange(change *BookPathChange) error {
 	if err != nil {
 		return err
 	}
-	key := []byte(fmt.Sprintf("path_history:%s:%019d", change.BookID, ts))
+	key := fmt.Appendf(nil, "path_history:%s:%019d", change.BookID, ts)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 // GetBookPathHistory returns all path changes for a book, newest first.
 func (p *PebbleStore) GetBookPathHistory(bookID string) ([]BookPathChange, error) {
-	prefix := []byte(fmt.Sprintf("path_history:%s:", bookID))
+	prefix := fmt.Appendf(nil, "path_history:%s:", bookID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),

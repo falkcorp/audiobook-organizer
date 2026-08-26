@@ -411,10 +411,7 @@ func chunkIDs(ids []string, size int) [][]string {
 	}
 	chunks := make([][]string, 0, (len(ids)+size-1)/size)
 	for start := 0; start < len(ids); start += size {
-		end := start + size
-		if end > len(ids) {
-			end = len(ids)
-		}
+		end := min(start+size, len(ids))
 		chunks = append(chunks, ids[start:end])
 	}
 	return chunks

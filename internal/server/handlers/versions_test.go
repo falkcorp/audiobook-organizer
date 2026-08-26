@@ -37,7 +37,8 @@ func newVersionsCtx(method, path, body string, params gin.Params) (*gin.Context,
 	return c, w
 }
 
-func strptr(s string) *string { return &s }
+//go:fix inline
+func strptr(s string) *string { return new(s) }
 
 // ── ListAudiobookVersions ─────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ func TestVersionsHandler_ListAudiobookVersions_NoGroup(t *testing.T) {
 
 func TestVersionsHandler_ListAudiobookVersions_WithGroup(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: strptr("g1")}, nil)
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().GetBooksByVersionGroup("g1").Return([]database.Book{{ID: "b1"}, {ID: "b2"}}, nil)
 
 	h := handlers.NewVersionsHandler(store)
@@ -118,7 +119,7 @@ func TestVersionsHandler_SetAudiobookPrimary_NoGroup(t *testing.T) {
 
 func TestVersionsHandler_SetAudiobookPrimary_WithGroup(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: strptr("g1")}, nil)
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().GetBooksByVersionGroup("g1").Return([]database.Book{{ID: "b1"}, {ID: "b2"}}, nil)
 	store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
 	store.EXPECT().UpdateBook("b2", mock.Anything).Return(&database.Book{ID: "b2"}, nil)
@@ -159,9 +160,9 @@ func TestVersionsHandler_GetVersionGroup_Error(t *testing.T) {
 func TestVersionsHandler_SplitVersion_Success(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	// Source already has a version group → skips the early UpdateBook.
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Book One", VersionGroupID: strptr("g1")}, nil)
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Book One", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().GetBooksByVersionGroup("g1").Return([]database.Book{{ID: "b1"}}, nil)
-	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "b2", VersionGroupID: strptr("g1")}, nil)
+	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "b2", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f1"}, "b1", "b2").Return(nil)
 	// New book gets one remaining file; source has none → only the new-book UpdateBook fires.
 	store.EXPECT().GetBookFiles("b2").Return([]database.BookFile{{ID: "f1", FilePath: "/x/f1.m4b"}}, nil)
@@ -223,8 +224,8 @@ func TestVersionsHandler_SplitSegmentsToBooks_EmptySegments(t *testing.T) {
 
 func TestVersionsHandler_MoveSegments_Success(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: strptr("g1")}, nil)
-	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", VersionGroupID: strptr("g1")}, nil)
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: new("g1")}, nil)
+	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{{ID: "f1", FilePath: "/x/f1.m4b"}}, nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f1"}, "b1", "b2").Return(nil)
 	store.EXPECT().GetExternalIDsForBook("b1").Return(nil, nil)
@@ -248,8 +249,8 @@ func TestVersionsHandler_MoveSegments_EmptySegments(t *testing.T) {
 
 func TestVersionsHandler_MoveSegments_GroupMismatch(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: strptr("g1")}, nil)
-	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", VersionGroupID: strptr("g2")}, nil)
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: new("g1")}, nil)
+	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", VersionGroupID: new("g2")}, nil)
 	// MoveBookFilesToBook must never be reached.
 
 	h := handlers.NewVersionsHandler(store)

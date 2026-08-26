@@ -56,7 +56,7 @@ func genPermSubset(t *rapid.T, label string) []Permission {
 	n := rapid.IntRange(0, len(all)).Draw(t, label+"_n")
 	perm := rapid.Permutation(all).Draw(t, label+"_perm")
 	out := make([]Permission, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, perm[i])
 	}
 	return out

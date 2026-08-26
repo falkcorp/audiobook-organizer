@@ -29,7 +29,7 @@ type NutsMetricsStore struct {
 func metsBucket(cacheName string) string { return "met:" + cacheName }
 
 func metsTimeKey(t time.Time) []byte {
-	return []byte(fmt.Sprintf("%020d", t.UnixNano()))
+	return fmt.Appendf(nil, "%020d", t.UnixNano())
 }
 
 // NewNutsMetricsStore opens (or creates) a NutsDB metrics store at dirPath.

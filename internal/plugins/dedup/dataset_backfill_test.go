@@ -45,7 +45,7 @@ func TestDatasetBackfill_ParallelMatchesSerialOutput(t *testing.T) {
 	hub := createBookWithHashedFile(t, pebble, "BackfillHub", "backfillhubhash0001")
 
 	var wantNotDup, wantUnlabeled []int64
-	for i := 0; i < numLeaves; i++ {
+	for i := range numLeaves {
 		stubSide := i%2 == 0
 		var leaf string
 		if stubSide {

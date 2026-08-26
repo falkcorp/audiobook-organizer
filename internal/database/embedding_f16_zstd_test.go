@@ -139,7 +139,7 @@ func TestEncodeDecodeV1_CosineDrift(t *testing.T) {
 	rng := rand.New(rand.NewSource(42)) // deterministic
 
 	var maxObservedDrift float64
-	for i := 0; i < numPairs; i++ {
+	for i := range numPairs {
 		// Generate two random unit vectors.
 		a32 := randomUnitVector(rng, dims)
 		b32 := randomUnitVector(rng, dims)
@@ -220,7 +220,7 @@ func TestEncodeDecodeV1_CompressionRatio(t *testing.T) {
 		rng := rand.New(rand.NewSource(7))
 		const numVectors = 20
 		var totalV0, totalV1 int
-		for i := 0; i < numVectors; i++ {
+		for range numVectors {
 			v := randomUnitVector(rng, dims)
 			totalV0 += len(encodeVectorV0(v))
 			totalV1 += len(encodeVector(v))
@@ -243,7 +243,7 @@ func TestEncodeDecodeV1_CompressionRatio(t *testing.T) {
 		// Generate a common base vector and perturb each vector slightly.
 		base := randomUnitVector(rng, dims)
 		var totalV0, totalV1 int
-		for i := 0; i < numVectors; i++ {
+		for range numVectors {
 			v := perturbedUnitVector(rng, base, 0.1) // 10% noise
 			totalV0 += len(encodeVectorV0(v))
 			totalV1 += len(encodeVector(v))

@@ -388,7 +388,7 @@ func TestFlush_RefusesOverCap(t *testing.T) {
 		itlWriteBackEnabled: true,
 		libraryWritePath:    itlPath,
 	}
-	for i := 0; i < MaxRemovesPerFlush+1; i++ {
+	for i := range MaxRemovesPerFlush + 1 {
 		b.pendingRemoves[strings.Repeat("a", 16-len(itoaSafe(i)))+itoaSafe(i)] = true
 	}
 

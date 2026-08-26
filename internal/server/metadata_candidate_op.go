@@ -128,15 +128,10 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 
 			var completed int64 = int64(alreadyDone)
 			var wg sync.WaitGroup
-			numWorkers := 8
-			if numWorkers > len(p.BookIDs) {
-				numWorkers = len(p.BookIDs)
-			}
+			numWorkers := min(8, len(p.BookIDs))
 
 			for i := 0; i < numWorkers; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					for bookID := range workCh {
 						if ctx.Err() != nil {
 							return
@@ -158,7 +153,7 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 						done := atomic.AddInt64(&completed, 1)
 						_ = progress.UpdateProgress(int(done), totalBooks, fmt.Sprintf("fetched %d/%d", done, totalBooks))
 					}
-				}()
+				})
 			}
 			wg.Wait()
 

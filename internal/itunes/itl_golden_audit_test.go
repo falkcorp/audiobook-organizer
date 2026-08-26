@@ -34,10 +34,7 @@ func TestGoldenCorpusAuditClean(t *testing.T) {
 		if r.Pass() {
 			continue
 		}
-		max := len(r.Violations)
-		if max > 5 {
-			max = 5
-		}
+		max := min(len(r.Violations), 5)
 		for _, v := range r.Violations[:max] {
 			t.Errorf("guard %s: [%d/%s] %s", r.Guard, v.Offset, v.Chunk, v.Message)
 		}

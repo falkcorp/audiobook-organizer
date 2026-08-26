@@ -157,8 +157,8 @@ func TestCompositeScore_SuppressedPairLabeled(t *testing.T) {
 // CollectExactFileHash emits a SigExactFile signal when two books share a
 // file hash.
 func TestCollectExactFileHash_EmitsSignalForSharedHash(t *testing.T) {
-	bookA := &database.Book{ID: "BOOK_A", FileHash: strPtr("abc123")}
-	bookB := &database.Book{ID: "BOOK_B", FileHash: strPtr("abc123")}
+	bookA := &database.Book{ID: "BOOK_A", FileHash: new("abc123")}
+	bookB := &database.Book{ID: "BOOK_B", FileHash: new("abc123")}
 
 	mock := &database.MockStore{}
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) {
@@ -182,7 +182,7 @@ func TestCollectExactFileHash_EmitsSignalForSharedHash(t *testing.T) {
 // TestCollectExactFileHash_SelfMatchSuppressed verifies that a book's own hash
 // does not produce a self-match signal.
 func TestCollectExactFileHash_SelfMatchSuppressed(t *testing.T) {
-	bookA := &database.Book{ID: "BOOK_A", FileHash: strPtr("abc123")}
+	bookA := &database.Book{ID: "BOOK_A", FileHash: new("abc123")}
 
 	mock := &database.MockStore{}
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) {

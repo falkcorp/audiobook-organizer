@@ -185,9 +185,9 @@ func (p *TrackProvisioner) bookAuthor(book *database.Book) string {
 func linuxToWindowsPath(p string) string {
 	const linuxRoot = "/mnt/bigdata/books/audiobook-organizer/"
 	const windowsRoot = `W:\audiobook-organizer\`
-	if strings.HasPrefix(p, linuxRoot) {
+	if after, ok := strings.CutPrefix(p, linuxRoot); ok {
 		return windowsRoot + strings.ReplaceAll(
-			strings.TrimPrefix(p, linuxRoot), "/", `\`,
+			after, "/", `\`,
 		)
 	}
 	return p

@@ -296,15 +296,9 @@ func printList(label string, pids []string, idx map[string]itunes.ITLTrack, max 
 }
 
 func printHexDiff(a, b []byte) {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
+	n := min(len(b), len(a))
 	for i := 0; i < n; i += 16 {
-		end := i + 16
-		if end > n {
-			end = n
-		}
+		end := min(i+16, n)
 		ra := a[i:end]
 		rb := b[i:end]
 		marker := " "

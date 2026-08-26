@@ -281,7 +281,7 @@ func TestProbeAll_ParallelWritesAreIndexPartitioned(t *testing.T) {
 	const folders = 40
 	secs := map[string]float64{}
 	cands := make([]probeCandidate, 0, folders)
-	for i := 0; i < folders; i++ {
+	for i := range folders {
 		// Alternate the two shapes so the verdicts differ per index and a
 		// cross-worker write would show up as a wrong verdict, not just a race.
 		var files []string

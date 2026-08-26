@@ -167,13 +167,13 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 	// Set the field to old value
 	if c.OldValue == "" {
 		// Set to nil for pointer types
-		if f.Kind() == reflect.Ptr {
+		if f.Kind() == reflect.Pointer {
 			f.Set(reflect.Zero(f.Type()))
 		} else {
 			f.SetString("")
 		}
 	} else {
-		if f.Kind() == reflect.Ptr {
+		if f.Kind() == reflect.Pointer {
 			val := reflect.New(f.Type().Elem())
 			val.Elem().SetString(c.OldValue)
 			f.Set(val)
@@ -204,7 +204,7 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 		return nil
 	}
 
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		c.FieldName: c.OldValue,
 	}
 	opConfig := fileops.OperationConfig{VerifyChecksums: true}

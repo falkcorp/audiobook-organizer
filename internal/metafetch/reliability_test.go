@@ -72,7 +72,7 @@ func TestBuildSourceChain_MemoizedAndBreakerPersists(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *metadata.ProtectedSource, got %T", c1[0])
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		ps.Breaker().RecordFailure()
 	}
 	if got := ps.Breaker().StateName(); got != "open" {
@@ -133,7 +133,7 @@ func TestSearchMetadataForBook_LimiterGatesPerRequest(t *testing.T) {
 
 	var calls int64
 	sources := make([]metadata.MetadataSource, 0, nSources)
-	for i := 0; i < nSources; i++ {
+	for range nSources {
 		sources = append(sources, &countingSource{name: "src", calls: &calls})
 	}
 

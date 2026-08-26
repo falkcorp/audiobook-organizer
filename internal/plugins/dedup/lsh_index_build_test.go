@@ -25,7 +25,7 @@ import (
 func synthRawLSH(seed int64, frames int) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	raw := make([]byte, frames*4)
-	for i := 0; i < frames; i++ {
+	for i := range frames {
 		binary.LittleEndian.PutUint32(raw[i*4:], rng.Uint32())
 	}
 	return raw

@@ -131,7 +131,7 @@ func TestCollectInputFiles_SingleFile(t *testing.T) {
 func TestCollectInputFiles_Segments(t *testing.T) {
 	// Create temp files
 	var tmpFiles []string
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		tmp, err := os.CreateTemp("", "test-seg-*.mp3")
 		if err != nil {
 			t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -112,9 +113,7 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 
 	// Build filtered payload without secrets (already applied above)
 	filtered := make(map[string]any, len(payload))
-	for k, v := range payload {
-		filtered[k] = v
-	}
+	maps.Copy(filtered, payload)
 	for _, k := range secretFieldKeys {
 		delete(filtered, k)
 	}

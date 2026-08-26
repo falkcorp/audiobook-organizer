@@ -152,8 +152,7 @@ func TestEnqueueOp_DifferentParamsQueuesASecondOp(t *testing.T) {
 // ConcurrencyKey (Gate 3, dispatcher.go:107), and must run once it is released.
 // This is what makes queueing-instead-of-dropping safe.
 func TestEnqueueOp_SecondQueuedOpStartsOnlyAfterTheFirstCompletes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
@@ -362,7 +361,7 @@ func TestEnqueueOp_DedupeStillFiresForTheCommonDoubleClick(t *testing.T) {
 
 	p := dedupeParams{BookIDs: []string{"a", "b", "c"}}
 	ids := make([]string, 0, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		id, err := r.EnqueueOp(context.Background(), def.ID, p)
 		if err != nil {
 			t.Fatalf("EnqueueOp #%d: %v", i+1, err)

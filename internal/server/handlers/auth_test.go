@@ -179,7 +179,7 @@ func TestAuthHandler_Login_PerIPThrottle(t *testing.T) {
 
 	h := handlers.NewAuthHandler(store, true)
 
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		c, w := newAuthCtx("POST", "/auth/login", map[string]any{
 			"username": "ghost", "password": "wrong",
 		})
@@ -211,7 +211,7 @@ func TestAuthHandler_Login_SoftCounterDoesNotLock(t *testing.T) {
 	h.SetFailureDelay(func(time.Duration) {}) // no-op: keeps test fast and deterministic
 
 	// 7 wrong attempts (past the soft threshold of 5) — adds small delays, no lock.
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		c, _ := newAuthCtx("POST", "/auth/login", map[string]any{
 			"username": "alice", "password": "wrong",
 		})
@@ -241,7 +241,7 @@ func TestAuthHandler_Login_DifferentIPNotThrottled(t *testing.T) {
 	h := handlers.NewAuthHandler(store, true)
 
 	// Attacker burns the budget from one IP (unknown user → sleep-free).
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		c, _ := newAuthCtx("POST", "/auth/login", map[string]any{
 			"username": "ghost", "password": "wrong",
 		})

@@ -133,7 +133,7 @@ func TestGetAllBooksCore_MemDBAndPebbleAgree(t *testing.T) {
 	// broken ListSoftDeletedBooks-style queries.
 	t.Run("ExplicitFilterStillReturnsDeleted", func(t *testing.T) {
 		p.UseMemDB = true
-		books, err := p.mem().GetAllBooksCore(0, 0, map[string]interface{}{"marked_for_deletion": true})
+		books, err := p.mem().GetAllBooksCore(0, 0, map[string]any{"marked_for_deletion": true})
 		require.NoError(t, err)
 		got := idsOf(books)
 		for _, id := range fx.deletedIDs {
@@ -177,7 +177,7 @@ func TestGetAllBooksCore_PaginationPartitionsTheLiveSet(t *testing.T) {
 	var wantLive []string
 	var deleted []string
 
-	for i := 0; i < total; i++ {
+	for i := range total {
 		title := fmt.Sprintf("Paged %02d", i)
 		created, err := store.CreateBook(&Book{Title: title, FilePath: "/lib/paged/" + title})
 		require.NoError(t, err)

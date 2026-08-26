@@ -73,11 +73,11 @@ func AsBookmarkStore(s any) BookmarkStore {
 var _ BookmarkStore = (*PebbleStore)(nil)
 
 func bookmarkKey(userID, itemID string, timeSec float64) []byte {
-	return []byte(fmt.Sprintf("bookmark:%s:%s:%s", userID, itemID, progress.CanonicalTimeKey(timeSec)))
+	return fmt.Appendf(nil, "bookmark:%s:%s:%s", userID, itemID, progress.CanonicalTimeKey(timeSec))
 }
 
 func bookmarkPrefix(userID, itemID string) []byte {
-	return []byte(fmt.Sprintf("bookmark:%s:%s:", userID, itemID))
+	return fmt.Appendf(nil, "bookmark:%s:%s:", userID, itemID)
 }
 
 // bookmarkUserPrefix bounds every bookmark for userID across ALL items --
@@ -86,7 +86,7 @@ func bookmarkPrefix(userID, itemID string) []byte {
 // way ListUserPositionsSince's "upos:<userID>:" prefix does in
 // pebble_store_playback.go.
 func bookmarkUserPrefix(userID string) []byte {
-	return []byte(fmt.Sprintf("bookmark:%s:", userID))
+	return fmt.Appendf(nil, "bookmark:%s:", userID)
 }
 
 // createBookmarkMu serializes CreateBookmark's get-then-set upsert section so

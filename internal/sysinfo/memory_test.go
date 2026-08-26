@@ -126,7 +126,7 @@ func TestMemoryStats_Structure(t *testing.T) {
 
 func TestGetMemoryStats_Consistency(t *testing.T) {
 	// Call multiple times and ensure it doesn't panic or error
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		stats, err := GetMemoryStats()
 		if err != nil {
 			t.Fatalf("Call %d failed: %v", i+1, err)
@@ -167,7 +167,7 @@ func TestMemoryStats_EdgeCases(t *testing.T) {
 
 func TestGetMemoryStatsRepeated(t *testing.T) {
 	// Call GetMemoryStats multiple times to verify consistency
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		stats, err := GetMemoryStats()
 		if err != nil {
 			t.Errorf("GetMemoryStats() iteration %d failed: %v", i, err)

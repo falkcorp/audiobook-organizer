@@ -56,7 +56,7 @@ func TestAuthors_CachedListStillServesCorrectPages(t *testing.T) {
 
 	// Page through with limit=1 and confirm we see each author exactly once, in order.
 	var seen []string
-	for page := 0; page < len(full); page++ {
+	for page := range full {
 		_, body, _ := w.req(t, http.MethodGet,
 			"/api/libraries/"+w.libraryID()+"/authors?limit=1&page="+itoa(page), nil)
 		results := requireArray(t, body, "results")

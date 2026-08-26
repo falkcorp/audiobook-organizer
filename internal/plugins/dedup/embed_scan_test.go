@@ -53,7 +53,7 @@ func newEmbedScanFixture(t *testing.T, n int) (*Plugin, *database.MockStore, *da
 
 	books := make([]database.Book, n)
 	byID := make(map[string]*database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b := database.Book{ID: fmt.Sprintf("BOOK_%03d", i), Title: fmt.Sprintf("Test Book %d", i)}
 		books[i] = b
 		bCopy := b
@@ -136,7 +136,7 @@ func TestRunEmbedScanMode_ParallelMatchesSerial(t *testing.T) {
 	require.NoError(t, err)
 
 	// Every book must have an identical stored embedding row in both runs.
-	for i := 0; i < numBooks; i++ {
+	for i := range numBooks {
 		id := fmt.Sprintf("BOOK_%03d", i)
 
 		serialEmb, err := serialES.Get("book", id)

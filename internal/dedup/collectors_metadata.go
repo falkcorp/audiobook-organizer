@@ -323,10 +323,7 @@ func normalizedLevenshteinSimilarity(a, b string) float64 {
 	}
 	la := len([]rune(a))
 	lb := len([]rune(b))
-	maxLen := la
-	if lb > maxLen {
-		maxLen = lb
-	}
+	maxLen := max(lb, la)
 	if maxLen == 0 {
 		return 1.0
 	}

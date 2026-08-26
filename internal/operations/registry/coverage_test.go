@@ -23,8 +23,7 @@ import (
 func TestReporter_StubMethods(t *testing.T) {
 	// Ensure the stubReporter methods are reachable via the Reporter interface.
 	// We exercise this through a Run function that calls all reporter methods.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -87,8 +86,7 @@ func TestEnqueueOptions_WithParentAndActor(t *testing.T) {
 // --- Shutdown tests ---
 
 func TestShutdown_DrainsAllWorkers(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 2, nil)
@@ -125,8 +123,7 @@ func TestShutdown_DrainsAllWorkers(t *testing.T) {
 }
 
 func TestShutdown_TimeoutMarksInterrupted(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -171,8 +168,7 @@ func TestShutdown_TimeoutMarksInterrupted(t *testing.T) {
 // --- DependsOn dispatch gate test ---
 
 func TestDispatcher_DependsOnBlocksUntilDepEnds(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)

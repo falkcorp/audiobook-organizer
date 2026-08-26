@@ -24,7 +24,7 @@ func benchPopulate(b *testing.B, s VectorANNStore, n, dim int) []float32 {
 	b.Helper()
 	ctx := context.Background()
 	rng := rand.New(rand.NewSource(1))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := s.Upsert(ctx, "book", fmt.Sprintf("v%d", i), unitVec(rng, dim), map[string]string{"is_primary_version": "true"}); err != nil {
 			b.Fatalf("upsert: %v", err)
 		}

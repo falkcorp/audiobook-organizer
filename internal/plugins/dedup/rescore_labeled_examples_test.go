@@ -271,7 +271,7 @@ func TestRescoreLabeledExamples_ParallelManyGroups(t *testing.T) {
 	es := database.NewEmbeddingStore(pebble.DB())
 
 	const n = 200
-	for i := 0; i < n; i++ {
+	for i := range n {
 		class := "true_dup"
 		if i%2 == 0 {
 			class = "not_dup"
@@ -289,7 +289,7 @@ func TestRescoreLabeledExamples_ParallelManyGroups(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		got, err := es.GetLabeledExample(int64(1000 + i))
 		if err != nil {
 			t.Fatalf("GetLabeledExample(%d): %v", 1000+i, err)

@@ -143,7 +143,6 @@ func TestFingerprintEligibility_IneligibleWhenFileDoesNotExist(t *testing.T) {
 func TestFingerprintEligibility_ProceedsWhenAllChecksPass(t *testing.T) {
 	tmp := t.TempDir()
 	for _, ext := range []string{".m4b", ".mp3", ".flac", ".m4a", ".ogg", ".opus", ".aac", ".wav"} {
-		ext := ext
 		t.Run(ext, func(t *testing.T) {
 			path := filepath.Join(tmp, "ok"+ext)
 			if err := os.WriteFile(path, []byte("placeholder"), 0o644); err != nil {

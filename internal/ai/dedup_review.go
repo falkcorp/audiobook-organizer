@@ -125,10 +125,7 @@ func SubmitDedupReviewJob(ctx context.Context, deps aijobs.Deps, model string, i
 	// Build function that constructs JSONL rows (one per sub-batch).
 	buildFn := func(i int) (aijobs.BatchRequest, error) {
 		start := i * dedupReviewBatchSize
-		end := start + dedupReviewBatchSize
-		if end > len(inputs) {
-			end = len(inputs)
-		}
+		end := min(start+dedupReviewBatchSize, len(inputs))
 		batch := inputs[start:end]
 
 		batchJSON, err := json.Marshal(batch)

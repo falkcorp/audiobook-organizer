@@ -113,10 +113,7 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 	}
 	state.TotalListenedSeconds = listened
 	if totalDuration > 0 {
-		pct := int((listened / totalDuration) * 100)
-		if pct < 0 {
-			pct = 0
-		}
+		pct := max(int((listened/totalDuration)*100), 0)
 		if pct > 100 {
 			pct = 100
 		}

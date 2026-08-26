@@ -20,7 +20,7 @@ import (
 type opStoreCalls struct {
 	mu       sync.Mutex
 	logs     []string
-	changes  []interface{}
+	changes  []any
 	progress []string
 }
 
@@ -38,7 +38,7 @@ func newOpStoreMock(t *testing.T) (*mocks.MockOperationStore, *opStoreCalls) {
 		}).Maybe()
 	m.EXPECT().
 		CreateOperationChange(mock.Anything).
-		RunAndReturn(func(change interface{}) error {
+		RunAndReturn(func(change any) error {
 			calls.mu.Lock()
 			defer calls.mu.Unlock()
 			calls.changes = append(calls.changes, change)

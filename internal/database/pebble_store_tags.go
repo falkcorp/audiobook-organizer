@@ -50,13 +50,13 @@ func (p *PebbleStore) AddBookTagWithSource(bookID, tag, source string) error {
 	}
 
 	// Primary key: book_tag:<bookID>:<tag>
-	bookTagKey := []byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag))
+	bookTagKey := fmt.Appendf(nil, "book_tag:%s:%s", bookID, tag)
 	if err := p.db.Set(bookTagKey, data, pebble.Sync); err != nil {
 		return err
 	}
 
 	// Reverse index: tag_idx:<tag>:<bookID>
-	tagIdxKey := []byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID))
+	tagIdxKey := fmt.Appendf(nil, "tag_idx:%s:%s", tag, bookID)
 	return p.db.Set(tagIdxKey, []byte{}, pebble.Sync)
 }
 
@@ -67,12 +67,12 @@ func (p *PebbleStore) RemoveBookTag(bookID, tag string) error {
 		return fmt.Errorf("tag cannot be empty")
 	}
 
-	bookTagKey := []byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag))
+	bookTagKey := fmt.Appendf(nil, "book_tag:%s:%s", bookID, tag)
 	if err := p.db.Delete(bookTagKey, pebble.Sync); err != nil && err != pebble.ErrNotFound {
 		return err
 	}
 
-	tagIdxKey := []byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID))
+	tagIdxKey := fmt.Appendf(nil, "tag_idx:%s:%s", tag, bookID)
 	if err := p.db.Delete(tagIdxKey, pebble.Sync); err != nil && err != pebble.ErrNotFound {
 		return err
 	}
@@ -114,7 +114,7 @@ func (p *PebbleStore) RemoveBookTagsByPrefix(bookID, prefix, source string) erro
 
 // GetBookTags returns all tag strings for a book, sorted alphabetically.
 func (p *PebbleStore) GetBookTags(bookID string) ([]string, error) {
-	prefix := []byte(fmt.Sprintf("book_tag:%s:", bookID))
+	prefix := fmt.Appendf(nil, "book_tag:%s:", bookID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),
@@ -141,7 +141,7 @@ func (p *PebbleStore) GetBookTags(bookID string) ([]string, error) {
 // we promote to "user" so downstream filters treat them as user
 // tags (the sensible default for legacy data).
 func (p *PebbleStore) GetBookTagsDetailed(bookID string) ([]BookTag, error) {
-	prefix := []byte(fmt.Sprintf("book_tag:%s:", bookID))
+	prefix := fmt.Appendf(nil, "book_tag:%s:", bookID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),
@@ -261,7 +261,7 @@ func (p *PebbleStore) GetBooksByTag(tag string) ([]string, error) {
 		return nil, fmt.Errorf("tag cannot be empty")
 	}
 
-	prefix := []byte(fmt.Sprintf("tag_idx:%s:", tag))
+	prefix := fmt.Appendf(nil, "tag_idx:%s:", tag)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),
@@ -312,11 +312,11 @@ func (p *PebbleStore) pebbleAddTag(ks pebbleTagKeyspace, entityID, tag, source s
 	if err != nil {
 		return err
 	}
-	primary := []byte(fmt.Sprintf("%s%s:%s", ks.tagPrefix, entityID, tag))
+	primary := fmt.Appendf(nil, "%s%s:%s", ks.tagPrefix, entityID, tag)
 	if err := p.db.Set(primary, data, pebble.Sync); err != nil {
 		return err
 	}
-	idx := []byte(fmt.Sprintf("%s%s:%s", ks.indexPrefix, tag, entityID))
+	idx := fmt.Appendf(nil, "%s%s:%s", ks.indexPrefix, tag, entityID)
 	return p.db.Set(idx, []byte{}, pebble.Sync)
 }
 
@@ -325,11 +325,11 @@ func (p *PebbleStore) pebbleRemoveTag(ks pebbleTagKeyspace, entityID, tag string
 	if tag == "" {
 		return fmt.Errorf("tag cannot be empty")
 	}
-	primary := []byte(fmt.Sprintf("%s%s:%s", ks.tagPrefix, entityID, tag))
+	primary := fmt.Appendf(nil, "%s%s:%s", ks.tagPrefix, entityID, tag)
 	if err := p.db.Delete(primary, pebble.Sync); err != nil && err != pebble.ErrNotFound {
 		return err
 	}
-	idx := []byte(fmt.Sprintf("%s%s:%s", ks.indexPrefix, tag, entityID))
+	idx := fmt.Appendf(nil, "%s%s:%s", ks.indexPrefix, tag, entityID)
 	if err := p.db.Delete(idx, pebble.Sync); err != nil && err != pebble.ErrNotFound {
 		return err
 	}
@@ -337,7 +337,7 @@ func (p *PebbleStore) pebbleRemoveTag(ks pebbleTagKeyspace, entityID, tag string
 }
 
 func (p *PebbleStore) pebbleGetTags(ks pebbleTagKeyspace, entityID string) ([]string, error) {
-	prefix := []byte(fmt.Sprintf("%s%s:", ks.tagPrefix, entityID))
+	prefix := fmt.Appendf(nil, "%s%s:", ks.tagPrefix, entityID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),
@@ -360,7 +360,7 @@ func (p *PebbleStore) pebbleGetTags(ks pebbleTagKeyspace, entityID string) ([]st
 }
 
 func (p *PebbleStore) pebbleGetTagsDetailed(ks pebbleTagKeyspace, entityID string) ([]BookTag, error) {
-	prefix := []byte(fmt.Sprintf("%s%s:", ks.tagPrefix, entityID))
+	prefix := fmt.Appendf(nil, "%s%s:", ks.tagPrefix, entityID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),
@@ -487,7 +487,7 @@ func (p *PebbleStore) pebbleEntitiesByTag(ks pebbleTagKeyspace, tag string) ([]s
 	if tag == "" {
 		return nil, fmt.Errorf("tag cannot be empty")
 	}
-	prefix := []byte(fmt.Sprintf("%s%s:", ks.indexPrefix, tag))
+	prefix := fmt.Appendf(nil, "%s%s:", ks.indexPrefix, tag)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),

@@ -168,10 +168,8 @@ func (s *OLStore) ImportDump(dumpType, filePath string, progress func(int)) erro
 
 	// Worker goroutines: parse JSON → entryCh
 	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numWorkers {
+		wg.Go(func() {
 			for line := range lineCh {
 				parts := strings.SplitN(string(line), "\t", 5)
 				if len(parts) < 5 {
@@ -184,7 +182,7 @@ func (s *OLStore) ImportDump(dumpType, filePath string, progress func(int)) erro
 				}
 				entryCh <- entry
 			}
-		}()
+		})
 	}
 
 	go func() {

@@ -26,7 +26,7 @@ type UpdateInfo struct {
 	UpdateAvailable bool      `json:"update_available"`
 	ReleaseURL      string    `json:"release_url,omitempty"`
 	ReleaseNotes    string    `json:"release_notes,omitempty"`
-	PublishedAt     time.Time `json:"published_at,omitempty"`
+	PublishedAt     time.Time `json:"published_at"`
 	LastChecked     time.Time `json:"last_checked"`
 }
 

@@ -124,7 +124,7 @@ func TestUpsertBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 		AcoustIDFingerprint:       []byte{10, 20, 30, 40},
 		FingerprintFailureReason:  nil,
 		FingerprintFailureDetail:  &detail,
-		FingerprintDiagnosticJSON: strPtr(`{"codec":"mp3"}`),
+		FingerprintDiagnosticJSON: new(`{"codec":"mp3"}`),
 	}); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
@@ -333,7 +333,9 @@ func TestUpdateBookFile_WritesFreshFingerprintAndClearsFailureDiagnostics(t *tes
 }
 
 // strPtr is a local test helper — returns a pointer to the given string.
-func strPtr(s string) *string { return &s }
+//
+//go:fix inline
+func strPtr(s string) *string { return new(s) }
 
 // BatchUpsertBookFiles must refresh the memdb view so batch-written rows are
 // immediately visible to memdb-backed reads (GetAllBookFilesCore / the UI).

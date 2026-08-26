@@ -83,10 +83,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	aiGroup.SetLimit(aiBatchWorkers)
 
 	for start := 0; start < len(candidates); start += batchSize {
-		end := start + batchSize
-		if end > len(candidates) {
-			end = len(candidates)
-		}
+		end := min(start+batchSize, len(candidates))
 		start, end := start, end
 		batch := candidates[start:end]
 

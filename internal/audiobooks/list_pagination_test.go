@@ -31,7 +31,7 @@ func seedPaginationStore(t *testing.T, n int) (*AudiobookService, []string) {
 
 	primary := true
 	wantTitles := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		title := fmt.Sprintf("Book %04d", i)
 		wantTitles = append(wantTitles, title)
 		_, err := ps.CreateBook(&database.Book{
@@ -141,7 +141,7 @@ func TestGetAudiobooks_ExcludeQuarantined(t *testing.T) {
 
 	primary := true
 	quarantined := 0
-	for i := 0; i < total; i++ {
+	for i := range total {
 		b := &database.Book{
 			Title:            fmt.Sprintf("Book %04d", i),
 			IsPrimaryVersion: &primary,

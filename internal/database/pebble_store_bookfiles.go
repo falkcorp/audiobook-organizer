@@ -21,7 +21,7 @@ import (
 
 // getBookFileByID fetches a BookFile by its primary key (book_file:<bookID>:<fileID>).
 func (s *PebbleStore) getBookFileByID(bookID, fileID string) (*BookFile, error) {
-	key := []byte(fmt.Sprintf("book_file:%s:%s", bookID, fileID))
+	key := fmt.Appendf(nil, "book_file:%s:%s", bookID, fileID)
 	value, closer, err := s.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -45,34 +45,34 @@ func (s *PebbleStore) getBookFileByID(bookID, fileID string) (*BookFile, error) 
 func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *BookFile) error {
 	// Delete book_file_id secondary index.
 	if f.ID != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book_file_id:%s", f.ID)), nil); err != nil {
+		if err := batch.Delete(fmt.Appendf(nil, "book_file_id:%s", f.ID), nil); err != nil {
 			return err
 		}
 	}
 
 	if f.ITunesPersistentID != "" {
-		pidKey := []byte(fmt.Sprintf("book_file_pid:%s", f.ITunesPersistentID))
+		pidKey := fmt.Appendf(nil, "book_file_pid:%s", f.ITunesPersistentID)
 		if err := batch.Delete(pidKey, nil); err != nil {
 			return err
 		}
 	}
 
 	if f.FilePath != "" {
-		pathKey := []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(f.FilePath)))
+		pathKey := fmt.Appendf(nil, "book_file_path:%s", bookFilePathCRC(f.FilePath))
 		if err := batch.Delete(pathKey, nil); err != nil {
 			return err
 		}
 	}
 
 	if f.FileHash != "" {
-		hashKey := []byte(fmt.Sprintf("book_file_hash:%s", f.FileHash))
+		hashKey := fmt.Appendf(nil, "book_file_hash:%s", f.FileHash)
 		if err := batch.Delete(hashKey, nil); err != nil {
 			return err
 		}
 	}
 
 	if f.OriginalFileHash != "" && f.OriginalFileHash != f.FileHash {
-		origKey := []byte(fmt.Sprintf("book_file_orig_hash:%s", f.OriginalFileHash))
+		origKey := fmt.Appendf(nil, "book_file_orig_hash:%s", f.OriginalFileHash)
 		if err := batch.Delete(origKey, nil); err != nil {
 			return err
 		}
@@ -82,7 +82,7 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 	for _, seg := range [7]string{f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2, f.AcoustIDSeg3,
 		f.AcoustIDSeg4, f.AcoustIDSeg5, f.AcoustIDSeg6} {
 		if seg != "" {
-			acoustKey := []byte(fmt.Sprintf("book_file_acoustid:%s", seg))
+			acoustKey := fmt.Appendf(nil, "book_file_acoustid:%s", seg)
 			if err := batch.Delete(acoustKey, nil); err != nil {
 				return err
 			}
@@ -243,7 +243,7 @@ func (s *PebbleStore) stagePIDTransfer(batch *pebble.Batch, file *BookFile) (*Bo
 	if err != nil {
 		return nil, fmt.Errorf("stagePIDTransfer: marshal prior owner %s: %w", prior.ID, err)
 	}
-	priorKey := []byte(fmt.Sprintf("book_file:%s:%s", prior.BookID, prior.ID))
+	priorKey := fmt.Appendf(nil, "book_file:%s:%s", prior.BookID, prior.ID)
 	if err := batch.Set(priorKey, data, nil); err != nil {
 		return nil, fmt.Errorf("stagePIDTransfer: rewrite prior owner %s: %w", prior.ID, err)
 	}
@@ -312,7 +312,7 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 		return err
 	}
 
-	key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
+	key := fmt.Appendf(nil, "book_file:%s:%s", file.BookID, file.ID)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return err
@@ -468,7 +468,7 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 			return err
 		}
 
-		key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
+		key := fmt.Appendf(nil, "book_file:%s:%s", file.BookID, file.ID)
 		if err := batch.Set(key, data, nil); err != nil {
 			batch.Close()
 			return err
@@ -602,7 +602,7 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 		return err
 	}
 
-	key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
+	key := fmt.Appendf(nil, "book_file:%s:%s", file.BookID, file.ID)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return err
@@ -628,7 +628,7 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 // GetBookFiles returns all BookFile records for the given bookID by iterating
 // the prefix book_file:<bookID>:.
 func (s *PebbleStore) GetBookFiles(bookID string) ([]BookFile, error) {
-	prefix := []byte(fmt.Sprintf("book_file:%s:", bookID))
+	prefix := fmt.Appendf(nil, "book_file:%s:", bookID)
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: append(append([]byte(nil), prefix...), 0xFF),
@@ -842,7 +842,7 @@ func (s *PebbleStore) GetBookFileByPID(itunesPID string) (*BookFile, error) {
 	if itunesPID == "" {
 		return nil, nil
 	}
-	pidKey := []byte(fmt.Sprintf("book_file_pid:%s", itunesPID))
+	pidKey := fmt.Appendf(nil, "book_file_pid:%s", itunesPID)
 	value, closer, err := s.db.Get(pidKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -888,7 +888,7 @@ func (s *PebbleStore) GetBookFileByPath(filePath string) (*BookFile, error) {
 	if filePath == "" {
 		return nil, nil
 	}
-	pathKey := []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(filePath)))
+	pathKey := fmt.Appendf(nil, "book_file_path:%s", bookFilePathCRC(filePath))
 	value, closer, err := s.db.Get(pathKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -920,7 +920,7 @@ func (s *PebbleStore) GetBookFileByAcoustID(fp string) (*BookFile, error) {
 	if fp == "" {
 		return nil, nil
 	}
-	key := []byte(fmt.Sprintf("book_file_acoustid:%s", fp))
+	key := fmt.Appendf(nil, "book_file_acoustid:%s", fp)
 	value, closer, err := s.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -1080,7 +1080,7 @@ func (s *PebbleStore) DeleteBookFile(id string) error {
 	batch := s.db.NewBatch()
 
 	// Delete primary key.
-	primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", found.BookID, found.ID))
+	primaryKey := fmt.Appendf(nil, "book_file:%s:%s", found.BookID, found.ID)
 	if err := batch.Delete(primaryKey, nil); err != nil {
 		batch.Close()
 		return err
@@ -1119,7 +1119,7 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 
 	for i := range files {
 		f := &files[i]
-		primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID))
+		primaryKey := fmt.Appendf(nil, "book_file:%s:%s", f.BookID, f.ID)
 		if err := batch.Delete(primaryKey, nil); err != nil {
 			batch.Close()
 			return err
@@ -1305,7 +1305,7 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 	// ── Pass 2: one batch, one Sync commit. ──
 	batch := s.db.NewBatch()
 	for _, f := range resolved {
-		primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID))
+		primaryKey := fmt.Appendf(nil, "book_file:%s:%s", f.BookID, f.ID)
 		if err := batch.Delete(primaryKey, nil); err != nil {
 			batch.Close()
 			return err
@@ -1506,7 +1506,7 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 			return err
 		}
 
-		key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
+		key := fmt.Appendf(nil, "book_file:%s:%s", file.BookID, file.ID)
 		if err := batch.Set(key, data, nil); err != nil {
 			batch.Close()
 			return err
@@ -1643,7 +1643,7 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 			}
 
 			// Delete old primary key
-			oldKey := []byte(fmt.Sprintf("book_file:%s:%s", mv.SourceBookID, fid))
+			oldKey := fmt.Appendf(nil, "book_file:%s:%s", mv.SourceBookID, fid)
 			if err := batch.Delete(oldKey, nil); err != nil {
 				batch.Close()
 				return err
@@ -1664,7 +1664,7 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 				batch.Close()
 				return err
 			}
-			newKey := []byte(fmt.Sprintf("book_file:%s:%s", targetBookID, fid))
+			newKey := fmt.Appendf(nil, "book_file:%s:%s", targetBookID, fid)
 			if err := batch.Set(newKey, data, nil); err != nil {
 				batch.Close()
 				return err

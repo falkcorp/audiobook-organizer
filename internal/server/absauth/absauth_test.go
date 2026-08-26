@@ -297,7 +297,7 @@ func TestRefreshToken_DependsOnServerSecret(t *testing.T) {
 
 func TestNewRefreshSeed_IsRandom(t *testing.T) {
 	seen := map[string]bool{}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		s, err := NewRefreshSeed()
 		if err != nil {
 			t.Fatalf("NewRefreshSeed: %v", err)
@@ -419,7 +419,7 @@ func TestPassword_RejectsMalformedArgonHash(t *testing.T) {
 func TestThrottle_PerIPHardBlockAfterBudget(t *testing.T) {
 	tr := NewThrottle()
 	tr.SetSleep(func(time.Duration) {})
-	for i := 0; i < MaxFailuresPerIP; i++ {
+	for i := range MaxFailuresPerIP {
 		if tr.IPBlocked("1.2.3.4") {
 			t.Fatalf("blocked too early at failure %d", i)
 		}
@@ -439,7 +439,7 @@ func TestThrottle_PerIPHardBlockAfterBudget(t *testing.T) {
 func TestThrottle_NeverHardLocksAnAccount(t *testing.T) {
 	tr := NewThrottle()
 	tr.SetSleep(func(time.Duration) {})
-	for i := 0; i < MaxFailuresPerIP*5; i++ {
+	for range MaxFailuresPerIP * 5 {
 		tr.RecordFailure("victim", "9.9.9.9")
 	}
 	if tr.IPBlocked("victim") {
@@ -454,7 +454,7 @@ func TestThrottle_SoftDelayIsProgressiveAndCapped(t *testing.T) {
 	tr := NewThrottle()
 	tr.SetSleep(func(time.Duration) {})
 	var last time.Duration
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		d := tr.RecordFailure("acct", "2.2.2.2")
 		if d > SoftMaxDelay {
 			t.Fatalf("soft delay %v exceeded the cap %v", d, SoftMaxDelay)
@@ -472,7 +472,7 @@ func TestThrottle_SoftDelayIsProgressiveAndCapped(t *testing.T) {
 func TestThrottle_ClearResetsBothCounters(t *testing.T) {
 	tr := NewThrottle()
 	tr.SetSleep(func(time.Duration) {})
-	for i := 0; i < MaxFailuresPerIP; i++ {
+	for range MaxFailuresPerIP {
 		tr.RecordFailure("acct", "3.3.3.3")
 	}
 	if !tr.IPBlocked("3.3.3.3") {
@@ -491,17 +491,17 @@ func TestThrottle_ConcurrentUseIsRaceFree(t *testing.T) {
 	tr := NewThrottle()
 	tr.SetSleep(func(time.Duration) {})
 	done := make(chan struct{})
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			for j := 0; j < 200; j++ {
+			for range 200 {
 				tr.RecordFailure("acct", "4.4.4.4")
 				_ = tr.IPBlocked("4.4.4.4")
 				tr.Clear("acct", "4.4.4.4")
 			}
 		}()
 	}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		<-done
 	}
 }

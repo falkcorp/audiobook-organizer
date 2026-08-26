@@ -197,10 +197,7 @@ func removeTracksByPIDLEUnsafe(data []byte, pids map[string]bool) ([]byte, int) 
 	// Update mlth track count
 	if mlthOffset >= 0 && mlthOffset+12 <= len(result) {
 		oldCount := int(readUint32LE(result, mlthOffset+8))
-		newCount := oldCount - removedCount
-		if newCount < 0 {
-			newCount = 0
-		}
+		newCount := max(oldCount-removedCount, 0)
 		writeUint32LE(result, mlthOffset+8, uint32(newCount))
 	}
 
@@ -217,7 +214,7 @@ func removeTracksByPIDLEUnsafe(data []byte, pids map[string]bool) ([]byte, int) 
 // Returns a lowercase 16-char hex string matching the canonical format.
 func extractMithPIDLE(data []byte, mithOffset int) string {
 	var pid [8]byte
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		pid[i] = data[mithOffset+135-i]
 	}
 	return strings.ToLower(hex.EncodeToString(pid[:]))

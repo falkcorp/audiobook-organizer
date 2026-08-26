@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -118,13 +119,7 @@ func TestFormatConfiguration(t *testing.T) {
 	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma"}
 
 	for _, format := range requiredFormats {
-		found := false
-		for _, ext := range config.AppConfig.SupportedExtensions {
-			if ext == format {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(config.AppConfig.SupportedExtensions, format)
 		if !found {
 			t.Errorf("Required format %s not in configuration", format)
 		}

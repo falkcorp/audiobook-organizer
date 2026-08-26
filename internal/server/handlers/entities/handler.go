@@ -210,14 +210,8 @@ func (h *Handler) ListWork(c *gin.Context) {
 	}
 
 	total := len(works)
-	start := params.Offset
-	if start > total {
-		start = total
-	}
-	end := start + params.Limit
-	if end > total {
-		end = total
-	}
+	start := min(params.Offset, total)
+	end := min(start+params.Limit, total)
 	page := works[start:end]
 
 	items := make([]map[string]any, 0, len(page))

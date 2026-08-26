@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -581,9 +582,7 @@ func remapScheduledKeys(payload map[string]any) map[string]any {
 	}
 	for group, fields := range groups {
 		if existingGroup, ok := existing[group].(map[string]any); ok {
-			for k, v := range fields {
-				existingGroup[k] = v
-			}
+			maps.Copy(existingGroup, fields)
 		} else {
 			existing[group] = fields
 		}

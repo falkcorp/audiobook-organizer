@@ -172,7 +172,7 @@ func TestGetBooksByIDs_ErrorAlongsideRows(t *testing.T) {
 	// Directly write an unparsable value under a book:<id> key, bypassing
 	// CreateBook, to simulate a corrupt row mid-batch.
 	corruptID := "book-corrupt"
-	if err := store.db.Set([]byte(fmt.Sprintf("book:%s", corruptID)), []byte("{not valid json"), nil); err != nil {
+	if err := store.db.Set(fmt.Appendf(nil, "book:%s", corruptID), []byte("{not valid json"), nil); err != nil {
 		t.Fatalf("seed corrupt row: %v", err)
 	}
 

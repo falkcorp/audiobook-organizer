@@ -132,7 +132,7 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, _ json.RawMessage, reporte
 	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Batch created: %s — polling for completion", batchID))
 
-	for i := 0; i < maxPolls; i++ {
+	for i := range maxPolls {
 		if reporter.IsCanceled() {
 			return fmt.Errorf("cancelled")
 		}

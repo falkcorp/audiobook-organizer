@@ -443,7 +443,7 @@ func TestSystemService_PaginateLogs_EdgeCases(t *testing.T) {
 	svc := sysinfo.NewSystemService(mockStore, "test", nil)
 
 	logs := make([]database.OperationLog, 50)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		logs[i] = database.OperationLog{Message: "Log"}
 	}
 
@@ -773,7 +773,7 @@ func TestMetadataStateService_UpdateFetchedMetadata(t *testing.T) {
 					{
 						BookID:       bookID,
 						Field:        "title",
-						FetchedValue: strPtr(`"Old Title"`),
+						FetchedValue: new(`"Old Title"`),
 						UpdatedAt:    time.Now().Add(-24 * time.Hour),
 					},
 				}
@@ -848,8 +848,10 @@ func matchMetadataFieldState(bookID, field string) any {
 }
 
 // strPtr returns a string pointer
+//
+//go:fix inline
 func strPtr(s string) *string {
-	return &s
+	return new(s)
 }
 
 // TestImportPathService_UpdateImportPathEnabled tests UpdateImportPathEnabled method
@@ -1446,12 +1448,12 @@ func TestServerHelpers_StringVal(t *testing.T) {
 		},
 		{
 			name:     "non-nil pointer returns value",
-			input:    strPtr("test"),
+			input:    new("test"),
 			expected: "test",
 		},
 		{
 			name:     "empty string pointer returns empty string",
-			input:    strPtr(""),
+			input:    new(""),
 			expected: "",
 		},
 	}
@@ -1480,17 +1482,17 @@ func TestServerHelpers_IntVal(t *testing.T) {
 		},
 		{
 			name:     "non-nil pointer returns value",
-			input:    intPtrHelper(42),
+			input:    new(42),
 			expected: 42,
 		},
 		{
 			name:     "zero value pointer returns zero",
-			input:    intPtrHelper(0),
+			input:    new(0),
 			expected: 0,
 		},
 		{
 			name:     "negative value pointer returns negative",
-			input:    intPtrHelper(-10),
+			input:    new(-10),
 			expected: -10,
 		},
 	}

@@ -150,7 +150,7 @@ func TestCheckBook_FileHashCheckError_ContinuesGracefully(t *testing.T) {
 		ID:       "BOOK_1",
 		Title:    "Test Book",
 		AuthorID: &authorID,
-		FileHash: strPtr("somehash"),
+		FileHash: new("somehash"),
 	}
 
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {

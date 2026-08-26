@@ -420,7 +420,7 @@ func runBreakdownBackfillWith(
 			mu.Unlock()
 		}
 
-		for i := 0; i < len(results); i++ {
+		for i := range results {
 			res := results[i]
 			ref := g.refs[i]
 

@@ -68,7 +68,7 @@ type DigestItem struct {
 	Details     string `json:"details,omitempty"`
 	// Timestamp is the original event time. Zero for digests compacted before
 	// 2026-05-20 (when this field was added); omitempty hides it from old JSON.
-	Timestamp time.Time `json:"timestamp,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 	// Tags carries the enriched tag set from the source row.
 	// Empty for digests compacted before 2026-05-20.
 	Tags []string `json:"tags,omitempty"`

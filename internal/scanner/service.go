@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -384,11 +385,8 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 				return nil
 			}
 			ext := strings.ToLower(filepath.Ext(path))
-			for _, supported := range config.AppConfig.SupportedExtensions {
-				if ext == supported {
-					fileCount++
-					break
-				}
+			if slices.Contains(config.AppConfig.SupportedExtensions, ext) {
+				fileCount++
 			}
 			return nil
 		})
@@ -404,10 +402,7 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 
 func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath string, foldersToScan []string, totalFilesAcrossFolders int, processedFiles *atomic.Int32, stats *ScanStats, opID string, itemOffset int, checkpoint func(folderIdx, itemOffset int), log logger.Logger) error {
 	currentProcessed := int(processedFiles.Load())
-	displayTotal := totalFilesAcrossFolders
-	if currentProcessed > displayTotal {
-		displayTotal = currentProcessed
-	}
+	displayTotal := max(currentProcessed, totalFilesAcrossFolders)
 	log.UpdateProgress(currentProcessed, displayTotal, fmt.Sprintf("Scanning folder %d/%d: %s", folderIdx+1, len(foldersToScan), folderPath))
 	log.Info("Scanning folder: %s", folderPath)
 
@@ -442,10 +437,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 	}
 	progressCallback := func(_ int, _ int, bookPath string) {
 		current := processedFiles.Add(1)
-		displayTotal := targetTotal
-		if int(current) > displayTotal {
-			displayTotal = int(current)
-		}
+		displayTotal := max(int(current), targetTotal)
 		message := fmt.Sprintf("Processed: %d/%d books", current, displayTotal)
 		if bookPath != "" {
 			message = fmt.Sprintf("Processed: %d/%d books (%s)", current, displayTotal, filepath.Base(bookPath))
@@ -479,10 +471,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 		// re-run others, so the sort is load-bearing, not cosmetic.
 		sort.Slice(books, func(i, j int) bool { return books[i].FilePath < books[j].FilePath })
 
-		start := itemOffset
-		if start < 0 {
-			start = 0
-		}
+		start := max(itemOffset, 0)
 		if start > len(books) {
 			start = len(books)
 		}
@@ -555,10 +544,7 @@ func (ss *ScanService) processBookChunks(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		end := off + scanChunkSize
-		if end > len(books) {
-			end = len(books)
-		}
+		end := min(off+scanChunkSize, len(books))
 		if err := process(ctx, books[off:end]); err != nil {
 			// No checkpoint on failure: recording `end` here would let a resume
 			// step over a chunk that never actually processed.
@@ -605,10 +591,7 @@ func (ss *ScanService) reportCompletion(totalFilesAcrossFolders int, finalProces
 		completionMsg = "Scan completed. No books found"
 	}
 
-	finalTotal := totalFilesAcrossFolders
-	if finalProcessed > finalTotal {
-		finalTotal = finalProcessed
-	}
+	finalTotal := max(finalProcessed, totalFilesAcrossFolders)
 	log.UpdateProgress(finalProcessed, finalTotal, completionMsg)
 	log.Info("%s", completionMsg)
 }
@@ -620,10 +603,10 @@ func ApplyOrganizedFileMetadata(book *database.Book, newPath string) {
 	if err != nil {
 		defaultLog.Warn("failed to compute organized hash for %s: %v", newPath, err)
 	} else if hash != "" {
-		book.FileHash = stringPtr(hash)
-		book.OrganizedFileHash = stringPtr(hash)
+		book.FileHash = new(hash)
+		book.OrganizedFileHash = new(hash)
 		if book.OriginalFileHash == nil {
-			book.OriginalFileHash = stringPtr(hash)
+			book.OriginalFileHash = new(hash)
 		}
 	}
 	if info, err := os.Stat(newPath); err == nil {

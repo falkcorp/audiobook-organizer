@@ -71,7 +71,7 @@ func TestExpandPattern(t *testing.T) {
 
 	book := &database.Book{
 		Title:    "The Hobbit",
-		Narrator: stringPtr("Rob Inglis"),
+		Narrator: new("Rob Inglis"),
 	}
 
 	result, err := org.expandPattern("{title}", book)
@@ -520,16 +520,16 @@ func TestExpandPattern_WithAllFields(t *testing.T) {
 	book := &database.Book{
 		Title:     "Complete Book",
 		Author:    &database.Author{Name: "Author Name"},
-		Narrator:  stringPtr("Narrator Name"),
-		Publisher: stringPtr("Publisher Name"),
-		Language:  stringPtr("English"),
-		Edition:   stringPtr("First"),
+		Narrator:  new("Narrator Name"),
+		Publisher: new("Publisher Name"),
+		Language:  new("English"),
+		Edition:   new("First"),
 		PrintYear: &printYear,
-		ISBN10:    stringPtr("1234567890"),
-		ISBN13:    stringPtr("1234567890123"),
+		ISBN10:    new("1234567890"),
+		ISBN13:    new("1234567890123"),
 		Bitrate:   &bitrate,
-		Codec:     stringPtr("AAC"),
-		Quality:   stringPtr("High"),
+		Codec:     new("AAC"),
+		Quality:   new("High"),
 	}
 
 	result, err := org.expandPattern("{author} - {title} ({year}) - {narrator}", book)
@@ -669,7 +669,7 @@ func TestExpandPattern_EmptySegmentDropsConnectorWords(t *testing.T) {
 			book: &database.Book{
 				Title:    "Time Pebbles",
 				Author:   &database.Author{Name: "Jerry Merritt"},
-				Narrator: stringPtr("Rob Inglis"),
+				Narrator: new("Rob Inglis"),
 			},
 			expected: "Time Pebbles - Jerry Merritt - read by Rob Inglis",
 		},
@@ -744,7 +744,7 @@ func TestExpandPattern_EmptySegmentDropsConnectorWords(t *testing.T) {
 			book: &database.Book{
 				Title:    "Foundation - Part 1",
 				Author:   &database.Author{Name: "Isaac Asimov"},
-				Narrator: stringPtr("Scott Brick"),
+				Narrator: new("Scott Brick"),
 			},
 			expected: "Foundation - Part 1 - Isaac Asimov - read by Scott Brick",
 		},
@@ -895,8 +895,8 @@ func TestStringOrEmpty(t *testing.T) {
 		expected string
 	}{
 		{"nil pointer", nil, ""},
-		{"empty string", stringPtr(""), ""},
-		{"non-empty", stringPtr("test"), "test"},
+		{"empty string", new(""), ""},
+		{"non-empty", new("test"), "test"},
 	}
 
 	for _, tt := range tests {

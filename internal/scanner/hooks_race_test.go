@@ -35,12 +35,12 @@ func TestScanHooksConcurrentSetAndRead(t *testing.T) {
 	const iterations = 500
 
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Add(2)
 		// Writers: the teardown path, installing and clearing hooks.
 		go func() {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				if j%2 == 0 {
 					SetScanHooks(noopScanHooks{})
 				} else {
@@ -54,7 +54,7 @@ func TestScanHooksConcurrentSetAndRead(t *testing.T) {
 		// even with the lock.
 		go func() {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				if hooks := currentScanHooks(); hooks != nil {
 					hooks.OnBookScanned("book-1", "Title")
 					hooks.OnImportDedup("book-1")

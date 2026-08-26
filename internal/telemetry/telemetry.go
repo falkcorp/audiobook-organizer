@@ -73,11 +73,11 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 }
 
 // GlobalTracer returns the global OpenTelemetry tracer.
-func GlobalTracer() interface{} {
+func GlobalTracer() any {
 	return otel.Tracer("audiobook-organizer")
 }
 
 // GlobalMeter returns the global OpenTelemetry meter.
-func GlobalMeter() interface{} {
+func GlobalMeter() any {
 	return otel.Meter("audiobook-organizer")
 }

@@ -27,7 +27,7 @@ func TestRunUnifiedScoringForBook_StopsPromptlyOnCancel(t *testing.T) {
 	book := primaryBook("BOOK_A", "Book A")
 	others := make(map[string]*database.Book)
 	const numCandidates = 5
-	for i := 0; i < numCandidates; i++ {
+	for i := range numCandidates {
 		id := "OTHER_" + string(rune('0'+i))
 		others[id] = primaryBook(id, "Other Title "+string(rune('0'+i)))
 	}

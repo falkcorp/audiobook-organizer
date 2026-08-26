@@ -228,7 +228,7 @@ func TestListReviewItems_FilterByStatusAndKind(t *testing.T) {
 
 func TestListReviewItems_Pagination(t *testing.T) {
 	s := newReviewTestStore(t)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		dk := string(rune('a' + i))
 		if _, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", dk, "/f/"+dk, "s", "")); err != nil {
 			t.Fatalf("seed: %v", err)

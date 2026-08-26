@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -289,10 +290,8 @@ var absAppAPICollisions = []string{
 // absReservedPath reports whether a request path belongs to the ABS surface and must
 // therefore skip the /api/* → /api/v1/* compatibility redirect.
 func absReservedPath(path string) bool {
-	for _, p := range absReservedPaths {
-		if path == p {
-			return true
-		}
+	if slices.Contains(absReservedPaths, path) {
+		return true
 	}
 	for _, prefix := range absReservedPathPrefixes {
 		if strings.HasPrefix(path, prefix) {

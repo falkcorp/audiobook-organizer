@@ -200,29 +200,29 @@ func TestHNSW_ConcurrentAddSearch(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 
 	// Seed some entries so searches have something to traverse.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		_ = s.Upsert(ctx, "book", fmt.Sprintf("seed-%d", i), unitVec(rng, 16), nil)
 	}
 
 	var wg sync.WaitGroup
 	// Writers.
-	for w := 0; w < 4; w++ {
+	for w := range 4 {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(int64(w)))
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				_ = s.Upsert(ctx, "book", fmt.Sprintf("w%d-%d", w, i), unitVec(r, 16), nil)
 			}
 		}(w)
 	}
 	// Readers.
-	for r := 0; r < 4; r++ {
+	for r := range 4 {
 		wg.Add(1)
 		go func(r int) {
 			defer wg.Done()
 			rr := rand.New(rand.NewSource(int64(100 + r)))
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				_, _ = s.FindSimilar(ctx, "book", unitVec(rr, 16), 10, nil)
 				_, _ = s.CountByType(ctx, "book")
 			}
@@ -286,9 +286,9 @@ func TestHNSW_RecallVsChromem(t *testing.T) {
 	c := NewInMemoryChromemStore(dim)
 
 	centroids := make([][]float32, clusters)
-	for ci := 0; ci < clusters; ci++ {
+	for ci := range clusters {
 		centroids[ci] = unitVec(rng, dim)
-		for pi := 0; pi < perCluster; pi++ {
+		for pi := range perCluster {
 			id := fmt.Sprintf("c%d-p%d", ci, pi)
 			v := addNoise(rng, centroids[ci], noiseScale)
 			if err := h.Upsert(ctx, "book", id, v, nil); err != nil {
@@ -303,7 +303,7 @@ func TestHNSW_RecallVsChromem(t *testing.T) {
 	var totalRecall float64
 	const queries = 40
 	qrng := rand.New(rand.NewSource(99))
-	for q := 0; q < queries; q++ {
+	for q := range queries {
 		query := addNoise(qrng, centroids[q%clusters], queryNoise)
 		hres, err := h.FindSimilar(ctx, "book", query, k, nil)
 		if err != nil {

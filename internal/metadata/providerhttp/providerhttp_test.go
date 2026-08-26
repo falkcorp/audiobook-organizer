@@ -35,7 +35,7 @@ func TestThrottled_PacesRequests(t *testing.T) {
 	}}
 
 	start := time.Now()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		resp, err := c.Get(srv.URL)
 		if err != nil {
 			t.Fatalf("request %d: %v", i, err)

@@ -17,14 +17,14 @@ import (
 
 // PreviewStep describes a single step in the organize preview.
 type PreviewStep struct {
-	Action      string                 `json:"action"`
-	Description string                 `json:"description"`
-	From        string                 `json:"from,omitempty"`
-	To          string                 `json:"to,omitempty"`
-	Files       []string               `json:"files,omitempty"`
-	Tags        map[string]interface{} `json:"tags,omitempty"`
-	CoverURL    string                 `json:"cover_url,omitempty"`
-	Warning     string                 `json:"warning,omitempty"`
+	Action      string         `json:"action"`
+	Description string         `json:"description"`
+	From        string         `json:"from,omitempty"`
+	To          string         `json:"to,omitempty"`
+	Files       []string       `json:"files,omitempty"`
+	Tags        map[string]any `json:"tags,omitempty"`
+	CoverURL    string         `json:"cover_url,omitempty"`
+	Warning     string         `json:"warning,omitempty"`
 }
 
 // PreviewResponse is the full response for a preview-organize request.

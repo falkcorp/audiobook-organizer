@@ -94,10 +94,7 @@ func nextBatchSize(backlog int) int {
 	if backlog <= 0 {
 		return 0
 	}
-	n := backlog / reconcileBacklogDivisor
-	if n < reconcileMinBatch {
-		n = reconcileMinBatch
-	}
+	n := max(backlog/reconcileBacklogDivisor, reconcileMinBatch)
 	if n > reconcileMaxBatch {
 		n = reconcileMaxBatch
 	}

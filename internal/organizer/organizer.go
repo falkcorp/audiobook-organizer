@@ -349,10 +349,7 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 		prefixLen := len(windowsRoot) + 1 + len(relDir) + 1
 		fileExt := filepath.Ext(fileName)
 		stem := strings.TrimSuffix(fileName, fileExt)
-		maxStem := 260 - prefixLen - len(fileExt)
-		if maxStem < 1 {
-			maxStem = 1
-		}
+		maxStem := max(260-prefixLen-len(fileExt), 1)
 		if len(stem) > maxStem {
 			stem = stem[:maxStem]
 			fileName = stem + fileExt

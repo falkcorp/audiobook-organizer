@@ -85,10 +85,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		params.MaxDurationSec = 1200
 	}
 	if params.MinTitleCollisionsUnscanned < params.MinTitleCollisions {
-		params.MinTitleCollisionsUnscanned = params.MinTitleCollisions
-		if params.MinTitleCollisionsUnscanned < 10 {
-			params.MinTitleCollisionsUnscanned = 10
-		}
+		params.MinTitleCollisionsUnscanned = max(params.MinTitleCollisions, 10)
 	}
 	reporter.Logger().Info("quarantine-chapter-artifacts start",
 		"apply", params.Apply, "min_collisions", params.MinTitleCollisions, "max_duration_sec", params.MaxDurationSec)

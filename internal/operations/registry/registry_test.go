@@ -197,8 +197,7 @@ func TestCancel_UnknownID_ReturnsErrOpNotFound(t *testing.T) {
 }
 
 func TestCancel_RunningOpCancelsContext(t *testing.T) {
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	defer cancelCtx()
+	ctx := t.Context()
 
 	r, _ := newTestRegistry(t)
 
@@ -521,8 +520,7 @@ func TestDepsScheduler_WakeOnCompletion(t *testing.T) {
 		t.Fatalf("RegisterOp dep: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	// Enqueue dependent — should be parked since prereq hasn't run.
@@ -575,8 +573,7 @@ func TestDepsScheduler_FailPropagation(t *testing.T) {
 		t.Fatalf("RegisterOp dep: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	params := map[string]string{"book_id": "b-fail"}
@@ -642,8 +639,7 @@ func TestE2E_DependencyOrdering(t *testing.T) {
 		t.Fatalf("RegisterOp B: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	sched := registry.NewDepsScheduler(r, store)
 	r.SetDepsScheduler(sched)

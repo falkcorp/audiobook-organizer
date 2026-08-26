@@ -455,7 +455,7 @@ func TestResolveImportMode(t *testing.T) {
 
 // TestPtrHelpers tests int/int64 pointer helpers.
 func TestPtrHelpers(t *testing.T) {
-	p := intPtrLocal(42)
+	p := new(42)
 	if p == nil || *p != 42 {
 		t.Errorf("intPtrLocal(42) = %v, want *42", p)
 	}
@@ -526,7 +526,7 @@ func TestStatusHelpers(t *testing.T) {
 
 	t.Run("recordImportFailure_respects_limit", func(t *testing.T) {
 		s := &itunesImportStatus{}
-		for i := 0; i < importErrorLimit+10; i++ {
+		for range importErrorLimit + 10 {
 			recordImportFailure(s, "err")
 		}
 		if len(s.Errors) != importErrorLimit {
@@ -544,7 +544,7 @@ func TestStatusHelpers(t *testing.T) {
 
 	t.Run("recordImportError_respects_limit", func(t *testing.T) {
 		s := &itunesImportStatus{}
-		for i := 0; i < importErrorLimit+5; i++ {
+		for range importErrorLimit + 5 {
 			recordImportError(s, "err")
 		}
 		if len(s.Errors) != importErrorLimit {

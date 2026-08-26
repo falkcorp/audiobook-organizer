@@ -29,7 +29,7 @@ var taglibAvailable = true
 //
 // If packageSafeWriteDeps is configured, protected (Deluge-managed) paths are
 // imported into the library before the write proceeds.
-func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _ fileops.OperationConfig) error {
+func writeMetadataWithTaglib(filePath string, metadata map[string]any, _ fileops.OperationConfig) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs path: %w", err)
@@ -53,7 +53,7 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _
 // Contract: the caller MUST already be operating on a temp copy created by an
 // outer fileops.WriteTagsSafe, and MUST have already resolved the protected-path
 // question against the real path. See tagger.WriteTagsInPlace for the rationale.
-func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]interface{}, _ fileops.OperationConfig) error {
+func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]any, _ fileops.OperationConfig) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs path: %w", err)

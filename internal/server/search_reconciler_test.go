@@ -211,7 +211,7 @@ func TestReconciler_DrainsRepeatedDropsOfOneBookOnce(t *testing.T) {
 
 	// A book updated repeatedly during a bulk op drops many times; the set
 	// must coalesce so the backlog figure is not inflated.
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		srv.enqueueIndex("hot-1", false)
 	}
 

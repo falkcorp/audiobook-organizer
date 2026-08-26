@@ -261,7 +261,9 @@ func TestPartVsWholeGenuineStillNotDup(t *testing.T) {
 }
 
 // simPtr is a test helper for the *float64 LabeledExample.Similarity field.
-func simPtr(v float64) *float64 { return &v }
+//
+//go:fix inline
+func simPtr(v float64) *float64 { return new(v) }
 
 // The following tests pin the same-title / high-similarity partVsWhole guard
 // (2026-07-12). Each fixture is anchored on a real row pulled from the prod
@@ -277,7 +279,7 @@ func simPtr(v float64) *float64 { return &v }
 func TestPartVsWholeSameTitleHighSimGoesUnsure(t *testing.T) {
 	ex := database.LabeledExample{
 		Layer:         "exact",
-		Similarity:    simPtr(1.0),
+		Similarity:    new(1.0),
 		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 82569, Title: "Foundation"},
 		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 22130, Title: "Foundation"},
 		DurationRatio: 22130.0 / 82569.0,
@@ -303,7 +305,7 @@ func TestPartVsWholeSameTitleHighSimGoesUnsure(t *testing.T) {
 func TestPartVsWholeBoilerplateIdentStaysNotDup(t *testing.T) {
 	ex := database.LabeledExample{
 		Layer:         "exact",
-		Similarity:    simPtr(1.0),
+		Similarity:    new(1.0),
 		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 8293, Title: "Big Finish Ident"},
 		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 4008, Title: "Big Finish Ident"},
 		DurationRatio: 4008.0 / 8293.0,
@@ -325,7 +327,7 @@ func TestPartVsWholeBoilerplateIdentStaysNotDup(t *testing.T) {
 func TestPartVsWholeSameTitleLowSimStaysNotDup(t *testing.T) {
 	ex := database.LabeledExample{
 		Layer:         "embedding",
-		Similarity:    simPtr(0.859),
+		Similarity:    new(0.859),
 		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 40000, Title: "The Improbable Adventures of Sherlock Holmes"},
 		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 12000, Title: "The Improbable Adventures of Sherlock Holmes"},
 		DurationRatio: 12000.0 / 40000.0,
@@ -354,7 +356,7 @@ func TestPartVsWholeSameTitleUnknownSimStaysNotDup(t *testing.T) {
 func TestPartVsWholeDifferentTitleHighSimStaysNotDup(t *testing.T) {
 	ex := database.LabeledExample{
 		Layer:         "embedding",
-		Similarity:    simPtr(0.97),
+		Similarity:    new(0.97),
 		A:             database.BookFeatures{FilesExist: true, TotalDurationSec: 36000, Title: "Foundation"},
 		B:             database.BookFeatures{FilesExist: true, TotalDurationSec: 10800, Title: "Foundation and Empire"},
 		DurationRatio: 10800.0 / 36000.0,

@@ -72,7 +72,7 @@ type ABSSession struct {
 	LastUsedAt time.Time `json:"last_used_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	// GraceUntil bounds how long PrevRefreshTokenHash stays acceptable.
-	GraceUntil time.Time `json:"grace_until,omitempty"`
+	GraceUntil time.Time `json:"grace_until"`
 
 	Revoked bool `json:"revoked"`
 }
@@ -96,7 +96,7 @@ func (s *ABSSession) InGrace(now time.Time) bool {
 
 func absSessionKey(id string) []byte { return []byte(absSessionKeyPrefix + id) }
 func absSessionTokenKey(h string) []byte {
-	return []byte(fmt.Sprintf(absSessionTokenIdxTmpl, h))
+	return fmt.Appendf(nil, absSessionTokenIdxTmpl, h)
 }
 func absSessionUserKey(userID, id string) []byte {
 	return []byte(absSessionUserIdxPfx + userID + ":" + id)

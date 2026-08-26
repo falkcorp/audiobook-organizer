@@ -142,7 +142,7 @@ func TestCustomTagsToMap_EmptyFieldsOmitted(t *testing.T) {
 func TestCustomTagConsistency_TaglibWriter(t *testing.T) {
 	// Build the tag map the same way writeMetadataWithTaglib does, using a
 	// fully-populated metadata map.
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"book_id":         "id-1",
 		"isbn10":          "0123456789",
 		"isbn13":          "9780123456789",
@@ -265,7 +265,7 @@ func TestCustomTagConsistency_AllThreeWritersMatch(t *testing.T) {
 func TestCustomTagConsistency_ReaderCoversAllConstants(t *testing.T) {
 	// Build a raw tag map that contains all custom tags, then call
 	// BuildMetadataFromTag and verify the Metadata struct has them.
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		TagBookID:      "book-42",
 		TagVersion:     "1",
 		TagASIN:        "B00READER",
@@ -327,7 +327,7 @@ func TestCustomTagConsistency_MetadataStructHasFieldForEveryCustomTag(t *testing
 		"TagPrintYear":   "PrintYear",
 	}
 
-	metaType := reflect.TypeOf(Metadata{})
+	metaType := reflect.TypeFor[Metadata]()
 	for constName, fieldName := range tagToField {
 		_, found := metaType.FieldByName(fieldName)
 		if !found {
@@ -352,7 +352,7 @@ func TestCustomTagConsistency_CustomTagsStructHasFieldForEveryTag(t *testing.T) 
 		"TagPrintYear":   "PrintYear",
 	}
 
-	ctType := reflect.TypeOf(CustomTags{})
+	ctType := reflect.TypeFor[CustomTags]()
 	for constName, fieldName := range tagToField {
 		_, found := ctType.FieldByName(fieldName)
 		if !found {
@@ -388,7 +388,7 @@ func TestCustomTagConsistency_ProvenanceFieldsCoverMetadata(t *testing.T) {
 		"description":            "Comments",
 	}
 
-	metaType := reflect.TypeOf(Metadata{})
+	metaType := reflect.TypeFor[Metadata]()
 	for provField, metaField := range provenanceToMeta {
 		_, found := metaType.FieldByName(metaField)
 		if !found {
@@ -419,8 +419,8 @@ func TestCustomTagConsistency_ProvenanceFieldsCoverMetadata(t *testing.T) {
 		metaFieldsInProvenance[mf] = true
 	}
 
-	for i := 0; i < metaType.NumField(); i++ {
-		f := metaType.Field(i)
+	for f := range metaType.Fields() {
+		f := f
 		if skipFields[f.Name] {
 			continue
 		}
@@ -493,7 +493,7 @@ func TestCustomTagConstantCount(t *testing.T) {
 // --- Mock tag.Metadata implementation for BuildMetadataFromTag tests ---
 
 type mockTagMetadata struct {
-	raw     map[string]interface{}
+	raw     map[string]any
 	title   string
 	artist  string
 	album   string
@@ -502,21 +502,21 @@ type mockTagMetadata struct {
 	comment string
 }
 
-func (m *mockTagMetadata) Format() tag.Format          { return tag.UnknownFormat }
-func (m *mockTagMetadata) FileType() tag.FileType      { return tag.UnknownFileType }
-func (m *mockTagMetadata) Title() string               { return m.title }
-func (m *mockTagMetadata) Album() string               { return m.album }
-func (m *mockTagMetadata) Artist() string              { return m.artist }
-func (m *mockTagMetadata) AlbumArtist() string         { return "" }
-func (m *mockTagMetadata) Composer() string            { return "" }
-func (m *mockTagMetadata) Genre() string               { return m.genre }
-func (m *mockTagMetadata) Year() int                   { return m.year }
-func (m *mockTagMetadata) Track() (int, int)           { return 0, 0 }
-func (m *mockTagMetadata) Disc() (int, int)            { return 0, 0 }
-func (m *mockTagMetadata) Picture() *tag.Picture       { return nil }
-func (m *mockTagMetadata) Comment() string             { return m.comment }
-func (m *mockTagMetadata) Lyrics() string              { return "" }
-func (m *mockTagMetadata) Raw() map[string]interface{} { return m.raw }
+func (m *mockTagMetadata) Format() tag.Format     { return tag.UnknownFormat }
+func (m *mockTagMetadata) FileType() tag.FileType { return tag.UnknownFileType }
+func (m *mockTagMetadata) Title() string          { return m.title }
+func (m *mockTagMetadata) Album() string          { return m.album }
+func (m *mockTagMetadata) Artist() string         { return m.artist }
+func (m *mockTagMetadata) AlbumArtist() string    { return "" }
+func (m *mockTagMetadata) Composer() string       { return "" }
+func (m *mockTagMetadata) Genre() string          { return m.genre }
+func (m *mockTagMetadata) Year() int              { return m.year }
+func (m *mockTagMetadata) Track() (int, int)      { return 0, 0 }
+func (m *mockTagMetadata) Disc() (int, int)       { return 0, 0 }
+func (m *mockTagMetadata) Picture() *tag.Picture  { return nil }
+func (m *mockTagMetadata) Comment() string        { return m.comment }
+func (m *mockTagMetadata) Lyrics() string         { return "" }
+func (m *mockTagMetadata) Raw() map[string]any    { return m.raw }
 
 // --- Compile-time interface check ---
 var _ tag.Metadata = (*mockTagMetadata)(nil)
@@ -526,7 +526,7 @@ var _ tag.Metadata = (*mockTagMetadata)(nil)
 // by simulating the tag map construction.
 func TestCustomTagWriteTagMap_StandardFieldsCovered(t *testing.T) {
 	// Simulate what writeMetadataWithTaglib does with the standard fields.
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":        "My Book",
 		"artist":       "Jane Author",
 		"album":        "My Series",
@@ -560,7 +560,7 @@ func TestCustomTagWriteTagMap_StandardFieldsCovered(t *testing.T) {
 
 // buildStandardTagMap replicates the standard-field portion of
 // writeMetadataWithTaglib's tag construction for testing purposes.
-func buildStandardTagMap(metadata map[string]interface{}) map[string][]string {
+func buildStandardTagMap(metadata map[string]any) map[string][]string {
 	tags := make(map[string][]string)
 
 	if title, ok := metadata["title"].(string); ok && title != "" {

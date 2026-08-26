@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -286,10 +287,5 @@ var dangerousRoots = []string{
 // though /home itself is dangerous.
 func IsDangerousRoot(path string) bool {
 	cleaned := filepath.Clean(path)
-	for _, d := range dangerousRoots {
-		if cleaned == d {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(dangerousRoots, cleaned)
 }

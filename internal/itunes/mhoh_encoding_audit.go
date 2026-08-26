@@ -112,10 +112,7 @@ func AuditMhohEncoding(fileData []byte, libPath string) (*MhohAuditReport, error
 		}
 		report.TotalContainersWalked++
 		contentStart := off + hdrLen
-		contentEnd := off + totalLen
-		if contentEnd > len(payload) {
-			contentEnd = len(payload)
-		}
+		contentEnd := min(off+totalLen, len(payload))
 		walkContainerForMhoh(payload, contentStart, contentEnd, report)
 	}
 
@@ -168,10 +165,7 @@ func walkContainerForMhoh(data []byte, start, end int, report *MhohAuditReport) 
 			// When totalLen == headerLen (mith with no sub-mhoh children), the
 			// range is empty and we recurse vacuously.
 			childStart := offset + headerLen
-			childEnd := offset + chunkSize
-			if childEnd > end {
-				childEnd = end
-			}
+			childEnd := min(offset+chunkSize, end)
 			if childStart < childEnd {
 				walkContainerForMhoh(data, childStart, childEnd, report)
 			}

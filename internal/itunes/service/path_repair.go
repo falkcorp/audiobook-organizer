@@ -317,7 +317,6 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 	g.SetLimit(pathRepairWorkers)
 
 	for _, track := range lib.Tracks {
-		track := track
 		g.Go(func() error {
 			select {
 			case <-gctx.Done():

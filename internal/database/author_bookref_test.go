@@ -37,11 +37,11 @@ func mkAuthorRefBook(t *testing.T, s *PebbleStore, title string, legacyAuthor in
 	b := &Book{
 		Title:             title,
 		FilePath:          "/authorref/" + title,
-		IsPrimaryVersion:  boolp(primary),
-		MarkedForDeletion: boolp(trashed),
+		IsPrimaryVersion:  new(primary),
+		MarkedForDeletion: new(trashed),
 	}
 	if legacyAuthor != 0 {
-		b.AuthorID = intp(legacyAuthor)
+		b.AuthorID = new(legacyAuthor)
 	}
 	created, err := s.CreateBook(b)
 	require.NoError(t, err)

@@ -127,10 +127,10 @@ func applyMemSync(m *MemStore, op string, fn func(txn memTxn, m *MemStore) error
 // memTxn aliases the memdb transaction type so callers don't have to import
 // the memdb package directly.
 type memTxn interface {
-	Insert(table string, obj interface{}) error
-	Delete(table string, obj interface{}) error
-	DeleteAll(table, index string, args ...interface{}) (int, error)
-	First(table, index string, args ...interface{}) (interface{}, error)
+	Insert(table string, obj any) error
+	Delete(table string, obj any) error
+	DeleteAll(table, index string, args ...any) (int, error)
+	First(table, index string, args ...any) (any, error)
 }
 
 // ── Book ────────────────────────────────────────────────────────────────────
@@ -551,7 +551,7 @@ func (p *PebbleStore) DeleteWorkFromMemDB(id string) {}
 // book_file:<bookID>:<fileID>. Used by UpsertBookToMemDB to refresh the
 // book_files rows after a book mutation.
 func (p *PebbleStore) loadBookFilesForBookID(bookID string) ([]BookFile, error) {
-	prefix := []byte(fmt.Sprintf("book_file:%s:", bookID))
+	prefix := fmt.Appendf(nil, "book_file:%s:", bookID)
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';'
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})

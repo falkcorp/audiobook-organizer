@@ -108,8 +108,7 @@ func TestMaintenanceJobDeclaredKeyWins(t *testing.T) {
 // (ConcurrencyKey back to policy.ConcurrencyKey, i.e. ""), maxOverlap reaches 2
 // and this test fails.
 func TestMaintenanceJobEnqueuedTwiceRunsSequentially(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newOpsFake(t)
 	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 4, nil)

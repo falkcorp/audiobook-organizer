@@ -201,7 +201,7 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 			skipped++
 			continue
 		}
-		vgKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", *book.VersionGroupID, book.ID))
+		vgKey := fmt.Appendf(nil, "book:versiongroup:%s:%s", *book.VersionGroupID, book.ID)
 		if err := batch.Set(vgKey, []byte(book.ID), nil); err != nil {
 			slog.Error("versiongroup-backfill: batch write failed",
 				"book_id", book.ID, "scanned", scanned, "indexed", indexed, "err", err)

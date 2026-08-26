@@ -81,7 +81,7 @@ func TestPebbleMetricsStore_PruneCacheStatsHistory(t *testing.T) {
 	cutoff := time.Now().UTC().Add(-1 * time.Hour)
 
 	// 3 old snapshots.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := s.RecordCacheStatsSnapshots([]CacheStatsSnapshot{
 			{CacheName: "authors", Timestamp: cutoff.Add(-time.Duration(i+1) * time.Minute), Hits: int64(i)},
 		})

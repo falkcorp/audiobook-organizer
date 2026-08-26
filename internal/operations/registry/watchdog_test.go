@@ -18,8 +18,7 @@ import (
 // TestWatchdog_StuckOpGetStrike verifies that an op with stale last_progress_at
 // gets a "stuck" strike and its context is canceled.
 func TestWatchdog_StuckOpGetsStrike(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Use 50ms watchdog interval for fast test.
 	store := newFakeStore()
@@ -67,8 +66,7 @@ func TestWatchdog_StuckOpGetsStrike(t *testing.T) {
 // TestWatchdog_UncheckpointedOpGetsStrike verifies that a ResumeRestart op
 // that hasn't checkpointed in ≥5 minutes accumulates an uncheckpointed strike.
 func TestWatchdog_UncheckpointedOpGetsStrike(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -122,8 +120,7 @@ func TestWatchdog_UncheckpointedOpGetsStrike(t *testing.T) {
 // The op calls UpdateProgress in a loop (keeping the atomic fresh) while the
 // test continuously backdates the DB row (simulating stuck DB writes).
 func TestWatchdog_InMemoryClockPreventsFalseStuck(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -180,8 +177,7 @@ func TestWatchdog_InMemoryClockPreventsFalseStuck(t *testing.T) {
 // TestWatchdog_InfiniteRestartForceDrop verifies that an op with resume_count≥3
 // and no high_water_progress advancement is force-dropped.
 func TestWatchdog_InfiniteRestartForceDrop(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{

@@ -26,10 +26,10 @@ import (
 
 func TestServerHelpers(t *testing.T) {
 	resetLibrarySizeCache()
-	if got := *intPtrHelper(7); got != 7 {
+	if got := *new(7); got != 7 {
 		t.Fatalf("expected int pointer 7, got %d", got)
 	}
-	if got := *boolPtr(true); got != true {
+	if got := *new(true); got != true {
 		t.Fatal("expected bool pointer true")
 	}
 
@@ -240,10 +240,10 @@ func TestImportPathEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	var response struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-	importPath := response.Data["importPath"].(map[string]interface{})
+	importPath := response.Data["importPath"].(map[string]any)
 	importID := int(importPath["id"].(float64))
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/import-paths", nil)

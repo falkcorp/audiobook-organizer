@@ -236,7 +236,7 @@ func (ss *SystemService) SortLogsByTimestamp(logs []database.OperationLog) []dat
 	copy(sorted, logs)
 
 	// Bubble sort for small sets
-	for i := 0; i < len(sorted); i++ {
+	for i := range sorted {
 		for j := 0; j < len(sorted)-1-i; j++ {
 			if sorted[j].CreatedAt.Before(sorted[j+1].CreatedAt) {
 				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
@@ -261,10 +261,7 @@ func (ss *SystemService) PaginateLogs(logs []database.OperationLog, page, pageSi
 		return []database.OperationLog{}
 	}
 
-	end := start + pageSize
-	if end > len(logs) {
-		end = len(logs)
-	}
+	end := min(start+pageSize, len(logs))
 
 	return logs[start:end]
 }

@@ -19,6 +19,8 @@
 
 package search
 
+import "strings"
+
 import "fmt"
 
 // Node is any AST node. The Kind() method exists so callers can
@@ -162,20 +164,22 @@ type ValueAltNode struct {
 
 func (n *ValueAltNode) Kind() NodeKind { return NodeValueAlt }
 func (n *ValueAltNode) String() string {
-	out := n.Field + ":("
+	var out strings.Builder
+	out.WriteString(n.Field + ":(")
 	for i, v := range n.Values {
 		if i > 0 {
-			out += "|"
+			out.WriteString("|")
 		}
-		out += v
+		out.WriteString(v)
 	}
-	return out + ")"
+	return out.String() + ")"
 }
 
 func groupString(op string, children []Node) string {
-	out := "(" + op
+	var out strings.Builder
+	out.WriteString("(" + op)
 	for _, c := range children {
-		out += " " + c.String()
+		out.WriteString(" " + c.String())
 	}
-	return out + ")"
+	return out.String() + ")"
 }

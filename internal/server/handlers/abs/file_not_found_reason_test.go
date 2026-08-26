@@ -69,13 +69,13 @@ func seedFileServing(t *testing.T) (seed *oracleSeed, itemID, ino, missingPath s
 // logReason extracts the reason= value from the captured log, or "" if the log
 // recorded no file-not-found at all.
 func logReason(logs string) string {
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if !strings.Contains(line, "abs: file not found") {
 			continue
 		}
-		for _, f := range strings.Fields(line) {
-			if strings.HasPrefix(f, "reason=") {
-				return strings.TrimPrefix(f, "reason=")
+		for f := range strings.FieldsSeq(line) {
+			if after, ok := strings.CutPrefix(f, "reason="); ok {
+				return after
 			}
 		}
 	}

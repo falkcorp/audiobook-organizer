@@ -18,12 +18,14 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
+//go:fix inline
 func stringPtr(s string) *string {
-	return &s
+	return new(s)
 }
 
+//go:fix inline
 func intPtrHelper(i int) *int {
-	return &i
+	return new(i)
 }
 
 func stripChapterFromTitle(title string) string {

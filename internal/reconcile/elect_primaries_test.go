@@ -222,7 +222,7 @@ func keysOfElectUpdated(f *electFakeStore) []string {
 func TestElectMissingPrimaries_DryRunWritesNothing(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	store := newElectFakeStore()
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		gid := fmt.Sprintf("vg-dry-%02d", i)
 		store.addElectBook(fmt.Sprintf("dry-%02d", i), fmt.Sprintf("Dry %02d", i), gid, false, base)
 	}

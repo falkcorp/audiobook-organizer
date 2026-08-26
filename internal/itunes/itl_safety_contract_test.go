@@ -92,7 +92,7 @@ func buildMith(tid uint32, children []byte) []byte {
 	// Unique nonzero PID derived from tid (stored reversed for LE).
 	var pid [8]byte
 	binary.BigEndian.PutUint64(pid[:], uint64(tid)|0x1000000000000000)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		b[135-i] = pid[i]
 	}
 	copy(b[fxMithHeaderLen:], children)
@@ -209,10 +209,7 @@ func buildHeaderFor(payload []byte) *hdfmHeader {
 	// Remainder must be long enough to reach file offset 0x54+4. The header
 	// begins at 0; remainder begins at 17+len(version). Size it to cover 0x60.
 	remStart := 17 + len(version)
-	remLen := 0x60 - remStart
-	if remLen < 0 {
-		remLen = 0
-	}
+	remLen := max(0x60-remStart, 0)
 	rem := make([]byte, remLen)
 	put := func(fileOff int, v uint32) {
 		off := fileOff - remStart
@@ -894,7 +891,7 @@ func TestContract_MhohRewriteBoundedDelta(t *testing.T) {
 // playlist referencing them. n may be 0 (empty master list + empty playlist).
 func buildManyTrackPayload(n int) []byte {
 	tracks := make([]fxTrack, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		tid := uint32((i + 1) * 2)
 		tracks[i] = fxTrack{
 			tid:      tid,

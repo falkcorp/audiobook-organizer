@@ -18,6 +18,7 @@
 package boilerplate
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -82,10 +83,8 @@ func IsBoilerplateTitle(title string) bool {
 	if normalized == "" {
 		return false
 	}
-	for _, pattern := range DefaultTitlePatterns {
-		if normalized == pattern {
-			return true
-		}
+	if slices.Contains(DefaultTitlePatterns, normalized) {
+		return true
 	}
 	for _, pattern := range DefaultPrefixPatterns {
 		if strings.HasPrefix(normalized, pattern+" ") {

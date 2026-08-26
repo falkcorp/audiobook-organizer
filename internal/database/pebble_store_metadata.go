@@ -15,12 +15,12 @@ import (
 )
 
 func (p *PebbleStore) metadataStateKey(bookID, field string) []byte {
-	return []byte(fmt.Sprintf("metadata_state:%s:%s", bookID, field))
+	return fmt.Appendf(nil, "metadata_state:%s:%s", bookID, field)
 }
 
 func (p *PebbleStore) GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error) {
 	var states []MetadataFieldState
-	prefix := []byte(fmt.Sprintf("metadata_state:%s:", bookID))
+	prefix := fmt.Appendf(nil, "metadata_state:%s:", bookID)
 
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -165,13 +165,13 @@ func (p *PebbleStore) AddMetadataRejection(r MetadataRejection) error {
 	if err != nil {
 		return err
 	}
-	key := []byte(fmt.Sprintf("metadata_rejection:%s:%s", r.BookID, r.ID))
+	key := fmt.Appendf(nil, "metadata_rejection:%s:%s", r.BookID, r.ID)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 // GetMetadataRejections returns all rejection records for a book.
 func (p *PebbleStore) GetMetadataRejections(bookID string) ([]MetadataRejection, error) {
-	prefix := []byte(fmt.Sprintf("metadata_rejection:%s:", bookID))
+	prefix := fmt.Appendf(nil, "metadata_rejection:%s:", bookID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: append(append([]byte(nil), prefix...), 0xFF),
@@ -196,7 +196,7 @@ func (p *PebbleStore) GetMetadataRejections(bookID string) ([]MetadataRejection,
 
 // DeleteMetadataRejections removes all rejection records for a book.
 func (p *PebbleStore) DeleteMetadataRejections(bookID string) error {
-	prefix := []byte(fmt.Sprintf("metadata_rejection:%s:", bookID))
+	prefix := fmt.Appendf(nil, "metadata_rejection:%s:", bookID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: append(append([]byte(nil), prefix...), 0xFF),

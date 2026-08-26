@@ -204,7 +204,7 @@ func TestStoreInvariants_CleanStore(t *testing.T) {
 
 	wid := "WORK0000000000000000000AAA"
 	for _, title := range []string{"Alpha", "Beta", "Gamma"} {
-		created, err := store.CreateBook(&Book{Title: title, FilePath: "/lib/" + title + ".m4b", WorkID: strPtr(wid)})
+		created, err := store.CreateBook(&Book{Title: title, FilePath: "/lib/" + title + ".m4b", WorkID: new(wid)})
 		if err != nil {
 			t.Fatalf("CreateBook: %v", err)
 		}
@@ -223,11 +223,11 @@ func TestStoreInvariants_SoftThenHardDelete(t *testing.T) {
 	defer cleanup()
 
 	wid := "WORK0000000000000000000BBB"
-	a, err := store.CreateBook(&Book{Title: "Keeper", FilePath: "/lib/keeper.m4b", WorkID: strPtr(wid)})
+	a, err := store.CreateBook(&Book{Title: "Keeper", FilePath: "/lib/keeper.m4b", WorkID: new(wid)})
 	if err != nil {
 		t.Fatalf("CreateBook a: %v", err)
 	}
-	b, err := store.CreateBook(&Book{Title: "Doomed", FilePath: "/lib/doomed.m4b", WorkID: strPtr(wid)})
+	b, err := store.CreateBook(&Book{Title: "Doomed", FilePath: "/lib/doomed.m4b", WorkID: new(wid)})
 	if err != nil {
 		t.Fatalf("CreateBook b: %v", err)
 	}

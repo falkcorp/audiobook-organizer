@@ -64,7 +64,7 @@ func TestSystemService_PaginateLogs_Success(t *testing.T) {
 	service := NewSystemService(&database.MockStore{}, "test", nil)
 
 	logs := make([]database.OperationLog, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		logs[i] = database.OperationLog{Message: "Log"}
 	}
 

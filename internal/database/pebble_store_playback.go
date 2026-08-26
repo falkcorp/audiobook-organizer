@@ -212,7 +212,7 @@ func (p *PebbleStore) AddPlaybackEvent(event *PlaybackEvent) error {
 }
 
 func (p *PebbleStore) ListPlaybackEvents(userID string, bookNumericID int, limit int) ([]PlaybackEvent, error) {
-	prefix := []byte(fmt.Sprintf("playe:%s:%d:", userID, bookNumericID))
+	prefix := fmt.Appendf(nil, "playe:%s:%d:", userID, bookNumericID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: append(prefix, 0xFF)})
 	if err != nil {
 		return nil, err
@@ -246,7 +246,7 @@ func (p *PebbleStore) UpdatePlaybackProgress(progress *PlaybackProgress) error {
 }
 
 func (p *PebbleStore) GetPlaybackProgress(userID string, bookNumericID int) (*PlaybackProgress, error) {
-	v, closer, err := p.db.Get([]byte(fmt.Sprintf("playp:%s:%d", userID, bookNumericID)))
+	v, closer, err := p.db.Get(fmt.Appendf(nil, "playp:%s:%d", userID, bookNumericID))
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}

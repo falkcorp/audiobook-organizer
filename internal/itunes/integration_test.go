@@ -2,7 +2,6 @@
 // version: 1.0.0
 // guid: e232c482-7e40-4c0c-87bd-4e88e4f7b3ef
 //go:build integration
-// +build integration
 
 package itunes
 

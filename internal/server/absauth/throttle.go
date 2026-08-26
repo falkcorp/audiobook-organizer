@@ -130,10 +130,7 @@ func (t *Throttle) RecordFailure(accountID, ip string) time.Duration {
 	if n <= SoftThreshold {
 		return 0
 	}
-	d := time.Duration(n-SoftThreshold) * SoftStep
-	if d > SoftMaxDelay {
-		d = SoftMaxDelay
-	}
+	d := min(time.Duration(n-SoftThreshold)*SoftStep, SoftMaxDelay)
 	return d
 }
 

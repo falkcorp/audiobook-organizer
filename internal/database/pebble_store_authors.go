@@ -50,7 +50,7 @@ func (p *PebbleStore) GetAllAuthors() ([]Author, error) {
 }
 
 func (p *PebbleStore) GetAuthorByID(id int) (*Author, error) {
-	key := []byte(fmt.Sprintf("author:%d", id))
+	key := fmt.Appendf(nil, "author:%d", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		// Check for tombstone redirect
@@ -93,7 +93,7 @@ func (p *PebbleStore) GetAuthorsByIDs(ids []int) (map[int]*Author, error) {
 
 func (p *PebbleStore) GetAuthorByName(name string) (*Author, error) {
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name)))
+	indexKey := fmt.Appendf(nil, "author:name:%s", util.NormalizeAuthor(name))
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -172,9 +172,9 @@ func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 	}
 
 	batch := p.db.NewBatch()
-	key := []byte(fmt.Sprintf("author:%d", id))
+	key := fmt.Appendf(nil, "author:%d", id)
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name)))
+	indexKey := fmt.Appendf(nil, "author:name:%s", util.NormalizeAuthor(name))
 
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
@@ -204,11 +204,11 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 	}
 
 	batch := p.db.NewBatch()
-	if err := batch.Delete([]byte(fmt.Sprintf("author:%d", id)), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "author:%d", id), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:%d: %w", id, err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(author.Name))), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "author:name:%s", util.NormalizeAuthor(author.Name)), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:name: %w", err)
 	}
@@ -331,7 +331,7 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 
 	batch := p.db.NewBatch()
 	// Remove old name index
-	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(author.Name))), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "author:name:%s", util.NormalizeAuthor(author.Name)), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:name: %w", err)
 	}
@@ -343,12 +343,12 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 		batch.Close()
 		return err
 	}
-	if err := batch.Set([]byte(fmt.Sprintf("author:%d", id)), data, nil); err != nil {
+	if err := batch.Set(fmt.Appendf(nil, "author:%d", id), data, nil); err != nil {
 		batch.Close()
 		return err
 	}
 	// Add new name index
-	if err := batch.Set([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name))), []byte(strconv.Itoa(id)), nil); err != nil {
+	if err := batch.Set(fmt.Appendf(nil, "author:name:%s", util.NormalizeAuthor(name)), []byte(strconv.Itoa(id)), nil); err != nil {
 		batch.Close()
 		return err
 	}
@@ -361,8 +361,8 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 }
 
 func (p *PebbleStore) GetAuthorAliases(authorID int) ([]AuthorAlias, error) {
-	prefix := []byte(fmt.Sprintf("author_alias:author:%d:", authorID))
-	upper := []byte(fmt.Sprintf("author_alias:author:%d;", authorID))
+	prefix := fmt.Appendf(nil, "author_alias:author:%d:", authorID)
+	upper := fmt.Appendf(nil, "author_alias:author:%d;", authorID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
 	if err != nil {
 		return nil, err
@@ -451,11 +451,11 @@ func (p *PebbleStore) CreateAuthorAlias(authorID int, aliasName string, aliasTyp
 	}
 
 	batch := p.db.NewBatch()
-	if err := batch.Set([]byte(fmt.Sprintf("author_alias:%d", id)), data, nil); err != nil {
+	if err := batch.Set(fmt.Appendf(nil, "author_alias:%d", id), data, nil); err != nil {
 		batch.Close()
 		return nil, fmt.Errorf("pebble Set author_alias:%d: %w", id, err)
 	}
-	if err := batch.Set([]byte(fmt.Sprintf("author_alias:author:%d:%d", authorID, id)), data, nil); err != nil {
+	if err := batch.Set(fmt.Appendf(nil, "author_alias:author:%d:%d", authorID, id), data, nil); err != nil {
 		batch.Close()
 		return nil, fmt.Errorf("pebble Set author_alias:author index: %w", err)
 	}
@@ -482,15 +482,15 @@ func (p *PebbleStore) DeleteAuthorAlias(id int) error {
 	}
 
 	batch := p.db.NewBatch()
-	if err := batch.Delete([]byte(fmt.Sprintf("author_alias:%d", id)), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "author_alias:%d", id), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author_alias:%d: %w", id, err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("author_alias:author:%d:%d", alias.AuthorID, id)), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "author_alias:author:%d:%d", alias.AuthorID, id), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author_alias:author index: %w", err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(alias.AliasName))), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "author_alias:name:%s", util.NormalizeAuthor(alias.AliasName)), nil); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author_alias:name index: %w", err)
 	}
@@ -502,7 +502,7 @@ func (p *PebbleStore) DeleteAuthorAlias(id int) error {
 }
 
 func (p *PebbleStore) FindAuthorByAlias(aliasName string) (*Author, error) {
-	nameKey := []byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(aliasName)))
+	nameKey := fmt.Appendf(nil, "author_alias:name:%s", util.NormalizeAuthor(aliasName))
 	value, closer, err := p.db.Get(nameKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -521,7 +521,7 @@ func (p *PebbleStore) FindAuthorByAlias(aliasName string) (*Author, error) {
 }
 
 func (p *PebbleStore) getAuthorAliasByID(id int) (*AuthorAlias, error) {
-	key := []byte(fmt.Sprintf("author_alias:%d", id))
+	key := fmt.Appendf(nil, "author_alias:%d", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -540,8 +540,8 @@ func (p *PebbleStore) getAuthorAliasByID(id int) (*AuthorAlias, error) {
 
 // deleteAuthorAliases removes all aliases for an author (cascade on delete).
 func (p *PebbleStore) deleteAuthorAliases(batch *pebble.Batch, authorID int) error {
-	prefix := []byte(fmt.Sprintf("author_alias:author:%d:", authorID))
-	upper := []byte(fmt.Sprintf("author_alias:author:%d;", authorID))
+	prefix := fmt.Appendf(nil, "author_alias:author:%d:", authorID)
+	upper := fmt.Appendf(nil, "author_alias:author:%d;", authorID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
 	if err != nil {
 		return err
@@ -555,10 +555,10 @@ func (p *PebbleStore) deleteAuthorAliases(batch *pebble.Batch, authorID int) err
 			return err
 		}
 		if alias != nil {
-			if err := batch.Delete([]byte(fmt.Sprintf("author_alias:%d", aliasID)), nil); err != nil {
+			if err := batch.Delete(fmt.Appendf(nil, "author_alias:%d", aliasID), nil); err != nil {
 				return fmt.Errorf("pebble Delete author_alias:%d: %w", aliasID, err)
 			}
-			if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(alias.AliasName))), nil); err != nil {
+			if err := batch.Delete(fmt.Appendf(nil, "author_alias:name:%s", util.NormalizeAuthor(alias.AliasName)), nil); err != nil {
 				return fmt.Errorf("pebble Delete author_alias:name index: %w", err)
 			}
 		}
@@ -570,7 +570,7 @@ func (p *PebbleStore) deleteAuthorAliases(batch *pebble.Batch, authorID int) err
 }
 
 func (p *PebbleStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {
-	key := []byte(fmt.Sprintf("book_authors:%s", bookID))
+	key := fmt.Appendf(nil, "book_authors:%s", bookID)
 	val, closer, err := p.db.Get(key)
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -588,7 +588,7 @@ func (p *PebbleStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {
 }
 
 func (p *PebbleStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
-	key := []byte(fmt.Sprintf("book_authors:%s", bookID))
+	key := fmt.Appendf(nil, "book_authors:%s", bookID)
 	data, err := json.Marshal(authors)
 	if err != nil {
 		return err
@@ -826,11 +826,11 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 	}
 
 	batch := p.db.NewBatch()
-	if err := batch.Set([]byte(fmt.Sprintf("narrator:%d", nextID)), data, nil); err != nil {
+	if err := batch.Set(fmt.Appendf(nil, "narrator:%d", nextID), data, nil); err != nil {
 		batch.Close()
 		return nil, err
 	}
-	nameKey := []byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(name)))
+	nameKey := fmt.Appendf(nil, "narrator_name:%s", util.NormalizeAuthor(name))
 	if err := batch.Set(nameKey, idData, nil); err != nil {
 		batch.Close()
 		return nil, fmt.Errorf("pebble Set narrator name index: %w", err)
@@ -848,7 +848,7 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 }
 
 func (p *PebbleStore) GetNarratorByID(id int) (*Narrator, error) {
-	key := []byte(fmt.Sprintf("narrator:%d", id))
+	key := fmt.Appendf(nil, "narrator:%d", id)
 	val, closer, err := p.db.Get(key)
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -866,7 +866,7 @@ func (p *PebbleStore) GetNarratorByID(id int) (*Narrator, error) {
 }
 
 func (p *PebbleStore) GetNarratorByName(name string) (*Narrator, error) {
-	nameKey := []byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(name)))
+	nameKey := fmt.Appendf(nil, "narrator_name:%s", util.NormalizeAuthor(name))
 	val, closer, err := p.db.Get(nameKey)
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -908,7 +908,7 @@ func (p *PebbleStore) ListNarrators() ([]Narrator, error) {
 }
 
 func (p *PebbleStore) GetBookNarrators(bookID string) ([]BookNarrator, error) {
-	key := []byte(fmt.Sprintf("book_narrators:%s", bookID))
+	key := fmt.Appendf(nil, "book_narrators:%s", bookID)
 	val, closer, err := p.db.Get(key)
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -926,7 +926,7 @@ func (p *PebbleStore) GetBookNarrators(bookID string) ([]BookNarrator, error) {
 }
 
 func (p *PebbleStore) SetBookNarrators(bookID string, narrators []BookNarrator) error {
-	key := []byte(fmt.Sprintf("book_narrators:%s", bookID))
+	key := fmt.Appendf(nil, "book_narrators:%s", bookID)
 	data, err := json.Marshal(narrators)
 	if err != nil {
 		return err
@@ -940,7 +940,7 @@ func (p *PebbleStore) SetBookNarrators(bookID string, narrators []BookNarrator) 
 
 // CreateAuthorTombstone writes a tombstone that redirects oldID to canonicalID.
 func (p *PebbleStore) CreateAuthorTombstone(oldID, canonicalID int) error {
-	key := []byte(fmt.Sprintf("author_tombstone:%d", oldID))
+	key := fmt.Appendf(nil, "author_tombstone:%d", oldID)
 	value := []byte(strconv.Itoa(canonicalID))
 	return p.db.Set(key, value, pebble.Sync)
 }
@@ -948,7 +948,7 @@ func (p *PebbleStore) CreateAuthorTombstone(oldID, canonicalID int) error {
 // GetAuthorTombstone returns the canonical author ID for a tombstoned author.
 // Returns 0 if no tombstone exists.
 func (p *PebbleStore) GetAuthorTombstone(oldID int) (int, error) {
-	key := []byte(fmt.Sprintf("author_tombstone:%d", oldID))
+	key := fmt.Appendf(nil, "author_tombstone:%d", oldID)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return 0, nil
@@ -1018,7 +1018,7 @@ func (p *PebbleStore) ResolveTombstoneChains() (int, error) {
 		}
 		if finalID != canonicalID {
 			// Update the tombstone to point directly to the final destination
-			key := []byte(fmt.Sprintf("author_tombstone:%d", oldID))
+			key := fmt.Appendf(nil, "author_tombstone:%d", oldID)
 			if err := p.db.Set(key, []byte(strconv.Itoa(finalID)), pebble.Sync); err != nil {
 				return updated, fmt.Errorf("failed to update tombstone %d: %w", oldID, err)
 			}

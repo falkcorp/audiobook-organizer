@@ -428,9 +428,9 @@ func TestServerSideSorting(t *testing.T) {
 
 	// Create books with varying fields — including a nil-narrator book upfront
 	// so all subtests see all 4 books (the list cache caches results after the first request).
-	bookA := createTestBookWithFields(t, "Zebra Adventures", stringPtr("Charlie"), intPtrHelper(3600))
-	bookB := createTestBookWithFields(t, "Alpha Quest", stringPtr("Aaron"), intPtrHelper(7200))
-	bookC := createTestBookWithFields(t, "Middle Ground", stringPtr("Michael"), intPtrHelper(1800))
+	bookA := createTestBookWithFields(t, "Zebra Adventures", new("Charlie"), new(3600))
+	bookB := createTestBookWithFields(t, "Alpha Quest", new("Aaron"), new(7200))
+	bookC := createTestBookWithFields(t, "Middle Ground", new("Michael"), new(1800))
 	bookD := createTestBook(t, "NoGenreBook") // nil narrator, nil duration
 
 	// Helper to extract titles from list response
@@ -573,9 +573,9 @@ func TestServerSideFieldFiltering(t *testing.T) {
 
 	// Books use narrator (present in BookSummary) instead of genre/language
 	// (not in BookSummary) so field filters work end-to-end with GetAllBookSummaries.
-	bookA := createTestBookWithFields(t, "The Great Adventure", stringPtr("Mary English"), nil)
-	bookB := createTestBookWithFields(t, "Mystery Mansion", stringPtr("John English"), nil)
-	bookC := createTestBookWithFields(t, "Le Petit Prince", stringPtr("Pierre French"), nil)
+	bookA := createTestBookWithFields(t, "The Great Adventure", new("Mary English"), nil)
+	bookB := createTestBookWithFields(t, "Mystery Mansion", new("John English"), nil)
+	bookC := createTestBookWithFields(t, "Le Petit Prince", new("Pierre French"), nil)
 	_ = bookA
 	_ = bookB
 	_ = bookC

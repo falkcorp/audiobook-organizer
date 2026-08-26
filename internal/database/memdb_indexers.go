@@ -26,16 +26,16 @@ import (
 // indexing this row for this index" when AllowMissing=true.
 type nullableIntFieldIndex struct{ Field string }
 
-func (i *nullableIntFieldIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (i *nullableIntFieldIndex) FromObject(obj any) (bool, []byte, error) {
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	fv := v.FieldByName(i.Field)
 	if !fv.IsValid() {
 		return false, nil, fmt.Errorf("nullableIntFieldIndex: field %q missing", i.Field)
 	}
-	if fv.Kind() != reflect.Ptr {
+	if fv.Kind() != reflect.Pointer {
 		return false, nil, fmt.Errorf("nullableIntFieldIndex: field %q is not a pointer", i.Field)
 	}
 	if fv.IsNil() {
@@ -44,7 +44,7 @@ func (i *nullableIntFieldIndex) FromObject(obj interface{}) (bool, []byte, error
 	return true, encodeInt64(fv.Elem().Int()), nil
 }
 
-func (i *nullableIntFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (i *nullableIntFieldIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("nullableIntFieldIndex: must provide exactly one arg")
 	}
@@ -66,16 +66,16 @@ func (i *nullableIntFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
 // nullableBoolFieldIndex indexes a struct field of type *bool.
 type nullableBoolFieldIndex struct{ Field string }
 
-func (i *nullableBoolFieldIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (i *nullableBoolFieldIndex) FromObject(obj any) (bool, []byte, error) {
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	fv := v.FieldByName(i.Field)
 	if !fv.IsValid() {
 		return false, nil, fmt.Errorf("nullableBoolFieldIndex: field %q missing", i.Field)
 	}
-	if fv.Kind() != reflect.Ptr {
+	if fv.Kind() != reflect.Pointer {
 		return false, nil, fmt.Errorf("nullableBoolFieldIndex: field %q is not a pointer", i.Field)
 	}
 	if fv.IsNil() {
@@ -84,7 +84,7 @@ func (i *nullableBoolFieldIndex) FromObject(obj interface{}) (bool, []byte, erro
 	return true, encodeBool(fv.Elem().Bool()), nil
 }
 
-func (i *nullableBoolFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (i *nullableBoolFieldIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("nullableBoolFieldIndex: must provide exactly one arg")
 	}
@@ -104,16 +104,16 @@ func (i *nullableBoolFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
 // nullableStringFieldIndex indexes a struct field of type *string.
 type nullableStringFieldIndex struct{ Field string }
 
-func (i *nullableStringFieldIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (i *nullableStringFieldIndex) FromObject(obj any) (bool, []byte, error) {
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	fv := v.FieldByName(i.Field)
 	if !fv.IsValid() {
 		return false, nil, fmt.Errorf("nullableStringFieldIndex: field %q missing", i.Field)
 	}
-	if fv.Kind() != reflect.Ptr {
+	if fv.Kind() != reflect.Pointer {
 		return false, nil, fmt.Errorf("nullableStringFieldIndex: field %q is not a pointer", i.Field)
 	}
 	if fv.IsNil() {
@@ -126,7 +126,7 @@ func (i *nullableStringFieldIndex) FromObject(obj interface{}) (bool, []byte, er
 	return true, []byte(s + "\x00"), nil
 }
 
-func (i *nullableStringFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (i *nullableStringFieldIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("nullableStringFieldIndex: must provide exactly one arg")
 	}
@@ -151,16 +151,16 @@ type effectiveBoolFieldIndex struct {
 	Default bool
 }
 
-func (i *effectiveBoolFieldIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (i *effectiveBoolFieldIndex) FromObject(obj any) (bool, []byte, error) {
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	fv := v.FieldByName(i.Field)
 	if !fv.IsValid() {
 		return false, nil, fmt.Errorf("effectiveBoolFieldIndex: field %q missing", i.Field)
 	}
-	if fv.Kind() != reflect.Ptr {
+	if fv.Kind() != reflect.Pointer {
 		return false, nil, fmt.Errorf("effectiveBoolFieldIndex: field %q is not a pointer", i.Field)
 	}
 	if fv.IsNil() {
@@ -169,7 +169,7 @@ func (i *effectiveBoolFieldIndex) FromObject(obj interface{}) (bool, []byte, err
 	return true, encodeBool(fv.Elem().Bool()), nil
 }
 
-func (i *effectiveBoolFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (i *effectiveBoolFieldIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("effectiveBoolFieldIndex: must provide exactly one arg")
 	}
@@ -187,16 +187,16 @@ type effectiveIntFieldIndex struct {
 	Default int64
 }
 
-func (i *effectiveIntFieldIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (i *effectiveIntFieldIndex) FromObject(obj any) (bool, []byte, error) {
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	fv := v.FieldByName(i.Field)
 	if !fv.IsValid() {
 		return false, nil, fmt.Errorf("effectiveIntFieldIndex: field %q missing", i.Field)
 	}
-	if fv.Kind() != reflect.Ptr {
+	if fv.Kind() != reflect.Pointer {
 		return false, nil, fmt.Errorf("effectiveIntFieldIndex: field %q is not a pointer", i.Field)
 	}
 	if fv.IsNil() {
@@ -205,7 +205,7 @@ func (i *effectiveIntFieldIndex) FromObject(obj interface{}) (bool, []byte, erro
 	return true, encodeInt64(fv.Elem().Int()), nil
 }
 
-func (i *effectiveIntFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (i *effectiveIntFieldIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("effectiveIntFieldIndex: must provide exactly one arg")
 	}
@@ -226,9 +226,9 @@ func (i *effectiveIntFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
 // than scanning every row in the table.
 type nonEmptyStringFieldIndex struct{ Field string }
 
-func (i *nonEmptyStringFieldIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (i *nonEmptyStringFieldIndex) FromObject(obj any) (bool, []byte, error) {
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	fv := v.FieldByName(i.Field)
@@ -245,7 +245,7 @@ func (i *nonEmptyStringFieldIndex) FromObject(obj interface{}) (bool, []byte, er
 	return true, []byte(s + "\x00"), nil
 }
 
-func (i *nonEmptyStringFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (i *nonEmptyStringFieldIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("nonEmptyStringFieldIndex: must provide exactly one arg")
 	}
@@ -263,9 +263,9 @@ func (i *nonEmptyStringFieldIndex) FromArgs(args ...interface{}) ([]byte, error)
 // plainBoolFieldIndex indexes a struct field of type bool (not pointer).
 type plainBoolFieldIndex struct{ Field string }
 
-func (i *plainBoolFieldIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (i *plainBoolFieldIndex) FromObject(obj any) (bool, []byte, error) {
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	fv := v.FieldByName(i.Field)
@@ -278,7 +278,7 @@ func (i *plainBoolFieldIndex) FromObject(obj interface{}) (bool, []byte, error) 
 	return true, encodeBool(fv.Bool()), nil
 }
 
-func (i *plainBoolFieldIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (i *plainBoolFieldIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("plainBoolFieldIndex: must provide exactly one arg")
 	}
@@ -319,7 +319,7 @@ func encodeBool(b bool) []byte {
 // title index entirely, vanishing from the library list when sort_by=title.
 type titleSortIndex struct{}
 
-func (titleSortIndex) FromObject(obj interface{}) (bool, []byte, error) {
+func (titleSortIndex) FromObject(obj any) (bool, []byte, error) {
 	b, ok := obj.(*Book)
 	if !ok {
 		return false, nil, fmt.Errorf("titleSortIndex: expected *Book, got %T", obj)
@@ -335,7 +335,7 @@ func (titleSortIndex) FromObject(obj interface{}) (bool, []byte, error) {
 	return true, append([]byte(key), 0), nil
 }
 
-func (titleSortIndex) FromArgs(args ...interface{}) ([]byte, error) {
+func (titleSortIndex) FromArgs(args ...any) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("titleSortIndex: expected 1 arg, got %d", len(args))
 	}
@@ -346,7 +346,7 @@ func (titleSortIndex) FromArgs(args ...interface{}) ([]byte, error) {
 	return append([]byte(util.NormalizeTitle(s)), 0), nil
 }
 
-func (titleSortIndex) PrefixFromArgs(args ...interface{}) ([]byte, error) {
+func (titleSortIndex) PrefixFromArgs(args ...any) ([]byte, error) {
 	b, err := titleSortIndex{}.FromArgs(args...)
 	if err != nil {
 		return nil, err

@@ -195,15 +195,13 @@ func TestChaos_ConcurrentReadsDuringClose(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { recover() }() // PebbleDB panics on close-during-read are acceptable
 			for range readsPerWorker {
 				_, _ = store.ListByType("book")
 				_, _ = store.FindSimilar("book", makeVector(256), 0.5, 5)
 			}
-		}()
+		})
 	}
 
 	time.Sleep(2 * time.Millisecond)
@@ -238,15 +236,13 @@ func TestChaos_MixedReadWriteDuringClose(t *testing.T) {
 
 	// Readers.
 	for range 5 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { recover() }()
 			for range 30 {
 				_, _ = store.Get("book", "seed0")
 				_, _ = store.CountByType("book")
 			}
-		}()
+		})
 	}
 
 	// Candidate writers.

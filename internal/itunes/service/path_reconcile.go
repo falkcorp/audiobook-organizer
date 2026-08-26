@@ -186,7 +186,7 @@ func (a *progressReporterAdapter) Logger() *slog.Logger {
 	return slog.Default()
 }
 
-func (a *progressReporterAdapter) Checkpoint(state interface{}) error {
+func (a *progressReporterAdapter) Checkpoint(state any) error {
 	// No-op checkpoint for this adapter.
 	return nil
 }

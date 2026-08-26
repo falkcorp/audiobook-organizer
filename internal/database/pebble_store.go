@@ -14,6 +14,7 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -434,7 +435,7 @@ func (p *PebbleStore) nextID(counter string) (int, error) {
 	p.counterMu.Lock()
 	defer p.counterMu.Unlock()
 
-	key := []byte(fmt.Sprintf("counter:%s", counter))
+	key := fmt.Appendf(nil, "counter:%s", counter)
 
 	value, closer, err := p.db.Get(key)
 	if err != nil {
@@ -1226,7 +1227,7 @@ func bookToSummary(b *Book) BookSummary {
 }
 
 func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
-	key := []byte(fmt.Sprintf("book:%s", id))
+	key := fmt.Appendf(nil, "book:%s", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -1284,7 +1285,7 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 func (p *PebbleStore) GetBooksByIDs(ids []string) ([]Book, error) {
 	books := make([]Book, 0, len(ids))
 	for _, id := range ids {
-		key := []byte(fmt.Sprintf("book:%s", id))
+		key := fmt.Appendf(nil, "book:%s", id)
 		value, closer, err := p.db.Get(key)
 		if err == pebble.ErrNotFound {
 			continue
@@ -1313,7 +1314,7 @@ func (p *PebbleStore) GetBooksByIDs(ids []string) ([]Book, error) {
 }
 
 func (p *PebbleStore) GetBookByFilePath(path string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:path:%s", path))
+	indexKey := fmt.Appendf(nil, "book:path:%s", path)
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -1428,7 +1429,7 @@ func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 }
 
 func (p *PebbleStore) GetBookByFileHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:hash:%s", hash))
+	indexKey := fmt.Appendf(nil, "book:hash:%s", hash)
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -1444,7 +1445,7 @@ func (p *PebbleStore) GetBookByFileHash(hash string) (*Book, error) {
 }
 
 func (p *PebbleStore) GetBookByOriginalHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:originalhash:%s", hash))
+	indexKey := fmt.Appendf(nil, "book:originalhash:%s", hash)
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -1459,7 +1460,7 @@ func (p *PebbleStore) GetBookByOriginalHash(hash string) (*Book, error) {
 }
 
 func (p *PebbleStore) GetBookByOrganizedHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:organizedhash:%s", hash))
+	indexKey := fmt.Appendf(nil, "book:organizedhash:%s", hash)
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -1481,7 +1482,7 @@ func (p *PebbleStore) GetBookBySegmentFileHash(hash string) (*Book, error) {
 		return nil, nil
 	}
 	for _, prefix := range []string{"book_file_hash:", "book_file_orig_hash:"} {
-		key := []byte(fmt.Sprintf("%s%s", prefix, hash))
+		key := fmt.Appendf(nil, "%s%s", prefix, hash)
 		value, closer, err := p.db.Get(key)
 		if err == pebble.ErrNotFound {
 			continue
@@ -1909,7 +1910,7 @@ func groupMetadataBucket(bucket []metadataDupEntry, threshold float64) [][]BookC
 		}
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		for j := i + 1; j < n; j++ {
 			if metadataTitleSimilarity(bucket[i].normTitle, bucket[j].normTitle) >= threshold {
 				union(i, j)
@@ -1919,7 +1920,7 @@ func groupMetadataBucket(bucket []metadataDupEntry, threshold float64) [][]BookC
 
 	comps := make(map[int][]BookCore)
 	rootsOrder := make([]int, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		r := find(i)
 		if _, ok := comps[r]; !ok {
 			rootsOrder = append(rootsOrder, r)
@@ -2384,7 +2385,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	batch := p.db.NewBatch()
 
 	// Main key
-	key := []byte(fmt.Sprintf("book:%s", book.ID))
+	key := fmt.Appendf(nil, "book:%s", book.ID)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return nil, err
@@ -2399,7 +2400,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	}
 
 	// Path index
-	pathKey := []byte(fmt.Sprintf("book:path:%s", book.FilePath))
+	pathKey := fmt.Appendf(nil, "book:path:%s", book.FilePath)
 	if err := batch.Set(pathKey, []byte(book.ID), nil); err != nil {
 		batch.Close()
 		return nil, err
@@ -2407,7 +2408,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 
 	// Hash index (if hash provided)
 	if book.FileHash != nil && *book.FileHash != "" {
-		hashKey := []byte(fmt.Sprintf("book:hash:%s", *book.FileHash))
+		hashKey := fmt.Appendf(nil, "book:hash:%s", *book.FileHash)
 		if err := batch.Set(hashKey, []byte(book.ID), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -2415,7 +2416,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	}
 
 	if book.OriginalFileHash != nil && *book.OriginalFileHash != "" {
-		origKey := []byte(fmt.Sprintf("book:originalhash:%s", *book.OriginalFileHash))
+		origKey := fmt.Appendf(nil, "book:originalhash:%s", *book.OriginalFileHash)
 		if err := batch.Set(origKey, []byte(book.ID), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -2423,7 +2424,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	}
 
 	if book.OrganizedFileHash != nil && *book.OrganizedFileHash != "" {
-		orgKey := []byte(fmt.Sprintf("book:organizedhash:%s", *book.OrganizedFileHash))
+		orgKey := fmt.Appendf(nil, "book:organizedhash:%s", *book.OrganizedFileHash)
 		if err := batch.Set(orgKey, []byte(book.ID), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -2443,7 +2444,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	// index — CreateBook, UpdateBook, BackfillVersionGroupIndex — writing
 	// the ID, so the row stays cheap enough to rewrite unconditionally.
 	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
-		vgKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", *book.VersionGroupID, book.ID))
+		vgKey := fmt.Appendf(nil, "book:versiongroup:%s:%s", *book.VersionGroupID, book.ID)
 		if err := batch.Set(vgKey, []byte(book.ID), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -2452,7 +2453,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 
 	// Work ID index: avoid O(50K) full-scan in GetBooksByWorkID
 	if book.WorkID != nil && *book.WorkID != "" {
-		workKey := []byte(fmt.Sprintf("book:work:%s:%s", *book.WorkID, book.ID))
+		workKey := fmt.Appendf(nil, "book:work:%s:%s", *book.WorkID, book.ID)
 		bookJSON, err := serializeBookForIndex(book)
 		if err != nil {
 			batch.Close()
@@ -2584,7 +2585,7 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	if marshalErr != nil {
 		return nil, fmt.Errorf("failed to marshal old book for version: %w", marshalErr)
 	}
-	versionKey := []byte(fmt.Sprintf("book_ver:%s:%d", id, time.Now().UnixNano()))
+	versionKey := fmt.Appendf(nil, "book_ver:%s:%d", id, time.Now().UnixNano())
 
 	batch := p.db.NewBatch()
 
@@ -2595,7 +2596,7 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	}
 
 	// Update main key
-	key := []byte(fmt.Sprintf("book:%s", id))
+	key := fmt.Appendf(nil, "book:%s", id)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return nil, err
@@ -2614,12 +2615,12 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 
 	// Update path index if changed
 	if oldBook.FilePath != book.FilePath {
-		oldPathKey := []byte(fmt.Sprintf("book:path:%s", oldBook.FilePath))
+		oldPathKey := fmt.Appendf(nil, "book:path:%s", oldBook.FilePath)
 		if err := batch.Delete(oldPathKey, nil); err != nil {
 			batch.Close()
 			return nil, err
 		}
-		newPathKey := []byte(fmt.Sprintf("book:path:%s", book.FilePath))
+		newPathKey := fmt.Appendf(nil, "book:path:%s", book.FilePath)
 		if err := batch.Set(newPathKey, []byte(id), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -2638,13 +2639,13 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 			return nil
 		}
 		if oldStr != "" {
-			oldKey := []byte(fmt.Sprintf("book:%s:%s", prefix, oldStr))
+			oldKey := fmt.Appendf(nil, "book:%s:%s", prefix, oldStr)
 			if err := batch.Delete(oldKey, nil); err != nil {
 				return err
 			}
 		}
 		if newStr != "" {
-			newKey := []byte(fmt.Sprintf("book:%s:%s", prefix, newStr))
+			newKey := fmt.Appendf(nil, "book:%s:%s", prefix, newStr)
 			if err := batch.Set(newKey, []byte(id), nil); err != nil {
 				return err
 			}
@@ -2687,14 +2688,14 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 		newVG = *book.VersionGroupID
 	}
 	if oldVG != newVG && oldVG != "" {
-		oldVGKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", oldVG, id))
+		oldVGKey := fmt.Appendf(nil, "book:versiongroup:%s:%s", oldVG, id)
 		if err := batch.Delete(oldVGKey, nil); err != nil {
 			batch.Close()
 			return nil, err
 		}
 	}
 	if newVG != "" {
-		newVGKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", newVG, id))
+		newVGKey := fmt.Appendf(nil, "book:versiongroup:%s:%s", newVG, id)
 		if err := batch.Set(newVGKey, []byte(id), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -2712,14 +2713,14 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	}
 	if oldWorkID != newWorkID {
 		if oldWorkID != "" {
-			oldWorkKey := []byte(fmt.Sprintf("book:work:%s:%s", oldWorkID, id))
+			oldWorkKey := fmt.Appendf(nil, "book:work:%s:%s", oldWorkID, id)
 			if err := batch.Delete(oldWorkKey, nil); err != nil {
 				batch.Close()
 				return nil, err
 			}
 		}
 		if newWorkID != "" {
-			newWorkKey := []byte(fmt.Sprintf("book:work:%s:%s", newWorkID, id))
+			newWorkKey := fmt.Appendf(nil, "book:work:%s:%s", newWorkID, id)
 			bookJSON, err := serializeBookForIndex(book)
 			if err != nil {
 				batch.Close()
@@ -2908,7 +2909,7 @@ func (p *PebbleStore) GetBookSnapshots(id string, limit int) ([]BookSnapshot, er
 
 // GetBookAtVersion retrieves a book snapshot at a specific version timestamp.
 func (p *PebbleStore) GetBookAtVersion(id string, ts time.Time) (*Book, error) {
-	key := []byte(fmt.Sprintf("book_ver:%s:%d", id, ts.UnixNano()))
+	key := fmt.Appendf(nil, "book_ver:%s:%d", id, ts.UnixNano())
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, fmt.Errorf("version not found")
@@ -2950,7 +2951,7 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 	toDelete := versions[keepCount:]
 	batch := p.db.NewBatch()
 	for _, v := range toDelete {
-		key := []byte(fmt.Sprintf("book_ver:%s:%d", id, v.Timestamp.UnixNano()))
+		key := fmt.Appendf(nil, "book_ver:%s:%d", id, v.Timestamp.UnixNano())
 		if err := batch.Delete(key, nil); err != nil {
 			batch.Close()
 			return 0, err
@@ -2974,7 +2975,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	batch := p.db.NewBatch()
 
 	// Delete main key
-	key := []byte(fmt.Sprintf("book:%s", id))
+	key := fmt.Appendf(nil, "book:%s", id)
 	if err := batch.Delete(key, nil); err != nil {
 		batch.Close()
 		return err
@@ -2993,7 +2994,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	}
 
 	// Delete path index
-	pathKey := []byte(fmt.Sprintf("book:path:%s", book.FilePath))
+	pathKey := fmt.Appendf(nil, "book:path:%s", book.FilePath)
 	if err := batch.Delete(pathKey, nil); err != nil {
 		batch.Close()
 		return err
@@ -3001,7 +3002,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 
 	// Delete version-group index (PERF-VERSIONS).
 	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
-		vgKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", *book.VersionGroupID, id))
+		vgKey := fmt.Appendf(nil, "book:versiongroup:%s:%s", *book.VersionGroupID, id)
 		if err := batch.Delete(vgKey, nil); err != nil {
 			batch.Close()
 			return err
@@ -3013,7 +3014,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// leaving a dangling index row that surfaced the hard-deleted book as a
 	// live phantom in GetBooksByWorkID. Mirror UpdateBook's teardown.
 	if book.WorkID != nil && *book.WorkID != "" {
-		workKey := []byte(fmt.Sprintf("book:work:%s:%s", *book.WorkID, id))
+		workKey := fmt.Appendf(nil, "book:work:%s:%s", *book.WorkID, id)
 		if err := batch.Delete(workKey, nil); err != nil {
 			batch.Close()
 			return err
@@ -3025,25 +3026,25 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// / book:organizedhash lookups resolve to a hard-deleted book ID. Guards
 	// mirror CreateBook's (nil / empty-string skipped).
 	if book.FileHash != nil && *book.FileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:hash:%s", *book.FileHash)), nil); err != nil {
+		if err := batch.Delete(fmt.Appendf(nil, "book:hash:%s", *book.FileHash), nil); err != nil {
 			batch.Close()
 			return err
 		}
 	}
 	if book.OriginalFileHash != nil && *book.OriginalFileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:originalhash:%s", *book.OriginalFileHash)), nil); err != nil {
+		if err := batch.Delete(fmt.Appendf(nil, "book:originalhash:%s", *book.OriginalFileHash), nil); err != nil {
 			batch.Close()
 			return err
 		}
 	}
 	if book.OrganizedFileHash != nil && *book.OrganizedFileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:organizedhash:%s", *book.OrganizedFileHash)), nil); err != nil {
+		if err := batch.Delete(fmt.Appendf(nil, "book:organizedhash:%s", *book.OrganizedFileHash), nil); err != nil {
 			batch.Close()
 			return err
 		}
 	}
 
-	statePrefix := []byte(fmt.Sprintf("metadata_state:%s:", id))
+	statePrefix := fmt.Appendf(nil, "metadata_state:%s:", id)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: statePrefix,
 		UpperBound: append(statePrefix, 0xFF),
@@ -3482,7 +3483,7 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	// authoritative book:<id> row and skip anything absent (hard-deleted) or
 	// MarkedForDeletion (soft-deleted). The index VALUE is never read, so it
 	// can never desync from the source of truth.
-	prefix := []byte(fmt.Sprintf("book:versiongroup:%s:", groupID))
+	prefix := fmt.Appendf(nil, "book:versiongroup:%s:", groupID)
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
 	idxIter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
@@ -3661,12 +3662,12 @@ func (p *PebbleStore) CreateBookTombstone(book *Book) error {
 	if err != nil {
 		return err
 	}
-	key := []byte(fmt.Sprintf("tombstone:%s", book.ID))
+	key := fmt.Appendf(nil, "tombstone:%s", book.ID)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 func (p *PebbleStore) GetBookTombstone(id string) (*Book, error) {
-	key := []byte(fmt.Sprintf("tombstone:%s", id))
+	key := fmt.Appendf(nil, "tombstone:%s", id)
 	val, closer, err := p.db.Get(key)
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -3683,7 +3684,7 @@ func (p *PebbleStore) GetBookTombstone(id string) (*Book, error) {
 }
 
 func (p *PebbleStore) DeleteBookTombstone(id string) error {
-	key := []byte(fmt.Sprintf("tombstone:%s", id))
+	key := fmt.Appendf(nil, "tombstone:%s", id)
 	return p.db.Delete(key, pebble.Sync)
 }
 
@@ -4017,7 +4018,7 @@ func (p *PebbleStore) CreateBookSegment(bookNumericID int, segment *BookSegment)
 		b.Close()
 		return nil, err
 	}
-	if err := b.Set([]byte(fmt.Sprintf("bfs:%d:%s", bookNumericID, segID)), []byte("1"), nil); err != nil {
+	if err := b.Set(fmt.Appendf(nil, "bfs:%d:%s", bookNumericID, segID), []byte("1"), nil); err != nil {
 		b.Close()
 		return nil, err
 	}
@@ -4034,7 +4035,7 @@ func (p *PebbleStore) CreateBookSegment(bookNumericID int, segment *BookSegment)
 func (p *PebbleStore) UpdateBookSegment(segment *BookSegment) error {
 	segment.UpdatedAt = time.Now()
 	segment.Version++
-	key := []byte(fmt.Sprintf("bfs:%d:%s", segment.BookID, segment.ID))
+	key := fmt.Appendf(nil, "bfs:%d:%s", segment.BookID, segment.ID)
 	data, err := json.Marshal(segment)
 	if err != nil {
 		return err
@@ -4043,7 +4044,7 @@ func (p *PebbleStore) UpdateBookSegment(segment *BookSegment) error {
 }
 
 func (p *PebbleStore) ListBookSegments(bookNumericID int) ([]BookSegment, error) {
-	prefix := []byte(fmt.Sprintf("bfs:%d:", bookNumericID))
+	prefix := fmt.Appendf(nil, "bfs:%d:", bookNumericID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: append(prefix, 0xFF)})
 	if err != nil {
 		return nil, err
@@ -4131,7 +4132,7 @@ func (p *PebbleStore) MoveSegmentsToBook(segmentIDs []string, targetBookNumericI
 		closer.Close()
 
 		// Delete old index key
-		oldKey := []byte(fmt.Sprintf("bfs:%d:%s", seg.BookID, seg.ID))
+		oldKey := fmt.Appendf(nil, "bfs:%d:%s", seg.BookID, seg.ID)
 		if err := b.Delete(oldKey, nil); err != nil {
 			b.Close()
 			return err
@@ -4148,7 +4149,7 @@ func (p *PebbleStore) MoveSegmentsToBook(segmentIDs []string, targetBookNumericI
 			return err
 		}
 		// Create new index key
-		newKey := []byte(fmt.Sprintf("bfs:%d:%s", targetBookNumericID, seg.ID))
+		newKey := fmt.Appendf(nil, "bfs:%d:%s", targetBookNumericID, seg.ID)
 		if err := b.Set(newKey, []byte("1"), nil); err != nil {
 			b.Close()
 			return err
@@ -4193,7 +4194,7 @@ func (p *PebbleStore) recomputeDurationMap(bookNumericID int) error {
 	}
 	m := map[string]any{"segments": arr, "total_duration": total, "version": 1}
 	data, _ := json.Marshal(m)
-	return p.db.Set([]byte(fmt.Sprintf("b:duration_map:%d", bookNumericID)), data, pebble.Sync)
+	return p.db.Set(fmt.Appendf(nil, "b:duration_map:%d", bookNumericID), data, pebble.Sync)
 }
 
 // ---- Operation State Persistence (resumable operations) ----
@@ -4271,7 +4272,7 @@ func (p *PebbleStore) CountPrefix(prefix string) (int64, error) {
 
 // GetBookUserTags returns all user-defined tags for a book.
 func (p *PebbleStore) GetBookUserTags(bookID string) ([]string, error) {
-	dbKey := []byte(fmt.Sprintf("user_tag:book:%s", bookID))
+	dbKey := fmt.Appendf(nil, "user_tag:book:%s", bookID)
 	value, closer, err := p.db.Get(dbKey)
 	if err == pebble.ErrNotFound {
 		return []string{}, nil
@@ -4290,7 +4291,7 @@ func (p *PebbleStore) GetBookUserTags(bookID string) ([]string, error) {
 
 // SetBookUserTags replaces all user-defined tags for a book.
 func (p *PebbleStore) SetBookUserTags(bookID string, tags []string) error {
-	dbKey := []byte(fmt.Sprintf("user_tag:book:%s", bookID))
+	dbKey := fmt.Appendf(nil, "user_tag:book:%s", bookID)
 	data, err := json.Marshal(tags)
 	if err != nil {
 		return err
@@ -4304,10 +4305,8 @@ func (p *PebbleStore) AddBookUserTag(bookID string, tag string) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range existing {
-		if t == tag {
-			return nil // already present
-		}
+	if slices.Contains(existing, tag) {
+		return nil // already present
 	}
 	existing = append(existing, tag)
 	return p.SetBookUserTags(bookID, existing)
@@ -4338,7 +4337,7 @@ func (p *PebbleStore) RemoveBookUserTag(bookID string, tag string) error {
 
 // GetBookAlternativeTitles returns every alt title for a book.
 func (p *PebbleStore) GetBookAlternativeTitles(bookID string) ([]BookAlternativeTitle, error) {
-	dbKey := []byte(fmt.Sprintf("alt_titles:book:%s", bookID))
+	dbKey := fmt.Appendf(nil, "alt_titles:book:%s", bookID)
 	value, closer, err := p.db.Get(dbKey)
 	if err == pebble.ErrNotFound {
 		return []BookAlternativeTitle{}, nil
@@ -4357,7 +4356,7 @@ func (p *PebbleStore) GetBookAlternativeTitles(bookID string) ([]BookAlternative
 
 // SetBookAlternativeTitles replaces every alt title for a book.
 func (p *PebbleStore) SetBookAlternativeTitles(bookID string, titles []BookAlternativeTitle) error {
-	dbKey := []byte(fmt.Sprintf("alt_titles:book:%s", bookID))
+	dbKey := fmt.Appendf(nil, "alt_titles:book:%s", bookID)
 	// Normalize: make sure every row has book_id populated + a
 	// created_at, and default source="user" when omitted.
 	now := time.Now().UTC()
@@ -4630,37 +4629,37 @@ func marshalBookFileDropSegs(f *BookFile) ([]byte, error) {
 // writeBookFileSecondaryIndexes adds the PID and path secondary index entries
 // to the batch. Either index is only written when the relevant field is non-empty.
 func writeBookFileSecondaryIndexes(batch *pebble.Batch, f *BookFile) error {
-	ref := []byte(fmt.Sprintf("%s:%s", f.BookID, f.ID))
+	ref := fmt.Appendf(nil, "%s:%s", f.BookID, f.ID)
 
 	// book_file_id:<fileID> → "<bookID>:<fileID>" — allows ID-only lookups.
-	idxKey := []byte(fmt.Sprintf("book_file_id:%s", f.ID))
-	if err := batch.Set(idxKey, []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID)), nil); err != nil {
+	idxKey := fmt.Appendf(nil, "book_file_id:%s", f.ID)
+	if err := batch.Set(idxKey, fmt.Appendf(nil, "book_file:%s:%s", f.BookID, f.ID), nil); err != nil {
 		return err
 	}
 
 	if f.ITunesPersistentID != "" {
-		pidKey := []byte(fmt.Sprintf("book_file_pid:%s", f.ITunesPersistentID))
+		pidKey := fmt.Appendf(nil, "book_file_pid:%s", f.ITunesPersistentID)
 		if err := batch.Set(pidKey, ref, nil); err != nil {
 			return err
 		}
 	}
 
 	if f.FilePath != "" {
-		pathKey := []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(f.FilePath)))
+		pathKey := fmt.Appendf(nil, "book_file_path:%s", bookFilePathCRC(f.FilePath))
 		if err := batch.Set(pathKey, ref, nil); err != nil {
 			return err
 		}
 	}
 
 	if f.FileHash != "" {
-		hashKey := []byte(fmt.Sprintf("book_file_hash:%s", f.FileHash))
+		hashKey := fmt.Appendf(nil, "book_file_hash:%s", f.FileHash)
 		if err := batch.Set(hashKey, ref, nil); err != nil {
 			return err
 		}
 	}
 
 	if f.OriginalFileHash != "" && f.OriginalFileHash != f.FileHash {
-		origKey := []byte(fmt.Sprintf("book_file_orig_hash:%s", f.OriginalFileHash))
+		origKey := fmt.Appendf(nil, "book_file_orig_hash:%s", f.OriginalFileHash)
 		if err := batch.Set(origKey, ref, nil); err != nil {
 			return err
 		}
@@ -4670,7 +4669,7 @@ func writeBookFileSecondaryIndexes(batch *pebble.Batch, f *BookFile) error {
 	for _, seg := range [7]string{f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2, f.AcoustIDSeg3,
 		f.AcoustIDSeg4, f.AcoustIDSeg5, f.AcoustIDSeg6} {
 		if seg != "" {
-			acoustKey := []byte(fmt.Sprintf("book_file_acoustid:%s", seg))
+			acoustKey := fmt.Appendf(nil, "book_file_acoustid:%s", seg)
 			if err := batch.Set(acoustKey, ref, nil); err != nil {
 				return err
 			}
@@ -4747,7 +4746,7 @@ func decodeLSHMeta(v []byte) ([]fingerprint.Subprint, []byte) {
 	}
 	subs := make([]fingerprint.Subprint, n)
 	bands := make([]byte, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		off := 9 * i
 		bands[i] = body[off]
 		copy(subs[i][:], body[off+1:off+9])
@@ -4845,7 +4844,7 @@ func (p *PebbleStore) MergeChapterBooks(primaryID string, srcIDs []string, newTi
 			old := files[i]
 			// Delete old primary + secondary indexes.
 			batch := p.db.NewBatch()
-			oldKey := []byte(fmt.Sprintf("book_file:%s:%s", old.BookID, old.ID))
+			oldKey := fmt.Appendf(nil, "book_file:%s:%s", old.BookID, old.ID)
 			if err := batch.Delete(oldKey, nil); err != nil {
 				batch.Close()
 				return err

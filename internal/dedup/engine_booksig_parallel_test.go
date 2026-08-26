@@ -30,7 +30,7 @@ import (
 // FuzzyMinSimilarity. Empty mask => all-real => overlap == 4096 (>= 512).
 func sigWord(word uint32) string {
 	buf := make([]byte, fingerprint.BookSignatureFixedLength*4)
-	for i := 0; i < fingerprint.BookSignatureFixedLength; i++ {
+	for i := range fingerprint.BookSignatureFixedLength {
 		binary.LittleEndian.PutUint32(buf[i*4:], word)
 	}
 	return base64.StdEncoding.EncodeToString(buf)
@@ -94,7 +94,7 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 	byID := make(map[string]database.Book)
 	for g, word := range groupWords {
 		sig := sigWord(word)
-		for k := 0; k < perGroup; k++ {
+		for k := range perGroup {
 			id := fmt.Sprintf("g%d-%02d", g, k)
 			b := database.Book{ID: id, Title: "Book " + id, BookSigV1: &sig}
 			books = append(books, b)

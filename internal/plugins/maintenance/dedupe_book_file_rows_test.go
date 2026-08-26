@@ -69,7 +69,7 @@ func TestRankKeeper_IsDeterministicAcrossRuns(t *testing.T) {
 		}
 	}
 	first := rankKeeper(mk())[0].ID
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if got := rankKeeper(mk())[0].ID; got != first {
 			t.Fatalf("keeper changed between runs: %q then %q — a dry run would not "+
 				"describe the same deletion the apply performs", first, got)

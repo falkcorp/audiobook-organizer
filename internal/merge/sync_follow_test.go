@@ -189,7 +189,7 @@ func TestMergeBooks_SyncIdentity_IdempotentRemerge(t *testing.T) {
 	require.NoError(t, err)
 
 	ms := NewService(store)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err = ms.MergeBooks([]string{winnerID, loserID}, winnerID)
 		require.NoError(t, err, "re-merge %d", i)
 	}

@@ -123,11 +123,11 @@ func TestChar_S1_QualityVocabulary(t *testing.T) {
 		Title:     "Q",
 		FilePath:  "/src/q.m4b",
 		Author:    &database.Author{Name: "A"},
-		Publisher: strPtr("Pub"),
-		Language:  strPtr("eng"),
-		Edition:   strPtr("Unabridged"),
-		Codec:     strPtr("aac"),
-		Quality:   strPtr("high"),
+		Publisher: new("Pub"),
+		Language:  new("eng"),
+		Edition:   new("Unabridged"),
+		Codec:     new("aac"),
+		Quality:   new("high"),
 		Bitrate:   &br,
 	}
 
@@ -607,4 +607,5 @@ func TestChar_SingleFileBookDropsTheTrackSegment(t *testing.T) {
 	}
 }
 
-func strPtr(s string) *string { return &s }
+//go:fix inline
+func strPtr(s string) *string { return new(s) }

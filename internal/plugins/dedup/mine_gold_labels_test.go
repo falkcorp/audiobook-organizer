@@ -137,7 +137,7 @@ func TestMineGoldLabels_ParallelMatchesSerialOutput(t *testing.T) {
 	hub := createBookWithHashedFile(t, pebble, "Hub", "hubsharedhash0001")
 
 	var wantTrueDup, wantUnlabeled []int64
-	for i := 0; i < numLeaves; i++ {
+	for i := range numLeaves {
 		fires := i%2 == 0
 		hash := "hubsharedhash0001" // shared with hub -> fires true_dup
 		if !fires {

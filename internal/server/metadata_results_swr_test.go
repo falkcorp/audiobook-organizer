@@ -99,12 +99,10 @@ func TestRebuildingFlagPreventsStampede(t *testing.T) {
 
 	store := &database.MockStore{}
 	var wg sync.WaitGroup
-	for i := 0; i < 25; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 25 {
+		wg.Go(func() {
 			_, _, _ = latestMetadataResultsByBookCached(store)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -191,12 +189,10 @@ func TestGenerationSurvivesConcurrentInvalidations(t *testing.T) {
 	defer resetMetaResultsCache()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			invalidateMetadataResultsCache()
-		}()
+		})
 	}
 	wg.Wait()
 

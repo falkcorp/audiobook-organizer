@@ -37,9 +37,9 @@ func (s *Server) handleImportCollisionPreview(c *gin.Context) {
 	)
 
 	httputil.RespondWithOK(c, struct {
-		Collisions   interface{} `json:"collisions"`
-		Count        int         `json:"count"`
-		HasCollision bool        `json:"has_collision"`
+		Collisions   any  `json:"collisions"`
+		Count        int  `json:"count"`
+		HasCollision bool `json:"has_collision"`
 	}{
 		Collisions:   result.Collisions,
 		Count:        result.Count,

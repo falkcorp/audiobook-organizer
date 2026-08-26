@@ -71,15 +71,15 @@ func AsSyncFileStore(s any) SyncFileStore {
 var _ SyncFileStore = (*PebbleStore)(nil)
 
 func syncFileLookupKey(bookID, fileID string) []byte {
-	return []byte(fmt.Sprintf("sync_file:lookup:%s:%s", bookID, fileID))
+	return fmt.Appendf(nil, "sync_file:lookup:%s:%s", bookID, fileID)
 }
 
 func syncFileBookKey(bookID, syncFileID string) []byte {
-	return []byte(fmt.Sprintf("sync_file:book:%s:%s", bookID, syncFileID))
+	return fmt.Appendf(nil, "sync_file:book:%s:%s", bookID, syncFileID)
 }
 
 func syncFileRecordKey(syncFileID string) []byte {
-	return []byte(fmt.Sprintf("sync_file:%s", syncFileID))
+	return fmt.Appendf(nil, "sync_file:%s", syncFileID)
 }
 
 // MintOrGetSyncFileID returns the durable syncFileID for the (bookID,
@@ -162,7 +162,7 @@ func (s *PebbleStore) GetSyncFileID(bookID, fileID string) (string, bool, error)
 // prefix-scanning the enumerable sync_file:book:<bookID>: index and
 // materializing each referenced SyncFile record.
 func (s *PebbleStore) ListSyncFilesForBook(bookID string) ([]SyncFile, error) {
-	prefix := []byte(fmt.Sprintf("sync_file:book:%s:", bookID))
+	prefix := fmt.Appendf(nil, "sync_file:book:%s:", bookID)
 
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,

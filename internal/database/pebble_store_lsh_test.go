@@ -28,7 +28,7 @@ func newPebbleStoreForLSH(t *testing.T) *PebbleStore {
 func synthRaw(seed int64, frames int) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	raw := make([]byte, frames*4)
-	for i := 0; i < frames; i++ {
+	for i := range frames {
 		binary.LittleEndian.PutUint32(raw[i*4:], rng.Uint32())
 	}
 	return raw
@@ -40,7 +40,7 @@ func flipBits(raw []byte, pctBits int, seed int64) []byte {
 	totalBits := len(flipped) * 8
 	toFlip := totalBits * pctBits / 100
 	rng := rand.New(rand.NewSource(seed))
-	for i := 0; i < toFlip; i++ {
+	for range toFlip {
 		b := rng.Intn(totalBits)
 		flipped[b/8] ^= 1 << uint(b%8)
 	}
@@ -131,7 +131,7 @@ func TestPebbleStoreLSH_UpdateBookFileSwapsIndex(t *testing.T) {
 
 func TestPebbleStoreLSH_ClearAllWipesIndex(t *testing.T) {
 	store := newPebbleStoreForLSH(t)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		id := string(rune('a' + i))
 		mustInsertBookFile(t, store, id, synthRaw(int64(i+1), 57600))
 	}

@@ -53,7 +53,7 @@ func openPropFixture(t *testing.T) (*database.PebbleStore, *search.BleveIndex) {
 func seedBooks(rt *rapid.T, store *database.PebbleStore, idx *search.BleveIndex, n int) []string {
 	ids := make([]string, 0, n)
 	docs := make([]search.BookDocument, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		b := rapidgen.Book(rt)
 		created, err := store.CreateBook(b)
 		if err != nil {

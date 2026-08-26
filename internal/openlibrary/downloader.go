@@ -41,7 +41,7 @@ type DownloadProgress struct {
 	TotalSize  int64     `json:"total_size"` // -1 if unknown
 	Error      string    `json:"error,omitempty"`
 	Source     string    `json:"source,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
 }
 
 // DownloadTracker holds live progress for all download types.

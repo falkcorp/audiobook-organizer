@@ -16,6 +16,7 @@ package dedup
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -167,8 +168,8 @@ func TestAutoResolveEligible(t *testing.T) {
 		c := base()
 		a := arPlausibleBook("A", "Same Book")
 		b := arPlausibleBook("B", "Same Book")
-		a.ISBN13 = strPtr("9780000000001")
-		b.ISBN13 = strPtr("9780000000002")
+		a.ISBN13 = new("9780000000001")
+		b.ISBN13 = new("9780000000002")
 		if ok, _ := engine.autoResolveEligible(c, a, b); ok {
 			t.Fatal("expected not eligible with conflicting ISBNs")
 		}
@@ -518,12 +519,7 @@ func mustSeed(t *testing.T, es *database.EmbeddingStore, aID, bID, band string, 
 }
 
 func arHasTag(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ss, want)
 }
 
 // TestDistinctAutoResolvePrimaryKinds pins the corroboration rule the exported

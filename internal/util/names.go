@@ -94,7 +94,7 @@ func SplitCreditNames(name string) []string {
 	for _, sep := range creditSeparators {
 		var next []string
 		for _, chunk := range work {
-			for _, piece := range strings.Split(chunk, sep) {
+			for piece := range strings.SplitSeq(chunk, sep) {
 				// Trimmed rather than merely TrimSpace'd so a stranded separator
 				// character cannot become part of a person's name, and so the
 				// emptiness check below sees a piece that is only punctuation

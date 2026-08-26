@@ -173,7 +173,7 @@ func mustWrite(t *testing.T, p, content string) {
 
 func TestFSTagScanner_ParallelMatchesSequential(t *testing.T) {
 	root := t.TempDir()
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		mustWrite(t, filepath.Join(root, fmt.Sprintf("a%02d.m4b", i)), "x")
 	}
 	extractor := func(p string) (string, error) {

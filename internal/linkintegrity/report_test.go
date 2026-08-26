@@ -114,7 +114,7 @@ func TestSummaryDeterministic(t *testing.T) {
 			}},
 		}
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if a, b := mk().Summary(), mk().Summary(); a != b {
 			t.Fatalf("Summary() not deterministic:\n%q\nvs\n%q", a, b)
 		}

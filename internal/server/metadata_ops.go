@@ -149,7 +149,7 @@ func runBookFetchPool(ctx context.Context, workers, n int, processOne func(conte
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if gctx.Err() != nil {
 			break // stop dispatching promptly on cancellation
 		}
@@ -944,9 +944,7 @@ func (s *Server) runBulkWriteBack(
 	}
 
 	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for bookID := range jobCh {
 				// Cancellation is checked per item inside the worker, not only in
 				// the feeder: with a deep buffer the feeder can be finished long
@@ -971,7 +969,7 @@ func (s *Server) runBulkWriteBack(
 					ckptMu.Unlock()
 				}
 			}
-		}()
+		})
 	}
 
 	for i := startIdx; i < total; i++ {

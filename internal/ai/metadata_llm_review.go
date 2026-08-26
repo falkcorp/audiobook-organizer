@@ -80,10 +80,7 @@ func (p *OpenAIParser) ScoreMetadataCandidates(
 
 	var all []MetadataLLMScore
 	for start := 0; start < len(indexed); start += metadataLLMBatchSize {
-		end := start + metadataLLMBatchSize
-		if end > len(indexed) {
-			end = len(indexed)
-		}
+		end := min(start+metadataLLMBatchSize, len(indexed))
 		batch := indexed[start:end]
 		scores, err := p.scoreMetadataBatch(ctx, query, batch)
 		if err != nil {

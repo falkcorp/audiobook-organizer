@@ -41,10 +41,10 @@ func plausibleBook(id, isbn13 string) *database.Book {
 		ID:                id,
 		Title:             "Book " + id,
 		FilePath:          "/audio/" + id + ".m4b",
-		ISBN13:            strPtr(isbn13),
+		ISBN13:            new(isbn13),
 		Duration:          &dur,
 		MarkedForDeletion: &marked,
-		FileHash:          strPtr("hash-" + id),
+		FileHash:          new("hash-" + id),
 	}
 }
 
@@ -229,7 +229,7 @@ func TestCheckExactISBN_SkipsImplausibleAudio(t *testing.T) {
 		ID:                "BOOK_B",
 		Title:             "Book B",
 		FilePath:          "/audio/BOOK_B.m4b",
-		ISBN13:            strPtr("9780000000001"),
+		ISBN13:            new("9780000000001"),
 		MarkedForDeletion: &marked,
 		// Duration intentionally left nil → hasPlausibleAudio = false
 	}
@@ -266,7 +266,7 @@ func TestCheckExactISBN_AnchorImplausibleAudio(t *testing.T) {
 	bookA := &database.Book{
 		ID:                "BOOK_A",
 		Title:             "Book A",
-		ISBN13:            strPtr("9780000000001"),
+		ISBN13:            new("9780000000001"),
 		MarkedForDeletion: &marked,
 		// Duration nil → not plausible
 	}
@@ -313,10 +313,10 @@ func TestCheckExactISBN_ScanIndexedEquivalence(t *testing.T) {
 	bookB := plausibleBook("BOOK_B", sharedISBN13) // genuine duplicate
 
 	bookC := plausibleBook("BOOK_C", "")
-	bookC.ASIN = strPtr("B00ASIN0001")
+	bookC.ASIN = new("B00ASIN0001")
 
 	bookD := plausibleBook("BOOK_D", "")
-	bookD.ISBN10 = strPtr("0000000010")
+	bookD.ISBN10 = new("0000000010")
 
 	bookE := plausibleBook("BOOK_E", "") // no IDs at all
 

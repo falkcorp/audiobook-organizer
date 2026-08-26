@@ -264,7 +264,7 @@ func (op *FileOperation) cleanupOldBackups() error {
 
 	// Remove oldest backups
 	toRemove := len(matches) - op.config.MaxBackups
-	for i := 0; i < toRemove; i++ {
+	for i := range toRemove {
 		if err := os.Remove(matches[i]); err != nil {
 			slog.Warn("failed to remove old backup", "path", matches[i], "error", err)
 		}

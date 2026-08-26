@@ -125,7 +125,7 @@ func TestComputeFileHashLargeFile(t *testing.T) {
 
 	const chunkSize = 1024 * 1024 // 1MB
 	chunk := make([]byte, chunkSize)
-	for i := 0; i < 150; i++ {
+	for i := range 150 {
 		// Fill with pattern based on position for consistency
 		for j := range chunk {
 			chunk[j] = byte(i + j)
@@ -574,7 +574,7 @@ func TestScanDirectoryParallelMultipleWorkers(t *testing.T) {
 	tmp := t.TempDir()
 
 	// Create multiple subdirectories with files
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		subdir := filepath.Join(tmp, fmt.Sprintf("dir%d", i))
 		if err := os.MkdirAll(subdir, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)

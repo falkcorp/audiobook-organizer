@@ -43,10 +43,10 @@ func TestListAuthorsAndSeries_ReturnsEmptyArrayWhenNil(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var authorsResp map[string]interface{}
+	var authorsResp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &authorsResp))
-	authorsResp = authorsResp["data"].(map[string]interface{})
-	items, ok := authorsResp["items"].([]interface{})
+	authorsResp = authorsResp["data"].(map[string]any)
+	items, ok := authorsResp["items"].([]any)
 	require.True(t, ok)
 	assert.Len(t, items, 0)
 
@@ -56,10 +56,10 @@ func TestListAuthorsAndSeries_ReturnsEmptyArrayWhenNil(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var seriesResp map[string]interface{}
+	var seriesResp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &seriesResp))
-	seriesResp = seriesResp["data"].(map[string]interface{})
-	items, ok = seriesResp["items"].([]interface{})
+	seriesResp = seriesResp["data"].(map[string]any)
+	items, ok = seriesResp["items"].([]any)
 	require.True(t, ok)
 	assert.Len(t, items, 0)
 }
@@ -85,10 +85,10 @@ func TestImportPaths_ListNilAndRemoveInvalidID(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var listResp struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
-	paths, ok := listResp.Data["importPaths"].([]interface{})
+	paths, ok := listResp.Data["importPaths"].([]any)
 	require.True(t, ok)
 	assert.Len(t, paths, 0)
 

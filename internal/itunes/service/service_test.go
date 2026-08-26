@@ -185,12 +185,12 @@ func TestEnabled_EnabledService(t *testing.T) {
 func TestDisabledService_StartShutdown_MultipleCallsAreNoOps(t *testing.T) {
 	svc := NewDisabled()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := svc.Start(context.Background()); err != nil {
 			t.Errorf("Start[%d] on disabled: %v", i, err)
 		}
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := svc.Shutdown(0); err != nil {
 			t.Errorf("Shutdown[%d] on disabled: %v", i, err)
 		}

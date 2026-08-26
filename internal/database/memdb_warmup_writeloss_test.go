@@ -79,7 +79,7 @@ func seedBooksStore(t *testing.T, dir string, n int) {
 
 	batch := seed.db.NewBatch()
 	now := time.Now()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id, err := newULID()
 		if err != nil {
 			t.Fatalf("seed newULID %d: %v", i, err)
@@ -96,7 +96,7 @@ func seedBooksStore(t *testing.T, dir string, n int) {
 			batch.Close()
 			t.Fatalf("seed marshal %d: %v", i, err)
 		}
-		key := []byte(fmt.Sprintf("book:%s", id))
+		key := fmt.Appendf(nil, "book:%s", id)
 		if err := batch.Set(key, data, nil); err != nil {
 			batch.Close()
 			t.Fatalf("seed batch.Set %d: %v", i, err)
@@ -278,7 +278,7 @@ func TestWarmupWriteLoss_ConcurrentWritesAllVisible(t *testing.T) {
 	var mu sync.Mutex
 	var written []string
 	var wg sync.WaitGroup
-	for w := 0; w < writers; w++ {
+	for w := range writers {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
@@ -350,7 +350,7 @@ func TestWarmupWriteLoss_BufferOverflowDegradesLoudly(t *testing.T) {
 
 	// Comfortably more write-throughs than the cap allows.
 	var written []string
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		b, err := store.CreateBook(&Book{
 			Title:    fmt.Sprintf("Overflow %d", i),
 			FilePath: fmt.Sprintf("/overflow/%d", i),

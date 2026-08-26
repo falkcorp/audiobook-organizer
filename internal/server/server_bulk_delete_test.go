@@ -26,7 +26,7 @@ type bulkDeleteResponse struct {
 	Total   int      `json:"total"`
 }
 
-func postJSON(server *Server, path string, body interface{}) *httptest.ResponseRecorder {
+func postJSON(server *Server, path string, body any) *httptest.ResponseRecorder {
 	data, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
@@ -49,7 +49,7 @@ func TestBulkDeleteAuthors_AllEmpty(t *testing.T) {
 	a2, err := store.CreateAuthor("Author Two")
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]any{
 		"ids": []int{a1.ID, a2.ID},
 	})
 
@@ -95,7 +95,7 @@ func TestBulkDeleteAuthors_SkipsAuthorsWithBooks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]any{
 		"ids": []int{authorWithBooks.ID, authorEmpty.ID},
 	})
 
@@ -135,7 +135,7 @@ func TestBulkDeleteAuthors_EmptyIDs(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]any{
 		"ids": []int{},
 	})
 
@@ -156,7 +156,7 @@ func TestBulkDeleteAuthors_NonexistentIDs(t *testing.T) {
 	defer cleanup()
 
 	// IDs that don't exist — GetBooksByAuthorIDCore returns empty, DeleteAuthor may error or succeed
-	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]any{
 		"ids": []int{99999, 99998},
 	})
 
@@ -195,7 +195,7 @@ func TestBulkDeleteAuthors_MixedResults(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]any{
 		"ids": []int{a1.ID, a2.ID, a3.ID},
 	})
 
@@ -240,7 +240,7 @@ func TestBulkDeleteAuthors_StoreError(t *testing.T) {
 	server, cleanup := setupTestServerWithStore(t, mock)
 	defer cleanup()
 
-	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]any{
 		"ids": []int{1, 2},
 	})
 
@@ -262,7 +262,7 @@ func TestBulkDeleteAuthors_DeleteError(t *testing.T) {
 	server, cleanup := setupTestServerWithStore(t, mock)
 	defer cleanup()
 
-	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/authors/bulk-delete", map[string]any{
 		"ids": []int{1},
 	})
 
@@ -293,7 +293,7 @@ func TestBulkDeleteSeries_AllEmpty(t *testing.T) {
 	s2, err := store.CreateSeries("Series Two", nil)
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{s1.ID, s2.ID},
 	})
 
@@ -337,7 +337,7 @@ func TestBulkDeleteSeries_SkipsSeriesWithBooks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{seriesWithBooks.ID, seriesEmpty.ID},
 	})
 
@@ -377,7 +377,7 @@ func TestBulkDeleteSeries_EmptyIDs(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{},
 	})
 
@@ -413,7 +413,7 @@ func TestBulkDeleteSeries_MixedResults(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{s1.ID, s2.ID, s3.ID},
 	})
 
@@ -458,7 +458,7 @@ func TestBulkDeleteSeries_StoreError(t *testing.T) {
 	server, cleanup := setupTestServerWithStore(t, mock)
 	defer cleanup()
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{1, 2},
 	})
 
@@ -480,7 +480,7 @@ func TestBulkDeleteSeries_DeleteError(t *testing.T) {
 	server, cleanup := setupTestServerWithStore(t, mock)
 	defer cleanup()
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{5},
 	})
 

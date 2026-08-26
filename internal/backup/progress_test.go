@@ -43,7 +43,7 @@ func seedDBDir(t *testing.T, n, size int) string {
 		// Non-constant bytes so gzip cannot collapse the archive to nothing.
 		payload[i] = byte(i % 251)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		name := filepath.Join(dir, filepath.Base(dir)+"-"+string(rune('a'+i))+".sst")
 		if err := os.WriteFile(name, payload, 0o644); err != nil {
 			t.Fatalf("setup: write %s: %v", name, err)

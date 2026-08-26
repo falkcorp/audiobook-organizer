@@ -53,7 +53,7 @@ func fullScanLayer1FixtureBooks(n int) []database.Book {
 	authorID := 1
 	fileHash := "SHARED-HASH-1"
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books[i] = database.Book{
 			ID:       fmt.Sprintf("L1-%03d", i),
 			Title:    "The Same Layer1 Book",
@@ -226,7 +226,7 @@ func TestFullScanLayer1AutoMergeConcurrent_NoRace(t *testing.T) {
 	pairs := make([]pair, numPairs)
 	var fixture []database.Book
 	hashToWinner := make(map[string]string, numPairs)
-	for p := 0; p < numPairs; p++ {
+	for p := range numPairs {
 		loserID := fmt.Sprintf("MA-%03d", p)
 		winnerID := fmt.Sprintf("MB-%03d", p)
 		hash := fmt.Sprintf("HASH-%03d", p)

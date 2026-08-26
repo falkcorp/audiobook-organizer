@@ -32,7 +32,7 @@ func TestDedupScanProgressLogger_BucketCrossings(t *testing.T) {
 	// Simulate FullScan calling progress("scan", i+1, total) on every i where
 	// i%10 == 0.
 	const total = 2500
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if i%10 == 0 || i == total-1 {
 			progress("scan", i+1, total)
 		}
@@ -68,7 +68,7 @@ func TestDedupScanProgressLogger_EveryItem(t *testing.T) {
 	progress := newDedupScanProgressLogger(100, logf)
 
 	const total = 350
-	for i := 0; i < total; i++ {
+	for i := range total {
 		progress("scan", i+1, total)
 	}
 
@@ -88,7 +88,7 @@ func TestDedupScanProgressLogger_SmallTotal(t *testing.T) {
 	})
 
 	const total = 42
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if i%10 == 0 || i == total-1 {
 			progress("scan", i+1, total)
 		}
@@ -111,7 +111,7 @@ func TestDedupScanProgressLogger_NonPositiveInterval(t *testing.T) {
 	progress := newDedupScanProgressLogger(0, func(format string, args ...any) {
 		count++
 	})
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		progress("scan", i+1, 5)
 	}
 	if count != 5 {
@@ -150,7 +150,7 @@ func fakeEmbedBookStatus(id string) (dedup.EmbedStatus, error) {
 func TestEmbedBooksConcurrent_ParallelMatchesSerial(t *testing.T) {
 	const n = 500
 	books := make([]database.BookCore, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books[i] = database.BookCore{ID: strconv.Itoa(i)}
 	}
 
@@ -189,7 +189,7 @@ func TestEmbedBooksConcurrent_ParallelMatchesSerial(t *testing.T) {
 func TestEmbedBooksConcurrent_ConcurrentCallsAreSerialized(t *testing.T) {
 	const n = 2000
 	books := make([]database.BookCore, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books[i] = database.BookCore{ID: strconv.Itoa(i)}
 	}
 
@@ -214,7 +214,7 @@ func TestEmbedBooksConcurrent_ConcurrentCallsAreSerialized(t *testing.T) {
 func TestEmbedAuthorsConcurrent_ParallelMatchesSerial(t *testing.T) {
 	const n = 400
 	authors := make([]database.Author, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		authors[i] = database.Author{ID: i}
 	}
 	fakeEmbed := func(_ context.Context, id int) error {

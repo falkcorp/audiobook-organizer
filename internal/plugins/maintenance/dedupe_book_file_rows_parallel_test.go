@@ -49,13 +49,13 @@ func (r *concurrentReporter) SetCurrentItem(_ string)                          {
 func seedDupBooks(t *testing.T, s *database.PebbleStore, books, copies int) []string {
 	t.Helper()
 	ids := make([]string, 0, books)
-	for b := 0; b < books; b++ {
+	for b := range books {
 		bk, err := s.CreateBook(&database.Book{Title: fmt.Sprintf("Dup Book %02d", b)})
 		if err != nil {
 			t.Fatalf("CreateBook: %v", err)
 		}
 		path := fmt.Sprintf("/lib/dup-%02d/track.m4b", b)
-		for c := 0; c < copies; c++ {
+		for range copies {
 			f := &database.BookFile{
 				BookID:   bk.ID,
 				FilePath: path,

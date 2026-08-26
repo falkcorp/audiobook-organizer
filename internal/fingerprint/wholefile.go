@@ -150,10 +150,7 @@ func WholeFileSimilarity(a, b []byte) (float64, error) {
 	}
 	sliceA := middleSliceFrames(a)
 	sliceB := middleSliceFrames(b)
-	n := len(sliceA)
-	if len(sliceB) < n {
-		n = len(sliceB)
-	}
+	n := min(len(sliceB), len(sliceA))
 	if n == 0 {
 		return 0, errors.New("middle slice is empty")
 	}

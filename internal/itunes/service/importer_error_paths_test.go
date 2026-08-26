@@ -153,13 +153,11 @@ func TestSync_Concurrent_NoPanic(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make([]error, 4)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = imp.Sync(context.Background(), xmlPath, nil, nil, log)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -455,7 +453,7 @@ func TestLinkITunesMetadata_AlreadyLinked_UpdatesCalled(t *testing.T) {
 	importBook := &database.Book{
 		Title:              "Linked Book",
 		ITunesPersistentID: &pid,
-		ITunesPlayCount:    intPtrLocal(5),
+		ITunesPlayCount:    new(5),
 	}
 
 	m := dbmocks.NewMockStore(t)

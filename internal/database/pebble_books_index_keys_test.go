@@ -35,7 +35,7 @@ func TestGetAllBooksFullFrom_SkipsSecondaryIndexKeys(t *testing.T) {
 	store.WaitForWarmup()
 
 	const total = 5
-	for i := 0; i < total; i++ {
+	for i := range total {
 		_, err := store.CreateBook(&Book{
 			Title:    fmt.Sprintf("Book %03d", i),
 			FilePath: fmt.Sprintf("/tmp/book_%03d.m4b", i),

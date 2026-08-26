@@ -25,8 +25,8 @@ func (p *PebbleStore) CreateExternalIDMapping(mapping *ExternalIDMapping) error 
 		return err
 	}
 
-	primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", mapping.Source, mapping.ExternalID))
-	reverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", mapping.BookID, mapping.Source, mapping.ExternalID))
+	primaryKey := fmt.Appendf(nil, "ext_id:%s:%s", mapping.Source, mapping.ExternalID)
+	reverseKey := fmt.Appendf(nil, "ext_id:book:%s:%s:%s", mapping.BookID, mapping.Source, mapping.ExternalID)
 
 	batch := p.db.NewBatch()
 	defer batch.Close()
@@ -43,7 +43,7 @@ func (p *PebbleStore) CreateExternalIDMapping(mapping *ExternalIDMapping) error 
 
 // GetBookByExternalID returns the book_id for a non-tombstoned external ID.
 func (p *PebbleStore) GetBookByExternalID(source, externalID string) (string, error) {
-	key := []byte(fmt.Sprintf("ext_id:%s:%s", source, externalID))
+	key := fmt.Appendf(nil, "ext_id:%s:%s", source, externalID)
 	data, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return "", nil
@@ -65,7 +65,7 @@ func (p *PebbleStore) GetBookByExternalID(source, externalID string) (string, er
 
 // GetExternalIDsForBook returns all external ID mappings for a book.
 func (p *PebbleStore) GetExternalIDsForBook(bookID string) ([]ExternalIDMapping, error) {
-	prefix := []byte(fmt.Sprintf("ext_id:book:%s:", bookID))
+	prefix := fmt.Appendf(nil, "ext_id:book:%s:", bookID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: append(prefix, 0xff),
@@ -85,7 +85,7 @@ func (p *PebbleStore) GetExternalIDsForBook(bookID string) ([]ExternalIDMapping,
 		source := parts[3]
 		extID := parts[4]
 
-		primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", source, extID))
+		primaryKey := fmt.Appendf(nil, "ext_id:%s:%s", source, extID)
 		data, closer, err := p.db.Get(primaryKey)
 		if err != nil {
 			continue
@@ -103,7 +103,7 @@ func (p *PebbleStore) GetExternalIDsForBook(bookID string) ([]ExternalIDMapping,
 
 // IsExternalIDTombstoned checks whether an external ID is tombstoned.
 func (p *PebbleStore) IsExternalIDTombstoned(source, externalID string) (bool, error) {
-	key := []byte(fmt.Sprintf("ext_id:%s:%s", source, externalID))
+	key := fmt.Appendf(nil, "ext_id:%s:%s", source, externalID)
 	data, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return false, nil
@@ -122,7 +122,7 @@ func (p *PebbleStore) IsExternalIDTombstoned(source, externalID string) (bool, e
 
 // TombstoneExternalID marks an external ID as tombstoned to prevent reimport.
 func (p *PebbleStore) TombstoneExternalID(source, externalID string) error {
-	key := []byte(fmt.Sprintf("ext_id:%s:%s", source, externalID))
+	key := fmt.Appendf(nil, "ext_id:%s:%s", source, externalID)
 	data, closer, err := p.db.Get(key)
 	if err != nil {
 		return err
@@ -157,7 +157,7 @@ func (p *PebbleStore) ReassignExternalIDs(oldBookID, newBookID string) error {
 	now := time.Now()
 	for _, m := range mappings {
 		// Delete old reverse key
-		oldReverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", oldBookID, m.Source, m.ExternalID))
+		oldReverseKey := fmt.Appendf(nil, "ext_id:book:%s:%s:%s", oldBookID, m.Source, m.ExternalID)
 		if err := batch.Delete(oldReverseKey, nil); err != nil {
 			return fmt.Errorf("pebble Delete ext_id old reverse: %w", err)
 		}
@@ -169,13 +169,13 @@ func (p *PebbleStore) ReassignExternalIDs(oldBookID, newBookID string) error {
 		if err != nil {
 			return err
 		}
-		primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", m.Source, m.ExternalID))
+		primaryKey := fmt.Appendf(nil, "ext_id:%s:%s", m.Source, m.ExternalID)
 		if err := batch.Set(primaryKey, data, nil); err != nil {
 			return fmt.Errorf("pebble Set ext_id primary: %w", err)
 		}
 
 		// Add new reverse key
-		newReverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", newBookID, m.Source, m.ExternalID))
+		newReverseKey := fmt.Appendf(nil, "ext_id:book:%s:%s:%s", newBookID, m.Source, m.ExternalID)
 		if err := batch.Set(newReverseKey, []byte(m.ExternalID), nil); err != nil {
 			return fmt.Errorf("pebble Set ext_id new reverse: %w", err)
 		}
@@ -190,7 +190,7 @@ func (p *PebbleStore) ReassignExternalIDs(oldBookID, newBookID string) error {
 // would wrongly drag unrelated PIDs along. No-ops if the mapping already points at
 // newBookID; errors if the mapping does not exist.
 func (p *PebbleStore) ReassignExternalID(source, externalID, newBookID string) error {
-	primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", source, externalID))
+	primaryKey := fmt.Appendf(nil, "ext_id:%s:%s", source, externalID)
 	data, closer, err := p.db.Get(primaryKey)
 	if err != nil {
 		return fmt.Errorf("ReassignExternalID: ext_id %s:%s not found: %w", source, externalID, err)
@@ -208,7 +208,7 @@ func (p *PebbleStore) ReassignExternalID(source, externalID, newBookID string) e
 	batch := p.db.NewBatch()
 	defer batch.Close()
 
-	oldReverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", m.BookID, m.Source, m.ExternalID))
+	oldReverseKey := fmt.Appendf(nil, "ext_id:book:%s:%s:%s", m.BookID, m.Source, m.ExternalID)
 	if err := batch.Delete(oldReverseKey, nil); err != nil {
 		return fmt.Errorf("ReassignExternalID delete old reverse: %w", err)
 	}
@@ -223,7 +223,7 @@ func (p *PebbleStore) ReassignExternalID(source, externalID, newBookID string) e
 		return fmt.Errorf("ReassignExternalID set primary: %w", err)
 	}
 
-	newReverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", newBookID, m.Source, m.ExternalID))
+	newReverseKey := fmt.Appendf(nil, "ext_id:book:%s:%s:%s", newBookID, m.Source, m.ExternalID)
 	if err := batch.Set(newReverseKey, []byte(m.ExternalID), nil); err != nil {
 		return fmt.Errorf("ReassignExternalID set new reverse: %w", err)
 	}
@@ -239,7 +239,7 @@ func (p *PebbleStore) BulkCreateExternalIDMappings(mappings []ExternalIDMapping)
 
 	now := time.Now()
 	for _, m := range mappings {
-		primaryKey := []byte(fmt.Sprintf("ext_id:%s:%s", m.Source, m.ExternalID))
+		primaryKey := fmt.Appendf(nil, "ext_id:%s:%s", m.Source, m.ExternalID)
 		// Check if already exists
 		if _, closer, err := p.db.Get(primaryKey); err == nil {
 			closer.Close()
@@ -256,7 +256,7 @@ func (p *PebbleStore) BulkCreateExternalIDMappings(mappings []ExternalIDMapping)
 			return fmt.Errorf("pebble Set ext_id primary: %w", err)
 		}
 
-		reverseKey := []byte(fmt.Sprintf("ext_id:book:%s:%s:%s", m.BookID, m.Source, m.ExternalID))
+		reverseKey := fmt.Appendf(nil, "ext_id:book:%s:%s:%s", m.BookID, m.Source, m.ExternalID)
 		if err := batch.Set(reverseKey, []byte(m.ExternalID), nil); err != nil {
 			return fmt.Errorf("pebble Set ext_id reverse: %w", err)
 		}
@@ -269,7 +269,7 @@ func (p *PebbleStore) BulkCreateExternalIDMappings(mappings []ExternalIDMapping)
 // the removal timestamp. The primary ext_id:<source>:<externalID> record is
 // updated in-place so provenance and other fields are preserved.
 func (p *PebbleStore) MarkExternalIDRemoved(source, externalID string) error {
-	key := []byte(fmt.Sprintf("ext_id:%s:%s", source, externalID))
+	key := fmt.Appendf(nil, "ext_id:%s:%s", source, externalID)
 	data, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil
@@ -297,7 +297,7 @@ func (p *PebbleStore) MarkExternalIDRemoved(source, externalID string) error {
 // SetExternalIDProvenance updates the provenance field on an existing external
 // ID mapping record. No-ops silently if the record does not exist.
 func (p *PebbleStore) SetExternalIDProvenance(source, externalID, provenance string) error {
-	key := []byte(fmt.Sprintf("ext_id:%s:%s", source, externalID))
+	key := fmt.Appendf(nil, "ext_id:%s:%s", source, externalID)
 	data, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil
@@ -323,7 +323,7 @@ func (p *PebbleStore) SetExternalIDProvenance(source, externalID, provenance str
 // GetRemovedExternalIDs returns all tombstoned external ID mappings for the
 // given source (i.e. records where MarkExternalIDRemoved was called).
 func (p *PebbleStore) GetRemovedExternalIDs(source string) ([]ExternalIDMapping, error) {
-	prefix := []byte(fmt.Sprintf("ext_id:%s:", source))
+	prefix := fmt.Appendf(nil, "ext_id:%s:", source)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: append(append([]byte{}, prefix...), 0xff),

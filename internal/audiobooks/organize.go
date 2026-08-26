@@ -49,7 +49,7 @@ func NewOrganizeService(db organizeServiceStore) *OrganizeService {
 		scanner.ApplyOrganizedFileMetadata(book, newPath)
 	}
 	svc.ComputeITunesPath = metafetch.ComputeITunesPath
-	svc.FetchMetadataForBook = func(ctx context.Context, bookID string) (interface{}, error) {
+	svc.FetchMetadataForBook = func(ctx context.Context, bookID string) (any, error) {
 		mfs := metafetch.NewService(db)
 		return mfs.FetchMetadataForBook(ctx, bookID)
 	}

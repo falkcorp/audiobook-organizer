@@ -117,7 +117,7 @@ var TerminalMarkers = []string{
 // times passed a version of this suite that counted writes.
 func CountInvocations(logs, bookID string) int {
 	n := 0
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if !strings.Contains(line, "book_id="+bookID) {
 			continue
 		}
@@ -136,7 +136,7 @@ func CountInvocations(logs, bookID string) int {
 // the note there before choosing between them.
 func CountWrites(logs, bookID string) int {
 	n := 0
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if strings.Contains(line, "RecomputeBookAggregates updated") &&
 			strings.Contains(line, "book_id="+bookID) {
 			n++

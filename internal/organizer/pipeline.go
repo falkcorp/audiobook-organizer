@@ -186,10 +186,7 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 // two files landed on the same target.
 func planPass(rootDir, folderPattern, filePattern string, sorted []database.BookFile, totalTracks int, vars PathVars, opts BuildOpts, forceTrackSuffix bool) ([]FileRenameEntry, bool, error) {
 	// Pad to the width of the largest track number so 9/10 sort as 09/10.
-	width := len(fmt.Sprintf("%d", totalTracks))
-	if width < 2 {
-		width = 2
-	}
+	width := max(len(fmt.Sprintf("%d", totalTracks)), 2)
 
 	var entries []FileRenameEntry
 	seen := make(map[string]struct{}, len(sorted))

@@ -480,7 +480,7 @@ func looksLikeASIN(s string) bool {
 func extractASIN(s string) string {
 	s = strings.TrimSpace(s)
 	// Split on whitespace and check each token
-	for _, word := range strings.Fields(s) {
+	for word := range strings.FieldsSeq(s) {
 		word = strings.Trim(word, ",.;:!?()[]{}\"'")
 		if looksLikeASIN(word) {
 			return word

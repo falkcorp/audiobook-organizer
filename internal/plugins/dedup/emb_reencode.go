@@ -274,10 +274,7 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 			return context.Canceled
 		}
 
-		end := batchStart + embReencodeBatchSize
-		if end > len(batch) {
-			end = len(batch)
-		}
+		end := min(batchStart+embReencodeBatchSize, len(batch))
 		chunk := batch[batchStart:end]
 
 		if err := p.reencodeChunk(db, chunk); err != nil {

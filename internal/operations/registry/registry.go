@@ -364,10 +364,8 @@ func (r *Registry) Start(ctx context.Context) {
 	internalCtx, cancel := context.WithCancel(ctx)
 	r.cancelFn = cancel
 
-	r.goroutineWG.Add(1)
-	go func() { defer r.goroutineWG.Done(); r.runDispatcher(internalCtx) }()
-	r.goroutineWG.Add(1)
-	go func() { defer r.goroutineWG.Done(); r.runWatchdog(internalCtx) }()
+	r.goroutineWG.Go(func() { ; r.runDispatcher(internalCtx) })
+	r.goroutineWG.Go(func() { ; r.runWatchdog(internalCtx) })
 	for i := range r.workers {
 		r.goroutineWG.Add(1)
 		go func(slot int) { defer r.goroutineWG.Done(); r.startWorker(internalCtx, slot) }(i)
@@ -386,9 +384,7 @@ func (r *Registry) Start(ctx context.Context) {
 		}
 		sweepStopped := make(chan struct{})
 		r.sweepStopped = sweepStopped
-		r.goroutineWG.Add(1)
-		go func() {
-			defer r.goroutineWG.Done()
+		r.goroutineWG.Go(func() {
 			// Signal Shutdown that the ticker goroutine has fully exited so it
 			// can safely let the caller close the store. See sweepStopped.
 			defer close(sweepStopped)
@@ -416,7 +412,7 @@ func (r *Registry) Start(ctx context.Context) {
 					}
 				}
 			}
-		}()
+		})
 	}
 }
 

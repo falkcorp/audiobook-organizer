@@ -28,6 +28,7 @@
 package database
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,25 +47,25 @@ func TestIndexedWalkAndSortBooksAgree(t *testing.T) {
 	// cannot observe a missing-value disagreement, which is how the existing
 	// test stayed green.
 	books := []Book{
-		{ID: "b1", Title: "One", Narrator: ptrString_mem("Zoe"), Duration: ptrInt_mem(300),
-			FileSize: ptrInt64_mem(9000), Bitrate: ptrInt_mem(128),
-			AudiobookReleaseYear: ptrInt_mem(2001), CreatedAt: &t1, UpdatedAt: &t2},
-		{ID: "b2", Title: "Two", Narrator: ptrString_mem("adam"), Duration: ptrInt_mem(100),
-			FileSize: ptrInt64_mem(100), Bitrate: ptrInt_mem(320),
-			AudiobookReleaseYear: ptrInt_mem(1999), CreatedAt: &t2, UpdatedAt: &t1},
+		{ID: "b1", Title: "One", Narrator: new("Zoe"), Duration: new(300),
+			FileSize: ptrInt64_mem(9000), Bitrate: new(128),
+			AudiobookReleaseYear: new(2001), CreatedAt: &t1, UpdatedAt: &t2},
+		{ID: "b2", Title: "Two", Narrator: new("adam"), Duration: new(100),
+			FileSize: ptrInt64_mem(100), Bitrate: new(320),
+			AudiobookReleaseYear: new(1999), CreatedAt: &t2, UpdatedAt: &t1},
 		// Nothing set at all: every field missing.
 		{ID: "b3", Title: "Three"},
 		// Genuine zeros, which must sort WITH the numbers rather than with the
 		// unknowns -- the distinction (int64, bool) accessors exist to keep and
 		// that derefInt() destroyed. PrintYear-only exercises the year
 		// fallback.
-		{ID: "b4", Title: "Four", Narrator: ptrString_mem("Mabel"), Duration: ptrInt_mem(0),
-			FileSize: ptrInt64_mem(0), Bitrate: ptrInt_mem(0),
-			PrintYear: ptrInt_mem(1888)},
+		{ID: "b4", Title: "Four", Narrator: new("Mabel"), Duration: new(0),
+			FileSize: ptrInt64_mem(0), Bitrate: new(0),
+			PrintYear: new(1888)},
 		// Empty narrator string vs nil narrator: both are "missing" and must
 		// rank together, not one at each end.
-		{ID: "b5", Title: "Five", Narrator: ptrString_mem(""), Duration: ptrInt_mem(50),
-			AudiobookReleaseYear: ptrInt_mem(0)}, // 0 year == absent, not year zero
+		{ID: "b5", Title: "Five", Narrator: new(""), Duration: new(50),
+			AudiobookReleaseYear: new(0)}, // 0 year == absent, not year zero
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -109,25 +110,25 @@ func TestIndexedWalkAndSortBooksAgree(t *testing.T) {
 }
 
 func summaryIDLine(s []BookSummary) string {
-	out := ""
+	var out strings.Builder
 	for i := range s {
 		if i > 0 {
-			out += " "
+			out.WriteString(" ")
 		}
-		out += s[i].ID
+		out.WriteString(s[i].ID)
 	}
-	return out
+	return out.String()
 }
 
 func bookIDLine(s []Book) string {
-	out := ""
+	var out strings.Builder
 	for i := range s {
 		if i > 0 {
-			out += " "
+			out.WriteString(" ")
 		}
-		out += s[i].ID
+		out.WriteString(s[i].ID)
 	}
-	return out
+	return out.String()
 }
 
 // TestSortBooksRanksMissingLastAscending pins the rule itself, independently of
@@ -136,8 +137,8 @@ func bookIDLine(s []Book) string {
 func TestSortBooksRanksMissingLastAscending(t *testing.T) {
 	books := []Book{
 		{ID: "none", Title: "n"},
-		{ID: "zero", Title: "z", Duration: ptrInt_mem(0)},
-		{ID: "big", Title: "b", Duration: ptrInt_mem(500)},
+		{ID: "zero", Title: "z", Duration: new(0)},
+		{ID: "big", Title: "b", Duration: new(500)},
 	}
 	SortBooks(books, "duration", true)
 	if got := bookIDLine(books); got != "zero big none" {

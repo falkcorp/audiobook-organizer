@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,10 +29,8 @@ func IsGarbageValue(s string) bool {
 	lower := strings.ToLower(strings.TrimSpace(s))
 	garbage := []string{"unknown", "narrator", "various", "n/a", "none", "null", "undefined", "",
 		"test", "untitled", "no title", "no author", "various authors", "various artists"}
-	for _, g := range garbage {
-		if lower == g {
-			return true
-		}
+	if slices.Contains(garbage, lower) {
+		return true
 	}
 	// Reject HTML fragments or error messages that may leak from Wikipedia/API errors
 	// Use anchored checks to avoid matching legitimate titles/authors containing "error" as a substring

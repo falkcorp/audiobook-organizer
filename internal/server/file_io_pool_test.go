@@ -75,7 +75,7 @@ func TestPendingJobs_DistinctOpTypesPerBook(t *testing.T) {
 	pool.SubmitTyped("book1", "op_b", func() { done <- struct{}{} })
 
 	deadline := time.After(2 * time.Second)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case <-done:
 		case <-deadline:

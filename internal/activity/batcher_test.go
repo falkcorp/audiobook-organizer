@@ -16,7 +16,7 @@ import (
 // drainAll collects up to n entries from ch, waiting at most timeout each time.
 func drainAll(ch <-chan database.ActivityEntry, n int, timeout time.Duration) []database.ActivityEntry {
 	var results []database.ActivityEntry
-	for i := 0; i < n; i++ {
+	for range n {
 		select {
 		case e := <-ch:
 			results = append(results, e)
@@ -74,7 +74,7 @@ func TestActivityBatcher_EarlyFlush_ItemCount(t *testing.T) {
 	key := BatchKey{Type: "tag-scan", Source: "scanner", OperationID: "op-early"}
 
 	// Submit 501 items — should trigger early flush at >= 500 total.
-	for i := 0; i < 501; i++ {
+	for range 501 {
 		b.Submit(key, BatchItem{Name: "file", Count: 1})
 	}
 
@@ -171,10 +171,10 @@ func TestActivityBatcher_Race(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < itemsEach; j++ {
+			for range itemsEach {
 				b.Submit(key, BatchItem{Name: "file", Count: 1})
 			}
 		}()
@@ -202,7 +202,7 @@ func TestActivityBatcher_Overflow(t *testing.T) {
 
 	// Submit maxBatchItems+1 = 201 items.
 	total := maxBatchItems + 1
-	for i := 0; i < total; i++ {
+	for range total {
 		b.Submit(key, BatchItem{Name: "file", Count: 1})
 	}
 

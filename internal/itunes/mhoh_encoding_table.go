@@ -58,6 +58,8 @@
 // 0x06, 0x0B, 0x0D — see CRIT-1 and SPEC 2 §2.
 package itunes
 
+import "slices"
+
 // MhohEncodingEntry holds the corpus-derived constraints for one hohmType.
 type MhohEncodingEntry struct {
 	// HeaderLen is the exclusively observed headerLen value. In every
@@ -84,12 +86,7 @@ type MhohEncodingEntry struct {
 
 // AllowedAt24Contains reports whether v is in e.AllowedAt24.
 func (e MhohEncodingEntry) AllowedAt24Contains(v uint32) bool {
-	for _, a := range e.AllowedAt24 {
-		if a == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(e.AllowedAt24, v)
 }
 
 // ITunesMhohEncoding is the corpus-derived constant table for text string

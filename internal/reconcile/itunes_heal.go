@@ -161,10 +161,7 @@ func BuildFileIndex(dirs []string, extSet map[string]bool) map[string][]string {
 
 	var wg sync.WaitGroup
 	for _, dir := range dirs {
-		dir := dir
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 				if err != nil || info.IsDir() {
 					return nil
@@ -178,7 +175,7 @@ func BuildFileIndex(dirs []string, extSet map[string]bool) map[string][]string {
 				mu.Unlock()
 				return nil
 			})
-		}()
+		})
 	}
 	wg.Wait()
 	return index
@@ -612,10 +609,7 @@ func fuzzyFindByAlbum(track iTunesTrack, fileIndex map[string][]string) string {
 		}
 	}
 	// Require at least (all album words × 2) − 2 to avoid short-title false positives.
-	minScore := len(albumWords)*2 - 2
-	if minScore < 8 {
-		minScore = 8
-	}
+	minScore := max(len(albumWords)*2-2, 8)
 	if best.score >= minScore {
 		return best.path
 	}
@@ -640,7 +634,7 @@ func healTrack(dst, src string) error {
 // titleWords returns lowercase words >3 chars from s, for overlap scoring.
 func titleWords(s string) []string {
 	var out []string
-	for _, w := range strings.Fields(strings.ToLower(s)) {
+	for w := range strings.FieldsSeq(strings.ToLower(s)) {
 		if len(w) > 3 {
 			out = append(out, w)
 		}

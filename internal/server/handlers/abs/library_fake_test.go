@@ -563,7 +563,7 @@ func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
 		if b.Genre == nil {
 			continue
 		}
-		for _, g := range strings.Split(*b.Genre, ",") {
+		for g := range strings.SplitSeq(*b.Genre, ",") {
 			g = strings.TrimSpace(g)
 			if g != "" && !seen[g] {
 				seen[g] = true
@@ -967,10 +967,7 @@ func oracleAudioFiles(t *testing.T) []oracleTrack {
 func writeFakeAudioSized(t *testing.T, path string, size int64) {
 	t.Helper()
 	const patterned = 4096
-	n := int64(patterned)
-	if size < n {
-		n = size
-	}
+	n := min(size, int64(patterned))
 	writeFakeAudio(t, path, int(n))
 	if size > n {
 		if err := os.Truncate(path, size); err != nil {
@@ -1211,7 +1208,7 @@ func TestAllowedAt_AmbiguousPatternsAreAnErrorNotACoinFlip(t *testing.T) {
 		"*duration":       {Reason: "loose", Within: 3.0},
 		"*media.duration": {Reason: "tight", Within: 0.5},
 	}
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		key, _, ok, ambiguous := allowedAt(allowed, "libraryItem.media.duration")
 		if ok {
 			t.Fatalf("iteration %d: resolved to %q — two patterns claim this path, so any "+
@@ -1230,7 +1227,7 @@ func TestAllowedAt_ExactKeyBeatsPattern(t *testing.T) {
 		"*duration":               {Reason: "pattern", Within: 3.0},
 		"media.tracks[].duration": {Reason: "exact", Within: 0.5},
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		key, a, ok, ambiguous := allowedAt(allowed, "media.tracks[3].duration")
 		if !ok || ambiguous != nil || key != "media.tracks[].duration" || a.Within != 0.5 {
 			t.Fatalf("iteration %d: exact key must win outright, got key=%q within=%v ok=%v ambiguous=%v",

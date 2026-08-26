@@ -91,14 +91,14 @@ func TestValidateMetadata_RequiredField(t *testing.T) {
 	}
 
 	// Test missing required field
-	updates := map[string]interface{}{}
+	updates := map[string]any{}
 	errors := ValidateMetadata(updates, rules)
 	if len(errors) > 0 {
 		t.Error("Expected no error for missing field when not in updates")
 	}
 
 	// Test empty required field
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"title": "",
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -107,7 +107,7 @@ func TestValidateMetadata_RequiredField(t *testing.T) {
 	}
 
 	// Test nil required field
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"title": nil,
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -116,7 +116,7 @@ func TestValidateMetadata_RequiredField(t *testing.T) {
 	}
 
 	// Test valid required field
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"title": "Valid Title",
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -135,7 +135,7 @@ func TestValidateMetadata_LengthConstraints(t *testing.T) {
 	}
 
 	// Test too short
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"title": "Hi",
 	}
 	errors := ValidateMetadata(updates, rules)
@@ -144,7 +144,7 @@ func TestValidateMetadata_LengthConstraints(t *testing.T) {
 	}
 
 	// Test too long
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"title": "This is a very long title that exceeds the maximum length",
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -153,7 +153,7 @@ func TestValidateMetadata_LengthConstraints(t *testing.T) {
 	}
 
 	// Test valid length
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"title": "Valid Title",
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -171,7 +171,7 @@ func TestValidateMetadata_AllowedValues(t *testing.T) {
 	}
 
 	// Test invalid value
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"format": "wav",
 	}
 	errors := ValidateMetadata(updates, rules)
@@ -180,7 +180,7 @@ func TestValidateMetadata_AllowedValues(t *testing.T) {
 	}
 
 	// Test valid value
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"format": "m4b",
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -189,7 +189,7 @@ func TestValidateMetadata_AllowedValues(t *testing.T) {
 	}
 
 	// Test case insensitive
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"format": "M4B",
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -202,7 +202,7 @@ func TestValidateMetadata_CustomValidator(t *testing.T) {
 	rules := map[string]ValidationRule{
 		"publishDate": {
 			Field: "publishDate",
-			CustomValidator: func(v interface{}) error {
+			CustomValidator: func(v any) error {
 				str, ok := v.(string)
 				if !ok {
 					return errors.New("must be string")
@@ -214,7 +214,7 @@ func TestValidateMetadata_CustomValidator(t *testing.T) {
 	}
 
 	// Test invalid date format
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"publishDate": "invalid-date",
 	}
 	errors := ValidateMetadata(updates, rules)
@@ -223,7 +223,7 @@ func TestValidateMetadata_CustomValidator(t *testing.T) {
 	}
 
 	// Test valid date
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"publishDate": "2024-01-15",
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -232,7 +232,7 @@ func TestValidateMetadata_CustomValidator(t *testing.T) {
 	}
 
 	// Test non-string value
-	updates = map[string]interface{}{
+	updates = map[string]any{
 		"publishDate": 12345,
 	}
 	errors = ValidateMetadata(updates, rules)
@@ -271,14 +271,14 @@ func TestBatchUpdateMetadata_Success(t *testing.T) {
 	updates := []MetadataUpdate{
 		{
 			BookID: "book1",
-			Updates: map[string]interface{}{
+			Updates: map[string]any{
 				"title":  "New Title 1",
 				"format": "m4b",
 			},
 		},
 		{
 			BookID: "book2",
-			Updates: map[string]interface{}{
+			Updates: map[string]any{
 				"title": "New Title 2",
 			},
 		},
@@ -303,7 +303,7 @@ func TestBatchUpdateMetadata_ValidationFailure(t *testing.T) {
 		{
 			BookID:   "book1",
 			Validate: true,
-			Updates: map[string]interface{}{
+			Updates: map[string]any{
 				"title": "", // Empty title should fail validation
 			},
 		},
@@ -326,7 +326,7 @@ func TestBatchUpdateMetadata_BookNotFound(t *testing.T) {
 	updates := []MetadataUpdate{
 		{
 			BookID: "nonexistent",
-			Updates: map[string]interface{}{
+			Updates: map[string]any{
 				"title": "New Title",
 			},
 		},
@@ -357,7 +357,7 @@ func TestBatchUpdateMetadata_UpdateError(t *testing.T) {
 	updates := []MetadataUpdate{
 		{
 			BookID: "book1",
-			Updates: map[string]interface{}{
+			Updates: map[string]any{
 				"title": "New Title",
 			},
 		},
@@ -395,7 +395,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b1",
-			Updates: map[string]interface{}{"author": "Ursula Le Guin"},
+			Updates: map[string]any{"author": "Ursula Le Guin"},
 		}}, store, false)
 		if len(errs) != 0 || ok != 1 {
 			t.Fatalf("expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
@@ -431,7 +431,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b2",
-			Updates: map[string]interface{}{"author": "New Author", "series": "New Series"},
+			Updates: map[string]any{"author": "New Author", "series": "New Series"},
 		}}, store, false)
 		if len(errs) != 0 || ok != 1 {
 			t.Fatalf("expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
@@ -451,7 +451,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b3",
-			Updates: map[string]interface{}{"author": "", "title": "New"},
+			Updates: map[string]any{"author": "", "title": "New"},
 		}}, store, false)
 		if len(errs) != 0 || ok != 1 {
 			t.Fatalf("expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
@@ -471,7 +471,7 @@ func TestAuthorSeriesResolution(t *testing.T) {
 
 		errs, ok := BatchUpdateMetadata([]MetadataUpdate{{
 			BookID:  "b4",
-			Updates: map[string]interface{}{"author": "Boom", "title": "New"},
+			Updates: map[string]any{"author": "Boom", "title": "New"},
 		}}, store, false)
 		if len(errs) != 0 || ok != 1 {
 			t.Fatalf("fail-open expected 0 errors / 1 success, got %d errors / %d success: %v", len(errs), ok, errs)
@@ -497,7 +497,7 @@ func TestLegacyHistoryStubRetired(t *testing.T) {
 
 	BatchUpdateMetadata([]MetadataUpdate{{
 		BookID:  "b5",
-		Updates: map[string]interface{}{"author": "A"},
+		Updates: map[string]any{"author": "A"},
 	}}, store, false)
 
 	if !recorded {
@@ -551,7 +551,7 @@ func TestExportMetadata(t *testing.T) {
 	}
 
 	// Check books data
-	booksData, ok := result["books"].([]map[string]interface{})
+	booksData, ok := result["books"].([]map[string]any)
 	if !ok {
 		t.Fatal("Expected books array")
 	}
@@ -581,14 +581,14 @@ func TestImportMetadata_Success(t *testing.T) {
 		return book != nil && book.Title == "Imported Book 2" && book.Format == "mp3"
 	})).Return(&database.Book{ID: "book2"}, nil).Once()
 
-	data := map[string]interface{}{
-		"books": []interface{}{
-			map[string]interface{}{
+	data := map[string]any{
+		"books": []any{
+			map[string]any{
 				"title":    "Imported Book 1",
 				"format":   "m4b",
 				"duration": float64(3600),
 			},
-			map[string]interface{}{
+			map[string]any{
 				"title":  "Imported Book 2",
 				"format": "mp3",
 			},
@@ -609,7 +609,7 @@ func TestImportMetadata_InvalidFormat(t *testing.T) {
 	store := newMockStore(t)
 
 	// Missing books field
-	data := map[string]interface{}{}
+	data := map[string]any{}
 
 	count, errs := ImportMetadata(data, store, false)
 
@@ -621,7 +621,7 @@ func TestImportMetadata_InvalidFormat(t *testing.T) {
 	}
 
 	// Invalid books field type
-	data = map[string]interface{}{
+	data = map[string]any{
 		"books": "not an array",
 	}
 
@@ -638,8 +638,8 @@ func TestImportMetadata_InvalidFormat(t *testing.T) {
 func TestImportMetadata_InvalidBookData(t *testing.T) {
 	store := newMockStore(t)
 
-	data := map[string]interface{}{
-		"books": []interface{}{
+	data := map[string]any{
+		"books": []any{
 			"not a map", // Invalid book data
 		},
 	}
@@ -657,9 +657,9 @@ func TestImportMetadata_InvalidBookData(t *testing.T) {
 func TestImportMetadata_ValidationFailure(t *testing.T) {
 	store := newMockStore(t)
 
-	data := map[string]interface{}{
-		"books": []interface{}{
-			map[string]interface{}{
+	data := map[string]any{
+		"books": []any{
+			map[string]any{
 				"title": "", // Empty title should fail validation
 			},
 		},
@@ -679,9 +679,9 @@ func TestImportMetadata_CreateError(t *testing.T) {
 	store := newMockStore(t)
 	store.EXPECT().CreateBook(mock.Anything).Return(nil, errors.New("database error")).Once()
 
-	data := map[string]interface{}{
-		"books": []interface{}{
-			map[string]interface{}{
+	data := map[string]any{
+		"books": []any{
+			map[string]any{
 				"title": "Test Book",
 			},
 		},
@@ -698,7 +698,7 @@ func TestImportMetadata_CreateError(t *testing.T) {
 }
 
 func TestGetStringField(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"string_field": "test value",
 		"int_field":    123,
 	}
@@ -720,7 +720,7 @@ func TestGetStringField(t *testing.T) {
 }
 
 func TestGetIntField(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"float_field":  float64(123),
 		"int_field":    456,
 		"string_field": "not a number",
@@ -748,7 +748,7 @@ func TestGetIntField(t *testing.T) {
 }
 
 func TestGetIntPtrField(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"float_field":  float64(123),
 		"int_field":    456,
 		"string_field": "not a number",
@@ -802,7 +802,7 @@ func TestWriteMetadataToFile_BackupFailed(t *testing.T) {
 	defer os.Chmod(tmpDir, 0755) // Restore permissions for cleanup
 
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title": "Test",
 	}
 

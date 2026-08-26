@@ -151,7 +151,7 @@ func oidcRedirectAllowed(uri string) bool {
 	allowed := defaultOIDCRedirectURIs
 	if raw := strings.TrimSpace(os.Getenv(OIDCRedirectURIsEnvVar)); raw != "" {
 		allowed = nil
-		for _, part := range strings.Split(raw, ",") {
+		for part := range strings.SplitSeq(raw, ",") {
 			if p := strings.TrimSpace(part); p != "" {
 				allowed = append(allowed, p)
 			}

@@ -127,7 +127,7 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 
 	// Write updated metadata back to the audio file
 	if updatedBook.FilePath != "" {
-		tagMap := make(map[string]interface{})
+		tagMap := make(map[string]any)
 		if v, ok := payload["title"].(string); ok && v != "" {
 			tagMap["title"] = v
 		}

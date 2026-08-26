@@ -52,10 +52,7 @@ func ParseTimeSec(raw string) (float64, error) {
 // the storage layer -- the type-level distinction is erased here, not at
 // the JSON boundary.
 func CanonicalTimeKey(timeSec float64) string {
-	ms := int64(math.Round(timeSec * 1000))
-	if ms < 0 {
-		ms = 0
-	}
+	ms := max(int64(math.Round(timeSec*1000)), 0)
 	// Zero-padded to 16 digits: comfortably wider than any realistic audio
 	// duration in milliseconds (16 digits covers ~317,000 years), so
 	// lexicographic string ordering always matches numeric ordering.

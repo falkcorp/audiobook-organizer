@@ -33,7 +33,7 @@ func (p *PebbleStore) CreateOperation(id, opType string, folderPath *string) (*O
 		return nil, err
 	}
 
-	key := []byte(fmt.Sprintf("operation:%s", id))
+	key := fmt.Appendf(nil, "operation:%s", id)
 	if err := p.db.Set(key, data, pebble.Sync); err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (p *PebbleStore) CreateOperation(id, opType string, folderPath *string) (*O
 }
 
 func (p *PebbleStore) GetOperationByID(id string) (*Operation, error) {
-	key := []byte(fmt.Sprintf("operation:%s", id))
+	key := fmt.Appendf(nil, "operation:%s", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -129,10 +129,7 @@ func (p *PebbleStore) ListOperations(limit, offset int) ([]Operation, int, error
 	}
 	end := len(operations)
 	if limit > 0 {
-		end = offset + limit
-		if end > len(operations) {
-			end = len(operations)
-		}
+		end = min(offset+limit, len(operations))
 	}
 	return operations[offset:end], total, nil
 }
@@ -163,7 +160,7 @@ func (p *PebbleStore) UpdateOperationStatus(id, status string, progress, total i
 		return err
 	}
 
-	key := []byte(fmt.Sprintf("operation:%s", id))
+	key := fmt.Appendf(nil, "operation:%s", id)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
@@ -186,7 +183,7 @@ func (p *PebbleStore) UpdateOperationError(id, errorMessage string) error {
 		return err
 	}
 
-	key := []byte(fmt.Sprintf("operation:%s", id))
+	key := fmt.Appendf(nil, "operation:%s", id)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
@@ -203,7 +200,7 @@ func (p *PebbleStore) UpdateOperationResultData(id string, resultData string) er
 	if err != nil {
 		return err
 	}
-	return p.db.Set([]byte(fmt.Sprintf("operation:%s", id)), data, pebble.Sync)
+	return p.db.Set(fmt.Appendf(nil, "operation:%s", id), data, pebble.Sync)
 }
 
 func (p *PebbleStore) AddOperationLog(operationID, level, message string, details *string) error {
@@ -227,13 +224,13 @@ func (p *PebbleStore) AddOperationLog(operationID, level, message string, detail
 	}
 
 	// Key format: operationlog:<operation_id>:<timestamp>:<seq>
-	key := []byte(fmt.Sprintf("operationlog:%s:%d:%d", operationID, log.CreatedAt.UnixNano(), id))
+	key := fmt.Appendf(nil, "operationlog:%s:%d:%d", operationID, log.CreatedAt.UnixNano(), id)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 func (p *PebbleStore) GetOperationLogs(operationID string) ([]OperationLog, error) {
 	var logs []OperationLog
-	prefix := []byte(fmt.Sprintf("operationlog:%s:", operationID))
+	prefix := fmt.Appendf(nil, "operationlog:%s:", operationID)
 
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
@@ -260,12 +257,12 @@ func (p *PebbleStore) SaveOperationSummaryLog(op *OperationSummaryLog) error {
 	if err != nil {
 		return err
 	}
-	key := []byte(fmt.Sprintf("opsummary:%s", op.ID))
+	key := fmt.Appendf(nil, "opsummary:%s", op.ID)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 func (p *PebbleStore) GetOperationSummaryLog(id string) (*OperationSummaryLog, error) {
-	key := []byte(fmt.Sprintf("opsummary:%s", id))
+	key := fmt.Appendf(nil, "opsummary:%s", id)
 	val, closer, err := p.db.Get(key)
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -320,12 +317,12 @@ func (p *PebbleStore) ListOperationSummaryLogs(limit, offset int) ([]OperationSu
 }
 
 func (p *PebbleStore) SaveOperationState(opID string, state []byte) error {
-	key := []byte(fmt.Sprintf("opstate:%s", opID))
+	key := fmt.Appendf(nil, "opstate:%s", opID)
 	return p.db.Set(key, state, pebble.Sync)
 }
 
 func (p *PebbleStore) GetOperationState(opID string) ([]byte, error) {
-	key := []byte(fmt.Sprintf("opstate:%s", opID))
+	key := fmt.Appendf(nil, "opstate:%s", opID)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -338,12 +335,12 @@ func (p *PebbleStore) GetOperationState(opID string) ([]byte, error) {
 }
 
 func (p *PebbleStore) SaveOperationParams(opID string, params []byte) error {
-	key := []byte(fmt.Sprintf("opstate:%s:params", opID))
+	key := fmt.Appendf(nil, "opstate:%s:params", opID)
 	return p.db.Set(key, params, pebble.Sync)
 }
 
 func (p *PebbleStore) GetOperationParams(opID string) ([]byte, error) {
-	key := []byte(fmt.Sprintf("opstate:%s:params", opID))
+	key := fmt.Appendf(nil, "opstate:%s:params", opID)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -357,11 +354,11 @@ func (p *PebbleStore) GetOperationParams(opID string) ([]byte, error) {
 
 func (p *PebbleStore) DeleteOperationState(opID string) error {
 	batch := p.db.NewBatch()
-	if err := batch.Delete([]byte(fmt.Sprintf("opstate:%s", opID)), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "opstate:%s", opID), nil); err != nil {
 		batch.Close()
 		return err
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("opstate:%s:params", opID)), nil); err != nil {
+	if err := batch.Delete(fmt.Appendf(nil, "opstate:%s:params", opID), nil); err != nil {
 		batch.Close()
 		return err
 	}
@@ -421,14 +418,14 @@ func (p *PebbleStore) DeleteOperationWithLogs(id string) error {
 	defer batch.Close()
 
 	// Delete the operation record itself.
-	opKey := []byte(fmt.Sprintf("operation:%s", id))
+	opKey := fmt.Appendf(nil, "operation:%s", id)
 	if err := batch.Delete(opKey, nil); err != nil {
 		return fmt.Errorf("batch delete operation key: %w", err)
 	}
 
 	// Delete all associated log lines via prefix range iteration.
 	// Key format: operationlog:<operation_id>:<timestamp_nano>:<seq>
-	logPrefix := []byte(fmt.Sprintf("operationlog:%s:", id))
+	logPrefix := fmt.Appendf(nil, "operationlog:%s:", id)
 	logUpper := prefixEnd(logPrefix)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: logPrefix,
@@ -503,12 +500,12 @@ func (p *PebbleStore) CreateOperationResult(result *OperationResult) error {
 	if err != nil {
 		return err
 	}
-	key := []byte(fmt.Sprintf("op_result:%s:%s", result.OperationID, result.BookID))
+	key := fmt.Appendf(nil, "op_result:%s:%s", result.OperationID, result.BookID)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 func (p *PebbleStore) GetOperationResults(operationID string) ([]OperationResult, error) {
-	prefix := []byte(fmt.Sprintf("op_result:%s:", operationID))
+	prefix := fmt.Appendf(nil, "op_result:%s:", operationID)
 	upperBound := make([]byte, len(prefix))
 	copy(upperBound, prefix)
 	upperBound[len(upperBound)-1]++
@@ -606,7 +603,7 @@ func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
 
 // GetOperationChanges returns all changes for a given operation.
 func (p *PebbleStore) GetOperationChanges(operationID string) ([]*OperationChange, error) {
-	prefix := []byte(fmt.Sprintf("opchange:%s:", operationID))
+	prefix := fmt.Appendf(nil, "opchange:%s:", operationID)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),

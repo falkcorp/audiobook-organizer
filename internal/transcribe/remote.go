@@ -100,10 +100,7 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, jobs map[str
 	batchSleep := time.Duration(config.AppConfig.WhisperBatchSleepMS) * time.Millisecond
 
 	for start := 0; start < len(ordered); start += whisperBatchSize {
-		end := start + whisperBatchSize
-		if end > len(ordered) {
-			end = len(ordered)
-		}
+		end := min(start+whisperBatchSize, len(ordered))
 		chunk := ordered[start:end]
 
 		batchResults, err := sendBatch(ctx, client, remoteURL, chunk)
@@ -225,9 +222,7 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, jobs map[str
 	resultCh := make(chan resultItem, len(jobs))
 	var wg sync.WaitGroup
 	for range remoteWorkers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for j := range jobCh {
 				r, err := transcribeOneRemote(batchCtx, client, remoteURL, j.wavPath)
 				resultCh <- resultItem{id: j.id, result: r, err: err}
@@ -236,7 +231,7 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, jobs map[str
 					return
 				}
 			}
-		}()
+		})
 	}
 	go func() {
 		wg.Wait()

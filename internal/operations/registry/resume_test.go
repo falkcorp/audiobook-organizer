@@ -68,8 +68,7 @@ func TestResume_DropLeavesInterruptedDropped(t *testing.T) {
 
 	opID := insertRunningOp(store, "test.resume-drop", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	// resumeAfterStartup ran synchronously in Start; check immediately.
@@ -94,8 +93,7 @@ func TestResume_AskLeavesInterruptedAsk(t *testing.T) {
 
 	opID := insertRunningOp(store, "test.resume-ask", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	time.Sleep(20 * time.Millisecond)
@@ -129,8 +127,7 @@ func TestResume_RestartReDispatchesWithIncrementedResumeCount(t *testing.T) {
 
 	opID := insertRunningOp(store, "test.resume-restart", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	// resumeAfterStartup should dispatch the op; wait for it to run.
@@ -180,8 +177,7 @@ func TestResume_RequeueFreshRun(t *testing.T) {
 
 	originalID := insertRunningOp(store, "test.resume-requeue", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	// Wait for the new op (fresh run) to complete.
@@ -213,8 +209,7 @@ func TestResume_ReconcileScanAlwaysDropped(t *testing.T) {
 
 	opID := insertRunningOp(store, "reconcile_scan", "scanner", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	time.Sleep(20 * time.Millisecond)
@@ -275,8 +270,7 @@ func TestResume_PreservesParamsAcrossRestartAndRequeue(t *testing.T) {
 
 			insertRunningOpWithParams(store, tc.defID, "test", params)
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			r.Start(ctx)
 
 			var got string

@@ -66,9 +66,9 @@ func GenerateTestITLSuite(
 	const windowsRoot = `W:\audiobook-organizer\`
 
 	linuxToWindows := func(p string) string {
-		if strings.HasPrefix(p, linuxRoot) {
+		if after, ok := strings.CutPrefix(p, linuxRoot); ok {
 			return windowsRoot + strings.ReplaceAll(
-				strings.TrimPrefix(p, linuxRoot), "/", `\`,
+				after, "/", `\`,
 			)
 		}
 		return p
@@ -324,7 +324,7 @@ func multiTracks(count int, toWin func(string) string) []ITLNewTrack {
 	}
 
 	tracks := make([]ITLNewTrack, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		f := formats[i%len(formats)]
 		author := fmt.Sprintf("Author %03d", i+1)
 		title := fmt.Sprintf("Book %03d", i+1)

@@ -306,11 +306,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// Done() has not run yet — so the counter is provably non-zero across this
 	// Add and can never be observed at zero by a concurrent Wait().
 	done := make(chan error, 1)
-	r.goroutineWG.Add(1)
-	go func() {
-		defer r.goroutineWG.Done()
+	r.goroutineWG.Go(func() {
 		done <- r.safeRun(runCtx, def, qr.params, reporter)
-	}()
+	})
 
 	// Wait for the run to finish or the context to be canceled.
 	var runErr error
@@ -395,8 +393,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			}
 			r.logger.Warn("registry: op goroutine abandoned; spawning replacement worker",
 				"op_id", qr.opID, "plugin", qr.plugin)
-			r.goroutineWG.Add(1)
-			go func() { defer r.goroutineWG.Done(); r.startWorker(parentCtx, -1) }()
+			r.goroutineWG.Go(func() { ; r.startWorker(parentCtx, -1) })
 			go func() {
 				<-done
 				r.abandoned.decrement(qr.plugin)

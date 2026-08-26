@@ -67,7 +67,7 @@ func TestMergeBooks_SyncIdentity_ConcurrentSamePair_ExactlyOnce(t *testing.T) {
 	const goroutines = 16
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			_, _ = ms.MergeBooks([]string{aID, bID}, bID)

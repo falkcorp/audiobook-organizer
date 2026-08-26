@@ -17,7 +17,8 @@ import (
 
 // helpers
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
+func ptr[T any](v T) *T { return new(v) }
 
 func newBook(id, title, format, path string) *database.Book {
 	return &database.Book{
@@ -188,10 +189,10 @@ func TestUnit_SoftDeleteBook_GetBookByID_Error(t *testing.T) {
 
 func TestUnit_BookIsBetter_ITunesGhostLoses(t *testing.T) {
 	ghost := newBook("g", "X", "m4b", "/itunes/iTunes Media/x.m4b")
-	ghost.Bitrate = ptr(256)
+	ghost.Bitrate = new(256)
 
 	organized := newBook("o", "X", "mp3", "/library/x.mp3")
-	organized.Bitrate = ptr(64)
+	organized.Bitrate = new(64)
 
 	assert.True(t, BookIsBetter(organized, ghost), "organized path should beat iTunes ghost")
 	assert.False(t, BookIsBetter(ghost, organized), "iTunes ghost should lose")
@@ -201,18 +202,18 @@ func TestUnit_BookIsBetter_CurationBeatsFormat(t *testing.T) {
 	pristine := newBook("p", "X", "m4b", "/lib/x.m4b")
 
 	curated := newBook("c", "X", "mp3", "/lib/x.mp3")
-	curated.MetadataReviewStatus = ptr("matched")
-	curated.LastWrittenAt = ptr(time.Now())
+	curated.MetadataReviewStatus = new("matched")
+	curated.LastWrittenAt = new(time.Now())
 
 	assert.True(t, BookIsBetter(curated, pristine), "curated book should beat pristine")
 }
 
 func TestUnit_BookIsBetter_SameFormatHigherBitrateWins(t *testing.T) {
 	low := newBook("l", "X", "mp3", "/lib/a.mp3")
-	low.Bitrate = ptr(64)
+	low.Bitrate = new(64)
 
 	high := newBook("h", "X", "mp3", "/lib/b.mp3")
-	high.Bitrate = ptr(320)
+	high.Bitrate = new(320)
 
 	assert.True(t, BookIsBetter(high, low))
 	assert.False(t, BookIsBetter(low, high))
@@ -220,10 +221,10 @@ func TestUnit_BookIsBetter_SameFormatHigherBitrateWins(t *testing.T) {
 
 func TestUnit_BookIsBetter_SameBitrateLargerFileWins(t *testing.T) {
 	small := newBook("s", "X", "mp3", "/lib/a.mp3")
-	small.FileSize = ptr(int64(100))
+	small.FileSize = new(int64(100))
 
 	large := newBook("l", "X", "mp3", "/lib/b.mp3")
-	large.FileSize = ptr(int64(999))
+	large.FileSize = new(int64(999))
 
 	assert.True(t, BookIsBetter(large, small))
 	assert.False(t, BookIsBetter(small, large))

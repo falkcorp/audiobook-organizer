@@ -334,10 +334,7 @@ func parsePlaylistHohmBE(data []byte, offset, length int, playlist *ITLPlaylist)
 		// Smart criteria: 8 zero bytes + raw blob
 		blobStart := offset + 40 + 8
 		if blobStart < offset+length && blobStart < len(data) {
-			end := offset + length
-			if end > len(data) {
-				end = len(data)
-			}
+			end := min(offset+length, len(data))
 			playlist.SmartCriteria = make([]byte, end-blobStart)
 			copy(playlist.SmartCriteria, data[blobStart:end])
 			playlist.IsSmart = true
@@ -347,10 +344,7 @@ func parsePlaylistHohmBE(data []byte, offset, length int, playlist *ITLPlaylist)
 		// Smart info: 8 zero bytes + raw blob
 		blobStart := offset + 40 + 8
 		if blobStart < offset+length && blobStart < len(data) {
-			end := offset + length
-			if end > len(data) {
-				end = len(data)
-			}
+			end := min(offset+length, len(data))
 			playlist.SmartInfo = make([]byte, end-blobStart)
 			copy(playlist.SmartInfo, data[blobStart:end])
 		}

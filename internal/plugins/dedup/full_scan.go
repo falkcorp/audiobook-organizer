@@ -56,10 +56,7 @@ func etaSuffix(phaseStart time.Time, done, total int) string {
 	if rate <= 0 {
 		return ""
 	}
-	remaining := total - done
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(total-done, 0)
 	etaSeconds := float64(remaining) / rate
 	eta := time.Duration(etaSeconds * float64(time.Second))
 	return fmt.Sprintf(" (%.1f books/sec, ~%s remaining)", rate, eta.Round(time.Second))

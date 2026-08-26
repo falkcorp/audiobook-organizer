@@ -479,7 +479,7 @@ func isTerminalCandidateStatus(status string) bool {
 }
 
 func dedupRecKey(id int64) []byte {
-	return []byte(fmt.Sprintf("%s%016x", dedupRecPfx, id))
+	return fmt.Appendf(nil, "%s%016x", dedupRecPfx, id)
 }
 
 func dedupPairKey(entityType, aID, bID string) []byte {
@@ -490,7 +490,7 @@ func dedupPairKey(entityType, aID, bID string) []byte {
 // Both entity_a and entity_b get their own entry so prefix-scanning
 // "dedup:e:<type>:<entityID>:" yields all candidates for that entity in O(k).
 func dedupEntityKey(entityType, entityID string, id int64) []byte {
-	return []byte(fmt.Sprintf("%s%s:%s:%016x", dedupEntityPfx, entityType, entityID, id))
+	return fmt.Appendf(nil, "%s%s:%s:%016x", dedupEntityPfx, entityType, entityID, id)
 }
 
 // dedupStatusIdxKey builds a presence-only secondary-index key for a
@@ -498,7 +498,7 @@ func dedupEntityKey(entityType, entityID string, id int64) []byte {
 // encoding. Prefix-scanning "dedup:s:<status>:" yields every candidate ID
 // with that status in O(k), instead of ListCandidates' full dedup:r: scan.
 func dedupStatusIdxKey(status string, id int64) []byte {
-	return []byte(fmt.Sprintf("%s%s:%016x", dedupStatusIdxPfx, status, id))
+	return fmt.Appendf(nil, "%s%s:%016x", dedupStatusIdxPfx, status, id)
 }
 
 // nextID reads and increments the sequential counter. Must be called with s.mu held.
@@ -613,7 +613,7 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 		if err := b.Set(dedupRecKey(id), data, nil); err != nil {
 			return 0, false, err
 		}
-		if err := b.Set(pairKey, []byte(fmt.Sprintf("%016x", id)), nil); err != nil {
+		if err := b.Set(pairKey, fmt.Appendf(nil, "%016x", id), nil); err != nil {
 			return 0, false, err
 		}
 		// Entity secondary index — both sides, so prefix-scan by entity is O(k).
@@ -1020,14 +1020,8 @@ func paginateCandidates(all []DedupCandidate, f CandidateFilter) ([]DedupCandida
 	if limit <= 0 {
 		limit = 50
 	}
-	start := f.Offset
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start := min(f.Offset, total)
+	end := min(start+limit, total)
 	return all[start:end], total
 }
 
@@ -1564,7 +1558,7 @@ func (s *EmbeddingStore) CanonicalizeCandidates() (rewritten, deleted int, err e
 			}
 			b := s.db.NewBatch()
 			_ = b.Delete(oldPairKey, nil)
-			_ = b.Set(canonPairKey, []byte(fmt.Sprintf("%016x", t.id)), nil)
+			_ = b.Set(canonPairKey, fmt.Appendf(nil, "%016x", t.id), nil)
 			_ = b.Set(dedupRecKey(t.id), data, nil)
 			if err := b.Commit(pebble.Sync); err != nil {
 				b.Close()

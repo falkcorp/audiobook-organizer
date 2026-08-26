@@ -184,7 +184,7 @@ func (f IntroFields) MatchesTrack(album, artist string) int {
 // titleWords returns lowercase words >3 chars (mirrors the helper in itunes_heal.go).
 func titleWords(s string) []string {
 	var out []string
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		if len(w) > 3 {
 			out = append(out, w)
 		}

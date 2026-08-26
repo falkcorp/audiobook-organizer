@@ -115,10 +115,7 @@ func compareArray(path string, want, got []any, opts Options, out *[]Finding) {
 			Want: strconv.Itoa(len(want)), Got: strconv.Itoa(len(got)),
 		})
 	}
-	n := len(want)
-	if len(got) < n {
-		n = len(got)
-	}
+	n := min(len(got), len(want))
 	for i := 0; i < n; i++ {
 		compareValue(fmt.Sprintf("%s[%d]", path, i), want[i], got[i], opts, out)
 	}

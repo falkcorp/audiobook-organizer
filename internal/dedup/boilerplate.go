@@ -6,6 +6,7 @@
 package dedup
 
 import (
+	"slices"
 	"strings"
 	"sync"
 
@@ -80,10 +81,8 @@ func isBoilerplateTitle(title string) bool {
 	if normalized == "" {
 		return false
 	}
-	for _, pattern := range effectiveTitlePatterns {
-		if normalized == pattern {
-			return true
-		}
+	if slices.Contains(effectiveTitlePatterns, normalized) {
+		return true
 	}
 	for _, pattern := range effectivePrefixPatterns {
 		if strings.HasPrefix(normalized, pattern+" ") {

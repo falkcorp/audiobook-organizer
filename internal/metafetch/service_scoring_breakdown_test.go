@@ -178,7 +178,8 @@ func TestBreakdown_EmptyIsNotConsistent(t *testing.T) {
 // fails, the evidence panel would present a derivation of a number the pipeline
 // did not use.
 
-func intPtr(v int) *int { return &v }
+//go:fix inline
+func intPtr(v int) *int { return new(v) }
 
 func assertBreakdownExplainsScore(t *testing.T, c MetadataCandidate) {
 	t.Helper()
@@ -229,7 +230,7 @@ func TestSearchPath_BreakdownExplainsEveryCandidateScore(t *testing.T) {
 		},
 		{
 			name: "duration comparison, matching and diverging",
-			book: &database.Book{ID: "b3", Title: "Mistborn", Duration: intPtr(86400)},
+			book: &database.Book{ID: "b3", Title: "Mistborn", Duration: new(86400)},
 			results: []metadata.BookMetadata{
 				{Title: "Mistborn", Author: "Brandon Sanderson", DurationSec: 86000},
 				{Title: "Mistborn", Author: "Brandon Sanderson", DurationSec: 3600},

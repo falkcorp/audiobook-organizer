@@ -10,7 +10,8 @@ import (
 	"testing"
 )
 
-func intp(v int) *int { return &v }
+//go:fix inline
+func intp(v int) *int { return new(v) }
 
 // makeSlim is a tiny helper that builds a slim book with the given path
 // under a shared author/series.
@@ -27,7 +28,7 @@ func makeSlim(id, title, path string, author, series *int) splitBookSlim {
 func TestDetect_ParentFlat_Tarkin(t *testing.T) {
 	// 5 chapter files in the same parent dir — classic flat split-book.
 	var books []splitBookSlim
-	author := intp(42)
+	author := new(42)
 	for i := 1; i <= 5; i++ {
 		path := fmt.Sprintf("/lib/Star Wars/Tarkin/%02d.mp3", i)
 		books = append(books, makeSlim(
@@ -63,7 +64,7 @@ func TestDetect_Grandparent_RogueSubdir(t *testing.T) {
 	// Each chapter file in its OWN subdir under the grandparent.
 	// Parent groups would be size 1; grandparent recovers cluster.
 	var books []splitBookSlim
-	author := intp(7)
+	author := new(7)
 	for i := 1; i <= 5; i++ {
 		path := fmt.Sprintf("/lib/Author/Tarkin/%d/chapter%02d.mp3", i, i)
 		books = append(books, makeSlim(
@@ -87,7 +88,7 @@ func TestDetect_Grandparent_RogueSubdir(t *testing.T) {
 
 func TestDetect_TooSmall(t *testing.T) {
 	// 2 chapters is below the min-group-size of 3.
-	author := intp(1)
+	author := new(1)
 	books := []splitBookSlim{
 		makeSlim("a", "Title", "/lib/A/Title/01.mp3", author, nil),
 		makeSlim("b", "Title", "/lib/A/Title/02.mp3", author, nil),
@@ -99,7 +100,7 @@ func TestDetect_TooSmall(t *testing.T) {
 }
 
 func TestDetect_AuthorMismatch_Disqualifies(t *testing.T) {
-	a, b := intp(1), intp(2)
+	a, b := new(1), new(2)
 	books := []splitBookSlim{
 		makeSlim("a", "T", "/lib/X/T/01.mp3", a, nil),
 		makeSlim("b", "T", "/lib/X/T/02.mp3", a, nil),
@@ -112,8 +113,8 @@ func TestDetect_AuthorMismatch_Disqualifies(t *testing.T) {
 }
 
 func TestDetect_SeriesMismatch_Disqualifies(t *testing.T) {
-	a := intp(1)
-	s1, s2 := intp(10), intp(20)
+	a := new(1)
+	s1, s2 := new(10), new(20)
 	books := []splitBookSlim{
 		makeSlim("a", "T", "/lib/X/T/01.mp3", a, s1),
 		makeSlim("b", "T", "/lib/X/T/02.mp3", a, s1),
@@ -127,7 +128,7 @@ func TestDetect_SeriesMismatch_Disqualifies(t *testing.T) {
 
 func TestDetect_NonSequential_Disqualifies(t *testing.T) {
 	// Numbers are 1, 50, 99 — huge gaps; not a chapter cluster.
-	a := intp(1)
+	a := new(1)
 	books := []splitBookSlim{
 		makeSlim("a", "T", "/lib/X/T/01.mp3", a, nil),
 		makeSlim("b", "T", "/lib/X/T/50.mp3", a, nil),
@@ -142,7 +143,7 @@ func TestDetect_NonSequential_Disqualifies(t *testing.T) {
 func TestDetect_ParentBeatsGrandparent(t *testing.T) {
 	// One flat parent cluster of 4 PLUS one rogue grandparent of 3
 	// elsewhere — both should be emitted, and no book double-claimed.
-	a := intp(1)
+	a := new(1)
 	var books []splitBookSlim
 	// Flat cluster under /lib/A/Flat.
 	for i := 1; i <= 4; i++ {

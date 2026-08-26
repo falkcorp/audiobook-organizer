@@ -106,10 +106,7 @@ func CollectMasterTrackIDsLE(data []byte) map[uint32]struct{} {
 		return nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 
 	tids := make(map[uint32]struct{}, 100000)
 	offset := contentStart
@@ -150,10 +147,7 @@ func FindDanglingMtphRefsLE(data []byte, masterTIDs map[uint32]struct{}) []uint3
 		return nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 
 	var missing []uint32
 	seen := make(map[uint32]struct{})

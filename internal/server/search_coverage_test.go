@@ -43,7 +43,8 @@ func seedPartialIndex(t *testing.T, store *database.PebbleStore, idx *search.Ble
 	}
 }
 
-func strptr(s string) *string { return &s }
+//go:fix inline
+func strptr(s string) *string { return new(s) }
 
 // coverageBooks returns three books whose titles carry the query terms and
 // three decoys that carry them only in the description — the exact shape of
@@ -53,11 +54,11 @@ func coverageBooks() []database.Book {
 		// Indexed first (oldest): description-only matches. These are the
 		// rows that survived on prod and were shown to the owner.
 		{ID: "cov-01", Title: "Dragon Conjurer", FilePath: "/tmp/cov01", Format: "m4b",
-			Description: strptr("I went to class, worked my minimum-wage job, and studied.")},
+			Description: new("I went to class, worked my minimum-wage job, and studied.")},
 		{ID: "cov-02", Title: "Parallax Rising", FilePath: "/tmp/cov02", Format: "m4b",
-			Description: strptr("She left class early and took a second job.")},
+			Description: new("She left class early and took a second job.")},
 		{ID: "cov-03", Title: "All in Charisma", FilePath: "/tmp/cov03", Format: "m4b",
-			Description: strptr("A job, a class, and a very long night.")},
+			Description: new("A job, a class, and a very long night.")},
 		// Never reached by the cancelled backfill (newest): the real matches.
 		{ID: "cov-04", Title: "All Jobs and Classes! I Just Wanted One Skill", FilePath: "/tmp/cov04", Format: "m4b"},
 		{ID: "cov-05", Title: "All Jobs and Classes! Book II: Ascension", FilePath: "/tmp/cov05", Format: "m4b"},

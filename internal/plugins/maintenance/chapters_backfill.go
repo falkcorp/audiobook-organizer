@@ -322,10 +322,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	// Clamp rather than trust. A checkpoint written before books were deleted
 	// can name a watermark past the current end; RunItems would return an empty
 	// slice and the op would report success having examined nothing.
-	resumeFrom := params.ResumeFrom
-	if resumeFrom < 0 {
-		resumeFrom = 0
-	}
+	resumeFrom := max(params.ResumeFrom, 0)
 	if resumeFrom > len(ids) {
 		resumeFrom = len(ids)
 	}

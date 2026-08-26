@@ -48,10 +48,7 @@ func (m *MockBackfillStore) GetAllBooksCore(limit, offset int) ([]database.BookC
 	if offset >= len(all) {
 		return []database.BookCore{}, nil
 	}
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
-	}
+	end := min(offset+limit, len(all))
 	return all[offset:end], nil
 }
 

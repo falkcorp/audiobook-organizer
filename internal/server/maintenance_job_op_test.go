@@ -63,7 +63,6 @@ func TestMaintenanceOpCarriesTheJobsOwnPolicy(t *testing.T) {
 	require.NoError(t, (&Server{}).RegisterMaintenanceJobOps(reg))
 
 	for _, job := range maintenance.All() {
-		job := job
 		t.Run(job.ID(), func(t *testing.T) {
 			def, ok := reg.Def("maintenance." + job.ID())
 			require.True(t, ok)

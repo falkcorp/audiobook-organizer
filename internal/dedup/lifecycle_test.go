@@ -137,12 +137,10 @@ func TestStop_BoundedTimeout_WarnPath(t *testing.T) {
 	// A goroutine that ignores bgCtx cancellation and only exits when leaked.
 	var wg sync.WaitGroup
 	wg.Add(1)
-	engine.bgWg.Add(1)
-	go func() {
-		defer engine.bgWg.Done()
+	engine.bgWg.Go(func() {
 		wg.Done() // signal that the goroutine is running
 		<-leaked
-	}()
+	})
 	wg.Wait() // ensure goroutine is started before Stop
 
 	start := time.Now()

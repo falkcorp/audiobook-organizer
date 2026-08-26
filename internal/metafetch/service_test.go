@@ -516,7 +516,7 @@ func TestBestTitleMatchWithContext(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStringPtrAndDeref(t *testing.T) {
-	p := stringPtr("hello")
+	p := new("hello")
 	assert.Equal(t, "hello", *p)
 	assert.Equal(t, "hello", derefStr(p))
 	assert.Equal(t, "", derefStr(nil))
@@ -527,7 +527,7 @@ func TestStringPtrAndDeref(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIntPtrHelper(t *testing.T) {
-	p := intPtrHelper(42)
+	p := new(42)
 	assert.Equal(t, 42, *p)
 }
 
@@ -575,7 +575,7 @@ func TestFilterUnchangedTags_UnchangedCustomTags(t *testing.T) {
 
 	// Prepare a tag map with custom tag values that match what ExtractMetadata
 	// would return from a real file
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"title":           "Test Book",
 		"album":           "Test Album",
 		"artist":          "Test Author",
@@ -603,7 +603,7 @@ func TestFilterUnchangedTags_UnchangedCustomTags(t *testing.T) {
 func TestFilterUnchangedTags_CustomTagMapping(t *testing.T) {
 	// A genuinely unknown tag like "track" should still be returned (safe fallback)
 	tmpFile := "/tmp/nonexistent-track-test.m4b"
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"track": 1,
 	}
 	filtered := FilterUnchangedTags(tmpFile, tagMap)
@@ -615,7 +615,7 @@ func TestFilterUnchangedTags_MissingFile(t *testing.T) {
 	// Test that missing files are handled gracefully by returning all tags.
 	missingFile := "/tmp/nonexistent-file-xyz.m4b"
 
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"title":   "Test Book",
 		"book_id": "test-id",
 	}
@@ -632,7 +632,7 @@ func TestFilterUnchangedTags_StandardFieldsUnchanged(t *testing.T) {
 	// Missing file: all fields returned unchanged
 	missingFile := "/tmp/nonexistent-standard-test.m4b"
 
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"title": "Test Book",
 		"album": "Test Album",
 	}
@@ -645,7 +645,7 @@ func TestFilterUnchangedTags_StandardFieldsUnchanged(t *testing.T) {
 func TestFilterUnchangedTags_YearFieldHandling(t *testing.T) {
 	missingFile := "/tmp/nonexistent-year-test.m4b"
 
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"year": 2020, // Numeric year
 	}
 

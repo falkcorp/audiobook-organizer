@@ -70,7 +70,7 @@ func buildMetadataDupFixture(t *testing.T, store Store) metadataDupFixtureIDs {
 	// contributes zero groups, while the run still returns the (a) group.
 	authD := newAuthor("Author Four")
 	ids.oversized = make([]string, 0, metadataFuzzyBucketCap+1)
-	for i := 0; i < metadataFuzzyBucketCap+1; i++ {
+	for range metadataFuzzyBucketCap + 1 {
 		ids.oversized = append(ids.oversized, create("Collected Works", authD))
 	}
 

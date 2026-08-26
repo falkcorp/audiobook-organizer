@@ -122,8 +122,7 @@ func TestBatch_FieldSet_ReadySubjectDispatched(t *testing.T) {
 		t.Fatalf("RegisterOp: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 	defer func() {
 		if err := r.Shutdown(ctx); err != nil {

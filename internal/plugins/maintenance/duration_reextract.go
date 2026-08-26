@@ -380,13 +380,11 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	// Start worker pool.
 	var wg sync.WaitGroup
 	for i := 0; i < params.Workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for book := range jobCh {
 				resultCh <- processBookForReextract(ctx, store, book, skipBefore)
 			}
-		}()
+		})
 	}
 	// Close resultCh once all workers finish.
 	go func() {

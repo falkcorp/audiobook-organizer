@@ -114,7 +114,7 @@ func (p *PebbleStore) CreateDeferredITunesUpdate(bookID, persistentID, oldPath, 
 	if err != nil {
 		return err
 	}
-	key := []byte(fmt.Sprintf("deferred_itunes:%019d", id))
+	key := fmt.Appendf(nil, "deferred_itunes:%019d", id)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
@@ -145,7 +145,7 @@ func (p *PebbleStore) GetPendingDeferredITunesUpdates() ([]DeferredITunesUpdate,
 
 // MarkDeferredITunesUpdateApplied sets the applied_at timestamp on a deferred update.
 func (p *PebbleStore) MarkDeferredITunesUpdateApplied(id int) error {
-	key := []byte(fmt.Sprintf("deferred_itunes:%019d", id))
+	key := fmt.Appendf(nil, "deferred_itunes:%019d", id)
 	data, closer, err := p.db.Get(key)
 	if err != nil {
 		return err

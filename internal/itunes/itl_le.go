@@ -95,10 +95,7 @@ func walkMsdhTracksLE(data []byte, start, end int, lib *ITLLibrary) {
 			// blocks live in [offset+headerLen, offset+totalLen); walk them now
 			// rather than relying on the outer loop where they are unreachable.
 			if totalLen > headerLen {
-				childEnd := offset + totalLen
-				if childEnd > end {
-					childEnd = end
-				}
+				childEnd := min(offset+totalLen, end)
 				innerOffset := offset + headerLen
 				for innerOffset+8 <= childEnd {
 					childTag := readTag(data, innerOffset)
@@ -177,10 +174,7 @@ func walkMiahContent(data []byte, miahStart, miahLen int, lib *ITLLibrary, curre
 			// When mith has children (totalLen > headerLen), inner-walk the mhoh
 			// string blocks rather than skipping them via the outer advance.
 			if totalLen > headerLen {
-				childEnd := offset + totalLen
-				if childEnd > end {
-					childEnd = end
-				}
+				childEnd := min(offset+totalLen, end)
 				innerOffset := offset + headerLen
 				for innerOffset+8 <= childEnd {
 					childTag := readTag(data, innerOffset)
@@ -275,13 +269,13 @@ func parseMithLE(data []byte, offset, length int) ITLTrack {
 	if safe(128, 8) {
 		// LE format stores PID bytes in reverse order compared to XML hex strings.
 		// Reverse them so PersistentID matches the XML format (BE / MSB first).
-		for i := 0; i < 8; i++ {
+		for i := range 8 {
 			t.PersistentID[i] = data[base+135-i]
 		}
 	}
 	// Album persistent ID at +300 if header is big enough
 	if length > 308 && safe(300, 8) {
-		for i := 0; i < 8; i++ {
+		for i := range 8 {
 			t.AlbumPersistentID[i] = data[base+307-i]
 		}
 	}
@@ -379,7 +373,7 @@ func parseMiphLE(data []byte, offset, length int) ITLPlaylist {
 		base := offset + 20
 		if base+428 <= len(data) {
 			// Reverse byte order for LE → BE PID matching
-			for i := 0; i < 8; i++ {
+			for i := range 8 {
 				p.PersistentID[i] = data[base+427-i]
 			}
 		}
@@ -422,10 +416,7 @@ func parsePlaylistMhohLE(data []byte, offset, length int, playlist *ITLPlaylist)
 	case 0x65:
 		blobStart := offset + 40 + 8
 		if blobStart < offset+length && blobStart < len(data) {
-			end := offset + length
-			if end > len(data) {
-				end = len(data)
-			}
+			end := min(offset+length, len(data))
 			playlist.SmartCriteria = make([]byte, end-blobStart)
 			copy(playlist.SmartCriteria, data[blobStart:end])
 			playlist.IsSmart = true
@@ -434,10 +425,7 @@ func parsePlaylistMhohLE(data []byte, offset, length int, playlist *ITLPlaylist)
 	case 0x66:
 		blobStart := offset + 40 + 8
 		if blobStart < offset+length && blobStart < len(data) {
-			end := offset + length
-			if end > len(data) {
-				end = len(data)
-			}
+			end := min(offset+length, len(data))
 			playlist.SmartInfo = make([]byte, end-blobStart)
 			copy(playlist.SmartInfo, data[blobStart:end])
 		}

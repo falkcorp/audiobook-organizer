@@ -504,9 +504,9 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	}
 
 	// Restore to imported state so the UI can re-process if needed
-	book.MarkedForDeletion = boolPtr(false)
+	book.MarkedForDeletion = new(false)
 	book.MarkedForDeletionAt = nil
-	book.LibraryState = stringPtr("imported")
+	book.LibraryState = new("imported")
 
 	updated, err := svc.store.UpdateBook(id, book)
 	if err != nil {

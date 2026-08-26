@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -392,9 +393,10 @@ Return ONLY valid JSON with a "results" key containing an array with these field
 
 Set confidence based on clarity of the filename structure.`
 
-	userPrompt := "Parse these audiobook filenames:\n\n"
+	var userPrompt strings.Builder
+	userPrompt.WriteString("Parse these audiobook filenames:\n\n")
 	for i, filename := range filenames {
-		userPrompt += fmt.Sprintf("%d. %s\n", i+1, filename)
+		userPrompt.WriteString(fmt.Sprintf("%d. %s\n", i+1, filename))
 	}
 
 	jsonObjectFormat := shared.NewResponseFormatJSONObjectParam()
@@ -404,7 +406,7 @@ Set confidence based on clarity of the filename structure.`
 		completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(systemPrompt),
-				openai.UserMessage(userPrompt),
+				openai.UserMessage(userPrompt.String()),
 			},
 			Model:                shared.ChatModel(p.filenameParseModel()), // batch filename parsing uses FilenameParseModel
 			MaxCompletionTokens:  param.NewOpt[int64](2000),

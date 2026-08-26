@@ -1213,7 +1213,7 @@ func TestSearchMetadataForBook_ResultLimitCap50(t *testing.T) {
 		name: "BigSource",
 		searchByTitleFunc: func(title string) ([]metadata.BookMetadata, error) {
 			var results []metadata.BookMetadata
-			for i := 0; i < 60; i++ {
+			for i := range 60 {
 				results = append(results, metadata.BookMetadata{
 					Title:    fmt.Sprintf("Test Book %d", i),
 					Author:   fmt.Sprintf("Author %d", i),

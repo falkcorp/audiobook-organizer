@@ -38,7 +38,7 @@ func countVGIndexRows(t *testing.T, s *PebbleStore) int {
 func seedGroupedBooks(t *testing.T, s *PebbleStore, gid string, n int) []string {
 	t.Helper()
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b := &Book{
 			Title:          fmt.Sprintf("Backfill Book %d", i),
 			VersionGroupID: &gid,
@@ -50,7 +50,7 @@ func seedGroupedBooks(t *testing.T, s *PebbleStore, gid string, n int) []string 
 		ids = append(ids, created.ID)
 	}
 	for _, id := range ids {
-		key := []byte(fmt.Sprintf("book:versiongroup:%s:%s", gid, id))
+		key := fmt.Appendf(nil, "book:versiongroup:%s:%s", gid, id)
 		if err := s.db.Delete(key, pebble.Sync); err != nil {
 			t.Fatalf("Delete index row: %v", err)
 		}
@@ -87,7 +87,7 @@ func TestBackfillVersionGroupIndex_SecondRunIsANoOp(t *testing.T) {
 	// Wipe one row, then re-run. The sentinel is set, so the run must skip and
 	// leave the damage in place — proving the second call really is gated and
 	// is not quietly redoing the full scan.
-	damaged := []byte(fmt.Sprintf("book:versiongroup:%s:%s", gid, ids[0]))
+	damaged := fmt.Appendf(nil, "book:versiongroup:%s:%s", gid, ids[0])
 	if err := s.db.Delete(damaged, pebble.Sync); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestBackfillVersionGroupIndex_ChunkedCommitWritesEveryRow(t *testing.T) {
 			// Every specific ID must be present — a count alone would pass if
 			// a boundary row were replaced by a duplicate of another.
 			for _, id := range ids {
-				key := []byte(fmt.Sprintf("book:versiongroup:%s:%s", gid, id))
+				key := fmt.Appendf(nil, "book:versiongroup:%s:%s", gid, id)
 				val, closer, err := s.db.Get(key)
 				if err != nil {
 					t.Fatalf("missing index row for %s: %v", id, err)
@@ -271,7 +271,7 @@ func TestBackfillVersionGroupIndex_IncludesLetterLeadingBookID(t *testing.T) {
 		t.Fatalf("backfill: %v", err)
 	}
 
-	indexKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", gid, letterID))
+	indexKey := fmt.Appendf(nil, "book:versiongroup:%s:%s", gid, letterID)
 	val, closer, err := s.db.Get(indexKey)
 	if err != nil {
 		t.Fatalf("letter-leading book ID was not indexed (bounds bug not fixed): %v", err)

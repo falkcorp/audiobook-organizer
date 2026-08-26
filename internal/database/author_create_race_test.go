@@ -48,10 +48,8 @@ func TestCreateAuthorIsAtomicUnderConcurrency(t *testing.T) {
 		startCh = make(chan struct{})
 	)
 
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			<-startCh // release all workers at once to widen the window
 			a, err := store.CreateAuthor(name)
 			mu.Lock()
@@ -61,7 +59,7 @@ func TestCreateAuthorIsAtomicUnderConcurrency(t *testing.T) {
 				return
 			}
 			ids[a.ID]++
-		}()
+		})
 	}
 	close(startCh)
 	wg.Wait()

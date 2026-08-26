@@ -79,7 +79,7 @@ func (s *Server) triggerFingerprintRescan(c *gin.Context) {
 	// to []byte here, EnqueueOp would marshal the byte slice itself,
 	// producing a base64 string that fails Unmarshal on the worker
 	// side ("failed to unmarshal params").
-	params := map[string]interface{}{
+	params := map[string]any{
 		"scope":    scope,
 		"book_ids": req.BookIDs,
 		"force":    req.Force,

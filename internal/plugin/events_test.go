@@ -32,7 +32,7 @@ func TestEventBus_MultipleSubscribers(t *testing.T) {
 	bus := NewEventBus()
 	var count atomic.Int32
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		bus.Subscribe(EventMetadataApplied, func(ctx context.Context, evt Event) error {
 			count.Add(1)
 			return nil

@@ -35,7 +35,7 @@ func fullScanScoreFixtureBooks(n int) []database.Book {
 	isbn := "9780000000042"
 	dur := 3600
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books[i] = database.Book{
 			ID:       fmt.Sprintf("SB%03d", i),
 			Title:    "The Same Scored Book",

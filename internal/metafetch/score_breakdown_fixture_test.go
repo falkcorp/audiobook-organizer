@@ -45,7 +45,7 @@ var updateFixture = os.Getenv("UPDATE_FIXTURE") != ""
 const fixtureRelPath = "../../web/src/components/review/evidence/__fixtures__/score_breakdown.json"
 
 func TestScoreBreakdownFixture_MatchesTheShippedWireFormat(t *testing.T) {
-	book := &database.Book{ID: "fixture", Title: "Mistborn", Duration: intPtr(86400)}
+	book := &database.Book{ID: "fixture", Title: "Mistborn", Duration: new(86400)}
 	svc := NewService(&database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) { return book, nil },
 	})

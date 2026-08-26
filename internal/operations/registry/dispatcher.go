@@ -8,6 +8,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -228,11 +229,8 @@ func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []
 		}
 		var overlap []Resource
 		for _, w := range candidateWrites {
-			for _, hw := range h.writes {
-				if w == hw {
-					overlap = append(overlap, w)
-					break
-				}
+			if slices.Contains(h.writes, w) {
+				overlap = append(overlap, w)
 			}
 		}
 		if len(overlap) > 0 {
@@ -285,10 +283,8 @@ func (r *Registry) checkDependsOn(depDefIDs []string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, h := range r.running {
-		for _, depID := range depDefIDs {
-			if h.defID == depID {
-				return true
-			}
+		if slices.Contains(depDefIDs, h.defID) {
+			return true
 		}
 	}
 	return false

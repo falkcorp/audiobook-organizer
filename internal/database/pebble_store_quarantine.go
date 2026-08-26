@@ -95,7 +95,7 @@ func (p *PebbleStore) IncrScanFailCount(pathHash string) (int, error) {
 	n, _ := p.GetScanFailCount(pathHash)
 	n++
 	key := []byte("scan_fail:" + pathHash)
-	return n, p.db.Set(key, []byte(fmt.Sprintf("%d", n)), pebble.Sync)
+	return n, p.db.Set(key, fmt.Appendf(nil, "%d", n), pebble.Sync)
 }
 
 // ResetScanFailCount resets the scan-fail counter for a file path hash.

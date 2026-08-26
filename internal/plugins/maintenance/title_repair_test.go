@@ -24,7 +24,9 @@ func agreedStub(agreed string, multi bool, called *bool) func(string) (string, b
 
 // trStrPtr is a task-unique string-pointer helper (strPtr already exists in
 // auto_match_transcribed_test.go in this package).
-func trStrPtr(s string) *string { return &s }
+//
+//go:fix inline
+func trStrPtr(s string) *string { return new(s) }
 
 func TestDecideTitleRepair_RetitleCase(t *testing.T) {
 	in := titleRepairBook{
@@ -84,11 +86,11 @@ func TestDecideTitleRepair_ProvenanceSkips(t *testing.T) {
 		in   titleRepairBook
 	}{
 		{"override value", titleRepairBook{Title: "T", FilePaths: paths,
-			TitleState: &database.MetadataFieldState{Field: "title", OverrideValue: trStrPtr(`"Custom"`)}}},
+			TitleState: &database.MetadataFieldState{Field: "title", OverrideValue: new(`"Custom"`)}}},
 		{"override locked", titleRepairBook{Title: "T", FilePaths: paths,
 			TitleState: &database.MetadataFieldState{Field: "title", OverrideLocked: true}}},
 		{"fetched value", titleRepairBook{Title: "T", FilePaths: paths,
-			TitleState: &database.MetadataFieldState{Field: "title", FetchedValue: trStrPtr(`"Fetched"`)}}},
+			TitleState: &database.MetadataFieldState{Field: "title", FetchedValue: new(`"Fetched"`)}}},
 		{"book metadata source", titleRepairBook{Title: "T", FilePaths: paths,
 			MetadataSource: "audible"}},
 	}

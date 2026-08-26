@@ -500,7 +500,7 @@ func TestBatchUpdateAudiobooks_Empty(t *testing.T) {
 
 	req := &batch.BatchUpdateRequest{
 		IDs:     []string{},
-		Updates: map[string]interface{}{},
+		Updates: map[string]any{},
 	}
 	body, _ := json.Marshal(req)
 

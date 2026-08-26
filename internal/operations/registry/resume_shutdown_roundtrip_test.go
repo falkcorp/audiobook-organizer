@@ -71,8 +71,7 @@ func TestResume_RealShutdownIsResumedByTheSweep(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r1.Start(ctx)
 
 	opID, err := r1.EnqueueOp(ctx, "test.shutdown-roundtrip", nil)
@@ -142,8 +141,7 @@ func TestResume_RealShutdownIsResumedByTheSweep(t *testing.T) {
 	if err := r2.RegisterOp(def2); err != nil {
 		t.Fatalf("r2 register: %v", err)
 	}
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
+	ctx2 := t.Context()
 	r2.Start(ctx2)
 	defer func() { _ = r2.Shutdown(context.Background()) }()
 	time.Sleep(300 * time.Millisecond)
@@ -187,8 +185,7 @@ func TestResume_ShutdownTimeoutLeavesQuiescedAndResumable(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	opID, err := r.EnqueueOp(ctx, "test.shutdown-timeout", nil)
@@ -317,8 +314,7 @@ func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 	target.ProgressTimeout = 30 * time.Minute
 	target.Run = func(context.Context, json.RawMessage, registry.Reporter) error { return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r1.Start(ctx)
 
 	if _, err := r1.EnqueueOp(ctx, "test.queued-blocker", nil); err != nil {
@@ -367,8 +363,7 @@ func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 		t.Fatalf("r2 register blocker: %v", err)
 	}
 
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
+	ctx2 := t.Context()
 	r2.Start(ctx2)
 	defer func() { _ = r2.Shutdown(context.Background()) }()
 

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -78,7 +79,9 @@ func makePlugin(pebble *database.PebbleStore) *Plugin {
 }
 
 // strPtrDedup returns a pointer to s.
-func strPtrDedup(s string) *string { return &s }
+//
+//go:fix inline
+func strPtrDedup(s string) *string { return new(s) }
 
 // createISBNBook inserts a book with the given ISBN13 and returns its ID.
 func createISBNBook(t *testing.T, pebble *database.PebbleStore, title, isbn13 string) string {
@@ -86,7 +89,7 @@ func createISBNBook(t *testing.T, pebble *database.PebbleStore, title, isbn13 st
 	b := &database.Book{
 		Title:    title,
 		FilePath: "/audio/" + title + ".m4b",
-		ISBN13:   strPtrDedup(isbn13),
+		ISBN13:   new(isbn13),
 	}
 	created, err := pebble.CreateBook(b)
 	if err != nil {
@@ -133,12 +136,7 @@ func TestBuildISBNIndex_EndToEnd_FlagAligned(t *testing.T) {
 		t.Fatalf("GetBookIDsByISBNASIN: %v", err)
 	}
 	containsIDDedup := func(s []string, target string) bool {
-		for _, v := range s {
-			if v == target {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(s, target)
 	}
 	if !containsIDDedup(ids, idA) {
 		t.Errorf("expected idA=%q in index, got %v", idA, ids)

@@ -60,7 +60,7 @@ func buildLETrackSection(trackID uint32, pid [8]byte, mhohs ...[]byte) []byte {
 	binary.LittleEndian.PutUint32(mith[8:12], uint32(mithTotalLen))
 	binary.LittleEndian.PutUint32(mith[16:20], trackID)
 	// PID stored reversed at bytes 128-135
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		mith[135-i] = pid[i]
 	}
 

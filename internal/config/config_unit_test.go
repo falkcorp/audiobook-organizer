@@ -386,10 +386,7 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("performance defaults", func(t *testing.T) {
-		expectedWorkers := runtime.NumCPU()
-		if expectedWorkers < 4 {
-			expectedWorkers = 4
-		}
+		expectedWorkers := max(runtime.NumCPU(), 4)
 		assert.Equal(t, expectedWorkers, AppConfig.ConcurrentScans)
 		assert.Equal(t, 30, AppConfig.OperationTimeoutMinutes)
 	})

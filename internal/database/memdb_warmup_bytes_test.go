@@ -51,7 +51,7 @@ func seedWarmBytesBook(t *testing.T, store *PebbleStore, tag string, n int, fp [
 	})
 	require.NoError(t, err)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		fh := fmt.Sprintf("warmbytes-%s-%03d", tag, i)
 		bf := &BookFile{
 			BookID:   book.ID,

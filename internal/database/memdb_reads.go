@@ -657,7 +657,7 @@ func (m *MemStore) getBooksByAuthorID(authorID int, limit, offset int, primaryOn
 // books by lowercase title on every page-load was the prod regression
 // that caused 340MB allocations per call and severe GC pressure — never
 // again. See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interface{}) ([]BookCore, error) {
+func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]any) ([]BookCore, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -687,7 +687,7 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]interfa
 
 	var (
 		iter interface {
-			Next() interface{}
+			Next() any
 		}
 		err error
 	)

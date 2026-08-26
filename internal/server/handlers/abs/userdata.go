@@ -216,7 +216,6 @@ func (p *userDataProvider) MediaProgress(userID string) ([]any, error) {
 	g := new(errgroup.Group)
 	g.SetLimit(p.concurrency)
 	for i := range bookIDs {
-		i := i
 		g.Go(func() error {
 			row, err := p.progressRow(userID, latest[bookIDs[i]])
 			if err != nil {

@@ -58,7 +58,6 @@ func TestDetectDRM_AAXCExtension_Protected(t *testing.T) {
 
 func TestDetectDRM_RealFixtures_NotMisclassified(t *testing.T) {
 	for _, path := range realFixturePaths {
-		path := path
 		t.Run(path, func(t *testing.T) {
 			requireFixture(t, path)
 

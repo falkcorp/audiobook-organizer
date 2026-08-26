@@ -65,15 +65,13 @@ func TestAcoustidEmitShards_MarkSamePairClaimedOnce(t *testing.T) {
 	var start sync.WaitGroup
 	start.Add(1) // gate so every goroutine contends at once
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			start.Wait()
 			if shards.mark(key) {
 				trues.Add(1)
 			}
-		}()
+		})
 	}
 	start.Done()
 	wg.Wait()
@@ -101,9 +99,9 @@ func TestAcoustidEmitShards_DistinctPairsNoLoss(t *testing.T) {
 	trues := make([]atomic.Int64, numKeys)
 
 	var wg sync.WaitGroup
-	for i := 0; i < numKeys; i++ {
+	for i := range numKeys {
 		keys[i] = fmt.Sprintf("A%04d:B%04d", i, i)
-		for g := 0; g < perKey; g++ {
+		for range perKey {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
@@ -115,7 +113,7 @@ func TestAcoustidEmitShards_DistinctPairsNoLoss(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < numKeys; i++ {
+	for i := range numKeys {
 		if got := trues[i].Load(); got != 1 {
 			t.Fatalf("key %s claimed %d times, want exactly 1 (lost or duplicated emission)", keys[i], got)
 		}

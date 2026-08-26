@@ -8,38 +8,38 @@ import "time"
 
 // OLEdition represents an Open Library edition record from the data dump.
 type OLEdition struct {
-	Key         string      `json:"key"`
-	Title       string      `json:"title"`
-	ISBN10      []string    `json:"isbn_10,omitempty"`
-	ISBN13      []string    `json:"isbn_13,omitempty"`
-	Authors     []OLRef     `json:"authors,omitempty"`
-	Publishers  []string    `json:"publishers,omitempty"`
-	PublishDate string      `json:"publish_date,omitempty"`
-	Covers      []int       `json:"covers,omitempty"`
-	Languages   []OLRef     `json:"languages,omitempty"`
-	Works       []OLRef     `json:"works,omitempty"`
-	Subjects    []string    `json:"subjects,omitempty"`
-	Description interface{} `json:"description,omitempty"` // can be string or {type, value}
+	Key         string   `json:"key"`
+	Title       string   `json:"title"`
+	ISBN10      []string `json:"isbn_10,omitempty"`
+	ISBN13      []string `json:"isbn_13,omitempty"`
+	Authors     []OLRef  `json:"authors,omitempty"`
+	Publishers  []string `json:"publishers,omitempty"`
+	PublishDate string   `json:"publish_date,omitempty"`
+	Covers      []int    `json:"covers,omitempty"`
+	Languages   []OLRef  `json:"languages,omitempty"`
+	Works       []OLRef  `json:"works,omitempty"`
+	Subjects    []string `json:"subjects,omitempty"`
+	Description any      `json:"description,omitempty"` // can be string or {type, value}
 }
 
 // OLWork represents an Open Library work record from the data dump.
 type OLWork struct {
-	Key         string      `json:"key"`
-	Title       string      `json:"title"`
-	Authors     []OLRef     `json:"authors,omitempty"`
-	Subjects    []string    `json:"subjects,omitempty"`
-	Description interface{} `json:"description,omitempty"`
-	Covers      []int       `json:"covers,omitempty"`
+	Key         string   `json:"key"`
+	Title       string   `json:"title"`
+	Authors     []OLRef  `json:"authors,omitempty"`
+	Subjects    []string `json:"subjects,omitempty"`
+	Description any      `json:"description,omitempty"`
+	Covers      []int    `json:"covers,omitempty"`
 }
 
 // OLAuthor represents an Open Library author record from the data dump.
 type OLAuthor struct {
-	Key       string      `json:"key"`
-	Name      string      `json:"name"`
-	BirthDate string      `json:"birth_date,omitempty"`
-	DeathDate string      `json:"death_date,omitempty"`
-	Bio       interface{} `json:"bio,omitempty"`
-	RemoteIDs interface{} `json:"remote_ids,omitempty"`
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	BirthDate string `json:"birth_date,omitempty"`
+	DeathDate string `json:"death_date,omitempty"`
+	Bio       any    `json:"bio,omitempty"`
+	RemoteIDs any    `json:"remote_ids,omitempty"`
 }
 
 // OLRef is a reference to another Open Library entity (e.g., {key: "/authors/OL123A"}).
@@ -68,14 +68,14 @@ type DumpStatus struct {
 
 // DescriptionText extracts a plain string from an OL description field,
 // which may be a string or a {"type": "/type/text", "value": "..."} object.
-func DescriptionText(desc interface{}) string {
+func DescriptionText(desc any) string {
 	if desc == nil {
 		return ""
 	}
 	if s, ok := desc.(string); ok {
 		return s
 	}
-	if m, ok := desc.(map[string]interface{}); ok {
+	if m, ok := desc.(map[string]any); ok {
 		if v, ok := m["value"].(string); ok {
 			return v
 		}

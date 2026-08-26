@@ -106,7 +106,7 @@ func TestSkipCounter_EmitsExactlyOneLineNotOnePerSkip(t *testing.T) {
 	records := captureLogs(t)
 
 	c := NewSkipCounter("noisy")
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		c.Skip("bad row", errors.New("decode"))
 	}
 	c.LogSummary(context.Background())
@@ -126,7 +126,7 @@ func TestSkipCounter_ConcurrentUseIsSafe(t *testing.T) {
 	c := NewSkipCounter("parallel")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

@@ -75,7 +75,7 @@ func TestParallelAcoustIDScan_SameCandidatesAsSerial(t *testing.T) {
 	}}
 
 	var wantMatches []string // satellite book IDs expected to pair with HUB
-	for i := 0; i < numSatellites; i++ {
+	for i := range numSatellites {
 		id := fmt.Sprintf("book-%02d", i)
 		books = append(books, database.Book{ID: id, Title: fmt.Sprintf("Real Book %02d", i)})
 		filesByBook[id] = []database.BookFile{{

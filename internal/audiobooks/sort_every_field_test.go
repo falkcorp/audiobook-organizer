@@ -39,11 +39,11 @@ const sortmxBooks = 3
 var sortmxSetters = map[string]func(b *database.Book, rank int){
 	"title":            func(b *database.Book, r int) { b.Title = fmt.Sprintf("%d-title", r) },
 	"narrator":         func(b *database.Book, r int) { b.Narrator = sortmxStr("%d-narr", r) },
-	"year":             func(b *database.Book, r int) { b.AudiobookReleaseYear = sortmxInt(2000 + r) },
-	"duration":         func(b *database.Book, r int) { b.Duration = sortmxInt(100 * (r + 1)) },
-	"duration_seconds": func(b *database.Book, r int) { b.Duration = sortmxInt(100 * (r + 1)) },
-	"bitrate":          func(b *database.Book, r int) { b.Bitrate = sortmxInt(64 * (r + 1)) },
-	"bitrate_kbps":     func(b *database.Book, r int) { b.Bitrate = sortmxInt(64 * (r + 1)) },
+	"year":             func(b *database.Book, r int) { b.AudiobookReleaseYear = new(2000 + r) },
+	"duration":         func(b *database.Book, r int) { b.Duration = new(100 * (r + 1)) },
+	"duration_seconds": func(b *database.Book, r int) { b.Duration = new(100 * (r + 1)) },
+	"bitrate":          func(b *database.Book, r int) { b.Bitrate = new(64 * (r + 1)) },
+	"bitrate_kbps":     func(b *database.Book, r int) { b.Bitrate = new(64 * (r + 1)) },
 	"file_size":        func(b *database.Book, r int) { v := int64(1000 * (r + 1)); b.FileSize = &v },
 	"file_size_bytes":  func(b *database.Book, r int) { v := int64(1000 * (r + 1)); b.FileSize = &v },
 	"genre":            func(b *database.Book, r int) { b.Genre = sortmxStr("%d-genre", r) },
@@ -54,8 +54,8 @@ var sortmxSetters = map[string]func(b *database.Book, rank int){
 	"edition":          func(b *database.Book, r int) { b.Edition = sortmxStr("%d-ed", r) },
 	"library_state":    func(b *database.Book, r int) { b.LibraryState = sortmxStr("%d-state", r) },
 	"format":           func(b *database.Book, r int) { b.Format = fmt.Sprintf("%d-fmt", r) },
-	"sample_rate":      func(b *database.Book, r int) { b.SampleRate = sortmxInt(8000 * (r + 1)) },
-	"sample_rate_hz":   func(b *database.Book, r int) { b.SampleRate = sortmxInt(8000 * (r + 1)) },
+	"sample_rate":      func(b *database.Book, r int) { b.SampleRate = new(8000 * (r + 1)) },
+	"sample_rate_hz":   func(b *database.Book, r int) { b.SampleRate = new(8000 * (r + 1)) },
 	// author and series are seeded as real rows, not as a pre-filled pointer:
 	// stripBookForMemdb nils Book.Author/Book.Series, so the order comes from
 	// resolving AuthorID/SeriesID against the authors/series tables. Seeding
@@ -73,7 +73,9 @@ var sortmxSetters = map[string]func(b *database.Book, rank int){
 }
 
 func sortmxStr(f string, r int) *string { s := fmt.Sprintf(f, r); return &s }
-func sortmxInt(v int) *int              { return &v }
+
+//go:fix inline
+func sortmxInt(v int) *int { return new(v) }
 
 // TestEverySortKeyIsCovered is the ratchet: a comparator added to
 // bookSortComparators without a fixture here fails immediately, rather than
@@ -196,7 +198,7 @@ func TestEverySortKeyPaginatesTheOrderedSet(t *testing.T) {
 			// Each single-row page must be the correct row of the ordered set,
 			// and the three pages together must partition it in order.
 			var seen []string
-			for offset := 0; offset < sortmxBooks; offset++ {
+			for offset := range sortmxBooks {
 				page, err := svc.GetAudiobooks(context.Background(), 1, offset, "", nil, nil,
 					ListFilters{SortBy: field, SortOrder: "asc"})
 				require.NoErrorf(t, err, "offset %d", offset)

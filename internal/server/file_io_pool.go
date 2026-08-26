@@ -106,7 +106,7 @@ func NewFileIOPool(workers int) *FileIOPool {
 		ch:       make(chan fileIOJobEntry, 500),
 		overflow: make(chan struct{}, workers),
 	}
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		p.wg.Add(1)
 		go p.worker(i)
 	}

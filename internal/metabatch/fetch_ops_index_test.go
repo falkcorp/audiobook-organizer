@@ -393,7 +393,7 @@ func TestCandidateFetchOps_QueuedRunSurvivesACrowdedOpsTable(t *testing.T) {
 
 	var rows []database.OperationV2Row
 	// 300 unrelated ops that have already STARTED, so they sort above anything queued.
-	for i := 0; i < 300; i++ {
+	for i := range 300 {
 		rows = append(rows, database.OperationV2Row{
 			ID: fmt.Sprintf("other-%d", i), DefID: "library.scan",
 			Status: "running", QueuedAt: now, StartedAt: &started,
@@ -422,7 +422,7 @@ func TestCandidateFetchOps_QueuedRunSurvivesACrowdedOpsTable(t *testing.T) {
 func TestCandidateFetchOps_LimitBoundsTheResult(t *testing.T) {
 	now := time.Now()
 	var rows []database.OperationV2Row
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rows = append(rows, database.OperationV2Row{
 			ID: fmt.Sprintf("f-%d", i), DefID: metabatch.CandidateFetchDefID,
 			Status: "completed", QueuedAt: now.Add(-time.Duration(i) * time.Minute),

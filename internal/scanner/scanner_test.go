@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -100,13 +101,7 @@ func TestProcessBooksParallelInvokesProgress(t *testing.T) {
 	}
 
 	for _, book := range books {
-		found := false
-		for _, seen := range processedPaths {
-			if filepath.Base(book.FilePath) == seen {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(processedPaths, filepath.Base(book.FilePath))
 		if !found {
 			t.Errorf("book %s not observed in progress callback", filepath.Base(book.FilePath))
 		}
@@ -383,14 +378,14 @@ func TestHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("stringPtr", func(t *testing.T) {
-		ptr := stringPtr("test")
+		ptr := new("test")
 		if ptr == nil || *ptr != "test" {
 			t.Error("stringPtr failed")
 		}
 	})
 
 	t.Run("intPtr", func(t *testing.T) {
-		ptr := intPtr(42)
+		ptr := new(42)
 		if ptr == nil || *ptr != 42 {
 			t.Error("intPtr failed")
 		}

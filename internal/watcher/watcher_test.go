@@ -210,7 +210,7 @@ func TestDebounceMultipleEvents(t *testing.T) {
 
 	// Rapid-fire create multiple files; no wall-clock pacing needed since
 	// the fake clock's debounce timer only fires when Advance is called.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		f := filepath.Join(dir, "test"+string(rune('a'+i))+".m4b")
 		if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
 			t.Fatal(err)

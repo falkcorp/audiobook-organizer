@@ -571,7 +571,7 @@ func TestSplitSeries(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "S"}, nil)
 	d.store.EXPECT().CreateSeries("S (Split)", (*int)(nil)).Return(&database.Series{ID: 6, Name: "S (Split)"}, nil)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", SeriesID: intptr(5)}, nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", SeriesID: new(5)}, nil)
 	d.store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
 	c, w := newCtx(http.MethodPost, "/series/5/split", `{"book_ids":["b1"]}`, idParam("5"))
 	h.SplitSeries(c)
@@ -690,7 +690,8 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
-func intptr(i int) *int { return &i }
+//go:fix inline
+func intptr(i int) *int { return new(i) }
 
 // ── Authors paging ───────────────────────────────────────────────────────
 //

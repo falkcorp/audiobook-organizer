@@ -8,6 +8,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -57,7 +58,6 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 	r.logger.Info("registry: resumeAfterStartup: processing resumable ops", "count", len(rows))
 
 	for _, row := range rows {
-		row := row // capture
 
 		// Always drop reconcile_scan.
 		if row.DefID == reconcileScanDefID {
@@ -211,9 +211,7 @@ func mergeJSONParams(base, overlay []byte) ([]byte, error) {
 	if err := json.Unmarshal(overlay, &over); err != nil {
 		return nil, err
 	}
-	for k, v := range over {
-		merged[k] = v
-	}
+	maps.Copy(merged, over)
 	return json.Marshal(merged)
 }
 

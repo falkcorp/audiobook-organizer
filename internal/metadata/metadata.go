@@ -535,7 +535,7 @@ var binaryTagKeyRe = regexp.MustCompile(`(?i)^(APIC|PIC|covr|©cov|METADATA_BLOC
 
 // collectAllTags flattens a dhowden raw tag map into a lossless string→string map,
 // normalizing each value and skipping binary/picture frames and empty values.
-func collectAllTags(raw map[string]interface{}) map[string]string {
+func collectAllTags(raw map[string]any) map[string]string {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -581,7 +581,7 @@ func parseSlashPair(s string) (number, total int) {
 	return n, total
 }
 
-func getRawString(raw map[string]interface{}, keys ...string) string {
+func getRawString(raw map[string]any, keys ...string) string {
 	if raw == nil {
 		return ""
 	}
@@ -630,7 +630,7 @@ func getRawString(raw map[string]interface{}, keys ...string) string {
 // (title, publisher, series) were unaffected, which is why only the numeric
 // fields — parsed straight from this string — were broken. Cleaning here fixes
 // every consumer at once instead of adding a second sanitising step per caller.
-func normalizeRawTagValue(value interface{}) string {
+func normalizeRawTagValue(value any) string {
 	switch typed := value.(type) {
 	case string:
 		return cleanTagValue(typed)

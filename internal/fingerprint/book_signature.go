@@ -94,12 +94,9 @@ func downsampleMaxPool(data []uint32, targetLen int) []uint32 {
 
 	windowSize := (len(data) + targetLen - 1) / targetLen
 	out := make([]uint32, targetLen)
-	for i := 0; i < targetLen; i++ {
+	for i := range targetLen {
 		start := i * windowSize
-		end := start + windowSize
-		if end > len(data) {
-			end = len(data)
-		}
+		end := min(start+windowSize, len(data))
 		var maxVal uint32
 		for j := start; j < end; j++ {
 			if data[j] > maxVal {
@@ -142,7 +139,7 @@ func BookSignatureSimilarity(a, b string) (float64, error) {
 	}
 
 	var totalBitDiff int
-	for i := 0; i < BookSignatureFixedLength; i++ {
+	for i := range BookSignatureFixedLength {
 		xor := intsA[i] ^ intsB[i]
 		totalBitDiff += bits.OnesCount32(xor)
 	}
@@ -213,19 +210,13 @@ type FileSegmentInput struct {
 // Returns 0 when none of the inputs can produce an estimate.
 func EstimateSegmentCount(durationSec, fileSizeBytes, bitrateKbps int, peerRatio float64) int {
 	if durationSec > 0 {
-		segDur := durationSec
-		if segDur > SegmentSeconds {
-			segDur = SegmentSeconds
-		}
+		segDur := min(durationSec, SegmentSeconds)
 		return segDur * NumSegments * chromaprintRatePerSec
 	}
 	if fileSizeBytes > 0 && bitrateKbps > 0 {
 		estDur := (fileSizeBytes * 8) / (bitrateKbps * 1000)
 		if estDur > 0 {
-			segDur := estDur
-			if segDur > SegmentSeconds {
-				segDur = SegmentSeconds
-			}
+			segDur := min(estDur, SegmentSeconds)
 			return segDur * NumSegments * chromaprintRatePerSec
 		}
 	}
@@ -338,15 +329,12 @@ func EncodeMask(realPositions []bool, totalLen, targetLen int) string {
 	}
 
 	windowSize := (n + targetLen - 1) / targetLen
-	for i := 0; i < targetLen; i++ {
+	for i := range targetLen {
 		start := i * windowSize
 		if start >= n {
 			break
 		}
-		end := start + windowSize
-		if end > n {
-			end = n
-		}
+		end := min(start+windowSize, n)
 		for j := start; j < end; j++ {
 			if realPositions[j] {
 				maskBytes[i/8] |= 1 << uint(i%8)
@@ -371,7 +359,7 @@ func decodeMask(mask string, targetLen int) ([]bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode mask: %w", err)
 	}
-	for i := 0; i < targetLen; i++ {
+	for i := range targetLen {
 		if i/8 < len(b) {
 			out[i] = (b[i/8]>>uint(i%8))&1 == 1
 		}
@@ -409,7 +397,7 @@ func BookSignatureSimilarityMasked(a, b, maskA, maskB string) (float64, int, err
 	}
 
 	var totalBitDiff, overlapCount int
-	for i := 0; i < BookSignatureFixedLength; i++ {
+	for i := range BookSignatureFixedLength {
 		if !mA[i] || !mB[i] {
 			continue
 		}

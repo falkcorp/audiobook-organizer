@@ -7,6 +7,7 @@ package server
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -168,10 +169,8 @@ func ValidateSliceLength(slice any, fieldName string, minLength int, maxLength i
 // ValidateStringInList validates that a string is one of the allowed values
 func ValidateStringInList(value string, fieldName string, allowed []string) error {
 	value = strings.TrimSpace(value)
-	for _, allowed := range allowed {
-		if value == allowed {
-			return nil
-		}
+	if slices.Contains(allowed, value) {
+		return nil
 	}
 	return ValidationError{
 		Field:   fieldName,

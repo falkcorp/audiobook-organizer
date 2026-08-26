@@ -72,10 +72,7 @@ func chapterTitlesAreSimilar(a, b string) bool {
 			common++
 		}
 	}
-	longer := len(wa)
-	if len(wb) > longer {
-		longer = len(wb)
-	}
+	longer := max(len(wb), len(wa))
 	return float64(common)/float64(longer) >= 0.80
 }
 

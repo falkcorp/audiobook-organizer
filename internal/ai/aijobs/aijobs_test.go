@@ -225,7 +225,7 @@ func mustMarshal(v any) []byte {
 func bytesSplitLines(b []byte) [][]byte {
 	var out [][]byte
 	start := 0
-	for i := 0; i < len(b); i++ {
+	for i := range b {
 		if b[i] == '\n' {
 			if i > start {
 				out = append(out, b[start:i])

@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -266,9 +267,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 		if task.IsEnabled() && task.GetInterval() > 0 {
 			interval := task.GetInterval()
 			taskName := name
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
 				for {
@@ -283,7 +282,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 						return
 					}
 				}
-			}()
+			})
 			slog.Info("Scheduled task interval", "taskName", taskName, "interval", interval)
 		} else if task.IsEnabled() && ts.reachableViaMaintenanceWindow(name) {
 			// Enabled with no ticker, but the nightly maintenance window WILL
@@ -327,9 +326,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 
 	// Maintenance window checker — runs every 60 seconds
 	if config.AppConfig.Maintenance.Enabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
 			slog.Info("Maintenance window enabled", "windowStart", config.AppConfig.Maintenance.WindowStart, "windowEnd", config.AppConfig.Maintenance.WindowEnd)
@@ -346,7 +343,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 					return
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -451,12 +448,7 @@ func (ts *TaskScheduler) MaintenanceOrder() []string {
 // which is exactly how four tasks came to declare a maintenance-window toggle
 // that did nothing.
 func (ts *TaskScheduler) inMaintenanceOrder(name string) bool {
-	for _, n := range ts.maintenanceOrder {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ts.maintenanceOrder, name)
 }
 
 // reachableViaMaintenanceWindow reports whether the nightly window can actually

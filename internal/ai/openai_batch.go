@@ -123,10 +123,10 @@ var _ = (*pagination.CursorPage[openai.Batch])(nil)
 
 // BatchRequest represents a single request in a JSONL batch file.
 type BatchRequest struct {
-	CustomID string                 `json:"custom_id"`
-	Method   string                 `json:"method"`
-	URL      string                 `json:"url"`
-	Body     map[string]interface{} `json:"body"`
+	CustomID string         `json:"custom_id"`
+	Method   string         `json:"method"`
+	URL      string         `json:"url"`
+	Body     map[string]any `json:"body"`
 }
 
 // BatchResponse represents a single response line from a batch result file.
@@ -182,7 +182,7 @@ Only include groups where you find actual duplicates or issues.`
 		CustomID: "author-dedup-full",
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body: map[string]interface{}{
+		Body: map[string]any{
 			"model": p.metadataReviewModel(), // batch author dedup uses MetadataReviewModel
 			"messages": []map[string]string{
 				{"role": "system", "content": systemPrompt},
@@ -346,7 +346,7 @@ Return ONLY valid JSON: {"suggestions": [{"group_index": N, "action": "merge|spl
 		CustomID: "author-dedup-groups",
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body: map[string]interface{}{
+		Body: map[string]any{
 			"model": p.metadataReviewModel(), // batch author dedup uses MetadataReviewModel
 			"messages": []map[string]string{
 				{"role": "system", "content": systemPrompt},

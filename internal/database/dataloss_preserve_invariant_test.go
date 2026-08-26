@@ -48,7 +48,7 @@ func dlPopulateNonZero(t *testing.T, v reflect.Value, field string) {
 		// e.g. MetadataProvenanceEntry.Value (any). A concrete non-nil string
 		// is enough to make the field non-zero; strip doesn't touch these.
 		v.Set(reflect.ValueOf("sentinel-" + field))
-	case reflect.Ptr:
+	case reflect.Pointer:
 		elem := reflect.New(v.Type().Elem())
 		dlPopulateNonZero(t, elem.Elem(), field)
 		v.Set(elem)
@@ -65,7 +65,7 @@ func dlPopulateNonZero(t *testing.T, v reflect.Value, field string) {
 		m.SetMapIndex(k.Elem(), val.Elem())
 		v.Set(m)
 	case reflect.Struct:
-		if v.Type() == reflect.TypeOf(time.Time{}) {
+		if v.Type() == reflect.TypeFor[time.Time]() {
 			v.Set(reflect.ValueOf(dlFixedTime))
 			return
 		}
@@ -173,7 +173,7 @@ func TestUpdateBook_PreservesEveryStrippedFieldOnNilIncoming(t *testing.T) {
 
 func isNilValue(v reflect.Value) bool {
 	switch v.Kind() {
-	case reflect.Ptr, reflect.Slice, reflect.Map, reflect.Interface, reflect.Chan, reflect.Func:
+	case reflect.Pointer, reflect.Slice, reflect.Map, reflect.Interface, reflect.Chan, reflect.Func:
 		return v.IsNil()
 	default:
 		return false

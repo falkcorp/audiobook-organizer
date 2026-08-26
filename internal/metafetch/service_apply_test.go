@@ -104,7 +104,7 @@ func TestRecordChangeHistory_SummaryLeadsWithBookTitle(t *testing.T) {
 	book := &database.Book{
 		ID:       "01J0BOOKID000000000000000",
 		Title:    "The Whispering Night",
-		Narrator: stringPtr("Alex Kozlowski"),
+		Narrator: new("Alex Kozlowski"),
 	}
 	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
 
@@ -143,7 +143,7 @@ func TestRecordChangeHistory_EmptyTitleFallsBackToID(t *testing.T) {
 	book := &database.Book{
 		ID:       "01J0BOOKID000000000000000",
 		Title:    "",
-		Narrator: stringPtr("Alex Kozlowski"),
+		Narrator: new("Alex Kozlowski"),
 	}
 	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
 

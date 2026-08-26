@@ -806,7 +806,7 @@ func TestLogin_RehashFailureStillLetsTheUserIn(t *testing.T) {
 func TestLogin_ThrottleIs429AndNeverLocksTheAccount(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := 0; i < absauth.MaxFailuresPerIP; i++ {
+	for i := range absauth.MaxFailuresPerIP {
 		w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
 			body: map[string]any{"username": "owner", "password": "wrong"}})
 		if w.Code != http.StatusUnauthorized {
@@ -995,7 +995,7 @@ func TestRefresh_ConcurrentRefreshesConverge(t *testing.T) {
 	results := make([]result, n)
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -1280,7 +1280,7 @@ func TestMe_ProviderErrorIs5xxNeverAnEmptyList(t *testing.T) {
 func TestMe_MediaProgressIsNeverPaginated(t *testing.T) {
 	const n = 250
 	rows := make([]any, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		rows = append(rows, map[string]any{"id": fmt.Sprintf("p%d", i)})
 	}
 	h := newHarness(t, "cf,jwt", nil, withUserData(&fakeUserData{progress: rows}))
@@ -1392,7 +1392,7 @@ func TestSessions_PaginatesPastTheFirstPage(t *testing.T) {
 
 	const seeded = 12
 	var access string
-	for i := 0; i < seeded; i++ {
+	for range seeded {
 		access = str(t, userObj(t, h.login(t, "owner", "pw-pw-pw-pw")), "accessToken")
 	}
 
@@ -1458,7 +1458,7 @@ func TestSessions_PaginatesPastTheFirstPage(t *testing.T) {
 	// The property that catches an off-by-one in either clamp: the pages must partition the
 	// set exactly — every session once, none dropped, none repeated.
 	seen := map[string]int{}
-	for page := 0; page < 2; page++ {
+	for page := range 2 {
 		for _, id := range ids(t, get(t, fmt.Sprintf("?page=%d", page))) {
 			seen[id]++
 		}

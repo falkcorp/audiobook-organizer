@@ -14,7 +14,7 @@ import (
 )
 
 func (p *PebbleStore) GetUserPreference(key string) (*UserPreference, error) {
-	dbKey := []byte(fmt.Sprintf("preference:%s", key))
+	dbKey := fmt.Appendf(nil, "preference:%s", key)
 	value, closer, err := p.db.Get(dbKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -60,7 +60,7 @@ func (p *PebbleStore) SetUserPreference(key, value string) error {
 		return err
 	}
 
-	dbKey := []byte(fmt.Sprintf("preference:%s", key))
+	dbKey := fmt.Appendf(nil, "preference:%s", key)
 	return p.db.Set(dbKey, data, pebble.Sync)
 }
 

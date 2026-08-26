@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -485,9 +486,7 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	if raw, err := json.Marshal(maskedConfig); err == nil {
 		var flat map[string]any
 		if err := json.Unmarshal(raw, &flat); err == nil {
-			for k, v := range flat {
-				response[k] = v
-			}
+			maps.Copy(response, flat)
 		}
 	}
 	httputil.RespondWithOK(c, response)
@@ -885,7 +884,7 @@ func (h *Handler) GetQuickQueries(c *gin.Context) {
 
 	if getter == nil {
 		// Store implementation does not support quick queries (e.g. SQLite in tests).
-		httputil.RespondWithOK(c, gin.H{"queries": []interface{}{}})
+		httputil.RespondWithOK(c, gin.H{"queries": []any{}})
 		return
 	}
 

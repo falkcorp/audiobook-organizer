@@ -25,7 +25,8 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 )
 
-func t10IntPtr(v int) *int { return &v }
+//go:fix inline
+func t10IntPtr(v int) *int { return new(v) }
 
 func TestApplyBookMergeReroute_SoftDeletesAndReassignsExternalIDs(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
@@ -46,7 +47,7 @@ func TestApplyBookMergeReroute_SoftDeletesAndReassignsExternalIDs(t *testing.T) 
 	}
 	if _, err := store.CreateBook(&database.Book{
 		ID: loserID, Title: "Loser", Format: "mp3", FilePath: "/tmp/" + loserID + ".mp3",
-		ITunesRating: t10IntPtr(80), ITunesPlayCount: t10IntPtr(5),
+		ITunesRating: new(80), ITunesPlayCount: new(5),
 	}); err != nil {
 		t.Fatalf("CreateBook loser: %v", err)
 	}

@@ -147,7 +147,7 @@ func TestB1HeavyFilterNonTitleSort_PaginatesAfterSort(t *testing.T) {
 	ps.WaitForWarmup()
 
 	rows := make([]b1lfSeedBook, 0, 12)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		rows = append(rows, b1lfSeedBook{
 			title:    string(rune('a'+i)) + "-book",
 			language: "en",

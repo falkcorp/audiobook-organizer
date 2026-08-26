@@ -739,7 +739,7 @@ func TestComputeHashFromReaderLargeFile(t *testing.T) {
 
 	const targetSize = 101 * 1024 * 1024 // 101 MB
 	chunk := make([]byte, 1024*1024)     // 1 MB chunks
-	for i := 0; i < 101; i++ {
+	for i := range 101 {
 		for j := range chunk {
 			chunk[j] = byte(i ^ j)
 		}

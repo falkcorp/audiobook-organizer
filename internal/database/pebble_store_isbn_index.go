@@ -72,7 +72,7 @@ func (p *PebbleStore) SetISBNIndexBuilt() error {
 // isbnIndexKey builds one row key for the ISBN/ASIN secondary index.
 // keyspace is "isbn10", "isbn13", or "asin".
 func isbnIndexKey(keyspace, value, bookID string) []byte {
-	return []byte(fmt.Sprintf("book:%s:%s:%s", keyspace, value, bookID))
+	return fmt.Appendf(nil, "book:%s:%s:%s", keyspace, value, bookID)
 }
 
 // writeISBNIndexRows adds index rows for all non-empty ISBN10/ISBN13/ASIN
@@ -181,7 +181,7 @@ func (p *PebbleStore) GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]strin
 		// Key format: book:<keyspace>:<value>:<bookID>
 		// We scan from "book:<keyspace>:<value>:" to "book:<keyspace>:<value>:~"
 		// (prefixEnd appends +1 to last byte).
-		prefix := []byte(fmt.Sprintf("book:%s:%s:", keyspace, value))
+		prefix := fmt.Appendf(nil, "book:%s:%s:", keyspace, value)
 		upper := prefixEnd(prefix)
 
 		iter, err := p.db.NewIter(&pebble.IterOptions{

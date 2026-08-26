@@ -36,7 +36,7 @@ func TestWarmupCounts_CountRowsNotPebbleKeys(t *testing.T) {
 	store.WaitForWarmup()
 
 	const totalBooks = 4
-	for i := 0; i < totalBooks; i++ {
+	for i := range totalBooks {
 		hash := fmt.Sprintf("hash%03d", i)
 		orig := fmt.Sprintf("orighash%03d", i)
 		organized := fmt.Sprintf("orghash%03d", i)

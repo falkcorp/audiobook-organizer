@@ -6,6 +6,7 @@
 package config
 
 import (
+	"slices"
 	"sync"
 	"testing"
 
@@ -353,13 +354,7 @@ func TestConfigurationValidation(t *testing.T) {
 	validTypes := []string{"pebble", "sqlite"}
 	dbType := AppConfig.DatabaseType
 
-	isValid := false
-	for _, valid := range validTypes {
-		if dbType == valid {
-			isValid = true
-			break
-		}
-	}
+	isValid := slices.Contains(validTypes, dbType)
 
 	if !isValid {
 		t.Errorf("Database type '%s' is not a valid type. Expected one of: %v", dbType, validTypes)
@@ -483,13 +478,13 @@ func TestAppConfigRace_MutateSnapshot(t *testing.T) {
 	t.Cleanup(func() { Mutate(func(c *Config) { *c = original }) })
 
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(2)
 
 		// Writer goroutine: simulates update_service applying a new root dir.
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < iters; j++ {
+			for range iters {
 				Mutate(func(c *Config) {
 					c.RootDir = "/race/test/path"
 					c.SetupComplete = c.RootDir != ""
@@ -500,7 +495,7 @@ func TestAppConfigRace_MutateSnapshot(t *testing.T) {
 		// Reader goroutine: simulates a background goroutine reading the snapshot.
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < iters; j++ {
+			for range iters {
 				snap := Snapshot()
 				// Access a few fields to make the read non-trivial.
 				_ = snap.RootDir

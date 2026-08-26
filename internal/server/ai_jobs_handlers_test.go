@@ -120,7 +120,7 @@ func TestListAIJobsHandler_Pagination(t *testing.T) {
 
 	// Insert 5 test jobs
 	now := time.Now()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := "j" + string(rune('1'+i))
 		require.NoError(t, store.CreateAIJob(database.AIJob{
 			ID: id, Type: "dedup_review", CustomIDPrefix: "x", Status: "completed",

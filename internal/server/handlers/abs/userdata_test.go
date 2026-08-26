@@ -368,7 +368,7 @@ func TestUserDataMediaProgressIsComplete(t *testing.T) {
 	f := newUDFake()
 	const n = 120
 	base := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		bookID := fmt.Sprintf("bk%03d", i)
 		f.addBook(bookID, nil, 1800, 1800)
 		f.presetSyncID(bookID, udSyncID(1000+i))
@@ -390,7 +390,7 @@ func TestUserDataMediaProgressIsComplete(t *testing.T) {
 	for i := range decoded {
 		seen[udStr(t, decoded[i], "libraryItemId")] = true
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if !seen[udSyncID(1000+i)] {
 			t.Fatalf("book bk%03d is missing from the list", i)
 		}
@@ -795,7 +795,7 @@ func TestUserDataMediaProgressTieBreaksForward(t *testing.T) {
 // reshuffle between refreshes.
 func TestUserDataMediaProgressIsDeterministic(t *testing.T) {
 	f := newUDFake()
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		id := fmt.Sprintf("bk%02d", i)
 		f.addBook(id, nil, 600)
 		f.presetSyncID(id, udSyncID(200+i))
@@ -807,7 +807,7 @@ func TestUserDataMediaProgressIsDeterministic(t *testing.T) {
 		t.Fatalf("MediaProgress: %v", err)
 	}
 	firstJSON, _ := json.Marshal(first)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		again, err := p.MediaProgress("u1")
 		if err != nil {
 			t.Fatalf("MediaProgress: %v", err)

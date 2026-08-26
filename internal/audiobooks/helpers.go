@@ -28,9 +28,12 @@ import (
 // --- basic pointer helpers --------------------------------------------------
 
 // stringPtr returns a pointer to s.
-func stringPtr(s string) *string { return &s }
+//
+//go:fix inline
+func stringPtr(s string) *string { return new(s) }
 
-func boolPtr(b bool) *bool { return &b }
+//go:fix inline
+func boolPtr(b bool) *bool { return new(b) }
 
 func ptrStr(p *string) string {
 	if p == nil {

@@ -152,8 +152,7 @@ func TestLivenessMode_String(t *testing.T) {
 // not break dispatch. The validator runs on a path every op takes, so a mistake
 // here would disable the registry rather than tighten it.
 func TestRegisteredOpStillRuns(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	r, store := newTestRegistry(t)
 	ran := make(chan struct{})

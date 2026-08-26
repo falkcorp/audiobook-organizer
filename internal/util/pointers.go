@@ -5,16 +5,24 @@
 package util
 
 // StringPtr returns a pointer to the given string.
-func StringPtr(s string) *string { return &s }
+//
+//go:fix inline
+func StringPtr(s string) *string { return new(s) }
 
 // IntPtr returns a pointer to the given int.
-func IntPtr(i int) *int { return &i }
+//
+//go:fix inline
+func IntPtr(i int) *int { return new(i) }
 
 // BoolPtr returns a pointer to the given bool.
-func BoolPtr(b bool) *bool { return &b }
+//
+//go:fix inline
+func BoolPtr(b bool) *bool { return new(b) }
 
 // Int64Ptr returns a pointer to the given int64.
-func Int64Ptr(i int64) *int64 { return &i }
+//
+//go:fix inline
+func Int64Ptr(i int64) *int64 { return new(i) }
 
 // DerefStr returns the string value of a *string, or "" if nil.
 func DerefStr(p *string) string {

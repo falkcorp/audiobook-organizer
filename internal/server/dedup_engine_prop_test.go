@@ -183,7 +183,7 @@ func TestProp_FindSimilarOrdering(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		es := getStore(t)
 		n := rapid.IntRange(2, 12).Draw(t, "n")
-		for i := 0; i < n; i++ {
+		for i := range n {
 			vec := genVector(t, propVectorDim, fmt.Sprintf("vec_%d", i))
 			err := es.Upsert(database.Embedding{
 				EntityType: "book",
@@ -224,7 +224,7 @@ func TestProp_FindSimilarThreshold(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		es := getStore(t)
 		n := rapid.IntRange(2, 12).Draw(t, "n")
-		for i := 0; i < n; i++ {
+		for i := range n {
 			vec := genVector(t, propVectorDim, fmt.Sprintf("vec_%d", i))
 			if err := es.Upsert(database.Embedding{
 				EntityType: "book",
@@ -262,7 +262,7 @@ func TestProp_FindSimilarMaxResults(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		es := getStore(t)
 		n := rapid.IntRange(5, 20).Draw(t, "n")
-		for i := 0; i < n; i++ {
+		for i := range n {
 			vec := genVector(t, propVectorDim, fmt.Sprintf("vec_%d", i))
 			if err := es.Upsert(database.Embedding{
 				EntityType: "book",
@@ -316,7 +316,7 @@ func TestProp_ChromemMatchesSqlite(t *testing.T) {
 		n := rapid.IntRange(10, 20).Draw(t, "n")
 		ids := make([]string, n)
 		vecs := make([][]float32, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			ids[i] = fmt.Sprintf("b%d", i)
 			vecs[i] = genNonZeroVector(t, propVectorDim, fmt.Sprintf("vec_%d", i))
 

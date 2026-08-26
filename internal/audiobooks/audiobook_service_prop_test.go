@@ -93,7 +93,7 @@ var filterableFields = []string{
 func genBookSlice(t *rapid.T, label string, minLen, maxLen int) []database.Book {
 	n := rapid.IntRange(minLen, maxLen).Draw(t, label+"_len")
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b := rapidgen.Book(t)
 		// Assign a unique ULID-shaped ID so the sort tiebreaker has
 		// something deterministic to work with.
@@ -274,7 +274,7 @@ func TestProp_PaginationConsistency(outer *testing.T) {
 		defer store.Close()
 
 		// Seed with `total` random books. CreateBook assigns the ID.
-		for i := 0; i < total; i++ {
+		for range total {
 			b := rapidgen.Book(t)
 			if _, err := store.CreateBook(b); err != nil {
 				t.Fatalf("CreateBook: %v", err)

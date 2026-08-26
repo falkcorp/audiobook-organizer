@@ -137,7 +137,6 @@ func (j *purgeUADuplicatesJob) Run(ctx context.Context, store maintenance.JobSto
 	var mu sync.Mutex
 	samples := []string{}
 	for _, id := range uaBooks {
-		id := id
 		g.Go(func() error {
 			if gctx.Err() != nil {
 				return gctx.Err()

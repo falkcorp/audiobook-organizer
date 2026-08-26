@@ -30,7 +30,7 @@ func captureLogs(t *testing.T) func() []map[string]any {
 	return func() []map[string]any {
 		t.Helper()
 		var out []map[string]any
-		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 			if line == "" {
 				continue
 			}
@@ -147,12 +147,10 @@ func TestMustLog_ConcurrentUseIsSafe(t *testing.T) {
 	records := captureLogs(t)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			MustLog(errors.New("concurrent"), "parallel discard")
-		}()
+		})
 	}
 	wg.Wait()
 

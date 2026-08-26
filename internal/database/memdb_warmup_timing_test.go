@@ -31,7 +31,7 @@ func TestWarmupDurations_EveryWarmedTableIsAttributed(t *testing.T) {
 
 	// Seed a little of everything the warmup scans so no phase is trivially
 	// empty. Books carry the indexes that matter most.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		hash := fmt.Sprintf("timinghash%03d", i)
 		_, err := store.CreateBook(&Book{
 			Title:    fmt.Sprintf("Timing Book %03d", i),

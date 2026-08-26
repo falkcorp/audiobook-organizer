@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -161,12 +162,12 @@ func formatReasonCounts(counts map[string]int, order []string) string {
 	if len(order) == 0 {
 		return "none"
 	}
-	s := ""
+	var s strings.Builder
 	for i, r := range order {
 		if i > 0 {
-			s += " "
+			s.WriteString(" ")
 		}
-		s += fmt.Sprintf("%s=%d", r, counts[r])
+		s.WriteString(fmt.Sprintf("%s=%d", r, counts[r]))
 	}
-	return s
+	return s.String()
 }

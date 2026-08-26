@@ -44,7 +44,7 @@ func TestRestoreBackup_Success(t *testing.T) {
 
 	// Restore into a new target directory.
 	target := filepath.Join(tmp, "restore-target")
-	payload, err := json.Marshal(map[string]interface{}{
+	payload, err := json.Marshal(map[string]any{
 		"backup_filename": info.Filename,
 		"target_path":     target,
 		"verify":          false,

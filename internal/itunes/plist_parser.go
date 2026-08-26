@@ -96,10 +96,7 @@ func parsePlist(data []byte) (*Library, error) {
 		// as unsigned 64-bit integers. Values > math.MaxInt64 wrap negative
 		// when parsed into int64; reset to 0 so the os.Stat fallback in
 		// buildBookFromTrack populates the correct value.
-		size := rawTrack.Size
-		if size < 0 {
-			size = 0
-		}
+		size := max(rawTrack.Size, 0)
 
 		library.Tracks[id] = &Track{
 			TrackID:      rawTrack.TrackID,

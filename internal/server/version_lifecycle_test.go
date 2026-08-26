@@ -184,7 +184,7 @@ func TestHandleHardDeleteVersion(t *testing.T) {
 	}
 
 	var envelope struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &envelope)
 	if envelope.Data["deleted"] != ver.ID {

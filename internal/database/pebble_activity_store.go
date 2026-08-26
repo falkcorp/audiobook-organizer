@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -127,7 +128,7 @@ func (s *PebbleActivityStore) DB() *pebble.DB { return s.db }
 //
 //	act:<tier>:<20d-unix-nano>:<ulid>
 func pactPrimaryKey(tier string, t time.Time, id string) []byte {
-	return []byte(fmt.Sprintf("act:%s:%020d:%s", tier, t.UnixNano(), id))
+	return fmt.Appendf(nil, "act:%s:%020d:%s", tier, t.UnixNano(), id)
 }
 
 // pactPrimaryPrefix returns the inclusive lower-bound prefix for a tier range scan:
@@ -180,17 +181,17 @@ func pactKeyTimeField(key []byte) string {
 		return ""
 	}
 	rest = rest[i+1:]
-	j := strings.IndexByte(rest, ':') // end of <nanos>
-	if j < 0 {
+	before, _, ok := strings.Cut(rest, ":") // end of <nanos>
+	if !ok {
 		return rest
 	}
-	return rest[:j]
+	return before
 }
 
 // pactIndexRef encodes the cross-reference value stored in secondary indexes:
 // "<tier>:<20d-unix-nano>:<ulid>" — enough to reconstruct the primary key.
 func pactIndexRef(tier string, t time.Time, id string) []byte {
-	return []byte(fmt.Sprintf("%s:%020d:%s", tier, t.UnixNano(), id))
+	return fmt.Appendf(nil, "%s:%020d:%s", tier, t.UnixNano(), id)
 }
 
 // pactPrimaryKeyFromRef reconstructs the primary key from an index reference value.
@@ -237,7 +238,7 @@ func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
 
 	// Secondary index: op_id → primary ref
 	if e.OperationID != "" {
-		opKey := []byte(fmt.Sprintf("act:op:%s:%020d:%s", e.OperationID, e.Timestamp.UnixNano(), entryID))
+		opKey := fmt.Appendf(nil, "act:op:%s:%020d:%s", e.OperationID, e.Timestamp.UnixNano(), entryID)
 		ref := pactIndexRef(e.Tier, e.Timestamp, entryID)
 		if err := batch.Set(opKey, ref, nil); err != nil {
 			return 0, fmt.Errorf("pebble_activity_store: set op index: %w", err)
@@ -246,7 +247,7 @@ func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
 
 	// Secondary index: book_id → primary ref
 	if e.BookID != "" {
-		bkKey := []byte(fmt.Sprintf("act:bk:%s:%020d:%s", e.BookID, e.Timestamp.UnixNano(), entryID))
+		bkKey := fmt.Appendf(nil, "act:bk:%s:%020d:%s", e.BookID, e.Timestamp.UnixNano(), entryID)
 		ref := pactIndexRef(e.Tier, e.Timestamp, entryID)
 		if err := batch.Set(bkKey, ref, nil); err != nil {
 			return 0, fmt.Errorf("pebble_activity_store: set book index: %w", err)
@@ -299,10 +300,7 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) ([]Ac
 	// the caller another page exists without counting the rest of the log.
 	probe := f.Offset + f.Limit + 1
 
-	pageCap := f.Limit
-	if pageCap < 0 {
-		pageCap = 0
-	}
+	pageCap := max(f.Limit, 0)
 	page := make([]ActivityEntry, 0, pageCap)
 	matched := 0
 	collect := func(e ActivityEntry) bool {
@@ -471,10 +469,7 @@ func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, erro
 	deleted := 0
 	// Delete in batches of 500 to keep batch size reasonable.
 	for i := 0; i < len(kvs); i += 500 {
-		end := i + 500
-		if end > len(kvs) {
-			end = len(kvs)
-		}
+		end := min(i+500, len(kvs))
 		batch := s.db.NewBatch()
 		for _, kv := range kvs[i:end] {
 			if err := batch.Delete(kv.key, nil); err != nil {
@@ -629,10 +624,7 @@ func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error
 			if err := ctx.Err(); err != nil {
 				return total, err
 			}
-			end := i + 500
-			if end > len(kvs) {
-				end = len(kvs)
-			}
+			end := min(i+500, len(kvs))
 			batch := s.db.NewBatch()
 			for _, kv := range kvs[i:end] {
 				if err := batch.Delete(kv.key, nil); err != nil {
@@ -903,13 +895,7 @@ func (s *PebbleActivityStore) RecompactDigests(ctx context.Context) (RecompactRe
 		}
 
 		// Check if any items need updating.
-		needsUpdate := false
-		for _, item := range c.dd.Items {
-			if isLegacyItem(item) {
-				needsUpdate = true
-				break
-			}
-		}
+		needsUpdate := slices.ContainsFunc(c.dd.Items, isLegacyItem)
 		if !needsUpdate {
 			result.Skipped++
 			continue
@@ -1050,13 +1036,7 @@ func pactSelectTiers(f ActivityFilter) (nonDigest, digest []string) {
 		base = []string{f.Tier}
 	}
 	for _, tier := range base {
-		excluded := false
-		for _, ex := range f.ExcludeTiers {
-			if tier == ex {
-				excluded = true
-				break
-			}
-		}
+		excluded := slices.Contains(f.ExcludeTiers, tier)
 		if excluded {
 			continue
 		}
@@ -1322,14 +1302,8 @@ func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix str
 	})
 
 	total := len(all)
-	start := f.Offset
-	if start > len(all) {
-		start = len(all)
-	}
-	end := start + f.Limit
-	if end > len(all) {
-		end = len(all)
-	}
+	start := min(f.Offset, len(all))
+	end := min(start+f.Limit, len(all))
 	return all[start:end], total, nil
 }
 

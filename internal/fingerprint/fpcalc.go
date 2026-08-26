@@ -367,10 +367,7 @@ func HammingSimilarity(a, b string) (float64, error) {
 		return 0, fmt.Errorf("decode b: %w", err)
 	}
 
-	n := len(intsA)
-	if len(intsB) < n {
-		n = len(intsB)
-	}
+	n := min(len(intsB), len(intsA))
 	if n == 0 {
 		return 0, errors.New("empty fingerprint")
 	}

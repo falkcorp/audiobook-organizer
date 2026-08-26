@@ -242,10 +242,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// each book COMPLETES, via a monotonic atomic counter that stays ordered even
 	// when books finish out of order. The stuck-op watchdog therefore sees progress
 	// on every completion rather than once per sequential step.
-	workers := runtime.NumCPU()
-	if workers > len(bookIDs) {
-		workers = len(bookIDs)
-	}
+	workers := min(runtime.NumCPU(), len(bookIDs))
 	log.Info("dedupe-book-file-rows: processing books in parallel",
 		"books", len(bookIDs), "workers", workers)
 

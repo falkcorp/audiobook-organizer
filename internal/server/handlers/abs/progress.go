@@ -347,10 +347,7 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 	}
 	pct := 0
 	if merged.Duration > 0 {
-		pct = int(merged.CurrentTime / merged.Duration * 100)
-		if pct > 100 {
-			pct = 100
-		}
+		pct = min(int(merged.CurrentTime/merged.Duration*100), 100)
 	}
 	return h.updateUserBookState(userID, bookID, func(state *database.UserBookState) {
 		state.Status = status

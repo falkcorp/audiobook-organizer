@@ -119,7 +119,7 @@ func TestBuildRelPath_AsianTitlesStayOneComponent(t *testing.T) {
 				t.Errorf("BuildRelPath(title=%q) = %q; has %d separators, want 2", title, got, n)
 			}
 
-			for _, comp := range strings.Split(got, "/") {
+			for comp := range strings.SplitSeq(got, "/") {
 				if comp == "" {
 					t.Errorf("BuildRelPath(title=%q) = %q; has an empty component", title, got)
 				}

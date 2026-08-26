@@ -86,7 +86,7 @@ func TestCoverage_CollectInputFiles_SortByPathTiebreaker(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	files := make([]string, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		f := filepath.Join(tmpDir, fmt.Sprintf("track_%c.mp3", 'c'-i))
 		if err := os.WriteFile(f, []byte("audio"), 0644); err != nil {
 			t.Fatal(err)

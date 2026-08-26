@@ -116,7 +116,7 @@ func TestRemuxMalformedFilesProgressCallback(t *testing.T) {
 	// content is enough to exercise the walk + progress path (ffmpeg will
 	// fail to remux them, which is fine — we're only proving progress fires
 	// with an accurate total, not that remux succeeds).
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := filepath.Join(tmpDir, fmt.Sprintf("test%d.m4b", i))
 		if err := os.WriteFile(p, []byte("not a real m4b"), 0o644); err != nil {
 			t.Fatalf("write test file: %v", err)

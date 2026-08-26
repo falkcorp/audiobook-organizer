@@ -48,17 +48,17 @@ func TestNotifyDelugeMoveStorage_WithMockServer(t *testing.T) {
 	var calledMoveStorage bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Method string        `json:"method"`
-			Params []interface{} `json:"params"`
-			ID     int64         `json:"id"`
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+			ID     int64  `json:"id"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		switch req.Method {
 		case "auth.login":
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": true})
+			json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": true})
 		case "core.move_storage":
 			calledMoveStorage = true
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": nil})
+			json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": nil})
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 		}
@@ -247,24 +247,24 @@ func TestNotifyDelugeAfterUndo_Enabled(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Method string        `json:"method"`
-			Params []interface{} `json:"params"`
-			ID     int64         `json:"id"`
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+			ID     int64  `json:"id"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		switch req.Method {
 		case "auth.login":
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": true})
+			json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": true})
 		case "core.move_storage":
 			if len(req.Params) == 2 {
-				if hashes, ok := req.Params[0].([]interface{}); ok {
+				if hashes, ok := req.Params[0].([]any); ok {
 					for _, h := range hashes {
 						gotHashes = append(gotHashes, h.(string))
 					}
 				}
 				gotPath, _ = req.Params[1].(string)
 			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": nil})
+			json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": nil})
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 		}
@@ -326,7 +326,7 @@ func TestNotifyDelugeAfterUndo_Disabled(t *testing.T) {
 		if req.Method == "core.move_storage" {
 			calledMoveStorage = true
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": 0, "result": true})
+		json.NewEncoder(w).Encode(map[string]any{"id": 0, "result": true})
 	}))
 	defer srv.Close()
 
@@ -372,7 +372,7 @@ func TestNotifyDelugeAfterUndo_NoHash(t *testing.T) {
 		if req.Method == "core.move_storage" {
 			calledMoveStorage = true
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": 0, "result": true})
+		json.NewEncoder(w).Encode(map[string]any{"id": 0, "result": true})
 	}))
 	defer srv.Close()
 
@@ -418,12 +418,12 @@ func TestNotifyDelugeAfterUndo_DelugeError(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&req)
 		switch req.Method {
 		case "auth.login":
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": true})
+			json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": true})
 		case "core.move_storage":
 			// Simulate Deluge error.
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]any{
 				"id":    req.ID,
-				"error": map[string]interface{}{"code": 1, "message": "torrent not found"},
+				"error": map[string]any{"code": 1, "message": "torrent not found"},
 			})
 		default:
 			w.WriteHeader(http.StatusBadRequest)

@@ -192,10 +192,7 @@ func (h *AuthHandler) recordFailure(userID, ip string) time.Duration {
 	if count <= accountSoftThreshold {
 		return 0
 	}
-	d := time.Duration(count-accountSoftThreshold) * accountSoftStep
-	if d > accountSoftMaxDelay {
-		d = accountSoftMaxDelay
-	}
+	d := min(time.Duration(count-accountSoftThreshold)*accountSoftStep, accountSoftMaxDelay)
 	return d
 }
 
@@ -252,10 +249,7 @@ func setSessionCookie(c *gin.Context, token string, expiresAt time.Time) {
 	if c == nil {
 		return
 	}
-	maxAge := int(time.Until(expiresAt).Seconds())
-	if maxAge < 0 {
-		maxAge = 0
-	}
+	maxAge := max(int(time.Until(expiresAt).Seconds()), 0)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     servermiddleware.SessionCookieName,
 		Value:    token,

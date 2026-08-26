@@ -194,7 +194,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 	// safeInsert tries to insert an object, logging+counting failures rather
 	// than aborting the warmup. Returns whether the row actually landed in
 	// memdb (never an error, so warmIter keeps going).
-	safeInsert := func(table string, obj interface{}, keyForLog string) (bool, error) {
+	safeInsert := func(table string, obj any, keyForLog string) (bool, error) {
 		if err := txn.Insert(table, obj); err != nil {
 			lose(table, keyForLog, "insert rejected", err)
 			return false, nil
@@ -584,10 +584,7 @@ func emitMemdbSizeTelemetry(ctx context.Context, m *MemStore, counts map[string]
 		}
 
 		// Sample up to sampleSize rows.
-		actualSamples := sampleSize
-		if tbl.maxSamples < sampleSize {
-			actualSamples = tbl.maxSamples
-		}
+		actualSamples := min(tbl.maxSamples, sampleSize)
 
 		// Collect sampled rows.
 		var totalBytes int64

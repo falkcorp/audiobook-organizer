@@ -62,7 +62,7 @@ func TestRunAutoPurgeSoftDeleted_DeletesOldEntries(t *testing.T) {
 	deletedAt := time.Now().AddDate(0, 0, -2)
 	book.MarkedForDeletion = &marked
 	book.MarkedForDeletionAt = &deletedAt
-	book.LibraryState = stringPtr("deleted")
+	book.LibraryState = new("deleted")
 	_, err = database.GetGlobalStore().UpdateBook(book.ID, book)
 	require.NoError(t, err)
 

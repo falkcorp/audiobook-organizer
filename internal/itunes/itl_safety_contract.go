@@ -25,7 +25,7 @@ package itunes
 import (
 	"fmt"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -445,7 +445,7 @@ func guardNoNewDanglingRefs(before, after []byte, _ *hdfmHeader, _ ContractConfi
 	if len(introduced) == 0 {
 		return pass(name)
 	}
-	sort.Slice(introduced, func(i, j int) bool { return introduced[i] < introduced[j] })
+	slices.Sort(introduced)
 	return fail(name, -1, "mtph", fmt.Sprintf("%d new dangling playlist→track refs (e.g. TrackIDs %v)", len(introduced), previewU32(introduced)))
 }
 
@@ -959,10 +959,7 @@ func countMasterTracks(data []byte) (declared, actual int) {
 		return 0, 0
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 	offset := contentStart
 	if contentStart+12 <= contentEnd && readTag(data, contentStart) == "mlth" {
 		declared = int(readUint32LE(data, contentStart+8))
@@ -999,10 +996,7 @@ func countPlaylistsAndCheckMiph(data []byte) (playlists int, viol []Violation) {
 		return 0, nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 	offset := contentStart
 	if contentStart+12 <= contentEnd && readTag(data, contentStart) == "mlph" {
 		offset = contentStart + int(readUint32LE(data, contentStart+4))
@@ -1069,10 +1063,7 @@ func countMsdhItems(data []byte, blockType int, itemTag string) int {
 		return 0
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 	n := 0
 	offset := contentStart
 	// Skip a leading list-header chunk if present (mlah/mlih etc.).
@@ -1186,10 +1177,7 @@ func collectMithTidsPids(data []byte) (tids []uint32, pids []string) {
 		return nil, nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 	offset := contentStart
 	if contentStart+12 <= contentEnd && readTag(data, contentStart) == "mlth" {
 		offset = contentStart + int(readUint32LE(data, contentStart+4))
@@ -1212,7 +1200,7 @@ func collectMithTidsPids(data []byte) (tids []uint32, pids []string) {
 			tids = append(tids, readUint32LE(data, offset+16))
 			var pid [8]byte
 			if offset+136 <= len(data) {
-				for i := 0; i < 8; i++ {
+				for i := range 8 {
 					pid[i] = data[offset+135-i]
 				}
 			}
@@ -1231,10 +1219,7 @@ func forEachTrackLocations(data []byte, fn func(trackOffset int, loc0D, loc0B st
 		return
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 	offset := contentStart
 	if contentStart+12 <= contentEnd && readTag(data, contentStart) == "mlth" {
 		offset = contentStart + int(readUint32LE(data, contentStart+4))

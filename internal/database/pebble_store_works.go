@@ -46,7 +46,7 @@ func (p *PebbleStore) GetAllWorks_Pebble() ([]Work, error) {
 }
 
 func (p *PebbleStore) GetWorkByID(id string) (*Work, error) {
-	key := []byte(fmt.Sprintf("work:%s", id))
+	key := fmt.Appendf(nil, "work:%s", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -75,7 +75,7 @@ func (p *PebbleStore) CreateWork(work *Work) (*Work, error) {
 		return nil, err
 	}
 	batch := p.db.NewBatch()
-	key := []byte(fmt.Sprintf("work:%s", work.ID))
+	key := fmt.Appendf(nil, "work:%s", work.ID)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return nil, err
@@ -83,7 +83,7 @@ func (p *PebbleStore) CreateWork(work *Work) (*Work, error) {
 	// Basic title index (case-insensitive normalized) for future lookup
 	normTitle := util.NormalizeString(work.Title)
 	if normTitle != "" {
-		idxKey := []byte(fmt.Sprintf("work:title:%s:%s", normTitle, work.ID))
+		idxKey := fmt.Appendf(nil, "work:title:%s:%s", normTitle, work.ID)
 		if err := batch.Set(idxKey, []byte(work.ID), nil); err != nil {
 			batch.Close()
 			return nil, err
@@ -110,7 +110,7 @@ func (p *PebbleStore) UpdateWork(id string, work *Work) (*Work, error) {
 		return nil, err
 	}
 	batch := p.db.NewBatch()
-	key := []byte(fmt.Sprintf("work:%s", id))
+	key := fmt.Appendf(nil, "work:%s", id)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return nil, err
@@ -119,13 +119,13 @@ func (p *PebbleStore) UpdateWork(id string, work *Work) (*Work, error) {
 	newNorm := util.NormalizeString(work.Title)
 	if oldNorm != newNorm {
 		if oldNorm != "" {
-			if err := batch.Delete([]byte(fmt.Sprintf("work:title:%s:%s", oldNorm, id)), nil); err != nil {
+			if err := batch.Delete(fmt.Appendf(nil, "work:title:%s:%s", oldNorm, id), nil); err != nil {
 				batch.Close()
 				return nil, fmt.Errorf("pebble batch delete old work title index: %w", err)
 			}
 		}
 		if newNorm != "" {
-			if err := batch.Set([]byte(fmt.Sprintf("work:title:%s:%s", newNorm, id)), []byte(id), nil); err != nil {
+			if err := batch.Set(fmt.Appendf(nil, "work:title:%s:%s", newNorm, id), []byte(id), nil); err != nil {
 				batch.Close()
 				return nil, fmt.Errorf("pebble batch set new work title index: %w", err)
 			}
@@ -147,14 +147,14 @@ func (p *PebbleStore) DeleteWork(id string) error {
 		return nil
 	}
 	batch := p.db.NewBatch()
-	key := []byte(fmt.Sprintf("work:%s", id))
+	key := fmt.Appendf(nil, "work:%s", id)
 	if err := batch.Delete(key, nil); err != nil {
 		batch.Close()
 		return err
 	}
 	norm := util.NormalizeString(work.Title)
 	if norm != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("work:title:%s:%s", norm, id)), nil); err != nil {
+		if err := batch.Delete(fmt.Appendf(nil, "work:title:%s:%s", norm, id), nil); err != nil {
 			batch.Close()
 			return fmt.Errorf("pebble batch delete work title index: %w", err)
 		}
@@ -178,7 +178,7 @@ func (p *PebbleStore) GetBooksByWorkID(workID string) ([]Book, error) {
 	// colons), which we point-look-up against the authoritative book:<id> row.
 	// A book that is absent (hard-deleted) or MarkedForDeletion (soft-deleted)
 	// is skipped. This can never desync from the source of truth.
-	prefix := []byte(fmt.Sprintf("book:work:%s:", workID))
+	prefix := fmt.Appendf(nil, "book:work:%s:", workID)
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})

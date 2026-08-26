@@ -73,8 +73,11 @@ func TestScoreCore_PinnedToProductionScorer(t *testing.T) {
 // evaluateBook: known ranks + unmatchable skip counting
 // ---------------------------------------------------------------------------
 
-func intPtr(i int) *int         { return &i }
-func strPtr(s string) *string   { return &s }
+//go:fix inline
+func intPtr(i int) *int { return new(i) }
+
+//go:fix inline
+func strPtr(s string) *string   { return new(s) }
 func sha256Hex(s string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) }
 
 func TestEvaluateBook_AppliedRanksFirst(t *testing.T) {
@@ -85,7 +88,7 @@ func TestEvaluateBook_AppliedRanksFirst(t *testing.T) {
 	if hash == "" {
 		t.Fatal("applied candidate must have a canonical id / source hash")
 	}
-	book := &database.Book{ID: "b1", Title: "The Way of Kings", Duration: intPtr(1000), MetadataSourceHash: &hash}
+	book := &database.Book{ID: "b1", Title: "The Way of Kings", Duration: new(1000), MetadataSourceHash: &hash}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 3)
 	ev, skip := evaluateBook(book, []metafetch.MetadataCandidate{applied, distractor}, "auto", defaultSweepKnobs(), grid)
@@ -110,7 +113,7 @@ func TestEvaluateBook_DurationDemotesApplied(t *testing.T) {
 	distractor := metafetch.MetadataCandidate{Title: "Elantris", Source: "google", ISBN: "1234567890", DurationSec: 2000}
 
 	hash := candidateSourceHash(applied)
-	book := &database.Book{ID: "b2", Title: "Elantris", Duration: intPtr(2000), MetadataSourceHash: &hash}
+	book := &database.Book{ID: "b2", Title: "Elantris", Duration: new(2000), MetadataSourceHash: &hash}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 2)
 	ev, skip := evaluateBook(book, []metafetch.MetadataCandidate{applied, distractor}, "manual", defaultSweepKnobs(), grid)
@@ -126,7 +129,7 @@ func TestEvaluateBook_Unmatchable(t *testing.T) {
 	c1 := metafetch.MetadataCandidate{Title: "A", Source: "audible", ASIN: "B00AAA"}
 	c2 := metafetch.MetadataCandidate{Title: "B", Source: "google", ISBN: "111"}
 	// Hash that matches NO cached candidate.
-	book := &database.Book{ID: "b3", Title: "A", MetadataSourceHash: strPtr("deadbeefdeadbeef")}
+	book := &database.Book{ID: "b3", Title: "A", MetadataSourceHash: new("deadbeefdeadbeef")}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 2)
 	ev, skip := evaluateBook(book, []metafetch.MetadataCandidate{c1, c2}, "auto", defaultSweepKnobs(), grid)
@@ -284,10 +287,10 @@ func TestRunCalibrateScoring_Race(t *testing.T) {
 	appliedHash := candidateSourceHash(applied)
 
 	books := []database.Book{
-		{ID: "m1", Title: "Warbreaker", Duration: intPtr(3000), MetadataSourceHash: &appliedHash}, // matched, manual origin
-		{ID: "m2", Title: "Warbreaker", Duration: intPtr(3000), MetadataSourceHash: &appliedHash}, // matched, auto origin
-		{ID: "e3", Title: "Empty", MetadataSourceHash: strPtr("someotherhash")},                   // empty cache
-		{ID: "u4", Title: "Unmatch", MetadataSourceHash: strPtr("nomatchhash")},                   // unmatchable
+		{ID: "m1", Title: "Warbreaker", Duration: new(3000), MetadataSourceHash: &appliedHash}, // matched, manual origin
+		{ID: "m2", Title: "Warbreaker", Duration: new(3000), MetadataSourceHash: &appliedHash}, // matched, auto origin
+		{ID: "e3", Title: "Empty", MetadataSourceHash: new("someotherhash")},                   // empty cache
+		{ID: "u4", Title: "Unmatch", MetadataSourceHash: new("nomatchhash")},                   // unmatchable
 		{ID: "x5", Title: "NoHash"}, // not applied — skipped silently
 	}
 
@@ -310,7 +313,7 @@ func TestRunCalibrateScoring_Race(t *testing.T) {
 	}
 	store.GetMetadataFieldStatesFunc = func(bookID string) ([]database.MetadataFieldState, error) {
 		if bookID == "m1" {
-			return []database.MetadataFieldState{{Field: "title", OverrideValue: strPtr(`"x"`)}}, nil
+			return []database.MetadataFieldState{{Field: "title", OverrideValue: new(`"x"`)}}, nil
 		}
 		return nil, nil
 	}

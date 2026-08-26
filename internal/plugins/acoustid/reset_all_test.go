@@ -127,7 +127,7 @@ func TestResetAll_DeletesCandidatesAcrossPages(t *testing.T) {
 	emb := newTestResetAllEmbeddingStore(t)
 
 	const n = 7 // > 1 page when the loop's internal pageSize is small enough to matter
-	for i := 0; i < n; i++ {
+	for i := range n {
 		c := database.DedupCandidate{
 			EntityType: "book",
 			EntityAID:  string(rune('a' + i)),

@@ -24,7 +24,7 @@ const dedupAutoMergeJournalPfx = "dedup:automerge:"
 // autoMergeJournalKey renders the fixed-width key for an entry's nanosecond
 // timestamp so prefix scans return rows in a stable, chronological order.
 func autoMergeJournalKey(unixNano int64) []byte {
-	return []byte(fmt.Sprintf("%s%016x", dedupAutoMergeJournalPfx, uint64(unixNano)))
+	return fmt.Appendf(nil, "%s%016x", dedupAutoMergeJournalPfx, uint64(unixNano))
 }
 
 // AutoMergeJournalEntry records one Tier-1 auto-merge so it can be reversed.

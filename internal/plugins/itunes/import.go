@@ -43,4 +43,4 @@ func (p *Plugin) runImport(ctx context.Context, _ json.RawMessage, reporter sdk.
 }
 
 // Ensure methods are referenced so staticcheck doesn't flag them as unused (U1000).
-var _ = []interface{}{(*Plugin).importDef, (*Plugin).runImport}
+var _ = []any{(*Plugin).importDef, (*Plugin).runImport}

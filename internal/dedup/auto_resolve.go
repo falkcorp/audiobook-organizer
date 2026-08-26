@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -61,7 +61,7 @@ func DistinctAutoResolvePrimaryKinds(signals []unified.Signal) []unified.SignalK
 			out = append(out, sig.Kind)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 

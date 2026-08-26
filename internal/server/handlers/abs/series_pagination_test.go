@@ -127,7 +127,7 @@ func TestLibrarySeries_PagesPartitionTheSeriesSet(t *testing.T) {
 	const limit = 2
 	seen := map[string]int{}
 	var walked []string
-	for page := 0; page < 5; page++ { // 4 real pages + 1 past the end
+	for page := range 5 { // 4 real pages + 1 past the end
 		names, pageTotal := absPgFetch(t, h, tok, fmt.Sprintf("limit=%d&page=%d", limit, page))
 
 		// Total must be the FULL count on every page. If it were len(results) the

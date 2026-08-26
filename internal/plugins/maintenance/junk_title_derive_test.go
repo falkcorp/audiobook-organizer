@@ -166,7 +166,7 @@ func TestDeriveJunkTitleReplacement_RejectsNoOpRewrite(t *testing.T) {
 func TestMajorityDirOf_IsDeterministicOnTies(t *testing.T) {
 	paths := []string{"/b/zzz/1.mp3", "/a/aaa/2.mp3"}
 	first := majorityDirOf(paths)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if got := majorityDirOf(paths); got != first {
 			t.Fatalf("majorityDirOf is unstable: %q then %q", first, got)
 		}

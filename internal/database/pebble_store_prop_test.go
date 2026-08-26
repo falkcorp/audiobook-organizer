@@ -10,6 +10,7 @@ package database_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -178,7 +179,7 @@ func TestProp_BookVersion_SingleActiveInvariant(t *testing.T) {
 
 		n := rapid.IntRange(1, 8).Draw(t, "n_versions")
 		activeAttempts := 0
-		for i := 0; i < n; i++ {
+		for range n {
 			v := rapidgen.BookVersion(t, bookID)
 			if _, err := store.CreateBookVersion(v); err != nil {
 				// The store rejects second-active — that's the invariant
@@ -374,7 +375,7 @@ func TestProp_OperationChange_Persistence(t *testing.T) {
 
 		n := rapid.IntRange(1, 5).Draw(t, "n_changes")
 		wantIDs := make(map[string]struct{}, n)
-		for i := 0; i < n; i++ {
+		for range n {
 			change := rapidgen.OperationChange(t, opID, bookID)
 			if err := store.CreateOperationChange(change); err != nil {
 				t.Fatalf("CreateOperationChange: %v", err)
@@ -448,10 +449,5 @@ func TestProp_ListUsers_ContainsCreatedUser(t *testing.T) {
 // containsString returns true if needle appears in haystack. Used by the
 // tag round-trip test.
 func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }

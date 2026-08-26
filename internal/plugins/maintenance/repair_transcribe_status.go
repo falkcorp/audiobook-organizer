@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -296,9 +297,7 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 
 	mu.Lock()
 	snap := make(map[string]int, len(counts))
-	for k, v := range counts {
-		snap[k] = v
-	}
+	maps.Copy(snap, counts)
 	mu.Unlock()
 
 	log.Info("repair-transcribe-status: complete",

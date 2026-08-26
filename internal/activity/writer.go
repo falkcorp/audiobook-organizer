@@ -459,11 +459,11 @@ func ParseLogLineFull(line string) ParsedLogLine {
 func extractSlogAttr(line string, keys ...string) string {
 	for _, key := range keys {
 		needle := " " + key + "="
-		idx := strings.Index(line, needle)
-		if idx < 0 {
+		_, after, ok := strings.Cut(line, needle)
+		if !ok {
 			continue
 		}
-		rest := line[idx+len(needle):]
+		rest := after
 		if rest == "" {
 			continue
 		}
@@ -534,8 +534,8 @@ func parseLogLineCore(line string) (level, source, message string) {
 	// GIN logs: [GIN] YYYY/MM/DD - HH:MM:SS | STATUS | ...
 	if strings.HasPrefix(line, "[GIN]") {
 		rest := line[5:]
-		if idx := strings.Index(rest, "| "); idx >= 0 {
-			message = strings.TrimSpace(rest[idx+2:])
+		if _, after, ok := strings.Cut(rest, "| "); ok {
+			message = strings.TrimSpace(after)
 		} else {
 			message = strings.TrimSpace(rest)
 		}

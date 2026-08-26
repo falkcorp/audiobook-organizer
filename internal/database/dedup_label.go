@@ -19,7 +19,7 @@ const dedupLabelPfx = "dedup:label:"
 // dedupLabelKey renders the fixed-width key for a candidate ID so that range
 // scans over the prefix return rows in a stable order.
 func dedupLabelKey(candidateID int64) []byte {
-	return []byte(fmt.Sprintf("%s%016x", dedupLabelPfx, uint64(candidateID)))
+	return fmt.Appendf(nil, "%s%016x", dedupLabelPfx, uint64(candidateID))
 }
 
 // BookFeatures captures the per-book evidence a judge needs. Computed by the

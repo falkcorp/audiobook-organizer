@@ -51,9 +51,9 @@ type TorrentStatus struct {
 }
 
 type rpcRequest struct {
-	Method string        `json:"method"`
-	Params []interface{} `json:"params"`
-	ID     int64         `json:"id"`
+	Method string `json:"method"`
+	Params []any  `json:"params"`
+	ID     int64  `json:"id"`
 }
 
 type rpcResponse struct {
@@ -83,9 +83,9 @@ func New(baseURL, password string) (*Client, error) {
 }
 
 // call sends a JSON-RPC request and decodes the result.
-func (c *Client) call(method string, params ...interface{}) (json.RawMessage, error) {
+func (c *Client) call(method string, params ...any) (json.RawMessage, error) {
 	if params == nil {
-		params = []interface{}{}
+		params = []any{}
 	}
 	id := c.reqID.Add(1)
 	body, _ := json.Marshal(rpcRequest{
@@ -145,7 +145,7 @@ func (c *Client) ListTorrents() (map[string]TorrentStatus, error) {
 	if err := c.Login(); err != nil {
 		return nil, err
 	}
-	result, err := c.call("core.get_torrents_status", map[string]interface{}{}, torrentFields)
+	result, err := c.call("core.get_torrents_status", map[string]any{}, torrentFields)
 	if err != nil {
 		return nil, err
 	}

@@ -54,7 +54,7 @@ func TestReading_SetAndGetPosition(t *testing.T) {
 	srv := setupReadingTestServer(t)
 
 	// POST position
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"segment_id": "s1", "position_seconds": 300,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/books/b1/position", bytes.NewReader(body))
@@ -88,7 +88,7 @@ func TestReading_StateComputed(t *testing.T) {
 	srv := setupReadingTestServer(t)
 
 	// Listen to 300s of a 1800s book → 16% in_progress.
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"segment_id": "s1", "position_seconds": 300,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/books/b1/position", bytes.NewReader(body))

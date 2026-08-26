@@ -5,6 +5,8 @@
 package dedup
 
 // strPtr returns a pointer to a string value.
+//
+//go:fix inline
 func strPtr(s string) *string {
-	return &s
+	return new(s)
 }

@@ -112,7 +112,7 @@ func TestListAudiobooksWithPagination(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create multiple books
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		filePath := filepath.Join(tempDir, "book"+string(rune(i))+".m4b")
 		os.WriteFile(filePath, []byte("audio"), 0o644)
 

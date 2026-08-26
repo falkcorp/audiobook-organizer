@@ -64,7 +64,7 @@ func (s *PebbleMetricsStore) Close() error { return nil }
 //
 //	met:<cacheName>:<20d-unix-nano>
 func pmetKey(cacheName string, t time.Time) []byte {
-	return []byte(fmt.Sprintf("met:%s:%020d", cacheName, t.UnixNano()))
+	return fmt.Appendf(nil, "met:%s:%020d", cacheName, t.UnixNano())
 }
 
 // pmetPrefix returns the inclusive lower-bound prefix for a cache-name range scan.
@@ -140,7 +140,7 @@ func (s *PebbleMetricsStore) GetCacheStatsHistory(cacheName string, since time.T
 
 	for _, name := range names {
 		lower := pmetKey(name, since)
-		upper := []byte(fmt.Sprintf("met:%s:%s", name, pmetKeyMaxNano))
+		upper := fmt.Appendf(nil, "met:%s:%s", name, pmetKeyMaxNano)
 
 		iter, err := s.db.NewIter(&pebble.IterOptions{
 			LowerBound: lower,
@@ -208,10 +208,7 @@ func (s *PebbleMetricsStore) PruneCacheStatsHistory(olderThan time.Time) (int64,
 		_ = iter.Close()
 
 		for i := 0; i < len(keys); i += 500 {
-			end := i + 500
-			if end > len(keys) {
-				end = len(keys)
-			}
+			end := min(i+500, len(keys))
 			batch := s.db.NewBatch()
 			for _, k := range keys[i:end] {
 				if err := batch.Delete(k, nil); err != nil {
@@ -267,10 +264,7 @@ func (s *PebbleMetricsStore) SweepExpiredMetrics() (int64, error) {
 		_ = iter.Close()
 
 		for i := 0; i < len(keys); i += 500 {
-			end := i + 500
-			if end > len(keys) {
-				end = len(keys)
-			}
+			end := min(i+500, len(keys))
 			batch := s.db.NewBatch()
 			for _, k := range keys[i:end] {
 				if err := batch.Delete(k, nil); err != nil {

@@ -79,16 +79,14 @@ func TestProviderSemaphore_CapRespectedAndReached(t *testing.T) {
 	const goroutines = 24
 	var wg sync.WaitGroup
 	ctx := context.Background()
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			if err := sem.acquire(ctx, src.name); err != nil {
 				return
 			}
 			defer sem.release(src.name)
 			_, _ = src.SearchByTitle(ctx, "t")
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -161,13 +159,11 @@ func TestRunBookFetchPool_CtxCancelStopsPromptly(t *testing.T) {
 func TestProtectedSource_ConcurrentCallsRaceFree(t *testing.T) {
 	ps := metadata.NewProtectedSource(&concurrentFakeSource{name: "fake", delay: 2 * time.Millisecond}, 5, 30*time.Second)
 	var wg sync.WaitGroup
-	for i := 0; i < perProviderFetchCap*8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range perProviderFetchCap * 8 {
+		wg.Go(func() {
 			_, _ = ps.SearchByTitle(context.Background(), "t")
 			_, _ = ps.SearchByTitleAndAuthor(context.Background(), "t", "a")
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -214,7 +210,7 @@ func newRecordingStore(books map[string]*database.Book) *recordingStore {
 func makeBooks(n int) (map[string]*database.Book, []string) {
 	books := make(map[string]*database.Book, n)
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("book-%03d", i)
 		books[id] = &database.Book{ID: id, Title: fmt.Sprintf("Title %03d", i)}
 		ids = append(ids, id)
@@ -262,7 +258,7 @@ func TestRunBulkMetadataFetchForBookIDs_ResumeSkipExact(t *testing.T) {
 	store := newRecordingStore(books)
 	// Mark the first 30 as already done.
 	const alreadyDone = 30
-	for i := 0; i < alreadyDone; i++ {
+	for i := range alreadyDone {
 		store.existing = append(store.existing, database.OperationResult{OperationID: "op-resume", BookID: ids[i], Status: "cached"})
 	}
 	srv := &Server{store: store.MockStore, metadataFetchService: metafetch.NewService(store)}
@@ -283,7 +279,7 @@ func TestRunBulkMetadataFetchForBookIDs_ResumeSkipExact(t *testing.T) {
 	for _, r := range store.created {
 		seen[r.BookID] = true
 	}
-	for i := 0; i < alreadyDone; i++ {
+	for i := range alreadyDone {
 		if seen[ids[i]] {
 			t.Fatalf("book %s was already done but got re-processed", ids[i])
 		}

@@ -80,7 +80,7 @@ func TestGetMetadataChangeHistory_OrderedByNewest(t *testing.T) {
 	defer cleanup()
 
 	base := time.Now().Add(-3 * time.Hour)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		val := `"value` + string(rune('A'+i)) + `"`
 		record := &MetadataChangeRecord{
 			BookID:     "book-order",
@@ -197,7 +197,7 @@ func TestGetBookChangeHistory_LimitRespected(t *testing.T) {
 	defer cleanup()
 
 	now := time.Now()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		val := `"val` + string(rune('0'+i)) + `"`
 		record := &MetadataChangeRecord{
 			BookID:     "book-limit",

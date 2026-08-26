@@ -118,7 +118,7 @@ func (s *Server) RegisterDiagnosticsAIOp(reg *opsregistry.Registry) error {
 			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Batch %s submitted with %d request(s) — polling for completion", batchID, requestCount))
 			_ = reporter.UpdateProgress(80, 100, fmt.Sprintf("Batch %s submitted, awaiting completion", batchID))
 
-			for i := 0; i < diagAIMaxPolls; i++ {
+			for i := range diagAIMaxPolls {
 				if reporter.IsCanceled() {
 					// Best-effort: the batch keeps costing money on OpenAI's side
 					// if it is left running after the op is gone.

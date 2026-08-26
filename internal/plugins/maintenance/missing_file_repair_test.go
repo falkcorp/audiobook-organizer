@@ -131,7 +131,7 @@ func TestMissingFileRepair_MaxDeletesCaps(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	rows := []database.BookFileCore{{ID: "keep", BookID: "b", FilePath: live}}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rows = append(rows, database.BookFileCore{
 			ID:       filepath.Join("dead", string(rune('a'+i))),
 			BookID:   "b",

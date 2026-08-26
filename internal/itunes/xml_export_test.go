@@ -26,7 +26,7 @@ func TestExportBooksToITunesXML_EmptyList(t *testing.T) {
 	require.NoError(t, err)
 
 	// Must be valid XML
-	assert.True(t, xml.Unmarshal(data, new(interface{})) == nil || isValidPlist(data),
+	assert.True(t, xml.Unmarshal(data, new(any)) == nil || isValidPlist(data),
 		"output should be valid XML")
 
 	// Should contain the playlist but no track entries

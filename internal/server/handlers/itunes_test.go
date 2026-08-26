@@ -48,7 +48,8 @@ func enabledSvc(t *testing.T) *handlersmocks.MockITunesService {
 	return svc
 }
 
-func itunesStrptr(s string) *string { return &s }
+//go:fix inline
+func itunesStrptr(s string) *string { return new(s) }
 
 // ── itunesEnabledOrError (503 disabled path) ──────────────────────────────
 
@@ -232,7 +233,7 @@ func TestITunesHandler_WriteBackPreview_NoLibraryPath_400(t *testing.T) {
 func TestITunesHandler_ListBooks_Happy(t *testing.T) {
 	store := handlersmocks.NewMockITunesStore(t)
 	store.EXPECT().ListBooksByITunesPID(0, 0).Return([]database.Book{
-		{ID: "b1", Title: "Book One", FilePath: "/x/b1.m4b", ITunesPersistentID: itunesStrptr("PID1")},
+		{ID: "b1", Title: "Book One", FilePath: "/x/b1.m4b", ITunesPersistentID: new("PID1")},
 	}, nil)
 
 	h := handlers.NewITunesHandler(enabledSvc(t), nil, nil, store)
@@ -257,7 +258,7 @@ func TestITunesHandler_ListBooks_Search_BoundedOverfetch_PinsResultSet(t *testin
 	const window = 10000
 	books := make([]database.Book, 0, window)
 	var wantPIDs []string
-	for i := 0; i < window; i++ {
+	for i := range window {
 		id := fmt.Sprintf("b%d", i)
 		var pid *string
 		if i%80 == 0 { // 10000/80 = 125 PID-tagged matches, spanning >1 page

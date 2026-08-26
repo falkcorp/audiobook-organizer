@@ -438,13 +438,13 @@ func (p *PebbleStore) SaveLibraryFingerprint(path string, size int64, modTime ti
 	if err != nil {
 		return err
 	}
-	key := []byte(fmt.Sprintf("itunes:fingerprint:%s", path))
+	key := fmt.Appendf(nil, "itunes:fingerprint:%s", path)
 	return p.db.Set(key, data, pebble.Sync)
 }
 
 // GetLibraryFingerprint retrieves the stored fingerprint for an iTunes library file.
 func (p *PebbleStore) GetLibraryFingerprint(path string) (*LibraryFingerprintRecord, error) {
-	key := []byte(fmt.Sprintf("itunes:fingerprint:%s", path))
+	key := fmt.Appendf(nil, "itunes:fingerprint:%s", path)
 	data, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil

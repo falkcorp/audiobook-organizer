@@ -111,7 +111,7 @@ func TestJaroWinklerBelowThresholdIsSoundUnderFuzz(t *testing.T) {
 	}
 
 	skipped := 0
-	for iter := 0; iter < 200000; iter++ {
+	for range 200000 {
 		a := randName()
 		b := a
 		// Half the time perturb a copy, so the corpus is dense near the

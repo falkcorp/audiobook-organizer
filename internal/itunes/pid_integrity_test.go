@@ -64,7 +64,7 @@ func TestComputeMergeOrphanCensus(t *testing.T) {
 			"b_j":  {ID: "b_j", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del},
 			"b_hp": {ID: "b_hp", IsPrimaryVersion: &primary},
 			"b_m": {ID: "b_m", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del,
-				MergedIntoBookID: strptr("b_winner")},
+				MergedIntoBookID: new("b_winner")},
 		},
 	}
 
@@ -116,7 +116,8 @@ func TestComputeMergeOrphanCensus(t *testing.T) {
 	}
 }
 
-func strptr(s string) *string { return &s }
+//go:fix inline
+func strptr(s string) *string { return new(s) }
 
 // TestComputePIDIntegrity exercises the duplicate-PID classification and the
 // relocate-correctness probe with no real .itl (itlPath = "").

@@ -132,7 +132,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	slog.Info("bulk-fetch-metadata books total, already cached, to fetch", "opID", opID, "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
 
 	reporter.SetTotal(totalBooks)
-	for i := 0; i < alreadyDone; i++ {
+	for range alreadyDone {
 		reporter.Increment()
 	}
 

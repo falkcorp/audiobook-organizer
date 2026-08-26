@@ -31,10 +31,10 @@ type QuickQueryEntry struct {
 
 // QuickQueryResult is one item in the GET /api/v1/library/quick-queries response.
 type QuickQueryResult struct {
-	ID     string                 `json:"id"`
-	Label  string                 `json:"label"`
-	Count  int                    `json:"count"`
-	Filter map[string]interface{} `json:"filter"`
+	ID     string         `json:"id"`
+	Label  string         `json:"label"`
+	Count  int            `json:"count"`
+	Filter map[string]any `json:"filter"`
 }
 
 // quickQueryDefs defines the six preset quick queries: id, human label, and the
@@ -43,47 +43,47 @@ type QuickQueryResult struct {
 var quickQueryDefs = []struct {
 	id     string
 	label  string
-	filter map[string]interface{}
+	filter map[string]any
 }{
 	{
 		id:    "missing_covers",
 		label: "Missing covers",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"missingCovers": true,
 		},
 	},
 	{
 		id:    "broken_files",
 		label: "Broken files",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"hasFileErrors": true,
 		},
 	},
 	{
 		id:    "no_fingerprints",
 		label: "No fingerprints",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"fingerprintStatus": "none",
 		},
 	},
 	{
 		id:    "in_import_path",
 		label: "In import path",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"inImportPath": true,
 		},
 	},
 	{
 		id:    "no_isbn",
 		label: "No ISBN",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"noIsbn": true,
 		},
 	},
 	{
 		id:    "duplicates_flagged",
 		label: "Duplicates flagged",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"duplicatesFlagged": true,
 		},
 	},

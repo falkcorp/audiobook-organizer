@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"net/http"
 	"os"
@@ -415,10 +416,8 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 			if role == nil {
 				continue
 			}
-			for _, perm := range role.Permissions {
-				if perm == auth.PermUsersManage {
-					return u, "", nil
-				}
+			if slices.Contains(role.Permissions, auth.PermUsersManage) {
+				return u, "", nil
 			}
 		}
 	}

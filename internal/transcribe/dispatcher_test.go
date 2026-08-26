@@ -43,7 +43,7 @@ func tempWAVJobs(t *testing.T, n int) map[string]string {
 	t.Helper()
 	dir := t.TempDir()
 	jobs := make(map[string]string, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("book-%03d", i)
 		path := filepath.Join(dir, id+".wav")
 		if err := os.WriteFile(path, []byte("RIFF-fake-wav"), 0o644); err != nil {

@@ -205,10 +205,7 @@ func TestGetAllBookSummariesFiltered_FallbackHonorsSortBy(t *testing.T) {
 						SortBy: "title", SortAscending: true,
 					})
 					require.NoError(t, err)
-					end := offset + pageSize
-					if end > len(wantAsc) {
-						end = len(wantAsc)
-					}
+					end := min(offset+pageSize, len(wantAsc))
 					require.Equal(t, wantAsc[offset:end], summaryTitlesInOrder(page),
 						"%s: page at offset %d", backend, offset)
 					seen = append(seen, summaryTitlesInOrder(page)...)

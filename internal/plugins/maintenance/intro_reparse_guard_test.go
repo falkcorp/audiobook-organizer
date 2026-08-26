@@ -52,7 +52,8 @@ func (s *reparseStore) UpdateBook(id string, b *database.Book) (*database.Book, 
 	return &cp, nil
 }
 
-func sp(s string) *string { return &s }
+//go:fix inline
+func sp(s string) *string { return new(s) }
 
 // TestReparseNeverClearsAnUnreproducibleParse is the data-loss regression test
 // for the reparse guard.
@@ -67,19 +68,19 @@ func TestReparseNeverClearsAnUnreproducibleParse(t *testing.T) {
 	// the parse from the earlier, better transcript is still stored.
 	degraded := &database.Book{
 		ID:                  "book-degraded",
-		IntroTranscription:  sp("This is Audible."),
-		TranscribedTitle:    sp("Wind and Truth"),
-		TranscribedAuthor:   sp("Brandon Sanderson"),
-		TranscribedNarrator: sp("Kate Reading and Michael Kramer"),
+		IntroTranscription:  new("This is Audible."),
+		TranscribedTitle:    new("Wind and Truth"),
+		TranscribedAuthor:   new("Brandon Sanderson"),
+		TranscribedNarrator: new("Kate Reading and Michael Kramer"),
 	}
 	// Narrative prose that merely contains the word "by" — the old parser turned
 	// this into a title/author pair; the new one must classify it prose and, on
 	// a reparse, leave the stored fields untouched rather than clearing them.
 	prose := &database.Book{
 		ID:                 "book-prose",
-		IntroTranscription: sp("The morning dragged on and he wasn't mildly amused by Memphis fortunes, nor the talk that followed him home."),
-		TranscribedTitle:   sp("Some Earlier Title"),
-		TranscribedAuthor:  sp("Some Earlier Author"),
+		IntroTranscription: new("The morning dragged on and he wasn't mildly amused by Memphis fortunes, nor the talk that followed him home."),
+		TranscribedTitle:   new("Some Earlier Title"),
+		TranscribedAuthor:  new("Some Earlier Author"),
 	}
 
 	store := newReparseStore(degraded, prose)
@@ -110,9 +111,9 @@ func TestReparseNeverClearsAnUnreproducibleParse(t *testing.T) {
 func TestReparseStillUpgradesACorrectableParse(t *testing.T) {
 	stale := &database.Book{
 		ID:                 "book-leaked-verb",
-		IntroTranscription: sp("Awakened Essence 1 Written by Jacob Poole Performed by Alex Perrone"),
-		TranscribedTitle:   sp("Awakened Essence 1 Written"), // the leaked verb
-		TranscribedAuthor:  sp("Jacob Poole"),
+		IntroTranscription: new("Awakened Essence 1 Written by Jacob Poole Performed by Alex Perrone"),
+		TranscribedTitle:   new("Awakened Essence 1 Written"), // the leaked verb
+		TranscribedAuthor:  new("Jacob Poole"),
 	}
 	store := newReparseStore(stale)
 	p := &Plugin{}
@@ -137,10 +138,10 @@ func TestReparseStillUpgradesACorrectableParse(t *testing.T) {
 func TestReparseKeepsExistingNarratorWhenNewParseHasNone(t *testing.T) {
 	b := &database.Book{
 		ID:                  "book-no-narrator",
-		IntroTranscription:  sp("On Writing by Stephen King No one writes a long novel alone"),
-		TranscribedTitle:    sp("On Writing Old"),
-		TranscribedAuthor:   sp("Stephen King"),
-		TranscribedNarrator: sp("Christopher Hurt"), // from a richer earlier transcript
+		IntroTranscription:  new("On Writing by Stephen King No one writes a long novel alone"),
+		TranscribedTitle:    new("On Writing Old"),
+		TranscribedAuthor:   new("Stephen King"),
+		TranscribedNarrator: new("Christopher Hurt"), // from a richer earlier transcript
 	}
 	store := newReparseStore(b)
 	p := &Plugin{}
@@ -187,9 +188,9 @@ func TestReparseDryRunWritesNothingButReportsWouldUpdate(t *testing.T) {
 	fixture := func() *database.Book {
 		return &database.Book{
 			ID:                 "book-dry-run",
-			IntroTranscription: sp("Awakened Essence 1 Written by Jacob Poole Performed by Alex Perrone"),
-			TranscribedTitle:   sp("Awakened Essence 1 Written"),
-			TranscribedAuthor:  sp("Jacob Poole"),
+			IntroTranscription: new("Awakened Essence 1 Written by Jacob Poole Performed by Alex Perrone"),
+			TranscribedTitle:   new("Awakened Essence 1 Written"),
+			TranscribedAuthor:  new("Jacob Poole"),
 		}
 	}
 

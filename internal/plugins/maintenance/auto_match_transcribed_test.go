@@ -44,8 +44,11 @@ func (d *autoMatchDeps) HasMetadataFetchService() bool { return true }
 
 // ptr helpers
 
-func boolPtr(b bool) *bool    { return &b }
-func strPtr(s string) *string { return &s }
+//go:fix inline
+func boolPtr(b bool) *bool { return new(b) }
+
+//go:fix inline
+func strPtr(s string) *string { return new(s) }
 
 // newAutoMatchPlugin builds a Plugin + MockStore wired to the given books.
 func newAutoMatchPlugin(books []database.Book, deps *autoMatchDeps) *Plugin {
@@ -72,7 +75,7 @@ func newAutoMatchPlugin(books []database.Book, deps *autoMatchDeps) *Plugin {
 
 func autoMatchParams(dryRun bool, minScore float64) json.RawMessage {
 	b, _ := json.Marshal(autoMatchTranscribedParams{
-		DryRun:   boolPtr(dryRun),
+		DryRun:   new(dryRun),
 		MinScore: minScore,
 	})
 	return b
@@ -88,8 +91,8 @@ func TestAutoMatchTranscribed_Apply(t *testing.T) {
 		{
 			ID:                "b1",
 			Title:             "Name Wind",
-			TranscribedTitle:  strPtr(trans),
-			TranscribedAuthor: strPtr(author),
+			TranscribedTitle:  new(trans),
+			TranscribedAuthor: new(author),
 			// MetadataReviewStatus == nil → eligible
 		},
 	}
@@ -122,8 +125,8 @@ func TestAutoMatchTranscribed_DryRunNoApply(t *testing.T) {
 		{
 			ID:                "b1",
 			Title:             "Name Wind",
-			TranscribedTitle:  strPtr(trans),
-			TranscribedAuthor: strPtr(author),
+			TranscribedTitle:  new(trans),
+			TranscribedAuthor: new(author),
 		},
 	}
 
@@ -180,7 +183,7 @@ func TestAutoMatchTranscribed_AlreadyReviewedSkipped(t *testing.T) {
 		{
 			ID:                   "b1",
 			Title:                "Already Matched Book",
-			TranscribedTitle:     strPtr(trans),
+			TranscribedTitle:     new(trans),
 			MetadataReviewStatus: &status, // already reviewed → must be skipped
 		},
 	}

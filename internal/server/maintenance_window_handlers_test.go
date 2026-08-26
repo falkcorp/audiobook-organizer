@@ -116,7 +116,7 @@ func TestUpdateMaintenanceWindowConfig_Valid(t *testing.T) {
 
 	srv := setupMaintenanceTestServer(t)
 
-	body, err := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]any{
 		"enabled":      true,
 		"window_start": 3,
 		"window_end":   5,
@@ -158,7 +158,7 @@ func TestUpdateMaintenanceWindowConfig_Valid(t *testing.T) {
 func TestUpdateMaintenanceWindowConfig_InvalidHour(t *testing.T) {
 	srv := setupMaintenanceTestServer(t)
 
-	body, err := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]any{
 		"enabled":      true,
 		"window_start": 24,
 		"window_end":   5,

@@ -438,7 +438,7 @@ func TestSQLiteStore_GetOperationResultsPage(t *testing.T) {
 	op, err := store.CreateOperation("page-op-1", "scan", nil)
 	require.NoError(t, err)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, store.CreateOperationResult(&OperationResult{
 			OperationID: op.ID,
 			BookID:      "book-" + string(rune('A'+i)),

@@ -189,7 +189,7 @@ func parseModes(raw string) (Modes, error) {
 		return Modes{CF: true, JWT: true}, nil
 	}
 	var m Modes
-	for _, part := range strings.Split(raw, ",") {
+	for part := range strings.SplitSeq(raw, ",") {
 		switch strings.ToLower(strings.TrimSpace(part)) {
 		case modeCF:
 			m.CF = true

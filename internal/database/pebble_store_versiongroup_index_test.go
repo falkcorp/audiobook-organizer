@@ -58,7 +58,7 @@ func TestGetBooksByVersionGroup_PartialIndexUnderReports(t *testing.T) {
 	// intact. This is the shape a real partial index has: the book exists and
 	// is in the group, but nothing points at it.
 	victim := ids[1]
-	victimKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", gid, victim))
+	victimKey := fmt.Appendf(nil, "book:versiongroup:%s:%s", gid, victim)
 	if err := s.db.Delete(victimKey, pebble.Sync); err != nil {
 		t.Fatalf("damage index row: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestGetBooksByVersionGroup_EmptyIndexFallsBackToCorrectAnswer(t *testing.T)
 		}
 	}
 
-	prefix := []byte(fmt.Sprintf("book:versiongroup:%s:", gid))
+	prefix := fmt.Appendf(nil, "book:versiongroup:%s:", gid)
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';'
 	if err := s.db.DeleteRange(prefix, upper, pebble.Sync); err != nil {
@@ -150,7 +150,7 @@ func TestCreateBook_WritesVersionGroupIndexRow(t *testing.T) {
 		t.Fatalf("CreateBook: %v", err)
 	}
 
-	key := []byte(fmt.Sprintf("book:versiongroup:%s:%s", gid, b.ID))
+	key := fmt.Appendf(nil, "book:versiongroup:%s:%s", gid, b.ID)
 	val, closer, err := s.db.Get(key)
 	if err != nil {
 		t.Fatalf("index row missing after CreateBook: %v", err)

@@ -5,6 +5,8 @@
 
 package server
 
+import "slices"
+
 import "strings"
 
 // nonSPAPrefixes are URL prefixes that must NEVER fall through to the SPA
@@ -76,10 +78,5 @@ func isNonSPAPath(path string) bool {
 			return true
 		}
 	}
-	for _, exact := range nonSPAExact {
-		if path == exact {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(nonSPAExact, path)
 }

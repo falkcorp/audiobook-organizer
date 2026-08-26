@@ -16,7 +16,9 @@ import (
 // strPtr is already defined in helpers_test.go.
 
 // intPtr returns a pointer to the given int value.
-func intPtr(v int) *int { return &v }
+//
+//go:fix inline
+func intPtr(v int) *int { return new(v) }
 
 // TestPairEligibility_TableDriven proves parity: PairEligibility makes the
 // same accept/suppress decisions that the inline guards in engine.go made
@@ -35,46 +37,46 @@ func TestPairEligibility_TableDriven(t *testing.T) {
 		// ── version_group_same ───────────────────────────────────────────────
 		{
 			name:            "version_group_same: both in same non-empty group → suppressed",
-			a:               &database.Book{ID: "A1", Title: "Dune", VersionGroupID: strPtr("VG1")},
-			b:               &database.Book{ID: "B1", Title: "Dune", VersionGroupID: strPtr("VG1")},
+			a:               &database.Book{ID: "A1", Title: "Dune", VersionGroupID: new("VG1")},
+			b:               &database.Book{ID: "B1", Title: "Dune", VersionGroupID: new("VG1")},
 			wantOK:          false,
 			wantSuppressors: []string{"version_group_same"},
 		},
 		{
 			name:   "version_group_same: different groups → eligible",
-			a:      &database.Book{ID: "A2", Title: "Dune", VersionGroupID: strPtr("VG1")},
-			b:      &database.Book{ID: "B2", Title: "Dune", VersionGroupID: strPtr("VG2")},
+			a:      &database.Book{ID: "A2", Title: "Dune", VersionGroupID: new("VG1")},
+			b:      &database.Book{ID: "B2", Title: "Dune", VersionGroupID: new("VG2")},
 			wantOK: true,
 		},
 		{
 			name:   "version_group_same: one nil group → eligible",
-			a:      &database.Book{ID: "A3", Title: "Dune", VersionGroupID: strPtr("VG1")},
+			a:      &database.Book{ID: "A3", Title: "Dune", VersionGroupID: new("VG1")},
 			b:      &database.Book{ID: "B3", Title: "Dune"},
 			wantOK: true,
 		},
 		{
 			name:   "version_group_same: both empty string group → eligible (empty groups are ignored)",
-			a:      &database.Book{ID: "A4", Title: "Dune", VersionGroupID: strPtr("")},
-			b:      &database.Book{ID: "B4", Title: "Dune", VersionGroupID: strPtr("")},
+			a:      &database.Book{ID: "A4", Title: "Dune", VersionGroupID: new("")},
+			b:      &database.Book{ID: "B4", Title: "Dune", VersionGroupID: new("")},
 			wantOK: true,
 		},
 		// ── series_volume_differs (structured SeriesSequence) ────────────────
 		{
 			name:            "series_volume: distinct sequence numbers → suppressed",
-			a:               &database.Book{ID: "A5", Title: "Series Name 3", SeriesSequence: intPtr(3)},
-			b:               &database.Book{ID: "B5", Title: "Series Name 4", SeriesSequence: intPtr(4)},
+			a:               &database.Book{ID: "A5", Title: "Series Name 3", SeriesSequence: new(3)},
+			b:               &database.Book{ID: "B5", Title: "Series Name 4", SeriesSequence: new(4)},
 			wantOK:          false,
 			wantSuppressors: []string{"series_volume_differs"},
 		},
 		{
 			name:   "series_volume: same sequence number → eligible",
-			a:      &database.Book{ID: "A6", Title: "My Book", SeriesSequence: intPtr(1)},
-			b:      &database.Book{ID: "B6", Title: "My Book", SeriesSequence: intPtr(1)},
+			a:      &database.Book{ID: "A6", Title: "My Book", SeriesSequence: new(1)},
+			b:      &database.Book{ID: "B6", Title: "My Book", SeriesSequence: new(1)},
 			wantOK: true,
 		},
 		{
 			name:   "series_volume: one has no sequence → eligible",
-			a:      &database.Book{ID: "A7", Title: "My Book", SeriesSequence: intPtr(3)},
+			a:      &database.Book{ID: "A7", Title: "My Book", SeriesSequence: new(3)},
 			b:      &database.Book{ID: "B7", Title: "My Book"},
 			wantOK: true,
 		},
@@ -147,13 +149,13 @@ func TestPairEligibility_TableDriven(t *testing.T) {
 			a: &database.Book{
 				ID:             "A16",
 				Title:          "Chapter 1",
-				VersionGroupID: strPtr("VG1"),
+				VersionGroupID: new("VG1"),
 				FilePath:       filepath.Join(dir1, "001.mp3"),
 			},
 			b: &database.Book{
 				ID:             "B16",
 				Title:          "Chapter 2",
-				VersionGroupID: strPtr("VG1"),
+				VersionGroupID: new("VG1"),
 				FilePath:       filepath.Join(dir1, "002.mp3"),
 			},
 			wantOK:          false,
@@ -188,8 +190,8 @@ func TestPairEligibility_SymmetricDecisions(t *testing.T) {
 	}{
 		{
 			name: "version group",
-			a:    &database.Book{ID: "A1", VersionGroupID: strPtr("VG1")},
-			b:    &database.Book{ID: "B1", VersionGroupID: strPtr("VG1")},
+			a:    &database.Book{ID: "A1", VersionGroupID: new("VG1")},
+			b:    &database.Book{ID: "B1", VersionGroupID: new("VG1")},
 		},
 		{
 			name: "same dir",
@@ -198,8 +200,8 @@ func TestPairEligibility_SymmetricDecisions(t *testing.T) {
 		},
 		{
 			name: "series differs",
-			a:    &database.Book{ID: "A3", Title: "S 3", SeriesSequence: intPtr(3)},
-			b:    &database.Book{ID: "B3", Title: "S 4", SeriesSequence: intPtr(4)},
+			a:    &database.Book{ID: "A3", Title: "S 3", SeriesSequence: new(3)},
+			b:    &database.Book{ID: "B3", Title: "S 4", SeriesSequence: new(4)},
 		},
 		{
 			name: "eligible plain",

@@ -141,7 +141,7 @@ func TestSafeWrite_BackupRotation(t *testing.T) {
 		t.Fatalf("PinLastKnownGood: %v", err)
 	}
 
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		// Each write must produce a DISTINCT backup timestamp; the RFC3339 layout
 		// has nanosecond precision, but force separation to avoid same-instant
 		// collisions on fast machines by varying the payload trivially is not

@@ -20,7 +20,7 @@ import (
 func makeTestSig(seed uint32) string {
 	const n = 4096
 	buf := make([]byte, n*4)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		binary.LittleEndian.PutUint32(buf[i*4:], seed)
 	}
 	return base64.StdEncoding.EncodeToString(buf)

@@ -21,12 +21,12 @@ import (
 // Service generates diagnostic ZIP exports for troubleshooting and AI analysis.
 type Service struct {
 	db            Store
-	aiPipeline    interface{} // *ai.Pipeline or nil
+	aiPipeline    any // *ai.Pipeline or nil
 	itunesXMLPath string
 }
 
 // NewService creates a new diagnostics Service.
-func NewService(db Store, aiPipeline interface{}, itunesXMLPath string) *Service {
+func NewService(db Store, aiPipeline any, itunesXMLPath string) *Service {
 	return &Service{
 		db:            db,
 		aiPipeline:    aiPipeline,
@@ -250,7 +250,7 @@ func (ds *Service) CollectAllBooks() ([]database.BookCore, error) {
 }
 
 // WriteJSON is a helper that marshals data and writes it into the ZIP.
-func WriteJSON(zw *zip.Writer, filename string, data interface{}) error {
+func WriteJSON(zw *zip.Writer, filename string, data any) error {
 	w, err := zw.Create(filename)
 	if err != nil {
 		return err

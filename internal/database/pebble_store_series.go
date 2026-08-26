@@ -53,7 +53,7 @@ func (p *PebbleStore) GetAllSeries_Pebble() ([]Series, error) {
 }
 
 func (p *PebbleStore) GetSeriesByID(id int) (*Series, error) {
-	key := []byte(fmt.Sprintf("series:%d", id))
+	key := fmt.Appendf(nil, "series:%d", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -96,7 +96,7 @@ func (p *PebbleStore) GetSeriesByName(name string, authorID *int) (*Series, erro
 	}
 
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(name), authorIDStr))
+	indexKey := fmt.Appendf(nil, "series:name:%s:%s", util.NormalizeAuthor(name), authorIDStr)
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -141,9 +141,9 @@ func (p *PebbleStore) CreateSeries(name string, authorID *int) (*Series, error) 
 	}
 
 	batch := p.db.NewBatch()
-	key := []byte(fmt.Sprintf("series:%d", id))
+	key := fmt.Appendf(nil, "series:%d", id)
 	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(name), authorIDStr))
+	indexKey := fmt.Appendf(nil, "series:name:%s:%s", util.NormalizeAuthor(name), authorIDStr)
 
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
@@ -163,7 +163,7 @@ func (p *PebbleStore) CreateSeries(name string, authorID *int) (*Series, error) 
 }
 
 func (p *PebbleStore) DeleteSeries(id int) error {
-	key := []byte(fmt.Sprintf("series:%d", id))
+	key := fmt.Appendf(nil, "series:%d", id)
 
 	// Read the series first to clean up the name index
 	val, closer, err := p.db.Get(key)
@@ -174,7 +174,7 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 			if series.AuthorID != nil {
 				authorIDStr = strconv.Itoa(*series.AuthorID)
 			}
-			indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(series.Name), authorIDStr))
+			indexKey := fmt.Appendf(nil, "series:name:%s:%s", util.NormalizeAuthor(series.Name), authorIDStr)
 			if err := p.db.Delete(indexKey, pebble.Sync); err != nil {
 				slog.Warn("pebble Delete series name index", "key", string(indexKey), "error", err)
 			}
@@ -190,7 +190,7 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 }
 
 func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
-	key := []byte(fmt.Sprintf("series:%d", id))
+	key := fmt.Appendf(nil, "series:%d", id)
 	val, closer, err := p.db.Get(key)
 	if err != nil {
 		return fmt.Errorf("series %d not found: %w", id, err)
@@ -207,7 +207,7 @@ func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
 	if series.AuthorID != nil {
 		oldAuthorIDStr = strconv.Itoa(*series.AuthorID)
 	}
-	oldIndexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(series.Name), oldAuthorIDStr))
+	oldIndexKey := fmt.Appendf(nil, "series:name:%s:%s", util.NormalizeAuthor(series.Name), oldAuthorIDStr)
 	if err := p.db.Delete(oldIndexKey, pebble.Sync); err != nil {
 		slog.Warn("pebble Delete old series name index", "key", string(oldIndexKey), "error", err)
 	}
@@ -223,8 +223,8 @@ func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
 	}
 
 	// Create new name index
-	newIndexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(name), oldAuthorIDStr))
-	idBytes := []byte(fmt.Sprintf("%d", id))
+	newIndexKey := fmt.Appendf(nil, "series:name:%s:%s", util.NormalizeAuthor(name), oldAuthorIDStr)
+	idBytes := fmt.Appendf(nil, "%d", id)
 	if err := p.db.Set(newIndexKey, idBytes, pebble.Sync); err != nil {
 		return err
 	}

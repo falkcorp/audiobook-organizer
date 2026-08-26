@@ -7,6 +7,7 @@ package audiobooks
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -51,7 +52,7 @@ func seedPushdownBooks(t *testing.T, ps *database.PebbleStore) []pushdownFixture
 	fpStatuses := []string{"none", "partial", "complete"}
 
 	fixtures := make([]pushdownFixture, 0, 51)
-	for i := 0; i < 51; i++ {
+	for i := range 51 {
 		f := pushdownFixture{
 			title:// spread titles so a title sort would reorder vs ID order
 			string(rune('a'+(i%26))) + "-book",
@@ -221,7 +222,7 @@ func TestLibraryStatePushdownParity(t *testing.T) {
 		},
 		{
 			name:   "coverage min=50",
-			filter: ListFilters{CoveragePercentMin: pdIntPtr(50)},
+			filter: ListFilters{CoveragePercentMin: new(50)},
 			match:  func(f pushdownFixture) bool { return f.coverage >= 50 },
 		},
 	}
@@ -255,7 +256,7 @@ func TestLibraryStatePushdownParity_MatchEverythingAndEmpty(t *testing.T) {
 	// Anti-over-suppression: coverage>=0 matches every book — the full library
 	// must come back, not a narrowed subset.
 	got, err := svc.GetAudiobooks(context.Background(), 1000, 0, "", nil, nil,
-		ListFilters{CoveragePercentMin: pdIntPtr(0)})
+		ListFilters{CoveragePercentMin: new(0)})
 	require.NoError(t, err)
 	require.Len(t, got, len(fixtures), "match-everything filter must return the full library")
 
@@ -394,12 +395,7 @@ func TestPushdownParityFingerprintAndSort(t *testing.T) {
 }
 
 func pdHasTag(f pushdownFixture, tag string) bool {
-	for _, t := range f.tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.tags, tag)
 }
 
 func pdComboName(limit, offset int) string {
@@ -429,4 +425,5 @@ func pdItoa(n int) string {
 	return b.String()
 }
 
-func pdIntPtr(v int) *int { return &v }
+//go:fix inline
+func pdIntPtr(v int) *int { return new(v) }

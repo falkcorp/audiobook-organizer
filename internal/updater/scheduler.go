@@ -44,10 +44,7 @@ func (s *Scheduler) Start() {
 		return
 	}
 
-	interval := time.Duration(cfg.CheckMins) * time.Minute
-	if interval < time.Minute {
-		interval = time.Minute
-	}
+	interval := max(time.Duration(cfg.CheckMins)*time.Minute, time.Minute)
 	s.ticker = time.NewTicker(interval)
 
 	slog.Info("Auto-update scheduler started checking every minutes", "checkMins", cfg.CheckMins)

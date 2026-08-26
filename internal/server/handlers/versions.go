@@ -377,7 +377,7 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 	}
 
 	// Create one new book per selected file
-	var createdBooks []interface{}
+	var createdBooks []any
 	for _, fileID := range req.SegmentIDs {
 		f, ok := fileMap[fileID]
 		if !ok {
@@ -624,16 +624,16 @@ func extractTitleFromSegmentFilename(filename string) string {
 	name := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 	// Try to find title after " - " separator (common pattern)
-	if idx := strings.Index(name, " - "); idx >= 0 {
-		title := strings.TrimSpace(name[idx+3:])
+	if _, after, ok := strings.Cut(name, " - "); ok {
+		title := strings.TrimSpace(after)
 		if title != "" {
 			return title
 		}
 	}
 
 	// Try after " – " (em dash)
-	if idx := strings.Index(name, " – "); idx >= 0 {
-		title := strings.TrimSpace(name[idx+len(" – "):])
+	if _, after, ok := strings.Cut(name, " – "); ok {
+		title := strings.TrimSpace(after)
 		if title != "" {
 			return title
 		}

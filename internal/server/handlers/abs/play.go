@@ -8,6 +8,7 @@ package abs
 import (
 	"crypto/rand"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -312,9 +313,7 @@ func (h *Handler) deviceInfoDTO(s *playSession, req *playRequest, c *gin.Context
 		"sdkVersion":    "",
 		"userId":        s.UserID,
 	}
-	for k, v := range req.DeviceInfo {
-		out[k] = v
-	}
+	maps.Copy(out, req.DeviceInfo)
 	return out
 }
 
@@ -495,10 +494,7 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 	}
 	pct := 0
 	if duration > 0 {
-		pct = int(merged.CurrentTime / duration * 100)
-		if pct > 100 {
-			pct = 100
-		}
+		pct = min(int(merged.CurrentTime/duration*100), 100)
 	}
 	_, timeListening, _ := s.snapshot()
 	// READ-MODIFY-WRITE, not a fresh literal. A fresh literal silently resets every

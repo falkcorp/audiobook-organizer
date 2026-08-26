@@ -19,8 +19,7 @@ import (
 // does not return within abandonGrace, the abandoned count for the plugin
 // increments, and decrements when the goroutine eventually returns.
 func TestAbandoned_CountIncrementOnCtxCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	// AbandonedCap=10 so we don't block dispatch during the test.
@@ -84,8 +83,7 @@ func TestAbandoned_CountIncrementOnCtxCancel(t *testing.T) {
 // TestAbandoned_BlocksDispatchAtCap verifies that when abandonedCount >= cap,
 // the dispatcher refuses new dispatches for that plugin.
 func TestAbandoned_BlocksDispatchAtCap(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	// Cap of 1 so a single abandoned op blocks the plugin immediately.
@@ -143,8 +141,7 @@ func TestAbandoned_BlocksDispatchAtCap(t *testing.T) {
 // TestAbandoned_CountDecrementsWhenGoroutineReturns verifies the decrement path
 // works correctly in a simpler scenario without full registry overhead.
 func TestAbandoned_CountDecrementsWhenGoroutineReturns(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{

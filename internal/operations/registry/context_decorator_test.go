@@ -29,8 +29,7 @@ type sdkGuardDecoratorProbeKey struct{}
 // preserve SLOG op-ID correlation (logger.WithOperation) now that the
 // registry package no longer imports the internal logging package directly.
 func TestRunContextDecorator_DecoratesRunContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{})
@@ -81,8 +80,7 @@ func TestRunContextDecorator_DecoratesRunContext(t *testing.T) {
 // never called) dispatches runs normally: no panic, and the run context
 // carries no decoration.
 func TestRunContextDecorator_NilDecoratorRunsUndecorated(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{})

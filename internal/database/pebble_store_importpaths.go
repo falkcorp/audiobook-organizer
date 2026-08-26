@@ -110,7 +110,7 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 }
 
 func (p *PebbleStore) GetImportPathByID(id int) (*ImportPath, error) {
-	key := []byte(fmt.Sprintf("import_path:%d", id))
+	key := fmt.Appendf(nil, "import_path:%d", id)
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -128,7 +128,7 @@ func (p *PebbleStore) GetImportPathByID(id int) (*ImportPath, error) {
 }
 
 func (p *PebbleStore) GetImportPathByPath(path string) (*ImportPath, error) {
-	indexKey := []byte(fmt.Sprintf("import_path:path:%s", path))
+	indexKey := fmt.Appendf(nil, "import_path:path:%s", path)
 	value, closer, err := p.db.Get(indexKey)
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -175,8 +175,8 @@ func (p *PebbleStore) CreateImportPath(path, name string) (*ImportPath, error) {
 	}
 
 	batch := p.db.NewBatch()
-	key := []byte(fmt.Sprintf("import_path:%d", id))
-	indexKey := []byte(fmt.Sprintf("import_path:path:%s", path))
+	key := fmt.Appendf(nil, "import_path:%d", id)
+	indexKey := fmt.Appendf(nil, "import_path:path:%s", path)
 
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
@@ -210,12 +210,12 @@ func (p *PebbleStore) UpdateImportPath(id int, importPath *ImportPath) error {
 	batch := p.db.NewBatch()
 
 	if current.Path != importPath.Path {
-		oldIndexKey := []byte(fmt.Sprintf("import_path:path:%s", current.Path))
+		oldIndexKey := fmt.Appendf(nil, "import_path:path:%s", current.Path)
 		if err := batch.Delete(oldIndexKey, nil); err != nil {
 			batch.Close()
 			return err
 		}
-		newIndexKey := []byte(fmt.Sprintf("import_path:path:%s", importPath.Path))
+		newIndexKey := fmt.Appendf(nil, "import_path:path:%s", importPath.Path)
 		if err := batch.Set(newIndexKey, []byte(strconv.Itoa(id)), nil); err != nil {
 			batch.Close()
 			return err
@@ -228,7 +228,7 @@ func (p *PebbleStore) UpdateImportPath(id int, importPath *ImportPath) error {
 		return err
 	}
 
-	key := []byte(fmt.Sprintf("import_path:%d", id))
+	key := fmt.Appendf(nil, "import_path:%d", id)
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
 		return err
@@ -252,13 +252,13 @@ func (p *PebbleStore) DeleteImportPath(id int) error {
 
 	batch := p.db.NewBatch()
 
-	key := []byte(fmt.Sprintf("import_path:%d", id))
+	key := fmt.Appendf(nil, "import_path:%d", id)
 	if err := batch.Delete(key, nil); err != nil {
 		batch.Close()
 		return err
 	}
 
-	indexKey := []byte(fmt.Sprintf("import_path:path:%s", importPath.Path))
+	indexKey := fmt.Appendf(nil, "import_path:path:%s", importPath.Path)
 	if err := batch.Delete(indexKey, nil); err != nil {
 		batch.Close()
 		return err

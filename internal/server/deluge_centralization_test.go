@@ -41,23 +41,23 @@ func newMockDelugeServer(t *testing.T, returnError bool) *mockDelugeServer {
 	m := &mockDelugeServer{returnError: returnError}
 	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Method string        `json:"method"`
-			Params []interface{} `json:"params"`
-			ID     int64         `json:"id"`
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+			ID     int64  `json:"id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		switch req.Method {
 		case "auth.login":
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": true})
+			json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": true})
 		case "core.move_storage":
 			m.moveStorageCalls.Add(1)
 			if m.returnError {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"id":    req.ID,
-					"error": map[string]interface{}{"code": -1, "message": "deluge offline"},
+					"error": map[string]any{"code": -1, "message": "deluge offline"},
 				})
 			} else {
-				json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": nil})
+				json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": nil})
 			}
 		default:
 			w.WriteHeader(http.StatusBadRequest)

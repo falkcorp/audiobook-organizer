@@ -238,7 +238,7 @@ func knobsFromConfig(cfg config.MetadataScoringConfig) sweepKnobs {
 	// Duration tiers: both arrays must be exactly durationTierCount long or the
 	// built-in table is used unmodified.
 	if len(cfg.DurationTierMultipliers) == durationTierCount && len(cfg.DurationTierScores) == durationTierCount {
-		for i := 0; i < durationTierCount; i++ {
+		for i := range durationTierCount {
 			k.DurationTierMultipliers[i] = cfg.DurationTierMultipliers[i]
 			k.DurationTierScores[i] = cfg.DurationTierScores[i]
 		}
@@ -325,8 +325,8 @@ func trailingNumber(title string) string {
 func normalizeSeriesNumber(pos string) string {
 	m := scoreCalibSeriesNumRe.FindStringSubmatch(pos)
 	if len(m) >= 2 {
-		if strings.HasSuffix(m[1], ".0") {
-			return strings.TrimSuffix(m[1], ".0")
+		if before, ok := strings.CutSuffix(m[1], ".0"); ok {
+			return before
 		}
 		return m[1]
 	}
@@ -909,10 +909,7 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	sampleLimit := params.SampleLimit
-	if sampleLimit < 0 {
-		sampleLimit = 0
-	}
+	sampleLimit := max(params.SampleLimit, 0)
 	if sampleLimit == 0 {
 		sampleLimit = defaultSampleLimit
 	}

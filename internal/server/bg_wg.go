@@ -66,7 +66,7 @@ func (n *namedWaitGroup) Running() []string {
 	defer n.mu.Unlock()
 	out := make([]string, 0, len(n.set))
 	for name, count := range n.set {
-		for i := 0; i < count; i++ {
+		for range count {
 			out = append(out, name)
 		}
 	}

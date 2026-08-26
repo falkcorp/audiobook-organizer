@@ -20,7 +20,7 @@ import (
 // http.StatusTooManyRequests. The route itself answers 410 Gone and touches
 // no store, so any 429 seen can only be the apiRateLimiter middleware.
 func hitOperationsActive(srv *Server, n int) (tooMany int) {
-	for i := 0; i < n; i++ {
+	for range n {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/operations/active", nil)
 		w := httptest.NewRecorder()
 		srv.router.ServeHTTP(w, req)

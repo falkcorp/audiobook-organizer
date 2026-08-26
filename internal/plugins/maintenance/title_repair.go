@@ -162,10 +162,7 @@ func (p *Plugin) titleRepairDef() sdk.OperationDef {
 // titleRepairWorkers caps the RunItems pool: the per-book work is disk-IO +
 // tag-read bound, so more than 8 workers just thrashes the disk.
 func titleRepairWorkers() int {
-	n := runtime.NumCPU()
-	if n > 8 {
-		n = 8
-	}
+	n := min(runtime.NumCPU(), 8)
 	if n < 1 {
 		n = 1
 	}

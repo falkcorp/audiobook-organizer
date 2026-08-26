@@ -242,7 +242,7 @@ func TestT018_FullScanSkipsLSHPhaseWhenIndexUnset(t *testing.T) {
 	ms := &mockLSHStore{flagSet: false}
 	adapter := &mockLSHStoreAdapter{inner: ms}
 
-	flagStore, ok := interface{}(adapter).(LSHFlagStore)
+	flagStore, ok := any(adapter).(LSHFlagStore)
 	if !ok {
 		t.Fatal("mockLSHStoreAdapter should satisfy LSHFlagStore")
 	}
@@ -253,7 +253,7 @@ func TestT018_FullScanSkipsLSHPhaseWhenIndexUnset(t *testing.T) {
 	// Confirm the store with flag=true is detected as "index built."
 	ms2 := &mockLSHStore{flagSet: true}
 	adapter2 := &mockLSHStoreAdapter{inner: ms2}
-	flagStore2, ok2 := interface{}(adapter2).(LSHFlagStore)
+	flagStore2, ok2 := any(adapter2).(LSHFlagStore)
 	if !ok2 {
 		t.Fatal("mockLSHStoreAdapter should satisfy LSHFlagStore (built case)")
 	}

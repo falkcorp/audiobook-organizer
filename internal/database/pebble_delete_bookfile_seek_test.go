@@ -134,7 +134,7 @@ func TestDeleteBookFile_LeavesSiblingRowsIntact(t *testing.T) {
 		t.Fatalf("CreateBook: %v", err)
 	}
 	var ids []string
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		f := &BookFile{BookID: book.ID, FilePath: fmt.Sprintf("/lib/Sibling Book/%02d.mp3", i), Duration: 600}
 		if err := s.CreateBookFile(f); err != nil {
 			t.Fatalf("CreateBookFile %d: %v", i, err)

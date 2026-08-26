@@ -327,7 +327,8 @@ func getSuspicious(t *testing.T, h *deduphandler.Handler) (int, []map[string]any
 	return decodeLabels(t, w)
 }
 
-func fptr(v float64) *float64 { return &v }
+//go:fix inline
+func fptr(v float64) *float64 { return new(v) }
 
 // TestSuspiciousPredicateIdentity covers arm (a): a rule not_dup that shares hard
 // identity (ASIN, version group, or identical primary path) is flagged, and the
@@ -374,8 +375,8 @@ func TestSuspiciousPredicateBand(t *testing.T) {
 // does not.
 func TestSuspiciousPredicateSimilarity(t *testing.T) {
 	h, d := newHandler(t)
-	upsertEx(t, d, 1, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Similarity = fptr(0.96) })
-	upsertEx(t, d, 2, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Similarity = fptr(0.80) })
+	upsertEx(t, d, 1, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Similarity = new(0.96) })
+	upsertEx(t, d, 2, "not_dup", "rule", func(ex *database.LabeledExample) { ex.Similarity = new(0.80) })
 	total, _ := getSuspicious(t, h)
 	if total != 1 {
 		t.Fatalf("expected 1 suspicious (sim>=0.95), got %d", total)
@@ -410,7 +411,7 @@ func TestSuspiciousPredicateCleanRuleLabelNotFlagged(t *testing.T) {
 		ex.A.PrimaryPath, ex.B.PrimaryPath = "/lib/a.m4b", "/lib/b.m4b"
 		ex.A.Title, ex.B.Title = "Book A", "Book B"
 		ex.Band = "LOW"
-		ex.Similarity = fptr(0.5)
+		ex.Similarity = new(0.5)
 		ex.DurationRatio = 0.3
 	})
 	total, _ := getSuspicious(t, h)
@@ -439,7 +440,7 @@ func TestSuspiciousPredicateHumanLabelNeverFlagged(t *testing.T) {
 	upsertEx(t, d, 1, "not_dup", "human", func(ex *database.LabeledExample) {
 		ex.A.ASIN, ex.B.ASIN = "B00SAME", "B00SAME"
 		ex.Band = "CERTAIN"
-		ex.Similarity = fptr(0.99)
+		ex.Similarity = new(0.99)
 	})
 	total, _ := getSuspicious(t, h)
 	if total != 0 {

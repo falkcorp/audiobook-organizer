@@ -45,10 +45,7 @@ func ExtractSample(ctx context.Context, req *SampleRequest, write func([]byte) (
 	}
 
 	// Clamp and validate parameters
-	start := req.Start
-	if start < 0 {
-		start = 0
-	}
+	start := max(req.Start, 0)
 	dur := req.Duration
 	if dur <= 0 {
 		dur = SampleDefault

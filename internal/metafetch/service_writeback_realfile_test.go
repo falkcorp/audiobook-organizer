@@ -48,7 +48,7 @@ func TestWriteBackRoundTrip_RealFile(t *testing.T) {
 	before, err := os.Stat(path)
 	require.NoError(t, err)
 
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"title":  "01 - The Long Way Home",
 		"album":  "The Long Way Home",
 		"artist": "Test Author",
@@ -96,7 +96,7 @@ func TestWriteBackRoundTrip_RealFile(t *testing.T) {
 func TestWriteBackRoundTrip_RealFile_ChangedTagStillWrites(t *testing.T) {
 	path := makeTestAudio(t, "changed.m4a")
 
-	initial := map[string]interface{}{
+	initial := map[string]any{
 		"title":  "01 - Original",
 		"album":  "Original Album",
 		"artist": "Test Author",
@@ -108,7 +108,7 @@ func TestWriteBackRoundTrip_RealFile_ChangedTagStillWrites(t *testing.T) {
 	require.NoError(t, err)
 
 	// Same file, but the album genuinely changed.
-	changed := map[string]interface{}{
+	changed := map[string]any{
 		"title":  "01 - Original",   // unchanged
 		"album":  "Corrected Album", // CHANGED
 		"artist": "Test Author",     // unchanged

@@ -8,6 +8,7 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -348,11 +349,9 @@ func RequireAdmin() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		for _, role := range user.Roles {
-			if role == "admin" {
-				c.Next()
-				return
-			}
+		if slices.Contains(user.Roles, "admin") {
+			c.Next()
+			return
 		}
 		httputil.RespondWithForbidden(c, "admin role required")
 		c.Abort()

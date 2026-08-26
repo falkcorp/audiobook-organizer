@@ -92,7 +92,7 @@ func TestService_GenerateExport_Deduplication(t *testing.T) {
 
 	// Verify system_info content
 	data := readZipFile(t, r, "system_info.json")
-	var sysInfo map[string]interface{}
+	var sysInfo map[string]any
 	require.NoError(t, json.Unmarshal(data, &sysInfo))
 	assert.Equal(t, "deduplication", sysInfo["category"])
 	assert.Equal(t, "test export", sysInfo["description"])
@@ -100,7 +100,7 @@ func TestService_GenerateExport_Deduplication(t *testing.T) {
 
 	// Verify books.json has our test book
 	booksData := readZipFile(t, r, "books.json")
-	var books []map[string]interface{}
+	var books []map[string]any
 	require.NoError(t, json.Unmarshal(booksData, &books))
 	require.Len(t, books, 1)
 	assert.Equal(t, "book1", books[0]["id"])
@@ -181,7 +181,7 @@ func TestService_GenerateExport_MetadataQuality(t *testing.T) {
 
 	// Verify missing_fields content
 	data := readZipFile(t, r, "missing_fields.json")
-	var missingFields []map[string]interface{}
+	var missingFields []map[string]any
 	require.NoError(t, json.Unmarshal(data, &missingFields))
 	// book2 missing title+author+series, book3 missing author+series
 	assert.Len(t, missingFields, 2, "should have 2 books with missing fields")
@@ -226,19 +226,19 @@ func TestBuildBatchJSONL(t *testing.T) {
 	assert.Greater(t, len(data), 0)
 
 	// Verify it's valid JSONL
-	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
-	for _, line := range lines {
-		var req map[string]interface{}
+	lines := bytes.SplitSeq(bytes.TrimSpace(data), []byte("\n"))
+	for line := range lines {
+		var req map[string]any
 		require.NoError(t, json.Unmarshal(line, &req))
 		assert.Equal(t, "POST", req["method"])
 		assert.Equal(t, "/v1/chat/completions", req["url"])
 		assert.NotEmpty(t, req["custom_id"])
 
-		body, ok := req["body"].(map[string]interface{})
+		body, ok := req["body"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, BatchModel, body["model"])
 
-		messages, ok := body["messages"].([]interface{})
+		messages, ok := body["messages"].([]any)
 		require.True(t, ok)
 		assert.GreaterOrEqual(t, len(messages), 2)
 	}
@@ -258,7 +258,7 @@ func TestBuildBatchJSONL_Categories(t *testing.T) {
 			lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
 			require.GreaterOrEqual(t, len(lines), 1)
 
-			var req map[string]interface{}
+			var req map[string]any
 			require.NoError(t, json.Unmarshal(lines[0], &req))
 			assert.Equal(t, "chunk-000", req["custom_id"])
 		})
@@ -268,7 +268,7 @@ func TestBuildBatchJSONL_Categories(t *testing.T) {
 func TestBuildBatchJSONL_Chunking(t *testing.T) {
 	// Create 600 books to test chunking at 500
 	books := make([]SlimBook, 600)
-	for i := 0; i < 600; i++ {
+	for i := range 600 {
 		books[i] = SlimBook{ID: "b" + strings.Repeat("x", 5), Title: "Book"}
 	}
 

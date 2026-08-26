@@ -195,7 +195,7 @@ func revertMetadataUpdate(store metadataReverter, change *database.OperationChan
 		applyFieldRestore(book, change.FieldName, change.OldValue)
 	} else if change.OldValue != "" {
 		// Multi-field JSON snapshot.
-		var snapshot map[string]interface{}
+		var snapshot map[string]any
 		if err := json.Unmarshal([]byte(change.OldValue), &snapshot); err == nil {
 			for field, val := range snapshot {
 				if s, ok := val.(string); ok {

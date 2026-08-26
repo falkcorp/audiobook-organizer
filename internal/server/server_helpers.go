@@ -39,16 +39,20 @@ func resetLibrarySizeCache() {
 }
 
 // Helper functions for pointer conversions
+//
+//go:fix inline
 func stringPtr(s string) *string {
-	return &s
+	return new(s)
 }
 
+//go:fix inline
 func intPtrHelper(i int) *int {
-	return &i
+	return new(i)
 }
 
+//go:fix inline
 func boolPtr(b bool) *bool {
-	return &b
+	return new(b)
 }
 
 func stringVal(p *string) any {

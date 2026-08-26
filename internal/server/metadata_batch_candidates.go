@@ -404,7 +404,7 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 		Type         string    `json:"type"`
 		Status       string    `json:"status"`
 		CreatedAt    time.Time `json:"created_at"`
-		CompletedAt  time.Time `json:"completed_at,omitempty"`
+		CompletedAt  time.Time `json:"completed_at"`
 		ResultCount  int       `json:"result_count"`
 		MatchedCount int       `json:"matched_count"`
 		NoMatchCount int       `json:"no_match_count"`
@@ -529,7 +529,6 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	g.SetLimit(batchApplyConcurrency)
 
 	for i, bookID := range req.BookIDs {
-		i, bookID := i, bookID
 		g.Go(func() error {
 			if gctx.Err() != nil {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: canceled: %v", bookID, gctx.Err())}
@@ -887,16 +886,10 @@ func (s *Server) handleListMetadataResults(c *gin.Context) {
 	total := len(all)
 
 	// Apply pagination.
-	start := pp.Offset
-	if start > total {
-		start = total
-	}
+	start := min(pp.Offset, total)
 	end := total
 	if pp.Limit > 0 {
-		end = start + pp.Limit
-		if end > total {
-			end = total
-		}
+		end = min(start+pp.Limit, total)
 	}
 	page := all[start:end]
 

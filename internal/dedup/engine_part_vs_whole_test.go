@@ -32,7 +32,7 @@ func TestUpsertExactCandidate_PartVsWholeGuard(t *testing.T) {
 		case "B":
 			// Ten files totalling far more than A's single file.
 			files := make([]database.BookFile, 0, 10)
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				files = append(files, database.BookFile{ID: "FB" + string(rune('0'+i)), BookID: "B", Duration: 3600})
 			}
 			return files, nil

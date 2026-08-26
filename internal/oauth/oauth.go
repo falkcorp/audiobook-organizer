@@ -22,6 +22,7 @@ package oauth
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -94,12 +95,7 @@ func (c *Config) IsEmailAllowed(email string) bool {
 	if email == "" {
 		return false
 	}
-	for _, a := range c.AllowedEmails {
-		if a == email {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.AllowedEmails, email)
 }
 
 // ProviderEnabled reports whether a given provider is configured.

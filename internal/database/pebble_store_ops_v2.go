@@ -45,7 +45,7 @@ func opv2OpKey(opID string) []byte {
 // dispatch order without a secondary sort.
 func opv2QueueKey(priority int, queuedAt time.Time, opID string) []byte {
 	// 999-priority gives higher priorities a smaller prefix → sorts first.
-	return []byte(fmt.Sprintf("opv2:q:%03d:%020d:%s", 999-priority, queuedAt.UnixNano(), opID))
+	return fmt.Appendf(nil, "opv2:q:%03d:%020d:%s", 999-priority, queuedAt.UnixNano(), opID)
 }
 
 func opv2ActKey(opID string) []byte {
@@ -57,15 +57,15 @@ func opv2StateKey(opID string) []byte {
 }
 
 func opv2LogKey(opID string, ts time.Time, seq int64) []byte {
-	return []byte(fmt.Sprintf("opv2:log:%s:%020d:%010d", opID, ts.UnixNano(), seq))
+	return fmt.Appendf(nil, "opv2:log:%s:%020d:%010d", opID, ts.UnixNano(), seq)
 }
 
 func opv2ErrKey(opID string, ts time.Time) []byte {
-	return []byte(fmt.Sprintf("opv2:err:%s:%020d", opID, ts.UnixNano()))
+	return fmt.Appendf(nil, "opv2:err:%s:%020d", opID, ts.UnixNano())
 }
 
 func opv2StrikeKey(defID string, ts time.Time, opID string) []byte {
-	return []byte(fmt.Sprintf("opv2:strike:%s:%020d:%s", defID, ts.UnixNano(), opID))
+	return fmt.Appendf(nil, "opv2:strike:%s:%020d:%s", defID, ts.UnixNano(), opID)
 }
 
 // pebbleGet reads a single key and JSON-decodes into dst. Returns nil, nil if not found.

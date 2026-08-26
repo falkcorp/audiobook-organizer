@@ -2366,7 +2366,7 @@ func TestListAudiobooksWithSearchAndPagination(t *testing.T) {
 
 	// Create multiple books
 	tempDir := t.TempDir()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		filePath := filepath.Join(tempDir, fmt.Sprintf("book%d.m4b", i))
 		require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 		_, err := database.GetGlobalStore().CreateBook(&database.Book{

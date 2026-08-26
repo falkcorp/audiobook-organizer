@@ -277,7 +277,7 @@ func TestBreakdownBackfill_ParallelManyGroups(t *testing.T) {
 
 	const n = 200
 	ids := make([]int64, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ids[i] = seedCandidate(t, es, database.DedupCandidate{
 			EntityAID: fmt.Sprintf("pA%03d", i), // distinct A per pair → many groups
 			EntityBID: fmt.Sprintf("pB%03d", i),

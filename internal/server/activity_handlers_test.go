@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -204,7 +205,7 @@ func TestListActivitySources(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Record 2 gin entries and 1 scanner entry.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		require.NoError(t, svc.Record(database.ActivityEntry{
 			Tier:      "info",
 			Type:      "request",
@@ -393,12 +394,6 @@ func TestListOperationActivity_WithRecordedEntries(t *testing.T) {
 		assert.True(t, record.Timestamp.Equal(got.Timestamp))
 	}
 
-	hasOpTag := false
-	for _, tag := range resp.Data.Entries[0].Tags {
-		if tag == "op:"+opID {
-			hasOpTag = true
-			break
-		}
-	}
+	hasOpTag := slices.Contains(resp.Data.Entries[0].Tags, "op:"+opID)
 	assert.True(t, hasOpTag)
 }

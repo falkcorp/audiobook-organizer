@@ -66,7 +66,7 @@ func TestUpdateAudiobook_CreatesAuthorSeries_AndUpdatesOverrideState(t *testing.
 	created, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "Original", FilePath: tempFile, Format: "m4b"})
 	require.NoError(t, err)
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"author_name":            "Author X",
 		"series_name":            "Series Y",
 		"narrator":               "Narrator Z",
@@ -75,7 +75,7 @@ func TestUpdateAudiobook_CreatesAuthorSeries_AndUpdatesOverrideState(t *testing.
 		"audiobook_release_year": 2024,
 		"isbn10":                 "1234567890",
 		"isbn13":                 "9999999999999",
-		"overrides": map[string]map[string]interface{}{
+		"overrides": map[string]map[string]any{
 			"title": {
 				"value":         "Override Title",
 				"locked":        true,

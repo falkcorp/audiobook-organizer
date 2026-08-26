@@ -325,17 +325,11 @@ func (p *PebbleStore) ListReviewItems(f ReviewFilter) ([]ReviewItem, int, error)
 	if limit <= 0 {
 		limit = 50
 	}
-	start := f.Offset
-	if start < 0 {
-		start = 0
-	}
+	start := max(f.Offset, 0)
 	if start > total {
 		start = total
 	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	end := min(start+limit, total)
 	return all[start:end], total, nil
 }
 

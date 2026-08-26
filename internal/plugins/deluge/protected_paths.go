@@ -28,7 +28,7 @@ func (p *Plugin) protectedPathsSyncDef() sdk.OperationDef {
 		Timeout:         5 * time.Minute,
 		Run:             p.runProtectedPathsSync,
 		// Scheduled to run every 30 minutes (matches the TTL of the cache).
-		Schedule: stringPtr("*/30 * * * *"),
+		Schedule: new("*/30 * * * *"),
 	}
 }
 
@@ -49,6 +49,7 @@ func (p *Plugin) runProtectedPathsSync(ctx context.Context, _ json.RawMessage, r
 	return nil
 }
 
+//go:fix inline
 func stringPtr(s string) *string {
-	return &s
+	return new(s)
 }

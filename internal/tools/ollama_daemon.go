@@ -118,7 +118,7 @@ func (d *OllamaDaemon) StopWhenIdle(ctx context.Context) error {
 		if d.cmd != nil {
 			d.cmd.Wait()
 		} else {
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				time.Sleep(100 * time.Millisecond)
 				if !processAlive(pid) {
 					return

@@ -130,7 +130,7 @@ func TestProcessFileBounded_LateSendDoesNotLeakAGoroutine(t *testing.T) {
 		// Goroutine counts are noisy; take the minimum over a few reads so an
 		// unrelated transient does not decide the result.
 		best := runtime.NumGoroutine()
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			time.Sleep(10 * time.Millisecond)
 			if n := runtime.NumGoroutine(); n < best {
 				best = n

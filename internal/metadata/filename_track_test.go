@@ -17,16 +17,16 @@ func TestExtractTrackInfoFromFilename(t *testing.T) {
 		wantTotal *int
 		wantDisk  *int
 	}{
-		{"Part X of Y", "/books/Part 3 of 12.mp3", intP(3), intP(12), nil},
-		{"XX of YY", "/books/03 of 12.mp3", intP(3), intP(12), nil},
-		{"Track XX", "/books/Track 05.mp3", intP(5), nil, nil},
-		{"Chapter XX", "/books/Chapter 07.m4b", intP(7), nil, nil},
-		{"Leading number", "/books/01 - Introduction.mp3", intP(1), nil, nil},
-		{"Leading number underscore", "/books/02_Chapter One.mp3", intP(2), nil, nil},
+		{"Part X of Y", "/books/Part 3 of 12.mp3", new(3), new(12), nil},
+		{"XX of YY", "/books/03 of 12.mp3", new(3), new(12), nil},
+		{"Track XX", "/books/Track 05.mp3", new(5), nil, nil},
+		{"Chapter XX", "/books/Chapter 07.m4b", new(7), nil, nil},
+		{"Leading number", "/books/01 - Introduction.mp3", new(1), nil, nil},
+		{"Leading number underscore", "/books/02_Chapter One.mp3", new(2), nil, nil},
 		{"No track info", "/books/Introduction.mp3", nil, nil, nil},
-		{"Disk in name", "/books/Disk 2 of 3 - Track 05.mp3", intP(2), intP(3), intP(2)},
-		{"CD prefix no track", "/books/CD1 - Opening.mp3", nil, nil, intP(1)},
-		{"Track after CD", "/books/CD2 Track 03.mp3", intP(3), nil, intP(2)},
+		{"Disk in name", "/books/Disk 2 of 3 - Track 05.mp3", new(2), new(3), new(2)},
+		{"CD prefix no track", "/books/CD1 - Opening.mp3", nil, nil, new(1)},
+		{"Track after CD", "/books/CD2 Track 03.mp3", new(3), nil, new(2)},
 	}
 
 	for _, tt := range tests {
@@ -67,7 +67,8 @@ func TestExtractTrackInfoBatch(t *testing.T) {
 	}
 }
 
-func intP(i int) *int { return &i }
+//go:fix inline
+func intP(i int) *int { return new(i) }
 
 func intPtrEq(a, b *int) bool {
 	if a == nil && b == nil {

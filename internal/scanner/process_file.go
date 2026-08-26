@@ -235,7 +235,7 @@ func computeHashFromReader(f *os.File, fileSize int64) (string, error) {
 		}
 
 		// Include size in hash
-		h.Write([]byte(fmt.Sprintf("%d", fileSize)))
+		h.Write(fmt.Appendf(nil, "%d", fileSize))
 
 		return hex.EncodeToString(h.Sum(nil)), nil
 	}
@@ -415,7 +415,7 @@ func synthesizeMultiFileChapters(ctx context.Context, files []database.BookFile,
 // from the sampled chapterStoreAssertErrCount wiring warning, since these
 // are per-book data-path failures worth seeing individually, not a
 // high-frequency wiring mismatch that needs sampling. scanLog is nil-safe.
-func logChapterWarn(scanLog logger.Logger, format string, args ...interface{}) {
+func logChapterWarn(scanLog logger.Logger, format string, args ...any) {
 	if scanLog != nil {
 		scanLog.Warn(format, args...)
 		return

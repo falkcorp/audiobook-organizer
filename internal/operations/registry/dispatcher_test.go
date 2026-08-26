@@ -33,8 +33,7 @@ func awaitStatus(t *testing.T, store *fakeStore, opID, want string, timeout time
 
 // TestDispatcher_SingleOpRunsAndCompletes tests the happy path.
 func TestDispatcher_SingleOpRunsAndCompletes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 2, nil)
@@ -53,8 +52,7 @@ func TestDispatcher_SingleOpRunsAndCompletes(t *testing.T) {
 // TestDispatcher_SameConcurrencyKeySerializes verifies that two ops with the
 // same ConcurrencyKey do not run simultaneously.
 func TestDispatcher_SameConcurrencyKeySerializes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
@@ -104,8 +102,7 @@ func TestDispatcher_SameConcurrencyKeySerializes(t *testing.T) {
 // TestDispatcher_DifferentConcurrencyKeysRunConcurrently verifies that two ops
 // with different ConcurrencyKeys can overlap.
 func TestDispatcher_DifferentConcurrencyKeysRunConcurrently(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
@@ -160,8 +157,7 @@ func TestDispatcher_DifferentConcurrencyKeysRunConcurrently(t *testing.T) {
 // TestDispatcher_PriorityOrderingHighBeforeLow verifies that a high-priority
 // op is dispatched before a low-priority op enqueued around the same time.
 func TestDispatcher_PriorityOrderingHighBeforeLow(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Single worker so ordering is strict.
 	store := newFakeStore()
@@ -225,8 +221,7 @@ func TestDispatcher_PriorityOrderingHighBeforeLow(t *testing.T) {
 
 // TestDispatcher_MaxConcurrentCapsPlugin verifies per-plugin concurrency cap.
 func TestDispatcher_MaxConcurrentCapsPlugin(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 8, nil)

@@ -29,7 +29,7 @@ func TestGetAllBooksFullFrom_PaginatesPastDoubleLimit(t *testing.T) {
 	const total = 55
 	const pageSize = 10 // old cap was pageSize*2 = 20; 55 books exposes the bug
 
-	for i := 0; i < total; i++ {
+	for i := range total {
 		b := &Book{
 			Title:    fmt.Sprintf("Book %03d", i),
 			FilePath: fmt.Sprintf("/tmp/book_%03d.m4b", i),
@@ -77,7 +77,7 @@ func TestGetAllBooksFullFrom_UnknownCursorEndsIteration(t *testing.T) {
 	store := setupTestPebbleStore(t)
 	store.WaitForWarmup()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		b := &Book{Title: fmt.Sprintf("B%d", i), FilePath: fmt.Sprintf("/tmp/b%d.m4b", i)}
 		created, err := store.CreateBook(b)
 		require.NoError(t, err)

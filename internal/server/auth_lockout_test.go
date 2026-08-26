@@ -90,7 +90,7 @@ func TestThrottle_TriggersAfterMaxIPFailures(t *testing.T) {
 
 	const maxFailedPerIP = 15
 
-	for i := 0; i < maxFailedPerIP; i++ {
+	for i := range maxFailedPerIP {
 		code := loginRequest(t, h, "wrongpassword")
 		if code == http.StatusTooManyRequests {
 			t.Fatalf("throttled after only %d attempts, want %d", i, maxFailedPerIP)
@@ -112,7 +112,7 @@ func TestLockout_ClearedOnSuccess(t *testing.T) {
 
 	const maxFailedLogins = 10
 
-	for i := 0; i < maxFailedLogins-1; i++ {
+	for range maxFailedLogins - 1 {
 		loginRequest(t, h, "wrongpassword")
 	}
 

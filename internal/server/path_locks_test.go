@@ -25,9 +25,7 @@ func TestPathLocksExcludesSamePath(t *testing.T) {
 
 	const goroutines, iterations = 16, 50
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range iterations {
 				release := pl.lock("/library/Author/Book/book.m4b")
 				n := inside.Add(1)
@@ -40,7 +38,7 @@ func TestPathLocksExcludesSamePath(t *testing.T) {
 				inside.Add(-1)
 				release()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -62,9 +60,7 @@ func TestPathLocksDistinctPathsDoNotBlock(t *testing.T) {
 	var arrived atomic.Int64
 
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			release := pl.lock(filepath.Join("/library", "book", string(rune('a'+i))+".m4b"))
 			defer release()
 			// Every goroutine must reach here while all the others still hold
@@ -73,7 +69,7 @@ func TestPathLocksDistinctPathsDoNotBlock(t *testing.T) {
 				close(barrier)
 			}
 			<-barrier
-		}()
+		})
 	}
 	wg.Wait() // hangs (and the test times out) if the lock is not per-path
 }
@@ -86,13 +82,11 @@ func TestPathLocksReleaseDrainsMap(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 200 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			release := pl.lock(filepath.Join("/library", "b", string(rune('a'+i%26))+".m4b"))
 			release()
 			release() // double release must be a no-op, not a negative refcount
-		}()
+		})
 	}
 	wg.Wait()
 

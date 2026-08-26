@@ -105,7 +105,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 	slog.Info("repair-missing-files candidates, already done, to process", "opID", opID, "totalFiles", totalFiles, "alreadyDone", alreadyDone, "work_count", len(work))
 
 	reporter.SetTotal(totalFiles)
-	for i := 0; i < alreadyDone; i++ {
+	for range alreadyDone {
 		reporter.Increment()
 	}
 
@@ -178,10 +178,8 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 
 	var wg sync.WaitGroup
 	const workers = 4
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			for f := range workCh {
 				if ctx.Err() != nil {
 					return
@@ -203,7 +201,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 				reporter.Increment()
 				progressMu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

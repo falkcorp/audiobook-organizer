@@ -63,10 +63,7 @@ func (p *parser) peek() byte {
 }
 
 func (p *parser) peekN(n int) string {
-	end := p.pos + n
-	if end > len(p.input) {
-		end = len(p.input)
-	}
+	end := min(p.pos+n, len(p.input))
 	return p.input[p.pos:end]
 }
 

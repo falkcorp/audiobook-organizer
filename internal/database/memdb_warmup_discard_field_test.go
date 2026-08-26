@@ -29,7 +29,8 @@ import (
 // expensive and dangerous thing. These tests seed one group at a time so
 // cross-attribution cannot hide.
 
-func discardStrPtr(s string) *string { return &s }
+//go:fix inline
+func discardStrPtr(s string) *string { return new(s) }
 
 // seedOneBookFile writes a single book_file row, letting the caller populate
 // exactly one discarded field group.
@@ -88,7 +89,7 @@ func TestDiscardByField_ChargesEachGroupToItsOwnKey(t *testing.T) {
 			name: "intro transcription",
 			key:  DiscardFieldIntroTranscription,
 			mutate: func(bf *BookFile) {
-				bf.IntroTranscription = discardStrPtr(strings.Repeat("t", blob))
+				bf.IntroTranscription = new(strings.Repeat("t", blob))
 			},
 			wantSize: blob,
 		},
@@ -96,7 +97,7 @@ func TestDiscardByField_ChargesEachGroupToItsOwnKey(t *testing.T) {
 			name: "fingerprint diagnostics",
 			key:  DiscardFieldFingerprintDiagnostics,
 			mutate: func(bf *BookFile) {
-				bf.FingerprintDiagnosticJSON = discardStrPtr(strings.Repeat("d", blob))
+				bf.FingerprintDiagnosticJSON = new(strings.Repeat("d", blob))
 			},
 			wantSize: blob,
 		},
@@ -257,12 +258,12 @@ func TestDiscardByField_SumsToThePerPhaseTotal(t *testing.T) {
 	store := setupTestPebbleStore(t)
 	store.WaitForWarmup()
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		tag := fmt.Sprintf("sum%02d", i)
 		seedOneBookFile(t, store, tag, func(bf *BookFile) {
 			bf.AcoustIDFingerprint = warmBytesFingerprint(2048)
 			bf.AcoustIDSeg0 = strings.Repeat("a", 128)
-			bf.IntroTranscription = discardStrPtr(strings.Repeat("t", 512))
+			bf.IntroTranscription = new(strings.Repeat("t", 512))
 		})
 	}
 

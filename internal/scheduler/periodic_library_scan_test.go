@@ -6,6 +6,7 @@
 package scheduler
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,13 +110,7 @@ func TestLibraryScanEnabledPreservesLegacyScanOnStartup(t *testing.T) {
 func TestLibraryScanIsReachableFromMaintenanceWindow(t *testing.T) {
 	ts := NewTaskScheduler(testDeps())
 
-	found := false
-	for _, name := range ts.MaintenanceOrder() {
-		if name == "library_scan" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(ts.MaintenanceOrder(), "library_scan")
 	assert.True(t, found,
 		"library_scan must be in MaintenanceOrder(), otherwise the maintenance.library_scan setting is unreachable")
 }

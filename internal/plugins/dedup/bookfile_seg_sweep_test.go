@@ -171,7 +171,7 @@ func TestBookfileSegDrop_DryRunNeverSetsFlag(t *testing.T) {
 	p := newSegDropPlugin(ms)
 
 	// Run dry-run three times — flag should never appear.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := p.runBookfileSegDrop(context.Background(), json.RawMessage(`{}`), &fakeReporter{})
 		if err != nil {
 			t.Fatalf("dry-run #%d failed: %v", i+1, err)

@@ -357,7 +357,7 @@ func TestHandleRestore_ValidBackup(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var envelope struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 	assert.Equal(t, true, envelope.Data["restored"])

@@ -126,7 +126,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 		buf, restore := busCapture(t)
 		defer restore()
 
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			absItemFilter(busCtx("sort=media.metadata.fileBirthtime"))
 		}
 		// A DIFFERENT unsupported sort inside the same window is suppressed
@@ -215,7 +215,7 @@ func TestUnsupportedSortLimiterIsConcurrencySafe(t *testing.T) {
 	ready.Add(workers)
 	wg.Add(workers)
 	start := make(chan struct{})
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		go func(i int) {
 			defer wg.Done()
 			ready.Done()

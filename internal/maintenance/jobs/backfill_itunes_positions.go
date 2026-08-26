@@ -490,10 +490,7 @@ func (j *backfillITunesPositionsJob) desiredState(userID, bookID string, merged 
 	}
 
 	fraction := ITunesPositionProgressFraction(merged.CurrentTime, merged.Duration)
-	state.ProgressPct = int(math.Round(fraction * 100))
-	if state.ProgressPct < 0 {
-		state.ProgressPct = 0
-	}
+	state.ProgressPct = max(int(math.Round(fraction*100)), 0)
 	if state.ProgressPct > 100 {
 		state.ProgressPct = 100
 	}

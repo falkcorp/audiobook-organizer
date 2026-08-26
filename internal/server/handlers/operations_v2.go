@@ -205,10 +205,7 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 		// straight into the make below and raised go/uncontrolled-allocation-size
 		// on an allocation that was already capped at 1000. Written this way the
 		// bound is visible to the analyzer as well as to a reader.
-		limit = n
-		if limit > timelineMaxLimit {
-			limit = timelineMaxLimit
-		}
+		limit = min(n, timelineMaxLimit)
 	}
 
 	defID := c.Query("def_id")
@@ -262,10 +259,7 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	inFlightBeforeWindow := 0
 	// Same reason as the clamp above: an explicit branch, so the ceiling on this
 	// allocation (timelineMaxLimit, 1000) is reachable by dataflow analysis.
-	capHint := len(rows)
-	if capHint > limit {
-		capHint = limit
-	}
+	capHint := min(len(rows), limit)
 	resp := make([]OperationV2Response, 0, capHint)
 	for _, r := range rows {
 		if defID != "" && r.DefID != defID {

@@ -106,7 +106,7 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 	//   3. Otherwise → ID-ordered scan.
 	var (
 		iter interface {
-			Next() interface{}
+			Next() any
 		}
 		err error
 	)
@@ -189,10 +189,7 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 	// cap0 clamp; this comment additionally documents the actual (larger)
 	// peak so a future reader does not mistake cap0's bound for a ceiling on
 	// len(out).
-	cap0 := limit
-	if cap0 > 4096 {
-		cap0 = 4096
-	}
+	cap0 := min(limit, 4096)
 	out := make([]BookSummary, 0, cap0)
 	skipped := 0
 
@@ -329,7 +326,7 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 // memFirstLookup is the one memdb operation hydrateSortNames needs. Taking an
 // interface keeps this file free of a memdb import for a single call.
 type memFirstLookup interface {
-	First(table, index string, args ...interface{}) (interface{}, error)
+	First(table, index string, args ...any) (any, error)
 }
 
 // hydrateSortNames fills in the Author/Series pointer that stripBookForMemdb
@@ -404,7 +401,7 @@ func (m *MemStore) CountBookSummaries(f BookSummaryFilter) (int, error) {
 	defer txn.Abort()
 
 	var (
-		iter interface{ Next() interface{} }
+		iter interface{ Next() any }
 		err  error
 	)
 	switch {

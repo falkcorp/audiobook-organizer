@@ -70,7 +70,7 @@ func TestCalibrationReport_RowsInGePairsOut(t *testing.T) {
 
 	var rowsIn, pairsOut float64
 	found := false
-	for _, line := range strings.Split(strings.TrimSpace(rep.buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(rep.buf.String()), "\n") {
 		if line == "" {
 			continue
 		}

@@ -67,8 +67,8 @@ func seedPrimaryFlagFixture(t *testing.T) primaryFlagFixture {
 		label string
 		flag  *bool
 	}{
-		{"explicit-true", boolPtr(true)},
-		{"explicit-false", boolPtr(false)},
+		{"explicit-true", new(true)},
+		{"explicit-false", new(false)},
 		{"nil-flag", nil},
 	} {
 		created, cErr := ps.CreateBook(&database.Book{
@@ -331,8 +331,8 @@ func TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown(t *testing.T)
 		"fixture invalid: this store pushes the filter down, so the cache would alias the returned slice and the test could not fail")
 
 	summaries := []database.BookSummary{
-		{ID: "explicit-true", Title: "a", IsPrimaryVersion: boolPtr(true)},
-		{ID: "explicit-false", Title: "b", IsPrimaryVersion: boolPtr(false)},
+		{ID: "explicit-true", Title: "a", IsPrimaryVersion: new(true)},
+		{ID: "explicit-false", Title: "b", IsPrimaryVersion: new(false)},
 		{ID: "nil-flag", Title: "c", IsPrimaryVersion: nil},
 	}
 	// Exactly once: the second GetAudiobooks call must be served by the list

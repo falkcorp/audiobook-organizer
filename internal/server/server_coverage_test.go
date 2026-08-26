@@ -1309,19 +1309,19 @@ func TestCoverageResetLibrarySizeCache(t *testing.T) {
 
 func TestCoverageHelperFunctions(t *testing.T) {
 	t.Run("stringPtr", func(t *testing.T) {
-		p := stringPtr("hello")
+		p := new("hello")
 		require.NotNil(t, p)
 		assert.Equal(t, "hello", *p)
 	})
 
 	t.Run("intPtrHelper", func(t *testing.T) {
-		p := intPtrHelper(42)
+		p := new(42)
 		require.NotNil(t, p)
 		assert.Equal(t, 42, *p)
 	})
 
 	t.Run("boolPtr", func(t *testing.T) {
-		p := boolPtr(true)
+		p := new(true)
 		require.NotNil(t, p)
 		assert.True(t, *p)
 	})

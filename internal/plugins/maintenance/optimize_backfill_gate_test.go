@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -46,12 +47,7 @@ func TestOptimize_AcoustIDBackfillRespectsTheFlag(t *testing.T) {
 	}
 
 	contains := func(hay []string, needle string) bool {
-		for _, s := range hay {
-			if s == needle {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(hay, needle)
 	}
 
 	t.Run("disabled excludes the child", func(t *testing.T) {

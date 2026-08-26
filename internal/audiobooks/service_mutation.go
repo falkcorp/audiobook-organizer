@@ -421,9 +421,9 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 
 		now := time.Now()
-		book.MarkedForDeletion = boolPtr(true)
+		book.MarkedForDeletion = new(true)
 		book.MarkedForDeletionAt = &now
-		book.LibraryState = stringPtr("deleted")
+		book.LibraryState = new("deleted")
 
 		if _, err := svc.store.UpdateBook(id, book); err != nil {
 			return nil, err
@@ -538,15 +538,15 @@ func ApplyOverrideToPayload(payload *AudiobookUpdate, field string, value any) {
 		}
 	case "narrator":
 		if v, ok := value.(string); ok {
-			payload.Narrator = stringPtr(v)
+			payload.Narrator = new(v)
 		}
 	case "publisher":
 		if v, ok := value.(string); ok {
-			payload.Publisher = stringPtr(v)
+			payload.Publisher = new(v)
 		}
 	case "language":
 		if v, ok := value.(string); ok {
-			payload.Language = stringPtr(v)
+			payload.Language = new(v)
 		}
 	case "audiobook_release_year":
 		switch v := value.(type) {
@@ -559,15 +559,15 @@ func ApplyOverrideToPayload(payload *AudiobookUpdate, field string, value any) {
 		}
 	case "isbn10":
 		if v, ok := value.(string); ok {
-			payload.ISBN10 = stringPtr(v)
+			payload.ISBN10 = new(v)
 		}
 	case "isbn13":
 		if v, ok := value.(string); ok {
-			payload.ISBN13 = stringPtr(v)
+			payload.ISBN13 = new(v)
 		}
 	case "asin":
 		if v, ok := value.(string); ok {
-			payload.ASIN = stringPtr(v)
+			payload.ASIN = new(v)
 		}
 	}
 }

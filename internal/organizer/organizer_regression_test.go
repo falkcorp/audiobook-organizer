@@ -360,7 +360,7 @@ func TestOrganizeBookDirectory_TracklessPatternDoesNotCollapseBook(t *testing.T)
 	var srcPaths []string
 	for i := 1; i <= 12; i++ {
 		p := filepath.Join(importDir, fmt.Sprintf("part%02d.mp3", i))
-		require.NoError(t, os.WriteFile(p, []byte(fmt.Sprintf("audio-%02d", i)), 0644))
+		require.NoError(t, os.WriteFile(p, fmt.Appendf(nil, "audio-%02d", i), 0644))
 		srcPaths = append(srcPaths, p)
 	}
 

@@ -119,7 +119,6 @@ func (h *Handler) loadItemViews(ctx context.Context, books []database.Book) ([]i
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for i := range books {
-		i := i
 		g.Go(func() error {
 			if gctx.Err() != nil {
 				return gctx.Err()
@@ -347,7 +346,7 @@ func parseNarratorsJSON(raw string) []string {
 		return out
 	}
 	var out []string
-	for _, n := range strings.Split(raw, ",") {
+	for n := range strings.SplitSeq(raw, ",") {
 		if n = strings.TrimSpace(n); n != "" {
 			out = append(out, n)
 		}
@@ -499,7 +498,7 @@ func splitList(raw *string) []string {
 	if raw == nil {
 		return out
 	}
-	for _, part := range strings.Split(*raw, ",") {
+	for part := range strings.SplitSeq(*raw, ",") {
 		if part = strings.TrimSpace(part); part != "" {
 			out = append(out, part)
 		}

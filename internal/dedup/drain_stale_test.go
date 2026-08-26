@@ -75,8 +75,8 @@ func seedDrainCandidate(t *testing.T, es *database.EmbeddingStore, aID, bID stri
 
 func TestDrainStale_BoilerplateTitle(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "Opening Credits", duration: intPtr(3600)},
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600)},
+		{id: "BOOK_A", title: "Opening Credits", duration: new(3600)},
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600)},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
@@ -97,8 +97,8 @@ func TestDrainStale_BoilerplateTitle(t *testing.T) {
 
 func TestDrainStale_ShortDuration(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "A Real Book", duration: intPtr(30)}, // < minFingerprintMatchSeconds (60)
-		{id: "BOOK_B", title: "Another Real Book", duration: intPtr(3600)},
+		{id: "BOOK_A", title: "A Real Book", duration: new(30)}, // < minFingerprintMatchSeconds (60)
+		{id: "BOOK_B", title: "Another Real Book", duration: new(3600)},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
@@ -113,8 +113,8 @@ func TestDrainStale_ShortDuration(t *testing.T) {
 
 func TestDrainStale_IdentifierConflict(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600), isbn13: strPtr("9781111111111")},
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600), isbn13: strPtr("9782222222222")},
+		{id: "BOOK_A", title: "A Real Book", duration: new(3600), isbn13: new("9781111111111")},
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600), isbn13: new("9782222222222")},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
@@ -129,10 +129,10 @@ func TestDrainStale_IdentifierConflict(t *testing.T) {
 
 func TestDrainStale_PartVsWhole(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600), files: []database.BookFile{
+		{id: "BOOK_A", title: "A Real Book", duration: new(3600), files: []database.BookFile{
 			{ID: "FA1", BookID: "BOOK_A", Duration: 100},
 		}},
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600), files: []database.BookFile{
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600), files: []database.BookFile{
 			{ID: "FB1", BookID: "BOOK_B", Duration: 500},
 			{ID: "FB2", BookID: "BOOK_B", Duration: 500},
 		}},
@@ -157,8 +157,8 @@ func TestDrainStale_NonPrimaryVersion(t *testing.T) {
 	primary := true
 	nonPrimary := false
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600), isPrimaryVersion: &primary},
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600), isPrimaryVersion: &nonPrimary},
+		{id: "BOOK_A", title: "A Real Book", duration: new(3600), isPrimaryVersion: &primary},
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600), isPrimaryVersion: &nonPrimary},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
@@ -180,8 +180,8 @@ func TestDrainStale_NonPrimaryVersion(t *testing.T) {
 // by the drain exactly like it would still be emitted by the chokepoint.
 func TestDrainStale_NonPrimaryVersion_ConservativeNilKept(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600)}, // isPrimaryVersion left nil
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600)}, // isPrimaryVersion left nil
+		{id: "BOOK_A", title: "A Real Book", duration: new(3600)}, // isPrimaryVersion left nil
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600)}, // isPrimaryVersion left nil
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
@@ -196,7 +196,7 @@ func TestDrainStale_NonPrimaryVersion_ConservativeNilKept(t *testing.T) {
 
 func TestDrainStale_MissingBook(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600)},
+		{id: "BOOK_A", title: "A Real Book", duration: new(3600)},
 		// BOOK_GONE is intentionally absent → GetBookByID returns (nil, nil).
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_GONE")
@@ -212,8 +212,8 @@ func TestDrainStale_MissingBook(t *testing.T) {
 
 func TestDrainStale_KeptWhenStillValid(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "A Real Book", duration: intPtr(3600)},
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600)},
+		{id: "BOOK_A", title: "A Real Book", duration: new(3600)},
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600)},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
@@ -230,8 +230,8 @@ func TestDrainStale_KeptWhenStillValid(t *testing.T) {
 // status untouched.
 func TestDrainStale_DryRunWritesNothing(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "Opening Credits", duration: intPtr(3600)},
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600)},
+		{id: "BOOK_A", title: "Opening Credits", duration: new(3600)},
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600)},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 
@@ -252,10 +252,10 @@ func TestDrainStale_DryRunWritesNothing(t *testing.T) {
 // stale-drain on would-purge rows but leaves kept rows pending.
 func TestDrainStale_ApplyReclassifiesOnlyWouldPurge(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
-		{id: "BOOK_A", title: "Opening Credits", duration: intPtr(3600)}, // boilerplate → purge
-		{id: "BOOK_B", title: "A Real Book", duration: intPtr(3600)},
-		{id: "BOOK_C", title: "A Real Book", duration: intPtr(3600)}, // C+D still valid → kept
-		{id: "BOOK_D", title: "A Real Book", duration: intPtr(3600)},
+		{id: "BOOK_A", title: "Opening Credits", duration: new(3600)}, // boilerplate → purge
+		{id: "BOOK_B", title: "A Real Book", duration: new(3600)},
+		{id: "BOOK_C", title: "A Real Book", duration: new(3600)}, // C+D still valid → kept
+		{id: "BOOK_D", title: "A Real Book", duration: new(3600)},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
 	seedDrainCandidate(t, es, "BOOK_C", "BOOK_D")
@@ -296,17 +296,17 @@ func TestDrainStale_PagingAcrossBatches(t *testing.T) {
 
 	const pairs = 7 // > 3 full batches of 2
 	books := make([]drainBook, 0, pairs*2)
-	for i := 0; i < pairs; i++ {
+	for i := range pairs {
 		aID := "PA" + string(rune('a'+i))
 		bID := "PB" + string(rune('a'+i))
 		// Every pair has a boilerplate side → all would-purge.
 		books = append(books,
-			drainBook{id: aID, title: "Opening Credits", duration: intPtr(3600)},
-			drainBook{id: bID, title: "A Real Book", duration: intPtr(3600)},
+			drainBook{id: aID, title: "Opening Credits", duration: new(3600)},
+			drainBook{id: bID, title: "A Real Book", duration: new(3600)},
 		)
 	}
 	engine, es := setupDrainTest(t, books)
-	for i := 0; i < pairs; i++ {
+	for i := range pairs {
 		seedDrainCandidate(t, es, "PA"+string(rune('a'+i)), "PB"+string(rune('a'+i)))
 	}
 
@@ -335,10 +335,10 @@ func TestDrainStale_CheckpointResumeAndClear(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
 
 	byID := map[string]*database.Book{
-		"BOOK_A": {ID: "BOOK_A", Title: "A Real Book", Duration: intPtr(3600)},
-		"BOOK_B": {ID: "BOOK_B", Title: "A Real Book", Duration: intPtr(3600)},
-		"BOOK_C": {ID: "BOOK_C", Title: "A Real Book", Duration: intPtr(3600)},
-		"BOOK_D": {ID: "BOOK_D", Title: "A Real Book", Duration: intPtr(3600)},
+		"BOOK_A": {ID: "BOOK_A", Title: "A Real Book", Duration: new(3600)},
+		"BOOK_B": {ID: "BOOK_B", Title: "A Real Book", Duration: new(3600)},
+		"BOOK_C": {ID: "BOOK_C", Title: "A Real Book", Duration: new(3600)},
+		"BOOK_D": {ID: "BOOK_D", Title: "A Real Book", Duration: new(3600)},
 	}
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return byID[id], nil }
 	mock.GetBookFilesFunc = func(string) ([]database.BookFile, error) { return nil, nil }
@@ -389,8 +389,8 @@ func TestDrainStale_CheckpointResumeAndClear(t *testing.T) {
 func TestDrainStale_DryRunIgnoresCheckpoint(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
 	byID := map[string]*database.Book{
-		"BOOK_A": {ID: "BOOK_A", Title: "A Real Book", Duration: intPtr(3600)},
-		"BOOK_B": {ID: "BOOK_B", Title: "A Real Book", Duration: intPtr(3600)},
+		"BOOK_A": {ID: "BOOK_A", Title: "A Real Book", Duration: new(3600)},
+		"BOOK_B": {ID: "BOOK_B", Title: "A Real Book", Duration: new(3600)},
 	}
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return byID[id], nil }
 	mock.GetBookFilesFunc = func(string) ([]database.BookFile, error) { return nil, nil }

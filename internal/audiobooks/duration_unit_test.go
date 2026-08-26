@@ -34,7 +34,7 @@ func TestAggregateFileMetadata_DoesNotDivideCorrectSeconds(t *testing.T) {
 	const track = 600      // 10 minutes
 	const size = 4_800_000 // 4.8 MB -> 64 kbps at 600 s
 	files := make([]database.BookFileCore, 0, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		files = append(files, database.BookFileCore{Duration: track, FileSize: size})
 	}
 

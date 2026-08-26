@@ -147,10 +147,7 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 	// belongs to exactly one book, so workers never touch the same row or the same
 	// RecomputeBookAggregates target (same disjoint-partition argument as
 	// dedupe-book-file-rows).
-	workers := runtime.NumCPU()
-	if workers > len(bookIDs) {
-		workers = len(bookIDs)
-	}
+	workers := min(runtime.NumCPU(), len(bookIDs))
 	log.Info("purge-millisecond-durations: repairing in parallel",
 		"books", len(bookIDs), "workers", workers)
 

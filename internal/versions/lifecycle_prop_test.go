@@ -192,7 +192,7 @@ func TestProp_AutoPromotePicksMostRecent(t *testing.T) {
 
 		n := rapid.IntRange(1, 5).Draw(t, "n_alts")
 		alts := make([]*database.BookVersion, 0, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			altGen := rapidgen.BookVersion(t, book.ID)
 			altGen.Status = database.BookVersionStatusAlt
 			created, err := store.CreateBookVersion(altGen)
@@ -274,7 +274,7 @@ func TestProp_SingleActiveInvariantMaintained(t *testing.T) {
 		}
 
 		nAlts := rapid.IntRange(1, 4).Draw(t, "n_alts")
-		for i := 0; i < nAlts; i++ {
+		for i := range nAlts {
 			altGen := rapidgen.BookVersion(t, book.ID)
 			altGen.Status = database.BookVersionStatusAlt
 			if _, err := store.CreateBookVersion(altGen); err != nil {
@@ -283,7 +283,7 @@ func TestProp_SingleActiveInvariantMaintained(t *testing.T) {
 		}
 
 		steps := rapid.IntRange(1, 8).Draw(t, "n_steps")
-		for step := 0; step < steps; step++ {
+		for step := range steps {
 			all, err := store.GetBookVersionsByBookID(book.ID)
 			if err != nil {
 				t.Fatalf("list versions: %v", err)
