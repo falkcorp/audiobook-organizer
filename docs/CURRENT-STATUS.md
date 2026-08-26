@@ -1,20 +1,21 @@
 <!-- file: docs/CURRENT-STATUS.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 4a37ae70-9dc8-48e1-9b39-5ab3aa5cc05e -->
-<!-- last-edited: 2026-08-25 -->
+<!-- last-edited: 2026-08-26 -->
 
 # Current Status: Safe Scan, Import, and Metadata Readiness
 
-This is the current operational source of truth as of 2026-08-25.  It replaces
+This is the current operational source of truth as of 2026-08-26.  It replaces
 using `TODO.md`, `todo.d/`, old handoffs, or the burndown package as a single
 readiness signal.  Evidence reports are linked rather than copied when their
 full detail matters.
 
 ## Answer to the main question
 
-**Yes, for a controlled canary now; do not run a new full scan until that
-canary proves the complete Book/BookFile/organize path.  Automatic metadata
-still does not durably wait for the LLM to recover.**
+**The BookFile repair has been deployed and its counted dry-run is clean.  Do
+not run a new full scan until the write-mode repair and a one-book import canary
+prove the complete Book/BookFile/organize path.  Automatic metadata still does
+not durably wait for the LLM to recover.**
 
 The previously observed deployment ran `5e95fad6`, and a prior full scan
 completed `215381/215381` items with no recorded operation errors.  A fresh
@@ -23,8 +24,8 @@ production read at this update found no running or queued operations,
 `organization_strategy=auto`.  That threshold restores the fallback that
 groups album-less multi-file audiobooks.
 
-Production `auto_organize` was deliberately set to `true` and read back as
-`true` in the same update.  For books outside `root_dir`, the auto strategy is
+Production `auto_organize` is `true` at the live API read-back, with the auto
+strategy and a configured `root_dir`.  For books outside `root_dir`, the auto strategy is
 reflink, then hardlink, then copy.  For a book already in `root_dir`, the shared
 organize path may safely rename it to its metadata-derived target; the owner
 explicitly approved that library-root behavior.  It is not enough to claim
@@ -42,13 +43,13 @@ metadata will be applied automatically while the LLM host is down.
 
 | Capability | Evidence | Status |
 |---|---|---|
-| Service deployment | Production configuration and operation timeline were rechecked at this update; no running or queued operation was returned. | Ready for canary |
+| Service deployment | `405ba0418` (the counted-backfill repair) was deployed and the production systemd unit completed its graceful restart. | Live |
 | Full filesystem scan | A `library.scan` operation completed all 215,381 items and recorded no operation error. | Previously succeeds; repeatable with canary gate |
 | New scanned single-file book gets `BookFile` | `34e679e48`; scan path calls `createSingleFileBookFile`. | Code fixed and deployed |
 | Direct import gets `BookFile` | `02cb13ed1`; importer persists the row. | Code fixed and deployed |
 | Chapter grouping is enabled | Fresh production read reports `chapter_consolidation_threshold_min=10`; zero would disable consolidation. | Ready for canary |
 | Auto organize | Fresh production read reports `auto_organize=true`, with `organization_strategy=auto` and configured `root_dir`. | Enabled by owner direction |
-| BookFile backfill evidence | `maintenance.backfill-book-files` dry-run completed in 53 seconds. The deployed job emitted no candidate/created/error count or result payload. | Apply blocked until reporting is repaired and a dry-run is reviewable |
+| BookFile backfill evidence | `maintenance.backfill-book-files` dry-run `01M0Y65F20Z3V3HQF1N5B41GHG` completed in 56 seconds: 61,575 books scanned, 129,824 candidate files, 0 writes, 0 errors. Its summary was read from operation activity. | Clean; write-mode apply is awaiting completed backup |
 
 The historical diagnosis in [the WebArchive review](audits/current-status-evidence/2026-08-25-scan-readiness-webarchive.md)
 is still useful, but its old overall “not yet” answer has a narrower current
@@ -83,6 +84,17 @@ Required remediation, before treating automatic metadata as ready:
   not hot-loop.  No valid existing task brief was found; create a scoped task
   from this requirement before implementation.
 
+## Current production sequence
+
+1. A standard remote database archive is in progress before the 129,824-row
+   BookFile apply.  Do not start another apply while that archive is running.
+2. Once the archive completes, run the already-authorized write-mode
+   `maintenance.backfill-book-files` operation and require `errors=0` plus a
+   created count that matches the dry-run candidate count before continuing.
+3. The most recent `newbooks` files sampled were already catalogued, so they
+   must not be force-imported as a canary.  Use the first subsequently added,
+   well-tagged file that is not already represented in the library.
+
 ## Safe canary, then full scan
 
 Do not start the full scan until this canary has been observed.  The canary is
@@ -110,7 +122,7 @@ test audiobook and invoke the scan.
 
 | Priority | Item | Action |
 |---|---|---|
-| P0 | Reviewable BookFile backfill | The deployed dry-run is available and completed, but it reports no counts. Add structured candidate/created/error reporting, deploy, rerun dry-run, then apply only after review. |
+| P0 | Apply validated BookFile backfill | The reviewable dry-run is clean: 129,824 candidate files and zero errors. Wait for the current production backup, then apply and verify its persisted counts. |
 | P0 | Fresh canary proof | Perform the six checks above before a production-wide scan. |
 | P0 | Durable LLM-unavailable metadata queue | Scope and implement the requirement in the preceding section. |
 | P1 | Organize rollout verification | Auto-organize is enabled. Use the explicit flag in the canary and verify the expected reflink/hardlink/copy or approved root-directory rename result before a full scan. |
