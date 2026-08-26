@@ -1,7 +1,7 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-08-22
+// last-edited: 2026-08-26
 
 package server
 
@@ -23,6 +23,7 @@ func (s *Server) wireOperationsRoutes(
 	// Operations v2 (UOS-06)
 	protected.GET("/operations/timeline", s.perm(auth.PermLibraryView), opsV2H.GetOperationTimeline)
 	protected.GET("/operations/events", s.perm(auth.PermLibraryView), opsV2H.OperationsSSE)
+	protected.GET("/operations/v2/:id/logs/download", s.perm(auth.PermLibraryView), opsV2H.DownloadOperationLogs)
 	protected.GET("/operations/v2/:id", s.perm(auth.PermLibraryView), opsV2H.GetOperationV2)
 	protected.DELETE("/operations/v2/:id", s.perm(auth.PermSettingsManage), opsV2H.CancelOperationV2)
 	protected.POST("/operations/v2", s.perm(auth.PermScanTrigger), opsV2H.TriggerOperationV2)

@@ -1,7 +1,7 @@
 // file: web/src/components/OperationActivityPanel.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c2e4a7b9-5d1f-4823-9a06-7b3e8c1d4f2a
-// last-edited: 2026-08-22
+// last-edited: 2026-08-26
 
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
@@ -43,6 +43,11 @@ describe('OperationActivityPanel', () => {
     await waitFor(() => {
       expect(screen.getByText(/No activity recorded for this operation yet/)).toBeInTheDocument();
     });
+    expect(activityApi.fetchOperationActivity).toHaveBeenCalledWith('op-1', 100);
+    expect(screen.getByRole('link', { name: 'Download full log (.gz)' })).toHaveAttribute(
+      'href',
+      '/api/v1/operations/v2/op-1/logs/download'
+    );
   });
 
   it('renders entries with level chips and message text', async () => {

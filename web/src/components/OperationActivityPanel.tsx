@@ -1,11 +1,12 @@
 // file: web/src/components/OperationActivityPanel.tsx
-// version: 1.3.4
+// version: 1.4.0
 // guid: f7a1e2c3-9b4d-4e5a-8c6f-1d3b5a7e9c0f
-// last-edited: 2026-08-22
+// last-edited: 2026-08-26
 
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import {
   Box,
+  Button,
   Chip,
   CircularProgress,
   Collapse,
@@ -26,7 +27,7 @@ import { useToast } from './toast/ToastProvider';
 interface OperationActivityPanelProps {
   /** Operation ID to fetch the per-op activity feed for. */
   operationId: string;
-  /** Optional cap on entries returned by the server (default 1000 server-side). */
+  /** Optional cap on entries returned by the server (default 100). */
   limit?: number;
 }
 
@@ -192,7 +193,7 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchOperationActivity(operationId, limit);
+      const data = await fetchOperationActivity(operationId, limit ?? 100);
       if (!isUnmountedRef.current) {
         setEntries(data.entries ?? []);
         setTotal(data.total ?? data.entries?.length ?? 0);
@@ -224,7 +225,7 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
     // renders that hand back an equal-looking but structurally new event object.
     if (lastAppendedSequenceRef.current === latestLogEvent.sequence) return;
     lastAppendedSequenceRef.current = latestLogEvent.sequence;
-    const cap = limit ?? 1000;
+    const cap = limit ?? 100;
     const currentOp = opRef.current;
     setEntries((prev) => {
       const next = [
@@ -323,6 +324,15 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
               </IconButton>
             </span>
           </Tooltip>
+          <Button
+            component="a"
+            href={`/api/v1/operations/v2/${encodeURIComponent(operationId)}/logs/download`}
+            download
+            size="small"
+            sx={{ textTransform: 'none' }}
+          >
+            Download full log (.gz)
+          </Button>
           <Tooltip title="Refresh activity">
             <IconButton size="small" onClick={load} aria-label="Refresh activity">
               <RefreshIcon fontSize="small" />

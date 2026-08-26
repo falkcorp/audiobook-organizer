@@ -1,14 +1,16 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-24
+// last-edited: 2026-08-26
 
 package handlers_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -124,6 +126,30 @@ func TestOperationsV2Handler_GetOperationV2_NotFound(t *testing.T) {
 	h.GetOperationV2(c)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestOperationsV2Handler_DownloadOperationLogs_GzipsFullTranscript(t *testing.T) {
+	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOpLogsV2("op1", 0).Return([]database.OpLogV2Row{
+		{OperationID: "op1", Level: "info", Message: "first line", Attrs: `{"book":"one"}`},
+		{OperationID: "op1", Level: "error", Message: "last line", Attrs: `{"book":"two"}`},
+	}, nil)
+
+	h := handlers.NewOperationsV2Handler(store, nil, nil, false)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/v2/op1/logs/download", "", gin.Params{{Key: "id", Value: "op1"}})
+	h.DownloadOperationLogs(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "application/gzip", w.Header().Get("Content-Type"))
+	require.Contains(t, w.Header().Get("Content-Disposition"), `attachment; filename="operation-op1.log.gz"`)
+
+	reader, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
+	require.NoError(t, err)
+	decompressed, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	assert.Contains(t, string(decompressed), "INFO first line")
+	assert.Contains(t, string(decompressed), "ERROR last line")
 }
 
 // ── CancelOperationV2 ─────────────────────────────────────────────────────
