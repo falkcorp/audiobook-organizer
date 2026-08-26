@@ -1,5 +1,5 @@
 <!-- file: docs/CURRENT-STATUS.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 4a37ae70-9dc8-48e1-9b39-5ab3aa5cc05e -->
 <!-- last-edited: 2026-08-26 -->
 
@@ -12,10 +12,9 @@ full detail matters.
 
 ## Answer to the main question
 
-**The BookFile repair has been deployed and its counted dry-run is clean.  Do
-not run a new full scan until the write-mode repair and a one-book import canary
-prove the complete Book/BookFile/organize path.  Automatic metadata still does
-not durably wait for the LLM to recover.**
+**The BookFile repair is complete.  Do not run a new full scan until a one-book
+import canary proves the complete Book/BookFile/organize path.  Automatic
+metadata still does not durably wait for the LLM to recover.**
 
 The previously observed deployment ran `5e95fad6`, and a prior full scan
 completed `215381/215381` items with no recorded operation errors.  A fresh
@@ -49,7 +48,7 @@ metadata will be applied automatically while the LLM host is down.
 | Direct import gets `BookFile` | `02cb13ed1`; importer persists the row. | Code fixed and deployed |
 | Chapter grouping is enabled | Fresh production read reports `chapter_consolidation_threshold_min=10`; zero would disable consolidation. | Ready for canary |
 | Auto organize | Fresh production read reports `auto_organize=true`, with `organization_strategy=auto` and configured `root_dir`. | Enabled by owner direction |
-| BookFile backfill evidence | `maintenance.backfill-book-files` dry-run `01M0Y65F20Z3V3HQF1N5B41GHG` completed in 56 seconds: 61,575 books scanned, 129,824 candidate files, 0 writes, 0 errors. Its summary was read from operation activity. | Clean; write-mode apply is awaiting completed backup |
+| BookFile backfill evidence | Dry-run `01M0Y65F20Z3V3HQF1N5B41GHG` found 129,824 candidates with 0 errors. Write run `01M0Y7PQWP1VA6P1CD3DHCAMJV` completed: 61,575 books scanned, 129,824 created, 0 errors. | Complete |
 
 The historical diagnosis in [the WebArchive review](audits/current-status-evidence/2026-08-25-scan-readiness-webarchive.md)
 is still useful, but its old overall “not yet” answer has a narrower current
@@ -86,11 +85,9 @@ Required remediation, before treating automatic metadata as ready:
 
 ## Current production sequence
 
-1. A standard remote database archive is in progress before the 129,824-row
-   BookFile apply.  Do not start another apply while that archive is running.
-2. Once the archive completes, run the already-authorized write-mode
-   `maintenance.backfill-book-files` operation and require `errors=0` plus a
-   created count that matches the dry-run candidate count before continuing.
+1. A standard remote database archive completed before the BookFile apply.
+2. The BookFile apply completed with an exact candidate-to-created match and
+   zero errors; do not re-run it unless a fresh census finds new missing rows.
 3. The most recent `newbooks` files sampled were already catalogued, so they
    must not be force-imported as a canary.  Use the first subsequently added,
    well-tagged file that is not already represented in the library.
@@ -122,9 +119,9 @@ test audiobook and invoke the scan.
 
 | Priority | Item | Action |
 |---|---|---|
-| P0 | Apply validated BookFile backfill | The reviewable dry-run is clean: 129,824 candidate files and zero errors. Wait for the current production backup, then apply and verify its persisted counts. |
 | P0 | Fresh canary proof | Perform the six checks above before a production-wide scan. |
 | P0 | Durable LLM-unavailable metadata queue | Scope and implement the requirement in the preceding section. |
+| P1 | Batch future BookFile repairs | The completed repair exposed per-file aggregate recomputation for large books. A scoped batching fix is planned; validate and deploy it before another large backfill. |
 | P1 | Organize rollout verification | Auto-organize is enabled. Use the explicit flag in the canary and verify the expected reflink/hardlink/copy or approved root-directory rename result before a full scan. |
 | P1 | Existing library repairs | The valid per-batch BookFile dedup/path/history and chapter backfill tasks remain in [TODO/CHANGELOG audit evidence](audits/current-status-evidence/2026-08-25-todo-changelog.md); revalidate before dispatch. |
 | P2 | TODO fragment reconciliation | The assembler currently reports 16 pending fragments.  Curate rather than blindly collect them; see [fragment evidence](audits/current-status-evidence/2026-08-25-todo-fragments.md). |
