@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-24
+// last-edited: 2026-08-26
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -9,6 +9,7 @@
 package handlers
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -354,6 +356,43 @@ func (h *OperationsV2Handler) GetOperationV2(c *gin.Context) {
 		"operation": opResp,
 		"logs":      logResp,
 	})
+}
+
+// DownloadOperationLogs streams the complete raw operation transcript as a
+// gzip attachment. The browser's download manager consumes the response; the
+// operations dialog never has to deserialize or render the full transcript.
+func (h *OperationsV2Handler) DownloadOperationLogs(c *gin.Context) {
+	id := c.Param("id")
+	if h.opsStore == nil {
+		httputil.RespondWithNotFound(c, "operation", id)
+		return
+	}
+
+	logs, err := h.opsStore.GetOpLogsV2(id, 0)
+	if err != nil {
+		httputil.InternalError(c, "failed to fetch operation logs", err)
+		return
+	}
+
+	filename := "operation-" + id + ".log.gz"
+	c.Header("Content-Type", "application/gzip")
+	c.Header("Content-Disposition", "attachment; filename="+strconv.Quote(filename))
+	c.Status(http.StatusOK)
+
+	gz := gzip.NewWriter(c.Writer)
+	defer gz.Close()
+	for _, log := range logs {
+		if _, err := fmt.Fprintf(gz, "%s %s %s\n", log.CreatedAt.UTC().Format(time.RFC3339Nano), strings.ToUpper(log.Level), log.Message); err != nil {
+			slog.Debug("operation log download interrupted", "op_id", id, "error", err)
+			return
+		}
+		if log.Attrs != "" && log.Attrs != "{}" {
+			if _, err := fmt.Fprintln(gz, log.Attrs); err != nil {
+				slog.Debug("operation log download interrupted", "op_id", id, "error", err)
+				return
+			}
+		}
+	}
 }
 
 // GetOperationLogs serves an operation's log lines on their own, satisfying
