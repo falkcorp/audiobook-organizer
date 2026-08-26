@@ -1,7 +1,7 @@
 # file: .github/dependabot.yml
-# version: 1.2.0
+# version: 1.2.1
 # guid: 9f416cf7-2df6-4a47-93b9-630339256aec
-# last-edited: 2026-07-16
+# last-edited: 2026-08-25
 
 version: 2
 
@@ -27,6 +27,11 @@ updates:
     multi-ecosystem-group: dependencies
     labels:
       - containers
+    ignore:
+      # Go 1.27 does not compile this repository. Continue accepting patch and
+      # digest updates for 1.26 while blocking incompatible toolchain upgrades.
+      - dependency-name: "golang"
+        versions: [">=1.27"]
 
   # Github Actions
   - package-ecosystem: github-actions
@@ -69,4 +74,3 @@ updates:
         versions: [">=8.0.0"]
       - dependency-name: "@vitejs/plugin-react"
         versions: [">=5.0.0"]
-
