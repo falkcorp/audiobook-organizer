@@ -1,8 +1,8 @@
 <!-- file: TODO.md -->
-<!-- version: 10.42.1 -->
+<!-- version: 10.42.2 -->
 <!-- version: 10.43.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-25 -->
+<!-- last-edited: 2026-08-26 -->
 
 # Project TODO — live items only
 
@@ -14,6 +14,669 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+## Auto-organize throws away a relationship it already has, then a later scan rediscovers it
+
+`AutoOrganizeFn` (`internal/server/server.go:921`) holds BOTH `oldPath` and `newPath` at
+the moment it organizes a book. It updates the row's `FilePath` to `newPath` and records
+nothing about `oldPath`.
+
+For a book outside `RootDir`, `OrganizeOneBook` routes to `Organizer.OrganizeBook`, which
+uses `organizeFile` — strategy `auto` = reflink -> hardlink -> copy
+(`internal/organizer/organizer.go:919-940`). **None of those remove the source.** So two
+directory entries now exist with identical content, the DB points at the organized one,
+and the original is untracked.
+
+If the original's directory is still in the scan paths, the next scan walks it, hashes it,
+matches it in `saveBookToDatabase`'s hash dedup, and version-links the two **after the
+fact** — creating the version group and `IsPrimaryVersion` stamp that organize could have
+written directly, at move time, with no hashing and no rediscovery.
+
+That is scan-then-dedup-later for a relationship that was known at import.
+
+- [ ] Have the organize path record the old->new relationship when it creates the second
+      copy (version-link, or mark the source as superseded), instead of leaving it to be
+      rediscovered
+- [ ] Decide whether reflink/hardlink cases should be version-linked at all — they share
+      extents/inode, so they are one set of bytes with two names, not two copies
+- [ ] Confirm on prod whether original import locations remain in the scan paths. If they
+      do not, this never fires and the priority drops; MEASURE before acting
+- [ ] Re-check the single-member version group finding with `RootDir` SET. It was measured
+      with `RootDir=""`, which is not production, and the primary/non-primary branch in
+      `saveBookToDatabase` is gated on `RootDir` prefixes
+
+Related: `docs/plans/2026-08-24-per-file-scan-cache-design.md` (option B), and
+`20260824-deluge-update-on-file-move.md`.
+
+- [ ] **Check whether `/filterdata`'s SERIES list has the same zero-book
+      problem the author list had.** `LibraryFilterData` now sources authors and
+      narrators from `contributorIndex`, so both are restricted to contributors
+      on a visible book. Series is still built from `GetAllSeries()` — every
+      series row in the store. In production 4,975 of 12,854 authors (38.7%)
+      had no visible book; nobody has measured the equivalent figure for the
+      14,625 series rows.
+
+      It was left alone deliberately: series has no entry in the contributor
+      index, so moving it needs its own build path and its own measurement
+      rather than a drive-by. Measure first — if the fraction is small the fix
+      may not be worth a second full-library pass.
+
+- [ ] **Make `/filterdata` stop walking the whole book keyspace twice to read
+      two fields.** `GetDistinctGenres` and `GetDistinctLanguages`
+      (`internal/database/pebble_store.go`) each iterate every `book:*` key and
+      `json.Unmarshal` the full row to read ONE field — `Genre` and `Language`
+      respectively. `publishedDecades` then scans another 5,000 rows.
+
+      Measured against production 2026-08-25: `/filterdata` took 7.17s and
+      6.57s on two consecutive calls. The endpoint is now cached, so this is no
+      longer on every page load, but the cold rebuild still pays all three
+      passes. At minimum the two distinct-value scans should share one pass;
+      better would be a projection that does not unmarshal the whole row.
+
+- [ ] **Decide what to do about the 6 ABS client sorts this server has no field
+      for.** `absSortFields` (`internal/server/handlers/abs/browse.go`) holds 11 accepted
+      parameter spellings resolving to 9 distinct store fields. Six known client
+      sorts resolve to `""` instead, which means "no ordering requested" everywhere downstream, so the
+      client gets a 200 and the store's default order.
+
+      As of 2026-08-25 this is at least no longer silent — `warnUnsupportedSort`
+      logs at most once a minute and names the supported alternatives —
+      but nothing sorts. They are unsupported for three different reasons and
+      each wants a different decision:
+
+      1. **File Modified** — tractable. `Book.LastScanMtime *int64` already
+         exists. Needs a `bookSortComparators` entry plus an `absSortFields`
+         mapping. Deliberately not done as part of the silence fix: adding a
+         sort is a feature, and it should be a decision rather than a drive-by.
+         ⚠️ If added, cover it in `internal/audiobooks/sort_every_field_test.go`
+         — that test enumerates `database.SortableBookFields()` and will fail
+         on arrival until it has a fixture, which is the intended behaviour.
+      2. **Progress ×3** (In Progress / Finished / Percent) — per-user state
+         (`UserBookState.ProgressPct`), not a `Book` field. The summary path has
+         no shape for a per-user join, so this is a design question, not a
+         mapping.
+      3. **File Birthtime** — no field exists anywhere; would need capture at
+         scan time.
+      4. **Randomly** — arguably should stay unimplemented: pagination is only
+         meaningful over a stable order.
+
+      Worth confirming against a real client which of these users actually
+      reach for before building any of them.
+
+## P0: `book_file` row creation regressed between 2026-08-11 and 2026-08-14
+
+A book row with no `book_file` rows has no route to any audio. **~13,000 books created
+since 2026-08-14 are in this state**, which is the mechanism behind "new books get added
+but I can't listen to them". Measurements, eliminated mechanisms and the method traps are
+in [`docs/audits/2026-08-25-book-file-creation-regression.md`](../docs/audits/2026-08-25-book-file-creation-regression.md).
+
+Sampled by `created_at` day, n=30/day: 2026-08-11 is **0.0%** over a 16,091-row pool;
+2026-08-14 is 93.8%; every day since runs 90-100%. Control 2026-04-04 is 0.0%.
+2026-08-12 and 2026-08-13 have no rows at all — a two-day gap right before the collapse,
+suggesting a deploy or config change rather than code that rotted.
+
+Three mechanisms are already eliminated and should not be re-proposed: duplicate rows
+starving each other (refuted by control — 59/60 pre-boundary duplicate groups have all
+rows holding files), the `len(SegmentFiles) > 1` gate at site 1487 (does not apply to
+directory books, which reach site 1285 unconditionally), and an outright `book:path:`
+index break (would give 0% success; 6 of 43 books succeeded today).
+
+Still unexplained and likely a **second stacked defect**: the successes are partial —
+Axiom 52 files on disk -> 42 rows, Foundation 149 -> 76, Flux 59 -> 48.
+
+Any repro must discriminate "no call was made" from "the call was made and returned
+early" — both give zero rows, and a test asserting only the end state will pass against
+the wrong fix.
+
+Note #2926 fixes the single-file half of this at save time but is **not deployed** —
+production ran a binary from 2026-08-24 23:26:31 at measurement time, so nothing is
+measurable against prod until it is.
+
+## Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping
+
+This is the root cause of the `book_file` creation regression — **12,525 books (20.4% of
+the library) have no route to their audio**. Full chain and evidence in
+[`docs/audits/2026-08-25-book-file-creation-regression.md`](../docs/audits/2026-08-25-book-file-creation-regression.md).
+
+The intended default is 10 (`config.go:1392`); `0` legitimately means "disable
+consolidation". With it disabled, files with no album tag (223 of 224 in the sampled
+book) fall to `consolidateChapterGroups`, which returns one Book per file. Each then
+arrives at scanner.go site 1487 with `len(SegmentFiles) == 1`, fails the `> 1` gate, and
+`createBookFilesForBook` is never called.
+
+Three separate pieces of work fall out of this, and only the first is a config change:
+
+- [ ] Set the production value back to 10. **Fixes future scans only.** Production
+      config change — belongs to the operator, not to an agent.
+- [ ] Repair the 12,525 existing books with no `book_file` rows, and the ~1,710
+      track-titled fragment rows. Already-written damage; the config change does not
+      touch it.
+- [ ] Fix the silent-disable defect: `ChapterConsolidationThresholdMin` has no
+      `omitempty` (`config.go:811`), so a write from a partially-populated struct
+      persists a hard `0` that beats viper's default on every later load — with no log
+      line and no startup warning. The absence of any signal is why this ran eleven days
+      behind a green suite. Blast radius is every field in that struct, so this needs a
+      decision, not a one-line patch.
+
+Not established: **when and how the value became 0.** `/var/lib/audiobook-organizer/config.yaml`
+is 724 bytes, mtime 2026-08-24T01:24:08 (after the boundary, so it dates the last write,
+not the flip), `0600` owned by `audiobook`, and `sudo cat` is not in the NOPASSWD
+allowlist.
+
+- [ ] **CI never fetches Git LFS, so every audio-fixture test runs against a
+      129-byte pointer.** `.gitattributes:1-5` tracks `*.m4b`, `*.m4a`, `*.mp3`,
+      `*.flac` and `*.png` with LFS, and **no** workflow passes `lfs: true` to
+      `actions/checkout` (checked every checkout step in `.github/workflows/`;
+      zero matches for `lfs` across all of them). So on CI,
+      `testdata/fixtures/test_sample.m4b` is 129 bytes of ASCII beginning
+      `version https://git-lfs.github.com/spec/v1`.
+
+      **Why this is silent rather than red.** `metadata.ExtractMetadata` does
+      not error on an unparseable file — measured, not assumed: given 74 bytes
+      of pointer text it returns a **nil error** and derives `Title` from the
+      filename. So a test that imports the pointer gets a book, a `book_file`
+      row with `Format` taken from the extension and `FileSize` 129 (which is
+      `> 0`), and every plausible assertion passes. Green for the wrong reason.
+
+      **Ten test files depend on the fixture**: `internal/server/`
+      (`e2e_workflow`, `server_more`, `scan_edge_cases`, `organize_integration`,
+      `itunes_integration`, `scan_integration`), `internal/audioutil/drm_test.go`,
+      `internal/scanner/process_file_test.go`,
+      `internal/metadata/real_audio_test.go`, and — until 2026-08-25 —
+      `internal/importer/bookfile_on_import_test.go`.
+
+      `testutil.CopyFixture` (`internal/testutil/integration.go:150-159`) is the
+      shared chokepoint and validates only that the read succeeded, not that the
+      bytes are audio. The `t.Skipf("fixture not found")` idiom used by
+      `process_file_test.go` and `real_audio_test.go` guards the failure mode
+      that cannot happen (missing file) and misses the one that does.
+
+      ⚠️ `.gitattributes` carries a comment recording that this repo **has
+      already been bitten by this exact thing** with PNGs and Playwright
+      goldens. This is the third occurrence of one root cause.
+
+      **The fix is two-part and the order matters.** Adding `lfs: true` alone
+      could turn ten currently-green files red at once, because none of them has
+      ever run against real audio in CI:
+      1. Add a validating helper (reject a `version https://git-lfs` prefix) to
+         `internal/testutil`, route `CopyFixture` and the `t.Skipf` sites
+         through it, and make it **fail** rather than skip.
+      2. Then add `lfs: true` to the `actions/checkout` steps, and fix whatever
+         that surfaces.
+
+      Done 2026-08-25 for `internal/importer/bookfile_on_import_test.go` only,
+      and not by validating the fixture but by **dropping the dependency**: that
+      test needs a file that exists, has a supported extension, and has a known
+      size, so it now synthesises one. Worth considering for the other nine —
+      several may not need real audio either, and the ones that genuinely do
+      (`real_audio_test.go`, `drm_test.go`) are the ones the validating helper
+      is for.
+
+- [x] **Decide whether `POST /import/file`'s `organize` flag should be wired or
+      removed.** Decided 2026-08-25: **wired**, option (1), with the blast
+      radius handled rather than accepted. The user made the call on the one
+      sub-decision the code could not: the flag is honored on its own and is
+      **not** ANDed with `auto_organize` (prod has `auto_organize=false`, so
+      ANDing would have made an explicitly-ticked checkbox silently do nothing
+      — this same bug wearing a different condition), and the checkbox now
+      **defaults OFF** so no import moves files unless someone chose it.
+      Honored by enqueueing `library.organize` with `BookIDs=[created.ID]`
+      rather than calling `PerformOrganize` inline, so it inherits the op's
+      ConcurrencyKey, cancellation, timeout and permission checks; the ID (not
+      a path) satisfies the `os.Rename` warning below.
+
+      ⚠️ **The wiring alone would have been INERT, and this is the part worth
+      keeping.** `FilterBooksNeedingOrganization`
+      (`internal/organizer/service.go:689-696`) drops any book whose `FilePath`
+      is outside `RootDir` and which has **zero `book_files` rows**, counting
+      it into `skippedMissingFiles` behind a `log.Debug`. An imported file is
+      outside `RootDir` by definition — that is what importing means. And
+      `internal/importer` created no `book_file` rows at all: `CreateBookFile`
+      was not on `importBookStore`, so no call site could exist to look broken.
+      An imported book therefore had a row, and audio on disk, and nothing
+      connecting the two — which also means no route to playback, not just no
+      organize. Fixed in the same PR. Verified the filter is on the live path
+      (`PerformOrganize:334` calls it), and confirmed with another lane that
+      this is a **separate defect** from the scanner-path `book_file`
+      regression (that one has a hard Aug 14 boundary and an all-scan sample;
+      this one is structural and presumably always existed).
+
+      Lesson worth carrying: a feature can be inert because of a missing row
+      three packages away, and every test that asserts "the op was enqueued"
+      passes anyway. The original UI offering was:
+      checkbox that **defaults to on** (`web/src/pages/Library.tsx:377`,
+      `useState(true)`), sends it on every import including bulk ones
+      (`Library.tsx:939` maps `api.importFile(path, importFileOrganize)` over
+      every selected target), and the API client serialises it faithfully
+      (`web/src/services/api.ts:2578-2582`). The server decodes it into
+      `importer.ImportFileRequest.Organize` (`internal/importer/service.go:117`)
+      via `ShouldBindJSON` at `internal/server/handlers/filesystem.go:357-363`.
+
+      That field is then read **zero** times. `internal/importer` does not import
+      `internal/organizer` at all — not a removed call, not a commented-out one.
+      The user gets a 201 and a success toast; the file never moves.
+
+      The "never built" shape matters for choosing the fix, because the sibling
+      path at `internal/server/handlers/metadata/handler.go:1349` *does* honor
+      `req.Organize`, and `deluge_discovery.go:95-97` explicitly passes
+      `Organize: false` — both consistent with an author who believed this was
+      wired. That is evidence about belief, not intent, so the code cannot pick
+      between the two candidate fixes:
+
+      1. **Wire it.** `PerformOrganize` is the canonical pipeline as of
+         `06c3ba3fd`, so there is a correct thing to call. Blast radius is the
+         reason this needs a decision and not a drive-by: every future import
+         would begin moving files under `RootDir` on a ~48k-book production
+         library, and the checkbox defaults to ON, so the change is opt-out
+         rather than opt-in for existing users.
+         ⚠️ `OrganizeOneBook` `os.Rename`s the book, so a `FilePath` captured
+         before the call is stale after it — any deferred work must carry
+         `book.ID`, not a path.
+      2. **Remove the lie.** Drop the checkbox and the field, or have the API
+         reject `organize: true` with a 400 saying import does not organize.
+         Cheap, honest, and reversible if (1) is later wanted.
+
+      Either is defensible; shipping neither is not, because today the UI
+      promises an action the server silently declines to take.
+
+- [ ] **Make the `has_file_errors` fast path honor the rest of the query, or
+      refuse it.** `ListAudiobooks`
+      (`internal/server/handlers/audiobooks/handler.go:349`) returns inside a
+      fast path that parses `params`, `author_id` and `series_id` at :342-346
+      and then uses **none** of them, while also ignoring `search`, the entire
+      `filters` JSON payload, and any requested sort. It hand-paginates the raw
+      `ListBooksWithFileErrors()` ID slice and reports `count` as the length of
+      that unfiltered slice.
+
+      This is reachable from the shipped UI, not a theoretical combination:
+      `web/src/pages/Dashboard.tsx:463` navigates to
+      `/library?has_file_errors=true`, and `useLibraryQuery.ts:265` sends
+      `hasFileErrors` alongside whatever filters and search the user already had
+      active. The response is 200 with plausible rows, so nothing surfaces —
+      the user sees their filter chips still lit above a result set that
+      ignored every one of them, and a total that belongs to a different query.
+
+      The same shape repeats immediately below it: the quick-query fast path at
+      :401 says in its own comment that it "Replicates the has_file_errors
+      pattern", so `missing_covers` / `in_import_path` / `no_isbn` /
+      `duplicates_flagged` need the same decision.
+
+      A fix probably does **not** need a caller-visible contract change:
+      `database.BookSummaryFilter` already carries `RestrictToIDs`, so the ID
+      slice can be handed to the normal filtered pipeline instead of being
+      hand-paginated, which restores search, filters, sort, pagination and an
+      honest count in one move while keeping store pushdown. Confirm that
+      `RestrictToIDs` is reachable from this handler before committing to it;
+      the fallback is to reject the combination with a 400.
+
+- [x] **Prune the merged worktrees under `.worktrees/`.** Done 2026-08-25: 22 →
+      6, each one content-verified with `git cherry origin/main HEAD` before
+      removal rather than trusted on its PR being MERGED. That check earned its
+      keep — `scan-cache-spec` held a commit that never landed despite #2868
+      being merged (a rebase-merge silent drop, same as #2831), rescued as
+      `6c54bb9d4`. Left in place: three worktrees with uncommitted work and two
+      with real unmerged commits.
+
+      The reason to keep the count low: `grep -rn` from the repo root descends
+      into every worktree, so a search returns hits from many divergent
+      snapshots with no signal as to which is live, and an agent told to
+      "search the repo" cannot tell them apart. Agent instructions should say
+      "verify against `origin/main`".
+
+      ⚠️ **Correction to how this item was originally filed.** It claimed a bug
+      had been reported against `internal/server/audiobooks_helpers.go`, "a file
+      deleted by `faf755ffa` surviving only in stale worktrees". That is wrong
+      in both halves: the file **exists** at `origin/main`, and `faf755ffa`
+      **added** it. The error came from running `git log --diff-filter=AD` — A
+      *or* D — seeing a single commit, and reading it as the D. `--diff-filter=A`
+      alone shows it was an addition.
+
+      The item's conclusion survives its evidence, but only partly, so the
+      honest version is: one finding in that sweep was genuinely stale (it
+      described code fixed nine commits earlier, from a local `main` that was
+      nine commits behind), and the citation I dismissed as pointing into a
+      graveyard was in fact a valid path I had not read. The lesson is narrower
+      than first written and cuts both ways — a stale tree does corrupt agent
+      findings, and so does a hasty refutation of one.
+
+## `/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one
+
+`internal/server/reconcile.go`'s `latestReconcileScan` fetches the 200 most
+recent reconcile-scan operations but only ever consults the newest one. That
+was previously written as a `for` loop whose every path returned on the first
+iteration (staticcheck SA4004 — it made `make ci` red on main). The loop was
+rewritten as an explicit `ops[0]` index in that fix, which is
+behaviour-preserving and deliberately did NOT change what the endpoint returns.
+
+The latent flaw that survived the rewrite:
+
+- If the newest op is `completed` and its `ResultData` **fails to unmarshal**,
+  the endpoint answers `preview: nil` and stops.
+- An older completed op whose `ResultData` parses fine is never consulted, even
+  though it would give the caller a usable preview.
+
+So one corrupt or schema-drifted `ResultData` blob makes the endpoint look as
+though no preview has ever been computed. The UI cannot distinguish "no scan has
+run" from "the newest scan's result is unreadable" — both render as empty.
+
+Deciding what it *should* do is an API-contract call for the `internal/server`
+lane owner, which is why the lint fix did not make it:
+
+- **Fall through** to the newest op whose `ResultData` parses, and report which
+  op the preview came from — the fetch of 200 ops only makes sense under this
+  reading, and it is almost certainly the original intent.
+- **Or** keep answering from the newest op only, stop fetching 200, and surface
+  the unmarshal error to the caller instead of swallowing it into `preview: nil`.
+
+Either is defensible. Silently swallowing the unmarshal error while fetching 199
+operations that can never be reached is not.
+
+- [ ] Decide which contract `/reconcile/latest-scan` should honour
+- [ ] If falling through: name the source op in the response so a stale preview is identifiable
+- [ ] Either way, stop discarding the `json.Unmarshal` error without a log line
+
+## Finish the LLM fallback chain — stages 2 through 4
+
+Stage 1 landed: `parserChain` in `internal/scanner/ai_parser_chain.go`, wired
+from `newAIParser` so `llm_mode=openai-fallback-local` builds a real chain
+instead of silently behaving as plain `openai`. Unreachable falls through;
+permanently-refused does not.
+
+What is NOT done, in the order it should be done:
+
+- [ ] **Stage 2 — make the local rung start a backend.** Today the local rung's
+      `ensure` only constructs a client against an already-running endpoint; if
+      nothing is listening it declines. `internal/tools/ollama_daemon.go` already
+      has start-on-demand, adopt-across-restarts and stop-when-idle, but it is
+      wired only for embeddings. Reuse it, and add a refcount so
+      `StopWhenIdle` cannot kill a daemon another consumer adopted.
+- [ ] **Stage 3 — durable deferral.** When no rung answers, the candidates are
+      currently just left unparsed; the only thing that re-nominates them is a
+      human running another scan. Record them as owed a parse.
+      🚨 **The scan-cache stamp must not be written for work that was only
+      promised.** The stamp is what tells the next scan the file is settled, so
+      stamping a deferred book converts a temporary outage into permanent data
+      loss — it is never re-nominated by any path, ever. The existing abort path
+      is already correct here (it stamps only inside the success branch); Stage 3
+      must preserve that property deliberately, not by accident. A test must
+      assert the stamp is ABSENT after a fully-deferred phase, and be
+      mutation-checked by writing the stamp anyway.
+      The persistence needs a store method — `internal/database` is another
+      session's lane, so specify the shape and ask rather than writing it.
+- [ ] **Stage 4 — poll for the remote and drain what is owed.**
+      🚨 **An in-memory ticker's ceiling is process uptime.** This deployment
+      restarted 146 times in 30 days, so a long-interval ticker fires zero times
+      while logging a perfectly healthy schedule. Persist a `last_probed_at` row
+      and compute "is it due?" from that on every startup and tick — never from
+      time-since-process-start.
+      Drain via the existing `library.ai-parse` operation and
+      `saveAIFieldsToPrimary`, NOT the scan's `saveBook`: organize may have moved
+      or demoted the row in the meantime.
+
+Design notes and the full test strategy are in the worktree's `PLAN.md`
+(`feat/llm-fallback-chain`).
+
+Deliberately deferred: auto-pulling a local model. A multi-GB download mid-scan
+is a decision, not a fallback. If it is ever added it needs its own explicit
+setting, defaulting off.
+
+## The path→author parser exists twice, the copies have diverged, and only one of them runs
+
+`internal/scanner` and `internal/metadata` each carry a complete copy of the
+filename/directory author parser: `extractFromFilename` / `extractInfoFromPath`,
+`parseFilenameForAuthor`, `extractAuthorFromDirectory`, `looksLikePersonName`.
+
+**`internal/metadata` runs first.** `internal/scanner` calls its own
+`extractInfoFromPath` only when `Author` is still empty (`scanner.go:1446`), and
+by that point metadata has already populated it. So on the ordinary path, the
+scanner's copy is dead code.
+
+**This already caused a shipped-and-caught defect.** PR #2888 fixed the
+`Unknown Author` laundering in the scanner copy only. It was **inert** — it never
+executed on the path that produces the bug — and worse, it would have opened the
+AI nomination gate, called the LLM, and discarded the answer, since
+`runAIBatchPhase` only fills fields that are still empty. A review pass caught it
+before merge. See `docs/audits/2026-08-25-unknown-author-feedback-loop.md`.
+
+**The copies genuinely differ in behaviour**, so this is a correctness issue, not
+tidiness. Measured 2026-08-25 on
+`.../Unknown Author/Pratchett 036/Pratchett 036 - Unknown Author.mp3`:
+
+- `internal/metadata`'s `extractAuthorFromDirectory` validates the directory name
+  and rejects `Pratchett 036`.
+- `internal/scanner`'s does not, and returns it — attributing the book to its own
+  title.
+
+Same input, different author, depending on which copy got there first.
+
+- [ ] Collapse the two into one parser (its own package, as
+      `internal/authorname` and `internal/trackseq` already are), consulting
+      `authorname.IsPlaceholder`, and delete both copies.
+- [ ] Reconcile the divergent directory validation deliberately rather than
+      picking one by accident — the metadata behaviour is the safer of the two.
+- [ ] Add a conformance test over a shared corpus, in the shape of
+      `internal/trackseq`'s, so the two cannot drift again if they are not fully
+      merged.
+
+Related: `todo.d/20260825-directory-fallback-reads-title-as-author.md` — the
+directory fallback's positional assumption is wrong under the organizer's
+`<root>/<author>/<title>/<file>` layout, and should be settled as part of this.
+
+## The "Unknown Author" repair is two populations, and only one is cheap
+
+Measured 2026-08-25 against production (complete scalar census of all 61,447 book
+rows; full detail in `docs/audits/2026-08-25-unknown-author-feedback-loop.md`).
+
+The 3,598 books whose scalar `author_id` is the placeholder split cleanly:
+
+| bucket | count | share | route |
+| --- | --- | --- | --- |
+| join slice already holds a usable author | **1,291** | 35.9% | DB-only reconciliation |
+| nothing local holds the author | **2,307** | 64.1% | external lookup by title |
+
+For the 2,307, every local source is exhausted — verified, not assumed:
+
+- `original_filename` is empty for **97.3%** of a 300-row random sample
+- **100%** sit under a literal `Unknown Author/` directory
+- embedded tags: **0 of 60** carry an artist/album_artist/composer value,
+  against a known-good twin of **30 of 30** on ordinary books with the identical
+  `ffprobe` command
+
+So the name is not mislinked, it is gone. Re-scanning cannot recover it,
+re-parsing the filename cannot recover it, and an AI pass over filenames cannot
+recover it — there is nothing left to parse.
+
+### Task 1 — repair the 1,291 (unblocked, do this first)
+
+Reconcile the scalar `book.AuthorID` against the join slice where the slice holds
+a non-placeholder, non-junk author.
+
+- Must **REPOINT**, never delete: `DeleteAuthor` does not sweep `book.AuthorID`,
+  which is how ~212 books already carry a dangling one.
+- Must not leave the merged row pointing at 54846 — a repaired row that keeps the
+  placeholder is permanently unparseable by every self-healing path.
+- Dry run first, with per-bucket counts, before any write.
+- Lane: `internal/database` / `internal/merge`.
+
+### Task 2 — decide the route for the 2,307 (needs a decision, not code yet)
+
+Candidates, in rough order of expected yield:
+
+- **External metadata lookup by title** (Open Library / Audible). The only route
+  with real coverage, and the enrichment machinery already exists.
+- **LLM pass over TITLES, not filenames.** A minority of titles embed the author
+  inline — `Starship's Mage Book 14 Glynn Stewart Chimera's Star`. Worth doing,
+  but it is a different operation from filename parsing and must not be reported
+  as the same one.
+- **Leave them.** They are catalogued and playable; only the author is unknown.
+
+Do not start Task 2 before Task 1 — Task 1 is free and shrinks the problem by a
+third.
+
+- [ ] Dry-run the 1,291 reconciliation and report per-bucket counts
+- [ ] Apply it, REPOINTING rather than deleting
+- [ ] Decide the route for the 2,307
+- [ ] Re-census afterwards to confirm the cohort actually shrank
+
+- [ ] **The quarantine "safety net" in `buildAudiobookListResponse` is justified
+      by a claim that is no longer true, and the hole it was covering moved.**
+      `internal/server/audiobooks_helpers.go:66-68` says:
+
+      > Safety net for the degraded (memdb-down) read path, where the Pebble
+      > fallback does not honor ExcludeQuarantined. In the normal memdb path the
+      > scan already excluded these, so this drops nothing.
+
+      The first sentence is false at HEAD. `PebbleStore.GetAllBookSummariesFiltered`
+      **does** honor it — `internal/database/pebble_store.go:1119`,
+      `if f.ExcludeQuarantined && book.QuarantinedAt != nil { continue }` — as
+      does the memdb walker (`internal/database/memdb_summaries.go:227`, `:444`).
+      The comment at `pebble_store.go:816` records that the old implementation
+      applied only `IsPrimaryVersion` and `ExcludeQuarantined` and dropped the
+      rest; the fix that closed that went the other way from what this net
+      assumes.
+
+      So on both production paths the net now drops nothing — it strips a page
+      that was already stripped. That makes it inert rather than harmful, but it
+      is inert for a reason nobody reading it would guess, and it runs AFTER
+      pagination, so if it ever does fire it returns a short page (a limit=500
+      request answering with fewer than 500) with a count that disagrees.
+
+      **The hole it was written for still exists, just somewhere else.** When the
+      store does not satisfy `filteredSummaryStore`, `summariesPushdownFiltered`
+      returns `didPushdown=false` and its contract says the caller "must
+      re-apply filters in-memory — slower, but correct". That promise is false
+      for quarantine specifically: `ExcludeQuarantined` appears nowhere in the
+      `internal/audiobooks` post-filter block, and it is absent from the
+      `hasPostFilters` disjunct at `service_query.go:99`, so a request carrying
+      only `ExcludeQuarantined` may not post-filter at all.
+
+      Today that path is mock/test-only, so this is latent, not a live bug — and
+      a green suite will not surface it, because the suite's stores conform.
+
+      - [ ] Apply `ExcludeQuarantined` in the service post-filter and add it to
+            the `hasPostFilters` disjunct, so the documented fail-safe is
+            actually safe. This is the same shape as the `RestrictToIDs` fix
+            (see `service_query.go`): a predicate pushed down correctly but
+            silently dropped on the fallback.
+      - [ ] Then delete the safety net in `audiobooks_helpers.go`, or rewrite its
+            comment to say what is actually true. Do not simply delete it on the
+            grounds that "nothing fails" — verify the fallback first.
+
+      Filed after mistaking this file for a deleted one earlier the same day; the
+      code here is live and worth reading properly.
+
+## Data repair
+
+- [ ] **Decide how to repair the duplicate author rows that already exist.** The
+      `CreateAuthor` race that produced them is fixed, but preventing corruption is
+      not repairing it — the existing bad rows have no route back on their own.
+
+      Known shape: two rows both named `Unknown Author` (id 54845 with 0 books,
+      id 54846 with 2,128). 17,947 author rows total, of which ~4,643 (25.9%) were
+      measured as non-people (track/volume fragments like `19 - Apocalypse`).
+
+      Because `author:name:<normalized>` maps one name to ONE id, duplicates beyond
+      the indexed row are unreachable by name lookup, so any repair must REPOINT
+      `book.AuthorID` at the indexed row rather than delete — and note `DeleteAuthor`
+      does not sweep `book.AuthorID`, which is how ~212 books ended up with a
+      dangling `AuthorID`. Related: `todo.d/20260825-createauthor-check-then-create-race.md`.
+
+## `ensureSingleFileBookFile` is now a backlog-only backfill — decide its retirement
+
+The scan now creates a `book_file` row for genuinely single-file books
+(`createSingleFileBookFile`, called from `ProcessBooksParallel`). Before that,
+the only thing that ever gave those books a file row was
+`ensureSingleFileBookFile` in `internal/server/server.go`, called from the
+auto-organize hook.
+
+That backfill is **still needed** — every single-file book imported before this
+change still has no row, and the auto-organize hook is currently the only thing
+that repairs them. But it is no longer the mechanism for NEW books, and leaving
+two writers for the same row indefinitely is how the two drift.
+
+Note the two are deliberately NOT identical, and the difference matters:
+
+- `createSingleFileBookFile` reads the file's tags (via `createBookFilesForBook`),
+  so the row carries `RawTags`, the real `TrackNumber`/`DiscNumber` from the tag,
+  and a content hash.
+- `ensureSingleFileBookFile` hand-builds the row with `TrackNumber: 1`, no tags
+  and no hash.
+
+So rows created by the backfill are **thinner** than rows created by the scan.
+Anything that later reads `RawTags` or `FileHash` off a book_file will see a
+difference that depends only on which writer got there first.
+
+- [ ] Size the backlog: how many books have zero `book_file` rows and a
+      regular-file `FilePath`? (Do not assume it is small — 41.8% of a sampled
+      cohort of file rows already point at bytes that are gone.)
+- [ ] Repair the backlog once, from the scan's writer rather than the thin one,
+      so every row has tags and a hash
+- [ ] Then delete `ensureSingleFileBookFile` and its call, rather than leaving a
+      second writer for the same row
+- [ ] Until then, do not "simplify" the two into one by keeping the thin version
+
+## staticcheck gates nothing on a PR — decide whether it should
+
+`make ci` runs `staticcheck ./...`, and until 2026-08-25 that target SKIPPED
+with "staticcheck not installed, skipping" and let the build continue whenever
+the binary was absent. A gate that skips and still reports green has never
+proven anything on any machine that lacked the tool, and the output does not
+distinguish "ran and passed" from "never ran". Three findings accumulated on
+main behind it (SA4004 in `internal/server/reconcile.go`, U1000 in
+`internal/audiobooks/service.go`, S1002 in `internal/server/handlers/abs/browse.go`).
+
+The skip is fixed — the target now fails with install instructions, matching
+`oplint` / `sdkguard` / `fmt-check`. What is NOT fixed is the coverage gap that
+made the skip so costly:
+
+- **staticcheck does not run in the PR workflows.** `ci.yml` delegates to
+  `reusable-ci-minimal.yml`, whose `go-lint` job runs **golangci-lint**, not
+  staticcheck. So a PR can be all-green on GitHub while `staticcheck ./...` is
+  red on the same commit — which is exactly what happened: PRs merged green all
+  through 2026-08-24/25 while main's `make ci` was red.
+- `nightly.yml`'s header comment says the nightly full suite includes
+  staticcheck. That claim has NOT been verified inside the reusable workflow it
+  calls; it lives in another repository. **Verify it before relying on it** — a
+  comment asserting a job runs is not evidence that it runs (this repo has been
+  bitten by exactly that twice this month).
+
+So today the only place staticcheck can block a change before merge is a
+contributor's local `make ci`, on a machine that happens to have it installed.
+
+The decision to make:
+
+- **Add staticcheck to the PR workflow**, so it gates like every other check.
+  Cost: one more job; the repo is currently at zero findings once the three
+  above land, so it would start green.
+- **Or** accept it as a local/nightly-only check and say so explicitly in the
+  Makefile and CONTRIBUTING, so nobody again reads a green PR as
+  "staticcheck-clean".
+
+Doing neither leaves a lint whose findings reach main unopposed.
+
+- [ ] Verify whether `nightly.yml`'s reusable workflow actually runs staticcheck
+- [ ] Decide: add to PR CI, or document it as local/nightly-only
+- [ ] Audit the other `command -v <tool>` guards in the Makefile for the same skip-and-pass shape
+
+## Scanner / scan cache
+
+- [ ] **Wire `BackfillBookFileScanCache` so it can actually be invoked before the
+      per-file scan cache reader goes live.** The function exists, is idempotent and
+      has a dry-run mode, but it currently has ZERO callers, so as shipped the
+      deploy-herd protection it was written for does not yet exist: if the reader is
+      deployed without it being run, every `book_file` row reads as "never scanned"
+      and the first scan is a whole-library cold re-read on a library that already
+      takes 4-6 hours.
+
+      Three options, and this is a deploy-shaped decision rather than a code one:
+      (a) register it as a `maintenance.*` op — note the maintenance plugin is gated
+      on `RootDir`, so with no `--dir` it registers 0 of 105 ops and would silently
+      not appear; (b) expose it as an explicit `POST /api/v1/operations/...` endpoint
+      like `elect-missing-primaries`; (c) leave it library-only and call it once by
+      hand as a documented pre-deploy step.
+
+      Until one of those lands, the reader must not be deployed without a manual
+      invocation first. See `docs/plans/2026-08-24-per-file-scan-cache-design.md`.
 
 ## AI filename parsing is queued now — what to verify after deploy
 
