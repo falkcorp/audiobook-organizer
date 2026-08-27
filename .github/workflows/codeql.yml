@@ -1,7 +1,7 @@
 # file: .github/workflows/codeql.yml
-# version: 1.2.0
+# version: 1.2.1
 # guid: 4e7a1b2c-3d5f-6e8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-05-18
+# last-edited: 2026-08-27
 #
 # Overrides GitHub's dynamic default CodeQL workflow so GOEXPERIMENT is set.
 # GOEXPERIMENT=jsonv2 is required by the project's JSON handling; it must be
@@ -37,6 +37,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           submodules: recursive
 
       - name: Setup Go
@@ -70,6 +71,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           submodules: recursive
 
       - name: Initialize CodeQL
@@ -95,6 +97,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           submodules: recursive
 
       - name: Initialize CodeQL

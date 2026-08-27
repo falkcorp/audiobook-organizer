@@ -1,7 +1,7 @@
 # file: .github/workflows/auto-revert.yml
-# version: 1.2.0
+# version: 1.2.1
 # guid: 2f7c4e19-6b83-4a05-9d21-8e5b0a3f7c64
-# last-edited: 2026-08-21
+# last-edited: 2026-08-27
 
 # Restore main to its last known-good commit when the CI gate goes red.
 #
@@ -102,8 +102,10 @@ jobs:
         if: steps.triage.outputs.act == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           fetch-depth: 0
           ref: main
+          submodules: recursive
           token: ${{ secrets.JF_CI_GH_PAT }}
 
       - name: Gather commits and gate verdicts

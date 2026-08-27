@@ -1,7 +1,7 @@
 # file: .github/workflows/security.yml
-# version: 2.4.1
+# version: 2.4.2
 # guid: 7f2a3c1d-4e5f-6g7h-8i9j-0k1l2m3n4o5p
-# last-edited: 2026-07-08
+# last-edited: 2026-08-27
 #
 # Security scanning: advanced CodeQL, dependency review, language audits, and
 # Go/NPM dependency submission for supply chain security. Third-party filesystem
@@ -48,6 +48,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           submodules: recursive
 
       - name: Setup Go
@@ -69,6 +70,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           submodules: recursive
 
       - name: Setup Node
