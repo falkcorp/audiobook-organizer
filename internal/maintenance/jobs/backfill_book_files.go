@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_book_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1000005-0000-0000-0000-000000000005
-// last-edited: 2026-08-25
+// last-edited: 2026-08-27
 
 package jobs
 
@@ -67,25 +67,27 @@ func (j *backfillBookFilesJob) Run(ctx context.Context, store maintenance.JobSto
 			continue
 		}
 		audioFiles := backfillBookFilePaths(book.FilePath)
+		newFiles := make([]*database.BookFile, 0, len(audioFiles))
 		for _, fp := range audioFiles {
 			result.CandidateFiles++
-			bf := &database.BookFile{
+			newFiles = append(newFiles, &database.BookFile{
 				ID:       ulid.Make().String(),
 				BookID:   book.ID,
 				FilePath: fp,
 				Format:   filepath.Ext(fp),
-			}
-			if !dryRun {
-				if cerr := store.CreateBookFile(bf); cerr != nil {
-					msg := cerr.Error()
-					slog.Error("failed to create book file", "details", msg)
-					reporter.Log("error", "backfill-book-files: failed to create book_file", &msg)
-					result.Errors++
-					continue
-				}
-				result.Created++
-			}
+			})
 		}
+		if dryRun || len(newFiles) == 0 {
+			continue
+		}
+		if cerr := store.BatchCreateBookFiles(newFiles); cerr != nil {
+			msg := cerr.Error()
+			slog.Error("failed to create book files", "details", msg)
+			reporter.Log("error", "backfill-book-files: failed to create book_files", &msg)
+			result.Errors += len(newFiles)
+			continue
+		}
+		result.Created += len(newFiles)
 	}
 
 	return saveBackfillBookFilesResult(ctx, store, result)

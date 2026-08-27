@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-08-24
+// last-edited: 2026-08-27
 
 package maintenance
 
@@ -224,6 +224,7 @@ type jobBookFileReader interface {
 
 type jobBookFileWriter interface {
 	CreateBookFile(file *database.BookFile) error
+	BatchCreateBookFiles(files []*database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
 	UpsertBookFile(file *database.BookFile) error
 	SetBookFileHash(id, hash string) error
