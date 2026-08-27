@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-08-24
+// last-edited: 2026-08-27
 
 package config
 
@@ -795,6 +795,7 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			// suppressed precisely because that is a behaviour change an
 			// operator must be able to see and audit after an upgrade.
 			logDefaultsPreservedOverBlob(blobStr, loaded)
+			logExplicitChapterConsolidationDisable(blobStr, loaded)
 		} else {
 			slog.Warn("Failed to parse config_blob — falling back to individual keys", "err", err)
 		}
@@ -1515,6 +1516,10 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 	// build the blob; a concurrent Mutate could otherwise see a torn read.
 	// Build a safe copy with secrets zeroed — they are saved separately (encrypted).
 	safeConfig := Snapshot()
+	if safeConfig.ChapterConsolidationThresholdMin <= 0 {
+		slog.Warn("config: saving chapter consolidation disabled; album-less multi-file books will not be grouped",
+			"chapter_consolidation_threshold_min", safeConfig.ChapterConsolidationThresholdMin)
+	}
 	safeConfig.OpenAIAPIKey = ""
 	safeConfig.GoogleBooksAPIKey = ""
 	safeConfig.HardcoverAPIToken = ""
