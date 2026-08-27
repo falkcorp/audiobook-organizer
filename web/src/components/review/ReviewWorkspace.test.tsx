@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-08-21
+// last-edited: 2026-08-27
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -71,6 +71,20 @@ beforeEach(() => {
 });
 
 describe('lane default', () => {
+  it('offers the runtime-difference filter with its unknown-duration guidance', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    await screen.findByTestId('compare-spine');
+
+    const control = screen.getByRole('switch', { name: 'Hide runtime differences' });
+    expect(control).not.toBeChecked();
+
+    await user.hover(control);
+    expect(
+      await screen.findByText(/unknown runtime stay visible/i)
+    ).toBeInTheDocument();
+  });
+
   it('opens on metadata, NOT on the first lane in LANE_ORDER', async () => {
     // LANE_ORDER starts with 'dupes' because the switcher lists widest-scope
     // work first, but the spine's renderers are metadata-shaped and dupes is not

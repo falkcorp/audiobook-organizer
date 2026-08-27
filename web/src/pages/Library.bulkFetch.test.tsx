@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.bulkFetch.test.tsx
-// version: 1.5.1
+// version: 1.6.0
 // guid: 5b7b0d6f-5c2b-4d57-9b6c-8dbb7a9e9e2c
-// last-edited: 2026-08-06
+// last-edited: 2026-08-27
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -42,19 +42,27 @@ vi.mock('../services/api', () => {
           updated_at: '2026-01-01T00:00:00Z',
           author_name: 'Author',
         },
+        {
+          id: 'id-3',
+          title: 'Third Book',
+          file_path: '/tmp/book3.m4b',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          author_name: 'Author',
+        },
       ],
-      count: 2,
+      count: 3,
     }),
     searchBooks: vi.fn().mockResolvedValue({ items: [], count: 0 }),
     searchBooksPage: vi.fn().mockResolvedValue({ items: [], count: 0 }),
     getImportPaths: vi.fn().mockResolvedValue([]),
-    countBooks: vi.fn().mockResolvedValue(2),
+    countBooks: vi.fn().mockResolvedValue(3),
     getBookFacets: vi.fn().mockResolvedValue({ genres: [], languages: [] }),
     getAuthors: vi.fn().mockResolvedValue([]),
     getSeries: vi.fn().mockResolvedValue([]),
     getSystemStatus: vi.fn().mockResolvedValue({
       status: 'ok',
-      library: { path: '/tmp', book_count: 2, total_size: 0 },
+      library: { path: '/tmp', book_count: 3, total_size: 0 },
       import_paths: { book_count: 0, folder_count: 0, total_size: 0 },
       memory: {},
       runtime: {},
@@ -83,6 +91,33 @@ vi.mock('../services/api', () => {
 });
 
 describe('Library bulk metadata fetch', () => {
+  it.each([
+    ['grid', undefined],
+    ['list', '/library?view=list'],
+  ])('selects the inclusive Shift-click range in the %s view', async (_view, entry) => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={entry ? [entry] : undefined}>
+        <Library />
+      </MemoryRouter>
+    );
+
+    const first = await screen.findByRole('checkbox', { name: 'Select Test Book' });
+    const middle = screen.getByRole('checkbox', { name: 'Select Second Book' });
+    const last = screen.getByRole('checkbox', { name: 'Select Third Book' });
+
+    await user.click(first);
+    await user.keyboard('[ShiftLeft>]');
+    await user.click(last);
+    await user.keyboard('[/ShiftLeft]');
+
+    await waitFor(() => {
+      expect(first).toBeChecked();
+      expect(middle).toBeChecked();
+      expect(last).toBeChecked();
+    });
+  });
+
   it('triggers bulk fetch when confirmed', async () => {
     const user = userEvent.setup();
     render(
@@ -91,10 +126,14 @@ describe('Library bulk metadata fetch', () => {
       </MemoryRouter>
     );
 
-    // Select both books so "Fetch Selected" becomes enabled (requires 2+)
-    const selectBoxes = await screen.findAllByRole('checkbox', {
-      name: /select /i,
-    });
+    // Select the books so "Fetch Selected" becomes enabled (requires 2+).
+    // Query the row controls by name: the selection toolbar adds a nameless
+    // select-all checkbox once the first row is selected.
+    const selectBoxes = [
+      await screen.findByRole('checkbox', { name: 'Select Test Book' }),
+      screen.getByRole('checkbox', { name: 'Select Second Book' }),
+      screen.getByRole('checkbox', { name: 'Select Third Book' }),
+    ];
     for (const box of selectBoxes) {
       await user.click(box);
     }
@@ -114,7 +153,7 @@ describe('Library bulk metadata fetch', () => {
 
     const fetchMock = vi.mocked(api.batchFetchCandidates);
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith({ book_ids: ['id-1', 'id-2'] });
+      expect(fetchMock).toHaveBeenCalledWith({ book_ids: ['id-1', 'id-2', 'id-3'] });
     });
   });
 

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-08-20
+// last-edited: 2026-08-27
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -40,7 +40,7 @@ import * as api from '../../../services/api';
 import { isAuthRedirectError } from '../../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
-import type { RowState } from '../spine/rowState';
+import { runtimeDiffers, type RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 
 /** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
@@ -241,6 +241,8 @@ export interface MetadataFilters {
   hideRejected: boolean;
   hideSkipped: boolean;
   hideNoMatch: boolean;
+  /** Hide rows whose candidate runtime is known to differ materially. */
+  hideRuntimeDifferences: boolean;
   /**
    * Hides any book that shares a match with another book, AND takes those books
    * out of Apply Selected. The second half is behaviour, not description --
@@ -263,6 +265,7 @@ function initialFilters(): MetadataFilters {
     hideRejected: true,
     hideSkipped: strict && STRICT_PRESET.hideSkipped,
     hideNoMatch: true,
+    hideRuntimeDifferences: false,
     hideMultiBook: strict && STRICT_PRESET.hideMultiBook,
     matchLanguage: loadLanguageFilter(),
     onlyWithTranscription: false,
@@ -513,6 +516,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         .filter((r) => !filters.hideRejected || rowStates.get(r.book.id) !== 'rejected')
         .filter((r) => !filters.hideSkipped || rowStates.get(r.book.id) !== 'skipped')
         .filter((r) => !filters.hideNoMatch || (r.status !== 'no_match' && r.status !== 'error'))
+        // runtimeDiffers deliberately returns false for absent deltas. Unknown
+        // duration is not evidence of a match, so those rows stay reviewable.
+        .filter((r) => !filters.hideRuntimeDifferences || !runtimeDiffers(r.candidate?.duration_delta_sec))
         .filter((r) => {
           // An unknown language on EITHER side is a no-op, not a hide: a book
           // with no language set must still be offered its candidates.

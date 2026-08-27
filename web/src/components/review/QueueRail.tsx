@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-08-21
+// last-edited: 2026-08-27
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -58,7 +58,7 @@ const PROVIDERS: Array<{ id: string; label: string }> = [
 ];
 
 /**
- * The eight filter switches.
+ * The nine filter switches.
  *
  * Two of these have tooltips that state BEHAVIOUR rather than describing the
  * control, and they are carried verbatim from the dialog because the
@@ -73,6 +73,13 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
   { key: 'hideRejected', label: 'Hide rejected' },
   { key: 'hideSkipped', label: 'Hide skipped' },
   { key: 'hideNoMatch', label: 'Hide no-match' },
+  {
+    key: 'hideRuntimeDifferences',
+    label: 'Hide runtime differences',
+    help:
+      'Hide candidates whose known runtime differs materially from the book. ' +
+      'Rows with an unknown runtime stay visible.',
+  },
   {
     key: 'hideMultiBook',
     label: 'Hide multi-book matches',
