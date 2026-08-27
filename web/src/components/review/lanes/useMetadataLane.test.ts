@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-08-20
+// last-edited: 2026-08-27
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -315,6 +315,36 @@ describe('hideMultiBook', () => {
       expect(ids).not.toContain('a');
       expect(ids).not.toContain('z');
     });
+  });
+});
+
+describe('hideRuntimeDifferences', () => {
+  it('defaults off, then hides only rows whose known runtime differs', async () => {
+    // A missing duration is unknown, not a mismatch. This is deliberately
+    // tested alongside both threshold cases so the switch cannot become a
+    // blanket "only rows with duration" filter during a later refactor.
+    const rows = [
+      makeResult('same', {}, { duration_delta_sec: 600 }),
+      makeResult('different', {}, { duration_delta_sec: 601 }),
+      makeResult('unknown', {}, {}),
+    ];
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(3));
+
+    expect(result.current.filters.hideRuntimeDifferences).toBe(false);
+    expect(result.current.filteredResults.map((r) => r.book.id)).toEqual([
+      'same',
+      'different',
+      'unknown',
+    ]);
+
+    act(() => result.current.setFilters({ hideRuntimeDifferences: true }));
+
+    await waitFor(() =>
+      expect(result.current.filteredResults.map((r) => r.book.id)).toEqual(['same', 'unknown'])
+    );
   });
 });
 
