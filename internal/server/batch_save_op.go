@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-23
+// last-edited: 2026-08-27
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -97,6 +97,12 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 
 				org := organizer.NewOrganizer(&config.AppConfig)
 				log2 := logger.NewWithActivityLog("batch-write-back", store)
+
+				releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
+				if gateErr != nil {
+					return gateErr
+				}
+				defer releaseFileWrite()
 
 				// Serialize on the destination path so two workers can never write
 				// or move the same file at once — see internal/server/path_locks.go

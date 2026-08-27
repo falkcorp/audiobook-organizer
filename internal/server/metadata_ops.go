@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.10.0
+// version: 1.12.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-08-19
+// last-edited: 2026-08-27
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -78,12 +78,20 @@ func bulkFetchWorkers() int {
 // hardcoded 2.
 const defaultWriteBackWorkers = 4
 
+// maxWriteBackWorkers prevents a malformed or overly optimistic configuration
+// from saturating the shared filesystem/TagLib resource. The process-wide gate
+// below applies this same ceiling across concurrently running operations.
+const maxWriteBackWorkers = 8
+
 // writeBackWorkers resolves the configured write-back pool size, falling back to
 // defaultWriteBackWorkers when unset. The `> 0` guard is load-bearing, not
 // decorative: an unmarshalled config that never set the key yields 0, and a
 // zero-sized pool would consume the job channel with nobody draining it.
 func writeBackWorkers() int {
 	if w := config.AppConfig.MetadataScoring.WriteBackWorkers; w > 0 {
+		if w > maxWriteBackWorkers {
+			return maxWriteBackWorkers
+		}
 		return w
 	}
 	return defaultWriteBackWorkers
@@ -907,6 +915,14 @@ func (s *Server) runBulkWriteBack(
 				return
 			}
 		}
+
+		releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
+		if gateErr != nil {
+			failed.Add(1)
+			_ = progress.Log("warn", fmt.Sprintf("book %s: write-back canceled while waiting for file I/O", bookID), nil)
+			return
+		}
+		defer releaseFileWrite()
 
 		// Rename FIRST, then re-read, then lock. Order matters: the rename moves
 		// the file, so a lock taken on the pre-rename path would guard a path
