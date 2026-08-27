@@ -1,7 +1,7 @@
 // file: internal/server/path_locks.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e2a9c14-7d3b-4f58-9a01-2c8b4d5e6f70
-// last-edited: 2026-08-15
+// last-edited: 2026-08-27
 
 package server
 
@@ -57,6 +57,11 @@ func newPathLocks() *pathLocks {
 // one table or the lock is worthless across them. There is one Server per
 // process, so this is not a scoping regression.
 var writeBackPathLocks = newPathLocks()
+
+// writeBackFileGate is the process-wide resource bound shared by every
+// TagLib/disk write path. Unlike writeBackPathLocks, it controls aggregate
+// filesystem pressure rather than just same-path races.
+var writeBackFileGate = newFileWriteGate(maxWriteBackWorkers)
 
 // normalizePathKey canonicalizes a path for use as a lock key. Cleaning matters:
 // "/a/b/x.m4b" and "/a/./b/x.m4b" are the same file and must take the same lock.

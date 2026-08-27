@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-08-19
+// last-edited: 2026-08-27
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -111,6 +111,13 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// batchApplyConcurrency=4, because this loop now does the file I/O
 			// rather than delegating it.
 			runOne := func(ctx context.Context, id string) error {
+				if p.WriteBack {
+					releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
+					if gateErr != nil {
+						return gateErr
+					}
+					defer releaseFileWrite()
+				}
 				out := applyCachedCandidateForBook(
 					svc, s.Ops(), itunes, id, p.WriteBack, writeBackPathLocks.lock)
 
