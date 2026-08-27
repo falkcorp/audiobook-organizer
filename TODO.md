@@ -1,8 +1,8 @@
 <!-- file: TODO.md -->
-<!-- version: 10.42.2 -->
+<!-- version: 10.42.3 -->
 <!-- version: 10.43.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-26 -->
+<!-- last-edited: 2026-08-27 -->
 
 # Project TODO — live items only
 
@@ -14,6 +14,13 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Metadata Review: hide runtime mismatches** — add a filter that excludes
+      cached metadata candidates whose advertised runtime materially differs
+      from the local audiobook duration. Define the threshold in settings or
+      alongside the existing duration-scoring configuration, make the active
+      threshold visible in the UI, and retain an explicit way to reveal the
+      filtered candidates for review rather than silently discarding them.
 
 ## Auto-organize throws away a relationship it already has, then a later scan rediscovers it
 
