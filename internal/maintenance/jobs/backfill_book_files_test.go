@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_book_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 73490888-1dfc-4aa9-93a9-5d730a8d4f79
 // last-edited: 2026-08-27
 
@@ -31,6 +31,7 @@ func TestBackfillBookFilesReportsDryRunCandidatesForDirectoryAndFile(t *testing.
 		GetAllBooksCoreFunc:         func(int, int) ([]database.BookCore, error) { return books, nil },
 		SaveOperationSummaryLogFunc: func(got *database.OperationSummaryLog) error { summary = got; return nil },
 		CreateBookFileFunc:          func(*database.BookFile) error { t.Fatal("dry run must not write"); return nil },
+		BatchCreateBookFilesFunc:    func([]*database.BookFile) error { t.Fatal("dry run must not write"); return nil },
 	}
 
 	job, err := maintenance.Get("backfill-book-files")
