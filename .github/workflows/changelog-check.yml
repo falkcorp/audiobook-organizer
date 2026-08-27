@@ -1,6 +1,7 @@
 # file: .github/workflows/changelog-check.yml
-# version: 1.0.0
+# version: 1.0.1
 # guid: f0377e85-bfb7-42b2-bb99-6cdd80d34a73
+# last-edited: 2026-08-27
 
 name: Changelog Fragment Check
 
@@ -31,7 +32,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           fetch-depth: 0
+          submodules: recursive
 
       - name: Require a changelog fragment
         run: |

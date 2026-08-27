@@ -1,7 +1,7 @@
 # file: .github/workflows/todo-collect.yml
-# version: 1.0.0
+# version: 1.0.1
 # guid: b615828c-4cc4-4c68-bb94-429744870438
-# last-edited: 2026-07-19
+# last-edited: 2026-08-27
 
 # Fold todo.d/ fragments into TODO.md and commit the result to the default
 # branch. Opt-in by presence: every step below is a no-op in a repo without
@@ -41,7 +41,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           fetch-depth: 0
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

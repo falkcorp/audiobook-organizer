@@ -1,7 +1,7 @@
 # file: .github/workflows/memory-leak-scan.yml
-# version: 2.3.0
+# version: 2.3.1
 # guid: 9f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-# last-edited: 2026-08-25
+# last-edited: 2026-08-27
 name: Memory Leak Detection
 
 on:
@@ -32,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           submodules: recursive
 
       - name: Set up Python
@@ -110,6 +111,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          lfs: true
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
