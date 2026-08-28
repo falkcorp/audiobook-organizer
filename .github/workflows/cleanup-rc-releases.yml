@@ -1,7 +1,7 @@
 # file: .github/workflows/cleanup-rc-releases.yml
-# version: 1.3.0
+# version: 1.3.1
 # guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
-# last-edited: 2026-08-24
+# last-edited: 2026-08-27
 
 name: Cleanup Old RC Releases
 
@@ -90,7 +90,7 @@ jobs:
           fi
 
           # Escape dots so the version can't act as a regex wildcard.
-          BASE_RE=$(printf '%s' "$BASE" | sed 's/\./\\./g')
+          BASE_RE=${BASE//./\\.}
 
           # Enumerate with `gh api --paginate`, not `gh release list --limit N`.
           # This repo has 460+ releases; any fixed limit silently truncates, and
@@ -119,7 +119,7 @@ jobs:
           fi
 
           echo "RC releases found for $BASE (newest first):"
-          echo "$RELEASES" | sed 's/^/  /'
+          printf '  %s\n' "${RELEASES//$'\n'/$'\n  '}"
 
           COUNT=0
           DELETED=0
