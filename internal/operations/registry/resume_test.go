@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
 // last-edited: 2026-08-23
 
@@ -155,6 +155,52 @@ func TestResume_RestartReDispatchesWithIncrementedResumeCount(t *testing.T) {
 	}
 	if row.ResumeCount != 1 {
 		t.Errorf("expected resume_count=1, got %d", row.ResumeCount)
+	}
+}
+
+// TestResume_RestartDoesNotInheritStaleLiveness proves that a resumed attempt
+// starts with a fresh watchdog baseline while retaining its persisted operation
+// identity and checkpoint. Before the baseline was attempt-scoped, the
+// watchdog read LastProgressAt from the pre-restart attempt and canceled the
+// fresh scan on its first tick as "idle for hours".
+func TestResume_RestartDoesNotInheritStaleLiveness(t *testing.T) {
+	store := newFakeStore()
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		WatchdogInterval: 20 * time.Millisecond,
+	})
+
+	progressed := make(chan struct{}, 1)
+	def := makeValidDef("test.resume-fresh-liveness")
+	def.ResumePolicy = registry.ResumeRestart
+	def.ProgressTimeout = time.Second
+	def.Run = func(ctx context.Context, _ json.RawMessage, reporter registry.Reporter) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(80 * time.Millisecond):
+		}
+		if err := reporter.UpdateProgress(1, 1, "resumed work started"); err != nil {
+			return err
+		}
+		progressed <- struct{}{}
+		return nil
+	}
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatalf("RegisterOp: %v", err)
+	}
+
+	opID := insertRunningOp(store, def.ID, def.Plugin, 1)
+	stale := time.Now().UTC().Add(-3 * time.Hour)
+	store.setLastProgressAt(opID, &stale)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Start(ctx)
+
+	select {
+	case <-progressed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resumed operation was canceled before its first new-attempt progress update")
 	}
 }
 
