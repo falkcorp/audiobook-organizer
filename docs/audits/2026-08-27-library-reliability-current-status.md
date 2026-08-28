@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-27-library-reliability-current-status.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 6c884144-c4fe-4f5a-bbdc-1a103cd5aa13 -->
 <!-- last-edited: 2026-08-28 -->
 
@@ -36,6 +36,10 @@ deduplication working; it was not used as transfer evidence.
 - PR #2941: compatible queued metadata-apply selections are coalesced into one
   operation instead of paying worker setup/teardown for each one-book request.
   Rebase-merged as `088799ef1` and deployed 2026-08-28.
+- PR #2946: durable, candidate-ID bulk split-book merge operation with overlap
+  preflight, snapshot parameters, per-candidate outcome reporting, and a
+  JSON candidate-ID import flow that defaults to dry-run. Rebase-merged as
+  `0b942fcc5`; it has **not** been deployed or invoked in production.
 
 ## Latest full scan: interrupted, not complete
 
@@ -71,12 +75,12 @@ run again.
 ## Fragment repair: preview complete, apply intentionally held
 
 The safe `dedup.split-book-scan` operation completed successfully and produced
-172 persisted fragment candidates. It did not merge or delete any books. The
-existing per-candidate merge endpoint performs its work inline and deletes its
-candidate only after success; that is suitable for a reviewed individual repair,
-but not yet a durable bulk operation. The next implementation must keep every
-failed candidate reviewable, record a per-candidate outcome, and establish
-candidate disjointness before applying any bulk repair.
+172 persisted fragment candidates. It did not merge or delete any books. PR
+#2946 now provides the durable bulk executor required for reviewed repair: it
+preflights candidate-ID uniqueness and book-set overlap, snapshots every
+resolved candidate before queueing, retains incomplete candidates for review,
+and defaults API/JSON import requests to dry-run. It is merged but not deployed;
+no production merge operation has been queued or applied.
 
 ## Remaining before broad repair work
 
@@ -84,7 +88,8 @@ candidate disjointness before applying any bulk repair.
    outcome before using it as scan-completeness evidence.
 2. Produce a unique-file scan plan that preserves the longest matching import
    root source identity.
-3. Design a durable fragment-merge executor for the 172 preview candidates that
-   preserves partial failures and verifies candidate disjointness before apply.
+3. Deploy PR #2946 only after the operations timeline is clear, then rerun the
+   preview-only split-book scan and verify all high-confidence numbered-track
+   fragment rows are covered by candidates before requesting an apply decision.
 4. Build and validate the optional Metal/MLX Whisper adapter before changing
    production transcription configuration.
