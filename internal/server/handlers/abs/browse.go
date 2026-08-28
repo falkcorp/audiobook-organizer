@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-25
+// last-edited: 2026-08-27
 
 package abs
 
@@ -803,8 +803,66 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 	// series would rebuild the whole library on each cache miss; the note above
 	// already measured the unpaginated body at ~10.8 MB / 31,139 book rows.
 	// Only the ~50 series actually being returned are hydrated.
-	enriched := h.seriesPageBooks(c.Request.Context(), series, bySeries)
+	results := h.seriesRows(c.Request.Context(), series, bySeries, counts)
+	// Total is the FULL series count, NOT len(results). The client decides whether
+	// another page exists with `page*limit < total` (the same rule recorded on
+	// authorDTOsCached), so reporting the slice length would tell it page 0 is the
+	// whole library and it would stop at 50 of 14,625. The opposite convention in
+	// playlists.go is correct THERE only because that route has no working page
+	// parameter to offer.
+	respondJSON(c, http.StatusOK, pageResponse{
+		Results: results,
+		Total:   total,
+		Limit:   limit,
+		Page:    page,
+	})
+}
 
+// SeriesDetail handles GET /api/series/:id. The full series row is deliberately
+// built through seriesRows so it remains byte-compatible with the series listing
+// the client navigated from.
+func (h *Handler) SeriesDetail(c *gin.Context) {
+	seriesID, err := strconv.Atoi(strings.TrimSpace(c.Param("id")))
+	if err != nil {
+		respondError(c, http.StatusNotFound, "series not found")
+		return
+	}
+
+	byID, err := h.library.GetSeriesByIDs([]int{seriesID})
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not load series")
+		return
+	}
+	series := byID[seriesID]
+	if series == nil {
+		respondError(c, http.StatusNotFound, "series not found")
+		return
+	}
+
+	counts, err := h.library.GetAllSeriesBookCounts()
+	if err != nil {
+		slog.Warn("abs: series book counts unavailable for detail, reporting 0", "err", err)
+		counts = map[int]int{}
+	}
+	bySeries, err := h.seriesBooksCached()
+	if err != nil {
+		slog.Warn("abs: series books unavailable for detail, reporting empty list", "err", err)
+		bySeries = map[int]seriesBooksBuilt{}
+	}
+	rows := h.seriesRows(c.Request.Context(), []database.Series{*series}, bySeries, counts)
+	respondJSON(c, http.StatusOK, rows[0])
+}
+
+// seriesRows builds the client-facing projection for both the paginated list and
+// an individual detail route. Keeping one renderer prevents their books, counts,
+// or identity fields from drifting apart.
+func (h *Handler) seriesRows(
+	ctx context.Context,
+	series []database.Series,
+	bySeries map[int]seriesBooksBuilt,
+	counts map[int]int,
+) []any {
+	enriched := h.seriesPageBooks(ctx, series, bySeries)
 	results := make([]any, 0, len(series))
 	for _, s := range series {
 		built := bySeries[s.ID]
@@ -820,41 +878,14 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 			"addedAt":          msEpoch(h.now()),
 			"updatedAt":        msEpoch(h.now()),
 			"books":            items,
-			// An int, never a float: Dart throws on `42.0 as int?` and this is cast
-			// during widget build (§1.7.3 item 5). Summed from BookSummary.Duration,
-			// which is already an int — do not introduce a float on the way here.
-			"totalDuration": total,
-			// Count the books actually SERVED, not every row the store counts.
-			//
-			// This is the same rule totalDuration above already follows, applied
-			// to the field next to it. Measured on production 2026-08-16, 9 of 50
-			// series on page 0 claimed numBooks >= 1 while carrying books: [] and
-			// totalDuration: 0 -- because seriesBookEntry drops books with no
-			// resolvable sync id, and the count came from a store query that knew
-			// nothing about that. A row that reports a book count it cannot list
-			// is a row the client has to decide how to disbelieve.
-			//
-			// counts is still consulted so a series whose books were all dropped
-			// is visible as such, rather than silently reading as an empty series
-			// that genuinely has no books.
-			"numBooks": len(items),
+			"totalDuration":    total,
+			"numBooks":         len(items),
 		})
 		if want := counts[s.ID]; want != len(items) {
 			h.logSeriesBookCountMismatch(s.ID, s.Name, want, len(items))
 		}
 	}
-	// Total is the FULL series count, NOT len(results). The client decides whether
-	// another page exists with `page*limit < total` (the same rule recorded on
-	// authorDTOsCached), so reporting the slice length would tell it page 0 is the
-	// whole library and it would stop at 50 of 14,625. The opposite convention in
-	// playlists.go is correct THERE only because that route has no working page
-	// parameter to offer.
-	respondJSON(c, http.StatusOK, pageResponse{
-		Results: results,
-		Total:   total,
-		Limit:   limit,
-		Page:    page,
-	})
+	return results
 }
 
 // seriesPageBooks hydrates each series' book list into real ABS LibraryItem
@@ -1399,6 +1430,33 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 		SortDesc: echoDesc,
 		Total:    total,
 	})
+}
+
+// AuthorDetail handles GET /api/authors/:id.
+//
+// Book items reference authors by this endpoint rather than by the library
+// listing route. Resolving from the same cached projection keeps the identity
+// and fields consistent across both UI paths without adding another store read.
+func (h *Handler) AuthorDetail(c *gin.Context) {
+	authorID := strings.TrimSpace(c.Param("id"))
+	if authorID == "" {
+		respondError(c, http.StatusNotFound, "author not found")
+		return
+	}
+
+	authors, err := h.authorDTOsCached(c.Request.Context())
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not load author")
+		return
+	}
+	for _, author := range authors {
+		if author.ID == authorID {
+			respondJSON(c, http.StatusOK, author)
+			return
+		}
+	}
+
+	respondError(c, http.StatusNotFound, "author not found")
 }
 
 // authorLess returns the comparator for an author-list sort, or nil when this

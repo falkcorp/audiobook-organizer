@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-25
+// last-edited: 2026-08-27
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -527,6 +527,11 @@ func (h *Handler) Register(r gin.IRouter) {
 	// absReservedPathPrefixes, where the trailing slash is load-bearing.
 	r.GET("/api/playlists/:id", auth, h.PlaylistDetail)
 	r.GET("/api/libraries/:libraryId/authors", auth, h.LibraryAuthors)
+	// The item surface emits these ids in media.metadata.authors. The ABS client
+	// follows them when a user taps an author in a book detail screen, so this
+	// must be an explicit ABS route rather than falling through to /api/v1.
+	r.GET("/api/authors/:id", auth, h.AuthorDetail)
+	r.GET("/api/series/:id", auth, h.SeriesDetail)
 	r.GET("/api/libraries/:libraryId/narrators", auth, h.LibraryNarrators)
 	r.GET("/api/libraries/:libraryId/filterdata", auth, h.LibraryFilterData)
 	r.GET("/api/libraries/:libraryId/search", auth, h.LibrarySearch)

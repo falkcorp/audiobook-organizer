@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-22
+// last-edited: 2026-08-27
 
 package server
 
@@ -140,6 +140,8 @@ type absCollisionDetailRoute struct {
 
 var absCollisionDetailRoutes = []absCollisionDetailRoute{
 	{Method: http.MethodGet, Pattern: "/api/playlists/:id"},
+	{Method: http.MethodGet, Pattern: "/api/authors/:id"},
+	{Method: http.MethodGet, Pattern: "/api/series/:id"},
 
 	// Collections, added 2026-08-16 with the ABS surface in handlers/abs/collections.go.
 	// This list is EXACTLY the set registered there — no more (a wider claim 404s the
