@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-08-27
+// last-edited: 2026-08-28
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -41,6 +41,33 @@ type batchApplyOpParams struct {
 	WriteBack bool `json:"write_back"`
 }
 
+func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMessage, bool, error) {
+	var current, next batchApplyOpParams
+	if err := json.Unmarshal(existing, &current); err != nil {
+		return nil, false, err
+	}
+	if err := json.Unmarshal(incoming, &next); err != nil {
+		return nil, false, err
+	}
+	if current.WriteBack != next.WriteBack {
+		return nil, false, nil
+	}
+	seen := make(map[string]struct{}, len(current.BookIDs)+len(next.BookIDs))
+	merged := batchApplyOpParams{WriteBack: current.WriteBack}
+	for _, id := range append(current.BookIDs, next.BookIDs...) {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		merged.BookIDs = append(merged.BookIDs, id)
+	}
+	raw, err := json.Marshal(merged)
+	return raw, err == nil, err
+}
+
 // RegisterBatchApplyFromCacheOp registers the "metadata.batch-apply-cached" op.
 //
 // Why this exists at all: BatchApplyFromCache used to do the whole batch inline
@@ -58,19 +85,20 @@ type batchApplyOpParams struct {
 // watchdog. The handler now returns an op id in milliseconds.
 func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "metadata.batch-apply-cached",
-		Liveness:        opsregistry.LivenessRunItems,
-		Plugin:          "metadata",
-		DisplayName:     "Apply Cached Metadata",
-		Description:     "Apply the highest-scored cached metadata candidate to each of a set of books, optionally writing tags back into the audio files.",
-		DefaultPriority: opsregistry.PriorityNormal,
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         4 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "metadata.batch-apply-cached",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
+		ID:                "metadata.batch-apply-cached",
+		Liveness:          opsregistry.LivenessRunItems,
+		Plugin:            "metadata",
+		DisplayName:       "Apply Cached Metadata",
+		Description:       "Apply the highest-scored cached metadata candidate to each of a set of books, optionally writing tags back into the audio files.",
+		DefaultPriority:   opsregistry.PriorityNormal,
+		Cancellable:       true,
+		Isolate:           false,
+		Timeout:           4 * time.Hour,
+		ResumePolicy:      opsregistry.ResumeDrop,
+		ConcurrencyKey:    "metadata.batch-apply-cached",
+		MergeQueuedParams: mergeBatchApplyQueuedParams,
+		Permissions:       []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p batchApplyOpParams
 			if len(rawParams) > 0 {
