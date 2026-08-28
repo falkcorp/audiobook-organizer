@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-08-27
+// last-edited: 2026-08-28
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -522,7 +522,9 @@ describe('dispatch', () => {
     // The server accepted the operation, so the default "Hide applied" filter
     // must remove it immediately; waiting for the worker to finish leaves stale
     // cards on screen for minutes and invites duplicate clicks.
-    expect(result.current.spineCtx.rowState('a')).toBe('applied');
+    // The request resolves before applyMany commits its optimistic state;
+    // wait for the state transition rather than racing that callback.
+    await waitFor(() => expect(result.current.spineCtx.rowState('a')).toBe('applied'));
     expect(result.current.spineCtx.rowState('b')).toBe('applied');
     expect(result.current.filteredResults).toHaveLength(0);
   });

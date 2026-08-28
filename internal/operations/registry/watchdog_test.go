@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4d5e6f7a-8b9c-0123-def0-1234567890ab
-// last-edited: 2026-07-17
+// last-edited: 2026-08-28
 
 package registry_test
 
@@ -15,8 +15,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
-// TestWatchdog_StuckOpGetStrike verifies that an op with stale last_progress_at
-// gets a "stuck" strike and its context is canceled.
+// TestWatchdog_StuckOpGetsStrike verifies that an op which never reports
+// progress is classified separately from one that reported and then stalled.
 func TestWatchdog_StuckOpGetsStrike(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -58,9 +58,12 @@ func TestWatchdog_StuckOpGetsStrike(t *testing.T) {
 	// Give the worker time to write terminal status.
 	awaitStatus(t, store, opID, "canceled", 3*time.Second)
 
-	// Verify a "stuck" strike was written.
-	if n := len(store.strikesOfKind(opID, "stuck")); n == 0 {
-		t.Error("expected at least 1 stuck strike, got 0")
+	// A run that never calls UpdateProgress is an unwired run, not a run that
+	// made progress and then got stuck. The watchdog cancels both, but their
+	// remediation is different, so the persisted strike kind must remain
+	// discriminating.
+	if n := len(store.strikesOfKind(opID, "never_reported")); n == 0 {
+		t.Error("expected at least 1 never_reported strike, got 0")
 	}
 }
 
