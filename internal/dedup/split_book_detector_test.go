@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f7e3b4c-c2a9-4c0e-9c83-1d5b6f0a8e74
-// last-edited: 2026-05-29
+// last-edited: 2026-08-28
 
 package dedup
 
@@ -108,6 +108,38 @@ func TestDetect_AuthorMismatch_Disqualifies(t *testing.T) {
 	got := detectFromSlim(books, nil)
 	if len(got) != 0 {
 		t.Fatalf("want 0 candidates, got %d (%+v)", len(got), got)
+	}
+}
+
+func TestDetect_NumberedSiblingFilenamesIgnorePollutedMetadata(t *testing.T) {
+	// These are the historical failure shape: each numbered track became a
+	// separate book and the title/author/series IDs no longer agree. The shared
+	// parent and filename stem are enough for a PREVIEW candidate, not a merge.
+	books := []splitBookSlim{
+		{ID: "a", Title: "01 - The Book", FilePath: "/lib/A/The Book/01 - The Book.mp3", OriginalFilename: "01 - The Book.mp3", AuthorID: intp(1), SeriesID: intp(10)},
+		{ID: "b", Title: "02 - The Book", FilePath: "/lib/A/The Book/02 - The Book.mp3", OriginalFilename: "02 - The Book.mp3", AuthorID: intp(2), SeriesID: nil},
+		{ID: "c", Title: "03 - The Book", FilePath: "/lib/A/The Book/03 - The Book.mp3", OriginalFilename: "03 - The Book.mp3", AuthorID: nil, SeriesID: intp(30)},
+	}
+	got := detectFromSlim(books, nil)
+	if len(got) != 1 {
+		t.Fatalf("want 1 relaxed preview candidate, got %d (%+v)", len(got), got)
+	}
+	if got[0].Shape != "parent-relaxed" {
+		t.Errorf("shape: want parent-relaxed, got %q", got[0].Shape)
+	}
+	if got[0].SequentialPattern == "" {
+		t.Error("want filename-stem evidence")
+	}
+}
+
+func TestDetect_NumberedSiblingRejectsStandaloneNumericTitles(t *testing.T) {
+	books := []splitBookSlim{
+		{ID: "a", Title: "1984", FilePath: "/lib/A/1984/1984.m4b", OriginalFilename: "1984.m4b"},
+		{ID: "b", Title: "86-Neon", FilePath: "/lib/A/1984/86-Neon.m4b", OriginalFilename: "86-Neon.m4b"},
+		{ID: "c", Title: "2001", FilePath: "/lib/A/1984/2001.m4b", OriginalFilename: "2001.m4b"},
+	}
+	if got := detectFromSlim(books, nil); len(got) != 0 {
+		t.Fatalf("standalone numeric titles must not form a candidate: %+v", got)
 	}
 }
 
