@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
 // last-edited: 2026-08-28
 
@@ -309,10 +309,11 @@ func extractChapterNumber(s string) int {
 	return n
 }
 
-// numberedSiblingStem extracts the leading track number and the remaining
-// filename stem. A bare number such as "1984" deliberately does not qualify:
-// it has no separator and no shared title evidence with sibling tracks.
-func numberedSiblingStem(book splitBookSlim) (int, string, bool) {
+// numberedSiblingStem extracts the leading track number, a normalized filename
+// stem for comparison, and the corresponding human-readable stem for display.
+// A bare number such as "1984" deliberately does not qualify: it has no
+// separator and no shared title evidence with sibling tracks.
+func numberedSiblingStem(book splitBookSlim) (int, string, string, bool) {
 	name := book.OriginalFilename
 	if name == "" {
 		name = filepath.Base(book.FilePath)
@@ -320,14 +321,14 @@ func numberedSiblingStem(book splitBookSlim) (int, string, bool) {
 	name = strings.TrimSuffix(name, filepath.Ext(name))
 	match := numberedSiblingStemRe.FindStringSubmatch(name)
 	if len(match) != 3 {
-		return 0, "", false
+		return 0, "", "", false
 	}
 	number := extractChapterNumber(match[1])
-	stem := strings.ToLower(strings.Trim(strings.TrimSpace(match[2]), "-_. "))
-	if number < 0 || stem == "" {
-		return 0, "", false
+	displayStem := strings.Trim(strings.TrimSpace(match[2]), "-_. ")
+	if number < 0 || displayStem == "" {
+		return 0, "", "", false
 	}
-	return number, stem, true
+	return number, strings.ToLower(displayStem), displayStem, true
 }
 
 // sequentialRun checks whether nums form a near-sequential run: ≥70%
@@ -497,13 +498,15 @@ func qualifyTypedGroup(group []splitBookSlim, parentKey, shape string, resolveAu
 func qualifyRelaxedNumberedSiblingGroup(group []splitBookSlim, parentKey string) (SplitBookCandidate, bool) {
 	nums := make([]int, 0, len(group))
 	stems := make([]string, 0, len(group))
+	displayStems := make([]string, 0, len(group))
 	for _, b := range group {
-		n, stem, ok := numberedSiblingStem(b)
+		n, stem, displayStem, ok := numberedSiblingStem(b)
 		if !ok {
 			return SplitBookCandidate{}, false
 		}
 		nums = append(nums, n)
 		stems = append(stems, stem)
+		displayStems = append(displayStems, displayStem)
 	}
 	if mostCommon(stems) == "" {
 		return SplitBookCandidate{}, false
@@ -524,7 +527,7 @@ func qualifyRelaxedNumberedSiblingGroup(group []splitBookSlim, parentKey string)
 	return SplitBookCandidate{
 		ParentFolder:      parentKey,
 		BookIDs:           sortBookIDsULIDAsc(ids),
-		SuggestedTitle:    stems[0],
+		SuggestedTitle:    displayStems[0],
 		SequentialPattern: "filename-stem:" + pattern,
 		Shape:             "parent-relaxed",
 	}, true

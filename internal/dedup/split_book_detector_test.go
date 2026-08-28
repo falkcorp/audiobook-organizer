@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_detector_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1f7e3b4c-c2a9-4c0e-9c83-1d5b6f0a8e74
 // last-edited: 2026-08-28
 
@@ -129,6 +129,9 @@ func TestDetect_NumberedSiblingFilenamesIgnorePollutedMetadata(t *testing.T) {
 	}
 	if got[0].SequentialPattern == "" {
 		t.Error("want filename-stem evidence")
+	}
+	if got[0].SuggestedTitle != "The Book" {
+		t.Errorf("suggested title: want human-readable filename stem, got %q", got[0].SuggestedTitle)
 	}
 }
 
