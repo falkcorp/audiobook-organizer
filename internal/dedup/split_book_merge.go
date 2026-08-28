@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-08-19
+// last-edited: 2026-08-28
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -31,6 +31,23 @@ type SplitBookMergeResult struct {
 	FilesMoved     int      `json:"files_moved"`
 	NewDuration    int      `json:"new_duration"`
 	Errors         []string `json:"errors,omitempty"`
+}
+
+// BulkSplitBookMergeItem is the immutable candidate snapshot consumed by the
+// durable batch operation. Keeping the book IDs here means a later detector
+// rescan cannot alter already-reviewed queued work.
+type BulkSplitBookMergeItem struct {
+	CandidateID    string   `json:"candidate_id"`
+	BookIDs        []string `json:"book_ids"`
+	KeepID         string   `json:"keep_id"`
+	SuggestedTitle string   `json:"suggested_title"`
+}
+
+// BulkSplitBookMergeParams controls one queued batch. DryRun deliberately
+// defaults to true in the HTTP handler; an apply requires an explicit false.
+type BulkSplitBookMergeParams struct {
+	Items  []BulkSplitBookMergeItem `json:"items"`
+	DryRun bool                     `json:"dry_run"`
 }
 
 // MergeSplitBookCluster absorbs every srcID into keepID:

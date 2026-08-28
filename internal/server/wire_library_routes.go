@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-08-23
+// last-edited: 2026-08-28
 
 package server
 
@@ -43,6 +43,7 @@ func (s *Server) wireLibraryRoutes(
 	protected.POST("/dedup/split-book-scan", s.perm(auth.PermScanTrigger), splitBookH.TriggerSplitBookScan)
 	protected.GET("/dedup/split-book-candidates", s.perm(auth.PermLibraryView), splitBookH.ListSplitBookCandidates)
 	protected.POST("/dedup/split-book-candidates/:id/merge", s.perm(auth.PermLibraryEditMetadata), splitBookH.MergeSplitBookCandidate)
+	protected.POST("/dedup/split-book-candidates/bulk-merge", s.perm(auth.PermLibraryEditMetadata), splitBookH.BulkMergeSplitBookCandidates)
 
 	// Filesystem + import paths
 	protected.GET("/filesystem/home", s.perm(auth.PermSettingsManage), filesystemH.GetHomeDirectory)

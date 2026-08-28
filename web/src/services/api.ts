@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.72.0
+// version: 2.73.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-24
+// last-edited: 2026-08-28
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -5455,6 +5455,19 @@ export interface SplitBookMergeResult {
   [key: string]: unknown;
 }
 
+export interface BulkSplitBookMergeRequest {
+  candidate_ids: string[];
+  keep_ids?: Record<string, string>;
+  /** Defaults to true server-side; pass false only after explicit review. */
+  dry_run?: boolean;
+}
+
+export interface BulkSplitBookMergeResponse {
+  op_id: string;
+  dry_run: boolean;
+  candidate_count: number;
+}
+
 // Trigger the split-book backfill scan (dedup.split-book-scan op).
 // Backend returns {op_id: "..."} — normalized to an Operation-shaped
 // object so the caller can drop it into useOperationsStore.startPolling.
@@ -5505,6 +5518,24 @@ export async function mergeSplitBookCandidate(
   }
   const responseData = await response.json();
   return responseData.data;
+}
+
+// Queue one preflighted batch from reviewed, persisted candidate IDs. This
+// helper intentionally does not accept raw book IDs: candidate generation and
+// destructive repair must remain separate workflows.
+export async function queueBulkSplitBookMerge(
+  request: BulkSplitBookMergeRequest
+): Promise<BulkSplitBookMergeResponse> {
+  const response = await apiFetch(`${API_BASE}/dedup/split-book-candidates/bulk-merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to queue split-book merge batch');
+  }
+  const responseData = await response.json();
+  return responseData.data as BulkSplitBookMergeResponse;
 }
 
 // All trigger* dedup endpoints return the full Operation row (id, type,

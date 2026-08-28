@@ -62,6 +62,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.llmReviewDef(),
 		p.bookSignatureScanDef(),
 		p.splitBookScanDef(),
+		p.splitBookBulkMergeDef(),
 		p.purgeStaleDef(),
 		p.lshIndexBuildDef(),
 		p.purgeLegacyFPDef(),                 // T015: legacy fingerprint purge op
