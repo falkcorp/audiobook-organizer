@@ -1,12 +1,11 @@
 // file: internal/organizer/organizer.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-25
+// last-edited: 2026-08-28
 
 package organizer
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,73 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 )
-
-// ErrTargetOccupied is returned from OrganizeBook when the computed
-// target path already exists on disk and is a DIFFERENT file than the
-// book's current source. This is the "two books with identical metadata
-// want the same destination" case — e.g. two different audio files both
-// tagged as "Asimov / Foundation". Previously OrganizeBook silently
-// returned (target, "", nil) here, which caused the caller to update
-// the DB file_path to the occupant's file — two rows pointed at the
-// same file on disk and the second book's audio was orphaned.
-//
-// Callers that can usefully act on this (e.g. the manual organize
-// endpoint) should detect the error via errors.Is, look up the occupant
-// via GetBookByFilePath, and either create a dedup candidate or ask
-// the user to resolve the collision before retrying.
-var ErrTargetOccupied = errors.New("organize: target path already occupied by a different file")
-
-// The three ways a target can be occupied. Every occupied-target error wraps
-// BOTH ErrTargetOccupied and exactly one of these, so existing
-// errors.Is(err, ErrTargetOccupied) callers keep working unchanged while a new
-// caller can ask which kind it is.
-//
-// Why this needed splitting: the two real cases take OPPOSITE remediation, and
-// until now they produced a byte-identical error string, so a production log
-// could not be counted into "how many need dedup" and "how many need cleanup".
-// A survey of 19,519 occupied-target lines on production could say only that
-// they existed.
-//
-//   - ByBook   — another book row owns the target. Two library rows expand to
-//     the same name. Actionable as a dedup candidate.
-//   - ByOrphan — a file sits at the target and NO book row claims it, e.g. the
-//     residue of a partial organize. Actionable as file cleanup; opening a
-//     dedup candidate for it would be meaningless, there is no second book.
-//
-// The third exists so the other two stay trustworthy:
-//
-//   - Unknown  — the ownership question was never answered, because there is
-//     no store wired or the lookup itself failed. This is NOT an orphan. An
-//     orphan is a positive finding ("the DB was asked and said nobody owns
-//     it"); folding a failed lookup into it would manufacture orphans out of
-//     database errors and send someone deleting files on the strength of a
-//     question that was never asked.
-var (
-	ErrTargetOccupiedByBook   = errors.New("occupant is another book row")
-	ErrTargetOccupiedByOrphan = errors.New("occupant is an untracked file with no book row")
-	ErrTargetOccupantUnknown  = errors.New("occupant not identified: no store wired or lookup failed")
-)
-
-// newTargetOccupiedError builds the occupied-target error, tagging it with
-// which of the three cases applies.
-//
-// occupantKnown means the ownership lookup RAN AND SUCCEEDED — it is not
-// "occupant != nil". The two must stay separate: a successful lookup returning
-// nil is the orphan finding, while a lookup that never ran also has a nil
-// occupant and means nothing at all.
-func newTargetOccupiedError(targetPath string, occupant *database.Book, occupantKnown bool) error {
-	switch {
-	case occupant != nil:
-		return fmt.Errorf("%w: %w (book %s): %s",
-			ErrTargetOccupied, ErrTargetOccupiedByBook, occupant.ID, targetPath)
-	case occupantKnown:
-		return fmt.Errorf("%w: %w: %s",
-			ErrTargetOccupied, ErrTargetOccupiedByOrphan, targetPath)
-	default:
-		return fmt.Errorf("%w: %w: %s",
-			ErrTargetOccupied, ErrTargetOccupantUnknown, targetPath)
-	}
-}
 
 // Organizer handles file organization operations
 type Organizer struct {
@@ -221,17 +153,14 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		}
 	}
 
-	// Check if file already exists at target path. Four cases:
+	// Check if file already exists at target path. Three cases:
 	//   1. SameFile (hardlink/reflink): already organized, success no-op.
 	//   2. Different inode but the DB says this exact book owns the
 	//      target path: it's a previous copy-based organize of the same
 	//      book (re-organize where the caller didn't refresh book.FilePath
 	//      before the retry). Success no-op.
-	//   3. Different inode and the DB says another book owns the target:
-	//      real collision, fire hook, return ErrTargetOccupied.
-	//   4. Different inode and no DB row at the target (e.g. orphaned
-	//      file from a previous partial organize): treat as collision
-	//      too — refuse to overwrite, let the user resolve it.
+	//   3. A different file owns the target: preserve it and select the
+	//      next deterministic _copyN filename for this book.
 	if targetInfo, err := os.Stat(targetPath); err == nil {
 		if srcInfo, srcErr := os.Stat(book.FilePath); srcErr == nil {
 			if os.SameFile(srcInfo, targetInfo) {
@@ -242,31 +171,19 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		// book, this is a re-organize no-op — don't panic, don't fire
 		// the collision hook, just return the target.
 		//
-		// The lookup's result is kept rather than discarded: the same answer
-		// that distinguishes case 2 also distinguishes case 3 from case 4,
-		// and those two need opposite remediation (see below).
-		var occupant *database.Book
-		occupantKnown := false
 		if o.store != nil && book.ID != "" {
 			owner, lookupErr := o.store.GetBookByFilePath(targetPath)
 			if lookupErr == nil {
-				occupantKnown = true
-				occupant = owner
 				if owner != nil && owner.ID == book.ID {
 					return targetPath, "", nil
 				}
 			}
 		}
-		// Case 3/4: collision. Fire the hook so the server can create a
-		// pending dedup candidate between this book and whoever owns
-		// the target, then return the explicit error. The old code
-		// silently returned nil here, which caused the caller to set
-		// this book's file_path to the occupant's file — two DB rows
-		// pointing at one file on disk.
-		if o.hooks != nil {
-			o.hooks.OnCollision(book.ID, targetPath)
+		var suffixErr error
+		targetPath, suffixErr = nextAvailableTargetPath(targetPath)
+		if suffixErr != nil {
+			return "", "", suffixErr
 		}
-		return targetPath, "", newTargetOccupiedError(targetPath, occupant, occupantKnown)
 	}
 
 	// Perform the organization based on strategy
@@ -294,6 +211,27 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		return targetPath, "symlink", o.symlinkFile(book.FilePath, targetPath)
 	default:
 		return "", "", fmt.Errorf("unknown organization strategy: %s", strategy)
+	}
+}
+
+// nextAvailableTargetPath returns the first unoccupied sibling filename using
+// the user-visible collision convention: "book.m4b", "book_copy1.m4b",
+// "book_copy2.m4b", and so on. It only chooses a path; the transfer helpers
+// still use exclusive destination creation so a concurrent organizer cannot
+// overwrite a file created after this check.
+func nextAvailableTargetPath(targetPath string) (string, error) {
+	dir, name := filepath.Dir(targetPath), filepath.Base(targetPath)
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+
+	for copyNumber := 1; ; copyNumber++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s_copy%d%s", stem, copyNumber, ext))
+		if _, err := os.Lstat(candidate); err != nil {
+			if os.IsNotExist(err) {
+				return candidate, nil
+			}
+			return "", fmt.Errorf("inspect candidate destination %s: %w", candidate, err)
+		}
 	}
 }
 
