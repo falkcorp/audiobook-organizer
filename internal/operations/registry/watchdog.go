@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-08-23
+// last-edited: 2026-08-27
 
 package registry
 
@@ -114,6 +114,13 @@ func (r *Registry) watchdogCycle() {
 		if ts := h.lastProgressAt.Load(); ts != 0 {
 			lastProgress = time.Unix(0, ts).UTC()
 			everReported = true
+		} else if ts := h.attemptStartedAt.Load(); ts != 0 {
+			// A persisted LastProgressAt can describe a PREVIOUS process attempt
+			// after ResumeRestart. It is useful history but not current liveness:
+			// reading it here killed a newly resumed scan on the first watchdog
+			// tick as "idle for hours". This attempt has not reported yet, so keep
+			// everReported false and count from its worker-start baseline.
+			lastProgress = time.Unix(0, ts).UTC()
 		} else if row.LastProgressAt != nil {
 			lastProgress = *row.LastProgressAt
 			everReported = true

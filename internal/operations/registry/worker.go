@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-23
+// last-edited: 2026-08-27
 
 package registry
 
@@ -62,6 +62,11 @@ type runHandle struct {
 	// Stored as Unix nanoseconds; zero means progress has never been reported.
 	// The watchdog reads this first (lock-free) before falling back to the DB row.
 	lastProgressAt atomic.Int64
+	// attemptStartedAt is stamped when this worker begins an attempt. A resumed
+	// operation deliberately retains its persisted progress for audit/history,
+	// but that timestamp belongs to the previous process. The watchdog must use
+	// this attempt-local baseline until the first new UpdateProgress arrives.
+	attemptStartedAt atomic.Int64
 	// lastUncheckpointedStrike (Unix nanoseconds) dedupes the watchdog's
 	// uncheckpointed strikes: at most one strike per threshold interval per op
 	// (C-4). Only the watchdog goroutine touches it; atomic for -race hygiene.
@@ -201,6 +206,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// queuedCancel instead. The flag is written and read under r.mu, so this
 	// check races with nothing — if Cancel got the lock first, we see the flag
 	// and drop the run without ever invoking Run.
+	attemptStartedAt := time.Now().UTC()
 	h := &runHandle{
 		id:             qr.opID,
 		defID:          qr.defID,
@@ -210,6 +216,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		writes:         def.Writes,
 		cancel:         cancel,
 	}
+	h.attemptStartedAt.Store(attemptStartedAt.UnixNano())
 	r.mu.Lock()
 	if prev, exists := r.running[qr.opID]; exists && prev.queuedCancel {
 		r.mu.Unlock()
@@ -229,7 +236,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	r.mu.Unlock()
 
 	// Mark running in DB.
-	now := time.Now().UTC()
+	now := attemptStartedAt
 	if err := r.store.UpdateOperationV2Status(qr.opID, "running", &now, nil, nil); err != nil {
 		r.logger.Warn("registry: failed to mark op running", "op_id", qr.opID, "error", err)
 	}
