@@ -1,5 +1,5 @@
 # file: .github/workflows/memory-leak-scan.yml
-# version: 2.3.1
+# version: 2.3.2
 # guid: 9f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 # last-edited: 2026-08-27
 name: Memory Leak Detection
@@ -62,9 +62,11 @@ jobs:
           count=${count:-0}
 
           if [ "$exit_code" -eq 0 ]; then
-            echo "has_leaks=false"   >> "$GITHUB_OUTPUT"
-            echo "leak_count=0"      >> "$GITHUB_OUTPUT"
-            echo "scan_failed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "has_leaks=false"
+              echo "leak_count=0"
+              echo "scan_failed=false"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -79,15 +81,19 @@ jobs:
             echo "::error::check-memory-leaks.py exited ${exit_code} without reporting a single finding. Treating this as a scanner failure, not as leaks; no TODO entry will be filed."
             echo "----- scanner output -----"
             tail -n 40 /tmp/leak-output.txt || true
-            echo "has_leaks=false"   >> "$GITHUB_OUTPUT"
-            echo "leak_count=0"      >> "$GITHUB_OUTPUT"
-            echo "scan_failed=true"  >> "$GITHUB_OUTPUT"
+            {
+              echo "has_leaks=false"
+              echo "leak_count=0"
+              echo "scan_failed=true"
+            } >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
-          echo "has_leaks=true"    >> "$GITHUB_OUTPUT"
-          echo "leak_count=$count" >> "$GITHUB_OUTPUT"
-          echo "scan_failed=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "has_leaks=true"
+            echo "leak_count=$count"
+            echo "scan_failed=false"
+          } >> "$GITHUB_OUTPUT"
 
           exit "$exit_code"
 
