@@ -1,8 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.42.3 -->
-<!-- version: 10.43.0 -->
+<!-- version: 10.44.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-27 -->
+<!-- last-edited: 2026-08-28 -->
 
 # Project TODO — live items only
 
@@ -3432,7 +3431,7 @@ argument for treating this gate's flakiness as a work item rather than a nuisanc
       document becomes archivable. This is a bounded, mechanical pass, and it is the thing
       standing between this audit and retirement.
 
-### ABS author and series detail routes are unimplemented and redirect into a 404
+### ✅ DONE 2026-08-28 — ABS author and series detail routes no longer redirect into a 404
 
 Found by enumerating the paths the app ACTUALLY requested in the server log, rather
 than by reading our own route table — the table can say which routes exist, never
@@ -3444,8 +3443,11 @@ which absent routes are being asked for.
   1 /api/series
 ```
 
-The 1:2 ratio is the redirect signature (each request logs the 301 and the target).
-Probed against production:
+The 1:2 ratio was the redirect signature (each request logged the 301 and the target).
+The routes are now registered on the ABS surface, placed in the exact-method collision
+table, and listed in the route inventory. Native subroutes remain unclaimed.
+
+Historical production result before the fix:
 
 | route | result |
 |---|---|
@@ -3467,17 +3469,9 @@ that took out 46 live app routes twice (#2332 → #2335) and again, more narrowl
 the playlist reservation. Use `absCollisionDetailRoutes`, which matches on method
 plus exactly one segment.
 
-Work:
-
-1. `GET /api/authors/:id` — ABS author DTO with its `libraryItems`. The id is ours
-   (it comes from our own `/libraries/:id/authors` list), so no id-mapping problem.
-2. `GET /api/series/:id` — ditto; the per-series book build already exists and is
-   cached (`seriesBooksCached`).
-3. Decide what bare `GET /api/series` should do. It currently redirects to an
+Remaining decision: bare `GET /api/series` currently redirects to an
    app-API shape an ABS client cannot parse — the "looks implemented, behaves
    broken" case. Either serve it or reserve it as an honest 404.
-4. Each addition needs a `TestPlaylistReservationDoesNotSwallowAppSubRoutes`-style
-   companion listing that namespace's app routes, or the next widening repeats this.
 
 ## ABS surface — what is still missing after the series/playlist fix
 
@@ -3494,14 +3488,8 @@ is complete".
       an empty page" is not by itself evidence of a gap; check whether a backing model
       exists before costing the work. Building this is a new entity end to end: storage,
       CRUD, ownership, ordering, plus ~10 upstream routes. Cost it before starting.
-- [ ] **Series DETAIL is still not served.** `/api/series/:id` 301s into the app API, the
-      same class of bug that made playlists open empty. It was not fixed alongside
-      playlists because populating the series LIST (which the client renders) addressed
-      the reported symptom, and claiming `/api/series/` from the redirect is a second
-      routing decision that deserves its own change. Upstream also has
-      `GET /api/libraries/:id/series/:seriesId`, which sits under the already-reserved
-      `/api/libraries/` prefix and therefore needs **no** routing decision at all —
-      prefer that route first.
+- [x] **Series DETAIL is served.** `GET /api/series/:id` resolves the same projection as
+      the library list, and only its exact GET route is reserved from the native API.
 - [ ] **The series list ignores `limit` and `page`.** It returned all 14,625 series in one
       response before this change and still does; the books are now embedded, so the
       payload grew. Upstream supports both params
