@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-27-library-reliability-current-status.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 6c884144-c4fe-4f5a-bbdc-1a103cd5aa13 -->
 <!-- last-edited: 2026-08-27 -->
 
@@ -39,6 +39,16 @@ files, zero created rows, and zero errors. The apply run therefore made no
 changes; the prior repair remains complete and the new batch writer is safe to
 run again.
 
+## Fragment repair: preview complete, apply intentionally held
+
+The safe `dedup.split-book-scan` operation completed successfully and produced
+172 persisted fragment candidates. It did not merge or delete any books. The
+existing per-candidate merge endpoint performs its work inline and deletes its
+candidate only after success; that is suitable for a reviewed individual repair,
+but not yet a durable bulk operation. The next implementation must keep every
+failed candidate reviewable, record a per-candidate outcome, and establish
+candidate disjointness before applying any bulk repair.
+
 ## In flight
 
 - PR #2936 enables LFS checkout on all workflow checkout steps and recursive
@@ -55,5 +65,5 @@ run again.
    do not coalesce scans, imports, organizes, or destructive merges.
 2. Produce a unique-file scan plan that preserves the longest matching import
    root source identity.
-3. Run `dedup.split-book-scan` preview, retain its census, and only then design
-   a durable fragment-merge executor that preserves partial failures.
+3. Design a durable fragment-merge executor for the 172 preview candidates that
+   preserves partial failures and verifies candidate disjointness before apply.
