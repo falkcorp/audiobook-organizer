@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-08-28
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. SplitBookHandler covers the split-book deduplication
@@ -145,11 +145,98 @@ func (h *SplitBookHandler) MergeSplitBookCandidate(c *gin.Context) {
 		return
 	}
 
-	// Delete candidate so it is not surfaced again. Best-effort: a stale row
-	// only causes a re-attempt that no-ops on already-soft-deleted srcs.
-	if delErr := h.candStore.Delete(id); delErr != nil {
-		c.Error(delErr) //nolint:errcheck
+	// A partial result must remain reviewable. Deleting it would turn a failed
+	// source-file move into an invisible, non-retryable repair gap.
+	complete := len(result.Errors) == 0 && result.MergedSrcCount == len(srcIDs)
+	if complete {
+		if delErr := h.candStore.Delete(id); delErr != nil {
+			c.Error(delErr) //nolint:errcheck
+		}
 	}
 
 	httputil.RespondWithOK(c, result)
+}
+
+type bulkSplitBookMergeRequest struct {
+	CandidateIDs []string          `json:"candidate_ids" binding:"required"`
+	KeepIDs      map[string]string `json:"keep_ids"`
+	DryRun       *bool             `json:"dry_run"`
+}
+
+// BulkMergeSplitBookCandidates preflights reviewed persisted candidates and
+// queues exactly one durable batch. The operation receives snapshots rather
+// than bare IDs so a rescan cannot change queued repair work.
+func (h *SplitBookHandler) BulkMergeSplitBookCandidates(c *gin.Context) {
+	if h.opEnqueuer == nil || h.candStore == nil {
+		httputil.RespondWithServiceUnavailable(c, "split-book operation or candidate store not available")
+		return
+	}
+	var body bulkSplitBookMergeRequest
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httputil.RespondWithBadRequest(c, "invalid bulk split-book merge request: "+err.Error())
+		return
+	}
+	if len(body.CandidateIDs) == 0 {
+		httputil.RespondWithBadRequest(c, "candidate_ids must not be empty")
+		return
+	}
+	seenCandidates := make(map[string]struct{}, len(body.CandidateIDs))
+	seenBooks := make(map[string]string)
+	items := make([]dedup.BulkSplitBookMergeItem, 0, len(body.CandidateIDs))
+	for _, candidateID := range body.CandidateIDs {
+		if candidateID == "" {
+			httputil.RespondWithBadRequest(c, "candidate_ids must not contain empty IDs")
+			return
+		}
+		if _, exists := seenCandidates[candidateID]; exists {
+			httputil.RespondWithBadRequest(c, "candidate_ids must be unique")
+			return
+		}
+		seenCandidates[candidateID] = struct{}{}
+		candidate, err := h.candStore.Get(candidateID)
+		if err != nil {
+			httputil.InternalError(c, "failed to load split-book candidate", err)
+			return
+		}
+		if candidate == nil {
+			httputil.RespondWithNotFound(c, "split_book_candidate", candidateID)
+			return
+		}
+		if len(candidate.BookIDs) < 2 {
+			httputil.RespondWithBadRequest(c, "candidate has fewer than 2 books")
+			return
+		}
+		keepID := candidate.BookIDs[0]
+		if body.KeepIDs != nil && body.KeepIDs[candidateID] != "" {
+			keepID = body.KeepIDs[candidateID]
+		}
+		keepFound := false
+		for _, bookID := range candidate.BookIDs {
+			if priorCandidate, exists := seenBooks[bookID]; exists {
+				httputil.RespondWithBadRequest(c, "submitted candidates overlap on book "+bookID+" ("+priorCandidate+" and "+candidateID+")")
+				return
+			}
+			seenBooks[bookID] = candidateID
+			if bookID == keepID {
+				keepFound = true
+			}
+		}
+		if !keepFound {
+			httputil.RespondWithBadRequest(c, "keep_id not in candidate book_ids")
+			return
+		}
+		items = append(items, dedup.BulkSplitBookMergeItem{CandidateID: candidateID, BookIDs: append([]string(nil), candidate.BookIDs...), KeepID: keepID, SuggestedTitle: candidate.SuggestedTitle})
+	}
+	// Safety by default: omission produces a dry run. A later apply must send
+	// an explicit false, and production invocation is separately operator-gated.
+	dryRun := true
+	if body.DryRun != nil {
+		dryRun = *body.DryRun
+	}
+	opID, err := h.opEnqueuer.EnqueueOp(c.Request.Context(), "dedup.split-book-bulk-merge", dedup.BulkSplitBookMergeParams{Items: items, DryRun: dryRun})
+	if err != nil {
+		httputil.InternalError(c, "failed to enqueue split-book bulk merge", err)
+		return
+	}
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{"op_id": opID, "dry_run": dryRun, "candidate_count": len(items)})
 }
