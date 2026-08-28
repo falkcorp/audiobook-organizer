@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.16.0
+// version: 3.17.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-23
+// last-edited: 2026-08-28
 
 package registry
 
@@ -619,6 +619,16 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 			r.logger.Debug("registry: batchable op bucketed",
 				"def_id", defID, "subject_type", sub.Type, "subject_id", sub.ID)
 			return "", nil // op ID assigned at flush time
+		}
+	}
+
+	if def.MergeQueuedParams != nil {
+		mergedID, merged, mergeErr := r.tryMergeQueuedParams(defID, def.MergeQueuedParams, rawParams)
+		if mergeErr != nil {
+			return "", mergeErr
+		}
+		if merged {
+			return mergedID, nil
 		}
 	}
 

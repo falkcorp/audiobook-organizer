@@ -1,7 +1,7 @@
 // file: internal/operations/registry/enqueue_dedupe_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4352733d-985f-4541-87ce-22f4698d67cc
-// last-edited: 2026-08-22
+// last-edited: 2026-08-28
 
 // ENQ-DEDUP-1 regression suite.
 //
@@ -27,6 +27,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -92,6 +93,57 @@ func TestEnqueueOp_SameParamsReturnsSameOpID(t *testing.T) {
 	}
 	if rows := activeRowsForDef(t, store, def.ID); len(rows) != 1 {
 		t.Errorf("expected exactly 1 active row for %s, got %d", def.ID, len(rows))
+	}
+}
+
+func TestEnqueueOp_MergesCompatibleQueuedSelectionsWithoutDroppingIDs(t *testing.T) {
+	r, store := newTestRegistry(t)
+	def := makeDedupeDef(t, "test.dedupe-merge-queued", "t.dedupe")
+	def.MergeQueuedParams = func(existing, incoming json.RawMessage) (json.RawMessage, bool, error) {
+		var oldParams, newParams dedupeParams
+		if err := json.Unmarshal(existing, &oldParams); err != nil {
+			return nil, false, err
+		}
+		if err := json.Unmarshal(incoming, &newParams); err != nil {
+			return nil, false, err
+		}
+		seen := map[string]struct{}{}
+		merged := dedupeParams{}
+		for _, id := range append(oldParams.BookIDs, newParams.BookIDs...) {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			merged.BookIDs = append(merged.BookIDs, id)
+		}
+		out, err := json.Marshal(merged)
+		return out, err == nil, err
+	}
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatalf("RegisterOp: %v", err)
+	}
+
+	first, err := r.EnqueueOp(context.Background(), def.ID, dedupeParams{BookIDs: []string{"a", "b"}})
+	if err != nil {
+		t.Fatalf("first EnqueueOp: %v", err)
+	}
+	second, err := r.EnqueueOp(context.Background(), def.ID, dedupeParams{BookIDs: []string{"b", "c"}})
+	if err != nil {
+		t.Fatalf("second EnqueueOp: %v", err)
+	}
+	if second != first {
+		t.Fatalf("merged request id = %q, want existing queued id %q", second, first)
+	}
+	rows := activeRowsForDef(t, store, def.ID)
+	if len(rows) != 1 {
+		t.Fatalf("active rows = %d, want one merged queued row", len(rows))
+	}
+	var got dedupeParams
+	if err := json.Unmarshal([]byte(rows[0].Params), &got); err != nil {
+		t.Fatalf("decode merged params: %v", err)
+	}
+	if want := []string{"a", "b", "c"}; !slices.Equal(got.BookIDs, want) {
+		t.Fatalf("merged book_ids = %v, want %v", got.BookIDs, want)
 	}
 }
 

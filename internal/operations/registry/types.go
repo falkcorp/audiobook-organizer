@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-22
+// last-edited: 2026-08-28
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -78,6 +78,11 @@ type OperationDef struct {
 	// alone without setting this — see EnqueueOp. Set this only for a def whose
 	// params legitimately vary between runs that must NOT both happen.
 	DedupeQueuedRuns bool
+
+	// MergeQueuedParams may merge a new request into an existing QUEUED run of
+	// this definition. It is never called for a running or dispatcher-claimed
+	// run. Returning false preserves the normal separate-queue behavior.
+	MergeQueuedParams func(existing, incoming json.RawMessage) (json.RawMessage, bool, error)
 
 	// MaxConcurrent is set on the Plugin, not the OperationDef (spec §1).
 	// Per-plugin caps are tracked in Registry.pluginMax via SetPluginMaxConcurrent.
