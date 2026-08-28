@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.44.0 -->
+<!-- version: 10.44.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-28 -->
 
@@ -13,6 +13,27 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Audible metadata upgrade job** — add a dry-run-first maintenance
+      operation that revisits accepted metadata originating anywhere other than
+      Audible, searches from the now-normalized local title/author/series, and
+      records the proposed Audible replacement. Apply only identity-verified,
+      higher-quality matches; never overwrite a user/manual choice merely
+      because an Audible result exists. Persist one result per book so failures
+      remain reviewable and retryable rather than silently changing a library.
+
+- [ ] **Operation bell: name metadata subjects** — render a single-book cached
+      apply as “Applying metadata to <title>”, not “Batch Apply Cached”. For a
+      multi-book operation, render the count and provide an expandable list of
+      included book titles/ids so an operator can identify the correct job
+      before cancelling it. Preserve the operation id and terminal state; the
+      UI label is an observability improvement, not a new cancellation scope.
+
+### Metal Whisper worker follow-up
+
+- [ ] Validate the Mac MLX/Metal Whisper worker locally, then benchmark and add
+  it as optional low-concurrency `WHISPER_ENDPOINTS` capacity. Keep AI parsing
+  disabled until the endpoint is healthy and production-reachable.
 
 - [ ] **Metadata Review: hide runtime mismatches** — add a filter that excludes
       cached metadata candidates whose advertised runtime materially differs
