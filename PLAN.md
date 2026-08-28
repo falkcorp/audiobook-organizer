@@ -1,7 +1,7 @@
 <!-- file: PLAN.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9bc45e15-df83-4d96-af74-2a510d2e215a -->
-<!-- last-edited: 2026-08-27 -->
+<!-- last-edited: 2026-08-28 -->
 
 # Library reliability follow-ups
 
@@ -85,3 +85,52 @@ reduce workers without changing cached metadata. Keep dedup finalization in
 dry-run mode until its result set is audited; a failed alternate relocation
 leaves the original and candidate intact. Stop the AI worker and retain queue
 items when service health is unavailable.
+
+## Approved bulk split-book merge extension
+
+### Goal
+
+Turn reviewed persisted split-book candidate IDs into one durable, safe,
+auditable merge operation. Extend preview detection for numbered sibling files
+whose metadata IDs are already corrupted; do not auto-merge those candidates.
+
+### Affected files
+
+- `internal/server/handlers/split_book.go` and its tests — validate candidate
+  ID batches, snapshot them, enqueue one operation, and retain incomplete
+  candidates.
+- `internal/server/wire_library_routes.go` — register the gated bulk endpoint.
+- `internal/plugins/dedup/*` — register and run the durable batch operation
+  with per-candidate outcomes and dry-run support.
+- `internal/dedup/split_book_{merge,detector,storage}.go` and tests — expose
+  complete-success semantics and preview the filename-first relaxed lane.
+- `web/src/services/api.ts` and the split-book review UI/tests — import a JSON
+  candidate-ID file and display one queued operation.
+- `docs/audits/2026-08-27-library-reliability-current-status.md` and
+  `changelog.d/` — record the new safety boundary and operator workflow.
+
+### Steps
+
+1. Add failing tests for batch request validation, candidate overlap rejection,
+   and the single-merge partial-failure retention invariant.
+2. Add the operation parameter/outcome types and durable operation definition;
+   test dry-run and mixed-result behavior against real split-book merge logic.
+3. Wire the candidate-ID batch endpoint and operation registration, preserving
+   the existing permission boundary.
+4. Add the filename-first relaxed preview detector lane with false-positive
+   regression tests for standalone numeric titles.
+5. Add JSON file import to the review UI, update status/docs, run focused tests
+   and CI, then push a draft PR. Do not deploy or invoke a merge operation.
+
+### Test strategy
+
+- `GOTOOLCHAIN=go1.26.0 go test ./internal/dedup/... ./internal/plugins/dedup/... ./internal/server/handlers/...`
+- `npm test -- --run web/src`
+- `npm run build`
+- `GOTOOLCHAIN=go1.26.0 make ci`
+
+### Rollback
+
+Do not invoke the batch endpoint to disable mutation. Revert the feature PR to
+remove the endpoint and operation definition while leaving persisted candidates
+untouched. Failed candidates remain reviewable and no source files are moved.

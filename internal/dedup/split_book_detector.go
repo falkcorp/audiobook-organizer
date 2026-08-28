@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
-// last-edited: 2026-08-20
+// last-edited: 2026-08-28
 
 // Package dedup — split-book backfill detector.
 //
@@ -78,11 +78,12 @@ type SplitBookCandidate struct {
 // splitBookSlim is the projection used internally to keep the working set
 // small while scanning the library.
 type splitBookSlim struct {
-	ID       string
-	Title    string
-	FilePath string
-	AuthorID *int
-	SeriesID *int
+	ID               string
+	Title            string
+	FilePath         string
+	OriginalFilename string
+	AuthorID         *int
+	SeriesID         *int
 }
 
 // DetectSplitBookCandidates walks every book in the store and returns the
@@ -129,12 +130,17 @@ func loadSlimBooks(ctx context.Context, store Store, progress func(loaded int)) 
 			if b.IsSoftDeleted() {
 				continue
 			}
+			originalFilename := ""
+			if b.OriginalFilename != nil {
+				originalFilename = *b.OriginalFilename
+			}
 			all = append(all, splitBookSlim{
-				ID:       b.ID,
-				Title:    b.Title,
-				FilePath: b.FilePath,
-				AuthorID: b.AuthorID,
-				SeriesID: b.SeriesID,
+				ID:               b.ID,
+				Title:            b.Title,
+				FilePath:         b.FilePath,
+				OriginalFilename: originalFilename,
+				AuthorID:         b.AuthorID,
+				SeriesID:         b.SeriesID,
 			})
 		}
 		loaded += len(batch)
@@ -171,6 +177,35 @@ func detectFromSlim(all []splitBookSlim, resolveAuthorName func(int) string) []S
 			continue
 		}
 		cand, ok := qualifyTypedGroup(group, key, "parent", resolveAuthorName)
+		if !ok {
+			continue
+		}
+		for _, id := range cand.BookIDs {
+			assigned[id] = true
+		}
+		out = append(out, cand)
+	}
+
+	// RELAXED PARENT pass — historical track fragments often have polluted
+	// author/series IDs, so metadata equality is not evidence. Require a much
+	// stronger filename signal instead: siblings must share a non-empty stem
+	// after a leading sequence number. This only persists a preview candidate.
+	for _, key := range sortedKeys(parentBuckets) {
+		group := parentBuckets[key]
+		if len(group) < 3 {
+			continue
+		}
+		anyAssigned := false
+		for _, b := range group {
+			if assigned[b.ID] {
+				anyAssigned = true
+				break
+			}
+		}
+		if anyAssigned {
+			continue
+		}
+		cand, ok := qualifyRelaxedNumberedSiblingGroup(group, key)
 		if !ok {
 			continue
 		}
@@ -239,6 +274,8 @@ var chapterMarkerRe = regexp.MustCompile(
 
 var numericTokenRe = regexp.MustCompile(`\d+`)
 
+var numberedSiblingStemRe = regexp.MustCompile(`^\s*0*(\d{1,4})\s*(?:[-_.]\s*|\s+)(.+?)\s*$`)
+
 // sortedKeys returns map keys sorted ascending for deterministic iteration.
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
@@ -270,6 +307,27 @@ func extractChapterNumber(s string) int {
 		}
 	}
 	return n
+}
+
+// numberedSiblingStem extracts the leading track number and the remaining
+// filename stem. A bare number such as "1984" deliberately does not qualify:
+// it has no separator and no shared title evidence with sibling tracks.
+func numberedSiblingStem(book splitBookSlim) (int, string, bool) {
+	name := book.OriginalFilename
+	if name == "" {
+		name = filepath.Base(book.FilePath)
+	}
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	match := numberedSiblingStemRe.FindStringSubmatch(name)
+	if len(match) != 3 {
+		return 0, "", false
+	}
+	number := extractChapterNumber(match[1])
+	stem := strings.ToLower(strings.Trim(strings.TrimSpace(match[2]), "-_. "))
+	if number < 0 || stem == "" {
+		return 0, "", false
+	}
+	return number, stem, true
 }
 
 // sequentialRun checks whether nums form a near-sequential run: ≥70%
@@ -429,5 +487,45 @@ func qualifyTypedGroup(group []splitBookSlim, parentKey, shape string, resolveAu
 		SuggestedAuthor:   suggestedAuthor,
 		SequentialPattern: pattern,
 		Shape:             shape,
+	}, true
+}
+
+// qualifyRelaxedNumberedSiblingGroup detects a prior scanner failure shape:
+// one book row per numbered track in one directory. It does not rely on the
+// author/series fields because those rows are frequently what the failure
+// corrupted. The full merge still requires later operator review.
+func qualifyRelaxedNumberedSiblingGroup(group []splitBookSlim, parentKey string) (SplitBookCandidate, bool) {
+	nums := make([]int, 0, len(group))
+	stems := make([]string, 0, len(group))
+	for _, b := range group {
+		n, stem, ok := numberedSiblingStem(b)
+		if !ok {
+			return SplitBookCandidate{}, false
+		}
+		nums = append(nums, n)
+		stems = append(stems, stem)
+	}
+	if mostCommon(stems) == "" {
+		return SplitBookCandidate{}, false
+	}
+	for _, stem := range stems {
+		if stem != stems[0] {
+			return SplitBookCandidate{}, false
+		}
+	}
+	ok, pattern := sequentialRun(nums)
+	if !ok {
+		return SplitBookCandidate{}, false
+	}
+	ids := make([]string, 0, len(group))
+	for _, b := range group {
+		ids = append(ids, b.ID)
+	}
+	return SplitBookCandidate{
+		ParentFolder:      parentKey,
+		BookIDs:           sortBookIDsULIDAsc(ids),
+		SuggestedTitle:    stems[0],
+		SequentialPattern: "filename-stem:" + pattern,
+		Shape:             "parent-relaxed",
 	}, true
 }
