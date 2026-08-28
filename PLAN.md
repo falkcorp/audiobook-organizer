@@ -1,5 +1,5 @@
 <!-- file: PLAN.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9bc45e15-df83-4d96-af74-2a510d2e215a -->
 <!-- last-edited: 2026-08-27 -->
 
@@ -32,6 +32,8 @@ shared originals.
 - deployment manifests/scripts and `internal/ai/*` — add a resource-bounded
   U0 Whisper/Ollama worker only after hardware and service viability checks;
   keep AI parsing disabled until the worker health contract is proven.
+- `internal/maintenance/*`, metadata providers, operation results, and tests —
+  add a dry-run-first Audible-upgrade job for accepted non-Audible metadata.
 
 ## Steps
 
@@ -57,7 +59,11 @@ shared originals.
 7. Run a hardware/service feasibility spike for U0 and this Mac. Prefer a
    low-VRAM, CPU-safe transcription queue on U0; choose the Mac only if the
    local GPU backend is supported and does not contend with the desktop.
-8. Update the current-status audit, run focused tests and full CI, open/push
+8. Add an Audible-upgrade maintenance job. It considers only non-Audible,
+   non-manual accepted metadata, searches from the existing normalized book
+   fields, records its proposed replacement in dry-run results, and applies
+   only an identity-verified higher-quality Audible match.
+9. Update the current-status audit, run focused tests and full CI, open/push
    one isolated PR per independently deployable change, then deploy only after
    its production preconditions are verified.
 
