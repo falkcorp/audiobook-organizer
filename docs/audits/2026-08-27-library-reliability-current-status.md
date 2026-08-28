@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-08-27-library-reliability-current-status.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 6c884144-c4fe-4f5a-bbdc-1a103cd5aa13 -->
-<!-- last-edited: 2026-08-27 -->
+<!-- last-edited: 2026-08-28 -->
 
 # Library reliability current status
 
@@ -30,6 +30,35 @@ deduplication working; it was not used as transfer evidence.
   coverage. Merged; deploy with the next approved production release.
 - PR #2938: `backfill-book-files` now writes each eligible book's file rows in
   one atomic batch. Merged as `85001ca7d` and deployed successfully.
+- PR #2940: scan-resume watchdog baseline, ABS author/series detail routes,
+  provider-source review filters, and immediate hiding of accepted review rows.
+  Rebase-merged as `af748225e` and deployed 2026-08-28.
+- PR #2941: compatible queued metadata-apply selections are coalesced into one
+  operation instead of paying worker setup/teardown for each one-book request.
+  Rebase-merged as `088799ef1` and deployed 2026-08-28.
+
+## Latest full scan: interrupted, not complete
+
+The post-deploy-preflight scan did **not** finish cleanly. It terminally became
+`interrupted_quiesced` at `600 / 909` with `abandoned: op goroutine did not
+exit within grace after context cancellation`. No other major production
+operation was active when the 2026-08-28 deployment began. The deployed
+watchdog change resets its liveness baseline on resume, addressing the
+previous immediate-cancel path; this specific scan remains incomplete and must
+be resumed or rerun before claiming a complete inventory.
+
+## Local AI worker: Ollama validated; Whisper adapter remains
+
+This Mac is an Apple M1 Max with a 32-core Metal GPU and 32 GB unified memory.
+Ollama 0.33.0 is installed locally with `qwen2.5:7b-instruct`; a local
+generation health check returned the expected response. It is intentionally
+loopback-only and production AI parsing remains disabled.
+
+The existing `scripts/whisper_server.py` is CUDA-only and cannot use this Mac.
+The next implementation is a Metal/MLX Whisper worker that exposes the
+existing `/health`, `/transcribe`, and `/transcribe-batch` contract; only after
+its health and request compatibility checks pass may it be added to
+`WHISPER_ENDPOINTS` as optional capacity.
 
 ## Book-file backfill: complete and idempotent
 
@@ -49,21 +78,13 @@ but not yet a durable bulk operation. The next implementation must keep every
 failed candidate reviewable, record a per-candidate outcome, and establish
 candidate disjointness before applying any bulk repair.
 
-## In flight
-
-- PR #2936 enables LFS checkout on all workflow checkout steps and recursive
-  submodules where absent. Its first CI run exposed unrelated existing shell
-  lint; the targeted lint fixes are pushed and the rerun is pending.
-- Shared file-write concurrency (default four, globally bounded, cap eight) is
-  committed on `codex/library-reliability` as `6a945c37f`.
-- Explicit persisted `chapter_consolidation_threshold_min=0` is now auditable
-  without overriding an intentional disable, committed as `f5cce0c32`.
-
 ## Remaining before broad repair work
 
-1. Finish durable semantic coalescing for one-book metadata apply/save requests;
-   do not coalesce scans, imports, organizes, or destructive merges.
+1. Resume or rerun the interrupted full scan and prove a terminal successful
+   outcome before using it as scan-completeness evidence.
 2. Produce a unique-file scan plan that preserves the longest matching import
    root source identity.
 3. Design a durable fragment-merge executor for the 172 preview candidates that
    preserves partial failures and verifies candidate disjointness before apply.
+4. Build and validate the optional Metal/MLX Whisper adapter before changing
+   production transcription configuration.
