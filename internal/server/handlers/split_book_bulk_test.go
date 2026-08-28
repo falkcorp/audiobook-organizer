@@ -17,7 +17,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type splitBookBulkStore struct{ candidates map[string]*dedup.SplitBookCandidate }
+type splitBookBulkStore struct {
+	candidates map[string]*dedup.SplitBookCandidate
+}
 
 func (s *splitBookBulkStore) List() ([]dedup.SplitBookCandidate, error) { return nil, nil }
 func (s *splitBookBulkStore) Get(id string) (*dedup.SplitBookCandidate, error) {
