@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-08-27
 //
@@ -140,6 +140,33 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
   toast.mockReset();
+});
+
+describe('provider source filters', () => {
+  it('normalizes provider display names for counts and filtering', async () => {
+    // Production cache rows carry human-readable source names (for example
+    // "Audible"), while the filter controls carry stable ids ("audible").
+    // Comparing them raw rendered every provider chip as zero and hid its rows.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([
+        makeResult('audible', {}, { source: 'Audible' }),
+        makeResult('google', {}, { source: 'Google Books' }),
+        makeResult('open-library', {}, { source: 'Open Library' }),
+      ])
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(3));
+
+    expect(result.current.sourceCounts).toMatchObject({
+      audible: 1,
+      google_books: 1,
+      openlibrary: 1,
+    });
+
+    act(() => result.current.setFilters({ sourceFilter: 'audible' }));
+    expect(result.current.filteredResults.map((row) => row.book.id)).toEqual(['audible']);
+  });
 });
 
 describe('stale-response discard', () => {
@@ -469,6 +496,35 @@ describe('dispatch', () => {
     expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
     expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined);
     vi.useRealTimers();
+  });
+
+  it('hides a dispatched selected batch immediately', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(['a', 'b'].map((id) => makeResult(id)))
+    );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-selected',
+    } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.filteredResults).toHaveLength(2));
+
+    act(() =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a', 'b'] })
+    );
+
+    await waitFor(() =>
+      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined)
+    );
+    // The server accepted the operation, so the default "Hide applied" filter
+    // must remove it immediately; waiting for the worker to finish leaves stale
+    // cards on screen for minutes and invites duplicate clicks.
+    expect(result.current.spineCtx.rowState('a')).toBe('applied');
+    expect(result.current.spineCtx.rowState('b')).toBe('applied');
+    expect(result.current.filteredResults).toHaveLength(0);
   });
 
   it('skipAllUnmatched touches no_match and error rows only', async () => {

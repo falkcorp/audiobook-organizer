@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-08-27
 //
@@ -187,6 +187,30 @@ export function normalizeLanguage(lang: string | undefined | null): string {
   if (canonical[s]) return canonical[s];
   if (s.length === 2) return s;
   return s;
+}
+
+// reviewProviderID converts the display names persisted in candidate cache rows
+// into the stable ids owned by QueueRail's provider chips. Cache data comes from
+// several provider clients, so it is intentionally tolerant of their historical
+// spelling variants; counts and filtering must use this same function.
+export function reviewProviderID(source: string | undefined | null): string {
+  const normalized = source?.trim().toLowerCase() ?? '';
+  switch (normalized) {
+    case 'audible':
+    case 'audnexus':
+    case 'audnexus (audible)':
+      return 'audible';
+    case 'google':
+    case 'google books':
+    case 'google_books':
+      return 'google_books';
+    case 'open library':
+    case 'open_library':
+    case 'openlibrary':
+      return 'openlibrary';
+    default:
+      return normalized;
+  }
 }
 
 /**
@@ -484,7 +508,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const sourceCounts = useMemo(
     () =>
       results.reduce<Record<string, number>>((acc, r) => {
-        if (r.candidate?.source) acc[r.candidate.source] = (acc[r.candidate.source] || 0) + 1;
+        const sourceID = reviewProviderID(r.candidate?.source);
+        if (sourceID) acc[sourceID] = (acc[sourceID] || 0) + 1;
         return acc;
       }, {}),
     [results]
@@ -504,7 +529,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     () =>
       results
         .filter((r) => !titleRegex || titleRegex.test(r.book.title || ''))
-        .filter((r) => !filters.sourceFilter || r.candidate?.source === filters.sourceFilter)
+        .filter(
+          (r) =>
+            !filters.sourceFilter || reviewProviderID(r.candidate?.source) === filters.sourceFilter
+        )
         .filter(
           (r) =>
             (r.status === 'matched' &&
@@ -518,7 +546,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         .filter((r) => !filters.hideNoMatch || (r.status !== 'no_match' && r.status !== 'error'))
         // runtimeDiffers deliberately returns false for absent deltas. Unknown
         // duration is not evidence of a match, so those rows stay reviewable.
-        .filter((r) => !filters.hideRuntimeDifferences || !runtimeDiffers(r.candidate?.duration_delta_sec))
+        .filter(
+          (r) => !filters.hideRuntimeDifferences || !runtimeDiffers(r.candidate?.duration_delta_sec)
+        )
         .filter((r) => {
           // An unknown language on EITHER side is a no-op, not a hide: a book
           // with no language set must still be offered its candidates.
@@ -735,6 +765,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       setApplying(true);
       try {
         await runApplyOp(bookIds);
+        // Dispatch acceptance is the point at which this batch belongs to the
+        // background worker. Mark each row now so the default Hide applied
+        // filter clears it immediately; the terminal poll still refreshes and
+        // restores any book the worker ultimately did not apply.
+        setRowStates((prev) => {
+          const next = new Map(prev);
+          bookIds.forEach((bookId) => next.set(bookId, 'applied'));
+          return next;
+        });
         // The refresh re-derives every row from the server, so clearing the
         // whole selection is safe: anything that did not apply comes back
         // pending and can be re-selected.
