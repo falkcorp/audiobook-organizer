@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupSplitBookTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-19
+// last-edited: 2026-08-28
 // Split-book backfill review tab (MAYDEPLOY-G3).
 //
 // Lists persisted split-book candidate clusters from
@@ -172,6 +172,8 @@ export function DedupSplitBookTab() {
   const [scanMsg, setScanMsg] = useState<string | null>(null);
   const [mergingId, setMergingId] = useState<string | null>(null);
   const [confirmCandidate, setConfirmCandidate] = useState<SplitBookCandidate | null>(null);
+  const [queueingImport, setQueueingImport] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
   const loadCandidates = useCallback(async () => {
@@ -254,6 +256,45 @@ export function DedupSplitBookTab() {
     }
   };
 
+  const handleCandidateImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setQueueingImport(true);
+    setError(null);
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      const payload = Array.isArray(parsed)
+        ? { candidate_ids: parsed, dry_run: true }
+        : parsed;
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        !Array.isArray((payload as { candidate_ids?: unknown }).candidate_ids)
+      ) {
+        throw new Error('JSON must be an array of candidate IDs or an object with candidate_ids');
+      }
+      const candidateIDs = (payload as { candidate_ids: unknown[] }).candidate_ids;
+      if (!candidateIDs.length || candidateIDs.some((id) => typeof id !== 'string' || !id.trim())) {
+        throw new Error('candidate_ids must contain one or more non-empty strings');
+      }
+      if (new Set(candidateIDs).size !== candidateIDs.length) {
+        throw new Error('candidate_ids must not contain duplicates');
+      }
+      const request = payload as api.BulkSplitBookMergeRequest;
+      // File import is permanently conservative: it queues a preview/dry run.
+      // A future explicit apply control must be designed and reviewed separately.
+      request.dry_run = true;
+      const queued = await api.queueBulkSplitBookMerge(request);
+      useOperationsStore.getState().startPolling(queued.op_id, 'dedup.split-book-bulk-merge');
+      setScanMsg(`Queued dry run for ${queued.candidate_count} reviewed candidate(s)`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not import split-book candidate JSON');
+    } finally {
+      setQueueingImport(false);
+    }
+  };
+
   const pageSlice = useMemo(() => {
     const start = page * rowsPerPage;
     return candidates.slice(start, start + rowsPerPage);
@@ -297,6 +338,21 @@ export function DedupSplitBookTab() {
             </Stack>
           </Box>
           <Stack direction="row" spacing={1}>
+            <Button
+              component="label"
+              variant="outlined"
+              disabled={queueingImport}
+              startIcon={queueingImport ? <CircularProgress size={16} /> : undefined}
+            >
+              Import candidate JSON (dry run)
+              <input
+                ref={importInputRef}
+                hidden
+                type="file"
+                accept="application/json,.json"
+                onChange={handleCandidateImport}
+              />
+            </Button>
             <Button
               variant="outlined"
               startIcon={<RefreshIcon />}
