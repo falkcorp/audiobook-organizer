@@ -1,7 +1,7 @@
 <!-- file: docs/reference/abs-target-client-contract.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e7f16330-0b27-42fe-a669-fa3bc539748a -->
-<!-- last-edited: 2026-08-22 -->
+<!-- last-edited: 2026-08-28 -->
 
 # ABS Target-Client Contract — what our server MUST do today
 
@@ -522,6 +522,9 @@ evidence-of-absence; only one of the three oracles above can falsify a claim.
   in the app and got an empty screen.
 - **Collections** — six routes in `absCollisionDetailRoutes`
   (`handlers/abs/collections.go`), implemented 2026-08-16.
+- **`GET /api/authors/:id` and `GET /api/series/:id`** — both detail routes are
+  explicitly registered, use exact collision reservations, and return the same
+  author/series projection their library listing uses (2026-08-28).
 - **`GET /api/me/sessions`, `GET /api/me/listening-sessions`,
   `GET /api/me/listening-stats`, `GET /api/me/stats/year/:year`,
   `GET /api/me/item/listening-sessions/:id`** — all answer **200 with truthful data**
@@ -530,24 +533,6 @@ evidence-of-absence; only one of the three oracles above can falsify a claim.
   zeros, never 404," and Appendix A already records "prefer 404 for the listening-stats
   family" as **refuted twice over**. §11 had simply drifted out of sync with the rest of
   this same document.
-
-**Falsified — NOT "out of scope by decision"; these are open, unfixed gaps, and
-re-listing them here would repeat the exact playlist mistake:**
-
-- **`GET /api/series/:id`** and **`GET /api/authors/:id`** (series/author *detail*,
-  distinct from the implemented *list* routes `GET /api/libraries/:id/series` and
-  `GET /api/libraries/:id/authors`). Neither is registered in `handler.go`, so both
-  fall through to the generic `/api/*` → `/api/v1/*` redirect, which 301s into
-  `/api/v1/authors/:id` / `/api/v1/series/:id` — routes that themselves don't exist,
-  so the client lands on 404. That is not evidence of a deliberate decision: `TODO.md`
-  ("ABS author and series detail routes are unimplemented and redirect into a 404")
-  found this by enumerating **actual production request logs**, not the fixture corpus
-  — 3 real `GET /api/authors/:id` requests and their 1:2 redirect-log signature,
-  captioned "the ABS author page asks for an author and gets a 404 … **Same failure
-  the playlist detail route had.**" `TODO.md`'s "Series DETAIL is still not served"
-  item is still open (unchecked) and scopes the actual fix
-  (`absCollisionDetailRoutes` entries, per the playlist precedent). Do not stub or
-  re-close either as "by decision" without doing that work.
 
 **Still genuinely unimplemented, and the current behavior really is `[]`/`{}`/404 (no
 live `/api/v1` twin for the redirect to land on):** `GET /api/backups`, `GET /api/match`,
