@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-27
+// last-edited: 2026-08-28
 
 package server
 
@@ -626,6 +626,8 @@ func absRouteList() []string {
 		// into the app API and rendered empty — reported from the app 2026-08-13.
 		"GET /api/playlists/:id",
 		"GET /api/libraries/:libraryId/authors",
+		"GET /api/authors/:id",
+		"GET /api/series/:id",
 		"GET /api/libraries/:libraryId/narrators",
 		"GET /api/libraries/:libraryId/filterdata",
 		"GET /api/libraries/:libraryId/search",

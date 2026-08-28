@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-08-22
+// last-edited: 2026-08-28
 
 package server
 
@@ -591,8 +591,16 @@ func TestAbsCollisionDetailReserved_BothNarrowingRules(t *testing.T) {
 			"the trailing slash keeps the LIST on the app API"},
 		{"the namespace with a slash but no id", http.MethodGet, "/api/playlists/", false,
 			"an empty segment is not an id"},
-		{"an unrelated namespace", http.MethodGet, "/api/authors/147924", false,
+		{"an unrelated namespace", http.MethodGet, "/api/narrators/147924", false,
 			"nothing outside the table is ever reserved"},
+		{"the author detail route", http.MethodGet, "/api/authors/147924", true,
+			"authors are reserved only for ABS detail GETs"},
+		{"an author subroute owned by the native API", http.MethodGet, "/api/authors/147924/books", false,
+			"the segment rule keeps native author routes reachable"},
+		{"the series detail route", http.MethodGet, "/api/series/42", true,
+			"series are reserved only for ABS detail GETs"},
+		{"a series subroute owned by the native API", http.MethodGet, "/api/series/42/books", false,
+			"the segment rule keeps native series routes reachable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := absCollisionDetailReserved(tc.method, tc.path)
