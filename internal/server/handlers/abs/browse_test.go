@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.2.3
+// version: 1.2.5
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
-// last-edited: 2026-08-22
+// last-edited: 2026-08-27
 
 package abs_test
 
@@ -47,6 +47,68 @@ func TestLibraries_ConformsToOracle(t *testing.T) {
 		t.Fatalf("got %d want 200", code)
 	}
 	assertConformant(t, "get_api_libraries.json", body)
+}
+
+// TestAuthorDetailServesTheAuthorReferencedByAnItem closes the route gap that
+// made a tap on an author name from a book redirect into /api/v1 and 404. The
+// author list already works; this proves the item-reference route returns the
+// same concrete author identity directly on the ABS surface.
+func TestAuthorDetailServesTheAuthorReferencedByAnItem(t *testing.T) {
+	h, _, tok := newBrowseHarness(t)
+	_, items := h.do(t, request{
+		method: http.MethodGet, path: "/api/libraries/" + h.libraryID() + "/items", headers: bearer(tok),
+	})
+	first := items["results"].([]any)[0].(map[string]any)
+	authors := first["media"].(map[string]any)["metadata"].(map[string]any)["authors"].([]any)
+	if len(authors) == 0 {
+		t.Fatal("oracle item has no author reference")
+	}
+	author := authors[0].(map[string]any)
+	authorID := author["id"].(string)
+
+	code, body := h.doAny(t, request{
+		method: http.MethodGet, path: "/api/authors/" + authorID, headers: bearer(tok),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("GET author detail = %d, want 200; body=%#v", code, body)
+	}
+	got := body.(map[string]any)
+	if got["id"] != authorID || got["name"] != author["name"] {
+		t.Fatalf("detail %#v does not match item author %#v", got, author)
+	}
+}
+
+// TestSeriesDetailServesTheSeriesReferencedByTheLibraryList prevents the same
+// collision-route failure as the author detail screen: the client follows a
+// series id from the library list through /api/series/:id, not the list route.
+func TestSeriesDetailServesTheSeriesReferencedByTheLibraryList(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	login := h.login(t, "oracle", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, login), "accessToken")
+	_, listed := h.do(t, request{
+		method:  http.MethodGet,
+		path:    "/api/libraries/" + h.libraryID() + "/series?limit=1&page=0",
+		headers: bearer(tok),
+	})
+	results := listed["results"].([]any)
+	if len(results) == 0 {
+		t.Fatal("oracle library has no series")
+	}
+	series := results[0].(map[string]any)
+	seriesID := series["id"].(string)
+
+	code, body := h.doAny(t, request{
+		method: http.MethodGet, path: "/api/series/" + seriesID, headers: bearer(tok),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("GET series detail = %d, want 200; body=%#v", code, body)
+	}
+	got := body.(map[string]any)
+	if got["id"] != seriesID || got["name"] != series["name"] {
+		t.Fatalf("detail %#v does not match listed series %#v", got, series)
+	}
 }
 
 // TestLibraries_IDMatchesUserDefaultLibraryID pins the §1.8.2 login blocker from
