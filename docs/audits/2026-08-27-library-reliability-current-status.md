@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-27-library-reliability-current-status.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6c884144-c4fe-4f5a-bbdc-1a103cd5aa13 -->
 <!-- last-edited: 2026-08-27 -->
 
@@ -29,7 +29,15 @@ deduplication working; it was not used as transfer evidence.
 - PR #2937: runtime-mismatch review filter and shift-selection regression
   coverage. Merged; deploy with the next approved production release.
 - PR #2938: `backfill-book-files` now writes each eligible book's file rows in
-  one atomic batch. Merged as `85001ca7d`; deploy before the next full backfill.
+  one atomic batch. Merged as `85001ca7d` and deployed successfully.
+
+## Book-file backfill: complete and idempotent
+
+The deployed `backfill-book-files` job was run first with `dry_run=true`, then
+with `dry_run=false`. Both runs scanned 57,822 books and reported zero candidate
+files, zero created rows, and zero errors. The apply run therefore made no
+changes; the prior repair remains complete and the new batch writer is safe to
+run again.
 
 ## In flight
 
@@ -43,11 +51,9 @@ deduplication working; it was not used as transfer evidence.
 
 ## Remaining before broad repair work
 
-1. Deploy the merged backfill batch writer, dry-run the book-file backfill, then
-   apply it and record before/after counts.
-2. Finish durable semantic coalescing for one-book metadata apply/save requests;
+1. Finish durable semantic coalescing for one-book metadata apply/save requests;
    do not coalesce scans, imports, organizes, or destructive merges.
-3. Produce a unique-file scan plan that preserves the longest matching import
+2. Produce a unique-file scan plan that preserves the longest matching import
    root source identity.
-4. Run `dedup.split-book-scan` preview, retain its census, and only then design
+3. Run `dedup.split-book-scan` preview, retain its census, and only then design
    a durable fragment-merge executor that preserves partial failures.
