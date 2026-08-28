@@ -1,7 +1,7 @@
 // file: internal/server/library_writeback_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-19
+// last-edited: 2026-08-28
 
 package server
 
@@ -23,24 +23,43 @@ type bulkWriteBackOpParams struct {
 	Rename  bool     `json:"rename"`
 }
 
+func mergeBulkWriteBackQueuedParams(existing, incoming json.RawMessage) (json.RawMessage, bool, error) {
+	var current, next bulkWriteBackOpParams
+	if err := json.Unmarshal(existing, &current); err != nil {
+		return nil, false, err
+	}
+	if err := json.Unmarshal(incoming, &next); err != nil {
+		return nil, false, err
+	}
+	if current.Rename != next.Rename {
+		return nil, false, nil
+	}
+	merged, err := json.Marshal(bulkWriteBackOpParams{
+		BookIDs: mergeUniqueBookIDs(current.BookIDs, next.BookIDs),
+		Rename:  current.Rename,
+	})
+	return merged, err == nil, err
+}
+
 // RegisterBulkWriteBackOp registers the "library.bulk-write-back" v2 OperationDef.
 // The HTTP handler handleBulkWriteBack pre-filters books and passes the resulting
 // book IDs as params; the Run func executes the actual tag-write work.
 func (s *Server) RegisterBulkWriteBackOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "library.bulk-write-back",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "library",
-		DisplayName:     "Bulk Tag Write-back",
-		Description:     "Write metadata from the database back to audio file tags for a set of audiobooks.",
-		DefaultPriority: opsregistry.PriorityNormal,
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         6 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeRestart,
-		ConcurrencyKey:  "library.bulk-write-back",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
+		ID:                "library.bulk-write-back",
+		Liveness:          opsregistry.LivenessManual,
+		Plugin:            "library",
+		DisplayName:       "Bulk Tag Write-back",
+		Description:       "Write metadata from the database back to audio file tags for a set of audiobooks.",
+		DefaultPriority:   opsregistry.PriorityNormal,
+		Cancellable:       true,
+		Isolate:           false,
+		Timeout:           6 * time.Hour,
+		ResumePolicy:      opsregistry.ResumeRestart,
+		ConcurrencyKey:    "library.bulk-write-back",
+		MergeQueuedParams: mergeBulkWriteBackQueuedParams,
+		Permissions:       []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p bulkWriteBackOpParams
 			if len(rawParams) > 0 {

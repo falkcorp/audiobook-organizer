@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-27
+// last-edited: 2026-08-28
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -33,6 +33,25 @@ type batchSaveOpParams struct {
 	Force    bool     `json:"force"`
 }
 
+func mergeBatchSaveQueuedParams(existing, incoming json.RawMessage) (json.RawMessage, bool, error) {
+	var current, next batchSaveOpParams
+	if err := json.Unmarshal(existing, &current); err != nil {
+		return nil, false, err
+	}
+	if err := json.Unmarshal(incoming, &next); err != nil {
+		return nil, false, err
+	}
+	if current.Organize != next.Organize || current.Force != next.Force {
+		return nil, false, nil
+	}
+	merged, err := json.Marshal(batchSaveOpParams{
+		BookIDs:  mergeUniqueBookIDs(current.BookIDs, next.BookIDs),
+		Organize: current.Organize,
+		Force:    current.Force,
+	})
+	return merged, err == nil, err
+}
+
 // RegisterBatchSaveToFilesOp registers the "metadata.batch-save" v2 OperationDef.
 // BatchWriteBackAudiobooks enqueues here and returns this run's v2 id; it no
 // longer pre-creates a v1 op record.
@@ -46,19 +65,20 @@ type batchSaveOpParams struct {
 // dbReporter.Log holds logMu, so this is safe from the worker pool.
 func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "metadata.batch-save",
-		Liveness:        opsregistry.LivenessRunItems,
-		Plugin:          "metadata",
-		DisplayName:     "Batch Save to Files",
-		Description:     "Write metadata from database back to audio file tags for a set of books, with optional re-organize.",
-		DefaultPriority: opsregistry.PriorityNormal,
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         4 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "metadata.batch-save",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
+		ID:                "metadata.batch-save",
+		Liveness:          opsregistry.LivenessRunItems,
+		Plugin:            "metadata",
+		DisplayName:       "Batch Save to Files",
+		Description:       "Write metadata from database back to audio file tags for a set of books, with optional re-organize.",
+		DefaultPriority:   opsregistry.PriorityNormal,
+		Cancellable:       true,
+		Isolate:           false,
+		Timeout:           4 * time.Hour,
+		ResumePolicy:      opsregistry.ResumeDrop,
+		ConcurrencyKey:    "metadata.batch-save",
+		MergeQueuedParams: mergeBatchSaveQueuedParams,
+		Permissions:       []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p batchSaveOpParams
 			if len(rawParams) > 0 {
