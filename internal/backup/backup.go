@@ -10,6 +10,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/diskstats"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
 
@@ -74,8 +76,19 @@ type BackupProgress func(phase string, filesDone int, bytesDone int64)
 
 // BackupConfig holds backup configuration
 type BackupConfig struct {
-	BackupDir        string
-	MaxBackups       int
+	BackupDir  string
+	MaxBackups int
+	// MaxTotalBytes bounds the COMBINED size of retained archives. Zero means
+	// unlimited.
+	//
+	// MaxBackups alone is not a usable bound. It was set to 10 when an archive
+	// was 247 MB (2.5 GB retained). Production archives are now ~15 GB, so the
+	// same policy targets 150 GB -- on a 141 GB filesystem. On 2026-08-29 that
+	// filled the disk, PebbleDB took a fatal commit error writing its WAL to
+	// the same filesystem, and the process died and was restarted by systemd
+	// every ~17 minutes for hours. A count bound cannot express "do not consume
+	// the disk" when the thing being counted grows 60x.
+	MaxTotalBytes    uint64
 	CompressionLevel int
 	// Progress is optional. See BackupProgress.
 	Progress BackupProgress
@@ -86,8 +99,106 @@ func DefaultBackupConfig() BackupConfig {
 	return BackupConfig{
 		BackupDir:        "backups",
 		MaxBackups:       10,
+		MaxTotalBytes:    defaultMaxTotalBytes,
 		CompressionLevel: gzip.BestCompression,
 	}
+}
+
+// defaultMaxTotalBytes caps retained archives at 40 GiB. Sized so that the
+// production database (~16 GB compressed) keeps two full generations plus room
+// for an incoming third, while leaving a 141 GB filesystem far from full.
+const defaultMaxTotalBytes uint64 = 40 << 30
+
+// backupSpaceMargin is the headroom required BEYOND the estimated archive size
+// before a backup is allowed to start.
+//
+// It is not arbitrary padding. The database being archived is live: Pebble is
+// still writing its WAL and running compactions on the same filesystem for the
+// whole duration of the archive (20-25 minutes on production). Sizing the check
+// at exactly the archive size would let the backup finish and still leave Pebble
+// with nothing to write into, which is the failure this guard exists to prevent.
+const backupSpaceMargin uint64 = 2 << 30
+
+// diskStatsFn is a seam so tests can drive the guard without needing a real
+// full filesystem. Production always uses diskstats.Stats.
+var diskStatsFn = diskstats.Stats
+
+// ErrInsufficientDiskSpace is returned when a backup would not fit.
+//
+// It is deliberately a normal error, not a panic or a fatal: every caller
+// (notably organizer.autoBackup) already logs a failed backup and continues.
+// Skipping a backup is a bad outcome; filling the disk and killing the database
+// the backup was protecting is a far worse one.
+var ErrInsufficientDiskSpace = errors.New("insufficient disk space for backup")
+
+// dirSizeBytes sums the regular files under root.
+//
+// Used as the archive-size estimate. That is not pessimism: a Pebble database
+// is mostly already-compressed SST data, and production measured a 16 GB
+// database producing a ~15 GB gzip archive -- close enough to 1:1 that assuming
+// compression will save the day is how the disk filled in the first place.
+// Files that vanish mid-walk (Pebble compaction deletes SSTs constantly) are
+// skipped rather than failing the estimate.
+func dirSizeBytes(root string) (uint64, error) {
+	var total uint64
+	err := filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode().IsRegular() {
+			total += uint64(info.Size())
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// ensureSpaceForBackup refuses the backup unless the destination filesystem can
+// hold the estimated archive plus backupSpaceMargin.
+//
+// Fails CLOSED when free space cannot be determined. That is the deliberate
+// choice: this guard exists because writing blind is what killed production, so
+// "I could not measure the disk" is treated as "do not write to it". The cost of
+// being wrong is a skipped backup with a loud warning; the cost of the other
+// direction is the outage this function was written for.
+func ensureSpaceForBackup(destDir, sourceDir string) error {
+	need, err := dirSizeBytes(sourceDir)
+	if err != nil {
+		return fmt.Errorf("%w: cannot size %s: %v", ErrInsufficientDiskSpace, sourceDir, err)
+	}
+	need += backupSpaceMargin
+
+	_, free, err := diskStatsFn(destDir)
+	if err != nil {
+		return fmt.Errorf("%w: cannot determine free space on %s: %v", ErrInsufficientDiskSpace, destDir, err)
+	}
+	if free < need {
+		return fmt.Errorf("%w: %s needs ~%s (archive %s + %s margin) but only %s is free",
+			ErrInsufficientDiskSpace, destDir,
+			formatBytes(need), formatBytes(need-backupSpaceMargin),
+			formatBytes(backupSpaceMargin), formatBytes(free))
+	}
+	return nil
+}
+
+// formatBytes renders a byte count for operator-facing messages.
+func formatBytes(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // CreateBackup creates a compressed backup of the database
@@ -95,6 +206,27 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	// Ensure backup directory exists
 	if err := os.MkdirAll(config.BackupDir, 0775); err != nil {
 		return nil, fmt.Errorf("failed to create backup directory: %w", err)
+	}
+
+	// Retention runs BEFORE the write, not only after it.
+	//
+	// It used to run only on success (at the end of this function). That is
+	// exactly backwards: when the disk is full the write fails, so the prune
+	// that would have freed room never executed, and every retry refilled the
+	// disk. Pruning first means a backup that only fits after retention can
+	// actually be taken. incoming is passed so retention accounts for the
+	// archive that is about to be written, not just the ones already there.
+	incoming, sizeErr := dirSizeBytes(databasePath)
+	if sizeErr != nil {
+		incoming = 0
+	}
+	if err := enforceRetention(config.BackupDir, config.MaxBackups, config.MaxTotalBytes, incoming); err != nil {
+		slog.Warn("backup pre-write retention failed", "error", err)
+	}
+
+	// Refuse rather than filling the filesystem the live database writes to.
+	if err := ensureSpaceForBackup(config.BackupDir, databasePath); err != nil {
+		return nil, err
 	}
 
 	// Generate backup filename with timestamp
@@ -159,7 +291,7 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	}
 
 	// Clean up old backups
-	if err := cleanupOldBackups(config.BackupDir, config.MaxBackups); err != nil {
+	if err := enforceRetention(config.BackupDir, config.MaxBackups, config.MaxTotalBytes, 0); err != nil {
 		// Log error but don't fail the backup
 		slog.Warn("backup failed to clean up old backups", "error", err)
 	}
@@ -180,6 +312,16 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType string, config BackupConfig) (*BackupInfo, error) {
 	if err := os.MkdirAll(config.BackupDir, 0775); err != nil {
 		return nil, fmt.Errorf("create backup dir: %w", err)
+	}
+
+	// Checked here as well as in CreateBackup below. The checkpoint itself is
+	// cheap (Checkpoint hard-links SSTs, it does not copy them), but running it
+	// on a filesystem that cannot hold the resulting archive means doing the
+	// flush and the link work only to fail at the write. Checking first also
+	// keeps the failure message about the real cause -- free space -- rather
+	// than surfacing as an opaque checkpoint error.
+	if err := ensureSpaceForBackup(config.BackupDir, dbSourcePath); err != nil {
+		return nil, err
 	}
 
 	// Create a temp directory for the checkpoint.
@@ -516,31 +658,75 @@ func calculateFileChecksum(path string, progress BackupProgress) (string, error)
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// cleanupOldBackups removes old backups exceeding the maximum count
-func cleanupOldBackups(backupDir string, maxBackups int) error {
+// enforceRetention removes old archives until both the count bound
+// (maxBackups) and the total-size bound (maxTotalBytes) are satisfied,
+// oldest first. incomingBytes is the size of an archive about to be written,
+// so a pre-write call reserves room for it; pass 0 after the write.
+func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingBytes uint64) error {
 	backups, err := ListBackups(backupDir)
 	if err != nil {
 		return err
 	}
 
-	if len(backups) <= maxBackups {
-		return nil
-	}
-
-	// Sort backups by creation time (oldest first).
+	// Oldest first -- the deletion order.
 	sort.SliceStable(backups, func(a, b int) bool {
 		return backups[a].CreatedAt.Before(backups[b].CreatedAt)
 	})
 
-	// Delete oldest backups
-	deleteCount := len(backups) - maxBackups
-	for i := 0; i < deleteCount; i++ {
-		if err := os.Remove(backups[i].Path); err != nil {
-			slog.Warn("backup failed to delete old backup", "filename", backups[i].Filename, "error", err)
+	var total uint64
+	for _, b := range backups {
+		if b.Size > 0 {
+			total += uint64(b.Size)
 		}
 	}
 
+	// overBudget reports whether the archives remaining from index i onward
+	// still violate either bound, counting the archive about to be written.
+	//
+	// The two bounds use DIFFERENT zero conventions, and that asymmetry is
+	// deliberate rather than an oversight:
+	//
+	//   - maxBackups == 0 means "keep none" (delete every archive). This is
+	//     pre-existing behaviour that TestCreateBackupMaxBackupsZero pins, so
+	//     it is preserved; a NEGATIVE value means unlimited. The old
+	//     implementation computed len(backups)-maxBackups as a loop bound, so a
+	//     negative value indexed past the slice -- unlimited now short-circuits
+	//     instead of panicking.
+	//   - maxTotalBytes == 0 means unlimited, the ordinary Go zero-value
+	//     convention for a newly added optional bound. Making it mean "keep no
+	//     bytes" would turn every BackupConfig literal that predates this field
+	//     into a silent delete-everything.
+	overBudget := func(i int) bool {
+		remaining := len(backups) - i
+		if maxBackups >= 0 && remaining+boolToInt(incomingBytes > 0) > maxBackups {
+			return true
+		}
+		if maxTotalBytes > 0 && total+incomingBytes > maxTotalBytes {
+			return true
+		}
+		return false
+	}
+
+	for i := 0; i < len(backups) && overBudget(i); i++ {
+		if err := os.Remove(backups[i].Path); err != nil {
+			slog.Warn("backup failed to delete old backup", "filename", backups[i].Filename, "error", err)
+			continue
+		}
+		if backups[i].Size > 0 {
+			total -= uint64(backups[i].Size)
+		}
+		slog.Info("backup retention removed old archive",
+			"filename", backups[i].Filename, "size", backups[i].Size, "remaining_bytes", total)
+	}
+
 	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // ScheduleBackup schedules automatic backups (placeholder for future implementation)
