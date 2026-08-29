@@ -252,3 +252,40 @@ func TestEnforceRetention_NegativeCountIsUnlimitedNotPanic(t *testing.T) {
 		t.Fatalf("negative count must keep everything; got %d of 3", got)
 	}
 }
+
+// The margin is the load-bearing half of the guard and needs its own test:
+// every other refusal case fails on the archive size alone, so zeroing the
+// margin would pass all of them.
+//
+// Why it matters: the database stays LIVE for the 20-25 minutes the archive
+// takes on production. Sizing the check at exactly the archive size lets the
+// backup succeed and still leave Pebble with no room for the WAL writes and
+// compactions it performs meanwhile -- which is the fatal commit error that
+// killed the process on 2026-08-29.
+func TestCreateBackup_RefusesWhenOnlyTheMarginIsMissing(t *testing.T) {
+	db := seedDB(t, 4096)
+	// Comfortably larger than the archive, but inside the margin.
+	withDiskStats(t, 1<<40, 1<<30, nil)
+
+	cfg := DefaultBackupConfig()
+	cfg.BackupDir = filepath.Join(t.TempDir(), "backups")
+
+	_, err := CreateBackup(db, "test", cfg)
+	if !errors.Is(err, ErrInsufficientDiskSpace) {
+		t.Fatalf("free space exceeded the archive but not the margin; expected refusal, got %v", err)
+	}
+}
+
+// ...and the margin must not be so eager that it refuses a backup with real
+// room, which is the failure mode of over-correcting the test above.
+func TestCreateBackup_ProceedsJustAboveTheMargin(t *testing.T) {
+	db := seedDB(t, 4096)
+	withDiskStats(t, 1<<40, backupSpaceMargin+(1<<20), nil)
+
+	cfg := DefaultBackupConfig()
+	cfg.BackupDir = filepath.Join(t.TempDir(), "backups")
+
+	if _, err := CreateBackup(db, "test", cfg); err != nil {
+		t.Fatalf("refused despite clearing archive + margin: %v", err)
+	}
+}
