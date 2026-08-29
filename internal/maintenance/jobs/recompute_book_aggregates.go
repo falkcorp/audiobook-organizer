@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-08-19
+// last-edited: 2026-08-29
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -17,11 +17,23 @@
 //
 // FLAG: system:backfill:book_aggregates_v1_done prevents the job from running
 //   again once it completes successfully. Use Force=true to override.
+//
+// FORCE, and why it was a lie until 2026-08-29: the flag was declared in
+//   DefaultParams and read NOWHERE. The sentinel check below did not consult it,
+//   maintenanceJobOpParams did not carry it, and the dispatcher did not bind it,
+//   so a submitted {"force": true} was discarded three layers before this file.
+//   Both operator-facing messages advertised an escape hatch that did not exist,
+//   which meant one clean non-dry run disabled this job PERMANENTLY. That matters
+//   beyond the job itself: notifyBookFileChange
+//   (internal/database/pebble_store_book_aggregates.go) swallows recompute errors
+//   partly because "the backfill job acts as a safety net for any misses", and an
+//   unrunnable job is not a safety net.
 
 package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -45,11 +57,40 @@ func (j *recomputeBookAggregatesJob) Description() string {
 // CanResume — checkpoints every 100 books so large libraries can continue after restart.
 func (j *recomputeBookAggregatesJob) CanResume() bool { return true }
 
+// recomputeAggregatesParams is the shape this job reads out of its own run
+// params. It is deliberately the SAME shape DefaultParams() advertises to
+// clients, so the catalogue and the reader cannot drift.
+type recomputeAggregatesParams struct {
+	DryRun bool `json:"dry_run"`
+	Force  bool `json:"force"`
+}
+
 func (j *recomputeBookAggregatesJob) DefaultParams() any {
-	return struct {
-		DryRun bool `json:"dry_run"`
-		Force  bool `json:"force"`
-	}{DryRun: true, Force: false}
+	return recomputeAggregatesParams{DryRun: true, Force: false}
+}
+
+// forceFromCtx reports whether this run was enqueued with {"force": true}.
+//
+// The params arrive on the context because MaintenanceJob.Run's signature
+// carries only dryRun -- see maintenance.WithRawParams for why the older
+// store.GetOperationParams route is dead on this path and would have made the
+// flag inert a second time.
+//
+// Every failure mode returns false: no params (a requeue enqueues nil), a blob
+// that is not an object, an unparseable body. False is the fail-safe answer --
+// it keeps the sentinel honoured -- and force is an explicit operator action, so
+// inferring it from a decode error would be wrong.
+func forceFromCtx(ctx context.Context) bool {
+	raw := maintenance.RawParamsFromCtx(ctx)
+	if len(raw) == 0 {
+		return false
+	}
+	var p recomputeAggregatesParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		slog.Warn("recompute-book-aggregates: could not decode run params; treating force as false", "error", err)
+		return false
+	}
+	return p.Force
 }
 
 func (j *recomputeBookAggregatesJob) Run(
@@ -73,12 +114,30 @@ func (j *recomputeBookAggregatesJob) Run(
 	}
 
 	// Check the one-time backfill sentinel. If already done and Force is false,
-	// report the count of books that would be processed and return early.
-	if !dryRun && pebbleStore.IsBookAggregatesBackfillDone() {
+	// return early without enumerating books.
+	//
+	// THREE conditions, and each carries its own weight:
+	//   dryRun  — a preview never short-circuits; it has always reported what a
+	//             real run WOULD do, sentinel or not.
+	//   force   — the operator's explicit override, now actually read. Placed
+	//             before the sentinel read so a forced run does not even ask:
+	//             the answer cannot change the outcome.
+	//   sentinel— the one-time marker.
+	force := forceFromCtx(ctx)
+	if !dryRun && !force && pebbleStore.IsBookAggregatesBackfillDone() {
 		// Fast sentinel check — this backfill has already run successfully.
-		slog.Info("recompute-book-aggregates: backfill already completed (book_aggregates_v1_done), skipping. Use Force=true to override.")
-		reporter.Log("info", "Backfill already completed — skipped. Use Force=true to override.", nil)
+		slog.Info("recompute-book-aggregates: backfill already completed (book_aggregates_v1_done), skipping. Use force=true to override.")
+		reporter.Log("info", "Backfill already completed — skipped. Re-run with {\"force\": true} to override.", nil)
 		return nil
+	}
+	if !dryRun && force {
+		// Say so out loud: a forced run redoes the whole library, and on a clean
+		// finish it REWRITES the sentinel below (that write is guarded on
+		// !dryRun && failed == 0, not on force). Rewriting is the correct
+		// behaviour — the marker means "the backfill has completed", which is
+		// true again after a forced run — but it is worth an operator seeing.
+		slog.Info("recompute-book-aggregates: force=true, ignoring the book_aggregates_v1_done sentinel")
+		reporter.Log("info", "force=true — running despite the completed-backfill sentinel.", nil)
 	}
 
 	// Collect IDs first so we can set an accurate total on the reporter.
