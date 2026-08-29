@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.5.1
+// version: 1.6.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-08-28
+// last-edited: 2026-08-29
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -613,5 +613,110 @@ describe('inactive lane', () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
     renderHook(() => useMetadataLane(toast, false));
     expect(api.getCachedReviewResults).not.toHaveBeenCalled();
+  });
+});
+
+describe('an optimistic apply must be correctable by the server', () => {
+  // Regression test for a silent data-integrity bug.
+  //
+  // applyMany marks every dispatched book `applied` so the default Hide-applied
+  // filter clears it immediately, and its comment promised "the terminal poll
+  // still refreshes and restores any book the worker ultimately did not apply".
+  // It could not: the refresh seeded row state ADD-ONLY
+  // (`if (!merged.has(k)) merged.set(k, v)`), so a key it had just written could
+  // never be overwritten. A book the background apply failed on stayed hidden
+  // behind the default filter with no route back, and the reviewer was never
+  // told -- the queue simply looked finished. Bulk apply made that hundreds of
+  // books per click.
+  beforeEach(() => {
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-1',
+    } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+  });
+
+  it('restores a row the background apply did not actually apply', async () => {
+    const rows = [makeResult('b1'), makeResult('b2')];
+    // The server keeps reporting both as `matched` -- i.e. still pending. That
+    // is what a failed apply looks like from here.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+    vi.mocked(api.pollOperationV2).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof api.pollOperationV2>>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.pageResults).toHaveLength(2);
+
+    await act(async () => {
+      result.current.dispatch({ type: 'applySelected', ids: ['b1', 'b2'] });
+    });
+
+    // The terminal poll refreshes, and the server's answer must win.
+    await waitFor(() => {
+      expect(result.current.pageResults).toHaveLength(2);
+    });
+  });
+
+  it('keeps a row hidden when the server confirms it was applied', async () => {
+    // The other direction: over-correcting would make applied books reappear
+    // forever, which is its own bug.
+    const pending = [makeResult('b1'), makeResult('b2')];
+    const applied = [
+      makeResult('b1', { status: 'applied' }),
+      makeResult('b2', { status: 'applied' }),
+    ];
+    vi.mocked(api.getCachedReviewResults)
+      .mockResolvedValueOnce(
+        reviewPayload(pending) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      )
+      .mockResolvedValue(
+        reviewPayload(applied) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      );
+    vi.mocked(api.pollOperationV2).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof api.pollOperationV2>>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      result.current.dispatch({ type: 'applySelected', ids: ['b1', 'b2'] });
+    });
+
+    await waitFor(() => {
+      expect(result.current.pageResults).toHaveLength(0);
+    });
+  });
+
+  it('does not revert a row while its apply op is still running', async () => {
+    // ActionBar.tsx explains at length why reverting mid-op is wrong: the rows
+    // flicker back to pending while the server is still working and a reviewer
+    // reasonably concludes the apply failed. The in-flight set is what keeps an
+    // unrelated refresh (a filter change, a page change) from doing that.
+    const rows = [makeResult('b1'), makeResult('b2')];
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+    // A poll that never settles == the op is still running.
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      result.current.dispatch({ type: 'applySelected', ids: ['b1', 'b2'] });
+    });
+    await waitFor(() => expect(result.current.pageResults).toHaveLength(0));
+
+    // An unrelated refresh while the op is in flight must not resurrect them.
+    await act(async () => {
+      result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.pageResults).toHaveLength(0);
   });
 });

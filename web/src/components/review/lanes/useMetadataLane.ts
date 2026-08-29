@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-08-27
+// last-edited: 2026-08-29
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -415,6 +415,17 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // the wrong page with the right page number.
   const fetchIdRef = useRef(0);
 
+  // Book ids whose apply has been DISPATCHED but whose background op has not
+  // reached a terminal state yet.
+  //
+  // This is what lets a refresh distinguish "the server has not caught up yet"
+  // from "the server has spoken and the book was not applied". Without it the
+  // seeding below can only ever ADD row states, so an optimistic `applied` is
+  // permanent: a book the background worker failed on stays hidden behind the
+  // default Hide-applied filter forever, and the reviewer is never told. That
+  // is worse than a visible failure, because the queue looks finished.
+  const inFlightApplyRef = useRef<Set<string>>(new Set());
+
   // Guards the deferred refresh below: the apply op outlives the component if
   // the user navigates away mid-apply, and setting state then warns.
   const aliveRef = useRef(true);
@@ -439,19 +450,41 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         if (fetchId !== fetchIdRef.current) return; // stale -- a newer fetch is in flight
         const allResults = data.results || [];
 
-        // Seed row state from what the server already knows, without clobbering
-        // decisions the user made in this session.
-        const seed = new Map<string, RowState>();
-        for (const r of allResults) {
-          if (r.status === 'applied') seed.set(r.book.id, 'applied');
-          else if (r.status === 'no_match') seed.set(r.book.id, 'rejected');
-        }
+        // Reconcile row state with the server, without clobbering decisions the
+        // user made in this session.
+        //
+        // This used to merge ADD-ONLY (`if (!merged.has(k))`), which quietly
+        // made every optimistic state permanent. applyMany marks each dispatched
+        // book `applied` and its comment promises "the terminal poll still
+        // refreshes and restores any book the worker ultimately did not apply"
+        // -- but the add-only merge could not restore anything, because every
+        // book it had just marked was already a key. A book the background apply
+        // failed on stayed hidden behind the default Hide-applied filter with no
+        // way back. Bulk apply made that hundreds of books at a time.
+        //
+        // The rule now:
+        //   - a book still in flight keeps its optimistic state (reverting it
+        //     mid-op is the flicker ActionBar.tsx explains at length);
+        //   - otherwise the server is authoritative for the two states it
+        //     actually tracks, applied and no_match;
+        //   - and a stale optimistic `applied` on a book the server does NOT
+        //     report as applied is dropped, which is the whole point.
+        // `skipped` is client-only -- the server has no opinion on it, so it is
+        // never touched here.
         setRowStates((prev) => {
-          const merged = new Map(prev);
-          seed.forEach((v, k) => {
-            if (!merged.has(k)) merged.set(k, v);
-          });
-          return merged;
+          const next = new Map(prev);
+          for (const r of allResults) {
+            const id = r.book.id;
+            if (inFlightApplyRef.current.has(id)) continue;
+            if (r.status === 'applied') {
+              next.set(id, 'applied');
+            } else if (r.status === 'no_match') {
+              next.set(id, 'rejected');
+            } else if (next.get(id) === 'applied') {
+              next.delete(id);
+            }
+          }
+          return next;
         });
 
         setResults(allResults);
@@ -705,6 +738,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // detection, report it accurately, and re-read server state rather than guess.
   const handleApplyError = useCallback(
     (err: unknown, requestedIds: string[]) => {
+      // A dispatch can fail after some ids were marked in flight (or the poll
+      // never runs its finally). Clearing here keeps the refresh below able to
+      // correct them rather than leaving them permanently uncorrectable.
+      requestedIds.forEach((id) => inFlightApplyRef.current.delete(id));
       refresh();
       if (isAuthRedirectError(err)) {
         toast(
@@ -722,15 +759,23 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // Re-reads the list when the op finishes rather than diffing a client guess.
   const runApplyOp = useCallback(
     async (requestedIds: string[], writeBack?: boolean): Promise<void> => {
-      const dispatch = await api.batchApplyFromCache(requestedIds, writeBack);
+      const dispatched = await api.batchApplyFromCache(requestedIds, writeBack);
+      // Marked in flight only AFTER the dispatch is accepted. A request that
+      // threw never reached the worker, so those books must stay correctable.
+      requestedIds.forEach((id) => inFlightApplyRef.current.add(id));
       toast(
         `Metadata apply queued for ${requestedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
         'success'
       );
       void api
-        .pollOperationV2(dispatch.op_id)
+        .pollOperationV2(dispatched.op_id)
         .catch(() => undefined)
         .finally(() => {
+          // Cleared BEFORE the refresh, so the refresh it triggers is the one
+          // that gets to correct these rows. Clearing after would let the
+          // reconcile skip them and the stale `applied` would survive the very
+          // refresh that exists to fix it.
+          requestedIds.forEach((id) => inFlightApplyRef.current.delete(id));
           if (!aliveRef.current) return;
           refresh();
         });
@@ -767,8 +812,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         await runApplyOp(bookIds);
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied
-        // filter clears it immediately; the terminal poll still refreshes and
+        // filter clears it immediately; the terminal poll then refreshes and
         // restores any book the worker ultimately did not apply.
+        //
+        // That restore is real now. It was not before: the refresh seeded row
+        // state add-only, so it could never overwrite the `applied` set here and
+        // a failed book stayed hidden forever. See the reconcile in the fetch
+        // effect and inFlightApplyRef.
         setRowStates((prev) => {
           const next = new Map(prev);
           bookIds.forEach((bookId) => next.set(bookId, 'applied'));
