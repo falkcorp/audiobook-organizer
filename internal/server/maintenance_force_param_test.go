@@ -43,11 +43,13 @@ type paramsProbeJob struct {
 	runs []json.RawMessage
 }
 
-func (j *paramsProbeJob) ID() string          { return j.id }
-func (j *paramsProbeJob) Name() string        { return "Params Probe " + j.id }
-func (j *paramsProbeJob) Description() string { return "Test probe; records the raw params it receives." }
-func (j *paramsProbeJob) Category() string    { return "test" }
-func (j *paramsProbeJob) CanResume() bool     { return false }
+func (j *paramsProbeJob) ID() string   { return j.id }
+func (j *paramsProbeJob) Name() string { return "Params Probe " + j.id }
+func (j *paramsProbeJob) Description() string {
+	return "Test probe; records the raw params it receives."
+}
+func (j *paramsProbeJob) Category() string { return "test" }
+func (j *paramsProbeJob) CanResume() bool  { return false }
 
 func (j *paramsProbeJob) DefaultParams() any {
 	return struct {
