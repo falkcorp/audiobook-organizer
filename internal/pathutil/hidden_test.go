@@ -1,5 +1,5 @@
 // file: internal/pathutil/hidden_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4b1f38-6c02-4a75-8e3d-2f905c7ab146
 // last-edited: 2026-08-29
 
@@ -43,10 +43,10 @@ func TestShouldSkipDir_SkipsHiddenChildrenButNeverTheRoot(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"/srv/books", false},                          // the root itself
-		{"/srv/books/abooks", false},                   // ordinary content
-		{"/srv/books/.backups", true},                  // the case this exists for
-		{"/srv/books/audiobook-organizer", false},      // the app's own dir is NOT hidden
+		{"/srv/books", false},                     // the root itself
+		{"/srv/books/abooks", false},              // ordinary content
+		{"/srv/books/.backups", true},             // the case this exists for
+		{"/srv/books/audiobook-organizer", false}, // the app's own dir is NOT hidden
 		{"/srv/books/audiobook-organizer/.backups", true},
 		{"/srv/books/.failed", true},
 	} {
@@ -129,5 +129,39 @@ func TestShouldSkipDir_RealWalkSkipsHiddenSubtree(t *testing.T) {
 
 	if len(seen) != 1 || seen[0] != filepath.Join("abooks", "real.m4b") {
 		t.Fatalf("walk saw %v; want only abooks/real.m4b -- the .backups subtree must be invisible", seen)
+	}
+}
+
+// The carve-out. Alternate versions are real library content that happens to
+// live under a dot-name, so the skip rule must not hide it. Without this the
+// alternates feature would ship into a scanner that cannot see it -- and a
+// folder the scanner cannot see fails SILENTLY: the books just never appear.
+func TestShouldSkipDir_AlternatesIsCarvedOut(t *testing.T) {
+	root := "/srv/books"
+	if ShouldSkipDir(root, "/srv/books/.alternates") {
+		t.Error(".alternates was skipped; it is library content, not app state")
+	}
+	if ShouldSkipDir(root, "/srv/books/abooks/.alternates") {
+		t.Error(".alternates was skipped when nested under a book folder")
+	}
+	// The carve-out is exact, not a prefix match: a neighbouring dot-name must
+	// not inherit visibility just by starting the same way.
+	if !ShouldSkipDir(root, "/srv/books/.alternates-backup") {
+		t.Error(".alternates-backup was treated as carved out; the match must be exact")
+	}
+	// And the rule it lives inside still works.
+	if !ShouldSkipDir(root, "/srv/books/.backups") {
+		t.Error(".backups must still be skipped")
+	}
+}
+
+func TestIsVisibleHiddenDir(t *testing.T) {
+	if !IsVisibleHiddenDir(".alternates") {
+		t.Error(".alternates must be visible")
+	}
+	for _, n := range []string{".backups", ".failed", ".itunes-writeback", "abooks", ""} {
+		if IsVisibleHiddenDir(n) {
+			t.Errorf("%q must not be carved out", n)
+		}
 	}
 }

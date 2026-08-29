@@ -27,3 +27,8 @@ have triggered the folder watcher into starting a scan.
 
 A folder you deliberately point the app at is still scanned, even if its own
 name starts with a dot. The rule applies to what is found inside it.
+
+One folder is deliberately exempt: `.alternates`, which will hold alternate
+versions of a book. That is library content rather than app working state, so
+the scan must still see it. The exemption is an exact name match, and it is kept
+in one place so future exceptions do not get scattered across the code.
