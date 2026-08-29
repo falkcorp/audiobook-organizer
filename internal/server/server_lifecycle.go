@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.31.0
+// version: 3.32.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-25
+// last-edited: 2026-08-29
 
 package server
 
@@ -794,7 +794,15 @@ func (s *Server) Start(cfg ServerConfig) error {
 	if s.hnswPersistDir != "" {
 		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](s.container, "chromemstore"); ok && raw != nil {
 			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
-				if err := hnswStore.Export(s.hnswPersistDir); err != nil {
+				// Record the Pebble truth count alongside the graph. Without it
+				// the next boot cannot tell a fresh snapshot from a stale one
+				// and must discard it — the graph is a filtered projection of
+				// the emb: rows, so its own size proves nothing about currency.
+				var truthCount func(string) (int, error)
+				if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](s.container, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
+					truthCount = embStore.CountByType
+				}
+				if err := hnswStore.ExportWithTruth(s.hnswPersistDir, truthCount); err != nil {
 					slog.Error("hnsw: export failed", "err", err)
 				} else {
 					slog.Info("hnsw: snapshot saved", "dir", s.hnswPersistDir)

@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-07-03
+// last-edited: 2026-08-29
 
 package database
 
@@ -504,13 +504,11 @@ func TestHNSW_ImportAtomic_CorruptMetaAbortsWithoutPartialInstall(t *testing.T) 
 	}
 }
 
-// TestHNSW_ImportWithStalenessCheck_DiscardsUndercountedSnapshot locks ARCH-1:
-// when the imported HNSW graph's count for an entity type is lower than the
-// Pebble-side truth count, the imported state for that entity type must be
-// discarded so the caller's existing hydrate-from-Pebble fallback (which
-// checks CountByType==0) runs instead of silently operating on a graph
-// missing vectors upserted since the last clean-shutdown export.
-func TestHNSW_ImportWithStalenessCheck_DiscardsUndercountedSnapshot(t *testing.T) {
+// TestHNSW_ImportWithStalenessCheck_DiscardsWhenPebbleGrewSinceExport locks
+// ARCH-1: if Pebble holds a different number of rows than it did when the
+// snapshot was exported, the snapshot predates writes it cannot know about and
+// must be discarded so hydrate-from-Pebble runs instead.
+func TestHNSW_ImportWithStalenessCheck_DiscardsWhenPebbleGrewSinceExport(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
 	s1 := NewHNSWEmbeddingStore(dim)
@@ -519,14 +517,13 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsUndercountedSnapshot(t *testing.T
 	}
 
 	dir := t.TempDir()
-	if err := s1.Export(dir); err != nil {
+	// Exported when Pebble held 1 book row.
+	if err := s1.ExportWithTruth(dir, func(string) (int, error) { return 1, nil }); err != nil {
 		t.Fatalf("export: %v", err)
 	}
 
 	s2 := NewHNSWEmbeddingStore(dim)
-	// Truth (simulated Pebble EmbeddingStore.CountByType) reports 5 vectors
-	// for "book" — more than the 1 vector in the snapshot, simulating an
-	// unclean shutdown that stranded 4 upserts after the last clean export.
+	// Pebble now holds 5 — four upserts landed after the export.
 	truth := func(entityType string) (int, error) {
 		if entityType == "book" {
 			return 5, nil
@@ -543,6 +540,82 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsUndercountedSnapshot(t *testing.T
 	}
 	if n != 0 {
 		t.Errorf("stale snapshot was not discarded: CountByType(book) = %d, want 0", n)
+	}
+}
+
+// TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth is the
+// regression test for the production defect measured on 2026-08-29.
+//
+// The graph is a FILTERED projection of the emb: rows — HydrateChromem skips
+// empty vectors, stale-model rows, orphans whose book row is gone, and
+// non-primary versions. In production that meant a graph of 17,706 against a
+// Pebble truth of 39,658 (44.6%). The previous guard compared those two numbers
+// directly (`g.Len() < truthCount`), so it fired on EVERY boot: the snapshot was
+// discarded and fully rehydrated each restart, which is precisely the cost the
+// snapshot exists to avoid.
+//
+// A graph far smaller than the truth count is therefore NORMAL and must be kept,
+// so long as the truth count has not moved since the export.
+func TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth(t *testing.T) {
+	const dim = 4
+	ctx := context.Background()
+	s1 := NewHNSWEmbeddingStore(dim)
+	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Pebble holds 5 rows; only 1 survives hydration's filters into the graph.
+	truth := func(string) (int, error) { return 5, nil }
+
+	dir := t.TempDir()
+	if err := s1.ExportWithTruth(dir, truth); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	s2 := NewHNSWEmbeddingStore(dim)
+	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
+		t.Fatalf("ImportWithStalenessCheck: %v", err)
+	}
+
+	n, err := s2.CountByType(ctx, "book")
+	if err != nil {
+		t.Fatalf("CountByType: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("a filtered graph (1 of 5 rows) was discarded even though Pebble "+
+			"had not changed since export: CountByType(book) = %d, want 1", n)
+	}
+}
+
+// TestHNSW_ImportWithStalenessCheck_DiscardsSnapshotWithoutTruthSidecar covers
+// the migration case: a snapshot written by the old Export (or by a run whose
+// truth source was unavailable) carries no sidecar, cannot be verified, and so
+// must be discarded rather than trusted. It is self-healing — the next clean
+// shutdown writes one.
+func TestHNSW_ImportWithStalenessCheck_DiscardsSnapshotWithoutTruthSidecar(t *testing.T) {
+	const dim = 4
+	ctx := context.Background()
+	s1 := NewHNSWEmbeddingStore(dim)
+	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := s1.Export(dir); err != nil { // no truth recorded
+		t.Fatalf("export: %v", err)
+	}
+
+	s2 := NewHNSWEmbeddingStore(dim)
+	if err := s2.ImportWithStalenessCheck(dir, func(string) (int, error) { return 1, nil }); err != nil {
+		t.Fatalf("ImportWithStalenessCheck: %v", err)
+	}
+
+	n, err := s2.CountByType(ctx, "book")
+	if err != nil {
+		t.Fatalf("CountByType: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("unverifiable snapshot was kept: CountByType(book) = %d, want 0", n)
 	}
 }
 
@@ -612,12 +685,12 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if err := s1.Export(dir); err != nil {
+	truth := func(entityType string) (int, error) { return 1, nil }
+	if err := s1.ExportWithTruth(dir, truth); err != nil {
 		t.Fatalf("export: %v", err)
 	}
 
 	s2 := NewHNSWEmbeddingStore(dim)
-	truth := func(entityType string) (int, error) { return 1, nil }
 	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("ImportWithStalenessCheck: %v", err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-03
+// last-edited: 2026-08-29
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -353,6 +353,31 @@ var ErrNoHNSWSnapshot = errors.New("hnsw: no snapshot found in directory")
 // Files: hnsw-<entityType>.bin (graph) + hnsw-<entityType>.meta.json (metadata).
 // Called on clean shutdown (SIGTERM/SIGINT) so the next boot can skip hydration.
 func (s *HNSWEmbeddingStore) Export(dir string) error {
+	return s.ExportWithTruth(dir, nil)
+}
+
+// snapshotTruth is the truth-sidecar payload written next to each graph.
+//
+// TruthCount is the Pebble-side row count for this entity type AS OF the
+// export. It is what makes the staleness check on import meaningful: the graph
+// itself is a FILTERED projection of those rows (HydrateChromem drops empty
+// vectors, stale-model rows, orphans whose book no longer exists, and
+// non-primary versions), so the graph size and the Pebble row count are
+// different quantities and comparing them directly is a category error.
+type snapshotTruth struct {
+	TruthCount int `json:"truth_count"`
+	GraphCount int `json:"graph_count"`
+}
+
+func truthPath(dir, entityType string) string {
+	return filepath.Join(dir, "hnsw-"+entityType+".truth.json")
+}
+
+// ExportWithTruth is Export plus a record of the Pebble truth count per entity
+// type, which ImportWithStalenessCheck needs to decide whether the snapshot has
+// fallen behind. truth may be nil, in which case no sidecar is written and the
+// next import will treat the snapshot as unverifiable and discard it.
+func (s *HNSWEmbeddingStore) ExportWithTruth(dir string, truth func(entityType string) (int, error)) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -413,6 +438,33 @@ func (s *HNSWEmbeddingStore) Export(dir string) error {
 		if err := os.Rename(metaTmpPath, metaPath); err != nil {
 			os.Remove(metaTmpPath)
 			return fmt.Errorf("hnsw export: rename meta %s: %w", entityType, err)
+		}
+
+		// Truth sidecar. Written last and best-effort: a missing sidecar makes
+		// the next import discard this snapshot (safe), whereas failing the
+		// whole export would throw away a good graph over a bookkeeping file.
+		if truth != nil {
+			tc, terr := truth(entityType)
+			if terr != nil {
+				slog.Warn("hnsw export: truth count unavailable; snapshot will not be reusable",
+					"entity_type", entityType, "err", terr)
+				_ = os.Remove(truthPath(dir, entityType))
+				continue
+			}
+			tb, merr := json.Marshal(snapshotTruth{TruthCount: tc, GraphCount: g.Len()})
+			if merr != nil {
+				slog.Warn("hnsw export: marshal truth sidecar failed", "entity_type", entityType, "err", merr)
+				continue
+			}
+			tTmp := truthPath(dir, entityType) + ".tmp"
+			if werr := os.WriteFile(tTmp, tb, 0o644); werr != nil {
+				slog.Warn("hnsw export: write truth sidecar failed", "entity_type", entityType, "err", werr)
+				continue
+			}
+			if rerr := os.Rename(tTmp, truthPath(dir, entityType)); rerr != nil {
+				os.Remove(tTmp)
+				slog.Warn("hnsw export: rename truth sidecar failed", "entity_type", entityType, "err", rerr)
+			}
 		}
 	}
 	slog.Info("hnsw: snapshot exported", "dir", dir, "entity_types", len(s.graphs))
@@ -538,15 +590,35 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 
 	stale := false
 	for entityType, g := range s.graphs {
-		truthCount, err := truth(entityType)
+		currentTruth, err := truth(entityType)
 		if err != nil {
 			// Can't verify against the truth source; don't treat this entity
 			// type as stale on an unrelated error.
 			continue
 		}
-		if g.Len() < truthCount {
-			slog.Warn("hnsw import: snapshot undercounts pebble truth; discarding entire imported snapshot (will rehydrate from pebble)",
-				"entity_type", entityType, "graph_count", g.Len(), "truth_count", truthCount)
+
+		// Compare the CURRENT Pebble row count against the count recorded when
+		// this snapshot was exported — not against the graph size.
+		//
+		// The graph is a FILTERED projection of the Pebble rows: HydrateChromem
+		// skips empty vectors, stale-model rows, orphans whose book row is gone,
+		// and non-primary versions. Measured in production on 2026-08-29 the
+		// graph held 17,706 of 39,658 book rows (44.6%), so the old
+		// `g.Len() < truthCount` test was true by construction on every boot.
+		// The snapshot was therefore discarded and fully rehydrated EVERY
+		// restart, which is exactly the cost the snapshot exists to avoid, and
+		// the warning that fired was a permanent fixture rather than a signal.
+		recorded, rerr := readSnapshotTruth(dir, entityType)
+		if rerr != nil {
+			slog.Warn("hnsw import: no usable truth sidecar; discarding snapshot (a clean shutdown will write one)",
+				"entity_type", entityType, "err", rerr)
+			stale = true
+			continue
+		}
+		if currentTruth != recorded.TruthCount {
+			slog.Info("hnsw import: pebble row count moved since export; discarding snapshot (will rehydrate from pebble)",
+				"entity_type", entityType, "recorded_truth", recorded.TruthCount,
+				"current_truth", currentTruth, "graph_count", g.Len())
 			stale = true
 		}
 	}
@@ -555,6 +627,22 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		s.meta = map[string]map[string]map[string]string{}
 	}
 	return nil
+}
+
+// readSnapshotTruth loads the truth sidecar for one entity type. A missing or
+// unparseable sidecar is an error, which the caller treats as "unverifiable,
+// therefore stale" — the safe direction, and self-healing because the next
+// clean shutdown writes a fresh one.
+func readSnapshotTruth(dir, entityType string) (snapshotTruth, error) {
+	var st snapshotTruth
+	b, err := os.ReadFile(truthPath(dir, entityType))
+	if err != nil {
+		return st, err
+	}
+	if err := json.Unmarshal(b, &st); err != nil {
+		return st, fmt.Errorf("unmarshal truth sidecar: %w", err)
+	}
+	return st, nil
 }
 
 // Compile-time assertion.
