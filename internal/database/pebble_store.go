@@ -2935,24 +2935,114 @@ func (p *PebbleStore) RevertBookToVersion(id string, ts time.Time) (*Book, error
 	return p.UpdateBook(id, oldBook)
 }
 
+// snapshotKeyRange returns the iterator bounds covering one book's CoW snapshots.
+func snapshotKeyRange(id string) (lower, upper []byte) {
+	prefix := fmt.Sprintf("book_ver:%s:", id)
+	return []byte(prefix), []byte(prefix + "\xff")
+}
+
+// snapshotKeyValid reports whether a snapshot key parses as book_ver:<id>:<nanos>.
+//
+// Keys that do not parse are IGNORED rather than deleted. GetBookSnapshots has
+// always skipped them, so they have never been visible as versions; deleting
+// them here would make this the only code path that destroys data no reader ever
+// acknowledged, which is not a decision a prune should make silently.
+func snapshotKeyValid(key string) bool {
+	parts := strings.SplitN(key, ":", 3)
+	if len(parts) != 3 {
+		return false
+	}
+	_, err := strconv.ParseInt(parts[2], 10, 64)
+	return err == nil
+}
+
+// bookSnapshotKeys returns a book's snapshot keys in ASCENDING timestamp order,
+// reading NO values.
+//
+// Ordering comes from the iterator, exactly as GetBookSnapshots has always
+// relied on: the nanosecond field is a fixed-width 19-digit decimal for every
+// timestamp between 2001 and 2033, so lexicographic order is numeric order over
+// any range this application can produce.
+func (p *PebbleStore) bookSnapshotKeys(id string) ([][]byte, error) {
+	lower, upper := snapshotKeyRange(id)
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = iter.Close() }()
+
+	var keys [][]byte
+	for iter.First(); iter.Valid(); iter.Next() {
+		if !snapshotKeyValid(string(iter.Key())) {
+			continue
+		}
+		// iter.Key() is only valid until the next call, so it must be copied.
+		// A key is ~40 bytes against a ~1.3 KB value, which is the whole point
+		// of this function.
+		k := make([]byte, len(iter.Key()))
+		copy(k, iter.Key())
+		keys = append(keys, k)
+	}
+	return keys, iter.Error()
+}
+
+// CountBookSnapshots returns how many CoW snapshots a book has, without reading
+// or allocating any of their payloads.
+//
+// This exists so a prune can be planned without paying for one. Counting via
+// GetBookSnapshots would copy every snapshot's value: on production that is
+// ~127 snapshots per book across 59,086 books, so a whole-library dry run would
+// read and copy the entire ~7.65 GB of history purely to produce a number.
+func (p *PebbleStore) CountBookSnapshots(id string) (int, error) {
+	lower, upper := snapshotKeyRange(id)
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = iter.Close() }()
+
+	n := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		if snapshotKeyValid(string(iter.Key())) {
+			n++
+		}
+	}
+	return n, iter.Error()
+}
+
 // PruneBookSnapshots keeps the newest keepCount versions and deletes the rest.
+//
+// It iterates KEYS ONLY. This used to call GetBookSnapshots(id, 0), which copies
+// every snapshot's value into a fresh []byte -- solely to read a timestamp that
+// is already encoded in the key, then discards it. Pruning one production book
+// with 697 snapshots therefore allocated and copied 697 payloads, and a
+// library-wide prune would have read and copied all ~7.65 GB of snapshot history
+// to discover keys it already had.
+//
+// The set of keys deleted is unchanged: the newest keepCount are kept and every
+// older parseable key is removed.
 func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) {
 	if keepCount < 0 {
 		keepCount = 0
 	}
-	versions, err := p.GetBookSnapshots(id, 0)
+	keys, err := p.bookSnapshotKeys(id)
 	if err != nil {
 		return 0, err
 	}
-	if len(versions) <= keepCount {
+	if len(keys) <= keepCount {
 		return 0, nil
 	}
-	toDelete := versions[keepCount:]
+	// Ascending order, so the OLDEST are at the front and the newest keepCount
+	// are the tail that must survive.
+	toDelete := keys[:len(keys)-keepCount]
+
 	batch := p.db.NewBatch()
-	for _, v := range toDelete {
-		key := []byte(fmt.Sprintf("book_ver:%s:%d", id, v.Timestamp.UnixNano()))
-		if err := batch.Delete(key, nil); err != nil {
-			batch.Close()
+	// Deferred so the batch is released on every path. The previous version
+	// closed it only on the error paths, leaking it on success.
+	defer func() { _ = batch.Close() }()
+
+	for _, k := range toDelete {
+		if err := batch.Delete(k, nil); err != nil {
 			return 0, err
 		}
 	}

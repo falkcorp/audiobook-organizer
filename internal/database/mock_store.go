@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.94.0
+// version: 1.95.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-24
 
@@ -62,6 +62,7 @@ type MockStore struct {
 	GetBookAtVersionFunc              func(id string, ts time.Time) (*Book, error)
 	RevertBookToVersionFunc           func(id string, ts time.Time) (*Book, error)
 	PruneBookVersionsFunc             func(id string, keepCount int) (int, error)
+	CountBookSnapshotsFunc            func(id string) (int, error)
 	MarkITunesSyncedFunc              func(bookIDs []string) (int64, error)
 	GetITunesDirtyBooksFunc           func() ([]Book, error)
 	GetITunesPurgePendingBooksFunc    func() ([]Book, error)
@@ -2229,6 +2230,16 @@ func (m *MockStore) RevertBookToVersion(id string, ts time.Time) (*Book, error) 
 func (m *MockStore) PruneBookSnapshots(id string, keepCount int) (int, error) {
 	if m.PruneBookVersionsFunc != nil {
 		return m.PruneBookVersionsFunc(id, keepCount)
+	}
+	return 0, nil
+}
+
+// CountBookSnapshots reports a book's snapshot count. Backed by its own hook so
+// a test can make counting disagree with pruning -- which is exactly the shape a
+// dry run has to get right.
+func (m *MockStore) CountBookSnapshots(id string) (int, error) {
+	if m.CountBookSnapshotsFunc != nil {
+		return m.CountBookSnapshotsFunc(id)
 	}
 	return 0, nil
 }

@@ -1,70 +1,62 @@
 <!-- file: PLAN.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5a1f8e34-72c9-4b60-8d1e-93af4c25b7e0 -->
+<!-- guid: 2f8b6d41-9c07-4e35-a1d8-5b3e7c0a94f2 -->
 <!-- last-edited: 2026-08-29 -->
 
-# A database backup must never be able to kill the database
+# Bulk CoW snapshot prune
 
 ## Goal
+Prune `book_ver:` copy-on-write snapshots across the whole library. Today the only
+control is `POST /api/v1/audiobooks/:id/cow-versions/prune`, one book at a time;
+prod has 59,086 books holding ~7.5M snapshots (~7.65 GB).
 
-Stop the production failure measured 2026-08-29: the pre-organize auto-backup
-filled `/var/lib` to 100%, which made PebbleDB take a fatal commit error and the
-process exit. systemd restarted it, the scan resumed, the backup ran again, and
-the cycle repeated every ~17 minutes for hours. No library scan has ever
-completed. Full evidence in `.claude/notes/2026-08-29-prod-outage-disk-full.md`.
-
-Three defects combine:
-
-1. **No pre-flight space check.** `CreateBackup` / `CreateBackupWithCheckpoint`
-   `os.Create` the archive and stream into it until the write fails. On a full
-   filesystem that consumes the last free bytes, and Pebble — writing its WAL to
-   the same filesystem — dies with `no space left on device`.
-2. **Retention runs only on success** (`backup.go:162`). When the disk is full
-   the backup fails, so the prune that would have freed room never executes.
-   Exactly backwards.
-3. **Retention is count-based on files that grew ~60x.** `MaxBackups: 10` was
-   written when an archive was 247 MB (2.5 GB total). Archives are now 15 GB, so
-   the policy *targets 150 GB on a 141 GB disk* — retention now guarantees the
-   outage instead of preventing it.
+Measured 2026-08-29 (40-book sample): min 42, median 91, mean 127.5, max 697
+snapshots per book. keep_count=10 deletes 92.2%.
 
 ## Files to change
 
-- `internal/diskstats/` (new) — extract the existing build-tagged helper from
-  `internal/server/diskstats_{unix,windows}.go` so `internal/backup` can use it
-  without importing `internal/server`. Move, do not duplicate.
-- `internal/server/diskstats_{unix,windows}.go` — delegate to the new package.
-- `internal/backup/backup.go` — pre-flight guard, prune-before-backup, and a
-  size-aware retention bound.
+1. `internal/database/pebble_store.go`
+   - Rewrite `PruneBookSnapshots` to iterate KEYS ONLY.
+     It currently calls `GetBookSnapshots(id, 0)`, which copies every snapshot's
+     value (`dataCopy := make(...); copy(...)`) just to read a timestamp that is
+     already in the key. A library-wide prune would therefore read and copy all
+     7.65 GB of snapshot payloads to discover keys it already had.
+   - Add `CountBookSnapshots(id) (int, error)` — keys-only, for a cheap dry run.
+2. `internal/database/iface_book.go` — declare `CountBookSnapshots`.
+3. `internal/maintenance/job.go` — add `PruneBookSnapshots` to `jobBookWriter`,
+   `CountBookSnapshots` to `jobBookReader`. (`ListBookIDs` already present.)
+4. `internal/maintenance/jobs/prune_book_snapshots.go` — NEW job.
+5. Regenerate mocks (`make mocks`).
+6. Tests + changelog fragment.
 
-## Ordered steps
+## Job design
 
-1. Create `internal/diskstats` with `Stats(path) (total, free uint64, err error)`
-   and both build-tagged implementations, moved verbatim.
-2. Reduce `internal/server`'s two files to a delegating call so the injected
-   `getDiskStats` func value and its one call site are untouched.
-3. Add `estimateArchiveBytes(dir)` — sum of regular-file sizes under the source.
-   A Pebble DB is already-compressed SSTs, so gzip is ~1:1; treating the source
-   size as the space requirement is the honest estimate, not a pessimistic one.
-4. Prune to retention *before* writing, then check free space, then write.
-5. Add `MaxTotalBytes` to `BackupConfig` and enforce it in retention alongside
-   `MaxBackups`, oldest-first.
-6. Refuse the backup with a clear, non-fatal error when free space is under
-   estimate + margin. `autoBackup` already logs a warning and continues on
-   error, so organize proceeds rather than the process dying.
+- ID `prune-book-snapshots`, category `cleanup`.
+- Params: `keep_count int` (default 10), `dry_run bool`.
+- **Refuses keep_count < 1.** 0 would delete every snapshot including the newest;
+  this is irreversible prod data, so the destructive extreme is not reachable by
+  omitting a field.
+- Bounded worker pool: `errgroup` + `SetLimit(runtime.NumCPU())`, per CLAUDE.md's
+  concurrency mandate (59k books x a DB write each).
+- **Partitioning is inherent, not assumed:** the unit of work is ONE book ID and
+  every `book_ver:` key is prefixed by that ID, so two workers can never touch the
+  same key. No shared mutable state except counters (atomic).
+- Honours `ctx` cancellation between books; reports progress per book so the
+  registry watchdog does not flag it as wedged.
+- Dry run counts via `CountBookSnapshots` and writes nothing.
 
 ## Test strategy
-
-- Unit: retention drops oldest-first by count and by total bytes; a zero value
-  for either bound means unlimited.
-- Unit: the pre-flight guard refuses when free space is short and, critically,
-  **creates no file** — a guard that refuses after `os.Create` still consumes
-  space.
-- Unit: prune runs before the write, so a backup that only fits after pruning
-  succeeds.
-- Mutation-test each guard at final HEAD, including the call sites.
+- Store: prune keeps the newest N and deletes the rest; count matches; malformed
+  keys are left alone (preserves current behaviour); keep_count >= len is a no-op.
+- Job: dry run deletes NOTHING but reports the real number; keep_count is honoured;
+  cancellation stops early; keep_count < 1 is refused.
+- Mutation-test each new test before trusting it.
 
 ## Rollback
+The job is additive and opt-in — nothing schedules it. Reverting the commit
+removes it. The store change is behaviour-preserving (same keys deleted); its
+tests pin that.
 
-Revert the PR. The change is additive — a refused backup logs a warning and
-organize continues, which is strictly safer than the current behaviour of
-filling the disk and killing the database.
+## NOT in scope
+Deleting anything on prod. This ships the capability; running it is a separate,
+explicit decision, and dry-run comes first.

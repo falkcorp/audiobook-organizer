@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-08-23
 
@@ -202,6 +202,9 @@ type BookSyncMarker interface {
 type BookVersionMutator interface {
 	RevertBookToVersion(id string, ts time.Time) (*Book, error)
 	PruneBookSnapshots(id string, keepCount int) (int, error)
+	// CountBookSnapshots reports how many snapshots a book has WITHOUT reading
+	// their payloads, so a prune can be planned without paying for one.
+	CountBookSnapshots(id string) (int, error)
 }
 
 // BookTombstoneWriter manages tombstones for deleted books.
