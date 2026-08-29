@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-08-29
 //
@@ -641,8 +641,17 @@ describe('an optimistic apply must be correctable by the server', () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
       reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
     );
-    vi.mocked(api.pollOperationV2).mockResolvedValue(
-      {} as Awaited<ReturnType<typeof api.pollOperationV2>>
+    // The poll is held open deliberately. Resolving it immediately made the
+    // hide and the restore collapse into one tick, and the final assertion --
+    // 2 rows -- then matched the STARTING state as well as the fixed one. The
+    // test passed with applyMany's optimistic marking deleted entirely, i.e. it
+    // could not observe the behaviour it is named for. Holding the poll lets
+    // the two states be asserted separately.
+    let finishPoll: () => void = () => {};
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishPoll = resolve;
+      }) as unknown as ReturnType<typeof api.pollOperationV2>
     );
 
     const { result } = renderHook(() => useMetadataLane(toast));
@@ -653,10 +662,88 @@ describe('an optimistic apply must be correctable by the server', () => {
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['b1', 'b2'] });
     });
 
-    // The terminal poll refreshes, and the server's answer must win.
+    // First: they really are hidden. Without this the assertion below is blind.
+    await waitFor(() => expect(result.current.pageResults).toHaveLength(0));
+
+    // Then the op finishes, the terminal poll refreshes, and the server's
+    // answer -- still `matched`, nothing applied -- must win over the guess.
+    await act(async () => {
+      finishPoll();
+      await Promise.resolve();
+    });
     await waitFor(() => {
       expect(result.current.pageResults).toHaveLength(2);
     });
+  });
+
+  it('does not turn a skipped row into a rejected one on refresh', async () => {
+    // The reconcile's own regression test. Making the server authoritative for
+    // no_match is right for a row the reviewer has not judged, and WRONG for one
+    // they have: skip is client-only and lands on rows whose server status is
+    // exactly no_match, so an unconditional write flipped every skip to
+    // rejected. This is the bug the first version of the fix introduced while
+    // fixing the other direction.
+    //
+    // Reaching the bug takes both filters off, and that is not test scaffolding
+    // -- it is the actual triage view. A no_match row is hidden by hideNoMatch
+    // (default true) AND seeded `rejected` by the reconcile, so hideRejected
+    // (default true) hides it a second time. Clearing both is exactly what a
+    // reviewer does to work the no-match pile, and `skipAllUnmatched` exists
+    // for that pass.
+    //
+    // hideRejected then goes back ON before the refresh, which is what turns
+    // the clobber from a wrong label into a disappearance: `skipped` survives
+    // that filter and `rejected` does not.
+    const rows = [makeResult('b1', { status: 'no_match', candidate: undefined })];
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      result.current.setFilters({ hideNoMatch: false, hideRejected: false });
+    });
+    await waitFor(() => expect(result.current.pageResults).toHaveLength(1));
+    // Seeded from the server, not judged by anyone yet.
+    expect(result.current.spineCtx.rowState('b1')).toBe('rejected');
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'metadata', type: 'skip', id: 'b1' });
+    });
+    expect(result.current.spineCtx.rowState('b1')).toBe('skipped');
+
+    // Back to hiding rejections. The skipped row must survive that.
+    await act(async () => {
+      result.current.setFilters({ hideRejected: true });
+    });
+    expect(result.current.pageResults).toHaveLength(1);
+
+    await act(async () => {
+      result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.spineCtx.rowState('b1')).toBe('skipped');
+    // The half the user actually sees: had the refresh flipped it back to
+    // rejected, hideRejected would have removed it outright and `unskip` with it.
+    expect(result.current.pageResults).toHaveLength(1);
+  });
+
+  it('still lets the server mark an unjudged no_match row rejected', async () => {
+    // The other side of the guard above: narrowing it to "only reconcile an
+    // absent or optimistic-applied state" must not stop the server from
+    // classifying a row nobody has touched. Without this, the guard could be
+    // widened into inertness and nothing would go red.
+    const rows = [makeResult('b1', { status: 'no_match', candidate: undefined })];
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.spineCtx.rowState('b1')).toBe('rejected');
   });
 
   it('keeps a row hidden when the server confirms it was applied', async () => {
