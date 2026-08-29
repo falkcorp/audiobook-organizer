@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-08-29
 
@@ -537,7 +537,38 @@ func RestoreBackup(backupPath, targetPath string, verify bool) error {
 }
 
 // ListBackups lists all available backups
+// ListBackups returns the archives in backupDir WITHOUT computing checksums.
+//
+// Checksumming used to happen here, unconditionally, for every archive on every
+// call -- and nothing read the result. That made an O(bytes-on-disk) read the
+// price of merely LISTING files, which is O(entries) work everywhere else in
+// this codebase.
+//
+// It was not a theoretical cost. Measured on production 2026-08-29 with ~16 GB
+// of archives, GET /api/v1/backup/list did not return within two minutes. Worse,
+// enforceRetention calls this on EVERY backup, so each run hashed the entire
+// backup directory before it could decide anything: with 101 GB of archives
+// present, the auto-backup that logged "failed after 18m38s" spent essentially
+// all of that time hashing files in order to report a disk-space refusal it
+// could have made instantly.
+//
+// Callers that genuinely need checksums ask for them explicitly via
+// ListBackupsWithChecksums. Verification is a deliberate act; listing is not.
 func ListBackups(backupDir string) ([]BackupInfo, error) {
+	return listBackups(backupDir, false)
+}
+
+// ListBackupsWithChecksums is ListBackups plus a SHA-256 for each archive.
+//
+// This READS EVERY BYTE of every archive in the directory. At the sizes this
+// application produces (~15 GB per archive) that is minutes of I/O, so it
+// belongs behind an explicit request from someone who wants integrity
+// verification -- never on a listing or a retention path.
+func ListBackupsWithChecksums(backupDir string) ([]BackupInfo, error) {
+	return listBackups(backupDir, true)
+}
+
+func listBackups(backupDir string, withChecksums bool) ([]BackupInfo, error) {
 	var backups []BackupInfo
 
 	entries, err := os.ReadDir(backupDir)
@@ -559,7 +590,10 @@ func ListBackups(backupDir string) ([]BackupInfo, error) {
 		}
 
 		backupPath := filepath.Join(backupDir, entry.Name())
-		checksum, _ := calculateFileChecksum(backupPath, nil)
+		var checksum string
+		if withChecksums {
+			checksum, _ = calculateFileChecksum(backupPath, nil)
+		}
 
 		// Parse database type from filename
 		dbType := "unknown"

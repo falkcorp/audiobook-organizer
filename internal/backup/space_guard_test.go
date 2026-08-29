@@ -1,5 +1,5 @@
 // file: internal/backup/space_guard_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b6d0f27-58c1-49ea-a704-1f8e2d95c6b3
 // last-edited: 2026-08-29
 
@@ -575,5 +575,73 @@ func TestResolveMaxTotalBytes(t *testing.T) {
 	}
 	if got := ResolveMaxTotalBytes(1); got != 1 {
 		t.Errorf("ResolveMaxTotalBytes(1) = %d, want 1", got)
+	}
+}
+
+// Listing must NOT hash. This is a performance contract expressed as a
+// correctness test, because the cost is invisible in any small-fixture suite:
+// hashing four 18-byte files is instant, so a test that merely "passes" proves
+// nothing about the behaviour that matters.
+//
+// What it guards: ListBackups used to checksum every archive unconditionally,
+// and nothing read the result. Measured on production 2026-08-29, that made
+// GET /api/v1/backup/list exceed two minutes against ~16 GB of archives, and --
+// far worse -- enforceRetention calls ListBackups on EVERY backup, so each run
+// hashed the whole backup directory before it could decide anything.
+//
+// Asserting the checksum field is EMPTY is the only durable way to state "this
+// path does no I/O over file contents", so re-adding the hash fails here rather
+// than being discovered as a timeout in production a second time.
+func TestListBackups_DoesNotChecksum(t *testing.T) {
+	dir := t.TempDir()
+	for i := 1; i <= 3; i++ {
+		name := fmt.Sprintf("audiobooks_pebble_2026010%d_000000.tar.gz", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("archive bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	backups, err := ListBackups(dir)
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(backups) != 3 {
+		t.Fatalf("got %d backups, want 3", len(backups))
+	}
+	for _, b := range backups {
+		if b.Checksum != "" {
+			t.Errorf("%s has checksum %q; ListBackups must not read file contents -- hashing here costs one full pass over every archive on every call, including on every retention run", b.Filename, b.Checksum)
+		}
+		// The cheap metadata must still be populated: this is a listing, and
+		// dropping the hash must not turn it into an empty shell. Size in
+		// particular is load-bearing -- retention's byte budget is computed from
+		// it.
+		if b.Size <= 0 {
+			t.Errorf("%s has size %d; listing must still report size (retention budgets depend on it)", b.Filename, b.Size)
+		}
+		if b.CreatedAt.IsZero() {
+			t.Errorf("%s has zero CreatedAt; listing must still report mtime (retention ORDERS by it)", b.Filename)
+		}
+	}
+}
+
+// The capability must still exist for callers that genuinely want it.
+func TestListBackupsWithChecksums_StillHashes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "audiobooks_pebble_20260101_000000.tar.gz"), []byte("archive bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	backups, err := ListBackupsWithChecksums(dir)
+	if err != nil {
+		t.Fatalf("ListBackupsWithChecksums: %v", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("got %d backups, want 1", len(backups))
+	}
+	// SHA-256 hex is 64 characters. Asserting the LENGTH rather than merely
+	// non-empty keeps this from passing on a truncated or placeholder value.
+	if got := len(backups[0].Checksum); got != 64 {
+		t.Errorf("checksum length = %d, want 64 (SHA-256 hex); opting in must actually produce a hash", got)
 	}
 }
