@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 2.7.0
+# version: 2.8.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-08-29
 #
@@ -14,7 +14,14 @@
 # ///
 #
 # Remote Whisper transcription server for use with audiobook-organizer.
-# Run on a machine with a fast GPU to offload bulk transcription.
+# Runs on a machine with a fast GPU when one is available, and on CPU otherwise
+# -- the device is resolved at startup (see _resolve_device) rather than
+# hardcoded. A GPU is strongly preferred for bulk transcription; CPU works and
+# is roughly an order of magnitude slower.
+#
+# WHISPER_DEVICE forces the device ("cuda" or "cpu"); "auto" and an unset value
+# both mean "probe for CUDA, fall back to CPU". ctranslate2 has no Metal/MPS
+# backend, so Apple Silicon runs on CPU.
 #
 # Run (uv handles all deps automatically — no pip install needed):
 #   uv run scripts/whisper_server.py [model]
@@ -29,9 +36,11 @@
 #
 # Windows firewall: allow inbound TCP 8000 from your LAN subnet.
 #
-# NOTE: faster-whisper uses ctranslate2 for CUDA inference — no separate
-# torch install needed. ctranslate2 bundles its own CUDA runtime.
+# NOTE: faster-whisper uses ctranslate2 for inference — no separate torch
+# install needed. ctranslate2 bundles its own CUDA runtime.
 # If you see CUDA errors, ensure CUDA 11.x or 12.x drivers are installed.
+# A host that reports device=cpu on /health when it has a GPU means the CUDA
+# probe found no devices at startup; restart it once the driver is healthy.
 #
 # v2: adds /transcribe-batch endpoint.  BatchedInferencePipeline (faster-whisper
 # >=1.0.0) processes 16 audio chunks per file simultaneously on the GPU —
@@ -72,7 +81,12 @@ def _resolve_device() -> str:
     working CPU server beats no server. Set WHISPER_DEVICE to override.
     """
     forced = os.environ.get("WHISPER_DEVICE", "").strip().lower()
-    if forced:
+    # "auto" is a legal ctranslate2 device string, but passing it through
+    # unresolved would defeat both things below that branch on the device: the
+    # compute_type default would pick int8 on a working GPU, and the startup
+    # banner would print "auto" instead of what is actually in use -- the exact
+    # defect this function exists to fix. Treat it as "probe", not as a device.
+    if forced and forced != "auto":
         return forced
     try:
         import ctranslate2
@@ -179,8 +193,26 @@ async def transcribe_batch(files: List[UploadFile] = File(...)):
 
 @app.get("/health")
 async def health():
+    """Health probe.
+
+    device/compute_type are reported because the CUDA probe in _resolve_device
+    cannot distinguish "no GPU installed" from "GPU transiently unavailable":
+    ctranslate2's get_cuda_device_count() returns 0 rather than raising when
+    cudaGetDeviceCount fails. A GPU host that comes up during a driver reset
+    therefore starts on CPU and stays pinned there for the life of the process,
+    serving healthy 200s roughly ten times slower than expected. Surfacing the
+    resolved device makes that visible to a health check instead of leaving it
+    in a log line. Adding fields is backward compatible -- the Go client decodes
+    into a struct with only batch_pipeline and ignores unknown fields.
+    """
     batch_available = batched_model is not None
-    return {"status": "ok", "model": model_name, "batch_pipeline": batch_available}
+    return {
+        "status": "ok",
+        "model": model_name,
+        "batch_pipeline": batch_available,
+        "device": device,
+        "compute_type": compute_type,
+    }
 
 
 if __name__ == "__main__":
