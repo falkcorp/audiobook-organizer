@@ -1,5 +1,5 @@
 // file: internal/backup/space_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b6d0f27-58c1-49ea-a704-1f8e2d95c6b3
 // last-edited: 2026-08-29
 
@@ -287,5 +287,127 @@ func TestCreateBackup_ProceedsJustAboveTheMargin(t *testing.T) {
 
 	if _, err := CreateBackup(db, "test", cfg); err != nil {
 		t.Fatalf("refused despite clearing archive + margin: %v", err)
+	}
+}
+
+// stubCheckpointer records whether Checkpoint was reached. It never needs to
+// run for the test below -- the point is that retention happens BEFORE the
+// space check, which sits before the checkpoint.
+type stubCheckpointer struct{ called bool }
+
+func (s *stubCheckpointer) Checkpoint(destDir string) error {
+	s.called = true
+	return os.MkdirAll(destDir, 0o755)
+}
+
+// seedArchive writes a fake .tar.gz of the given size and backdates it, so
+// retention's oldest-first ordering is deterministic.
+func seedArchive(t *testing.T, dir, name string, size int, age time.Duration) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, make([]byte, size), 0o600); err != nil {
+		t.Fatalf("seed archive: %v", err)
+	}
+	when := time.Now().Add(-age)
+	if err := os.Chtimes(p, when, when); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	return p
+}
+
+// THE regression test for the 2026-08-29 production finding.
+//
+// The checkpoint path is the production path, and it ran its space check before
+// any retention. So when the disk was genuinely full the guard refused -- which
+// correctly kept the database alive -- but the old archives that CAUSED the
+// shortage were never pruned. Every later attempt refused identically. The
+// system was stable and could never dig itself out; only a human with rm could.
+//
+// Retention must therefore run even on the path that then refuses. Asserting
+// only "it returned ErrInsufficientDiskSpace" would pass in both worlds, which
+// is exactly how this shipped: assert the PRUNE happened.
+func TestCreateBackupWithCheckpoint_PrunesBeforeRefusing(t *testing.T) {
+	db := seedDB(t, 4096)
+	backupDir := t.TempDir()
+
+	oldest := seedArchive(t, backupDir, "audiobooks_pebble_20260101_000000.tar.gz", 8000, 72*time.Hour)
+	middle := seedArchive(t, backupDir, "audiobooks_pebble_20260102_000000.tar.gz", 8000, 48*time.Hour)
+	newest := seedArchive(t, backupDir, "audiobooks_pebble_20260103_000000.tar.gz", 8000, 24*time.Hour)
+
+	// Far too little free space: the guard must refuse after pruning.
+	withDiskStats(t, 1<<30, 1024, nil)
+
+	cp := &stubCheckpointer{}
+	_, err := CreateBackupWithCheckpoint(cp, db, "pebble", BackupConfig{
+		BackupDir: backupDir,
+		// Negative == unlimited, so the COUNT bound cannot be what prunes here
+		// and the assertion below is unambiguously about the byte bound.
+		MaxBackups:    -1,
+		MaxTotalBytes: 10000,
+	})
+
+	if !errors.Is(err, ErrInsufficientDiskSpace) {
+		t.Fatalf("want ErrInsufficientDiskSpace, got %v", err)
+	}
+	if cp.called {
+		t.Error("checkpoint ran despite insufficient space; the guard must precede it")
+	}
+
+	// The prune must have happened anyway -- that is the whole point.
+	if _, statErr := os.Stat(oldest); !os.IsNotExist(statErr) {
+		t.Error("oldest archive survived: retention did not run before the refusal, " +
+			"so a full disk can never be recovered from")
+	}
+	if _, statErr := os.Stat(middle); !os.IsNotExist(statErr) {
+		t.Error("middle archive survived: retention did not prune far enough to fit the incoming archive")
+	}
+	// The floor: even an unsatisfiable budget must leave one archive behind.
+	if _, statErr := os.Stat(newest); statErr != nil {
+		t.Errorf("newest archive was deleted (%v); retention must never leave zero backups", statErr)
+	}
+}
+
+// Retention must never leave the database with no backup at all.
+//
+// The byte bound can be unsatisfiable: production on 2026-08-29 had a 30.3 GiB
+// incoming archive, a 40 GiB budget and ~15 GB archives, so no existing archive
+// could be retained and the loop would have deleted every one. Deleting the
+// whole history to make room for a write that may itself fail is a worse
+// outcome than being over budget.
+func TestEnforceRetention_KeepsTheLastArchiveWhenTheBudgetIsUnsatisfiable(t *testing.T) {
+	dir := t.TempDir()
+	a := seedArchive(t, dir, "audiobooks_pebble_20260101_000000.tar.gz", 8000, 72*time.Hour)
+	b := seedArchive(t, dir, "audiobooks_pebble_20260102_000000.tar.gz", 8000, 48*time.Hour)
+	c := seedArchive(t, dir, "audiobooks_pebble_20260103_000000.tar.gz", 8000, 24*time.Hour)
+
+	// Budget smaller than one archive plus the incoming one: unsatisfiable.
+	if err := enforceRetention(dir, -1, 10000, 4096); err != nil {
+		t.Fatalf("enforceRetention: %v", err)
+	}
+
+	for _, p := range []string{a, b} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived; retention should have pruned it", filepath.Base(p))
+		}
+	}
+	if _, err := os.Stat(c); err != nil {
+		t.Fatalf("the newest archive was deleted: retention must never leave zero backups (%v)", err)
+	}
+}
+
+// The explicit "keep none" case still means none. maxBackups == 0 is
+// pre-existing behaviour and the floor must not quietly resurrect an archive.
+func TestEnforceRetention_MaxBackupsZeroStillDeletesEverything(t *testing.T) {
+	dir := t.TempDir()
+	a := seedArchive(t, dir, "audiobooks_pebble_20260101_000000.tar.gz", 100, 48*time.Hour)
+	b := seedArchive(t, dir, "audiobooks_pebble_20260102_000000.tar.gz", 100, 24*time.Hour)
+
+	if err := enforceRetention(dir, 0, 0, 0); err != nil {
+		t.Fatalf("enforceRetention: %v", err)
+	}
+	for _, p := range []string{a, b} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived a maxBackups=0 sweep", filepath.Base(p))
+		}
 	}
 }
