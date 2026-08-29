@@ -24,17 +24,19 @@ func TestPruneBookSnapshotsJob_Registered(t *testing.T) {
 	assertJobRegistered(t, "prune-book-snapshots")
 }
 
-// The policy is load-bearing, not decorative: keep_count is read back off the
-// operation row, so a ResumePolicy that mints a fresh operation id would silently
-// drop the retention depth on a restart.
-func TestPruneBookSnapshotsJob_PolicyKeepsParamsAcrossRestart(t *testing.T) {
+// CanResume() and Policy().ResumePolicy must agree: since the v1 op minter was
+// retired, Policy() is the only thing that resumes anything, so a job claiming
+// CanResume() with ResumeDrop would simply never resume and nothing would report
+// it. This job checkpoints nothing, so both must say "no".
+func TestPruneBookSnapshotsJob_PolicyAgreesWithCanResume(t *testing.T) {
 	j, err := maintenance.Get("prune-book-snapshots")
 	require.NoError(t, err)
 	p := j.Policy()
-	assert.Equal(t, opsregistry.ResumeRestart, p.ResumePolicy,
-		"ResumeRestart re-dispatches the same row so keep_count survives; Requeue/Drop lose it")
-	assert.NotEmpty(t, p.ConcurrencyKey,
-		"two concurrent runs would issue overlapping deletes over the same book_ver: prefix")
+	assert.False(t, j.CanResume(), "the job does not checkpoint")
+	assert.Equal(t, opsregistry.ResumeDrop, p.ResumePolicy,
+		"a job that cannot resume must not be restarted or requeued")
+	assert.Positive(t, p.Timeout, "a non-positive timeout means the registry default")
+	assert.NotEmpty(t, p.Capabilities, "the job reads and writes the library")
 }
 
 // recordingStore captures prune calls race-safely: Run fans out over NumCPU
@@ -66,9 +68,9 @@ func (r *pruneRecorder) snapshot() map[string]int {
 func TestPruneBookSnapshotsJob_HonoursKeepCountFromOperationParams(t *testing.T) {
 	rec := &pruneRecorder{}
 	store := &database.MockStore{
-		ListBookIDsFunc:            func() ([]string, error) { return []string{"b1"}, nil },
-		CountBookSnapshotsFunc:     func(id string) (int, error) { return 100, nil },
-		GetOperationParamsFunc:     func(opID string) ([]byte, error) { return []byte(`{"keep_count":3}`), nil },
+		ListBookIDsFunc:        func() ([]string, error) { return []string{"b1"}, nil },
+		CountBookSnapshotsFunc: func(id string) (int, error) { return 100, nil },
+		GetOperationParamsFunc: func(opID string) ([]byte, error) { return []byte(`{"keep_count":3}`), nil },
 		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 			rec.record(id, keep)
 			return 97, nil

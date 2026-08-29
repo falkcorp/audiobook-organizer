@@ -23,7 +23,7 @@ import (
 // of the same population returned 35 and was wrong. The compiler is the instrument
 // that cannot miss one, because a job that fails to implement the interface cannot
 // build.
-const wantJobCount = 37
+const wantJobCount = 38
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.
