@@ -1,5 +1,5 @@
 // file: internal/dedup/hydrate_chromem_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-29
 
@@ -20,16 +20,25 @@ import (
 // fakeVectorANNStore is a minimal in-memory database.VectorANNStore double
 // that records every Upsert call so tests can assert which entities were (or
 // were not) mirrored during HydrateChromem.
+// It can also be told to FAIL specific keys, so a test can cover the case
+// where a row passes every filter but its write into the index errors — the
+// case that used to be invisible, because the mirror helpers swallowed the
+// Upsert error and the hydrated counter incremented anyway.
 type fakeVectorANNStore struct {
 	upserted map[string]bool // "entityType/entityID" -> seen
+	failOn   map[string]bool // "entityType/entityID" -> Upsert returns an error
 }
 
 func newFakeVectorANNStore() *fakeVectorANNStore {
-	return &fakeVectorANNStore{upserted: map[string]bool{}}
+	return &fakeVectorANNStore{upserted: map[string]bool{}, failOn: map[string]bool{}}
 }
 
 func (f *fakeVectorANNStore) Upsert(_ context.Context, entityType, entityID string, _ []float32, _ map[string]string) error {
-	f.upserted[entityType+"/"+entityID] = true
+	key := entityType + "/" + entityID
+	if f.failOn[key] {
+		return errors.New("chromem: simulated upsert failure")
+	}
+	f.upserted[key] = true
 	return nil
 }
 func (f *fakeVectorANNStore) Get(_ context.Context, _, _ string) (map[string]string, error) {
@@ -135,8 +144,13 @@ func TestHydrateChromem_SkipsStaleModelRows(t *testing.T) {
 //	5 x ORPHAN_*      GetBookByID -> (nil,nil) -> BooksOrphaned
 //	6 x LOOKUPERR_*   GetBookByID -> (nil,err) -> BooksLookupError
 //	7 x NONPRIMARY_*  primary=false            -> BooksNonPrimary
+//	8 x MIRRORERR_*   ANN store Upsert -> err  -> BooksMirrorError
 //
-// and 1/2/3 rows for the author hydrated/empty/stale buckets.
+// and 1/2/3/4 rows for the author hydrated/empty/stale/mirror-error buckets.
+//
+// MIRRORERR_* is the bucket that keeps BooksHydrated honest: those rows pass
+// every filter and reach the write, so before this bucket existed they were
+// counted as hydrated even though the index rejected them.
 //
 // WHY the counts differ per bucket instead of one row each: the one-row-each
 // version of this fixture was written first and a mutation test walked
@@ -161,16 +175,18 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	lookupErr := errors.New("pebble: simulated read fault")
 
 	const (
-		wantHydratedPrimary   = 2
-		wantHydratedNilFlag   = 1
-		wantEmptyVector       = 3
-		wantStaleModel        = 4
-		wantOrphaned          = 5
-		wantLookupError       = 6
-		wantNonPrimary        = 7
-		wantAuthorsHydrated   = 1
-		wantAuthorsEmptyVec   = 2
-		wantAuthorsStaleModel = 3
+		wantHydratedPrimary    = 2
+		wantHydratedNilFlag    = 1
+		wantEmptyVector        = 3
+		wantStaleModel         = 4
+		wantOrphaned           = 5
+		wantLookupError        = 6
+		wantNonPrimary         = 7
+		wantMirrorError        = 8
+		wantAuthorsHydrated    = 1
+		wantAuthorsEmptyVec    = 2
+		wantAuthorsStaleModel  = 3
+		wantAuthorsMirrorError = 4
 	)
 
 	// Keyed by ID prefix — a catch-all returning a book for any unrecognised
@@ -178,7 +194,9 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	// rows as hydrated and this test would prove nothing.
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		switch {
-		case strings.HasPrefix(id, "HYDRATED_"):
+		case strings.HasPrefix(id, "HYDRATED_"), strings.HasPrefix(id, "MIRRORERR_"):
+			// MIRRORERR_* books are perfectly good — it is the ANN store's
+			// Upsert that rejects them (see fake.failOn below).
 			return &database.Book{ID: id, Title: "Good", IsPrimaryVersion: &primary}, nil
 		case strings.HasPrefix(id, "NILPRIMARY_"):
 			// IsPrimaryVersion left nil on purpose: nil serializes as ABSENT
@@ -245,9 +263,20 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	wantSkipped = append(wantSkipped, seedAuthors(wantAuthorsEmptyVec, nil, "bge-m3")...)
 	wantSkipped = append(wantSkipped, seedAuthors(wantAuthorsStaleModel, vec, "text-embedding-3-large")...)
 
+	// Rows that pass every filter but whose write into the index fails. Seeded
+	// last so the keys are known, then armed on the fake store.
+	mirrorFailBooks := seedBooks("MIRRORERR", wantMirrorError, vec, "bge-m3")
+	mirrorFailAuthors := seedAuthors(wantAuthorsMirrorError, vec, "bge-m3")
+	for _, key := range append(append([]string{}, mirrorFailBooks...), mirrorFailAuthors...) {
+		fake.failOn[key] = true
+	}
+	wantSkipped = append(wantSkipped, mirrorFailBooks...)
+	wantSkipped = append(wantSkipped, mirrorFailAuthors...)
+
 	wantBookRows := wantHydratedPrimary + wantHydratedNilFlag + wantEmptyVector +
-		wantStaleModel + wantOrphaned + wantLookupError + wantNonPrimary
-	wantAuthorRows := wantAuthorsHydrated + wantAuthorsEmptyVec + wantAuthorsStaleModel
+		wantStaleModel + wantOrphaned + wantLookupError + wantNonPrimary + wantMirrorError
+	wantAuthorRows := wantAuthorsHydrated + wantAuthorsEmptyVec + wantAuthorsStaleModel +
+		wantAuthorsMirrorError
 
 	// Confirm the fixture can actually observe each bucket before trusting the
 	// counters: an empty-vector row has to survive the encode/decode round
@@ -290,10 +319,12 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 		{"BooksOrphaned", stats.BooksOrphaned, wantOrphaned},
 		{"BooksLookupError", stats.BooksLookupError, wantLookupError},
 		{"BooksNonPrimary", stats.BooksNonPrimary, wantNonPrimary},
+		{"BooksMirrorError", stats.BooksMirrorError, wantMirrorError},
 		{"AuthorRows", stats.AuthorRows, wantAuthorRows},
 		{"AuthorsHydrated", stats.AuthorsHydrated, wantAuthorsHydrated},
 		{"AuthorsEmptyVector", stats.AuthorsEmptyVector, wantAuthorsEmptyVec},
 		{"AuthorsStaleModel", stats.AuthorsStaleModel, wantAuthorsStaleModel},
+		{"AuthorsMirrorError", stats.AuthorsMirrorError, wantAuthorsMirrorError},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
@@ -316,11 +347,21 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 		t.Errorf("AuthorsSkipped() = %d, want %d", got, want)
 	}
 
-	// --- a bare count gives nobody anything to debug; keep the sample ---
+	// --- a bare count gives nobody anything to debug; keep the samples ---
 	if stats.FirstBookLookupError == nil {
 		t.Error("FirstBookLookupError = nil, want the sampled lookup fault")
 	} else if !errors.Is(stats.FirstBookLookupError, lookupErr) {
 		t.Errorf("FirstBookLookupError = %v, want it to wrap %v", stats.FirstBookLookupError, lookupErr)
+	}
+	if stats.FirstMirrorError == nil {
+		t.Error("FirstMirrorError = nil, want the sampled ANN-store write failure")
+	} else if !strings.Contains(stats.FirstMirrorError.Error(), "simulated upsert failure") {
+		t.Errorf("FirstMirrorError = %v, want it to carry the store's failure", stats.FirstMirrorError)
+	}
+
+	// --- a completed run must not be flagged incomplete ---
+	if stats.Incomplete {
+		t.Error("Incomplete = true on a run with a live context, want false")
 	}
 
 	// --- and the counters must describe what actually reached the index ---
