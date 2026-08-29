@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-24
+// last-edited: 2026-08-29
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -187,14 +187,22 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 // inconsistent state (file committed, book not updated). Failing the caller's
 // write over a derived value that can be rebuilt is the worse trade.
 //
-// ⚠️ THERE IS NO SAFETY NET. This comment used to end "the backfill job acts as
-// a safety net for any misses." That is not true and should not be relied on:
-// maintenance.recompute-book-aggregates short-circuits on a one-time sentinel,
-// and its documented escape hatch — Force — is declared but never read, and is
-// absent from the params struct the only call site populates, so it cannot even
-// be submitted. Once the sentinel is set the job refuses to run. See the todo.d
-// fragment. Until that is resolved, a book whose recompute fails here stays
-// wrong until some later write to its files happens to recompute it.
+// ⚠️ THE SAFETY NET IS OPERATOR-DRIVEN, NOT AUTOMATIC. This comment once ended
+// "the backfill job acts as a safety net for any misses", which was false in the
+// stronger way between then and 2026-08-29: maintenance.recompute-book-aggregates
+// short-circuits on a one-time sentinel, and its documented escape hatch — Force —
+// was declared but never read, absent from the params struct the dispatcher
+// populates, and unbound by the dispatcher's request body. Once the sentinel was
+// set the job refused to run, forever, while printing an override that did
+// nothing.
+//
+// Force is now wired end to end (dispatcher body → maintenanceJobOpParams →
+// maintenance.WithRawParams → the sentinel gate), so the remedy exists: an
+// operator can POST {"dry_run": false, "force": true} and rebuild every book's
+// aggregates. What is still true is that NOTHING does this on its own. A book
+// whose recompute fails here stays wrong until either a later write to its files
+// recomputes it or someone runs the forced backfill — which is why the failure
+// must be loud.
 //
 // That is why the failure must at least be loud. For batch writes use
 // notifyBookFileChanges, which additionally emits one aggregated Error for the
