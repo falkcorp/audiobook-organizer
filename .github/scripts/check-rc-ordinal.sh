@@ -1,33 +1,42 @@
 #!/usr/bin/env bash
 # file: .github/scripts/check-rc-ordinal.sh
-# version: 1.0.1
+# version: 2.0.0
 # guid: 49d5c680-8da1-44d4-907f-f3394d52c900
-# last-edited: 2026-08-22
+# last-edited: 2026-08-29
 #
 # Counts how many -rc.N prerelease tags exist for a given base version in a
-# `gh release list --json tagName,isPrerelease` JSON payload, and fails
-# (exit 1) once the count reaches the "never accumulate more than 10 RCs on
-# a version" threshold (TODO.md, owner directive 2026-08-08: "we are never to
-# get above 10 RCs"). The next step past 10 is a stable release, not rc.11.
+# `gh release list --json tagName,isPrerelease` JSON payload and REPORTS
+# whether the "never accumulate more than 10 RCs on a version" threshold
+# (TODO.md, owner directive 2026-08-08) has been reached.
 #
-# Uses the same tagName-parsing pattern as the RC-counting jq in
-# .github/workflows/cleanup-rc-releases.yml (strip -rc.N to get the base,
-# match "^$base-rc\.[0-9]+$" to select same-base RCs) so the two pieces of
-# RC-accounting logic in this repo stay consistent.
+# v2.0.0 CONTRACT CHANGE (owner directive 2026-08-29: "We don't want it to
+# fail, just have it push a new minor release"). Previously this script
+# exited 1 at the threshold, which turned every subsequent merge to main into
+# a red "Prerelease on Merge" run while doing nothing to stop RCs piling up --
+# v0.219.3 reached rc.33, 23 past the limit, with the guard failing all the
+# way. Failing was never the remedy; cutting the next minor release is.
+#
+# So this script now only COUNTS AND REPORTS. Deciding what to do about the
+# verdict belongs to the caller (.github/workflows/prerelease.yml), which
+# dispatches a minor Production Release instead of failing the run.
+#
+# Outputs (stdout, and $GITHUB_OUTPUT when set):
+#   rc_count      integer count of same-base RCs found
+#   at_threshold  "true" once rc_count >= MAX_RCS, else "false"
 #
 # Usage: check-rc-ordinal.sh <releases-json-file> <base-version>
 #   <releases-json-file>  path to JSON matching
 #                         `gh release list --json tagName,isPrerelease`
-#   <base-version>        base version to count against, e.g. v0.217
+#   <base-version>        base version to count against, e.g. v0.219.3
 #
 # Exit codes:
-#   0  count is below the threshold (or no matching RCs at all)
-#   1  count has reached the threshold — cut a stable release instead
+#   0  counted successfully (REGARDLESS of whether the threshold was hit --
+#      check the at_threshold output, not the exit status)
 #   2  usage error (bad args, missing/unreadable file)
 
 set -euo pipefail
 
-MAX_RCS=10
+MAX_RCS="${MAX_RCS:-10}"
 
 if [[ $# -ne 2 ]]; then
   echo "usage: $0 <releases-json-file> <base-version>" >&2
@@ -59,10 +68,21 @@ COUNT=$(jq --arg base "$BASE" \
 echo "Base version: $BASE"
 echo "RC releases found for $BASE: $COUNT"
 
+AT_THRESHOLD=false
 if (( COUNT >= MAX_RCS )); then
-  echo "::error::${BASE} has ${COUNT} release candidate(s) (limit ${MAX_RCS}) — cut a stable release for ${BASE} instead of another RC. See TODO.md: 'Never accumulate more than 10 RCs on a version.'"
-  exit 1
+  AT_THRESHOLD=true
+  echo "::notice::${BASE} has ${COUNT} release candidate(s) (limit ${MAX_RCS}) — promoting to the next MINOR release instead of minting another RC. See TODO.md: 'Never accumulate more than 10 RCs on a version.'"
+else
+  echo "OK: ${COUNT} RC(s) for ${BASE} is below the ${MAX_RCS} threshold."
 fi
 
-echo "OK: ${COUNT} RC(s) for ${BASE} is below the ${MAX_RCS} threshold."
+emit() {
+  echo "$1=$2"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "$1=$2" >> "$GITHUB_OUTPUT"
+  fi
+}
+emit rc_count "$COUNT"
+emit at_threshold "$AT_THRESHOLD"
+
 exit 0
