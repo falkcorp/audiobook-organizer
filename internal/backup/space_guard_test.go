@@ -1,5 +1,5 @@
 // file: internal/backup/space_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b6d0f27-58c1-49ea-a704-1f8e2d95c6b3
 // last-edited: 2026-08-29
 
@@ -409,5 +409,61 @@ func TestEnforceRetention_MaxBackupsZeroStillDeletesEverything(t *testing.T) {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s survived a maxBackups=0 sweep", filepath.Base(p))
 		}
+	}
+}
+
+// ResolveDir is the single answer to "where do backups live". Five call sites
+// used to each carry their own copy of this rule; a disagreement between the
+// create path and the list path would surface as "the backup succeeded but the
+// list is empty", which is a confusing way to discover you have no backups.
+func TestResolveDir(t *testing.T) {
+	dbPath := "/var/lib/audiobook-organizer/audiobooks.pebble"
+	for _, tc := range []struct {
+		name       string
+		configured string
+		dbPath     string
+		want       string
+	}{
+		{
+			name:       "unset keeps the historical behaviour",
+			configured: "",
+			dbPath:     dbPath,
+			want:       "/var/lib/audiobook-organizer/backups",
+		},
+		{
+			name:       "an absolute configured path wins outright",
+			configured: "/mnt/bigdata/books/audiobook-organizer/.backups",
+			dbPath:     dbPath,
+			want:       "/mnt/bigdata/books/audiobook-organizer/.backups",
+		},
+		{
+			// The whole point of the change: the configured path must be able
+			// to leave the database's filesystem entirely.
+			name:       "the configured path need not be near the database",
+			configured: "/somewhere/else",
+			dbPath:     dbPath,
+			want:       "/somewhere/else",
+		},
+		{
+			// A relative path is resolved against the DATABASE, never the
+			// process working directory -- for a service that is wherever
+			// systemd started it, which nobody meant to fill with archives.
+			name:       "a relative configured path hangs off the database dir",
+			configured: "snapshots",
+			dbPath:     dbPath,
+			want:       "/var/lib/audiobook-organizer/snapshots",
+		},
+		{
+			name:       "no database path falls back to the bare name",
+			configured: "",
+			dbPath:     "",
+			want:       "backups",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveDir(tc.configured, tc.dbPath); got != tc.want {
+				t.Errorf("ResolveDir(%q, %q) = %q, want %q", tc.configured, tc.dbPath, got, tc.want)
+			}
+		})
 	}
 }

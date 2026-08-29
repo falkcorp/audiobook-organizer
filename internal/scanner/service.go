@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-24
+// last-edited: 2026-08-29
 package scanner
 
 import (
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // scanServiceStore is the narrow slice of scannerStore this service uses.
@@ -381,6 +382,14 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 				return nil
 			}
 			if d.IsDir() {
+				// Must match the discovery walk exactly. If the counter walks
+				// a subtree the scanner skips, the progress denominator counts
+				// files that will never be scanned and the bar can never reach
+				// 100%. A 15 GB .backups directory inside the library would do
+				// precisely that.
+				if pathutil.ShouldSkipDir(folderPath, path) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			ext := strings.ToLower(filepath.Ext(path))

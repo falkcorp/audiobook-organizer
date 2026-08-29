@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-08-29
 
@@ -95,6 +95,36 @@ type BackupConfig struct {
 }
 
 // DefaultBackupConfig returns default backup configuration
+// ResolveDir decides where backups are written.
+//
+// `configured` is the user's backup_dir setting; `dbPath` is the database file
+// or directory. An absolute configured path wins outright. Anything else falls
+// back to the historical behaviour -- a "backups" directory beside the database
+// -- so an unset config behaves exactly as before.
+//
+// This exists because the same `if !filepath.IsAbs(...) { join(dir(dbPath)) }`
+// was copy-pasted at five call sites (the organizer's auto-backup and four
+// handlers). Five copies of a path rule is five chances for the create path and
+// the list path to disagree about where backups live, which would surface as
+// "the backup succeeded but the list is empty". One resolver, one answer.
+//
+// A relative configured path is deliberately NOT resolved against the process
+// working directory: for a service that is wherever systemd happened to start
+// it, which is never a location a person meant to fill with 15 GB archives.
+func ResolveDir(configured, dbPath string) string {
+	if filepath.IsAbs(configured) {
+		return configured
+	}
+	dir := configured
+	if dir == "" {
+		dir = "backups"
+	}
+	if dbPath == "" {
+		return dir
+	}
+	return filepath.Join(filepath.Dir(dbPath), dir)
+}
+
 func DefaultBackupConfig() BackupConfig {
 	return BackupConfig{
 		BackupDir:        "backups",
