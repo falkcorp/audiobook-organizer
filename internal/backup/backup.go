@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-08-29
 
@@ -748,8 +748,14 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 	//     convention for a newly added optional bound. Making it mean "keep no
 	//     bytes" would turn every BackupConfig literal that predates this field
 	//     into a silent delete-everything.
-	overBudget := func(i int) bool {
-		remaining := len(backups) - i
+	// `remaining` is the number of archives ACTUALLY still on disk, which is not
+	// the same as the loop index. A delete can fail -- the backup directory now
+	// lives outside the application's own tree, where a sticky bit or foreign
+	// ownership can make an archive unremovable by the service account. Deriving
+	// `remaining` from the loop index would count such a file as freed, so
+	// retention would stop early believing it had reclaimed a slot it had not,
+	// and the count bound would drift permanently out of step with the disk.
+	overBudget := func(remaining int) bool {
 		if maxBackups >= 0 && remaining+boolToInt(incomingBytes > 0) > maxBackups {
 			return true
 		}
@@ -780,11 +786,15 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 		floor = 0
 	}
 
-	for i := 0; i < len(backups)-floor && overBudget(i); i++ {
+	remaining := len(backups)
+	for i := 0; i < len(backups)-floor && overBudget(remaining); i++ {
 		if err := os.Remove(backups[i].Path); err != nil {
+			// Deliberately do NOT decrement `remaining` or `total`: the archive
+			// is still occupying the directory and the budget.
 			slog.Warn("backup failed to delete old backup", "filename", backups[i].Filename, "error", err)
 			continue
 		}
+		remaining--
 		if backups[i].Size > 0 {
 			total -= uint64(backups[i].Size)
 		}
@@ -796,7 +806,7 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 	// unsatisfiable, which is a configuration problem a human has to resolve --
 	// either a larger budget or a backup directory that is not on the database's
 	// own filesystem.
-	if floor > 0 && len(backups) > 0 && overBudget(len(backups)-floor) {
+	if floor > 0 && len(backups) > 0 && overBudget(remaining) {
 		slog.Warn("backup retention cannot satisfy its budget without deleting the last archive; keeping it",
 			"max_total_bytes", maxTotalBytes, "incoming_bytes", incomingBytes, "retained_bytes", total)
 	}
