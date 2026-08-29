@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.1.0
+# version: 1.2.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-07-17
+# last-edited: 2026-08-29
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -15,6 +15,33 @@
 #
 # See docs/system/deploy-and-gpu-ops.md for the full rollback flow this
 # template's `.prev`-preserving step enables.
+#
+# ---------------------------------------------------------------------------
+# TOOLCHAIN: the `go build` lines below deliberately carry NO GOTOOLCHAIN /
+# GOEXPERIMENT prefix. The committed Makefile exports both
+# (`export GOTOOLCHAIN := go1.26.0`, `export GOEXPERIMENT := jsonv2`) BEFORE its
+# `-include Makefile.local`, and an exported make variable becomes an
+# environment variable for every recipe — including recipes defined in this
+# included file. Verified 2026-08-29: a probe target here echoed
+# `GOTOOLCHAIN=go1.26.0` and built clean on a box whose default `go` is 1.27.0;
+# with the export commented out the same target failed with
+# `undefined: fastrand64` from github.com/cockroachdb/swiss.
+#
+# So: do NOT set `GOTOOLCHAIN` or `GOEXPERIMENT` in this file — you would only
+# create a second copy to drift. Two things you MUST NOT do, because they
+# re-open the 2026-08-24 deploy break:
+#   * `unexport`/override either variable here;
+#   * lift one of these `go build` lines out into a standalone shell script or a
+#     wrapper that does not run under this Makefile — outside make there is
+#     nothing exporting the pin, and GOTOOLCHAIN's default (`auto`) will never
+#     step DOWN from an installed 1.27+ to the 1.26.0 go.mod asks for. Set both
+#     explicitly in any such script.
+#
+# PIPING: never judge one of these targets by `make deploy 2>&1 | tail -30`. A
+# pipeline's exit status is the LAST command's (`tail`, always 0), so a deploy
+# that died in the build reads as a success and prod silently stays on the old
+# binary. Use `set -o pipefail` first, or check `${PIPESTATUS[0]}`.
+# ---------------------------------------------------------------------------
 
 # Hostname/alias of your production box (must resolve via ssh, e.g. an
 # ~/.ssh/config Host entry). 192.168.0.10 is the author's prod host — replace
