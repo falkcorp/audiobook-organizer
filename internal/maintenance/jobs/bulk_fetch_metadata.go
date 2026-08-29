@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package jobs
 
@@ -45,15 +45,22 @@ func (j *bulkFetchMetadataJob) Permission() string { return string(auth.PermLibr
 func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
+	// prefer_audible / skip_cached arrive on the run's own params blob, via the
+	// context. This used to read store.GetOperationParams(opID), whose only
+	// writer (operations.SaveParams) has no caller on the maintenance path since
+	// the v1 op minter was retired (#2784) — so both flags were silently pinned
+	// to false no matter what the operator sent. See maintenance.WithRawParams.
+	//
+	// Both zero values are the conservative choice (source chain unchanged, no
+	// cache skipping), which is what makes an absent blob safe to fall through on:
+	// a requeue re-enqueues with nil params.
 	preferAudible := false
 	skipCached := false
-	if opID != "" {
-		if raw, err := store.GetOperationParams(opID); err == nil && len(raw) > 0 {
-			var p bmf_params
-			if jerr := json.Unmarshal(raw, &p); jerr == nil {
-				preferAudible = p.PreferAudible
-				skipCached = p.SkipCached
-			}
+	if raw := maintenance.RawParamsFromCtx(ctx); len(raw) > 0 {
+		var p bmf_params
+		if jerr := json.Unmarshal(raw, &p); jerr == nil {
+			preferAudible = p.PreferAudible
+			skipCached = p.SkipCached
 		}
 	}
 

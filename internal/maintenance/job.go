@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-08-29
 
@@ -295,9 +295,25 @@ type jobUserStateStore interface {
 	GetBookUserTags(bookID string) ([]string, error)
 }
 
+// GetOperationParams is deliberately ABSENT from this interface.
+//
+// It reads the Pebble key opstate:<opID>:params, written only by
+// operations.SaveParams — whose surviving callers are internal/organizer and
+// internal/itunes, neither of which is on the maintenance path. The maintenance
+// dispatcher's call went away with the v1 op minter (#2784), so from that point
+// every maintenance job calling it received nothing, silently, forever. Five
+// did: revert-metadata-fetch (which was thereby 100% non-functional, since its
+// fetch_op_ids is required), bulk-fetch-metadata, bulk-deluge-import,
+// scan-composer-tags and prune-book-snapshots.
+//
+// Removing the method from the interface is the part that makes this
+// unrepeatable. Converting the five call sites fixes five jobs; taking the method
+// away means a sixth job cannot reach for it — the mistake stops compiling
+// instead of silently returning nothing. Custom params reach a job through
+// maintenance.RawParamsFromCtx, which is fed from the v2 row the run actually
+// has.
 type jobOperationRecordStore interface {
 	GetOperationByID(id string) (*database.Operation, error)
-	GetOperationParams(opID string) ([]byte, error)
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 	CreateOperationResult(result *database.OperationResult) error
 	SaveOperationSummaryLog(op *database.OperationSummaryLog) error
