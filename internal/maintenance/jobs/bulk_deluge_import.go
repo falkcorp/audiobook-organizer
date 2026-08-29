@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package jobs
 
@@ -43,14 +43,27 @@ func (j *bulkDelugeImportJob) CanResume() bool    { return true }
 func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
+	// max_books arrives on the run's own params blob, via the context. This used
+	// to read store.GetOperationParams(opID), whose only writer
+	// (operations.SaveParams) has no caller on the maintenance path since the v1
+	// op minter was retired (#2784), so max_books was always 0 — unlimited.
+	// See maintenance.WithRawParams.
+	//
+	// `dryRun = p.DryRun` is deliberately NOT carried over. dryRun is already a
+	// parameter of this function and the caller decodes it from these very same
+	// bytes (server/maintenance_job_op.go decodes maintenanceJobOpParams.DryRun
+	// off the run's params and passes it here), so the assignment was a SECOND
+	// source of truth for the one flag whose zero value is destructive. It was
+	// inert while this read returned nothing; going live it would have started
+	// overwriting the resolved argument — including clobbering the advertised
+	// dry_run:true default with false whenever the blob omitted the key, which is
+	// precisely the preview-becomes-mutation failure the dispatcher's
+	// advertisedDryRunDefault exists to prevent. The argument is authoritative.
 	maxBooks := 0
-	if opID != "" {
-		if raw, err := store.GetOperationParams(opID); err == nil && len(raw) > 0 {
-			var p bdi_params
-			if jerr := json.Unmarshal(raw, &p); jerr == nil {
-				maxBooks = p.MaxBooks
-				dryRun = p.DryRun
-			}
+	if raw := maintenance.RawParamsFromCtx(ctx); len(raw) > 0 {
+		var p bdi_params
+		if jerr := json.Unmarshal(raw, &p); jerr == nil {
+			maxBooks = p.MaxBooks
 		}
 	}
 

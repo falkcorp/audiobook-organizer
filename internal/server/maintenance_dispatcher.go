@@ -1,13 +1,13 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 55555555-5555-5555-5555-555555555555
 // last-edited: 2026-08-29
 
 package server
 
 import (
+	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 
@@ -113,23 +113,65 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// bool, omitted and false are the same value and the handler cannot tell an
 	// operator who asked to apply from one who said nothing.
 	//
-	// Force is bound here too. Without it this route drops the key before
-	// EnqueueOp ever sees it, so a job's Force parameter is unreachable from the
-	// entry point the UI uses. POST /operations/v2 forwards params verbatim and
-	// would have carried it, but nothing in the web client uses that route for
-	// maintenance -- which is how recompute-book-aggregates ended up printing
-	// "Use Force=true to override" over a flag no caller could set.
+	// force no longer needs a binding of its own. #2965 added one because this
+	// route dropped the key before EnqueueOp ever saw it -- which is how
+	// recompute-book-aggregates ended up printing "Use Force=true to override"
+	// over a flag no caller could set. Keeping every key makes that binding
+	// redundant: force now flows through as an ordinary operator key, and so does
+	// the NEXT custom parameter somebody adds, without a third edit here. The
+	// per-key binding was a fix for one key; this is a fix for the shape.
 	//
-	// A plain bool is right for Force where DryRun needs a pointer: DryRun's zero
-	// value is the DESTRUCTIVE one, so "omitted" must stay distinguishable from
-	// "false". Force's zero value is the safe one, so the two may collapse.
-	var req struct {
-		DryRun *bool `json:"dry_run"`
-		Force  bool  `json:"force"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+	// Read the body ONCE as raw bytes and keep EVERY key the operator sent.
+	//
+	// Binding to a fixed struct is exactly what lost the custom parameters. This
+	// handler bound dry_run (and, since #2965, force) and then enqueued
+	// maintenanceJobOpParams — a three-field struct — so every other key was
+	// dropped right here, at the dispatcher, before it could reach the params
+	// blob. Five jobs take a custom parameter and all five silently received
+	// nothing on this route: revert-metadata-fetch (fetch_op_ids),
+	// bulk-fetch-metadata (prefer_audible, skip_cached), bulk-deluge-import
+	// (max_books), scan-composer-tags (fix_mode), prune-book-snapshots
+	// (keep_count).
+	//
+	// It is the same defect #2965 fixed one layer down for force, with the same
+	// tell: listMaintenanceJobs (above) publishes each job's DefaultParams() to
+	// clients as `default_params`, so the catalogue route ADVERTISES fetch_op_ids
+	// and fix_mode while the run route threw them away. fetch_op_ids is REQUIRED,
+	// so revert-metadata-fetch could only ever return "fetch_op_ids required" —
+	// it was 100% non-functional from the entry point the UI uses.
+	//
+	// A map[string]json.RawMessage is what preserves unknown keys. Values stay
+	// raw and are never re-interpreted, so a job decodes the operator's own bytes
+	// into the shape DefaultParams() advertises.
+	body, readErr := io.ReadAll(c.Request.Body)
+	if readErr != nil {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+readErr.Error())
 		return
+	}
+
+	// An absent or whitespace-only body is legal and means "no parameters" — the
+	// io.EOF tolerance the previous ShouldBindJSON call spelled out. Anything
+	// else must parse as a JSON object; a trailing comma or a truncated upload
+	// is a 400, never a silently-defaulted run.
+	params := map[string]json.RawMessage{}
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &params); err != nil {
+			httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+			return
+		}
+	}
+
+	// dry_run is decoded from the map rather than bound separately so there is
+	// one parse of one body. A wrong TYPE ("true" instead of true) is still a
+	// 400 — the whole point of the *bool is that a malformed dry_run must not
+	// collapse to false and silently mutate. An explicit null is treated as
+	// omitted, matching what ShouldBindJSON did with it.
+	var reqDryRun *bool
+	if raw, ok := params["dry_run"]; ok {
+		if err := json.Unmarshal(raw, &reqDryRun); err != nil {
+			httputil.RespondWithBadRequest(c, "invalid request body: dry_run must be a boolean")
+			return
+		}
 	}
 
 	// When dry_run is omitted, honor the default this job ADVERTISES rather than
@@ -155,8 +197,8 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// jobs advertising false are unaffected. An explicit "dry_run": false still
 	// applies — callers that mean it say so.
 	dryRun := advertisedDryRunDefault(job)
-	if req.DryRun != nil {
-		dryRun = *req.DryRun
+	if reqDryRun != nil {
+		dryRun = *reqDryRun
 	}
 
 	// Enqueue the run. This mints a v2 operations row and nothing else.
@@ -181,11 +223,45 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// of reconstructing it, which is what the v1 row could never do -- database.Operation
 	// has no params field, and that gap is what turned an interrupted PREVIEW into a
 	// real mutation before #2419 worked around it.
-	v2OpID, err := s.opRegistry.EnqueueOp(c.Request.Context(), maintenanceOpID(jobID), maintenanceJobOpParams{
-		JobID:  jobID,
-		DryRun: dryRun,
-		Force:  req.Force,
-	})
+	// Overlay the two keys the dispatcher OWNS onto the operator's object and
+	// enqueue that, rather than marshalling a fixed struct.
+	//
+	// job_id is the dispatcher's to set; a client cannot rename the run it asked
+	// for. dry_run is written back RESOLVED, because advertisedDryRunDefault may
+	// have supplied it — a body with no dry_run must persist the advertised
+	// default, not an absent key, so that both resume paths (which copy
+	// row.Params verbatim) restore the operator's effective choice rather than
+	// falling to Go's zero value, which is the DESTRUCTIVE one. That is the
+	// property #2419 worked around and the v2 params field now provides directly.
+	//
+	// force is deliberately NOT overlaid: it has no dispatcher-side default, so
+	// it flows through as an ordinary operator key like every other custom
+	// parameter. maintenanceJobOpParams is still the shape the Run closure
+	// DECODES (job_id, dry_run, force); it is simply no longer the shape this
+	// route ENCODES, which is what made it a filter.
+	params["job_id"], _ = json.Marshal(jobID)
+	params["dry_run"], _ = json.Marshal(dryRun)
+
+	// encoding/json marshals map keys in sorted order, so this byte shape is
+	// deterministic run to run — which EnqueueOp's dedupe requires, since
+	// legacy_op_id is gone and that comparison is now exact bytes.
+	//
+	// Two bounded effects, both in the safe direction. Across the deploy, a
+	// request arriving while a PRE-deploy run is still in flight compares
+	// sorted-key bytes against that run's struct-order bytes, does not match, and
+	// queues a second run instead of merging — the same window #2965 accepted for
+	// dropping legacy_op_id, and it closes when the last pre-deploy run finishes.
+	// Going forward, two requests for the same job with DIFFERENT custom params
+	// now differ and queue instead of merging, which is required: a run asking to
+	// revert operations A and B must not be silently swallowed by an in-flight run
+	// reverting C. The per-job ConcurrencyKey still serializes them either way.
+	enqParams, marshalErr := json.Marshal(params)
+	if marshalErr != nil {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+marshalErr.Error())
+		return
+	}
+
+	v2OpID, err := s.opRegistry.EnqueueOp(c.Request.Context(), maintenanceOpID(jobID), json.RawMessage(enqParams))
 	if err != nil {
 		httputil.RespondWithConflict(c, err.Error())
 		return

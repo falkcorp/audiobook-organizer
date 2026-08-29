@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-08-17
+// last-edited: 2026-08-29
 
 package jobs
 
@@ -34,16 +34,28 @@ func (j *revertMetadataFetchJob) DefaultParams() any { return &rmf_params{Operat
 func (j *revertMetadataFetchJob) CanResume() bool    { return false }
 
 func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
-	opID := maintenance.OperationIDFromCtx(ctx)
-
-	// Load parameters: fetch_op_ids from operation params if stored.
+	// fetch_op_ids arrives on the run's own params blob, via the context.
+	//
+	// This used to read store.GetOperationParams(OperationIDFromCtx(ctx)), which
+	// loads the Pebble key opstate:<opID>:params. NOTHING on the maintenance path
+	// writes that key — it has exactly one writer, operations.SaveParams, whose
+	// only remaining callers are internal/organizer/service.go and
+	// internal/itunes/service/importer.go. The maintenance dispatcher's call was
+	// deleted with the v1 op minter (#2784), so the read survived its writer.
+	//
+	// For THIS job that was not a degradation, it was total: fetch_op_ids is
+	// required, the read always returned nothing, so Run could only ever reach the
+	// error below. The job was 100% non-functional and said so in a message that
+	// read like operator error.
+	//
+	// No fallback to the old read. It has no writer on this path, so a fallback
+	// could only ever yield nothing — and a fallback that silently yields nothing
+	// is worse than none, because it looks like a safety net.
 	var operationIDs []string
-	if opID != "" {
-		if raw, err := store.GetOperationParams(opID); err == nil && len(raw) > 0 {
-			var p rmf_params
-			if jerr := json.Unmarshal(raw, &p); jerr == nil {
-				operationIDs = p.OperationIDs
-			}
+	if raw := maintenance.RawParamsFromCtx(ctx); len(raw) > 0 {
+		var p rmf_params
+		if jerr := json.Unmarshal(raw, &p); jerr == nil {
+			operationIDs = p.OperationIDs
 		}
 	}
 

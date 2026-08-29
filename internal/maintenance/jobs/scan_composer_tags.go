@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package jobs
 
@@ -44,15 +44,26 @@ func (j *scanComposerTagsJob) CanResume() bool { return true }
 func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
-	// Load fix_mode from persisted params when resuming.
+	// fix_mode arrives on the run's own params blob, via the context. This used to
+	// read store.GetOperationParams(opID), whose only writer
+	// (operations.SaveParams) has no caller on the maintenance path since the v1
+	// op minter was retired (#2784), so fix_mode was pinned to "set_narrator" and
+	// an operator asking for "clear" silently got the opposite behaviour.
+	// See maintenance.WithRawParams.
+	//
+	// `dryRun = p.DryRun` is deliberately NOT carried over — same reason as
+	// bulk-deluge-import: dryRun is already this function's parameter, decoded by
+	// the caller from these same bytes, so the assignment was a second source of
+	// truth for the flag whose zero value is destructive. Worse here than there,
+	// because it sat inside the `p.FixMode != ""` guard: a body setting fix_mode
+	// would have silently reset dry_run while a body omitting it would not, making
+	// the destructive flag depend on an unrelated key. The argument is
+	// authoritative.
 	fixMode := "set_narrator"
-	if opID != "" {
-		if raw, err := store.GetOperationParams(opID); err == nil && len(raw) > 0 {
-			var p sct_params
-			if jerr := json.Unmarshal(raw, &p); jerr == nil && p.FixMode != "" {
-				fixMode = p.FixMode
-				dryRun = p.DryRun
-			}
+	if raw := maintenance.RawParamsFromCtx(ctx); len(raw) > 0 {
+		var p sct_params
+		if jerr := json.Unmarshal(raw, &p); jerr == nil && p.FixMode != "" {
+			fixMode = p.FixMode
 		}
 	}
 
