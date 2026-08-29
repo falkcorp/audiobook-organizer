@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8bb33b18-e9eb-4210-87e4-f87bb86bf4ae
 // last-edited: 2026-08-29
 
@@ -7,6 +7,7 @@ package jobs_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -19,6 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Mirrors the unexported defaultKeepCount so the test states the expected value
+// explicitly rather than reading it from the code under test.
+const defaultKeepCountForTest = 10
 
 func TestPruneBookSnapshotsJob_Registered(t *testing.T) {
 	assertJobRegistered(t, "prune-book-snapshots")
@@ -65,12 +70,23 @@ func (r *pruneRecorder) snapshot() map[string]int {
 	return out
 }
 
-func TestPruneBookSnapshotsJob_HonoursKeepCountFromOperationParams(t *testing.T) {
+// keep_count must ride the LIVE params channel (WithRawParams), which
+// maintenance_job_op.go populates from the v2 operation row.
+//
+// The first version of this test stubbed GetOperationParamsFunc instead. It
+// passed, and the feature was still completely inert: GetOperationParams reads
+// opstate:<opID>:params, which only operations.SaveParams writes, and the
+// maintenance dispatcher has not called SaveParams since the v1 op minter was
+// retired (#2784). The stub was a hook production never populates -- the test
+// asserted against a channel that did not exist.
+func TestPruneBookSnapshotsJob_HonoursKeepCountFromLiveParams(t *testing.T) {
 	rec := &pruneRecorder{}
 	store := &database.MockStore{
 		ListBookIDsFunc:        func() ([]string, error) { return []string{"b1"}, nil },
 		CountBookSnapshotsFunc: func(id string) (int, error) { return 100, nil },
-		GetOperationParamsFunc: func(opID string) ([]byte, error) { return []byte(`{"keep_count":3}`), nil },
+		// Deliberately NOT stubbed: if the job ever regresses to reading
+		// GetOperationParams, it gets the zero value and falls back to the
+		// default, which this assertion catches.
 		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 			rec.record(id, keep)
 			return 97, nil
@@ -79,11 +95,34 @@ func TestPruneBookSnapshotsJob_HonoursKeepCountFromOperationParams(t *testing.T)
 
 	j, err := maintenance.Get("prune-book-snapshots")
 	require.NoError(t, err)
-	ctx := maintenance.WithOperationID(context.Background(), "op-1")
+	ctx := maintenance.WithRawParams(context.Background(), json.RawMessage(`{"keep_count":3}`))
 	require.NoError(t, j.Run(ctx, store, &noopReporter{}, false))
 
 	assert.Equal(t, map[string]int{"b1": 3}, rec.snapshot(),
-		"keep_count from the operation row must reach PruneBookSnapshots, not the default")
+		"keep_count from the live params channel must reach PruneBookSnapshots")
+}
+
+// A zero or negative keep_count must NOT mean "keep nothing" -- that would turn
+// a retention tweak into a full history wipe. This repo has already taken a
+// production outage from a 0 config value being treated as load-bearing.
+func TestPruneBookSnapshotsJob_ZeroKeepCountFallsBackToDefault(t *testing.T) {
+	for _, body := range []string{`{"keep_count":0}`, `{"keep_count":-5}`, `{}`, `not json`} {
+		rec := &pruneRecorder{}
+		store := &database.MockStore{
+			ListBookIDsFunc:        func() ([]string, error) { return []string{"b1"}, nil },
+			CountBookSnapshotsFunc: func(id string) (int, error) { return 100, nil },
+			PruneBookVersionsFunc: func(id string, keep int) (int, error) {
+				rec.record(id, keep)
+				return 90, nil
+			},
+		}
+		j, err := maintenance.Get("prune-book-snapshots")
+		require.NoError(t, err)
+		ctx := maintenance.WithRawParams(context.Background(), json.RawMessage(body))
+		require.NoError(t, j.Run(ctx, store, &noopReporter{}, false))
+		assert.Equal(t, map[string]int{"b1": defaultKeepCountForTest}, rec.snapshot(),
+			"params %q must fall back to the default, never to 0", body)
+	}
 }
 
 func TestPruneBookSnapshotsJob_DefaultsWhenNoParams(t *testing.T) {
