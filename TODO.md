@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.44.2 -->
+<!-- version: 10.45.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-29 -->
 
@@ -1086,10 +1086,32 @@ expensive to process.
 ### Do NOT conflate this with the 12.8% figure
 
 The 12.8% of books lacking `last_scan_mtime` was sampled from **book rows**.
-Files with no row at all are structurally invisible to that measurement. These
-are disjoint populations and fixing one will not move the other. The weekly
-`force_update` sweep does not cover this one either: a sweep re-writes cache
-entries for files that *get* a row, and these never do.
+Files with no row *anywhere* are structurally invisible to that measurement, so
+for that sub-population the two figures really are disjoint. The weekly
+`force_update` sweep does not cover it either: a sweep re-writes cache entries
+for files that *get* a row, and these never do.
+
+> **CORRECTED 2026-08-29 (#134).** This section previously said, flatly, that
+> `scanCacheNoRowCount` and the nil-`last_scan_mtime` population "are disjoint
+> populations and fixing one will not move the other." **That generalization was
+> wrong**, and it was wrong in the direction that hides work: it treats the
+> counter as if row-less duplicate paths were its only cause.
+>
+> They were not. The FilePath desync fixed in `9a29957b0` + `e2c7b3292` made a
+> multi-file book increment `scanCacheNoRowCount` *while having a perfectly good
+> book row* — `createBookFilesForBook` moved the row to the containing directory
+> and the caller kept looking under `segs[0]`. Such a book is counted by BOTH
+> instruments: it lands in `scanCacheNoRowCount` at the dead path, and it lands
+> in the 12.8% book-row sample as a row with a nil `last_scan_mtime`. The
+> populations OVERLAP, and closing the desync moved both — pinned by
+> `TestProcessBooksParallelWritesScanCacheForNormalizedMultiFileBook`
+> (`internal/scanner/create_book_files_path_return_test.go:166`), which asserts
+> `LastScanMtime != nil` after a scan of a normalized multi-file book.
+>
+> Consequence for the sizing task below: a `scanCacheNoRowCount` reading taken
+> **before** those two commits deployed cannot be attributed to row-less paths
+> at all. Take the reading fresh, and treat any "the two numbers can't inform
+> each other" reasoning built on the old claim as retired.
 
 ### Tasks
 
@@ -1124,7 +1146,11 @@ entries for files that *get* a row, and these never do.
       *the* cause. There is at least a third early `return nil` with the same
       effect — the blocked-hash skip in `saveBookToDatabase`. Any estimate that
       attributes the whole `scanCacheNoRowCount` figure to duplicate files will
-      be wrong.
+      be wrong. A **fourth** cause was not a row-less path at all: the multi-file
+      FilePath desync (#134), where the row existed but had moved. Fixed
+      2026-08-24 in `9a29957b0` (report the move to the caller) and `e2c7b3292`
+      (recover rows an earlier scan had already moved), so it should no longer
+      contribute — but that is a reason to re-read the counter, not to assume it.
 
 - [ ] **Decide how a forced per-book rescan gets picked up immediately.**
       `POST /audiobooks/:id/force-rescan` (#2856) sets `NeedsRescan`, which is
