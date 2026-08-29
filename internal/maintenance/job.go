@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-08-27
 
@@ -201,6 +201,9 @@ type jobBookReader interface {
 	// strands them.
 	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
+	// CountBookSnapshots reads only keys, so a job can size a prune across the
+	// whole library without loading ~7.65 GB of snapshot payloads to count them.
+	CountBookSnapshots(id string) (int, error)
 }
 
 type jobBookWriter interface {
@@ -208,6 +211,7 @@ type jobBookWriter interface {
 	DeleteBook(id string) error
 	RecomputeBookAggregates(bookID string) error
 	MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
+	PruneBookSnapshots(id string, keepCount int) (int, error)
 }
 
 type jobBookStore interface {

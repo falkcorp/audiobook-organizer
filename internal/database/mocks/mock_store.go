@@ -5916,6 +5916,66 @@ func (_c *MockStore_CountAuthors_Call) RunAndReturn(run func() (int, error)) *Mo
 	return _c
 }
 
+// CountBookSnapshots provides a mock function for the type MockStore
+func (_mock *MockStore) CountBookSnapshots(id string) (int, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CountBookSnapshots")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (int, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) int); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_CountBookSnapshots_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountBookSnapshots'
+type MockStore_CountBookSnapshots_Call struct {
+	*mock.Call
+}
+
+// CountBookSnapshots is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) CountBookSnapshots(id any) *MockStore_CountBookSnapshots_Call {
+	return &MockStore_CountBookSnapshots_Call{Call: _e.mock.On("CountBookSnapshots", id)}
+}
+
+func (_c *MockStore_CountBookSnapshots_Call) Run(run func(id string)) *MockStore_CountBookSnapshots_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CountBookSnapshots_Call) Return(n int, err error) *MockStore_CountBookSnapshots_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockStore_CountBookSnapshots_Call) RunAndReturn(run func(id string) (int, error)) *MockStore_CountBookSnapshots_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CountBooksByPathPrefix provides a mock function for the type MockStore
 func (_mock *MockStore) CountBooksByPathPrefix(prefix string) (int, error) {
 	ret := _mock.Called(prefix)
