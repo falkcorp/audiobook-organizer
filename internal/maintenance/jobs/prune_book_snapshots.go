@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3714dde-e788-468a-958a-5514eebcd952
 // last-edited: 2026-08-29
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sync/atomic"
 
@@ -21,10 +22,17 @@ func init() { maintenance.Register(&pruneBookSnapshotsJob{}) }
 
 type pruneBookSnapshotsJob struct{}
 
-// pbs_params carries the retention depth. It arrives the same way
-// revert_metadata_fetch's fetch_op_ids does: MaintenanceJob.Run is handed only
-// dryRun, so anything else has to be read back off the operation row via
-// GetOperationParams(OperationIDFromCtx(ctx)).
+// pbs_params carries the retention depth. MaintenanceJob.Run is handed only
+// dryRun, so anything else rides the context.
+//
+// This originally copied revert_metadata_fetch's GetOperationParams(opID) call.
+// That path is DEAD for maintenance jobs: GetOperationParams reads the Pebble key
+// opstate:<opID>:params, written only by operations.SaveParams, whose sole
+// production callers are internal/organizer/service.go and
+// internal/itunes/service/importer.go -- the maintenance dispatcher's call went
+// away with the v1 op minter (#2784). So keep_count silently never arrived and
+// every run used the default. The package test passed because it stubbed
+// GetOperationParamsFunc, a hook production never populates.
 type pbs_params struct {
 	DryRun    bool `json:"dry_run"`
 	KeepCount int  `json:"keep_count"`
@@ -68,16 +76,29 @@ func (j *pruneBookSnapshotsJob) Policy() maintenance.ExecutionPolicy {
 // never over-deletes.
 func (j *pruneBookSnapshotsJob) CanResume() bool { return false }
 
-func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
-	keepCount := defaultKeepCount
-	if opID := maintenance.OperationIDFromCtx(ctx); opID != "" {
-		if raw, err := store.GetOperationParams(opID); err == nil && len(raw) > 0 {
-			var p pbs_params
-			if jerr := json.Unmarshal(raw, &p); jerr == nil && p.KeepCount > 0 {
-				keepCount = p.KeepCount
-			}
-		}
+// keepCountFromCtx reads keep_count off the live params channel. A missing,
+// unparseable, or non-positive value falls back to the default: a zero would
+// otherwise mean "keep nothing", turning a retention tweak into a full history
+// wipe, so zero is deliberately NOT load-bearing here.
+func keepCountFromCtx(ctx context.Context) int {
+	raw := maintenance.RawParamsFromCtx(ctx)
+	if len(raw) == 0 {
+		return defaultKeepCount
 	}
+	var p pbs_params
+	if err := json.Unmarshal(raw, &p); err != nil {
+		slog.Warn("prune-book-snapshots: could not decode run params; using default keep_count",
+			"error", err, "default", defaultKeepCount)
+		return defaultKeepCount
+	}
+	if p.KeepCount <= 0 {
+		return defaultKeepCount
+	}
+	return p.KeepCount
+}
+
+func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
+	keepCount := keepCountFromCtx(ctx)
 
 	ids, err := store.ListBookIDs()
 	if err != nil {
