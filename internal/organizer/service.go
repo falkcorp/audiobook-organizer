@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-24
+// last-edited: 2026-08-29
 
 package organizer
 
@@ -549,9 +549,7 @@ func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 	}
 
 	backupConfig := backup.DefaultBackupConfig()
-	if !filepath.IsAbs(backupConfig.BackupDir) {
-		backupConfig.BackupDir = filepath.Join(filepath.Dir(dbPath), backupConfig.BackupDir)
-	}
+	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, dbPath)
 
 	if age, name, ok := newestBackupAge(backupConfig.BackupDir); ok && age < autoBackupMinInterval {
 		log.Info("Skipping auto-backup: %s is %s old (under the %s threshold)",

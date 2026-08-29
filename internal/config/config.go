@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.88.0
+// version: 1.89.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-25
+// last-edited: 2026-08-29
 
 package config
 
@@ -684,6 +684,12 @@ type Config struct {
 	FolderNamingPattern     string `json:"folder_naming_pattern"`
 	FileNamingPattern       string `json:"file_naming_pattern"`
 	CreateBackups           bool   `json:"create_backups"`
+	// BackupDir is where database backups are written. Absolute paths are used
+	// as-is; empty means "a backups/ directory beside the database", which is
+	// the historical behaviour. Pointing this off the database's own filesystem
+	// is strongly recommended -- see the 2026-08-29 outage, where a 15 GB
+	// archive written beside the database filled the disk and killed it.
+	BackupDir string `json:"backup_dir" mapstructure:"backup_dir"`
 
 	// Storage quotas
 	EnableDiskQuota    bool `json:"enable_disk_quota"`
@@ -1775,6 +1781,7 @@ func InitConfig() {
 			FolderNamingPattern:     viper.GetString("folder_naming_pattern"),
 			FileNamingPattern:       viper.GetString("file_naming_pattern"),
 			CreateBackups:           viper.GetBool("create_backups"),
+			BackupDir:               viper.GetString("backup_dir"),
 
 			// Storage quotas
 			EnableDiskQuota:    viper.GetBool("enable_disk_quota"),

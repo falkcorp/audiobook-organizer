@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.70.0
+// version: 1.71.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-25
+// last-edited: 2026-08-29
 
 package scanner
 
@@ -32,6 +32,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/oklog/ulid/v2"
 )
@@ -914,7 +915,12 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			return nil
 		}
 		if d.IsDir() {
-			if d.Name() == ".failed" {
+			// Generalises what used to be a single hard-coded `.failed` check.
+			// The app keeps its own state inside the library tree (.backups,
+			// .itunes-writeback, .failed), and naming them one at a time meant
+			// every new hidden directory had to remember to add itself to a
+			// list it did not know existed.
+			if pathutil.ShouldSkipDir(rootDir, path) {
 				return filepath.SkipDir
 			}
 			if !registerDirectory(path, info) {

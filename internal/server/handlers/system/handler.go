@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-08-19
+// last-edited: 2026-08-29
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -530,9 +530,7 @@ func (h *Handler) CreateBackup(c *gin.Context) {
 	dbType := config.AppConfig.DatabaseType
 
 	// Resolve backup dir relative to database directory so it's always absolute
-	if dbPath != "" && !filepath.IsAbs(backupConfig.BackupDir) {
-		backupConfig.BackupDir = filepath.Join(filepath.Dir(dbPath), backupConfig.BackupDir)
-	}
+	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, dbPath)
 
 	var info *backup.BackupInfo
 	var err error
@@ -567,9 +565,7 @@ func (h *Handler) CreateBackup(c *gin.Context) {
 // ListBackups lists all available backups. Implements GET /backup/list.
 func (h *Handler) ListBackups(c *gin.Context) {
 	backupConfig := backup.DefaultBackupConfig()
-	if dbPath := config.AppConfig.DatabasePath; dbPath != "" && !filepath.IsAbs(backupConfig.BackupDir) {
-		backupConfig.BackupDir = filepath.Join(filepath.Dir(dbPath), backupConfig.BackupDir)
-	}
+	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 
 	backups, err := backup.ListBackups(backupConfig.BackupDir)
 	if err != nil {
@@ -602,9 +598,7 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	}
 
 	backupConfig := backup.DefaultBackupConfig()
-	if dbPath := config.AppConfig.DatabasePath; dbPath != "" && !filepath.IsAbs(backupConfig.BackupDir) {
-		backupConfig.BackupDir = filepath.Join(filepath.Dir(dbPath), backupConfig.BackupDir)
-	}
+	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 	safeFilename := pathvalidation.SanitizeFilename(req.BackupFilename)
 	backupPath := filepath.Join(backupConfig.BackupDir, safeFilename)
 
@@ -649,9 +643,7 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	}
 
 	backupConfig := backup.DefaultBackupConfig()
-	if dbPath := config.AppConfig.DatabasePath; dbPath != "" && !filepath.IsAbs(backupConfig.BackupDir) {
-		backupConfig.BackupDir = filepath.Join(filepath.Dir(dbPath), backupConfig.BackupDir)
-	}
+	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 	filename = pathvalidation.SanitizeFilename(filename)
 	backupPath := filepath.Join(backupConfig.BackupDir, filename)
 

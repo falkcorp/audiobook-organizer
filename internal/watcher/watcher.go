@@ -1,7 +1,7 @@
 // file: internal/watcher/watcher.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-07-30
+// last-edited: 2026-08-29
 
 package watcher
 
@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // audioExtensions are the file extensions we care about.
@@ -144,6 +146,14 @@ func (w *Watcher) addRecursive(root string) error {
 			return nil // skip inaccessible dirs
 		}
 		if d.IsDir() {
+			// Never watch hidden directories. The app writes its own state
+			// inside the library tree, and a database backup landing in
+			// <root>/.backups is a multi-GB write that would otherwise fire a
+			// storm of filesystem events and debounce-trigger an auto-scan --
+			// the application reacting to its own backup.
+			if pathutil.ShouldSkipDir(root, path) {
+				return filepath.SkipDir
+			}
 			if watchErr := w.fsWatcher.Add(path); watchErr != nil {
 				slog.Warn("watcher cannot watch", "path", path, "watchErr", watchErr)
 			}
