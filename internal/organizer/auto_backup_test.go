@@ -1,5 +1,5 @@
 // file: internal/organizer/auto_backup_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b7e2d18-9c53-4a06-8f21-6d5e3a90c471
 // last-edited: 2026-08-29
 
@@ -212,5 +212,54 @@ func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
 	// leaves all three seeded archives plus the new one = 4.
 	if len(archives) != 2 {
 		t.Errorf("got %d archives %v, want 2: the configured backup_max_total_bytes did not reach retention, so the built-in 40 GiB default was enforced instead", len(archives), archives)
+	}
+}
+
+// The freshness check must consult the NEWEST archive, not just any archive.
+//
+// Every other fixture in this file seeds a SINGLE backup, where "newest" and
+// "oldest" are the same file -- so the selection loop inside newestBackupAge was
+// entirely unverified. Measured 2026-08-29: inverting that comparison
+// (.After -> .Before) left the whole package green.
+//
+// The consequence of getting it wrong is expensive rather than subtle. A library
+// that keeps several archives always has an old one; reading THAT one's age
+// makes the 6-hour window look expired on every call, so every organize re-takes
+// a backup that at this database's size costs ~65 minutes and ~30 GB of I/O --
+// which is precisely the waste autoBackupMinInterval exists to prevent.
+func TestAutoBackup_FreshnessUsesTheNewestArchiveNotTheOldest(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	pebbleStore, err := database.NewPebbleStore(dbPath)
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = pebbleStore.Close() })
+
+	backupDir := withBackupEnv(t, dbPath)
+	if mkErr := os.MkdirAll(backupDir, 0o775); mkErr != nil {
+		t.Fatalf("mkdir backups: %v", mkErr)
+	}
+
+	// Two stale archives and one fresh one. Filename order deliberately does NOT
+	// match age order, so a implementation that trusted lexical ordering rather
+	// than mtime would also be caught here.
+	seed := func(name string, age time.Duration) {
+		t.Helper()
+		p := filepath.Join(backupDir, name)
+		if wErr := os.WriteFile(p, []byte("archive"), 0o644); wErr != nil {
+			t.Fatalf("seed %s: %v", name, wErr)
+		}
+		ts := time.Now().Add(-age)
+		if cErr := os.Chtimes(p, ts, ts); cErr != nil {
+			t.Fatalf("chtimes %s: %v", name, cErr)
+		}
+	}
+	seed("audiobooks_pebble_20260801_000000.tar.gz", 30*24*time.Hour) // ancient
+	seed("audiobooks_pebble_20260803_000000.tar.gz", time.Minute)     // FRESH
+	seed("audiobooks_pebble_20260802_000000.tar.gz", 20*24*time.Hour) // ancient
+
+	svc := NewService(pebbleStore)
+	if got := svc.autoBackup(logger.New("test")); got != backupSkippedRecent {
+		t.Fatalf("autoBackup took the %q path, want %q -- a one-minute-old archive exists, so the freshness check must have read an OLDER archive's timestamp and concluded the backup was stale", got, backupSkippedRecent)
 	}
 }
