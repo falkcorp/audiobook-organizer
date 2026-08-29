@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-08-29
 //
@@ -44,6 +44,10 @@ import { runtimeDiffers, type RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 
 /** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
+// Upper bound on how long a dispatched apply keeps its rows protected from
+// reconciliation. See runApplyOp for why this is bounded at all.
+const APPLY_INFLIGHT_MAX_MS = 60 * 60 * 1000;
+
 const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
 
 export type Toast = (
@@ -424,7 +428,23 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // permanent: a book the background worker failed on stays hidden behind the
   // default Hide-applied filter forever, and the reviewer is never told. That
   // is worse than a visible failure, because the queue looks finished.
-  const inFlightApplyRef = useRef<Set<string>>(new Set());
+  // REFCOUNTED, not a plain Set. A book can be in two applies at once -- a
+  // bulk "Apply Selected" and a per-row Apply inside the 500ms debounce window
+  // -- and with a Set the first op to finish deleted the shared entry and
+  // reverted the row while the second was still genuinely running.
+  const inFlightApplyRef = useRef<Map<string, number>>(new Map());
+  const retainInFlight = useCallback((ids: string[]) => {
+    ids.forEach((id) =>
+      inFlightApplyRef.current.set(id, (inFlightApplyRef.current.get(id) ?? 0) + 1)
+    );
+  }, []);
+  const releaseInFlight = useCallback((ids: string[]) => {
+    ids.forEach((id) => {
+      const n = (inFlightApplyRef.current.get(id) ?? 0) - 1;
+      if (n > 0) inFlightApplyRef.current.set(id, n);
+      else inFlightApplyRef.current.delete(id);
+    });
+  }, []);
 
   // Guards the deferred refresh below: the apply op outlives the component if
   // the user navigates away mid-apply, and setting state then warns.
@@ -469,18 +489,43 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         //     actually tracks, applied and no_match;
         //   - and a stale optimistic `applied` on a book the server does NOT
         //     report as applied is dropped, which is the whole point.
-        // `skipped` is client-only -- the server has no opinion on it, so it is
-        // never touched here.
         setRowStates((prev) => {
           const next = new Map(prev);
           for (const r of allResults) {
             const id = r.book.id;
-            if (inFlightApplyRef.current.has(id)) continue;
+            if ((inFlightApplyRef.current.get(id) ?? 0) > 0) continue;
+
+            // ONLY an absent state or the optimistic `applied` may be
+            // reconciled. Everything else is a deliberate in-session decision
+            // and the server has no better answer for it.
+            //
+            // An earlier version of this loop wrote `rejected` unconditionally
+            // whenever the server said no_match, and that was a data-loss bug
+            // of exactly the kind this reconcile exists to fix. `skip` and
+            // `skipAllUnmatched` set the client-only `skipped` on rows whose
+            // server status IS no_match (skip never calls the server, unlike
+            // reject). So every skipped row flipped to `rejected` on the very
+            // next refresh. Deterministic, not a race.
+            //
+            // Where that is visible: no_match rows are hidden by default
+            // (`hideNoMatch: true`), so the reviewer meets them by turning that
+            // filter off -- which is precisely the pass in which skip is used.
+            // In that view `hideSkipped` is false (it is only true under the
+            // strict preset, default off) while `hideRejected` is true, so the
+            // clobber did not merely relabel the row: it disappeared, and the
+            // unskip affordance went with it.
+            //
+            // It also clobbered `unreject`: that sets `pending` client-side
+            // after clearing the no-match, so a refresh landing before the
+            // server caught up flipped the undo straight back to rejected.
+            const local = next.get(id);
+            if (local !== undefined && local !== 'applied') continue;
+
             if (r.status === 'applied') {
               next.set(id, 'applied');
             } else if (r.status === 'no_match') {
               next.set(id, 'rejected');
-            } else if (next.get(id) === 'applied') {
+            } else if (local === 'applied') {
               next.delete(id);
             }
           }
@@ -741,7 +786,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       // A dispatch can fail after some ids were marked in flight (or the poll
       // never runs its finally). Clearing here keeps the refresh below able to
       // correct them rather than leaving them permanently uncorrectable.
-      requestedIds.forEach((id) => inFlightApplyRef.current.delete(id));
+      releaseInFlight(requestedIds);
       refresh();
       if (isAuthRedirectError(err)) {
         toast(
@@ -752,7 +797,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       }
       toast(`Failed to start applying ${requestedIds.length} book(s)`, 'error');
     },
-    [toast, refresh]
+    [toast, refresh, releaseInFlight]
   );
 
   // Dispatches the background apply and returns; the bell owns progress.
@@ -760,27 +805,37 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const runApplyOp = useCallback(
     async (requestedIds: string[], writeBack?: boolean): Promise<void> => {
       const dispatched = await api.batchApplyFromCache(requestedIds, writeBack);
-      // Marked in flight only AFTER the dispatch is accepted. A request that
-      // threw never reached the worker, so those books must stay correctable.
-      requestedIds.forEach((id) => inFlightApplyRef.current.add(id));
       toast(
         `Metadata apply queued for ${requestedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
         'success'
       );
-      void api
-        .pollOperationV2(dispatched.op_id)
-        .catch(() => undefined)
-        .finally(() => {
-          // Cleared BEFORE the refresh, so the refresh it triggers is the one
-          // that gets to correct these rows. Clearing after would let the
-          // reconcile skip them and the stale `applied` would survive the very
-          // refresh that exists to fix it.
-          requestedIds.forEach((id) => inFlightApplyRef.current.delete(id));
-          if (!aliveRef.current) return;
-          refresh();
-        });
+      // pollOperationV2 loops forever with no timeout, so an op that never
+      // reaches a terminal status (a crashed worker, an unrecognised status)
+      // would leave these ids retained permanently -- freezing their optimistic
+      // `applied` and reproducing the exact permanent-stale-state bug this
+      // reconcile exists to fix, just gated on op completion instead of on an
+      // add-only merge. So the protection is bounded.
+      //
+      // The bound is deliberately generous. Releasing early on a genuinely
+      // long apply lets the reconcile revert rows the worker is still
+      // processing, which is the flicker ActionBar.tsx disclaims. Between the
+      // two failure modes, a visible flicker on a very long op beats rows that
+      // are silently hidden forever, so it is bounded rather than left open.
+      // Measured reference: 250 books took 2m0s in production.
+      void Promise.race([
+        api.pollOperationV2(dispatched.op_id).catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, APPLY_INFLIGHT_MAX_MS)),
+      ]).finally(() => {
+        // Released BEFORE the refresh, so the refresh it triggers is the one
+        // that gets to correct these rows. Releasing after would let the
+        // reconcile skip them and the stale `applied` would survive the very
+        // refresh that exists to fix it.
+        releaseInFlight(requestedIds);
+        if (!aliveRef.current) return;
+        refresh();
+      });
     },
-    [toast, refresh]
+    [toast, refresh, releaseInFlight]
   );
 
   const flushApplyQueue = useCallback(async () => {
@@ -796,18 +851,26 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const applyOne = useCallback(
     (bookId: string) => {
+      // Retained at the OPTIMISTIC MARK, not after the dispatch resolves.
+      // applyOne marks the row synchronously but its dispatch is behind a 500ms
+      // debounce, so retaining later left a window in which any refresh (another
+      // apply's terminal poll, a filter change) reverted the row -- the precise
+      // flicker ActionBar.tsx rejects useOptimistic to avoid. applyMany has no
+      // such window because it retains before dispatching.
+      retainInFlight([bookId]);
       setRowStates((prev) => new Map(prev).set(bookId, 'applied'));
       applyQueueRef.current.push(bookId);
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       applyTimerRef.current = setTimeout(() => void flushApplyQueue(), 500);
     },
-    [flushApplyQueue]
+    [flushApplyQueue, retainInFlight]
   );
 
   const applyMany = useCallback(
     async (bookIds: string[]) => {
       if (bookIds.length === 0) return;
       setApplying(true);
+      retainInFlight(bookIds);
       try {
         await runApplyOp(bookIds);
         // Dispatch acceptance is the point at which this batch belongs to the
@@ -834,7 +897,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setApplying(false);
       }
     },
-    [runApplyOp, handleApplyError]
+    [runApplyOp, handleApplyError, retainInFlight]
   );
 
   const reject = useCallback(
