@@ -46,19 +46,21 @@ func (j *pruneBookSnapshotsJob) Description() string {
 	return "Delete old copy-on-write book version snapshots library-wide, keeping the newest keep_count per book"
 }
 
-// Policy is RestartPolicy, not DefaultPolicy, for a reason specific to this job:
-// keep_count is read back off the operation row via GetOperationParams. ResumeDrop
-// would abandon a library-wide run on any restart, and ResumeRequeue "mints a fresh
-// ULID and moves all of that" — including the params this job needs. ResumeRestart
-// re-dispatches the SAME row, so the retention depth survives the restart.
+// Policy is DefaultPolicy. Two earlier justifications for deviating from it did
+// not survive checking:
 //
-// ConcurrencyKey is set because two concurrent runs would each count the same
-// book_ver: prefix and issue overlapping deletes; the job is idempotent across
-// sequential runs, not across simultaneous ones.
+//   - ResumeRestart "so keep_count survives a restart" — but ResumeDrop never
+//     resumes, so it never needs to reconstruct params at all. The argument was
+//     against ResumeRequeue (which mints a fresh operation id and would lose the
+//     params), not in favour of Restart over Drop. Dropping an in-flight prune is
+//     acceptable: the job is idempotent and cheap to re-trigger, and CanResume()
+//     is false because it genuinely does not checkpoint.
+//   - A ConcurrencyKey "because concurrent runs issue overlapping deletes" — they
+//     do, but a Pebble delete of an already-deleted key is a no-op, so two
+//     simultaneous runs waste work without corrupting anything. Wasteful is not
+//     the bar the bridge's empty key is measured against.
 func (j *pruneBookSnapshotsJob) Policy() maintenance.ExecutionPolicy {
-	p := maintenance.RestartPolicy()
-	p.ConcurrencyKey = "prune-book-snapshots"
-	return p
+	return maintenance.DefaultPolicy()
 }
 
 // Not resumable: a re-run is idempotent (a book already at keep_count prunes
