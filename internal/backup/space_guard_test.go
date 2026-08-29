@@ -1,5 +1,5 @@
 // file: internal/backup/space_guard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b6d0f27-58c1-49ea-a704-1f8e2d95c6b3
 // last-edited: 2026-08-29
 
@@ -551,5 +551,29 @@ func TestEnforceRetention_AFailedDeleteIsNotCountedAsFreed(t *testing.T) {
 	}
 	if len(entries) != 5 {
 		t.Errorf("got %d archives on disk, want 5 -- nothing was deletable", len(entries))
+	}
+}
+
+// ResolveMaxTotalBytes translates between two conflicting zero conventions, so
+// each one is pinned explicitly. The dangerous direction is the config zero: if
+// it passed straight through, "the operator never set this" would silently
+// become "retain archives without bound" -- an unset value quietly changing
+// behaviour, which is the exact shape of the chapter_consolidation_threshold_min
+// defect this codebase has already paid for once.
+func TestResolveMaxTotalBytes(t *testing.T) {
+	if got := ResolveMaxTotalBytes(0); got != defaultMaxTotalBytes {
+		t.Errorf("ResolveMaxTotalBytes(0) = %d, want the default %d: an UNSET budget must not mean unlimited", got, defaultMaxTotalBytes)
+	}
+	if got := ResolveMaxTotalBytes(0); got == 0 {
+		t.Error("ResolveMaxTotalBytes(0) returned 0, which enforceRetention reads as UNLIMITED")
+	}
+	if got := ResolveMaxTotalBytes(-1); got != 0 {
+		t.Errorf("ResolveMaxTotalBytes(-1) = %d, want 0 (unlimited)", got)
+	}
+	if got := ResolveMaxTotalBytes(500 << 30); got != 500<<30 {
+		t.Errorf("ResolveMaxTotalBytes(500 GiB) = %d, want %d", got, uint64(500<<30))
+	}
+	if got := ResolveMaxTotalBytes(1); got != 1 {
+		t.Errorf("ResolveMaxTotalBytes(1) = %d, want 1", got)
 	}
 }

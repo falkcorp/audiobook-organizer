@@ -1,13 +1,14 @@
 // file: internal/organizer/auto_backup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b7e2d18-9c53-4a06-8f21-6d5e3a90c471
-// last-edited: 2026-08-11
+// last-edited: 2026-08-29
 
 package organizer
 
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,5 +139,78 @@ func TestAutoBackup_StillBacksUpWhenTheOnlyBackupIsStale(t *testing.T) {
 	if got := svc.autoBackup(logger.New("test")); got == backupSkippedRecent {
 		t.Fatalf("autoBackup skipped on a backup %s old; the %s freshness window "+
 			"must not suppress backups indefinitely", 2*autoBackupMinInterval, autoBackupMinInterval)
+	}
+}
+
+// The CONFIGURED byte budget must actually reach retention.
+//
+// Testing backup.ResolveMaxTotalBytes in isolation would prove only that the
+// translation is correct, not that anyone performs it. The defect this guards
+// against is autoBackup silently keeping DefaultBackupConfig()'s hardcoded
+// 40 GiB while the operator's setting is ignored -- and that failure is
+// invisible on a small test database, because a backup still succeeds either
+// way. So the assertion is on what retention PRUNED, which is the only
+// observable that differs between the two.
+//
+// This matters operationally: backup_dir now points at an 11 TB library volume,
+// and a budget stuck at 40 GiB against a ~30 GiB archive lets that volume retain
+// exactly one backup -- the move would buy space the application refuses to use.
+func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	pebbleStore, err := database.NewPebbleStore(dbPath)
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = pebbleStore.Close() })
+
+	backupDir := withBackupEnv(t, dbPath)
+	if mkErr := os.MkdirAll(backupDir, 0o775); mkErr != nil {
+		t.Fatalf("mkdir backups: %v", mkErr)
+	}
+
+	prevBudget := config.AppConfig.BackupMaxTotalBytes
+	t.Cleanup(func() { config.AppConfig.BackupMaxTotalBytes = prevBudget })
+	// Small enough that the seeded archives alone exceed it. The default budget
+	// (40 GiB) would prune nothing here, which is exactly the distinction.
+	config.AppConfig.BackupMaxTotalBytes = 4096
+
+	// Three stale archives: stale so the freshness window does not short-circuit
+	// autoBackup before retention ever runs.
+	old := time.Now().Add(-2 * autoBackupMinInterval)
+	for _, name := range []string{
+		"audiobooks_pebble_20260801_000000.tar.gz",
+		"audiobooks_pebble_20260802_000000.tar.gz",
+		"audiobooks_pebble_20260803_000000.tar.gz",
+	} {
+		path := filepath.Join(backupDir, name)
+		if wErr := os.WriteFile(path, make([]byte, 2000), 0o644); wErr != nil {
+			t.Fatalf("seed %s: %v", name, wErr)
+		}
+		if cErr := os.Chtimes(path, old, old); cErr != nil {
+			t.Fatalf("chtimes %s: %v", name, cErr)
+		}
+	}
+
+	svc := NewService(pebbleStore)
+	if got := svc.autoBackup(logger.New("test")); got == backupSkippedRecent {
+		t.Fatalf("autoBackup skipped; retention never ran so this test asserts nothing (got %q)", got)
+	}
+
+	entries, rErr := os.ReadDir(backupDir)
+	if rErr != nil {
+		t.Fatalf("read backup dir: %v", rErr)
+	}
+	var archives []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".tar.gz") {
+			archives = append(archives, e.Name())
+		}
+	}
+
+	// One seeded archive survives (the retention floor never deletes the last
+	// one) plus the archive just written = 2. Ignoring the configured budget
+	// leaves all three seeded archives plus the new one = 4.
+	if len(archives) != 2 {
+		t.Errorf("got %d archives %v, want 2: the configured backup_max_total_bytes did not reach retention, so the built-in 40 GiB default was enforced instead", len(archives), archives)
 	}
 }

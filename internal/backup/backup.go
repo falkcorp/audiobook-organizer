@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-08-29
 
@@ -131,6 +131,33 @@ func DefaultBackupConfig() BackupConfig {
 		MaxBackups:       10,
 		MaxTotalBytes:    defaultMaxTotalBytes,
 		CompressionLevel: gzip.BestCompression,
+	}
+}
+
+// ResolveMaxTotalBytes turns the configured backup budget into the value
+// enforceRetention expects.
+//
+// It translates between two DIFFERENT zero conventions, which is why it exists
+// as a named function rather than an inline cast at each call site:
+//
+//	config value  0  -> "not configured", so the built-in default applies
+//	config value <0  -> unlimited, matching MaxBackups' negative convention
+//	config value >0  -> that many bytes
+//
+// BackupConfig.MaxTotalBytes uses 0 for UNLIMITED. Passing a config zero
+// straight through would therefore turn "the operator never set this" into "keep
+// archives without bound" -- the same shape of defect as
+// chapter_consolidation_threshold_min, where an unset zero silently became a
+// permanent behaviour change nobody chose. The translation is deliberate and
+// belongs in exactly one place.
+func ResolveMaxTotalBytes(configured int64) uint64 {
+	switch {
+	case configured < 0:
+		return 0 // unlimited
+	case configured == 0:
+		return defaultMaxTotalBytes
+	default:
+		return uint64(configured)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-08-29
 
@@ -550,6 +550,7 @@ func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 
 	backupConfig := backup.DefaultBackupConfig()
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, dbPath)
+	backupConfig.MaxTotalBytes = backup.ResolveMaxTotalBytes(config.AppConfig.BackupMaxTotalBytes)
 
 	if age, name, ok := newestBackupAge(backupConfig.BackupDir); ok && age < autoBackupMinInterval {
 		log.Info("Skipping auto-backup: %s is %s old (under the %s threshold)",
@@ -562,7 +563,14 @@ func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 	// stuck — see autoBackupMinInterval above.
 	start := time.Now()
 	log.UpdateProgress(0, 1, "Backing up database before organize (this can take several minutes)")
-	log.Info("Auto-backup starting: %s", dbPath)
+	// Log the RESOLVED destination, not just the source. backup_dir is
+	// configurable and falls back to a directory beside the database when unset,
+	// so an empty or lost setting silently relocates archives back onto the
+	// database's own filesystem -- which is precisely the arrangement that filled
+	// the disk and crash-looped the service on 2026-08-29. A one-line statement of
+	// where the archive is actually going makes that reversion visible in the log
+	// instead of discoverable only after the disk fills again.
+	log.Info("Auto-backup starting: %s -> %s", dbPath, backupConfig.BackupDir)
 	backupConfig.Progress = backupProgressReporter(log, backupProgressInterval)
 
 	var (
