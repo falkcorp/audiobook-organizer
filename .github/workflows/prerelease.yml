@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 2.13.1
+# version: 3.0.0
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-08-27
+# last-edited: 2026-08-29
 
 name: Prerelease on Merge
 
@@ -21,6 +21,9 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  # For the promote step below, which dispatches release-prod.yml once a
+  # version accumulates MAX_RCS release candidates.
+  actions: write
 
 env:
   GHCOMMON_SCRIPTS_DIR: ${{ github.workspace }}/.github/workflows/scripts
@@ -54,7 +57,7 @@ jobs:
     secrets: inherit
 
   check-rc-ordinal:
-    name: Fail when RC count for this version hits 10
+    name: Promote to a minor release when RC count hits 10
     needs: prerelease
     # Only inspect actual -rc.N tags, and only when the reusable workflow
     # actually created a release this run (e.g. skip on a failed/no-op run
@@ -70,7 +73,8 @@ jobs:
           lfs: true
           submodules: recursive
 
-      - name: Count RCs for this base version and fail at 10
+      - name: Count RCs for this base version
+        id: rc
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -87,3 +91,46 @@ jobs:
             --json tagName,isPrerelease > "$RELEASES_JSON"
 
           .github/scripts/check-rc-ordinal.sh "$RELEASES_JSON" "$BASE"
+
+      # Owner directive 2026-08-29: "We don't want it to fail, just have it push
+      # a new minor release." Failing was never a remedy -- v0.219.3 reached
+      # rc.33 with this job red on every merge and nothing stopping the pile-up,
+      # because the guard runs AFTER the RC tag has already been minted.
+      # Dispatching the minor cut is what actually resets the ordinal.
+      #
+      # This MUST use JF_CI_GH_PAT. A workflow_dispatch authenticated with the
+      # default GITHUB_TOKEN is silently ignored by GitHub -- a GITHUB_TOKEN run
+      # cannot trigger another workflow run. Falling back to GITHUB_TOKEN would
+      # produce a green step that promotes nothing, so a missing PAT is a hard
+      # failure here rather than a silent no-op.
+      - name: Promote to the next minor release
+        if: steps.rc.outputs.at_threshold == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.JF_CI_GH_PAT }}
+          REPO: ${{ github.repository }}
+          RC_COUNT: ${{ steps.rc.outputs.rc_count }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::JF_CI_GH_PAT is unavailable, so the minor-release dispatch would be silently dropped by GitHub. Cut the minor release manually via the Production Release workflow."
+            exit 1
+          fi
+
+          # Do not stack dispatches. Between this run and the release landing,
+          # every further merge to main mints another RC and re-enters this job;
+          # a blind dispatch would queue a duplicate minor cut for each one.
+          RUNNING="$(gh run list --repo "$REPO" \
+            --workflow release-prod.yml \
+            --json status \
+            --jq '[.[] | select(.status == "queued" or .status == "in_progress")] | length')"
+          if [[ "$RUNNING" -gt 0 ]]; then
+            echo "::notice::A Production Release run is already queued or in progress (${RUNNING}); not dispatching another."
+            exit 0
+          fi
+
+          echo "RC count is ${RC_COUNT}; dispatching a minor Production Release."
+          gh workflow run release-prod.yml --repo "$REPO" \
+            --ref main \
+            -f release-type=minor \
+            -f create-draft=false
+          echo "::notice::Dispatched a minor Production Release to reset the RC ordinal."
