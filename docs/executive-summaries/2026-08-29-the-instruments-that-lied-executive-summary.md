@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-29-the-instruments-that-lied-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f6729b52-5e19-4e85-8ed8-2d5e1e3911e3 -->
 <!-- last-edited: 2026-08-29 -->
 
@@ -10,7 +10,7 @@ safety limits that could not be satisfied, a setting that never reached the code
 it configured, a saved index thrown away every restart, and a "lost work" alarm
 about work that was never lost**
 
-**21 pull requests merged.** Full list at the end.
+**22 pull requests merged.** Full list at the end.
 
 ---
 
@@ -187,7 +187,10 @@ see whether anything is different.** Nothing was.
 `#2947` split-book merge status ·
 `#2956` and `#2964` corrections to previously recorded claims
 
-**Still open:** `#2969` — the four remaining jobs on the disconnected settings path.
+`#2969` the four remaining jobs on the disconnected settings path — including
+`revert-metadata-fetch`, which could not function at all
+
+**All 22 merged. Nothing left open from today's work.**
 
 ---
 
