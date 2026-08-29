@@ -1,12 +1,15 @@
 // file: internal/backup/space_guard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b6d0f27-58c1-49ea-a704-1f8e2d95c6b3
 // last-edited: 2026-08-29
 
 package backup
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -465,5 +468,88 @@ func TestResolveDir(t *testing.T) {
 				t.Errorf("ResolveDir(%q, %q) = %q, want %q", tc.configured, tc.dbPath, got, tc.want)
 			}
 		})
+	}
+}
+
+// retentionLogSpy reports every log message to fn so a test can assert on what
+// retention actually did, rather than on what it left behind. Some retention
+// behaviour is only visible in the attempts it makes: when every delete fails,
+// the directory looks identical whether retention gave up after one candidate
+// or tried them all.
+type retentionLogSpy struct{ fn func(string) }
+
+func (h retentionLogSpy) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h retentionLogSpy) Handle(_ context.Context, r slog.Record) error {
+	h.fn(r.Message)
+	return nil
+}
+func (h retentionLogSpy) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h retentionLogSpy) WithGroup(string) slog.Handler      { return h }
+
+// A delete that FAILS must not be counted as a freed slot.
+//
+// This became reachable when backups moved out of the application's own tree and
+// into `<library>/.backups`. Measured on production 2026-08-29, that directory
+// carries a sticky bit inherited from the share (`flags: s-t`), under which only
+// a file's owner may unlink it -- so the service account can encounter archives
+// it is not permitted to delete, and os.Remove fails for those alone.
+//
+// The defect this pins is arithmetic, not error handling. The error was already
+// logged and skipped correctly; but "how many archives remain" was derived from
+// the LOOP INDEX, so a failed delete advanced the count exactly as a successful
+// one did. Retention concluded it had reclaimed slots that were still on disk and
+// stopped while genuinely over budget -- the count bound drifting permanently out
+// of step with the filesystem.
+//
+// The observable is the number of candidates retention tries. With the bug it
+// stops at 3; counting only real deletions as progress, it tries all 4.
+func TestEnforceRetention_AFailedDeleteIsNotCountedAsFreed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		// root bypasses directory write permission, so every delete would
+		// succeed and this test would silently assert nothing. Skipping is
+		// honest; passing vacuously is not.
+		t.Skip("running as root: a read-only directory cannot make os.Remove fail")
+	}
+
+	dir := t.TempDir()
+	for i := 1; i <= 5; i++ {
+		name := fmt.Sprintf("audiobooks_pebble_2026010%d_000000.tar.gz", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A read-only directory makes every os.Remove inside it fail with EACCES.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) }) // so t.TempDir can clean up
+
+	failedDeletes := 0
+	prev := slog.Default()
+	slog.SetDefault(slog.New(retentionLogSpy{fn: func(msg string) {
+		if msg == "backup failed to delete old backup" {
+			failedDeletes++
+		}
+	}}))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// 5 archives on disk plus 1 incoming against maxBackups=3 is over budget by
+	// any accounting. The floor protects the newest, leaving 4 candidates.
+	if err := enforceRetention(dir, 3, 0, 1); err != nil {
+		t.Fatalf("enforceRetention: %v", err)
+	}
+
+	if failedDeletes != 4 {
+		t.Errorf("retention attempted %d deletes, want 4: a delete that FAILED was counted as a freed slot, so retention stopped while still over budget", failedDeletes)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 5 {
+		t.Errorf("got %d archives on disk, want 5 -- nothing was deletable", len(entries))
 	}
 }
