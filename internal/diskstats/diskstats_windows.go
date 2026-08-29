@@ -1,10 +1,11 @@
-// file: internal/server/diskstats_windows.go
+// file: internal/diskstats/diskstats_windows.go
 // version: 1.0.0
-// guid: d4e5f6a7-b8c9-0123-defa-234567890123
+// guid: 4e81d05a-9b27-43c6-8f10-6d5b29ac7f31
+// last-edited: 2026-08-29
 
 //go:build windows
 
-package server
+package diskstats
 
 import (
 	"fmt"
@@ -12,8 +13,8 @@ import (
 	"unsafe"
 )
 
-// getDiskStats returns total, free bytes for the given path using Windows API.
-func getDiskStats(path string) (total, free uint64, err error) {
+// Stats returns total and available bytes for the filesystem holding path.
+func Stats(path string) (total, free uint64, err error) {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	proc := kernel32.NewProc("GetDiskFreeSpaceExW")
 	pathPtr, err := syscall.UTF16PtrFromString(path)
