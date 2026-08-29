@@ -1,12 +1,13 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates_sentinel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0a5c7e39-4b18-4d26-91f7-6e2a8b3c5d40
-// last-edited: 2026-08-19
+// last-edited: 2026-08-29
 
 package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -95,5 +96,86 @@ func TestRecomputeProceedsWhenSentinelUnset(t *testing.T) {
 	}
 	if !store.listCalled {
 		t.Error("ListBookIDs was NOT called with the sentinel unset — the job skipped work it should have done")
+	}
+}
+
+// TestRecomputeForceOverridesBackfillSentinel pins the escape hatch the job has
+// advertised in two operator-facing strings since it was written.
+//
+// Force was declared in DefaultParams and read nowhere, so once the sentinel was
+// set this job could never run again — and the message telling the operator how
+// to override said so over a flag that could not be submitted. That mattered
+// beyond the job: notifyBookFileChange swallows recompute errors on the grounds
+// that this backfill is the safety net.
+//
+// The mock carries NO IsBookAggregatesBackfillDone expectation on purpose. force
+// is evaluated before the sentinel read, so a forced run must not consult it at
+// all; mockery fails an unexpected call, which makes that ordering an assertion
+// rather than a comment.
+func TestRecomputeForceOverridesBackfillSentinel(t *testing.T) {
+	m := newMockAggregatesBackfillMarker(t)
+	// A clean forced run rewrites the marker — the backfill HAS just completed
+	// again — so this is expected, not incidental.
+	m.EXPECT().MarkBookAggregatesBackfillDone().Return(nil).Once()
+
+	store := &sentinelStore{mockAggregatesBackfillMarker: m}
+	rep := &sentinelReporter{}
+	j := &recomputeBookAggregatesJob{}
+
+	// The params blob the dispatcher persists on the v2 row and the op Run
+	// closure hands to the job. Built as raw JSON rather than from a struct so
+	// this asserts the wire shape an operator actually POSTs.
+	ctx := maintenance.WithRawParams(context.Background(),
+		json.RawMessage(`{"job_id":"recompute-book-aggregates","dry_run":false,"force":true}`))
+
+	if err := j.Run(ctx, store, rep, false); err != nil {
+		t.Fatalf("Run returned err %v, want nil", err)
+	}
+	if !store.listCalled {
+		t.Error("ListBookIDs was NOT called with force=true — the Force flag is still inert")
+	}
+}
+
+// TestRecomputeForceFalseStillHonoursSentinel is the discriminating negative for
+// the test above: without it, a gate that ignored the sentinel unconditionally
+// (or a forceFromCtx that returned true for any params blob) would pass.
+func TestRecomputeForceFalseStillHonoursSentinel(t *testing.T) {
+	m := newMockAggregatesBackfillMarker(t)
+	m.EXPECT().IsBookAggregatesBackfillDone().Return(true).Once()
+
+	store := &sentinelStore{mockAggregatesBackfillMarker: m}
+	rep := &sentinelReporter{}
+	j := &recomputeBookAggregatesJob{}
+
+	ctx := maintenance.WithRawParams(context.Background(),
+		json.RawMessage(`{"job_id":"recompute-book-aggregates","dry_run":false,"force":false}`))
+
+	if err := j.Run(ctx, store, rep, false); err != nil {
+		t.Fatalf("Run returned err %v, want nil", err)
+	}
+	if store.listCalled {
+		t.Error("ListBookIDs was called with force=false and the sentinel set — the short-circuit is gone")
+	}
+}
+
+// TestRecomputeForceIgnoresUnparseableParams pins the fail-safe direction of the
+// decode. A params blob the job cannot read must NOT be treated as an override:
+// force is an explicit operator action, and inferring it from a decode failure
+// would turn a malformed request into a full 40k-book rewrite.
+func TestRecomputeForceIgnoresUnparseableParams(t *testing.T) {
+	m := newMockAggregatesBackfillMarker(t)
+	m.EXPECT().IsBookAggregatesBackfillDone().Return(true).Once()
+
+	store := &sentinelStore{mockAggregatesBackfillMarker: m}
+	rep := &sentinelReporter{}
+	j := &recomputeBookAggregatesJob{}
+
+	ctx := maintenance.WithRawParams(context.Background(), json.RawMessage(`{"force":`))
+
+	if err := j.Run(ctx, store, rep, false); err != nil {
+		t.Fatalf("Run returned err %v, want nil", err)
+	}
+	if store.listCalled {
+		t.Error("ListBookIDs was called on an undecodable params blob — force defaulted to true")
 	}
 }

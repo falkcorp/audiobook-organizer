@@ -1,12 +1,13 @@
 // file: internal/maintenance/job.go
 // version: 1.11.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-08-27
+// last-edited: 2026-08-29
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -17,6 +18,8 @@ type contextKey string
 
 const opIDKey contextKey = "maintenance_op_id"
 
+const opParamsKey contextKey = "maintenance_op_params"
+
 // WithOperationID returns a context carrying the given operation ID.
 func WithOperationID(ctx context.Context, opID string) context.Context {
 	return context.WithValue(ctx, opIDKey, opID)
@@ -25,6 +28,38 @@ func WithOperationID(ctx context.Context, opID string) context.Context {
 // OperationIDFromCtx returns the operation ID stored in the context, or "".
 func OperationIDFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(opIDKey).(string)
+	return v
+}
+
+// WithRawParams returns a context carrying the raw JSON params blob the run was
+// enqueued with.
+//
+// WHY A CONTEXT VALUE. MaintenanceJob.Run takes exactly one parameter —
+// dryRun — so a job with any OTHER custom parameter has no argument to receive
+// it on. The documented workaround was store.GetOperationParams(opID), which
+// reads the Pebble key opstate:<opID>:params. Nothing on the maintenance path
+// writes that key: it is written only by operations.SaveParams, whose two
+// remaining callers are internal/organizer/service.go and
+// internal/itunes/service/importer.go. The maintenance dispatcher's call was
+// deleted with the v1 op minter (#2784), which persisted params natively on the
+// v2 row instead. So the read path survived its writer and any job relying on
+// it silently receives nothing.
+//
+// This carries the v2 row's own params — the same bytes EnqueueOp persisted and
+// both resume paths preserve verbatim — to the job, alongside the operation ID
+// that already travels this way. A job decodes it into its own param struct,
+// the shape DefaultParams() already advertises to clients.
+//
+// May legitimately be absent or empty: a requeue re-enqueues with nil params.
+// RawParamsFromCtx then returns nil and every field takes its zero value, which
+// must be the fail-safe choice for whatever the job does with it.
+func WithRawParams(ctx context.Context, raw json.RawMessage) context.Context {
+	return context.WithValue(ctx, opParamsKey, raw)
+}
+
+// RawParamsFromCtx returns the raw JSON params blob for the current run, or nil.
+func RawParamsFromCtx(ctx context.Context) json.RawMessage {
+	v, _ := ctx.Value(opParamsKey).(json.RawMessage)
 	return v
 }
 

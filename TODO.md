@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.45.0 -->
+<!-- version: 10.44.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-29 -->
 
@@ -984,7 +985,21 @@ do not bolt a second cache onto the book row.
       Found while hardening the purge (#2877); the guard became load-bearing for
       the first time in #2875, having been skipped for months.
 
-## 🔴 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it
+## 🟡 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it
+
+**RESOLVED 2026-08-29 in code — one checkbox left, and it can only be answered against
+production.** `Force` is now wired end to end: `runMaintenanceJob` binds `force` from the
+request body, `maintenanceJobOpParams` carries it, the op `Run` closure hands the run's
+params to the job via the new `maintenance.WithRawParams`, and the sentinel gate reads it
+(`if !dryRun && !force && pebbleStore.IsBookAggregatesBackfillDone()`). The root cause was
+one layer deeper than this entry recorded: `MaintenanceJob.Run` takes only `dryRun`, and
+the documented alternative (`store.GetOperationParams`) reads a Pebble key nothing on the
+maintenance path writes any more — its writer went with the v1 op minter — so a job had no
+live channel for a custom parameter at all. **Four other jobs still read that dead path
+and silently receive nothing: `revert-metadata-fetch`, `bulk-fetch-metadata`,
+`bulk-deluge-import`, `scan-composer-tags`.** Separate call path, not fixed here.
+
+The original report follows.
 
 Found 2026-08-24 while auditing the aggregate-recompute safety net for PR #2861. Not
 fixed there — different file, different call path.
@@ -1033,9 +1048,21 @@ Either wire `Force` through (`maintenanceJobOpParams` needs the field, `Job.Run`
 carry it, and the sentinel check needs `&& !force`), or delete the parameter and both log
 lines that promise it. Do not leave a third state where the flag exists and lies.
 
-- [ ] Decide: wire `Force` through, or remove it and correct the two operator messages
-- [ ] Check prod: is `system:backfill:book_aggregates_v1_done` currently set?
-- [ ] Re-check `notifyBookFileChange`'s "backfill job acts as a safety net" clause once resolved
+- [x] Decide: wire `Force` through, or remove it and correct the two operator messages —
+      **wired through** (2026-08-29). Removing it was the wrong half of the choice: the
+      sentinel makes this a one-shot job, and `notifyBookFileChange` names it as the
+      remedy for its own swallowed errors, so an override has to exist.
+- [ ] Check prod: is `system:backfill:book_aggregates_v1_done` currently set? — still
+      unanswered; it cannot be verified from the source tree. If it IS set, the recovery
+      is now available: `POST /api/v1/maintenance/jobs/recompute-book-aggregates` with
+      `{"dry_run": false, "force": true}`.
+- [x] Re-check `notifyBookFileChange`'s "backfill job acts as a safety net" clause once
+      resolved — the clause is true again *as an operator action*, and the comment in
+      `internal/database/pebble_store_book_aggregates.go` now says exactly that: the
+      remedy exists, but nothing runs it automatically, so the warning must stay loud.
+- [ ] The web UI's Run button (`api.runMaintenanceJob`) sends `{dry_run}` only, so `force`
+      is reachable by API but not from the maintenance tab. Deliberately out of scope for
+      the wiring fix; decide whether one job warrants a UI control.
 
 ## Repair the book rows that were written one-per-track
 

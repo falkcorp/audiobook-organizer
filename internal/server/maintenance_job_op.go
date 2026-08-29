@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package server
 
@@ -39,9 +39,29 @@ import (
 // stated here — that comment justified it by resume reading params written by an
 // older build through operations.SaveParams / LoadParams, and both of those call
 // sites were deleted with the v1 minter.
+//
+// Force is read by the job, not by this file. It exists here because this struct
+// IS the params byte-shape: the dispatcher marshals it, EnqueueOp persists it on
+// the v2 row, and the Run closure below hands those same bytes to the job through
+// maintenance.WithRawParams. A field absent from this struct is dropped at the
+// dispatcher and can never reach a job at all, which is exactly why
+// recompute-book-aggregates' Force was inert while two of its operator-facing
+// messages advertised it.
+//
+// Plain bool, not *bool. DryRun needs the pointer because its zero value is the
+// DESTRUCTIVE one and "omitted" has to be distinguishable from "false"; Force's
+// zero value is the safe one, so omitted and false may collapse.
+//
+// Adding the key changes the params byte-shape, which EnqueueOp's dedupe compares.
+// legacy_op_id is gone, so sameParamsIgnoringLegacyID's key-wise path is never
+// taken and the comparison is exact bytes: a force request and a non-force request
+// for the same job now differ and QUEUE instead of merging. That is the direction
+// required — a forced re-run must not be silently swallowed by an in-flight
+// ordinary run that is about to short-circuit on the sentinel.
 type maintenanceJobOpParams struct {
 	JobID  string `json:"job_id"`
 	DryRun bool   `json:"dry_run"`
+	Force  bool   `json:"force"`
 }
 
 // maintenanceOpID returns the v2 operation ID for a maintenance job.
@@ -180,6 +200,19 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			}
 
 			ctx = maintenance.WithOperationID(ctx, opID)
+
+			// The run's own params, verbatim, for the jobs that take a custom
+			// parameter. Run's signature carries only dryRun, so without this a
+			// job's other params have no route in: the side-table read path
+			// (store.GetOperationParams) lost its writer when the v1 minter was
+			// retired and now returns nothing on this path. See
+			// maintenance.WithRawParams.
+			//
+			// rawParams, not a re-marshal of p: p is lossy by construction — it
+			// decodes only the keys this struct declares — and a job decoding its
+			// own shape must see what the operator actually sent.
+			ctx = maintenance.WithRawParams(ctx, rawParams)
+
 			progress := registryProgressAdapter{r: reporter}
 			adapter := &maintenance.ProgressAdapter{Ops: progress}
 

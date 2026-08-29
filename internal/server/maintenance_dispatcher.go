@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package server
 
@@ -112,8 +112,20 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// DryRun is a *bool so that "omitted" is representable at all. With a plain
 	// bool, omitted and false are the same value and the handler cannot tell an
 	// operator who asked to apply from one who said nothing.
+	//
+	// Force is bound here too. Without it this route drops the key before
+	// EnqueueOp ever sees it, so a job's Force parameter is unreachable from the
+	// entry point the UI uses. POST /operations/v2 forwards params verbatim and
+	// would have carried it, but nothing in the web client uses that route for
+	// maintenance -- which is how recompute-book-aggregates ended up printing
+	// "Use Force=true to override" over a flag no caller could set.
+	//
+	// A plain bool is right for Force where DryRun needs a pointer: DryRun's zero
+	// value is the DESTRUCTIVE one, so "omitted" must stay distinguishable from
+	// "false". Force's zero value is the safe one, so the two may collapse.
 	var req struct {
 		DryRun *bool `json:"dry_run"`
+		Force  bool  `json:"force"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
@@ -172,6 +184,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	v2OpID, err := s.opRegistry.EnqueueOp(c.Request.Context(), maintenanceOpID(jobID), maintenanceJobOpParams{
 		JobID:  jobID,
 		DryRun: dryRun,
+		Force:  req.Force,
 	})
 	if err != nil {
 		httputil.RespondWithConflict(c, err.Error())
