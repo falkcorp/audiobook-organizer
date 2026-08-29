@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-08-29
 //
@@ -787,6 +787,129 @@ describe('an optimistic apply must be correctable by the server', () => {
     });
 
     expect(result.current.pageResults).toHaveLength(0);
+  });
+
+  it('lets a manual Search apply clear the seeded rejection', async () => {
+    // The escape hatch this nearly broke. Search is offered ONLY on no_match
+    // rows (QueueRail gates the icon on r.status === 'no_match'), and every
+    // no_match row has already been seeded `rejected` by the reconcile itself.
+    // The dialog applies server-side for real and MetadataPanel then calls
+    // refresh() -- so if a local `rejected` were protected unconditionally, the
+    // refresh would discard the server's `applied` and the book would stay
+    // hidden behind hideRejected with nothing to show the apply had worked.
+    //
+    // Protecting human decisions and correcting server-derived ones are the
+    // same string, which is why provenance is recorded rather than inferred.
+    const before = [makeResult('b1', { status: 'no_match', candidate: undefined })];
+    const after = [makeResult('b1', { status: 'applied' })];
+    vi.mocked(api.getCachedReviewResults)
+      .mockResolvedValueOnce(
+        reviewPayload(before) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      )
+      .mockResolvedValue(
+        reviewPayload(after) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // Seeded by the reconcile, not by a person.
+    expect(result.current.spineCtx.rowState('b1')).toBe('rejected');
+
+    // What MetadataPanel's onApplied does after the dialog succeeds.
+    await act(async () => {
+      result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.spineCtx.rowState('b1')).toBe('applied');
+  });
+
+  it('returns a seeded rejection to pending once the server finds a candidate', async () => {
+    // The refetch path. A stale row is re-fetched, the server finds a candidate
+    // and stops reporting no_match -- the seeded `rejected` is then a mirror of
+    // state that no longer exists and must not outlive it. On production nearly
+    // every reviewable row is stale, so this is the common case, not an edge.
+    const before = [makeResult('b1', { status: 'no_match', candidate: undefined })];
+    const after = [makeResult('b1')]; // matched again
+    vi.mocked(api.getCachedReviewResults)
+      .mockResolvedValueOnce(
+        reviewPayload(before) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      )
+      .mockResolvedValue(
+        reviewPayload(after) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.spineCtx.rowState('b1')).toBe('rejected');
+
+    await act(async () => {
+      result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.spineCtx.rowState('b1')).toBeUndefined();
+    // And it is reviewable again rather than hidden by hideRejected.
+    expect(result.current.pageResults).toHaveLength(1);
+  });
+
+  it('does not undo an unreject before the server has caught up', async () => {
+    // The guard's comment claims this case and nothing covered it. unreject
+    // clears the no-match server-side and sets `pending` locally; the very next
+    // refresh can still read the old no_match, and writing `rejected` back over
+    // it would flip the undo the reviewer just performed.
+    const rows = [makeResult('b1', { status: 'no_match', candidate: undefined })];
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+    vi.mocked(api.clearMetadataNoMatch).mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.spineCtx.rowState('b1')).toBe('rejected');
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'metadata', type: 'unreject', id: 'b1' });
+    });
+    await waitFor(() => expect(result.current.spineCtx.rowState('b1')).toBe('pending'));
+
+    // The server still reports no_match -- it has not caught up yet.
+    await act(async () => {
+      result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.spineCtx.rowState('b1')).toBe('pending');
+  });
+
+  it('lets the server report an applied book even over a local skip', async () => {
+    // `applied` is a fact about what was written, not an opinion about what to
+    // do, so it outranks a human decision. A book applied elsewhere (another
+    // tab, a background op) must not keep showing as skipped here.
+    const before = [makeResult('b1', { status: 'no_match', candidate: undefined })];
+    const after = [makeResult('b1', { status: 'applied' })];
+    vi.mocked(api.getCachedReviewResults)
+      .mockResolvedValueOnce(
+        reviewPayload(before) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      )
+      .mockResolvedValue(
+        reviewPayload(after) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+      );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'metadata', type: 'skip', id: 'b1' });
+    });
+    expect(result.current.spineCtx.rowState('b1')).toBe('skipped');
+
+    await act(async () => {
+      result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.spineCtx.rowState('b1')).toBe('applied');
   });
 
   it('protects a single-row apply from the moment it is marked', async () => {
