@@ -1,7 +1,7 @@
 <!-- file: docs/superpowers/specs/2026-08-28-ai-endpoint-pool-design.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6d52e9c0-92fd-4193-9b9e-cd19e7d1bf5d -->
-<!-- last-edited: 2026-08-28 -->
+<!-- last-edited: 2026-08-29 -->
 
 # AI endpoint pool design
 
@@ -52,6 +52,33 @@ The API must reject duplicate IDs, duplicate `(capability, normalized URL)`
 entries, empty capability lists, invalid URLs, invalid roles, and concurrency
 outside the configured safe range. Secrets remain outside this object and stay
 environment-authoritative.
+
+### Serialization and zero-value semantics
+
+The pool is persisted as part of the config blob, so `AIEndpoint`'s wire shape is
+load-bearing rather than incidental.
+
+`omitempty` does not mean the same thing under encoding/json v1 and v2. Under v2 a
+`false` bool and a `0` int are *emitted* rather than dropped, so `enabled`,
+`priority`, and `concurrency` change shape between the two. Use `omitzero`, not
+`omitempty`, for any field whose zero value must not be written, and never rely on
+"the field is absent" to signal a default.
+
+Zero must never be load-bearing as a disable switch. Validation rejects
+`concurrency` outside the safe range, but validation only guards the API path: the
+config blob is written by full-struct marshal, so a transient zero that reaches
+the stored struct becomes a permanent silent kill switch that a `viper.SetDefault`
+will not undo. This repo has already taken a production outage of exactly this
+shape (`chapter_consolidation_threshold_min = 0` disabling chapter consolidation
+library-wide). Therefore:
+
+- Migration seeds explicit values for every field it creates; it never leaves
+  `concurrency`, `priority`, or `enabled` to be filled in by a zero value later.
+- Loading treats an out-of-range or zero `concurrency` on an otherwise valid
+  endpoint as "apply the documented default and log it", not as "no capacity".
+- A round-trip test asserts that marshalling and reloading a pool under
+  `GOEXPERIMENT=jsonv2` preserves `enabled: false`, `priority: 0`, and the
+  configured concurrency exactly.
 
 ## Routing and failure behavior
 
@@ -147,10 +174,16 @@ path.
 - Contract-test Ollama and Whisper probes with `httptest` servers, including
   malformed responses and timeouts.
 - Test that no config/status response exposes secrets.
+- Round-trip the pool under `GOEXPERIMENT=jsonv2` and assert `enabled: false`,
+  `priority: 0`, and a configured `concurrency` all survive marshal/reload.
 - Test the server API and Settings UI role toggle, ordering, and health view.
-- Run `GOTOOLCHAIN=go1.26.0 go test ./internal/config ./internal/ai
-  ./internal/transcribe ./internal/server/... -count=1`, focused frontend
-  tests, and `GOTOOLCHAIN=go1.26.0 make ci` before deployment.
+- Run `GOTOOLCHAIN=go1.26.0 GOEXPERIMENT=jsonv2 go test ./internal/config
+  ./internal/ai ./internal/transcribe ./internal/server/... -count=1`, focused
+  frontend tests, and `GOTOOLCHAIN=go1.26.0 make ci` before deployment.
+  `GOEXPERIMENT=jsonv2` is not optional: the Makefile exports it (`Makefile:11`)
+  and CI sets it, so a bare `go test` would exercise encoding/json v1 while
+  production runs v2 — and v1/v2 disagree on exactly the field shapes this
+  design introduces. See "Serialization" above.
 - Before each deploy, inspect the production operation timeline. Do not restart
   while scan, import, organize, metadata apply/write-back, or equivalent major
   operations are active.
