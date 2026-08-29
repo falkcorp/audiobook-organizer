@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.44.1 -->
+<!-- version: 10.44.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-28 -->
+<!-- last-edited: 2026-08-29 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,125 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+## Applied books stay in the list in BulkMetadataSearchDialog
+
+`web/src/components/audiobooks/BulkMetadataSearchDialog.tsx:157`:
+
+```ts
+const filteredBooks = skipApplied
+  ? books.filter((b) => b.metadata_review_status !== 'matched')
+  : books;
+```
+
+The filter reads `metadata_review_status` off the `books` **prop**, which the
+dialog never refreshes, and ignores `bookStatuses` — the local map that records
+what was applied in this session (set at :267 and :300). So applying a book marks
+the button "Applied" and disables it, but the book stays in the list. `skipApplied`
+also defaults to `false` (:139), so nothing is filtered at all until the reviewer
+finds the toggle.
+
+- [ ] Make the filter session-aware (also exclude `bookStatuses.get(id) === 'applied'`).
+- [ ] Decide whether `skipApplied` should default to `true`.
+
+**Cost, stated honestly:** this is not a one-line change. `currentIndex` indexes
+into `filteredBooks`, and `advanceToNext` (:358) increments it. Removing the
+current book from the list shifts every later index down by one, so a naive fix
+makes the wizard skip a book on every apply. The fix needs `currentIndex` handled
+together with the filter, plus tests for apply-then-advance at the list boundary.
+
+Distinct from the review lane's queue (`useMetadataLane`), whose equivalent bug
+was fixed 2026-08-29 — this dialog is the per-book wizard reached from the
+audiobooks list.
+
+## Mask the remaining secrets returned by `GET /api/v1/config`
+
+`UpdateService.MaskSecrets` now covers the five scalar secret fields and
+`metadata_sources[].credentials`. These are still returned in full cleartext:
+
+- [ ] `OAuthGithubClientSecret` and `OAuthGoogleClientSecret` (`internal/config/config.go:895-898`)
+- [ ] `DelugeWebPassword` (`internal/config/config.go:991`)
+- [ ] `DownloadClient.Torrent.Deluge.Password` (`config.go:172`)
+- [ ] `DownloadClient.Torrent.QBittorrent.Password` (`config.go:180`)
+- [ ] `DownloadClient.Usenet.Sabnzbd.APIKey` (`config.go:188`)
+
+`ABSJWTSecret` is correctly excluded via `json:"-"` — leave it alone.
+
+**Do not just add these to `MaskSecrets`.** Masking a field that a client sends
+back makes `PUT /api/v1/config` destructive unless the echoed mask is rejected,
+and `MaskSecret` is idempotent, so the response looks identical whether the
+secret survived or was wiped — the failure is invisible until the integration
+starts returning 401. For each field, trace which client path resends it, then
+protect it the way the metadata-source credentials are protected
+(`restoreMaskedCredentials`) or the scalars are (`acceptSecretUpdate`), and
+mutation-test the call site rather than only the helper.
+
+### Metadata review: a book can be dispatched to apply twice
+
+`applyOne` pushes a book into a 500ms debounce queue; `applyMany` dispatches
+immediately and does not drain that queue. Neither clears the other's pending
+work, and `applyOne` does not clear `selectedIds`.
+
+Repro: tick row B1's checkbox, click B1's row-level Apply, then within 500ms
+click "Apply Selected" over a selection that still contains B1. `applyMany`
+dispatches `batchApplyFromCache` with B1 now; the still-armed debounce timer
+fires 500ms later and dispatches B1 again.
+
+Client row state stays correct (the in-flight refcount is balanced -- 2 retains,
+2 releases), so this does not reproduce the hidden-forever bug. The open
+question is the server: is `batch-apply-cached` idempotent for a book already
+applied by an in-flight op, or does the second request duplicate work / race
+the first's write-back?
+
+Found by review on PR #2954. Pre-existing, not introduced there.
+
+- [ ] Confirm server-side idempotency for a repeated apply of the same book
+- [ ] If not idempotent, have `applyMany` drain `applyQueueRef` (and cancel the
+      timer) for ids it is about to dispatch
+
+## Move database backups off the database's own filesystem
+
+`autoBackup` writes archives to `backups/` resolved relative to the database
+directory, so on production the ~15 GB archive lands on the same filesystem the
+live PebbleDB writes its WAL to. The pre-flight space guard now stops that from
+killing the database, but co-locating them is still the underlying design
+problem: a backup exists to survive the loss of what it backs up.
+
+- [ ] Make `BackupConfig.BackupDir` configurable to an absolute path on another
+      filesystem (on the reference deployment `/mnt/bigdata` has 11 TB free
+      versus 141 GB for `/var/lib`).
+- [ ] Decide whether a backup that lands on the same filesystem should warn at
+      startup.
+- [ ] Revisit `defaultMaxTotalBytes` (currently 40 GiB) once the destination is
+      no longer the constraint.
+
+Context: `.claude/notes/2026-08-29-prod-outage-disk-full.md`.
+
+### A running scan does not say which kind of scan it is
+
+Reported by the user: the job name gives no way to tell an incremental scan from
+a full sweep. Confirmed — it cannot, because two different scheduled tasks report
+through one operation definition:
+
+- `internal/server/library_core_ops.go:51` — `DisplayName: "Library Scan"`, the
+  single display name for op id `library.scan`.
+- `internal/scheduler/tasks.go:104` — scheduled task `library_scan`, the periodic
+  incremental scan.
+- `internal/scheduler/tasks.go:185` — scheduled task `library_scan_full`, the
+  weekly full sweep that re-reads and re-hashes every file.
+
+So "Library Scan" in the operations list and the bell covers both a cheap
+incremental pass and a full re-hash of the library, with nothing to distinguish
+them. A full sweep is the expensive one and the one worth knowing about.
+
+⚠️ Do NOT fix this by splitting `library.scan`'s ConcurrencyKey — that key is
+load-bearing and splitting it reintroduces the 2026-08-07 silent field-loss.
+The fix is in how the operation is LABELLED, not how it is keyed.
+
+- [ ] Give the running operation a display name that names the mode
+      (incremental vs full), sourced from the task that started it
+- [ ] Check the progress/log lines too — "Reading tags: N files" never says
+      which sweep it belongs to
 
 - [ ] **Audible metadata upgrade job** — add a dry-run-first maintenance
       operation that revisits accepted metadata originating anywhere other than
