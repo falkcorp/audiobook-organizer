@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-08-24
+// last-edited: 2026-08-29
 
 package backup
 
@@ -312,6 +312,28 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType string, config BackupConfig) (*BackupInfo, error) {
 	if err := os.MkdirAll(config.BackupDir, 0775); err != nil {
 		return nil, fmt.Errorf("create backup dir: %w", err)
+	}
+
+	// Retention MUST run before the space check, not after it.
+	//
+	// This is the production path (Pebble), and getting the order wrong here
+	// made the space guard a one-way door. Observed in production on
+	// 2026-08-29: the guard correctly refused a backup ("needs ~32.3 GiB but
+	// only 758.6 MiB is free") and so kept the database alive -- but because
+	// the refusal happened before retention, the 101 GB of old archives that
+	// caused the shortage were never pruned. The system was stable and
+	// permanently stuck: every subsequent attempt refused for the same reason,
+	// and nothing could free the space except a human with rm.
+	//
+	// CreateBackup below already prunes before its own write, but on this path
+	// it is never reached. A second call there is harmless -- retention finds
+	// nothing over budget the second time.
+	incoming, sizeErr := dirSizeBytes(dbSourcePath)
+	if sizeErr != nil {
+		incoming = 0
+	}
+	if err := enforceRetention(config.BackupDir, config.MaxBackups, config.MaxTotalBytes, incoming); err != nil {
+		slog.Warn("backup pre-checkpoint retention failed", "error", err)
 	}
 
 	// Checked here as well as in CreateBackup below. The checkpoint itself is
@@ -707,7 +729,28 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 		return false
 	}
 
-	for i := 0; i < len(backups) && overBudget(i); i++ {
+	// The byte bound can demand more room than deleting everything provides.
+	// Production, measured 2026-08-29: a 30.3 GiB incoming archive against a
+	// 40 GiB budget leaves 9.7 GiB of headroom, and every existing archive is
+	// ~15 GB -- so `overBudget` stays true after each deletion and the loop
+	// runs to the end, destroying the entire backup history to make room for
+	// one new archive. If that new write then fails (which is exactly the
+	// situation retention is being asked to rescue), the result is ZERO
+	// backups.
+	//
+	// So the last archive is a floor, not a candidate. Retention exists to stop
+	// backups consuming the disk; it must never be the thing that leaves the
+	// database with no backup at all. An over-budget state with one archive
+	// left is reported and kept rather than "resolved" by deleting it.
+	//
+	// maxBackups == 0 is the one exception: that means "keep none" explicitly,
+	// and TestCreateBackupMaxBackupsZero pins it.
+	floor := 1
+	if maxBackups == 0 {
+		floor = 0
+	}
+
+	for i := 0; i < len(backups)-floor && overBudget(i); i++ {
 		if err := os.Remove(backups[i].Path); err != nil {
 			slog.Warn("backup failed to delete old backup", "filename", backups[i].Filename, "error", err)
 			continue
@@ -717,6 +760,15 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 		}
 		slog.Info("backup retention removed old archive",
 			"filename", backups[i].Filename, "size", backups[i].Size, "remaining_bytes", total)
+	}
+
+	// Say so plainly. A silent "retention ran" hides the fact that the bound is
+	// unsatisfiable, which is a configuration problem a human has to resolve --
+	// either a larger budget or a backup directory that is not on the database's
+	// own filesystem.
+	if floor > 0 && len(backups) > 0 && overBudget(len(backups)-floor) {
+		slog.Warn("backup retention cannot satisfy its budget without deleting the last archive; keeping it",
+			"max_total_bytes", maxTotalBytes, "incoming_bytes", incomingBytes, "retained_bytes", total)
 	}
 
 	return nil
