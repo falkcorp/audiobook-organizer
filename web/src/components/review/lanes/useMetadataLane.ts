@@ -810,10 +810,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const applyQueueRef = useRef<string[]>([]);
   const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Every in-flight apply arms an hour-long bound (see runApplyOp). They are
+  // cleared when their race settles, but an unmount while an op is still
+  // running would otherwise leave one armed for the rest of the hour.
+  const boundTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   useEffect(
     () => () => {
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
+      boundTimeoutsRef.current.forEach((t) => clearTimeout(t));
+      boundTimeoutsRef.current.clear();
     },
     []
   );
@@ -868,17 +874,22 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       // two failure modes, a visible flicker on a very long op beats rows that
       // are silently hidden forever, so it is bounded rather than left open.
       // Measured reference: 250 books took 2m0s in production.
-      let bound: ReturnType<typeof setTimeout> | undefined;
+      let boundTimeout: ReturnType<typeof setTimeout> | undefined;
       void Promise.race([
         api.pollOperationV2(dispatched.op_id).catch(() => undefined),
         new Promise((resolve) => {
-          bound = setTimeout(resolve, APPLY_INFLIGHT_MAX_MS);
+          boundTimeout = setTimeout(resolve, APPLY_INFLIGHT_MAX_MS);
+          boundTimeoutsRef.current.add(boundTimeout);
         }),
       ]).finally(() => {
         // Cancelled on the ordinary path. The race settles as soon as the poll
         // returns, but an uncancelled timer still holds its closure for the
-        // full hour, and each per-row apply arms its own.
-        if (bound !== undefined) clearTimeout(bound);
+        // full hour, and each per-row apply arms its own. The unmount cleanup
+        // clears any that are still armed when the hook goes away.
+        if (boundTimeout !== undefined) {
+          clearTimeout(boundTimeout);
+          boundTimeoutsRef.current.delete(boundTimeout);
+        }
         // Released BEFORE the refresh, so the refresh it triggers is the one
         // that gets to correct these rows. Releasing after would let the
         // reconcile skip them and the stale `applied` would survive the very
