@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-08-29
 //
@@ -43,11 +43,11 @@ import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
 import { runtimeDiffers, type RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 
-/** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
 // Upper bound on how long a dispatched apply keeps its rows protected from
 // reconciliation. See runApplyOp for why this is bounded at all.
 const APPLY_INFLIGHT_MAX_MS = 60 * 60 * 1000;
 
+/** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
 const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
 
 export type Toast = (
@@ -432,6 +432,30 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // bulk "Apply Selected" and a per-row Apply inside the 500ms debounce window
   // -- and with a Set the first op to finish deleted the shared entry and
   // reverted the row while the second was still genuinely running.
+  // Which rows hold a state the RECONCILE wrote, rather than a person.
+  //
+  // Without this the reconcile cannot tell the two apart, because they are the
+  // same string. Every no_match row is seeded `rejected` here on first load, so
+  // `rejected` means either "the server reports no match" or "a reviewer
+  // rejected this" -- and the two need opposite treatment: the first is a
+  // mirror of server state and must stay correctable, the second is a decision
+  // the server has no better answer for and must be protected.
+  //
+  // Guessing either way breaks a real flow. Protecting all of them freezes the
+  // manual Search-and-apply escape hatch: Search is offered ONLY on no_match
+  // rows (QueueRail), it applies server-side for real, and MetadataPanel then
+  // calls refresh() -- so the row comes back `applied` from the server and the
+  // guard would discard that, leaving a successfully applied book hidden behind
+  // hideRejected with no sign the apply worked. Reconciling all of them
+  // reintroduces the skipped/pending clobber this reconcile exists to fix.
+  //
+  // So it is recorded rather than inferred. Any human action on a row clears
+  // its entry; the reconcile re-adds it whenever it writes the row itself.
+  const serverDerivedRef = useRef<Set<string>>(new Set());
+  const clearServerDerived = useCallback((ids: string[]) => {
+    ids.forEach((id) => serverDerivedRef.current.delete(id));
+  }, []);
+
   const inFlightApplyRef = useRef<Map<string, number>>(new Map());
   const retainInFlight = useCallback((ids: string[]) => {
     ids.forEach((id) =>
@@ -519,14 +543,36 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             // after clearing the no-match, so a refresh landing before the
             // server caught up flipped the undo straight back to rejected.
             const local = next.get(id);
-            if (local !== undefined && local !== 'applied') continue;
 
+            // `applied` is a FACT about what the server did, not an opinion
+            // about what to do, so it outranks every local state including a
+            // human one. A book whose metadata has been written is applied even
+            // if this session had earlier skipped or rejected it; showing it
+            // otherwise contradicts the library.
             if (r.status === 'applied') {
               next.set(id, 'applied');
-            } else if (r.status === 'no_match') {
+              serverDerivedRef.current.add(id);
+              continue;
+            }
+
+            // Everything below is the server's OPINION about a row nobody has
+            // judged. A human decision outranks it -- unless the state on the
+            // row was written by this same reconcile, in which case there is no
+            // human decision to protect.
+            const humanDecision =
+              local !== undefined && local !== 'applied' && !serverDerivedRef.current.has(id);
+            if (humanDecision) continue;
+
+            if (r.status === 'no_match') {
               next.set(id, 'rejected');
-            } else if (local === 'applied') {
+              serverDerivedRef.current.add(id);
+            } else if (local !== undefined) {
+              // Either a stale optimistic `applied` the server does not confirm,
+              // or a server-derived `rejected` whose no-match has since been
+              // cleared (a refetch or a manual Search found a candidate). Both
+              // must fall back to pending rather than persist.
               next.delete(id);
+              serverDerivedRef.current.delete(id);
             }
           }
           return next;
@@ -822,10 +868,17 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       // two failure modes, a visible flicker on a very long op beats rows that
       // are silently hidden forever, so it is bounded rather than left open.
       // Measured reference: 250 books took 2m0s in production.
+      let bound: ReturnType<typeof setTimeout> | undefined;
       void Promise.race([
         api.pollOperationV2(dispatched.op_id).catch(() => undefined),
-        new Promise((resolve) => setTimeout(resolve, APPLY_INFLIGHT_MAX_MS)),
+        new Promise((resolve) => {
+          bound = setTimeout(resolve, APPLY_INFLIGHT_MAX_MS);
+        }),
       ]).finally(() => {
+        // Cancelled on the ordinary path. The race settles as soon as the poll
+        // returns, but an uncancelled timer still holds its closure for the
+        // full hour, and each per-row apply arms its own.
+        if (bound !== undefined) clearTimeout(bound);
         // Released BEFORE the refresh, so the refresh it triggers is the one
         // that gets to correct these rows. Releasing after would let the
         // reconcile skip them and the stale `applied` would survive the very
@@ -858,12 +911,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       // flicker ActionBar.tsx rejects useOptimistic to avoid. applyMany has no
       // such window because it retains before dispatching.
       retainInFlight([bookId]);
+      clearServerDerived([bookId]);
       setRowStates((prev) => new Map(prev).set(bookId, 'applied'));
       applyQueueRef.current.push(bookId);
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       applyTimerRef.current = setTimeout(() => void flushApplyQueue(), 500);
     },
-    [flushApplyQueue, retainInFlight]
+    [flushApplyQueue, retainInFlight, clearServerDerived]
   );
 
   const applyMany = useCallback(
@@ -871,6 +925,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       if (bookIds.length === 0) return;
       setApplying(true);
       retainInFlight(bookIds);
+      clearServerDerived(bookIds);
       try {
         await runApplyOp(bookIds);
         // Dispatch acceptance is the point at which this batch belongs to the
@@ -897,13 +952,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setApplying(false);
       }
     },
-    [runApplyOp, handleApplyError, retainInFlight]
+    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived]
   );
 
   const reject = useCallback(
     async (bookId: string) => {
       try {
         await api.markNoMatch(bookId);
+        clearServerDerived([bookId]);
         setRowStates((prev) => new Map(prev).set(bookId, 'rejected'));
         toast('Candidate rejected — will be excluded from future fetches', 'info', {
           label: 'Undo',
@@ -923,20 +979,21 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         toast('Failed to reject', 'error');
       }
     },
-    [toast]
+    [toast, clearServerDerived]
   );
 
   const unreject = useCallback(
     async (bookId: string) => {
       try {
         await api.clearMetadataNoMatch(bookId);
+        clearServerDerived([bookId]);
         setRowStates((prev) => new Map(prev).set(bookId, 'pending'));
         toast('Rejection undone', 'success');
       } catch {
         toast('Failed to undo rejection', 'error');
       }
     },
-    [toast]
+    [toast, clearServerDerived]
   );
 
   /**
@@ -962,15 +1019,18 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           void unreject(action.id);
           return;
         case 'skip':
+          clearServerDerived([action.id]);
           setRowStates((prev) => new Map(prev).set(action.id, 'skipped'));
           return;
         case 'unskip':
+          clearServerDerived([action.id]);
           setRowStates((prev) => new Map(prev).set(action.id, 'pending'));
           return;
         case 'rejectGroup':
           void (async () => {
             try {
               await Promise.all(action.ids.map((id) => api.markNoMatch(id)));
+              clearServerDerived(action.ids);
               setRowStates((prev) => {
                 const next = new Map(prev);
                 action.ids.forEach((id) => next.set(id, 'rejected'));
@@ -982,6 +1042,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           })();
           return;
         case 'skipAllUnmatched':
+          clearServerDerived(
+            results
+              .filter((r) => r.status === 'no_match' || r.status === 'error')
+              .map((r) => r.book.id)
+          );
           setRowStates((prev) => {
             const next = new Map(prev);
             results
@@ -998,7 +1063,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           return;
       }
     },
-    [applyOne, applyMany, reject, unreject, results, toast, requestedPage]
+    [applyOne, applyMany, reject, unreject, results, toast, requestedPage, clearServerDerived]
   );
 
   const toggleSelect = useCallback((bookId: string) => {
