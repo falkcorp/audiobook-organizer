@@ -650,7 +650,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     expect(result.current.pageResults).toHaveLength(2);
 
     await act(async () => {
-      result.current.dispatch({ type: 'applySelected', ids: ['b1', 'b2'] });
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['b1', 'b2'] });
     });
 
     // The terminal poll refreshes, and the server's answer must win.
@@ -682,12 +682,24 @@ describe('an optimistic apply must be correctable by the server', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     await act(async () => {
-      result.current.dispatch({ type: 'applySelected', ids: ['b1', 'b2'] });
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['b1', 'b2'] });
     });
 
+    // Wait for the REFRESH, not just for the rows to be hidden. The optimistic
+    // marking hides them immediately, so asserting length 0 straight away
+    // succeeds before the reconcile this test exists to exercise has run --
+    // the expected value would equal the intermediate value and the assertion
+    // would be blind. Mutation testing caught exactly that.
+    // Anchor on data that can ONLY exist after the refresh has been committed
+    // to state. Waiting for the API call count is not enough -- the call having
+    // happened says nothing about React having rendered its result, so the
+    // assertion below would still be reading the pre-refresh rows.
     await waitFor(() => {
-      expect(result.current.pageResults).toHaveLength(0);
+      expect(result.current.results).toHaveLength(2);
+      expect(result.current.results.every((r) => r.status === 'applied')).toBe(true);
     });
+
+    expect(result.current.pageResults).toHaveLength(0);
   });
 
   it('does not revert a row while its apply op is still running', async () => {
@@ -708,7 +720,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     await act(async () => {
-      result.current.dispatch({ type: 'applySelected', ids: ['b1', 'b2'] });
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['b1', 'b2'] });
     });
     await waitFor(() => expect(result.current.pageResults).toHaveLength(0));
 
