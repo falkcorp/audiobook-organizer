@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-29
 
@@ -690,6 +690,15 @@ type Config struct {
 	// is strongly recommended -- see the 2026-08-29 outage, where a 15 GB
 	// archive written beside the database filled the disk and killed it.
 	BackupDir string `json:"backup_dir" mapstructure:"backup_dir"`
+
+	// BackupMaxTotalBytes caps the TOTAL bytes of retained backup archives.
+	// 0 means unset (the built-in default applies); a negative value means
+	// unlimited. See backup.ResolveMaxTotalBytes for why that translation is
+	// explicit rather than a cast. This became worth configuring once BackupDir
+	// could point at a volume far larger than the database's own filesystem: the
+	// built-in 40 GiB cap would otherwise let an 11 TB library volume retain a
+	// single archive.
+	BackupMaxTotalBytes int64 `json:"backup_max_total_bytes" mapstructure:"backup_max_total_bytes"`
 
 	// Storage quotas
 	EnableDiskQuota    bool `json:"enable_disk_quota"`
@@ -1782,6 +1791,7 @@ func InitConfig() {
 			FileNamingPattern:       viper.GetString("file_naming_pattern"),
 			CreateBackups:           viper.GetBool("create_backups"),
 			BackupDir:               viper.GetString("backup_dir"),
+			BackupMaxTotalBytes:     viper.GetInt64("backup_max_total_bytes"),
 
 			// Storage quotas
 			EnableDiskQuota:    viper.GetBool("enable_disk_quota"),
