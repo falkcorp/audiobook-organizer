@@ -536,7 +536,6 @@ func RestoreBackup(backupPath, targetPath string, verify bool) error {
 	return nil
 }
 
-// ListBackups lists all available backups
 // ListBackups returns the archives in backupDir WITHOUT computing checksums.
 //
 // Checksumming used to happen here, unconditionally, for every archive on every

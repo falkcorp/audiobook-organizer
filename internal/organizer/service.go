@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-08-29
 
@@ -437,32 +437,31 @@ func organizeOutcomeError(stats *Stats) error {
 // not remove the backup — it stops re-taking one that is still fresh.
 const autoBackupMinInterval = 6 * time.Hour
 
-// newestBackupAge returns the age and filename of the most recent .tar.gz in
-// backupDir. Deliberately NOT backup.ListBackups: that checksums every archive
-// it finds, which on 14 GB files costs more than the check is worth.
+// newestBackupAge returns the age and filename of the most recent archive in
+// backupDir.
+//
+// This hand-rolled the directory walk until 2026-08-29, to avoid
+// backup.ListBackups checksumming every archive it found -- a full read of every
+// file, which at ~15 GB per archive cost enormously more than this freshness
+// check is worth. ListBackups no longer hashes, so the duplicate has lost its
+// reason to exist and is now a liability instead: two copies of the same
+// "which files here are archives?" predicate that can drift apart silently.
+//
+// The predicates were identical (skip directories, require .tar.gz, skip
+// entries that will not stat), and this needs only CreatedAt and Filename,
+// which the listing still populates.
 func newestBackupAge(backupDir string) (time.Duration, string, bool) {
-	entries, err := os.ReadDir(backupDir)
-	if err != nil {
+	backups, err := backup.ListBackups(backupDir)
+	if err != nil || len(backups) == 0 {
 		return 0, "", false
 	}
-	var newest time.Time
-	var name string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") {
-			continue
-		}
-		info, statErr := e.Info()
-		if statErr != nil {
-			continue
-		}
-		if info.ModTime().After(newest) {
-			newest, name = info.ModTime(), e.Name()
+	newest := backups[0]
+	for _, b := range backups[1:] {
+		if b.CreatedAt.After(newest.CreatedAt) {
+			newest = b
 		}
 	}
-	if name == "" {
-		return 0, "", false
-	}
-	return time.Since(newest), name, true
+	return time.Since(newest.CreatedAt), newest.Filename, true
 }
 
 // backupMethod records which path autoBackup took. It exists to make the
