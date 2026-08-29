@@ -24,3 +24,19 @@ Books still being worked on keep their applied state until their job ends, so
 rows do not flicker back to pending while the server is still working on them.
 
 Nothing about the immediate hide-on-apply behaviour changes.
+
+#### Applying metadata from the Search dialog no longer looks like it did nothing
+
+The Search button on a "no match" row lets you find and apply a candidate by
+hand — it is the only way to fix a book the automatic matching gave up on. The
+apply worked, but the queue then re-read the row and threw the answer away, so
+the book vanished under the default "Hide rejected" filter with nothing to show
+it had succeeded. The same thing happened when a re-fetch found a candidate for
+a row that had previously come back with no match: the row stayed marked
+rejected even though it no longer was.
+
+The queue now keeps track of which rows it marked itself versus which ones you
+decided about, so it can correct its own marks without overwriting your
+decisions. A book that has actually had metadata written is now shown as
+applied even if it had been skipped or rejected earlier in the session — what
+happened to the file wins over what was planned for it.

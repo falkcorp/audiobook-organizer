@@ -919,11 +919,19 @@ describe('an optimistic apply must be correctable by the server', () => {
     // gap -- another apply's terminal poll, a filter change -- saw an `applied`
     // row the server still called `matched` and reverted it, which is the
     // flicker ActionBar.tsx rejects useOptimistic to avoid.
+    //
+    // The refresh below is deliberately fired WITHOUT first waiting for
+    // batchApplyFromCache. An earlier version of this test waited for that call
+    // and did not test the window at all: the mock resolves immediately, and
+    // JS drains the microtask queue before waitFor's macrotask poll hands
+    // control back, so the post-dispatch continuation had always already run by
+    // the time the test could act. Restoring the pre-fix design left it green.
+    // Firing inside the debounce, before any dispatch exists, is the only way
+    // to observe the gap.
     const rows = [makeResult('b1'), makeResult('b2')];
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
       reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
     );
-    // Never settles: the op is still running for the whole test.
     vi.mocked(api.pollOperationV2).mockReturnValue(
       new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
     );
@@ -934,14 +942,13 @@ describe('an optimistic apply must be correctable by the server', () => {
     await act(async () => {
       result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'b1' });
     });
-    await waitFor(() => expect(result.current.pageResults).toHaveLength(1));
+    expect(result.current.pageResults).toHaveLength(1);
+    // Still inside the debounce: nothing has been dispatched yet.
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
 
-    // Let the debounce flush so the op is genuinely in flight, then disturb it.
-    await waitFor(() => expect(api.batchApplyFromCache).toHaveBeenCalled());
     await act(async () => {
       result.current.refresh();
     });
-    await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.spineCtx.rowState('b1')).toBe('applied');
     expect(result.current.pageResults).toHaveLength(1);
