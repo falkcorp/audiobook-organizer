@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-08-29
 //
@@ -787,6 +787,41 @@ describe('an optimistic apply must be correctable by the server', () => {
     });
 
     expect(result.current.pageResults).toHaveLength(0);
+  });
+
+  it('protects a single-row apply from the moment it is marked', async () => {
+    // applyOne is not a small applyMany: it marks the row synchronously and
+    // then sits behind a 500ms debounce, so the retention has to happen at the
+    // mark rather than after the dispatch resolves. Any refresh landing in that
+    // gap -- another apply's terminal poll, a filter change -- saw an `applied`
+    // row the server still called `matched` and reverted it, which is the
+    // flicker ActionBar.tsx rejects useOptimistic to avoid.
+    const rows = [makeResult('b1'), makeResult('b2')];
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+    // Never settles: the op is still running for the whole test.
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'b1' });
+    });
+    await waitFor(() => expect(result.current.pageResults).toHaveLength(1));
+
+    // Let the debounce flush so the op is genuinely in flight, then disturb it.
+    await waitFor(() => expect(api.batchApplyFromCache).toHaveBeenCalled());
+    await act(async () => {
+      result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.spineCtx.rowState('b1')).toBe('applied');
+    expect(result.current.pageResults).toHaveLength(1);
   });
 
   it('does not revert a row while its apply op is still running', async () => {
