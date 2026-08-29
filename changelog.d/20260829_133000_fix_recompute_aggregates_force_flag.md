@@ -33,10 +33,9 @@
   the v2 operations row — which both resume paths already preserve, so a restarted run
   still sees the operator's actual choice.
 
-### Known issue
-
-- Four other maintenance jobs still read parameters through the dead
-  `store.GetOperationParams(opID)` path and therefore receive nothing:
+  Known issue, reported but **not** fixed here: four other maintenance jobs still read
+  parameters through that same dead `store.GetOperationParams(opID)` path and therefore
+  receive nothing —
   `revert-metadata-fetch` (whose `fetch_op_ids` is required, so the job always errors),
   `bulk-fetch-metadata`, `bulk-deluge-import` and `scan-composer-tags`. They are a
   separate call path from the fix above and were left untouched; each needs its params
