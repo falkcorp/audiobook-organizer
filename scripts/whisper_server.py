@@ -1,7 +1,7 @@
 # file: scripts/whisper_server.py
-# version: 2.6.0
+# version: 2.7.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-07-01
+# last-edited: 2026-08-29
 #
 # /// script
 # requires-python = ">=3.11"
@@ -58,13 +58,46 @@ except ImportError as e:
 import os
 
 model_name = sys.argv[1] if len(sys.argv) > 1 else "base.en"
-# WHISPER_COMPUTE_TYPE: float16 for Turing+ (RTX series), int8 for Pascal (GTX 10-series).
-compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
-log.info(f"Loading {model_name} compute={compute_type} (first run downloads model)...")
+
+
+def _resolve_device() -> str:
+    """Pick the inference device, preferring CUDA when it is actually usable.
+
+    device= was hardcoded to "cuda", which made this server GPU-only: on any
+    machine without CUDA it died at model load. That is why the Mac had no
+    Whisper server at all while the Go service was configured to call one.
+
+    ctranslate2 (what faster-whisper runs on) has no Metal/MPS backend, so
+    Apple Silicon runs on CPU -- but CPU with int8 is perfectly usable, and a
+    working CPU server beats no server. Set WHISPER_DEVICE to override.
+    """
+    forced = os.environ.get("WHISPER_DEVICE", "").strip().lower()
+    if forced:
+        return forced
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception as exc:  # pragma: no cover - depends on host
+        log.warning(f"CUDA probe failed ({exc}); falling back to CPU")
+    return "cpu"
+
+
+device = _resolve_device()
+
+# WHISPER_COMPUTE_TYPE: float16 for Turing+ (RTX series), int8 for Pascal
+# (GTX 10-series). The default must follow the device -- ctranslate2's CPU
+# backend does not implement float16, so keeping the old unconditional
+# "float16" default would trade the hardcoded-cuda crash for a compute-type
+# crash and leave CPU hosts exactly as broken.
+default_compute = "float16" if device == "cuda" else "int8"
+compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", default_compute)
+log.info(f"Loading {model_name} device={device} compute={compute_type} (first run downloads model)...")
 
 model = faster_whisper.WhisperModel(
     model_name,
-    device="cuda",
+    device=device,
     compute_type=compute_type,
 )
 
@@ -79,7 +112,7 @@ except (ImportError, Exception) as e:
     batched_model = None
     log.warning(f"BatchedInferencePipeline unavailable ({e}), falling back to standard model")
 
-log.info(f"Ready — model={model_name} device=cuda compute={compute_type}")
+log.info(f"Ready — model={model_name} device={device} compute={compute_type}")
 
 # VAD parameters tuned for audiobook intros: lower threshold so music/quiet speech
 # isn't stripped; shorter silence gap so publisher jingles don't eat the whole clip.
