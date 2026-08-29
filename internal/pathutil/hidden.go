@@ -1,5 +1,5 @@
 // file: internal/pathutil/hidden.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2c7e91-4d38-4b06-9c1f-7e0a3b58d264
 // last-edited: 2026-08-29
 
@@ -9,6 +9,33 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// visibleHiddenDirs are dot-directories that library sweeps MUST still descend
+// into, despite the general rule below.
+//
+// The rule "skip anything dot-prefixed" is right for application state the
+// library should never see (.backups, .itunes-writeback, .failed). It is wrong
+// for content deliberately stored under a dot-name that IS library material.
+//
+// `.alternates` is that case: alternate versions/rips of a book are real
+// content the scanner has to find. The alternates feature is not built yet, and
+// this carve-out exists so that turning on the dot rule now does not quietly
+// make that content invisible the day it lands. A folder the scanner cannot see
+// fails silently -- the books simply never appear, with no error anywhere --
+// which is the most expensive kind of bug this codebase keeps rediscovering.
+//
+// THIS MAP IS THE ONE PLACE to add another carve-out. Adding the check inline
+// at a walker instead is how the scanner ended up with a hard-coded `.failed`
+// test that the count phase and the watcher never knew about.
+var visibleHiddenDirs = map[string]bool{
+	".alternates": true,
+}
+
+// IsVisibleHiddenDir reports whether a dot-prefixed directory is explicitly
+// carved out of the skip rule and must still be walked.
+func IsVisibleHiddenDir(name string) bool {
+	return visibleHiddenDirs[name]
+}
 
 // IsHiddenName reports whether a single path element is dot-prefixed.
 //
@@ -52,5 +79,9 @@ func ShouldSkipDir(root, path string) bool {
 	if filepath.Clean(root) == filepath.Clean(path) {
 		return false
 	}
-	return IsHiddenName(filepath.Base(path))
+	base := filepath.Base(path)
+	if IsVisibleHiddenDir(base) {
+		return false
+	}
+	return IsHiddenName(base)
 }

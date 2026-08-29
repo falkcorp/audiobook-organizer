@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-08-29
 
