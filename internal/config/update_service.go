@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.12.0
+// version: 3.14.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-08-19
+// last-edited: 2026-08-29
 
 package config
 
@@ -51,7 +51,153 @@ func (us *UpdateService) MaskSecrets(cfg Config) Config {
 	if masked.BasicAuthPassword != "" {
 		masked.BasicAuthPassword = database.MaskSecret(masked.BasicAuthPassword)
 	}
+	masked.MetadataSources = maskMetadataSourceCredentials(cfg.MetadataSources)
 	return masked
+}
+
+// maskMetadataSourceCredentials returns a deep copy of srcs with every
+// credential value masked.
+//
+// This closed a real leak: GET /api/v1/config masked the scalar
+// GoogleBooksAPIKey ("AIz****35bE") while returning the SAME key in full
+// cleartext at metadata_sources[].credentials.apiKey — two different maskings
+// of one secret in one response. Any provider credential stored here (Hardcover
+// token, a future provider's key) leaked the same way.
+//
+// The deep copy is load-bearing, not defensive style. MaskSecrets does
+// `masked := cfg`, which is a SHALLOW struct copy: the MetadataSources slice
+// header is copied but the backing array is shared with the live AppConfig, and
+// each Credentials map is a reference. Masking in place would therefore
+// overwrite the process's real credentials with "AIz****35bE" and every
+// provider client would start authenticating with the mask. So the slice is
+// reallocated and each map is rebuilt.
+//
+// Empty values are left as "" rather than masked, so the UI can still tell
+// "not configured" apart from "configured but hidden".
+func maskMetadataSourceCredentials(srcs []MetadataSource) []MetadataSource {
+	if srcs == nil {
+		return nil
+	}
+	out := make([]MetadataSource, len(srcs))
+	copy(out, srcs)
+	for i := range out {
+		if out[i].Credentials == nil {
+			continue
+		}
+		creds := make(map[string]string, len(out[i].Credentials))
+		for k, v := range out[i].Credentials {
+			if v == "" {
+				creds[k] = ""
+				continue
+			}
+			creds[k] = database.MaskSecret(v)
+		}
+		out[i].Credentials = creds
+	}
+	return out
+}
+
+// snapshotSourceCredentials copies every metadata-source credential, keyed by
+// source ID, so restoreMaskedCredentials can put back anything the incoming
+// payload would have destroyed.
+func snapshotSourceCredentials(srcs []MetadataSource) map[string]map[string]string {
+	out := make(map[string]map[string]string, len(srcs))
+	for _, s := range srcs {
+		if len(s.Credentials) == 0 {
+			continue
+		}
+		creds := make(map[string]string, len(s.Credentials))
+		for k, v := range s.Credentials {
+			creds[k] = v
+		}
+		out[s.ID] = creds
+	}
+	return out
+}
+
+// restoreMaskedCredentials puts back any metadata-source credential that the
+// incoming payload did not genuinely supply.
+//
+// This exists because MaskSecrets now masks these values, which turns a
+// previously harmless round-trip into a destructive one. The scalar secrets
+// (openai_api_key and friends) are safe: UpdateConfig deletes them from the
+// payload via secretFieldKeys before the JSON round-trip, so echoing a masked
+// scalar back is discarded. metadata_sources is NOT in that list, and
+// json.Unmarshal REPLACES the whole slice, credentials included. So a client
+// that does the obvious GET /config -> edit -> PUT /config would write
+// "AIz****35bE" over the real key and SaveConfigToDatabase would persist it --
+// masking the response would have converted a disclosure bug into permanent
+// credential loss.
+//
+// Two cases are restored:
+//
+//   - the incoming value is exactly MaskSecret(previous): the client echoed
+//     back what GET handed it, which never means "change the key to this".
+//   - the incoming value is empty while a previous value existed: either the
+//     key was absent (PUT /config is a merge -- absent means unchanged) or it
+//     was explicitly cleared. Those are indistinguishable after unmarshal, so
+//     this deliberately refuses to destroy a credential through an ambiguous
+//     path. Clearing one means removing the source or supplying a new value.
+//
+// A genuinely new value is always written through.
+func restoreMaskedCredentials(srcs []MetadataSource, prior map[string]map[string]string) {
+	for i := range srcs {
+		old, ok := prior[srcs[i].ID]
+		if !ok {
+			continue
+		}
+		if srcs[i].Credentials == nil {
+			// The payload dropped the map entirely; rebuild it from the prior
+			// values rather than silently losing every credential.
+			restored := make(map[string]string, len(old))
+			for k, v := range old {
+				restored[k] = v
+			}
+			srcs[i].Credentials = restored
+			continue
+		}
+		for k, prev := range old {
+			if prev == "" {
+				continue
+			}
+			switch srcs[i].Credentials[k] {
+			case prev:
+				// unchanged
+			case "", database.MaskSecret(prev):
+				srcs[i].Credentials[k] = prev
+			}
+		}
+	}
+}
+
+// acceptSecretUpdate reports whether an incoming scalar secret should be written
+// through to the stored config.
+//
+// GET /api/v1/config returns these masked, so a client that reads the config and
+// PUTs it back sends "AIz****35bE" as the value. Writing that through replaces
+// the real key with the mask. The browser avoids this deliberately -- Settings.tsx
+// loads the config with `openaiApiKey: ”` ("Clear field when loading, show
+// placeholder instead") and useSettingsHandlers.ts omits the key entirely when
+// empty -- but that is a client-side convention, not an invariant. Any other
+// client doing the obvious GET-edit-PUT destroys the key.
+//
+// The failure is silent in a nasty way: MaskSecret is idempotent
+// (MaskSecret("AIz****35bE") == "AIz****35bE"), so the response after a
+// destructive write is byte-identical to the response after a successful one.
+// The UI still displays "AIz****35bE" and nothing surfaces until the provider
+// starts returning 401.
+//
+// Only the exact mask is rejected. An empty value still clears the secret --
+// that is existing, intentional behaviour and the only way to unset one. This is
+// deliberately narrower than restoreMaskedCredentials, which also restores on
+// empty: a metadata-source payload cannot express "clear this credential"
+// (the client always sends a credentials map), so there an empty value is
+// ambiguous. Here it is unambiguous.
+func acceptSecretUpdate(incoming, current string) bool {
+	if current == "" || incoming == "" {
+		return true
+	}
+	return incoming != database.MaskSecret(current)
 }
 
 // secretFieldKeys are extracted and applied explicitly, then removed before the
@@ -92,22 +238,46 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	// flow through the JSON round-trip to avoid plaintext exposure.
 	// WHY Mutate: each assignment here is a write to the global AppConfig that
 	// races with concurrent HTTP readers; Mutate serialises under the write lock.
+	// The acceptSecretUpdate check lives INSIDE Mutate on purpose: it compares
+	// the incoming value against the currently stored one, so reading the
+	// current value outside the lock and writing inside it would be a
+	// check-then-act race with any concurrent writer.
 	if val, ok := payloadString(payload, "openai_api_key"); ok {
 		slog.Debug("UpdateConfig updating OpenAI API key (len)", "val_count", len(val))
-		Mutate(func(c *Config) { c.OpenAIAPIKey = val })
+		Mutate(func(c *Config) {
+			if acceptSecretUpdate(val, c.OpenAIAPIKey) {
+				c.OpenAIAPIKey = val
+			}
+		})
 	}
 	if val, ok := payloadString(payload, "acoustid_api_key"); ok {
 		slog.Debug("UpdateConfig updating AcoustID API key (len)", "val_count", len(val))
-		Mutate(func(c *Config) { c.AcoustIDAPIKey = val })
+		Mutate(func(c *Config) {
+			if acceptSecretUpdate(val, c.AcoustIDAPIKey) {
+				c.AcoustIDAPIKey = val
+			}
+		})
 	}
 	if val, ok := payloadString(payload, "google_books_api_key"); ok {
-		Mutate(func(c *Config) { c.GoogleBooksAPIKey = val })
+		Mutate(func(c *Config) {
+			if acceptSecretUpdate(val, c.GoogleBooksAPIKey) {
+				c.GoogleBooksAPIKey = val
+			}
+		})
 	}
 	if val, ok := payloadString(payload, "hardcover_api_token"); ok {
-		Mutate(func(c *Config) { c.HardcoverAPIToken = val })
+		Mutate(func(c *Config) {
+			if acceptSecretUpdate(val, c.HardcoverAPIToken) {
+				c.HardcoverAPIToken = val
+			}
+		})
 	}
 	if val, ok := payloadString(payload, "basic_auth_password"); ok {
-		Mutate(func(c *Config) { c.BasicAuthPassword = val })
+		Mutate(func(c *Config) {
+			if acceptSecretUpdate(val, c.BasicAuthPassword) {
+				c.BasicAuthPassword = val
+			}
+		})
 	}
 
 	// Build filtered payload without secrets (already applied above)
@@ -133,10 +303,16 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	}
 	var unmarshalErr error
 	Mutate(func(c *Config) {
+		// Captured INSIDE the lock, immediately before the unmarshal that would
+		// clobber them, so no concurrent writer can slip between snapshot and
+		// restore. See restoreMaskedCredentials for why this is needed.
+		priorCreds := snapshotSourceCredentials(c.MetadataSources)
+
 		if err := json.Unmarshal(payloadJSON, c); err != nil {
 			unmarshalErr = err
 			return
 		}
+		restoreMaskedCredentials(c.MetadataSources, priorCreds)
 		// Post-process inside the lock: trim root_dir whitespace, derive setup_complete
 		c.RootDir = strings.TrimSpace(c.RootDir)
 		c.SetupComplete = c.RootDir != ""
