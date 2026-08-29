@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-08-20
+// last-edited: 2026-08-29
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -133,12 +133,23 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 				defer de.bgWg.Done()
 				hCtx, cancel := context.WithTimeout(bgCtx, 30*time.Minute)
 				defer cancel()
-				books, authors, err := de.HydrateChromem(hCtx)
+				stats, err := de.HydrateChromem(hCtx)
 				if err != nil {
-					slog.Warn("chromem hydrate finished with error", "err", err, "books", books, "authors", authors)
+					slog.Warn("chromem hydrate finished with error", "err", err,
+						"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
+						"book_rows", stats.BookRows, "author_rows", stats.AuthorRows)
 					return
 				}
-				slog.Info("chromem hydrate complete", "books", books, "authors", authors)
+				// book_rows/author_rows are the numbers to diff against the
+				// ANN store's own "truth_count" import log: books_skipped is
+				// exactly the difference, and HydrateChromem's accounting line
+				// breaks that total down by named bucket. Before 2026-08-29
+				// this line reported only the hydrated counts, so a 21,952-row
+				// gap between the two logs had no explanation anywhere.
+				slog.Info("chromem hydrate complete",
+					"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
+					"book_rows", stats.BookRows, "books_skipped", stats.BooksSkipped(),
+					"author_rows", stats.AuthorRows, "authors_skipped", stats.AuthorsSkipped())
 			}()
 		}
 	}

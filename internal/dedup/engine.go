@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.66.0
+// version: 1.67.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-08-19
+// last-edited: 2026-08-29
 
 package dedup
 
@@ -299,6 +299,104 @@ func (de *Engine) getScoreConfig() unified.ScoreConfig {
 	return unified.DefaultScoreConfig()
 }
 
+// HydrateStats is the full per-bucket accounting for one HydrateChromem run.
+//
+// WHY a struct instead of the two bare hydrated counts this used to return:
+// on 2026-08-29 production read 39,658 `emb:` book rows and put 17,706 of them
+// into the graph. 21,952 vanished, and exactly ONE of them (a stale-model row)
+// was reported anywhere. The other four book skip paths incremented nothing
+// and logged nothing, so an operator comparing the ANN store's truth_count to
+// its graph_count could not tell "correctly filtered" from "silently broken".
+// Every `continue` in the loops below now has a named bucket here, and the
+// identity
+//
+//	BookRows == BooksAccounted()   (and AuthorRows == AuthorsAccounted())
+//
+// holds for any run that read every row, so a future skip path added without a
+// counter breaks the identity instead of quietly widening the mystery.
+//
+// The identity does NOT hold when HydrateChromem returned early on context
+// cancellation — the remaining rows were never classified. Callers that assert
+// on it must use a live context.
+type HydrateStats struct {
+	// BookRows is how many "book" embedding rows were read from the store.
+	BookRows int
+	// BooksHydrated is how many of them reached the ANN index.
+	BooksHydrated int
+	// BooksEmptyVector counts rows whose stored vector decoded to zero
+	// elements — nothing to mirror. A row here is corrupt or was written
+	// before the vector was populated.
+	BooksEmptyVector int
+	// BooksStaleModel counts rows stamped with a different model than the
+	// wired embed client. Re-embeddable if the book still exists.
+	BooksStaleModel int
+	// BooksOrphaned counts rows whose book ID no longer resolves at all
+	// (GetBookByID returned nil with no error — the book was hard-deleted or
+	// merged away). These are DEAD WEIGHT: no re-embed can ever reach them,
+	// because the entity they describe is gone, so they will be skipped on
+	// every restart forever while still occupying space in the embedding
+	// table. This is the cleanup signal the stale-model warning below already
+	// promised ("or a future orphan-embedding cleanup") — the book-side
+	// counterpart of what dedup.cleanup-orphan-author-embeddings does for
+	// authors. Surfacing the count is deliberately all this does; deleting
+	// the rows is a separate op's job.
+	BooksOrphaned int
+	// BooksLookupError counts rows whose book lookup returned an ERROR
+	// (Pebble I/O, JSON unmarshal, book_sig hydrate failure). Kept apart from
+	// BooksOrphaned because the two mean opposite things: an orphan is a
+	// correct, permanent skip, while a lookup error is a transient or
+	// corrupt-data fault that drops a LIVE book out of dedup. The old code
+	// discarded the error and folded both into one silent `continue`.
+	BooksLookupError int
+	// FirstBookLookupError is the first error behind BooksLookupError, kept
+	// as a bounded sample: per-row logging would emit ~22K lines on the
+	// production library, but a bare count gives nobody anything to debug.
+	FirstBookLookupError error
+	// BooksNonPrimary counts rows for non-primary version-group members.
+	// This bucket is INTENTIONAL and expected to be large — non-primary
+	// versions must not participate in dedup matching.
+	BooksNonPrimary int
+
+	// AuthorRows is how many "author" embedding rows were read.
+	AuthorRows int
+	// AuthorsHydrated is how many of them reached the ANN index.
+	AuthorsHydrated int
+	// AuthorsEmptyVector counts author rows with a zero-length vector.
+	AuthorsEmptyVector int
+	// AuthorsStaleModel counts author rows stamped with a different model.
+	AuthorsStaleModel int
+	//
+	// NOTE — there is deliberately no AuthorsOrphaned bucket. The author loop
+	// has no existence check at all, so orphaned author rows whose model DOES
+	// match are mirrored into the index rather than skipped, and there is no
+	// loss to account for. Adding a guard here would be wrong twice over:
+	// PebbleStore.GetAuthorByID follows a tombstone redirect for merged
+	// authors, so it returns the CANONICAL author (non-nil) for a merged-away
+	// ID and would never flag one; and the sound check (membership in
+	// GetAllAuthors()'s literal author:N enumeration) is already implemented
+	// by the dedup.cleanup-orphan-author-embeddings op, which owns author
+	// orphan detection. See internal/plugins/dedup/cleanup_orphan_author_embeddings.go.
+}
+
+// BooksAccounted returns the sum of every book bucket. Equals BookRows on a
+// run that classified every row.
+func (s HydrateStats) BooksAccounted() int {
+	return s.BooksHydrated + s.BooksEmptyVector + s.BooksStaleModel +
+		s.BooksOrphaned + s.BooksLookupError + s.BooksNonPrimary
+}
+
+// AuthorsAccounted returns the sum of every author bucket. Equals AuthorRows
+// on a run that classified every row.
+func (s HydrateStats) AuthorsAccounted() int {
+	return s.AuthorsHydrated + s.AuthorsEmptyVector + s.AuthorsStaleModel
+}
+
+// BooksSkipped is BookRows minus what reached the index.
+func (s HydrateStats) BooksSkipped() int { return s.BooksAccounted() - s.BooksHydrated }
+
+// AuthorsSkipped is AuthorRows minus what reached the index.
+func (s HydrateStats) AuthorsSkipped() int { return s.AuthorsAccounted() - s.AuthorsHydrated }
+
 // HydrateChromem walks the SQLite embedding rows and copies any that are
 // missing from the chromem ANN index. Run once at startup to bring chromem
 // into sync with the canonical SQLite table — without this step, a fresh
@@ -311,81 +409,137 @@ func (de *Engine) getScoreConfig() unified.ScoreConfig {
 // than the currently-wired embed client are also skipped — mirroring one
 // would only fail the ANN store's dimension check (e.g. after a model
 // cutover) and log a warning for no benefit. Orphaned rows left behind by a
-// merge/delete (the entity no longer exists to re-embed) hit this same
-// guard, since a re-embed can never reach them either; the mismatched
-// vector just sits inert in the embedding table instead of spamming logs
-// every restart.
+// merge/delete (the entity no longer exists to re-embed) hit their own guard,
+// since a re-embed can never reach them either; the vector just sits inert in
+// the embedding table instead of spamming logs every restart.
 //
-// Returns counts so the caller can log progress. Errors on individual rows
-// are logged but never abort the hydrate — partial coverage is better than
-// no coverage.
-func (de *Engine) HydrateChromem(ctx context.Context) (booksHydrated, authorsHydrated int, err error) {
+// EVERY skip above is counted into the returned HydrateStats and reported in
+// one summary log line, so the gap between rows read and rows indexed is fully
+// explained by named buckets. Errors on individual rows are counted but never
+// abort the hydrate — partial coverage is better than no coverage.
+func (de *Engine) HydrateChromem(ctx context.Context) (HydrateStats, error) {
+	var stats HydrateStats
 	if de.chromemStore == nil || de.embedStore == nil {
-		return 0, 0, nil
+		return stats, nil
 	}
-
-	var staleBooks, staleAuthors int
 
 	bookEmbeds, err := de.embedStore.ListByType("book")
 	if err != nil {
-		return 0, 0, fmt.Errorf("list book embeddings: %w", err)
+		return stats, fmt.Errorf("list book embeddings: %w", err)
 	}
+	stats.BookRows = len(bookEmbeds)
 	for _, e := range bookEmbeds {
 		if err := ctx.Err(); err != nil {
-			return booksHydrated, authorsHydrated, err
+			return stats, err
 		}
 		if len(e.Vector) == 0 {
+			stats.BooksEmptyVector++
 			continue
 		}
 		if !de.embeddingModelMatches(e.Model) {
-			staleBooks++
+			stats.BooksStaleModel++
 			continue
 		}
-		book, _ := de.bookStore.GetBookByID(e.EntityID)
+		// GetBookByID returns (nil, nil) for a missing key and (nil, err)
+		// for a real fault — verified against PebbleStore.GetBookByID, which
+		// maps pebble.ErrNotFound to a bare nil rather than a sentinel. The
+		// two cases are counted separately: see BooksOrphaned/BooksLookupError.
+		book, err := de.bookStore.GetBookByID(e.EntityID)
+		if err != nil {
+			stats.BooksLookupError++
+			if stats.FirstBookLookupError == nil {
+				stats.FirstBookLookupError = fmt.Errorf("book %s: %w", e.EntityID, err)
+			}
+			continue
+		}
 		if book == nil {
+			stats.BooksOrphaned++
 			continue
 		}
 		// Skip non-primary versions — they should not participate in
 		// dedup matches and the on-disk row is stale.
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+			stats.BooksNonPrimary++
 			continue
 		}
 		de.mirrorBookToChromem(ctx, book, e.Vector)
-		booksHydrated++
+		stats.BooksHydrated++
 	}
 
 	authorEmbeds, err := de.embedStore.ListByType("author")
 	if err != nil {
-		return booksHydrated, authorsHydrated, fmt.Errorf("list author embeddings: %w", err)
+		return stats, fmt.Errorf("list author embeddings: %w", err)
 	}
+	stats.AuthorRows = len(authorEmbeds)
 	for _, e := range authorEmbeds {
 		if err := ctx.Err(); err != nil {
-			return booksHydrated, authorsHydrated, err
+			return stats, err
 		}
 		if len(e.Vector) == 0 {
+			stats.AuthorsEmptyVector++
 			continue
 		}
 		if !de.embeddingModelMatches(e.Model) {
-			staleAuthors++
+			stats.AuthorsStaleModel++
 			continue
 		}
+		// No orphan guard here on purpose — see the note on HydrateStats.
 		de.mirrorAuthorToChromem(ctx, e.EntityID, e.Vector)
-		authorsHydrated++
+		stats.AuthorsHydrated++
 	}
 
-	// Surface stale-model rows once, as a single summary, instead of either
-	// spamming a warning per row (the old behavior this guard replaces) or
-	// silently dropping them where nobody would ever notice they exist.
-	// These rows are candidates for a re-embed (if the entity is real and
-	// just missed a backfill pass) or a future orphan-embedding cleanup (if
-	// the entity was merged/deleted and the row is dead weight) — either way
-	// this line is the trigger to go look, not a fire-and-forget skip.
-	if staleBooks > 0 || staleAuthors > 0 {
-		logging.Warn(ctx, "chromem hydrate: skipped stale-model embedding rows (candidates for re-embed or orphan cleanup)",
-			"stale_books", staleBooks, "stale_authors", staleAuthors)
+	de.logHydrateAccounting(ctx, stats)
+	return stats, nil
+}
+
+// logHydrateAccounting emits the one summary line that explains the whole gap
+// between rows read and rows indexed.
+//
+// One line, not one per row: the production library skips ~22K book rows per
+// hydrate, so per-row logging is not an option. It is also not one line per
+// bucket — an operator reading this is diffing it against the ANN store's
+// truth_count/graph_count pair, and that arithmetic only works if every bucket
+// is in front of them at once. This replaces the old stale-model-only warning,
+// which reported 1 of the 21,952 rows production was dropping.
+//
+// Severity carries the actionability: WARN when a bucket that wants a human
+// (stale-model rows to re-embed, orphaned rows to clean up, lookup errors that
+// dropped a live book) is non-empty, INFO when the only skips are the
+// intentional ones. Non-primary and empty-vector rows alone are not a problem.
+func (de *Engine) logHydrateAccounting(ctx context.Context, stats HydrateStats) {
+	args := []any{
+		"book_rows", stats.BookRows,
+		"books_hydrated", stats.BooksHydrated,
+		"books_empty_vector", stats.BooksEmptyVector,
+		"books_stale_model", stats.BooksStaleModel,
+		"books_orphaned", stats.BooksOrphaned,
+		"books_lookup_error", stats.BooksLookupError,
+		"books_non_primary", stats.BooksNonPrimary,
+		"books_unaccounted", stats.BookRows - stats.BooksAccounted(),
+		"author_rows", stats.AuthorRows,
+		"authors_hydrated", stats.AuthorsHydrated,
+		"authors_empty_vector", stats.AuthorsEmptyVector,
+		"authors_stale_model", stats.AuthorsStaleModel,
+		"authors_unaccounted", stats.AuthorRows - stats.AuthorsAccounted(),
+	}
+	if stats.FirstBookLookupError != nil {
+		args = append(args, "first_book_lookup_error", stats.FirstBookLookupError)
 	}
 
-	return booksHydrated, authorsHydrated, nil
+	actionable := stats.BooksStaleModel > 0 || stats.AuthorsStaleModel > 0 ||
+		stats.BooksOrphaned > 0 || stats.BooksLookupError > 0
+	if actionable {
+		// Stale-model rows are candidates for a re-embed (the entity is real
+		// and just missed a backfill pass). Orphaned rows are candidates for
+		// an orphan-embedding cleanup (the entity was merged/deleted and the
+		// row is dead weight that no re-embed can reach). Lookup errors mean
+		// a LIVE book fell out of dedup and should be investigated, not
+		// cleaned up. This line is the trigger to go look, not a
+		// fire-and-forget skip.
+		logging.Warn(ctx, "chromem hydrate accounting: rows skipped that want attention (re-embed, orphan cleanup, or lookup fault)", args...)
+		return
+	}
+	logging.Info(ctx, "chromem hydrate accounting", args...)
 }
 
 // CheckBook runs Layer 1 (exact) and Layer 2 (embedding) dedup checks for a book.
