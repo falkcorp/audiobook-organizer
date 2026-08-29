@@ -1,0 +1,3 @@
+### Changed
+
+- **Corrected a note in the project's own TODO that would have sent the next person looking in the wrong place.** While double-checking a scan-cache bug that was already fixed, it turned out the notes still claimed that two separate ways a book can go "never scanned" were completely unrelated, so fixing one could never help the other. That was not true: a multi-file audiobook filed under its folder rather than its first file showed up in *both* counts at once, and the fix for one moved both. The note now says so, and flags that the numbers it asks someone to go and read must be re-read fresh rather than compared against the old, pre-fix figures.
