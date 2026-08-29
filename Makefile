@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.25.0
+# version: 2.26.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-25
+# last-edited: 2026-08-29
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -9,6 +9,33 @@ WEB_DIR := $(ROOT_DIR)/web
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo 'dev')
 LDFLAGS := -X main.version=$(VERSION)
 export GOEXPERIMENT := jsonv2
+
+# Pin the Go toolchain for EVERY target in this file and in the `-include`d
+# Makefile.local (exported make variables become environment variables for all
+# recipes, including those defined in the included file).
+#
+# Why this is not optional: github.com/cockroachdb/swiss (pulled in by
+# cockroachdb/pebble) reaches into runtime internals via //go:linkname —
+# `fastrand64`, `hashFn`, `getRuntimeHasher`. Go 1.27 removed them, so building
+# with a 1.27+ toolchain fails with `undefined: fastrand64`. GOTOOLCHAIN's
+# default (`auto`) only ever upgrades to a NEWER toolchain than the `go`
+# directive in go.mod — it will never step DOWN from an installed 1.27 to the
+# 1.26.0 go.mod asks for. Hit for real on 2026-08-24: `make deploy-debug` died
+# in `build-linux-debug` on a machine whose default toolchain was go1.27.0.
+#
+# `:=` (not `?=`) is deliberate: a makefile assignment beats an inherited
+# environment variable, so a stale `GOTOOLCHAIN=local` in a developer's shell
+# cannot silently re-break the build.
+#
+# The literal is intentional rather than derived from go.mod: the `go` directive
+# may legally be two-component (`go 1.27`), and `go1.27` is not a valid
+# toolchain name. Drift in the direction that matters is self-detecting — if
+# go.mod ever requires more than this pin, Go refuses loudly with
+# "go.mod requires go >= X (running go1.26.0; GOTOOLCHAIN=go1.26.0)".
+#
+# When bumping: change this line and go.mod's `go` directive together, and only
+# once cockroachdb/swiss supports the newer runtime.
+export GOTOOLCHAIN := go1.26.0
 
 # Overridable deployment variables (set in Makefile.local or via environment)
 DEPLOY_HOST ?=
