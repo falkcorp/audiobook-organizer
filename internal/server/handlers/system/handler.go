@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-08-29
 
@@ -568,7 +568,22 @@ func (h *Handler) ListBackups(c *gin.Context) {
 	backupConfig := backup.DefaultBackupConfig()
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 
-	backups, err := backup.ListBackups(backupConfig.BackupDir)
+	// Checksums are OPT-IN because computing them reads every byte of every
+	// archive. Measured on production 2026-08-29, with ~16 GB of archives this
+	// endpoint did not respond within two minutes; at the sizes this application
+	// produces, hashing on every list makes the backup screen unusable.
+	//
+	// A caller that actually wants to verify integrity asks for it, and accepts
+	// the wait. The default answer to "what backups exist" must be cheap.
+	var (
+		backups []backup.BackupInfo
+		err     error
+	)
+	if c.Query("checksums") == "true" {
+		backups, err = backup.ListBackupsWithChecksums(backupConfig.BackupDir)
+	} else {
+		backups, err = backup.ListBackups(backupConfig.BackupDir)
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to list backups", err)
 		return
