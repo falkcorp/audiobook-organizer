@@ -8,6 +8,9 @@ package dedup
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -120,27 +123,34 @@ func TestHydrateChromem_SkipsStaleModelRows(t *testing.T) {
 // row) was reported anywhere, because three of the four book skip paths
 // incremented no counter and logged nothing.
 //
-// The fixture deliberately contains ONE row of EVERY book skip category plus
-// two rows that must survive, so each counter can be asserted individually
-// rather than inferred from a total:
+// The fixture contains rows of EVERY skip category plus rows that must
+// survive, at a DISTINCT COUNT PER BUCKET:
 //
-//	BOOK_OK           primary=true             -> BooksHydrated
-//	BOOK_NIL_PRIMARY  IsPrimaryVersion==nil    -> BooksHydrated (the DEFAULT
-//	                                             case in production; a nil
-//	                                             pointer is not "non-primary")
-//	BOOK_EMPTY        zero-length vector       -> BooksEmptyVector
-//	BOOK_STALE        model=text-embedding-3-* -> BooksStaleModel
-//	BOOK_ORPHAN       GetBookByID -> (nil,nil) -> BooksOrphaned
-//	BOOK_LOOKUP_ERR   GetBookByID -> (nil,err) -> BooksLookupError
-//	BOOK_NONPRIMARY   primary=false            -> BooksNonPrimary
+//	2 x HYDRATED_*    primary=true             -> BooksHydrated
+//	1 x NILPRIMARY_*  IsPrimaryVersion==nil    -> BooksHydrated (the DEFAULT
+//	                                              case in production; a nil
+//	                                              pointer is not "non-primary")
+//	3 x EMPTY_*       zero-length vector       -> BooksEmptyVector
+//	4 x STALE_*       model=text-embedding-3-* -> BooksStaleModel
+//	5 x ORPHAN_*      GetBookByID -> (nil,nil) -> BooksOrphaned
+//	6 x LOOKUPERR_*   GetBookByID -> (nil,err) -> BooksLookupError
+//	7 x NONPRIMARY_*  primary=false            -> BooksNonPrimary
 //
-// plus, on the author side, one row per author skip path and one that lands.
+// and 1/2/3 rows for the author hydrated/empty/stale buckets.
+//
+// WHY the counts differ per bucket instead of one row each: the one-row-each
+// version of this fixture was written first and a mutation test walked
+// straight through it. Swapping the BooksOrphaned and BooksNonPrimary
+// increments in engine.go left every assertion green — both buckets held 1, so
+// 1↔1 is invisible, and the row totals are unchanged so the arithmetic
+// identity below did not notice either. Distinct expected counts make every
+// pairwise mis-assignment change two numbers at once.
 //
 // The counts are asserted one bucket at a time AND as the arithmetic identity
-// BookRows == BooksAccounted(). The identity is what catches a future skip
-// path added without a counter — the exact defect class this test exists for —
-// while the individual assertions catch a counter incremented into the wrong
-// bucket, which the identity alone would not notice.
+// BookRows == BooksAccounted(). The identity catches a future skip path added
+// with no counter — the exact defect class this test exists for — while the
+// individual assertions catch an increment landing in the wrong bucket, which
+// the identity alone cannot see.
 func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
 	fake := newFakeVectorANNStore()
@@ -150,22 +160,35 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	primary, nonPrimary := true, false
 	lookupErr := errors.New("pebble: simulated read fault")
 
-	// Keyed explicitly — a catch-all returning a book for any unrecognised ID
-	// (as the sibling test above does) would silently reclassify the orphan
-	// row as hydrated and this test would prove nothing.
+	const (
+		wantHydratedPrimary   = 2
+		wantHydratedNilFlag   = 1
+		wantEmptyVector       = 3
+		wantStaleModel        = 4
+		wantOrphaned          = 5
+		wantLookupError       = 6
+		wantNonPrimary        = 7
+		wantAuthorsHydrated   = 1
+		wantAuthorsEmptyVec   = 2
+		wantAuthorsStaleModel = 3
+	)
+
+	// Keyed by ID prefix — a catch-all returning a book for any unrecognised
+	// ID (as the sibling test above does) would silently reclassify the orphan
+	// rows as hydrated and this test would prove nothing.
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
-		switch id {
-		case "BOOK_OK":
+		switch {
+		case strings.HasPrefix(id, "HYDRATED_"):
 			return &database.Book{ID: id, Title: "Good", IsPrimaryVersion: &primary}, nil
-		case "BOOK_NIL_PRIMARY":
+		case strings.HasPrefix(id, "NILPRIMARY_"):
 			// IsPrimaryVersion left nil on purpose: nil serializes as ABSENT
 			// and is the default across most of the production library.
 			return &database.Book{ID: id, Title: "Unset Primary Flag"}, nil
-		case "BOOK_NONPRIMARY":
+		case strings.HasPrefix(id, "NONPRIMARY_"):
 			return &database.Book{ID: id, Title: "Alt Version", IsPrimaryVersion: &nonPrimary}, nil
-		case "BOOK_LOOKUP_ERR":
+		case strings.HasPrefix(id, "LOOKUPERR_"):
 			return nil, lookupErr
-		case "BOOK_ORPHAN":
+		case strings.HasPrefix(id, "ORPHAN_"):
 			// PebbleStore.GetBookByID maps pebble.ErrNotFound to a bare
 			// (nil, nil) — no sentinel — so this is production's real
 			// not-found shape, not a mock-only convenience.
@@ -175,25 +198,56 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 		return nil, nil
 	}
 
-	seed := func(entityType, entityID string, vec []float32, model string) {
+	vec := []float32{1, 2, 3, 4}
+	// seedBooks writes n book rows named "<prefix>_<i>" — the prefix is what
+	// GetBookByIDFunc above dispatches on — and returns their "book/<id>" keys
+	// so the ANN-store assertions can name every seeded row exactly.
+	seedBooks := func(prefix string, n int, v []float32, model string) []string {
 		t.Helper()
-		if err := es.Upsert(database.Embedding{EntityType: entityType, EntityID: entityID, Vector: vec, Model: model}); err != nil {
-			t.Fatalf("seed %s/%s: %v", entityType, entityID, err)
+		keys := make([]string, 0, n)
+		for i := range n {
+			id := fmt.Sprintf("%s_%d", prefix, i)
+			if err := es.Upsert(database.Embedding{EntityType: "book", EntityID: id, Vector: v, Model: model}); err != nil {
+				t.Fatalf("seed book/%s: %v", id, err)
+			}
+			keys = append(keys, "book/"+id)
 		}
+		return keys
+	}
+	// seedAuthors mints stringified-int entity IDs from one shared counter, so
+	// no two author buckets can collide on a key (which would silently shrink
+	// the fixture and make a bucket unobservable).
+	nextAuthorID := 1000
+	seedAuthors := func(n int, v []float32, model string) []string {
+		t.Helper()
+		keys := make([]string, 0, n)
+		for range n {
+			nextAuthorID++
+			id := strconv.Itoa(nextAuthorID)
+			if err := es.Upsert(database.Embedding{EntityType: "author", EntityID: id, Vector: v, Model: model}); err != nil {
+				t.Fatalf("seed author/%s: %v", id, err)
+			}
+			keys = append(keys, "author/"+id)
+		}
+		return keys
 	}
 
-	vec := []float32{1, 2, 3, 4}
-	seed("book", "BOOK_OK", vec, "bge-m3")
-	seed("book", "BOOK_NIL_PRIMARY", vec, "bge-m3")
-	seed("book", "BOOK_EMPTY", nil, "bge-m3")
-	seed("book", "BOOK_STALE", vec, "text-embedding-3-large")
-	seed("book", "BOOK_ORPHAN", vec, "bge-m3")
-	seed("book", "BOOK_LOOKUP_ERR", vec, "bge-m3")
-	seed("book", "BOOK_NONPRIMARY", vec, "bge-m3")
+	wantMirrored := append(
+		seedBooks("HYDRATED", wantHydratedPrimary, vec, "bge-m3"),
+		seedBooks("NILPRIMARY", wantHydratedNilFlag, vec, "bge-m3")...)
+	wantSkipped := seedBooks("EMPTY", wantEmptyVector, nil, "bge-m3")
+	wantSkipped = append(wantSkipped, seedBooks("STALE", wantStaleModel, vec, "text-embedding-3-large")...)
+	wantSkipped = append(wantSkipped, seedBooks("ORPHAN", wantOrphaned, vec, "bge-m3")...)
+	wantSkipped = append(wantSkipped, seedBooks("LOOKUPERR", wantLookupError, vec, "bge-m3")...)
+	wantSkipped = append(wantSkipped, seedBooks("NONPRIMARY", wantNonPrimary, vec, "bge-m3")...)
 
-	seed("author", "100", vec, "bge-m3")
-	seed("author", "101", nil, "bge-m3")
-	seed("author", "102", vec, "text-embedding-3-large")
+	wantMirrored = append(wantMirrored, seedAuthors(wantAuthorsHydrated, vec, "bge-m3")...)
+	wantSkipped = append(wantSkipped, seedAuthors(wantAuthorsEmptyVec, nil, "bge-m3")...)
+	wantSkipped = append(wantSkipped, seedAuthors(wantAuthorsStaleModel, vec, "text-embedding-3-large")...)
+
+	wantBookRows := wantHydratedPrimary + wantHydratedNilFlag + wantEmptyVector +
+		wantStaleModel + wantOrphaned + wantLookupError + wantNonPrimary
+	wantAuthorRows := wantAuthorsHydrated + wantAuthorsEmptyVec + wantAuthorsStaleModel
 
 	// Confirm the fixture can actually observe each bucket before trusting the
 	// counters: an empty-vector row has to survive the encode/decode round
@@ -202,13 +256,20 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByType(book): %v", err)
 	}
-	if len(rows) != 7 {
-		t.Fatalf("fixture seeded %d book rows, want 7", len(rows))
+	if len(rows) != wantBookRows {
+		t.Fatalf("fixture seeded %d book rows, want %d", len(rows), wantBookRows)
 	}
+	emptyRows := 0
 	for _, r := range rows {
-		if r.EntityID == "BOOK_EMPTY" && len(r.Vector) != 0 {
-			t.Fatalf("fixture cannot observe the empty-vector bucket: BOOK_EMPTY round-tripped with %d elements", len(r.Vector))
+		if strings.HasPrefix(r.EntityID, "EMPTY_") {
+			if len(r.Vector) != 0 {
+				t.Fatalf("fixture cannot observe the empty-vector bucket: %s round-tripped with %d elements", r.EntityID, len(r.Vector))
+			}
+			emptyRows++
 		}
+	}
+	if emptyRows != wantEmptyVector {
+		t.Fatalf("fixture holds %d empty-vector book rows, want %d", emptyRows, wantEmptyVector)
 	}
 
 	stats, err := engine.HydrateChromem(context.Background())
@@ -222,17 +283,17 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 		got  int
 		want int
 	}{
-		{"BookRows", stats.BookRows, 7},
-		{"BooksHydrated", stats.BooksHydrated, 2},
-		{"BooksEmptyVector", stats.BooksEmptyVector, 1},
-		{"BooksStaleModel", stats.BooksStaleModel, 1},
-		{"BooksOrphaned", stats.BooksOrphaned, 1},
-		{"BooksLookupError", stats.BooksLookupError, 1},
-		{"BooksNonPrimary", stats.BooksNonPrimary, 1},
-		{"AuthorRows", stats.AuthorRows, 3},
-		{"AuthorsHydrated", stats.AuthorsHydrated, 1},
-		{"AuthorsEmptyVector", stats.AuthorsEmptyVector, 1},
-		{"AuthorsStaleModel", stats.AuthorsStaleModel, 1},
+		{"BookRows", stats.BookRows, wantBookRows},
+		{"BooksHydrated", stats.BooksHydrated, wantHydratedPrimary + wantHydratedNilFlag},
+		{"BooksEmptyVector", stats.BooksEmptyVector, wantEmptyVector},
+		{"BooksStaleModel", stats.BooksStaleModel, wantStaleModel},
+		{"BooksOrphaned", stats.BooksOrphaned, wantOrphaned},
+		{"BooksLookupError", stats.BooksLookupError, wantLookupError},
+		{"BooksNonPrimary", stats.BooksNonPrimary, wantNonPrimary},
+		{"AuthorRows", stats.AuthorRows, wantAuthorRows},
+		{"AuthorsHydrated", stats.AuthorsHydrated, wantAuthorsHydrated},
+		{"AuthorsEmptyVector", stats.AuthorsEmptyVector, wantAuthorsEmptyVec},
+		{"AuthorsStaleModel", stats.AuthorsStaleModel, wantAuthorsStaleModel},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
@@ -248,10 +309,10 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 		t.Errorf("author buckets do not account for every row: AuthorsAccounted()=%d, AuthorRows=%d (%d rows vanished into an uncounted skip path)",
 			stats.AuthorsAccounted(), stats.AuthorRows, stats.AuthorRows-stats.AuthorsAccounted())
 	}
-	if got, want := stats.BooksSkipped(), 5; got != want {
+	if got, want := stats.BooksSkipped(), wantBookRows-(wantHydratedPrimary+wantHydratedNilFlag); got != want {
 		t.Errorf("BooksSkipped() = %d, want %d", got, want)
 	}
-	if got, want := stats.AuthorsSkipped(), 2; got != want {
+	if got, want := stats.AuthorsSkipped(), wantAuthorRows-wantAuthorsHydrated; got != want {
 		t.Errorf("AuthorsSkipped() = %d, want %d", got, want)
 	}
 
@@ -263,16 +324,12 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	}
 
 	// --- and the counters must describe what actually reached the index ---
-	for _, id := range []string{"book/BOOK_OK", "book/BOOK_NIL_PRIMARY", "author/100"} {
+	for _, id := range wantMirrored {
 		if !fake.upserted[id] {
 			t.Errorf("expected %s to be mirrored into the ANN store", id)
 		}
 	}
-	for _, id := range []string{
-		"book/BOOK_EMPTY", "book/BOOK_STALE", "book/BOOK_ORPHAN",
-		"book/BOOK_LOOKUP_ERR", "book/BOOK_NONPRIMARY",
-		"author/101", "author/102",
-	} {
+	for _, id := range wantSkipped {
 		if fake.upserted[id] {
 			t.Errorf("%s should NOT have been mirrored into the ANN store", id)
 		}
