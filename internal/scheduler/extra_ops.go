@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-08-30
 
@@ -25,18 +25,18 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -537,59 +537,80 @@ func (r *ExtraOpsRegistrar) RegisterCleanupOldBackupsOp(reg *opsregistry.Registr
 		ConcurrencyKey:  "scheduler.cleanup-old-backups",
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			progress := extraOpsProgressAdapter{r: reporter}
-			rootDir := config.AppConfig.RootDir
-			if rootDir == "" {
-				_ = progress.Log("info", "No root directory configured, skipping backup cleanup", nil)
-				return nil
-			}
-			retentionDays := config.AppConfig.PurgeSoftDeletedAfterDays
-			if retentionDays <= 0 {
-				retentionDays = 30
-			}
-			maxAge := time.Duration(retentionDays) * 24 * time.Hour
-			removed := 0
-			_ = progress.Log("info", fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays), nil)
-
-			// The library root holds application state as well as books: a
-			// backup directory of multi-GB archives and an OpenLibrary dump
-			// directory with an embedded database. Both are operator-settable
-			// to names with no leading dot, so the dot rule alone never
-			// covered them. This op DELETES by filename, so descending into
-			// them is not merely wasted I/O over ~90 GB -- an operator file
-			// named "*.bak-*" parked in the backup directory would be removed.
-			app := appdirs.Current()
-			err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				if err != nil {
-					return nil
-				}
-				if info.IsDir() {
-					if pathutil.ShouldSkipDir(rootDir, path, app) {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				if strings.Contains(info.Name(), ".bak-") {
-					age := time.Since(info.ModTime())
-					if age > maxAge {
-						if rmErr := os.Remove(path); rmErr != nil {
-							slog.Warn("failed to remove old backup:", "path", path, "rmErr", rmErr)
-						} else {
-							removed++
-							slog.Info("cleaned up old backup (age )", "path", path, "age", age.Round(time.Hour))
-						}
-					}
-				}
-				return nil
-			})
-			_ = progress.Log("info", fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed), nil)
-			return err
+		Run: func(ctx context.Context, _ json.RawMessage, reporter opsregistry.Reporter) error {
+			return runCleanupOldBackups(ctx, extraOpsProgressAdapter{r: reporter})
 		},
 	})
+}
+
+// runCleanupOldBackups is the body of scheduler.cleanup-old-backups, lifted out
+// of the OperationDef literal so the app-directory guard below can be driven by
+// a test without standing up a Registry, a store and a bus. Extracting it
+// changes no behaviour; the closure above now only adapts the reporter.
+// cleanupProgressLogger is what runCleanupOldBackups actually calls: one
+// method. extraOpsProgressAdapter satisfies it, and so does a two-line test
+// stub -- which is the point, since the alternative is standing up a Registry,
+// a store and a bus to exercise a filesystem guard.
+type cleanupProgressLogger interface {
+	Log(level, message string, details *string) error
+}
+
+func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) error {
+	rootDir := config.AppConfig.RootDir
+	if rootDir == "" {
+		_ = progress.Log("info", "No root directory configured, skipping backup cleanup", nil)
+		return nil
+	}
+	retentionDays := config.AppConfig.PurgeSoftDeletedAfterDays
+	if retentionDays <= 0 {
+		retentionDays = 30
+	}
+	maxAge := time.Duration(retentionDays) * 24 * time.Hour
+	removed := 0
+	_ = progress.Log("info", fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays), nil)
+
+	// The library root holds application state as well as books: a backup
+	// directory of multi-GB archives and an OpenLibrary dump directory with an
+	// embedded database. Both are operator-settable to names with no leading
+	// dot, so the dot rule alone never covered them. This op DELETES by
+	// filename, so descending into them is not merely wasted I/O over ~90 GB --
+	// an operator file named "*.bak-*" parked in the backup directory would be
+	// removed.
+	//
+	// NOTE: this is one of THREE implementations of "delete old backup files"
+	// in the tree (see internal/plugins/maintenance/cleanup.go with the same
+	// predicate, and internal/maintenance/jobs/cleanup_backups.go with a
+	// different regex). All three are guarded; consolidating them is a separate
+	// change.
+	app := appdirs.Current()
+	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if pathutil.ShouldSkipDir(rootDir, path, app) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.Contains(info.Name(), ".bak-") {
+			age := time.Since(info.ModTime())
+			if age > maxAge {
+				if rmErr := os.Remove(path); rmErr != nil {
+					slog.Warn("failed to remove old backup:", "path", path, "rmErr", rmErr)
+				} else {
+					removed++
+					slog.Info("cleaned up old backup (age )", "path", path, "age", age.Round(time.Hour))
+				}
+			}
+		}
+		return nil
+	})
+	_ = progress.Log("info", fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed), nil)
+	return err
 }
 
 // --- isbn-enrichment ---

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
@@ -75,6 +77,79 @@ func TestBuildFileIndex_SkipsAppDirs(t *testing.T) {
 				if len(idx[name]) != 0 {
 					t.Errorf("%s is inside an app dir and must NOT be indexed", name)
 				}
+			}
+		})
+	}
+}
+
+// appDirStore is the 8-method reconcile.Store surface, stubbed. Only
+// GetAllImportPaths is exercised by FindUntrackedFiles.
+type appDirStore struct{ imports []database.ImportPath }
+
+func (s appDirStore) GetAllBooksCore(int, int) ([]database.BookCore, error) { return nil, nil }
+func (s appDirStore) GetBookByID(string) (*database.Book, error)            { return nil, nil }
+func (s appDirStore) GetBookFiles(string) ([]database.BookFile, error)      { return nil, nil }
+func (s appDirStore) GetBooksByVersionGroup(string) ([]database.Book, error) {
+	return nil, nil
+}
+func (s appDirStore) UpdateBook(string, *database.Book) (*database.Book, error) { return nil, nil }
+func (s appDirStore) DeleteBook(string) error                                   { return nil }
+func (s appDirStore) GetAllImportPaths() ([]database.ImportPath, error)         { return s.imports, nil }
+func (s appDirStore) CreateOperationChange(*database.OperationChange) error     { return nil }
+
+// TestFindUntrackedFiles_SkipsAppDirs pins the untracked-file scan.
+//
+// Its output becomes IMPORT CANDIDATES, so an audio file sitting in the backup
+// or OpenLibrary dump tree would be offered for import as a new book. The
+// extension filter is what stops that today — a naming coincidence, not a
+// control, which is exactly what this guard replaces.
+func TestFindUntrackedFiles_SkipsAppDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		appDirs   bool
+		wantCount int
+	}{
+		{"app dirs configured: their audio is not offered for import", true, 1},
+		{"empty AppDirs: whole tree scanned, exactly as before", false, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			prevRoot := config.AppConfig.RootDir
+			prevBackup, prevDump := config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir
+			prevExts := config.AppConfig.SupportedExtensions
+			config.AppConfig.RootDir = root
+			config.AppConfig.SupportedExtensions = []string{".m4b"}
+			if tc.appDirs {
+				config.AppConfig.BackupDir = filepath.Join(root, "backups")
+				config.AppConfig.OpenLibraryDumpDir = filepath.Join(root, "openlibrary-dumps")
+			} else {
+				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
+			}
+			t.Cleanup(func() {
+				config.AppConfig.RootDir = prevRoot
+				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = prevBackup, prevDump
+				config.AppConfig.SupportedExtensions = prevExts
+			})
+
+			for _, p := range []string{
+				filepath.Join(root, "Author", "Book", "library.m4b"),
+				filepath.Join(root, "backups", "archived.m4b"),
+				filepath.Join(root, "openlibrary-dumps", "db", "dumped.m4b"),
+			} {
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			got, err := FindUntrackedFiles(appDirStore{}, map[string]bool{})
+			if err != nil {
+				t.Fatalf("FindUntrackedFiles: %v", err)
+			}
+			if len(got) != tc.wantCount {
+				t.Errorf("found %d untracked files (%v), want %d", len(got), got, tc.wantCount)
 			}
 		})
 	}
