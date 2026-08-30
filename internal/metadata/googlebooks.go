@@ -1,7 +1,7 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
-// last-edited: 2026-08-20
+// last-edited: 2026-08-30
 
 package metadata
 
@@ -118,7 +118,7 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 		return nil, fmt.Errorf("failed to read Google Books response: %w", err)
 	}
 	var gbResp googleBooksResponse
-	if err := json.Unmarshal(body, &gbResp, json.DiscardUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(body, &gbResp); err != nil {
 		return nil, fmt.Errorf("failed to decode Google Books response: %w", err)
 	}
 
