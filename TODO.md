@@ -1,8 +1,8 @@
 <!-- file: TODO.md -->
-<!-- version: 10.45.0 -->
+<!-- version: 10.45.1 -->
 <!-- version: 10.44.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-29 -->
+<!-- last-edited: 2026-08-30 -->
 
 # Project TODO — live items only
 
@@ -14,6 +14,97 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **DEDUP-ORPHAN-BOOK-EMB** Act on `HydrateChromem`'s new `books_orphaned`
+      counter. The hydrate now reports, per restart, how many `emb:v:book:*`
+      rows point at a book ID that `GetBookByID` no longer resolves — dead
+      weight that no re-embed can ever reach, since the entity is gone. Two
+      follow-ups: (1) read the count off a production restart and record it
+      next to the 2026-08-29 baseline (39,658 book rows read, 17,706 indexed,
+      21,952 skipped, of which only the stale-model bucket was previously
+      visible); (2) if it is material, add the book-side counterpart of
+      `dedup.cleanup-orphan-author-embeddings` — a dry-run-by-default op that
+      reports orphaned vs. live rows and deletes only the ones it can prove
+      orphaned. Note the book case is the EASY one: unlike authors, PebbleDB
+      does not tombstone-redirect book IDs, so `GetBookByID` returning
+      `(nil, nil)` is already the sound orphan signal. Also worth checking why
+      `books_lookup_error` is nonzero if it is — that bucket means a LIVE book
+      fell out of dedup and is an incident, not a cleanup candidate.
+
+### Investigate kektordb as a vector-store option
+
+<https://github.com/sanonone/kektordb> — evaluate it as a replacement or
+supplement for the current embedding store, with a fork in mind if the shape is
+close but not exact.
+
+**Lowest priority.** This is an investigation, not a commitment, and it should
+not displace any in-flight storage work.
+
+What the investigation has to answer before anyone writes code:
+
+- What does it actually persist, and does an index survive a restart? The
+  current pain is HNSW snapshot staleness, so "rebuilds from scratch at boot"
+  would be trading one problem for the same problem.
+- Does it reclaim space on delete? PebbleDB does not until compaction, and that
+  property is what makes the 30 GB production database hard to shrink. A vector
+  store with the same behaviour buys nothing on that axis.
+- Licence, release cadence, and single-maintainer risk — a fork is only cheap if
+  the upstream is small. Measure the source size before assuming it is.
+- Benchmark against the incumbent on OUR shape: ~61k books, real embedding
+  dimension, recall at the operating point dedup actually uses. A synthetic
+  benchmark will not settle it.
+
+Decide explicitly between "adopt", "fork", and "no" — and if the answer is no,
+record why, so the next person does not re-evaluate it from zero.
+
+- [ ] Investigate app-dir guard tests failing only under heavy cross-package test load
+
+  Observed 2026-08-30 while finishing `fix/app-dir-guards-remaining-walkers`. Running
+  ~24 package binaries concurrently on a saturated dev box produced a DIFFERENT random
+  subset of failures on each run:
+
+  - `TestStripMovementAtoms_SkipsAppDirs` (internal/server) — expected 1, actual 3
+  - `TestFileProvenanceCapture_SkipsAppDirs` (internal/plugins/maintenance) — expected 1, actual 3
+  - `TestBuildFileIndex_SkipsAppDirs` (internal/reconcile) — app-dir files indexed
+  - `TestChaptersBackfill_ProgressLabelReportsEligibleCount` — unrelated to these guards
+
+  Controls already run, so do NOT repeat them:
+  - `go test -p 1` over all 10 affected packages: **exit 0, zero failures**.
+  - `-race` over 4 packages: **zero DATA RACE warnings**.
+  - Each package in isolation, and `internal/reconcile` at `-count=5`: all pass.
+
+  The mechanism is UNEXPLAINED. It is not a data race and not a global-config collision:
+  `TestBuildFileIndex_SkipsAppDirs` is fully hermetic — it passes a literal
+  `pathutil.AppDirs`, walks a single dir (one goroutine), and `pathutil.ShouldSkipDir` is
+  pure string logic with no filesystem I/O. A pure function cannot change its answer under
+  load, so either the fixture or the walk is not seeing what the test believes it wrote.
+
+  Worth ruling out: `BuildFileIndex`'s walk swallows every error with
+  `if err != nil { return nil }` (internal/reconcile/itunes_heal.go:181). Under fd
+  exhaustion that yields a silently incomplete index in PRODUCTION, which is a real
+  silent-failure defect independent of this test question — though note it would produce
+  too FEW indexed files, not too many, so it does not by itself explain what was seen.
+
+- [ ] **Activity `Summarize` writes a summary row with an `OperationID` but no `act:op:` index entry.**
+      `PebbleActivityStore.Summarize` replaces a group of entries with one summary row carrying
+      `OperationID: gk.opID`, but only `Record` writes index entries, so the summary is invisible to
+      `Query` with an `OperationID` filter — that filter takes the `act:op:` index fast path, never the
+      tier scan. This is an index *completeness* gap, not the deletion leak fixed in
+      `fix/activity-index-deletion`; it was deliberately left alone there because adding the write with
+      the wrong nano field would manufacture fresh orphans. Same question applies to `BookID`, which
+      `Summarize` does not carry onto the summary row at all.
+
+- [ ] **Verify against production whether `act:digest:` and `act:debug:` keys actually exist.**
+      A prior investigation claimed prod has zero `act:digest:` keys and no `act:debug:` tier, which
+      would make `CompactByDay`'s rollup produce nothing and `Prune(cutoff, "debug")` delete zero rows
+      on every run. Code contradicts half of it: three production sites write tier `debug`
+      (`internal/activity/api.go`, `internal/activity/writer.go` level=debug, `internal/server/server.go`),
+      and `CompactByDay` is reachable both from the nightly job and from a live handler
+      (`internal/server/handlers/activity.go`). The old RootDir registration gate is gone — maintenance
+      plugin registration is unconditional (`internal/server/server.go`). So if the tiers really are
+      empty, the mechanism is something else (the job not firing), and that is what needs measuring.
+      Needs a read-only key-prefix count against the prod Pebble store; not done here because the task
+      forbade touching production.
 
 ## Applied books stay in the list in BulkMetadataSearchDialog
 
