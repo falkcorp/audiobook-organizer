@@ -1,7 +1,7 @@
 // file: internal/config/blob_default_audit.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b8d5f60-c179-4e34-a5d2-70f9e1c46b8a
-// last-edited: 2026-08-27
+// last-edited: 2026-08-30
 
 package config
 
@@ -12,14 +12,26 @@ import (
 	"strings"
 )
 
-// maxAuditedKeysLogged bounds the boot log line. The count is always exact; only
-// the enumeration is truncated, and the message says so when it truncates — a
-// silently shortened list would be the same class of defect this audit exists to
-// catch.
+// maxAuditedKeysLogged bounds the boot log line. The enumeration is data-scaled
+// — Config carries operator-controlled maps (plugins, per-source credentials,
+// per-kind dedup confidence, per-model embedding thresholds), so the flattened
+// key set grows with the install, not just with the source. An unbounded line is
+// therefore not an option.
+//
+// The count is always exact, and when the list is cut the line now reports
+// `omitted` so the operator can see how many names are missing rather than
+// inferring it from `count` minus a list they have to measure by hand. That is
+// still less than the whole truth: on the production install that motivated this
+// audit, 122 keys inherited and the one that caused the incident
+// (scheduled.library_scan.interval) sorts past the cut. Callers that need the
+// complete set must use defaultsPreservedOverBlob, which never truncates.
 const maxAuditedKeysLogged = 40
 
-// logDefaultsPreservedOverBlob reports every config key that the stored blob did
-// NOT contain and which therefore kept its shipped default.
+// defaultsPreservedOverBlob returns every config key that the stored blob did
+// NOT contain and which therefore kept its shipped default, sorted and COMPLETE.
+// It never truncates: the truncation belongs to the log renderer, so a test or a
+// future caller can assert on the real inherited set rather than on how many of
+// its names happened to fit in one line.
 //
 // This exists because the inheritance is a real behaviour change and used to be
 // invisible. LoadConfigFromDatabase previously unmarshalled the blob into an
@@ -36,19 +48,19 @@ const maxAuditedKeysLogged = 40
 // Keys only — never values. The blob is documented as secret-free, but this runs
 // during config load and there is no reason to put config values into a log line
 // to answer the question "which keys inherited a default".
-func logDefaultsPreservedOverBlob(blobStr string, loaded Config) {
+func defaultsPreservedOverBlob(blobStr string, loaded Config) []string {
 	var blobMap map[string]any
 	if err := json.Unmarshal([]byte(blobStr), &blobMap); err != nil {
-		return // already reported by the caller's parse-failure branch
+		return nil // already reported by the caller's parse-failure branch
 	}
 
 	effective, err := json.Marshal(loaded)
 	if err != nil {
-		return
+		return nil
 	}
 	var effMap map[string]any
 	if err := json.Unmarshal(effective, &effMap); err != nil {
-		return
+		return nil
 	}
 
 	stored := make(map[string]struct{})
@@ -68,22 +80,40 @@ func logDefaultsPreservedOverBlob(blobStr string, loaded Config) {
 		inherited = append(inherited, key)
 	}
 
+	sort.Strings(inherited)
+	return inherited
+}
+
+// logDefaultsPreservedOverBlob renders the audit set to the boot log. It is a
+// presentation layer over defaultsPreservedOverBlob and holds no logic of its
+// own beyond the line bound described on maxAuditedKeysLogged.
+func logDefaultsPreservedOverBlob(blobStr string, loaded Config) {
+	inherited := defaultsPreservedOverBlob(blobStr, loaded)
 	if len(inherited) == 0 {
 		return
 	}
-	sort.Strings(inherited)
 
 	shown := inherited
-	truncated := ""
+	omitted := 0
 	if len(shown) > maxAuditedKeysLogged {
+		omitted = len(shown) - maxAuditedKeysLogged
 		shown = shown[:maxAuditedKeysLogged]
-		truncated = " (list truncated; count is exact)"
 	}
 
-	slog.Info("config: keys absent from the stored blob kept their shipped default"+truncated,
+	attrs := []any{
 		"count", len(inherited),
 		"keys", strings.Join(shown, ", "),
-	)
+	}
+	msg := "config: keys absent from the stored blob kept their shipped default"
+	if omitted > 0 {
+		// Name the shortfall as a number. "(list truncated)" told the operator
+		// something was missing without telling them how much, which is the
+		// same shape of invisibility this audit exists to remove.
+		msg += " (list truncated; count is exact)"
+		attrs = append(attrs, "omitted", omitted)
+	}
+
+	slog.Info(msg, attrs...)
 }
 
 // explicitChapterConsolidationDisable reports only an operator-persisted
