@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9c1e4a77-5b2d-4f83-9a10-2e7c6b8d4f01
-// last-edited: 2026-07-11
+// last-edited: 2026-08-30
 
 // Package server tests for TASK-05 (INIT-3-T3): the bulk metadata fetch outer
 // loop now runs on a bounded errgroup pool with a per-provider semaphore. These
@@ -80,15 +80,13 @@ func TestProviderSemaphore_CapRespectedAndReached(t *testing.T) {
 	var wg sync.WaitGroup
 	ctx := context.Background()
 	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := sem.acquire(ctx, src.name); err != nil {
 				return
 			}
 			defer sem.release(src.name)
 			_, _ = src.SearchByTitle(ctx, "t")
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -162,12 +160,10 @@ func TestProtectedSource_ConcurrentCallsRaceFree(t *testing.T) {
 	ps := metadata.NewProtectedSource(&concurrentFakeSource{name: "fake", delay: 2 * time.Millisecond}, 5, 30*time.Second)
 	var wg sync.WaitGroup
 	for i := 0; i < perProviderFetchCap*8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, _ = ps.SearchByTitle(context.Background(), "t")
 			_, _ = ps.SearchByTitleAndAuthor(context.Background(), "t", "a")
-		}()
+		})
 	}
 	wg.Wait()
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/contributor_filters_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f8c1d54-9a20-4e7b-b6d1-8c4a2f01e9b7
-// last-edited: 2026-08-25
+// last-edited: 2026-08-30
 
 package abs_test
 
@@ -232,12 +232,10 @@ func TestContributorIndex_ConcurrentColdCallersBuildOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil)
-		}()
+		})
 	}
 	close(start)
 
@@ -344,12 +342,10 @@ func TestFilterData_ConcurrentColdCallersBuildOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
-		}()
+		})
 	}
 	close(start)
 
