@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 package jobs
 
@@ -157,9 +157,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 	var wg sync.WaitGroup
 
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for w := range workCh {
 				if ctx.Err() != nil {
 					return
@@ -224,7 +222,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 				reporter.Increment()
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

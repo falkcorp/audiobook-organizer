@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-24
+// last-edited: 2026-08-30
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -266,9 +266,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 		if task.IsEnabled() && task.GetInterval() > 0 {
 			interval := task.GetInterval()
 			taskName := name
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
 				for {
@@ -283,7 +281,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 						return
 					}
 				}
-			}()
+			})
 			slog.Info("Scheduled task interval", "taskName", taskName, "interval", interval)
 		} else if task.IsEnabled() && ts.reachableViaMaintenanceWindow(name) {
 			// Enabled with no ticker, but the nightly maintenance window WILL
@@ -327,9 +325,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 
 	// Maintenance window checker — runs every 60 seconds
 	if config.AppConfig.Maintenance.Enabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
 			slog.Info("Maintenance window enabled", "windowStart", config.AppConfig.Maintenance.WindowStart, "windowEnd", config.AppConfig.Maintenance.WindowEnd)
@@ -346,7 +342,7 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 					return
 				}
 			}
-		}()
+		})
 	}
 }
 

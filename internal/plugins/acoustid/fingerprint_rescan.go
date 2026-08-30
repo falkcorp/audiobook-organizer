@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_rescan.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a7b8c9d0-e1f2-3456-def0-123456789abc
-// last-edited: 2026-08-20
+// last-edited: 2026-08-30
 
 package acoustid
 
@@ -171,9 +171,9 @@ func (p *Plugin) runFingerprintRescan(ctx context.Context, params json.RawMessag
 		}
 
 		bookSem <- struct{}{}
-		bookWg.Add(1)
-		go func(book database.Book) {
-			defer func() { <-bookSem; bookWg.Done() }()
+		book := b
+		bookWg.Go(func() {
+			defer func() { <-bookSem }()
 
 			if ctx.Err() != nil {
 				completedBooks.Add(1)
@@ -223,7 +223,7 @@ func (p *Plugin) runFingerprintRescan(ctx context.Context, params json.RawMessag
 				reporter.Logger().Warn("synthesize book signature", "book_id", book.ID, "error", err)
 			}
 			completedBooks.Add(1)
-		}(b)
+		})
 	}
 
 	bookWg.Wait()

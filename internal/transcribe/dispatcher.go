@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-08-07
+// last-edited: 2026-08-30
 
 package transcribe
 
@@ -180,12 +180,11 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]s
 			if len(sub) == 0 {
 				continue
 			}
-			wg.Add(1)
-			go func(idx int, ep Endpoint, sub map[string]string) {
-				defer wg.Done()
+			ep := healthy[idx]
+			wg.Go(func() {
 				r, err := transcribeRemote(ctx, ep.URL, sub, progressFor())
 				resCh <- epResult{idx: idx, res: r, err: err}
-			}(idx, healthy[idx], sub)
+			})
 		}
 		wg.Wait()
 		close(resCh)

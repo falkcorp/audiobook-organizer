@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.11.0
+// version: 3.12.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-08-19
+// last-edited: 2026-08-30
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -380,13 +380,11 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	// Start worker pool.
 	var wg sync.WaitGroup
 	for i := 0; i < params.Workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for book := range jobCh {
 				resultCh <- processBookForReextract(ctx, store, book, skipBefore)
 			}
-		}()
+		})
 	}
 	// Close resultCh once all workers finish.
 	go func() {

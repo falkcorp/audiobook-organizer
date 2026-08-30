@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 package organizer
 
@@ -967,9 +967,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	// Start worker goroutines
 	var wg sync.WaitGroup
 	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			workerOrg := orgSvc.newOrganizer()
 
 			for i := range jobs {
@@ -1154,7 +1152,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 						fmt.Sprintf("Organizing: %d/%d books", count, len(booksToOrganize)))
 				}
 			}
-		}()
+		})
 	}
 
 	// Feed jobs — cancellation checked here AND in the worker loop above.

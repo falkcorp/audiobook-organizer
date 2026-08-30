@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-08-30
 
@@ -175,9 +175,7 @@ func BuildFileIndex(dirs []string, extSet map[string]bool, app pathutil.AppDirs)
 	var wg sync.WaitGroup
 	for _, dir := range dirs {
 		dir := dir
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return nil
@@ -197,7 +195,7 @@ func BuildFileIndex(dirs []string, extSet map[string]bool, app pathutil.AppDirs)
 				mu.Unlock()
 				return nil
 			})
-		}()
+		})
 	}
 	wg.Wait()
 	return index

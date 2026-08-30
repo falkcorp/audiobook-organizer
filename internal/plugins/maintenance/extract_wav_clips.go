@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-08-30
 
 package maintenance
 
@@ -106,9 +106,7 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 				}
 			}
 
-			wg.Add(1)
-			go func(bookID, src, dest, cacheKey, bookFileID string) {
-				defer wg.Done()
+			wg.Go(func() {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
@@ -160,7 +158,7 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 					"src_sha256", srcHash,
 					"wav_sha256", wavHash,
 					"file", src)
-			}(bookID, src, dest, cacheKey, bookFileID)
+			})
 		}
 		wg.Wait()
 

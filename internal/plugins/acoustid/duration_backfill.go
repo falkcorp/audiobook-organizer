@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/duration_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a8b
-// last-edited: 2026-07-07
+// last-edited: 2026-08-30
 
 package acoustid
 
@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -118,9 +117,9 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, params json.RawMessage
 		}
 
 		sem <- struct{}{}
-		wg.Add(1)
-		go func(bf database.BookFile) {
-			defer func() { <-sem; wg.Done() }()
+		bf := f
+		wg.Go(func() {
+			defer func() { <-sem }()
 
 			if ctx.Err() != nil {
 				return
@@ -137,7 +136,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, params json.RawMessage
 			done := fixed.Load() + failed.Load() + ineligible.Load()
 			_ = reporter.UpdateProgress(int(done), total,
 				fmt.Sprintf("fixed=%d failed=%d ineligible=%d / %d", fixed.Load(), failed.Load(), ineligible.Load(), total))
-		}(f)
+		})
 	}
 	wg.Wait()
 
