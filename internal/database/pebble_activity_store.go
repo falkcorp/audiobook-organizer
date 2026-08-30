@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-30
 
@@ -2365,14 +2365,27 @@ func (s *PebbleActivityStore) fetchIndexPage(
 	tally := &pactDecodeTally{}
 	defer tally.log("queryByIndexPrefix pushdown prefix=" + prefix)
 
-	rank := 0
+	// skipped counts SURVIVING refs passed over to reach f.Offset, and nothing
+	// else. It is read in exactly one place, `skipped < f.Offset`, and is
+	// deliberately NOT incremented once the page starts filling: by then it has
+	// already reached f.Offset and can never fall back under it, so a further
+	// increment is a dead store. It used to be called `rank` and was bumped once
+	// per appended row as well, which is why an added increment there was an
+	// unkillable mutant — nothing could observe it. The name now says what the
+	// counter is, and its one real boundary (`<` vs `<=`) is pinned by M11 of
+	// scripts/mutation-tables/activity-index-pushdown.muts.
+	skipped := 0
 	fetched := 0
 	for i := 0; i < sc.len() && len(page) < f.Limit; i++ {
+		// An orphaned ref MUST NOT consume an offset slot: it is not in `total`
+		// either, and letting it count toward f.Offset would silently shift
+		// every subsequent page by one. Hence `continue` without touching
+		// skipped — the mutation that adds one here is M10.
 		if !alive[i] {
 			continue
 		}
-		if rank < f.Offset {
-			rank++
+		if skipped < f.Offset {
+			skipped++
 			continue
 		}
 		if fetched%activityCtxCheckInterval == 0 {
@@ -2410,7 +2423,6 @@ func (s *PebbleActivityStore) fetchIndexPage(
 			continue
 		}
 		page = append(page, entry)
-		rank++
 	}
 
 	if len(page) == 0 && total == 0 {

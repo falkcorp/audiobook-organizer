@@ -33,6 +33,12 @@
 # it has already reached the offset and can never fall back under it. That is
 # what a dead store looks like from the outside. It is now named `skipped`, is
 # incremented only where it is read, and M11 tests its one real boundary instead.
+#
+# ANCHOR MUTATIONS ON CODE, NOT ON COMMENTS. M10 used to quote a sentence from a
+# comment that was never in the file, so it silently reported NOT-APPLIED. A
+# mutation anchored on prose breaks the next time someone rewords the prose, and
+# the breakage LOOKS like a table typo rather than what it is — a mutation that
+# stopped being run. Every pattern below quotes executable text.
 
 # ── the existence merge that defines `total` ─────────────────────────────────
 M01 count every ref, alive or not | internal/database/pebble_activity_store.go | s/if pit\.Valid\(\) && bytes\.Equal\(pit\.Key\(\), k\) \{/if true {/
@@ -52,7 +58,7 @@ M08 undecodable row stays in total | internal/database/pebble_activity_store.go 
 M09 foreign row in the page stays in total | internal/database/pebble_activity_store.go | s/if !matchesFilter\(entry, f\) \{\n\t\t\ttotal--\n/if !matchesFilter(entry, f) {\n/
 
 # ── the page is taken by rank over SURVIVORS, not by index position ──────
-M10 an orphaned ref consumes an offset slot | internal/database/pebble_activity_store.go | s/\t\t\t\/\/ pruned row would silently shift every subsequent page\.\n\t\t\tcontinue/\t\t\tskipped++\n\t\t\tcontinue/
+M10 an orphaned ref consumes an offset slot | internal/database/pebble_activity_store.go | s/\t\tif !alive\[i\] \{\n\t\t\tcontinue\n\t\t\}/\t\tif !alive[i] {\n\t\t\tskipped++\n\t\t\tcontinue\n\t\t}/
 M11 off-by-one in the offset skip | internal/database/pebble_activity_store.go | s/if skipped < f\.Offset \{/if skipped <= f.Offset {/
 
 # ── the ordering contract both paths are held to ─────────────────────────────
@@ -64,6 +70,16 @@ M14 sort oldest-first instead of newest-first | internal/database/pebble_activit
 M15 admit pre-epoch timestamps into the keyspace | internal/database/pebble_activity_store.go | s/if e\.Timestamp\.UnixNano\(\) < 0 \{/if false {/
 
 # ── the eligibility gate that decides whether the pushdown runs at all ───────
+#
+# M16 WAS REPORTED SURVIVED FOR TWO DAYS AND THE REPORT WAS FALSE. Until
+# 2026-08-30 mutation-matrix.sh rewrote `\x7c` into a bare `|` before handing the
+# expression to perl, which turned this pattern's `||` into ALTERNATION WITH TWO
+# EMPTY BRANCHES. It matched the zero-length string at offset 0, prepended a tab
+# and a newline to line 1, left the gate byte-identical, still changed the file
+# enough to satisfy the "did it apply" guard, compiled, and passed. The entry
+# below is unchanged; the harness was fixed and grew guard 5 (a one-byte sentinel
+# preflight) so a zero-width pattern is rejected instead of scored.
+
 M16 push down a filter the index cannot decide | internal/database/pebble_activity_store.go | s/\tif f\.Type != "" \x7c\x7c f\.Level != "" \x7c\x7c f\.Source != "" \x7c\x7c f\.Search != "" \{\n\t\treturn false\n\t\}/\t\n/
 M17 push down on an unknown index family | internal/database/pebble_activity_store.go | s/\t\t\/\/ An unknown index family: neither id predicate can be justified by\n\t\t\/\/ construction, so refuse rather than guess\.\n\t\treturn false/\t\treturn true/
 
