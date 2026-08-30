@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-06-14
+// last-edited: 2026-08-30
 
 package registry_test
 
@@ -126,10 +126,8 @@ func TestBatch_50RapidEnqueues(t *testing.T) {
 
 	// Enqueue 50 distinct book subjects concurrently.
 	var wg sync.WaitGroup
-	for i := range 50 {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
+	for n := range 50 {
+		wg.Go(func() {
 			id, err := r.EnqueueOp(ctx, defID, paramsForBook(fmt.Sprintf("book-%03d", n)))
 			if err != nil {
 				t.Errorf("EnqueueOp[%d]: %v", n, err)
@@ -137,7 +135,7 @@ func TestBatch_50RapidEnqueues(t *testing.T) {
 			if id != "" {
 				t.Errorf("EnqueueOp[%d]: expected empty id for batchable op, got %q", n, id)
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 
@@ -442,12 +440,10 @@ func TestBatch_RaceDetector(t *testing.T) {
 	defer r.Shutdown(context.Background())
 
 	var wg sync.WaitGroup
-	for i := range 100 {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
+	for n := range 100 {
+		wg.Go(func() {
 			_, _ = r.EnqueueOp(ctx, defID, paramsForBook(fmt.Sprintf("race-book-%03d", n)))
-		}(i)
+		})
 	}
 	wg.Wait()
 

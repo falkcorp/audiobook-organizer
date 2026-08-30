@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-08-24
+// last-edited: 2026-08-30
 
 package dedup
 
@@ -1202,9 +1202,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	}
 	var scanWG sync.WaitGroup
 	for w := 0; w < workers; w++ {
-		scanWG.Add(1)
-		go func() {
-			defer scanWG.Done()
+		scanWG.Go(func() {
 			for {
 				li := int(atomic.AddInt64(&nextLi, 1))
 				if li >= len(lastNames) {
@@ -1228,7 +1226,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 				}
 				similarPairs[li] = matches
 			}
-		}()
+		})
 	}
 	scanWG.Wait()
 

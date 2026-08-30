@@ -1,6 +1,7 @@
 // file: internal/dedup/lifecycle_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cf16e52e-6506-4cf5-bd34-b279263e0d58
+// last-edited: 2026-08-30
 
 // Tests for Engine lifecycle: PostInit/Stop shutdown join, double-Stop
 // safety, and bounded-timeout behaviour. All tests run with -race.
@@ -137,12 +138,10 @@ func TestStop_BoundedTimeout_WarnPath(t *testing.T) {
 	// A goroutine that ignores bgCtx cancellation and only exits when leaked.
 	var wg sync.WaitGroup
 	wg.Add(1)
-	engine.bgWg.Add(1)
-	go func() {
-		defer engine.bgWg.Done()
+	engine.bgWg.Go(func() {
 		wg.Done() // signal that the goroutine is running
 		<-leaked
-	}()
+	})
 	wg.Wait() // ensure goroutine is started before Stop
 
 	start := time.Now()
