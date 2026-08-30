@@ -798,14 +798,30 @@ func TestBackupChecksum(t *testing.T) {
 		}
 
 		// Assert
-		// Note: Checksums will be different because timestamps differ
-		// Just verify that checksums exist and are valid hex strings
 		if len(info1.Checksum) != 64 {
 			t.Errorf("Expected checksum length 64 (SHA-256), got %d", len(info1.Checksum))
 		}
 
 		if len(info2.Checksum) != 64 {
 			t.Errorf("Expected checksum length 64 (SHA-256), got %d", len(info2.Checksum))
+		}
+
+		// The checksum is a function of the ARCHIVE CONTENT and nothing else.
+		// Two backups of byte-identical source data, taken at different times and
+		// written to differently-named files, hash the same.
+		//
+		// This assertion is new, and it replaces a comment that asserted the
+		// opposite: "Checksums will be different because timestamps differ". That
+		// comment was simply wrong -- measured 2026-08-30 on BOTH the real clock
+		// (pre-conversion) and the bubble clock, the two checksums are identical,
+		// because CreateBackup folds neither the archive filename nor the creation
+		// time into the compressed bytes it hashes. Nothing in this test had ever
+		// checked either way, so the 1s sleep here was buying a distinct FILENAME
+		// that no assertion looked at. Pinning the real property is what makes the
+		// test mutation-sensitive: teach CreateBackup to embed a timestamp in the
+		// archive (a gzip header ModTime, say) and this line goes red.
+		if info1.Checksum != info2.Checksum {
+			t.Errorf("checksum should depend only on content, but two backups of identical data differ: %s vs %s", info1.Checksum, info2.Checksum)
 		}
 	})
 }
