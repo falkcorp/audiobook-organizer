@@ -14,17 +14,25 @@
 # fixture notices the latter, and none of the defects an adversarial review
 # found in this code would have been caught by that.
 #
-# The `total--` corrections (M06-M08) get one mutation each rather than one for
+# The `total--` corrections (M07-M09) get one mutation each rather than one for
 # the group, because each is a separate arithmetic claim about a separate
 # population (pruned / undecodable / foreign) and a fixture can easily contain a
 # row for one and none for the others.
 #
-# M09 IS A KNOWN EQUIVALENT MUTANT and is expected to SURVIVE. Removing
-# pit.Next() leaves the merge correct: the very next iteration re-seeks whenever
-# the iterator is not already past the target, so dropping the advance costs a
-# SeekGE and changes no answer. It is listed rather than omitted so that nobody
+# M18 IS A KNOWN EQUIVALENT MUTANT and is expected to SURVIVE. Removing
+# pit.Next() leaves the merge correct: the next iteration re-seeks whenever the
+# iterator is not already past the target, so dropping the advance costs a SeekGE
+# and changes no answer. It is listed rather than omitted so that nobody
 # rediscovers it and "fixes" it with a test asserting an implementation detail.
 # Confirm it stays survived; do not chase it.
+#
+# A SECOND EQUIVALENT MUTANT WAS FOUND AND THEN DELETED RATHER THAN DOCUMENTED.
+# The page loop's counter used to be called `rank` and was also incremented once
+# per appended row. Adding a further increment survived — because the counter is
+# read in exactly one place, `< f.Offset`, and by the time a row can be appended
+# it has already reached the offset and can never fall back under it. That is
+# what a dead store looks like from the outside. It is now named `skipped`, is
+# incremented only where it is read, and M11 tests its one real boundary instead.
 
 # ── the existence merge that defines `total` ─────────────────────────────────
 M01 count every ref, alive or not | internal/database/pebble_activity_store.go | s/if pit\.Valid\(\) && bytes\.Equal\(pit\.Key\(\), k\) \{/if true {/
@@ -39,13 +47,13 @@ M05 accept a key that only PREFIX-matches the id | internal/database/pebble_acti
 M06 accept a ref that cannot become a primary key | internal/database/pebble_activity_store.go | s/if ti < 0 \{\n\t\t\tcontinue\n\t\t\}/if ti < -1 {\n\t\t\tcontinue\n\t\t}/
 
 # ── the three per-population corrections to `total` ──────────────────────────
-M07 pruned-between-passes row stays in total | internal/database/pebble_activity_store.go | s/if getErr != nil \{\n(.*\n)*?\t\t\ttotal--\n/if getErr != nil {\n/
+M07 pruned-between-passes row stays in total | internal/database/pebble_activity_store.go | s/\t\t\t\/\/ Deleted between markLiveRefs and now \(a concurrent prune\)\. The\n(.*\n)*?\t\t\ttotal--\n/\t\t\t/
 M08 undecodable row stays in total | internal/database/pebble_activity_store.go | s/\t\t\ts\.decodeFailures\.Add\(1\)\n\t\t\ttally\.record\(primaryKey, jsonErr\)\n\t\t\ttotal--\n/\t\t\ts.decodeFailures.Add(1)\n\t\t\ttally.record(primaryKey, jsonErr)\n/
 M09 foreign row in the page stays in total | internal/database/pebble_activity_store.go | s/if !matchesFilter\(entry, f\) \{\n\t\t\ttotal--\n/if !matchesFilter(entry, f) {\n/
 
-# ── the page is taken by RANK over survivors, not by index position ──────────
-M10 an orphaned ref consumes a page slot | internal/database/pebble_activity_store.go | s/\t\tif !alive\[i\] \{\n\t\t\tcontinue\n\t\t\}/\t\tif !alive[i] {\n\t\t\trank++\n\t\t\tcontinue\n\t\t}/
-M11 a foreign row in the page consumes a rank | internal/database/pebble_activity_store.go | s/if !matchesFilter\(entry, f\) \{\n\t\t\ttotal--\n\t\t\tcontinue\n\t\t\}/if !matchesFilter(entry, f) {\n\t\t\ttotal--\n\t\t\trank++\n\t\t\tcontinue\n\t\t}/
+# ── the page is taken by rank over SURVIVORS, not by index position ──────
+M10 an orphaned ref consumes an offset slot | internal/database/pebble_activity_store.go | s/\t\t\t\/\/ pruned row would silently shift every subsequent page\.\n\t\t\tcontinue/\t\t\tskipped++\n\t\t\tcontinue/
+M11 off-by-one in the offset skip | internal/database/pebble_activity_store.go | s/if skipped < f\.Offset \{/if skipped <= f.Offset {/
 
 # ── the ordering contract both paths are held to ─────────────────────────────
 M12 drop the tie-break, leaving ties unordered | internal/database/pebble_activity_store.go | s/\t\treturn strings\.Compare\(b\.entryID, a\.entryID\)/\t\treturn 0/
@@ -58,3 +66,7 @@ M15 admit pre-epoch timestamps into the keyspace | internal/database/pebble_acti
 # ── the eligibility gate that decides whether the pushdown runs at all ───────
 M16 push down a filter the index cannot decide | internal/database/pebble_activity_store.go | s/\tif f\.Type != "" \x7c\x7c f\.Level != "" \x7c\x7c f\.Source != "" \x7c\x7c f\.Search != "" \{\n\t\treturn false\n\t\}/\t\n/
 M17 push down on an unknown index family | internal/database/pebble_activity_store.go | s/\t\t\/\/ An unknown index family: neither id predicate can be justified by\n\t\t\/\/ construction, so refuse rather than guess\.\n\t\treturn false/\t\treturn true/
+
+
+# ── known equivalent mutant, listed so nobody rediscovers it ─────────────
+M18 drop the merge iterator advance (EQUIVALENT - expect SURVIVED) | internal/database/pebble_activity_store.go | s/\t\t\t\tpit\.Next\(\)\n//
