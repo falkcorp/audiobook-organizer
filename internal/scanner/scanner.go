@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.72.0
+// version: 1.72.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 package scanner
 
@@ -961,9 +961,8 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	semaphore := make(chan struct{}, workers)
 
 	for _, dir := range dirs {
-		wg.Add(1)
-		go func(scanDir string) {
-			defer wg.Done()
+		scanDir := dir
+		wg.Go(func() {
 			semaphore <- struct{}{} // Acquire
 			defer func() {
 				<-semaphore // Release
@@ -1025,7 +1024,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 				books = append(books, localBooks...)
 				mu.Unlock()
 			}
-		}(dir)
+		})
 	}
 
 	wg.Wait()
@@ -1114,10 +1113,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// are handled in a single goroutine.
 	progressCh := make(chan string, len(books))
 	var progressWG sync.WaitGroup
-	progressWG.Add(1)
-
-	go func() {
-		defer progressWG.Done()
+	progressWG.Go(func() {
 		processed := 0
 		for path := range progressCh {
 			processed++
@@ -1129,7 +1125,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			}
 		}
 		scanLog.Info("scan complete: %d files processed", total)
-	}()
+	})
 
 	// Build the AI fallback parser from the configured LLM backend. The routing
 	// logic, and the incident that produced it, live on newAIParser in
@@ -1160,16 +1156,14 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	errChan := make(chan error, len(books))
 	var ctxErr error
 
-	for i := range books {
+	for idx := range books {
 		// Check context cancellation before starting new work
 		if ctx.Err() != nil {
 			ctxErr = ctx.Err()
 			break
 		}
 
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
+		wg.Go(func() {
 			semaphore <- struct{}{} // Acquire
 			defer func() {
 				<-semaphore // Release
@@ -1553,7 +1547,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 					writeBackScanCache(books[idx].FilePath, nil, scanLog)
 				}
 			}
-		}(i)
+		})
 	}
 
 	wg.Wait()

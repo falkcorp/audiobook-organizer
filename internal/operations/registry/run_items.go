@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-08-17
+// last-edited: 2026-08-30
 
 package registry
 
@@ -304,10 +304,8 @@ func runItemsPar[T any](ctx context.Context, items []T, runOne func(context.Cont
 		case sem <- struct{}{}:
 		}
 
-		wg.Add(1)
 		i, item := i, item
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 			if err := runOne(cancelCtx, i, item); err != nil {
 				mu.Lock()
@@ -317,7 +315,7 @@ func runItemsPar[T any](ctx context.Context, items []T, runOne func(context.Cont
 					cancel()
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

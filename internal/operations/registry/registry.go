@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.17.0
+// version: 3.17.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-28
+// last-edited: 2026-08-30
 
 package registry
 
@@ -364,13 +364,10 @@ func (r *Registry) Start(ctx context.Context) {
 	internalCtx, cancel := context.WithCancel(ctx)
 	r.cancelFn = cancel
 
-	r.goroutineWG.Add(1)
-	go func() { defer r.goroutineWG.Done(); r.runDispatcher(internalCtx) }()
-	r.goroutineWG.Add(1)
-	go func() { defer r.goroutineWG.Done(); r.runWatchdog(internalCtx) }()
-	for i := range r.workers {
-		r.goroutineWG.Add(1)
-		go func(slot int) { defer r.goroutineWG.Done(); r.startWorker(internalCtx, slot) }(i)
+	r.goroutineWG.Go(func() { r.runDispatcher(internalCtx) })
+	r.goroutineWG.Go(func() { r.runWatchdog(internalCtx) })
+	for slot := range r.workers {
+		r.goroutineWG.Go(func() { r.startWorker(internalCtx, slot) })
 	}
 
 	// Wire the dependency-scheduler sweep ticker if a scheduler has been set.
@@ -386,9 +383,7 @@ func (r *Registry) Start(ctx context.Context) {
 		}
 		sweepStopped := make(chan struct{})
 		r.sweepStopped = sweepStopped
-		r.goroutineWG.Add(1)
-		go func() {
-			defer r.goroutineWG.Done()
+		r.goroutineWG.Go(func() {
 			// Signal Shutdown that the ticker goroutine has fully exited so it
 			// can safely let the caller close the store. See sweepStopped.
 			defer close(sweepStopped)
@@ -416,7 +411,7 @@ func (r *Registry) Start(ctx context.Context) {
 					}
 				}
 			}
-		}()
+		})
 	}
 }
 

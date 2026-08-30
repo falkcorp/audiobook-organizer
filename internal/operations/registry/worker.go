@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.16.0
+// version: 2.16.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-27
+// last-edited: 2026-08-30
 
 package registry
 
@@ -308,16 +308,15 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// marked interrupted, Shutdown must still wait for this goroutine before
 	// returning — otherwise the caller closes the store while Run is mid-write.
 	// No notifyStopped-style gate is needed here (unlike notifyDepCompletion/
-	// notifyDepFailed): this Add happens synchronously inside executeRun, which
-	// is called from the already-enrolled startWorker goroutine, whose own
-	// Done() has not run yet — so the counter is provably non-zero across this
-	// Add and can never be observed at zero by a concurrent Wait().
+	// notifyDepFailed): WaitGroup.Go increments the counter synchronously,
+	// before it spawns, and it does so inside executeRun — which runs on the
+	// already-enrolled startWorker goroutine, whose own Done() has not run yet.
+	// So the counter is provably non-zero across this enrollment and can never
+	// be observed at zero by a concurrent Wait().
 	done := make(chan error, 1)
-	r.goroutineWG.Add(1)
-	go func() {
-		defer r.goroutineWG.Done()
+	r.goroutineWG.Go(func() {
 		done <- r.safeRun(runCtx, def, qr.params, reporter)
-	}()
+	})
 
 	// Wait for the run to finish or the context to be canceled.
 	var runErr error
@@ -402,8 +401,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			}
 			r.logger.Warn("registry: op goroutine abandoned; spawning replacement worker",
 				"op_id", qr.opID, "plugin", qr.plugin)
-			r.goroutineWG.Add(1)
-			go func() { defer r.goroutineWG.Done(); r.startWorker(parentCtx, -1) }()
+			r.goroutineWG.Go(func() { r.startWorker(parentCtx, -1) })
 			go func() {
 				<-done
 				r.abandoned.decrement(qr.plugin)
