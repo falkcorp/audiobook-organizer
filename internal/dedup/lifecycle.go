@@ -1,5 +1,5 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
 // last-edited: 2026-08-29
 
@@ -141,11 +141,16 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 					return
 				}
 				// book_rows/author_rows are the numbers to diff against the
-				// ANN store's own "truth_count" import log: books_skipped is
-				// exactly the difference, and HydrateChromem's accounting line
-				// breaks that total down by named bucket. Before 2026-08-29
-				// this line reported only the hydrated counts, so a 21,952-row
-				// gap between the two logs had no explanation anywhere.
+				// ANN store's own "truth_count" import log, and
+				// HydrateChromem's accounting line breaks the gap down by
+				// named bucket. Two caveats live on that line, not here:
+				// truth_count counts raw keys while book_rows counts rows that
+				// DECODED (book_rows_undecodable names the difference), and
+				// books_skipped equals book_rows - books_hydrated only on a
+				// run that was not cut short (incomplete=false). Before
+				// 2026-08-29 this line reported only the hydrated counts, so a
+				// 21,952-row gap between the two logs had no explanation
+				// anywhere.
 				slog.Info("chromem hydrate complete",
 					"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
 					"book_rows", stats.BookRows, "books_skipped", stats.BooksSkipped(),

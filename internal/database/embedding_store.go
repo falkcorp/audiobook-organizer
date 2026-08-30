@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.12.0
-// last-edited: 2026-08-20
+// version: 2.13.0
+// last-edited: 2026-08-29
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -336,27 +336,48 @@ func (s *EmbeddingStore) Delete(entityType, entityID string) error {
 	return s.db.Delete(embVecKey(entityType, entityID), pebble.Sync)
 }
 
-// ListByType returns all embeddings for the given entity type.
+// ListByType returns all embeddings for the given entity type. Rows whose
+// stored record fails to decode are silently dropped; call ListByTypeCounted
+// if you need to know how many.
 func (s *EmbeddingStore) ListByType(entityType string) ([]Embedding, error) {
+	rows, _, err := s.ListByTypeCounted(entityType)
+	return rows, err
+}
+
+// ListByTypeCounted is ListByType but also reports how many rows were skipped
+// because their stored record would not unmarshal.
+//
+// WHY this exists: the returned slice length is NOT the number of rows the
+// prefix holds, because a corrupt record is dropped mid-iteration. CountByType
+// counts raw keys and never unmarshals, so the two disagree by exactly this
+// number — silently, and permanently. That matters because the vector index's
+// startup log reports CountByType as its "truth_count" while dedup's hydrate
+// reports len(ListByType(...)) as its row count, and operators are told to
+// diff the two. Without this count, a corrupt record makes those operands
+// incomparable with nothing anywhere reporting the delta. Callers that publish
+// a row count to a human should use this form and surface the number.
+func (s *EmbeddingStore) ListByTypeCounted(entityType string) ([]Embedding, int, error) {
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
 	if err := s.checkClosed(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	prefix := []byte(embVecPfx + entityType + ":")
 	upper := prefixUpperBound(prefix)
 
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
 	if err != nil {
-		return nil, fmt.Errorf("list by type %s: %w", entityType, err)
+		return nil, 0, fmt.Errorf("list by type %s: %w", entityType, err)
 	}
 	defer iter.Close()
 
 	typePrefix := embVecPfx + entityType + ":"
 	var results []Embedding
+	undecodable := 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		var rec embRec
 		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			undecodable++
 			continue
 		}
 		entityID := string(iter.Key())[len(typePrefix):]
@@ -370,7 +391,7 @@ func (s *EmbeddingStore) ListByType(entityType string) ([]Embedding, error) {
 			UpdatedAt:  time.Unix(0, rec.UpdatedAt),
 		})
 	}
-	return results, iter.Error()
+	return results, undecodable, iter.Error()
 }
 
 // FindSimilar loads all embeddings of entityType, computes cosine similarity

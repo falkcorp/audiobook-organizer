@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.68.0
+// version: 1.69.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-08-29
 
@@ -319,8 +319,18 @@ func (de *Engine) getScoreConfig() unified.ScoreConfig {
 // cancellation — the remaining rows were never classified. Callers that assert
 // on it must use a live context.
 type HydrateStats struct {
-	// BookRows is how many "book" embedding rows were read from the store.
+	// BookRows is how many "book" embedding rows were read from the store —
+	// rows that DECODED. See BookRowsUndecodable for the rest.
 	BookRows int
+	// BookRowsUndecodable counts rows the store dropped before this function
+	// ever saw them, because their record would not unmarshal. They are not
+	// in BookRows and so cannot appear in any bucket below; without this
+	// field they would be invisible to the accounting AND would silently make
+	// book_rows disagree with the ANN store's truth_count (which counts raw
+	// keys and never unmarshals) — the exact two numbers an operator is told
+	// to diff. Always actionable: a corrupt row is a live book with no route
+	// into dedup.
+	BookRowsUndecodable int
 	// BooksHydrated is how many of them reached the ANN index.
 	BooksHydrated int
 	// BooksEmptyVector counts rows whose stored vector decoded to zero
@@ -358,16 +368,20 @@ type HydrateStats struct {
 	BooksNonPrimary int
 	// BooksMirrorError counts rows that passed every filter but whose write
 	// INTO the ANN store failed. Without this bucket BooksHydrated would mean
-	// "we tried", not "it arrived": mirrorBookToChromem is best-effort and
-	// used to swallow its Upsert error, so a failed write still incremented
-	// the hydrated count and the summary log claimed a row was in the graph
-	// when it was not. This repo has seen exactly that failure in the wild —
+	// "we tried", not "it arrived": mirrorBookToChromem used to be
+	// best-effort and swallowed its Upsert error, so a failed write still
+	// incremented the hydrated count and the summary log claimed a row was in
+	// the graph when it was not. It now returns that failure and this bucket
+	// counts it. This repo has seen exactly that failure in the wild —
 	// the `dedup chromem upsert author` warning chased through PRs
 	// #1862/#1865/#1866. Always actionable: a live book fell out of dedup.
 	BooksMirrorError int
 
-	// AuthorRows is how many "author" embedding rows were read.
+	// AuthorRows is how many "author" embedding rows decoded.
 	AuthorRows int
+	// AuthorRowsUndecodable counts author rows dropped by the store as
+	// unparseable. See BookRowsUndecodable.
+	AuthorRowsUndecodable int
 	// AuthorsHydrated is how many of them reached the ANN index.
 	AuthorsHydrated int
 	// AuthorsEmptyVector counts author rows with a zero-length vector.
@@ -417,10 +431,13 @@ func (s HydrateStats) AuthorsAccounted() int {
 		s.AuthorsMirrorError
 }
 
-// BooksSkipped is BookRows minus what reached the index.
+// BooksSkipped is how many CLASSIFIED rows did not reach the index. On a
+// complete run that equals BookRows - BooksHydrated; on an incomplete one it
+// deliberately excludes rows the loop never reached, which were not skipped,
+// just never looked at.
 func (s HydrateStats) BooksSkipped() int { return s.BooksAccounted() - s.BooksHydrated }
 
-// AuthorsSkipped is AuthorRows minus what reached the index.
+// AuthorsSkipped is the author-side counterpart of BooksSkipped.
 func (s HydrateStats) AuthorsSkipped() int { return s.AuthorsAccounted() - s.AuthorsHydrated }
 
 // HydrateChromem walks the SQLite embedding rows and copies any that are
@@ -449,10 +466,18 @@ func (de *Engine) HydrateChromem(ctx context.Context) (HydrateStats, error) {
 		return stats, nil
 	}
 
-	bookEmbeds, err := de.embedStore.ListByType("book")
+	// Counted form: len(bookEmbeds) is not the number of rows the prefix
+	// holds, because a record that will not unmarshal is dropped inside the
+	// store. That drop is what makes book_rows and the ANN store's
+	// truth_count (raw key count, no unmarshal) disagree, so the operator we
+	// send to diff them needs the delta named. See BookRowsUndecodable.
+	bookEmbeds, undecodableBooks, err := de.embedStore.ListByTypeCounted("book")
 	if err != nil {
+		stats.Incomplete = true
+		de.logHydrateAccounting(ctx, stats)
 		return stats, fmt.Errorf("list book embeddings: %w", err)
 	}
+	stats.BookRowsUndecodable = undecodableBooks
 	stats.BookRows = len(bookEmbeds)
 	for _, e := range bookEmbeds {
 		if err := ctx.Err(); err != nil {
@@ -502,10 +527,15 @@ func (de *Engine) HydrateChromem(ctx context.Context) (HydrateStats, error) {
 		stats.BooksHydrated++
 	}
 
-	authorEmbeds, err := de.embedStore.ListByType("author")
+	// Incomplete + log here too: an author-list failure would otherwise
+	// discard a fully computed book accounting with no line emitted at all.
+	authorEmbeds, undecodableAuthors, err := de.embedStore.ListByTypeCounted("author")
 	if err != nil {
+		stats.Incomplete = true
+		de.logHydrateAccounting(ctx, stats)
 		return stats, fmt.Errorf("list author embeddings: %w", err)
 	}
+	stats.AuthorRowsUndecodable = undecodableAuthors
 	stats.AuthorRows = len(authorEmbeds)
 	for _, e := range authorEmbeds {
 		if err := ctx.Err(); err != nil {
@@ -553,6 +583,7 @@ func (de *Engine) HydrateChromem(ctx context.Context) (HydrateStats, error) {
 func (de *Engine) logHydrateAccounting(ctx context.Context, stats HydrateStats) {
 	args := []any{
 		"book_rows", stats.BookRows,
+		"book_rows_undecodable", stats.BookRowsUndecodable,
 		"books_hydrated", stats.BooksHydrated,
 		"books_empty_vector", stats.BooksEmptyVector,
 		"books_stale_model", stats.BooksStaleModel,
@@ -562,6 +593,7 @@ func (de *Engine) logHydrateAccounting(ctx context.Context, stats HydrateStats) 
 		"books_mirror_error", stats.BooksMirrorError,
 		"books_unaccounted", stats.BookRows - stats.BooksAccounted(),
 		"author_rows", stats.AuthorRows,
+		"author_rows_undecodable", stats.AuthorRowsUndecodable,
 		"authors_hydrated", stats.AuthorsHydrated,
 		"authors_empty_vector", stats.AuthorsEmptyVector,
 		"authors_stale_model", stats.AuthorsStaleModel,
@@ -570,6 +602,11 @@ func (de *Engine) logHydrateAccounting(ctx context.Context, stats HydrateStats) 
 		// On an incomplete run the unaccounted totals are rows the loop never
 		// reached, NOT an uncounted skip path. Read them together.
 		"incomplete", stats.Incomplete,
+		// Makes a zero in the stale-model buckets self-describing.
+		// embeddingModelMatches returns true unconditionally when no embed
+		// client is wired, so with model_check_active=false those buckets are
+		// structurally 0 and prove nothing — the check did not run.
+		"model_check_active", de.embedClient != nil,
 	}
 	if stats.FirstBookLookupError != nil {
 		args = append(args, "first_book_lookup_error", stats.FirstBookLookupError)
@@ -584,10 +621,21 @@ func (de *Engine) logHydrateAccounting(ctx context.Context, stats HydrateStats) 
 	// or was written before its vector landed, so a live primary book is
 	// silently absent from the graph, which is the same shape of problem as a
 	// lookup fault.
+	//
+	// The accounting identity is part of the predicate, not just of the unit
+	// test. A future skip path added with no counter is exactly the defect
+	// this whole function exists to make visible, and a test cannot see a
+	// skip path that does not exist yet — so a nonzero unaccounted total has
+	// to raise the line's severity at runtime. Suppressed on an incomplete
+	// run, where the leftover is rows never reached rather than rows lost.
+	unaccounted := !stats.Incomplete &&
+		(stats.BookRows != stats.BooksAccounted() || stats.AuthorRows != stats.AuthorsAccounted())
 	actionable := stats.BooksStaleModel > 0 || stats.AuthorsStaleModel > 0 ||
 		stats.BooksOrphaned > 0 || stats.BooksLookupError > 0 ||
 		stats.BooksEmptyVector > 0 || stats.AuthorsEmptyVector > 0 ||
-		stats.BooksMirrorError > 0 || stats.AuthorsMirrorError > 0
+		stats.BooksMirrorError > 0 || stats.AuthorsMirrorError > 0 ||
+		stats.BookRowsUndecodable > 0 || stats.AuthorRowsUndecodable > 0 ||
+		stats.Incomplete || unaccounted
 	if actionable {
 		// Stale-model rows are candidates for a re-embed (the entity is real
 		// and just missed a backfill pass). Orphaned rows are candidates for
@@ -2501,7 +2549,7 @@ func (de *Engine) prepBookEmbed(ctx context.Context, bookID string) (
 	if getErr == nil && existing != nil && existing.TextHash == hash && de.embeddingModelMatches(existing.Model) {
 		// Single-row path: the per-row Warn inside the mirror is adequate here,
 		// unlike HydrateChromem's 39K-row sweep, which counts the failure.
-		_ = de.mirrorBookToChromem(ctx, book, existing.Vector)
+		de.mirrorBookToChromem(ctx, book, existing.Vector) //nolint:errcheck // single-row path: the helper already logs a per-row Warn; only HydrateChromem's 39K-row sweep needs the count
 		return book, text, hash, EmbedStatusCached, true, nil
 	}
 	return book, text, hash, 0, false, nil
@@ -2595,7 +2643,7 @@ func (de *Engine) EmbedBooks(ctx context.Context, bookIDs []string) (map[string]
 			logging.Info(ctx, "dedup upsert embedding for", "p", p.id, "upErr", upErr)
 			continue
 		}
-		_ = de.mirrorBookToChromem(ctx, p.book, vecs[i]) // per-row Warn suffices; see above
+		de.mirrorBookToChromem(ctx, p.book, vecs[i]) //nolint:errcheck // per-row Warn suffices here; see mirrorBookToChromem
 		results[p.id] = EmbedStatusEmbedded
 	}
 	return results, nil
@@ -2615,11 +2663,24 @@ func (de *Engine) EmbedBooks(ctx context.Context, bookIDs []string) (map[string]
 // "unobservable". HydrateChromem's per-row counters would otherwise be a lie:
 // it increments BooksHydrated after this call, so a swallowed Upsert error
 // meant the summary log claimed a row reached the graph when it had not, and
-// books_skipped no longer equalled truth_count - graph_count. Callers that
-// genuinely do not care write `_ =`.
+// books_skipped no longer equalled truth_count - graph_count. Single-row
+// callers that are content with the Warn above suppress the return with an
+// explained nolint:errcheck directive; a bare `_ =` is NOT an option here,
+// because .golangci.yml turns on errcheck's check-blank.
+//
+// A nil chromemStore means no ANN index is configured and is not a failure.
+// Invalid input (nil book, empty vector) IS returned as an error rather than
+// silently no-op'd, so a caller that counts arrivals cannot mistake a
+// never-attempted write for a completed one.
 func (de *Engine) mirrorBookToChromem(ctx context.Context, book *database.Book, vec []float32) error {
-	if de.chromemStore == nil || book == nil || len(vec) == 0 {
+	if de.chromemStore == nil {
 		return nil
+	}
+	if book == nil {
+		return fmt.Errorf("chromem upsert book: nil book")
+	}
+	if len(vec) == 0 {
+		return fmt.Errorf("chromem upsert book %s: empty vector", book.ID)
 	}
 	primary := "true"
 	if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
@@ -2663,7 +2724,7 @@ func (de *Engine) EmbedAuthor(ctx context.Context, authorID int) error {
 	if err == nil && existing != nil && existing.TextHash == hash && de.embeddingModelMatches(existing.Model) {
 		// Mirror to chromem on cache hits too — see mirrorBookToChromem
 		// for the rationale (keeps ANN index in sync with sqlite).
-		_ = de.mirrorAuthorToChromem(ctx, entityID, existing.Vector) // per-row Warn suffices
+		de.mirrorAuthorToChromem(ctx, entityID, existing.Vector) //nolint:errcheck // per-row Warn suffices here; see mirrorBookToChromem
 		return nil
 	}
 
@@ -2681,7 +2742,7 @@ func (de *Engine) EmbedAuthor(ctx context.Context, authorID int) error {
 	}); err != nil {
 		return err
 	}
-	_ = de.mirrorAuthorToChromem(ctx, entityID, vec) // per-row Warn suffices
+	de.mirrorAuthorToChromem(ctx, entityID, vec) //nolint:errcheck // per-row Warn suffices here; see mirrorBookToChromem
 	return nil
 }
 
@@ -2754,8 +2815,18 @@ func (de *Engine) EmbedBooksAsync(ctx context.Context) (batchID string, count in
 // Logs and returns the failure; see mirrorBookToChromem for the rationale on
 // both halves of that.
 func (de *Engine) mirrorAuthorToChromem(ctx context.Context, authorID string, vec []float32) error {
-	if de.chromemStore == nil || authorID == "" || len(vec) == 0 {
+	if de.chromemStore == nil {
 		return nil
+	}
+	// An empty authorID used to return silently here, which meant such a row
+	// incremented AuthorsHydrated in the hydrate loop without ever reaching
+	// the graph — the same counting lie the mirror-error bucket exists to
+	// prevent, surviving in one corner.
+	if authorID == "" {
+		return fmt.Errorf("chromem upsert author: empty author id")
+	}
+	if len(vec) == 0 {
+		return fmt.Errorf("chromem upsert author %s: empty vector", authorID)
 	}
 	if err := de.chromemStore.Upsert(ctx, "author", authorID, vec, nil); err != nil {
 		logging.Warn(ctx, "dedup chromem upsert author", "authorID", authorID, "err", err)
