@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-30
 
@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -145,6 +146,15 @@ func (s *PebbleActivityStore) DB() *pebble.DB { return s.db }
 
 // ── Key construction ──────────────────────────────────────────────────────────
 
+// pactErrPreEpochTimestamp is returned by prepareEntry for an entry whose
+// timestamp cannot be rendered as a sortable fixed-width key.
+//
+// It covers both ends of the same defect, because both produce a negative
+// UnixNano: an instant genuinely before 1970-01-01, and one so far in the future
+// that UnixNano overflows int64 (beyond ~2262-04-11). Either way %020d emits a
+// leading '-' and the key sorts wrongly, so both are refused by one check.
+var pactErrPreEpochTimestamp = errors.New("pebble_activity_store: timestamp outside the representable key range (UnixNano must be >= 0)")
+
 // pactPrimaryKey builds the primary key for a tier entry:
 //
 //	act:<tier>:<20d-unix-nano>:<ulid>
@@ -209,6 +219,78 @@ func pactKeyTimeField(key []byte) string {
 	return rest[:j]
 }
 
+// pactKeyEntryID returns the <ulid> component of a primary key
+// ("act:<tier>:<20d-unix-nano>:<ulid>"), or "" if the key is malformed.
+//
+// This is the per-row tie-break the ordering contract rests on (see
+// pactSortEntriesNewestFirst). It is deliberately read from the KEY rather than
+// from any decoded field: the ULID is not carried in the entry body at all
+// (ActivityEntry.ID is a separate synthetic counter that resets with the
+// process), so the key is the only place a stable, globally-unique per-row
+// discriminator exists.
+func pactKeyEntryID(key []byte) string {
+	s := string(key)
+	if !strings.HasPrefix(s, "act:") {
+		return ""
+	}
+	rest := s[len("act:"):]
+	i := strings.IndexByte(rest, ':') // end of <tier>
+	if i < 0 {
+		return ""
+	}
+	rest = rest[i+1:]
+	j := strings.IndexByte(rest, ':') // end of <nanos>
+	if j < 0 {
+		return ""
+	}
+	return rest[j+1:]
+}
+
+// pactRankedEntry pairs a decoded entry with the ULID of the key it was read
+// from, so the full path can order ties by something better defined than
+// "whatever sort.Slice happened to do".
+type pactRankedEntry struct {
+	entry   ActivityEntry
+	entryID string
+}
+
+// pactSortEntriesNewestFirst is THE ordering contract for an index-prefix query,
+// and both implementations are required to produce it:
+//
+//	newest Timestamp first; among rows sharing a Timestamp, the HIGHEST ULID first.
+//
+// WHY the tie-break has to be explicit. This path used to sort with sort.Slice
+// on Timestamp.After, which is UNSTABLE — so with tied timestamps its output
+// order was not merely different from the pushdown's, it was not well-defined at
+// all, and "the pushdown reproduces what the sort reached" was a claim about
+// nothing. A reference implementation whose answer depends on the sort's
+// internal pivot choices cannot be a reference. Ties are not exotic here:
+// RecordBatch writes a whole batch from instants that routinely collide at the
+// resolution callers actually pass (see the 149 entry mismatches the tie-bearing
+// differential fixture produced before this existed).
+//
+// WHY the ULID, and why DESCENDING. The pushdown never decodes the rows it
+// counts; it orders by index key, which is <20d-unix-nano>:<ulid> read in
+// reverse. So for a tied nano it yields descending ULID, and matching that here
+// is what makes the two paths comparable. Descending ULID is also the right
+// answer on its own terms: ulid.Make draws monotonically increasing entropy
+// within a millisecond, so a higher ULID means written later, and "newest
+// first" stays true down to the tie.
+//
+// The tie-break is on the ULID ALONE, never on the "<nanos>:<ulid>" key suffix
+// as one string. The nano field is compared numerically by the primary key
+// above; comparing it lexicographically as well would re-import the pre-epoch
+// padding hazard (a negative UnixNano renders with a leading '-'), and this
+// function must stay correct for any row already on disk.
+func pactSortEntriesNewestFirst(all []pactRankedEntry) {
+	slices.SortStableFunc(all, func(a, b pactRankedEntry) int {
+		if c := b.entry.Timestamp.Compare(a.entry.Timestamp); c != 0 {
+			return c
+		}
+		return strings.Compare(b.entryID, a.entryID)
+	})
+}
+
 // pactIndexRef encodes the cross-reference value stored in secondary indexes:
 // "<tier>:<20d-unix-nano>:<ulid>" — enough to reconstruct the primary key.
 func pactIndexRef(tier string, t time.Time, id string) []byte {
@@ -223,6 +305,61 @@ func pactPrimaryKeyFromRef(ref []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return []byte("act:" + s), true
+}
+
+// pactIndexKeyNamesExactly reports whether key is an index key for EXACTLY the
+// id that prefix names — not merely one that shares prefix's bytes.
+//
+// The hazard it closes: a Pebble prefix scan over "act:op:A:" also returns every
+// key of an id that STARTS WITH "A:". "act:op:A:B:<nano>:<ulid>" is an index key
+// for the id "A:B", and it prefix-matches. The full path decodes those rows and
+// matchesFilter drops them (their OperationID is "A:B", not "A"), so they are
+// absent from its total; a pushdown that counted every ref under the prefix
+// would count them, and one that skipped them only while filling the page would
+// still let them consume a rank and shift the page. Rejecting them at scan time
+// keeps them out of BOTH.
+//
+// The parse is unambiguous because the suffix Record appends is fixed-shape:
+// exactly 20 digits of zero-padded unix-nano, a ':', then a ULID — Crockford
+// base32, which contains no ':'. So "the remainder after the prefix is
+// <20 digits>:<colon-free>" is true for a key belonging to this id and false for
+// a key belonging to any longer id, with no scan of the id itself and no read of
+// the row. O(1) per ref, which is what lets it sit in the hot loop. It reads the
+// ULID's length nowhere, so a non-standard entry id would not trip it.
+//
+// HOW REACHABLE, measured rather than assumed: every stored OperationID and
+// BookID is a ULID (book ids are newULID()/ulid.Make() at every writer, and no
+// path writes a book row under a caller-chosen key; cmd/seed.go's "seed_<ULID>"
+// is the only non-ULID shape and is still colon-free), so no key in a production
+// index names a longer id and this check rejects nothing there TODAY. It is
+// still not decoration:
+//
+//   - It converts pactIndexPushdownEligible's central argument — "f.OperationID
+//     == X is true by construction for every ref under act:op:<X>:" — from an
+//     assumption about the write path into an invariant this loop CHECKS. That
+//     argument is what licenses the whole pushdown, and it should not rest on a
+//     property no code enforces.
+//   - The id it is compared against is not internal data. ActivityFilter.BookID
+//     and OperationID are unvalidated query parameters (handlers/activity.go
+//     passes c.Query("book_id") straight through to the act:bk: prefix), so the
+//     PREFIX side is attacker-controlled even though the stored side is not.
+//   - A future id scheme that admits ':' would otherwise reintroduce a silent
+//     wrong total, with nothing failing to say so.
+func pactIndexKeyNamesExactly(key []byte, prefix string) bool {
+	if len(key) <= len(prefix) || string(key[:len(prefix)]) != prefix {
+		return false
+	}
+	rest := key[len(prefix):]
+	// <20 digits> ':' <ulid>, and the ULID must be non-empty.
+	if len(rest) < 22 || rest[20] != ':' {
+		return false
+	}
+	for _, c := range rest[:20] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return bytes.IndexByte(rest[21:], ':') < 0
 }
 
 // pactIndexFamilyPrefixes are the two secondary-index key families Record
@@ -366,6 +503,27 @@ type pactPreparedEntry struct {
 func (s *PebbleActivityStore) prepareEntry(e ActivityEntry) (pactPreparedEntry, error) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
+	}
+	if e.Timestamp.UnixNano() < 0 {
+		// A pre-epoch instant is not REPRESENTABLE in this store's key format.
+		// pactPrimaryKey renders the nano with %020d, so a negative value gets a
+		// leading '-' (0x2D, below '0') instead of a zero pad: the key sorts
+		// before every post-epoch key, and among negatives it sorts in REVERSE
+		// chronological order. Everything in this file that reads time from a
+		// key rather than from the row — the tier merge, the since/until bounds
+		// in pactTierBounds, and the reverse index scan the limit pushdown is
+		// built on — silently returns a wrong ORDER for such a row, with no
+		// error surface anywhere.
+		//
+		// Rejecting rather than clamping: clamping would invent a timestamp the
+		// caller never supplied and store it as fact, and the row would then be
+		// indistinguishable from a real one. And rejecting belongs HERE
+		// specifically because prepareEntry is by design the one step that can
+		// fail for a reason attributable to a single entry — RecordBatch's error
+		// semantics rest on that split, so a per-entry rejection lands exactly
+		// where this file already puts per-entry failures, and a batch is not
+		// doomed by one bad row.
+		return pactPreparedEntry{}, fmt.Errorf("%w: %s", pactErrPreEpochTimestamp, e.Timestamp.UTC().Format(time.RFC3339Nano))
 	}
 	if e.Level == "" {
 		e.Level = "info"
@@ -1938,8 +2096,16 @@ func (sc *pactIndexScan) len() int { return len(sc.ends) }
 // Reverse is what makes the pushdown possible at all: the index key is
 // act:op:<id>:<20d-unix-nano>:<ulid>, and because the nanos are zero-padded to a
 // fixed 20 digits, lexicographic key order IS chronological order. Iterating
-// backwards therefore yields exactly the newest-first order the full path
-// produced with a sort.Slice over every decoded entry.
+// backwards therefore yields descending (nano, ulid) — which is exactly the
+// ordering contract pactSortEntriesNewestFirst defines and the full path now
+// sorts to, ties included.
+//
+// The "zero-padded 20 digits ⇒ lexicographic == chronological" step holds only
+// for NON-NEGATIVE nanos: %020d of a pre-epoch instant renders a leading '-'
+// (0x2D, below '0'), which sorts every negative before every positive AND
+// reverses the order among negatives. prepareEntry rejects pre-epoch timestamps
+// at write time precisely so this scan's premise cannot be violated by a row on
+// disk; see pactErrPreEpochTimestamp.
 func (s *PebbleActivityStore) scanIndexRefs(ctx context.Context, prefix string) (*pactIndexScan, error) {
 	// Upper bound: replace trailing ':' with ';' to cover the entire id sub-namespace.
 	upperPrefix := prefix[:len(prefix)-1] + ";"
@@ -1962,6 +2128,15 @@ func (s *PebbleActivityStore) scanIndexRefs(ctx context.Context, prefix string) 
 			}
 		}
 		seen++
+
+		// A key that only PREFIX-matches belongs to a longer id (see
+		// pactIndexKeyNamesExactly). The full path's matchesFilter rejects those
+		// rows on their decoded id; dropping them here is the same rejection,
+		// made without a decode, and it keeps them out of `total` AND out of the
+		// rank the page is taken by.
+		if !pactIndexKeyNamesExactly(iter.Key(), prefix) {
+			continue
+		}
 
 		ref := iter.Value()
 		// Same rejection as pactPrimaryKeyFromRef: a ref with no ':' cannot be
@@ -2072,32 +2247,61 @@ func (s *PebbleActivityStore) markLiveRefs(ctx context.Context, sc *pactIndexSca
 // 50,000 of each to return 1,000 rows. This does one index scan, one key-only
 // existence merge, and exactly len(page) Gets and decodes.
 //
-// HOW total stays exactly what the full path returns: total is the number of
-// refs whose primary row exists, which is the same set the full path accumulates
-// into `all` — minus only rows whose stored JSON will not decode. That is the
-// ONE divergence, and it is stated here in full rather than rounded off:
+// WHAT total ACTUALLY MEANS, stated as a contract rather than as a claim of
+// exactness. total is:
 //
-//	A row that EXISTS but whose body cannot be unmarshalled into an
-//	ActivityEntry is excluded by the full path and, if this path never decodes
-//	it, counted by this one. Rows inside the page window ARE decoded and DO
-//	correct the total, so it takes an undecodable row the caller never pages to.
-//	Such a row sitting BEFORE the offset also consumes one rank in the skip
-//	loop, which shifts the returned page by one against the full path.
+//	the number of refs under prefix that NAME this exact id (see
+//	pactIndexKeyNamesExactly) and whose primary row EXISTS — corrected downward
+//	for every row inside the page window that turns out not to decode or not to
+//	pass matchesFilter.
 //
-// Closing that would mean decoding every row, which is the cost this function
-// exists to remove, so it is a deliberate trade and not an oversight. What makes
-// it an acceptable one is how the case is reached: Pebble checksums its blocks,
-// so disk corruption surfaces as a Get error (handled above as "gone"), not as
-// garbage bytes. The reachable route is a schema change that makes historical
-// rows undecodable — which is loud in the page itself, and counted by
-// DecodeFailures either way.
+// That equals the full path's total for any index satisfying this store's own
+// write invariant, i.e. one where every ref under act:op:<X>: was written by
+// prepareEntry/pactIndexKeysFor from an entry whose OperationID is X. It is NOT
+// unconditionally equal, and the two ways it can differ are these:
+//
+//  1. A row that EXISTS but whose body will not unmarshal, sitting OUTSIDE the
+//     page window: the full path excludes it, this path counts it. One before
+//     the offset also consumes a rank, shifting the page by one.
+//  2. A ref whose VALUE points at a row belonging to a different id, again
+//     outside the page window: same asymmetry, same rank consumption.
+//
+// Both are pinned by tests rather than left as prose — see
+// TestIndexPushdownUndecodableRowOutsidePageInflatesTotal and
+// TestIndexPushdownForeignRefOutsidePageInflatesTotalByExactlyOne — so the
+// contract cannot quietly drift into something worse without a failure.
+//
+// WHY case 2 is not closable here, having tried: the index KEY carries the id,
+// and a key naming a longer id is rejected at scan time by
+// pactIndexKeyNamesExactly, which is O(1) and closes the whole prefix-collision
+// population. What remains is a ref whose key names X correctly while its VALUE
+// addresses a row whose stored OperationID is not X. Nothing in the key or the
+// ref encodes that disagreement — only the row body does — so detecting it costs
+// a Get and a decode PER REF, which is precisely the ~7.9µs/ref this function
+// exists to remove (against ~330ns/ref for the key-only existence merge). It is
+// a state the write path cannot produce: only pactIndexKeysFor writes these keys
+// and only pactDeleteEntry removes them, and both derive key and ref from the
+// same primary key in the same batch. Rows in the page ARE checked, so a foreign
+// row can inflate a count but can never LEAK into a transcript.
+//
+// Making it exact for real is a schema change, not a code change: putting the
+// op/book id in the ref value would decide it in O(1). That only helps rows
+// written after the change, and this index is dominated by legacy refs, so it is
+// a future migration with a backfill — deliberately not smuggled into a
+// performance PR.
+//
+// Case 1 is bounded the same way. Pebble checksums its blocks, so disk
+// corruption surfaces as a Get error (handled below as "gone"), not as garbage
+// bytes; the reachable route is a schema change that makes historical rows
+// undecodable, which is loud in the page itself and counted by DecodeFailures
+// either way.
 //
 // The comparison that matters is with counting index keys instead, which would
 // have been far cheaper still: that would misreport the total on ORPHANED refs,
 // and orphans are not an edge case here but the normal state of this index (see
 // markLiveRefs). Existence is verified for every ref precisely because that
-// error would be routine, while this one needs a corrupt row on a page nobody
-// opens.
+// error would be routine, while these two need a corrupt row or a corrupt index
+// on a page nobody opens.
 //
 // ORPHANED REFS MUST NOT CONSUME A PAGE SLOT. The page is taken by rank over the
 // SURVIVING refs, never by position in the index, so a pruned row at the newest
@@ -2126,6 +2330,29 @@ func (s *PebbleActivityStore) queryByIndexPrefixPaged(ctx context.Context, prefi
 		return nil, 0, nil
 	}
 
+	return s.fetchIndexPage(ctx, sc, alive, total, prefix, f)
+}
+
+// fetchIndexPage decodes the page window out of an already-scanned, already-
+// existence-checked ref set, correcting total for any row that turns out not to
+// belong in it.
+//
+// Split out of queryByIndexPrefixPaged so the concurrent-prune branch below is
+// REACHABLE FROM A TEST. That branch fires when a row disappears between
+// markLiveRefs and the Get here, and it adjusts total — so leaving it untested
+// is not "an untested decrement", it is a line no test executes at all: a bare
+// panic() planted in it left the entire suite green. With the two halves
+// separate, a test can run the existence pass, delete a primary row itself, and
+// then run this — exercising the real branch with no test-only seam in the
+// production path. See TestIndexPushdownRowPrunedBetweenPassesIsUncounted.
+func (s *PebbleActivityStore) fetchIndexPage(
+	ctx context.Context,
+	sc *pactIndexScan,
+	alive []bool,
+	total int,
+	prefix string,
+	f ActivityFilter,
+) ([]ActivityEntry, int, error) {
 	capacity := f.Limit
 	if room := total - f.Offset; room < capacity {
 		capacity = room
@@ -2202,6 +2429,15 @@ func (s *PebbleActivityStore) queryByIndexPrefixPaged(ctx context.Context, prefi
 // must be a difference the pushdown introduced, not one the reference drifted
 // into.
 //
+// The ONE change made to it here is its sort, and it was made because the
+// sentence above was otherwise unsatisfiable. It used to call sort.Slice, which
+// is unstable, so on tied timestamps its output order was undefined — there was
+// no fact of the matter for the pushdown to either match or diverge from. A
+// reference has to be deterministic before "identical to the reference" means
+// anything, so the ordering contract now lives in pactSortEntriesNewestFirst and
+// BOTH paths are held to it. That is a change to the reference's tie order, not
+// to which rows or how many it returns.
+//
 // It needs its own cancellation checks: without them, threading a request
 // context into Query would be cosmetic on that endpoint and an abandoned
 // operation-transcript request would keep scanning to completion. ctx is checked
@@ -2246,7 +2482,7 @@ func (s *PebbleActivityStore) queryByIndexPrefixFull(ctx context.Context, prefix
 	tally := &pactDecodeTally{}
 	defer tally.log("queryByIndexPrefix full prefix=" + prefix)
 
-	var all []ActivityEntry
+	var all []pactRankedEntry
 	for i, ref := range refs {
 		if i%activityCtxCheckInterval == 0 {
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -2277,13 +2513,11 @@ func (s *PebbleActivityStore) queryByIndexPrefixFull(ctx context.Context, prefix
 			continue
 		}
 		if matchesFilter(entry, f) {
-			all = append(all, entry)
+			all = append(all, pactRankedEntry{entry: entry, entryID: pactKeyEntryID(primaryKey)})
 		}
 	}
 
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].Timestamp.After(all[j].Timestamp)
-	})
+	pactSortEntriesNewestFirst(all)
 
 	total := len(all)
 	start := f.Offset
@@ -2294,7 +2528,18 @@ func (s *PebbleActivityStore) queryByIndexPrefixFull(ctx context.Context, prefix
 	if end > len(all) {
 		end = len(all)
 	}
-	return all[start:end], total, nil
+	window := all[start:end]
+	if window == nil {
+		// all[0:0] on a nil slice is nil, and the pushdown returns nil in the
+		// same situation. Preserving nil-vs-empty exactly is load-bearing: a
+		// caller that distinguishes them would see the two paths differ.
+		return nil, total, nil
+	}
+	page := make([]ActivityEntry, 0, len(window))
+	for _, r := range window {
+		page = append(page, r.entry)
+	}
+	return page, total, nil
 }
 
 // findExistingDigest looks for a digest row for the given date string ("2006-01-02").
