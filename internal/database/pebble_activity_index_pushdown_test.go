@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_pushdown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e9eb1e1-29af-4a5d-8cd9-2be21b5aad0c
 // last-edited: 2026-08-30
 
@@ -399,18 +399,27 @@ func TestIndexPushdownEligibilityRefusesUndecidableFilters(t *testing.T) {
 }
 
 // TestIndexPushdownIneligibleFiltersStillCorrectThroughQuery proves the refusal
-// is a fallback, not a hole: an ineligible filter still returns the right rows,
-// via the full path.
+// is a fallback, not a hole: an ineligible filter still returns the right rows
+// AND the right total, via the full path.
+//
+// The limit here is deliberately SMALLER than the number of matching rows. With
+// a limit larger than the match count, a pushdown that wrongly accepted this
+// filter would still walk every ref (its loop only stops when the page is full)
+// and decrement its way to the correct total by accident — the test would pass
+// over a broken dispatch. At limit 5 of 20 matches it stops early and reports an
+// inflated total, which is the failure that has to be visible.
 func TestIndexPushdownIneligibleFiltersStillCorrectThroughQuery(t *testing.T) {
 	s := newTestPebbleActivityStore(t)
 	const opID = "op-ineligible"
 	const seeded = 60
-	seedOpEntries(t, s, opID, seeded)
+	seedOpEntries(t, s, opID, seeded) // Type cycles type-0..type-2
 
 	entries, total, err := s.Query(context.Background(),
-		ActivityFilter{OperationID: opID, Type: "type-1", Limit: 50})
+		ActivityFilter{OperationID: opID, Type: "type-1", Limit: 5})
 	require.NoError(t, err)
-	assert.Equal(t, seeded/3, total)
+	assert.Equal(t, seeded/3, total,
+		"total must count every matching row, not stop when the page filled")
+	assert.Len(t, entries, 5)
 	for _, e := range entries {
 		assert.Equal(t, "type-1", e.Type)
 	}
@@ -611,6 +620,25 @@ func TestIndexPushdownAbortsWhenCallerGoesAway(t *testing.T) {
 	assert.Zero(t, total)
 }
 
+// TestIndexPushdownIndexScanIsCancellable pins the FIRST loop's check on its
+// own. Driving cancellation through queryByIndexPrefixPaged cannot distinguish
+// the two loops — deleting the scan's check just lets the existence pass's
+// check fire instead, and the end-to-end test stays green over a loop that no
+// longer checks anything. Calling scanIndexRefs directly is what makes that
+// mutation fail.
+func TestIndexPushdownIndexScanIsCancellable(t *testing.T) {
+	pinCtxCheckInterval(t)
+	s := newTestPebbleActivityStore(t)
+
+	const opID = "op-scan-cancel"
+	seedOpEntries(t, s, opID, 30)
+
+	sc, err := s.scanIndexRefs(newTrippingContext(0), "act:op:"+opID+":")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, sc)
+}
+
 // TestIndexPushdownExistencePassIsCancellable drives cancellation past the
 // index scan and into markLiveRefs, the loop that does the per-ref work. A
 // context that trips during the first loop would leave the second loop's check
@@ -632,6 +660,34 @@ func TestIndexPushdownExistencePassIsCancellable(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Zero(t, live)
+}
+
+// TestIndexPushdownPageFetchIsCancellable pins the THIRD loop's check.
+//
+// Cancelling through the whole query trips in the first loop, and cancelling
+// markLiveRefs directly trips in the second, so neither notices the page loop's
+// check disappearing. The fixture is one entry so the call sequence is short
+// enough to name exactly: one check on entry, one in the index scan, one in the
+// existence merge, and the FOURTH is the page loop's — the only one this
+// context lets through as an error.
+func TestIndexPushdownPageFetchIsCancellable(t *testing.T) {
+	pinCtxCheckInterval(t)
+	s := newTestPebbleActivityStore(t)
+
+	const opID = "op-page-cancel"
+	seedOpEntries(t, s, opID, 1)
+
+	ctx := newTrippingContext(3)
+	entries, total, err := s.queryByIndexPrefixPaged(ctx, "act:op:"+opID+":",
+		ActivityFilter{OperationID: opID, Limit: 50})
+
+	require.Error(t, err, "the page fetch must abandon an abandoned request too")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, entries)
+	assert.Zero(t, total)
+	assert.Equal(t, 4, ctx.checkCount(),
+		"exactly one check per loop plus the entry check; if this count moves, "+
+			"re-derive it before changing the number — a check may have been deleted")
 }
 
 // ── key-layout premise ───────────────────────────────────────────────────────

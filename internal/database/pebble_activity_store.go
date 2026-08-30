@@ -2074,15 +2074,30 @@ func (s *PebbleActivityStore) markLiveRefs(ctx context.Context, sc *pactIndexSca
 //
 // HOW total stays exactly what the full path returns: total is the number of
 // refs whose primary row exists, which is the same set the full path accumulates
-// into `all` — minus only rows whose stored JSON will not decode. Those are the
-// one divergence and it is bounded to that case: a row that EXISTS but whose
-// body cannot be unmarshalled into an ActivityEntry is counted here and was not
-// counted by the full path. Pebble checksums its blocks, so disk corruption
-// surfaces as a Get error (already handled as "gone"), not as garbage bytes; the
-// reachable route is a schema change that makes historical rows undecodable, and
-// that is loud in the page itself. Rows inside the page window ARE decode-checked
-// and DO correct the total, so the divergence needs an undecodable row that the
-// caller never pages to.
+// into `all` — minus only rows whose stored JSON will not decode. That is the
+// ONE divergence, and it is stated here in full rather than rounded off:
+//
+//	A row that EXISTS but whose body cannot be unmarshalled into an
+//	ActivityEntry is excluded by the full path and, if this path never decodes
+//	it, counted by this one. Rows inside the page window ARE decoded and DO
+//	correct the total, so it takes an undecodable row the caller never pages to.
+//	Such a row sitting BEFORE the offset also consumes one rank in the skip
+//	loop, which shifts the returned page by one against the full path.
+//
+// Closing that would mean decoding every row, which is the cost this function
+// exists to remove, so it is a deliberate trade and not an oversight. What makes
+// it an acceptable one is how the case is reached: Pebble checksums its blocks,
+// so disk corruption surfaces as a Get error (handled above as "gone"), not as
+// garbage bytes. The reachable route is a schema change that makes historical
+// rows undecodable — which is loud in the page itself, and counted by
+// DecodeFailures either way.
+//
+// The comparison that matters is with counting index keys instead, which would
+// have been far cheaper still: that would misreport the total on ORPHANED refs,
+// and orphans are not an edge case here but the normal state of this index (see
+// markLiveRefs). Existence is verified for every ref precisely because that
+// error would be routine, while this one needs a corrupt row on a page nobody
+// opens.
 //
 // ORPHANED REFS MUST NOT CONSUME A PAGE SLOT. The page is taken by rank over the
 // SURVIVING refs, never by position in the index, so a pruned row at the newest
