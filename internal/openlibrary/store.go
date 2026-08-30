@@ -1,7 +1,7 @@
 // file: internal/openlibrary/store.go
-// version: 2.3.2
+// version: 2.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-03
+// last-edited: 2026-08-30
 
 package openlibrary
 
@@ -169,9 +169,7 @@ func (s *OLStore) ImportDump(dumpType, filePath string, progress func(int)) erro
 	// Worker goroutines: parse JSON → entryCh
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for line := range lineCh {
 				parts := strings.SplitN(string(line), "\t", 5)
 				if len(parts) < 5 {
@@ -184,7 +182,7 @@ func (s *OLStore) ImportDump(dumpType, filePath string, progress func(int)) erro
 				}
 				entryCh <- entry
 			}
-		}()
+		})
 	}
 
 	go func() {

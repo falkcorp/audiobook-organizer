@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.22.0
+// version: 3.23.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-20
+// last-edited: 2026-08-30
 
 package maintenance
 
@@ -499,10 +499,8 @@ func (p *Plugin) processTranscribePage(
 			wavResults[i] = wavResult{bookID: j.book.ID, status: statusNoAudio}
 			continue
 		}
-		wg.Add(1)
-		go func(idx int, bookID, src, fileHash string) {
-			defer wg.Done()
-
+		idx, bookID, src, fileHash := i, j.book.ID, j.audioSrc, j.fileHash
+		wg.Go(func() {
 			// Cache hit — no semaphore needed, just a stat.
 			if cacheDir != "" && fileHash != "" {
 				cp := cachedClipPath(cacheDir, fileHash)
@@ -544,7 +542,7 @@ func (p *Plugin) processTranscribePage(
 				return
 			}
 			wavResults[idx] = wavResult{bookID: bookID, wavPath: wavPath}
-		}(i, j.book.ID, j.audioSrc, j.fileHash)
+		})
 	}
 	wg.Wait()
 

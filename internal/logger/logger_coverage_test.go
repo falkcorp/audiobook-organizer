@@ -1,5 +1,7 @@
 // file: internal/logger/logger_coverage_test.go
-// version: 1.1.0
+// version: 1.2.0
+// guid: dbb463d6-f89b-4dee-8f50-b9ea2a790f2e
+// last-edited: 2026-08-30
 
 package logger
 
@@ -223,11 +225,9 @@ func TestCoverage_OperationLogger_ConcurrentRecordChange(t *testing.T) {
 	log := ForOperation("op1", nil, nil)
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			log.RecordChange(Change{ChangeType: "test"})
-		}(i)
+		})
 	}
 	wg.Wait()
 

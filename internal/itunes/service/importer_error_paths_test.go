@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-07-16
+// last-edited: 2026-08-30
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -154,12 +154,9 @@ func TestSync_Concurrent_NoPanic(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 4)
 	for i := 0; i < 4; i++ {
-		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = imp.Sync(context.Background(), xmlPath, nil, nil, log)
-		}()
+		})
 	}
 	wg.Wait()
 

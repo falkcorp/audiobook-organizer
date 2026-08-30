@@ -1,7 +1,7 @@
 // file: internal/watcher/watcher_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-30
+// last-edited: 2026-08-30
 
 package watcher
 
@@ -82,11 +82,9 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.mu.Unlock()
 
 	for _, t := range toFire {
-		c.wg.Add(1)
-		go func(t *fakeTimer) {
-			defer c.wg.Done()
+		c.wg.Go(func() {
 			t.fn()
-		}(t)
+		})
 	}
 	c.wg.Wait()
 }

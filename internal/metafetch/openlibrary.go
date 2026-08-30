@@ -1,6 +1,7 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
+// last-edited: 2026-08-30
 
 package metafetch
 
@@ -126,9 +127,8 @@ func (svc *OpenLibraryService) Import(ctx context.Context, progress operations.P
 			_ = progress.Log("info", fmt.Sprintf("Starting %s import", dumpType), nil)
 		}
 
-		importWg.Add(1)
-		go func(dt string, idx int) {
-			defer importWg.Done()
+		dt, idx := dumpType, i
+		importWg.Go(func() {
 			defer func() {
 				svc.Mu.Lock()
 				delete(svc.Importing, dt)
@@ -164,7 +164,7 @@ func (svc *OpenLibraryService) Import(ctx context.Context, progress operations.P
 					_ = progress.Log("info", fmt.Sprintf("%s import complete", dt), nil)
 				}
 			}
-		}(dumpType, i)
+		})
 	}
 	importWg.Wait()
 

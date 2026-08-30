@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
 // last-edited: 2026-08-30
 
@@ -173,9 +173,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 	var wg sync.WaitGroup
 	const workers = 4
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for f := range workCh {
 				if ctx.Err() != nil {
 					return
@@ -197,7 +195,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 				reporter.Increment()
 				progressMu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

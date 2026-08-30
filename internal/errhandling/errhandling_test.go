@@ -1,7 +1,7 @@
 // file: internal/errhandling/errhandling_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 21b860a5-1a53-4ed1-8cc2-d62c8862bea9
-// last-edited: 2026-08-11
+// last-edited: 2026-08-30
 
 package errhandling
 
@@ -148,11 +148,9 @@ func TestMustLog_ConcurrentUseIsSafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			MustLog(errors.New("concurrent"), "parallel discard")
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -1,7 +1,7 @@
 // file: internal/itunes/import.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 4b58a17d-b2b4-4743-9b7e-3462e2ed55ac
-// last-edited: 2026-07-03
+// last-edited: 2026-08-30
 
 package itunes
 
@@ -272,9 +272,7 @@ func ValidateImport(opts ImportOptions) (*ValidationResult, error) {
 	// Start workers
 	var wg sync.WaitGroup
 	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for idx := range jobs {
 				tc := checks[idx]
 				if !tc.decodeOK {
@@ -295,7 +293,7 @@ func ValidateImport(opts ImportOptions) (*ValidationResult, error) {
 				}
 				results <- statResult{idx: idx, found: found}
 			}
-		}()
+		})
 	}
 
 	// Send jobs

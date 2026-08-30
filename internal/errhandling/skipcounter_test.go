@@ -1,7 +1,7 @@
 // file: internal/errhandling/skipcounter_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0910fd4e-59de-4348-9e4b-e02e31fcff50
-// last-edited: 2026-08-11
+// last-edited: 2026-08-30
 
 package errhandling
 
@@ -127,15 +127,13 @@ func TestSkipCounter_ConcurrentUseIsSafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			if i%2 == 0 {
 				c.Processed()
 			} else {
 				c.Skip("odd", errors.New("odd item"))
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 
