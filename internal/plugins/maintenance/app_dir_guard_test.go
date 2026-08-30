@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/app_dir_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c94e0a6-5d31-4b82-9e08-3f61b7d425ac
 // last-edited: 2026-08-30
 
@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,14 +38,28 @@ func (d rootDirDeps) RootDir() string { return d.root }
 func withPluginAppDirs(t *testing.T, root string, enabled bool) {
 	t.Helper()
 	prevBackup, prevDump := config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir
+	prevDB, prevPlaylist := config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir
 	if enabled {
 		config.AppConfig.BackupDir = filepath.Join(root, "backups")
 		config.AppConfig.OpenLibraryDumpDir = filepath.Join(root, "openlibrary-dumps")
 	} else {
+		// Zero EVERY field appdirs.FromConfig reads, not just these two.
+		// backup.ResolveDir SYNTHESIZES "backups" when BackupDir is unset and
+		// anchors it to the database's own directory, so clearing BackupDir alone
+		// still produces a live absolute exclusion whenever DatabasePath is set --
+		// and sibling tests in this tree do set it. The assertion below is the real
+		// guarantee: it fails loudly if FromConfig ever grows a source field that
+		// nobody zeroed here, instead of letting this subtest quietly stop testing
+		// the empty case while still passing.
 		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
+		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
+		if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+			t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
+		}
 	}
 	t.Cleanup(func() {
 		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = prevBackup, prevDump
+		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = prevDB, prevPlaylist
 	})
 }
 

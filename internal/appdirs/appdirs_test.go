@@ -63,6 +63,26 @@ func TestFromConfig_UnanchorableRelativeIsDropped(t *testing.T) {
 	}
 }
 
+// An UNSET backup_dir is not the same as "no backup directory".
+//
+// backup.ResolveDir substitutes the literal default "backups" when the setting
+// is empty and then anchors it to the database's own directory, so a config
+// that never mentions backup_dir still yields a live absolute exclusion as
+// soon as database_path is set. This is correct -- it is where backups
+// actually land -- but it is surprising, and it is the reason a test cannot
+// establish an "empty AppDirs" precondition by zeroing BackupDir alone.
+// Tests that need a genuinely empty AppDirs must zero database_path too, and
+// should assert the resolved result rather than trust the inputs.
+func TestFromConfig_UnsetBackupDirStillResolvesFromDatabasePath(t *testing.T) {
+	got := FromConfig(&config.Config{DatabasePath: "/var/lib/abo/library.db"})
+	if want := filepath.Clean("/var/lib/abo/backups"); got.BackupDir != want {
+		t.Fatalf("BackupDir = %q, want %q -- an unset backup_dir still resolves against the database dir", got.BackupDir, want)
+	}
+	if got == (pathutil.AppDirs{}) {
+		t.Fatal("AppDirs is empty; zeroing BackupDir alone is NOT enough to make it empty")
+	}
+}
+
 // An unset setting must come back EMPTY, never as "." (filepath.Clean("")),
 // which would be a live prefix matching the entire library.
 func TestFromConfig_EmptySettingsStayEmpty(t *testing.T) {
