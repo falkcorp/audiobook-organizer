@@ -1,7 +1,7 @@
 // file: internal/backup/backup_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-23
+// last-edited: 2026-08-30
 
 package backup
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -692,141 +693,176 @@ func TestBackupTimestampFormat(t *testing.T) {
 	}
 }
 
+// The four tests below run inside a testing/synctest bubble.
+//
+// WHY: each one slept a real second (four of them, 8s total -- essentially the
+// whole package's runtime) for one reason only: CreateBackup names its archive
+// from time.Now().Format("20060102_150405") (backup.go:325), which is
+// second-resolution, so two backups created inside the same wall-clock second
+// collide on filename. Inside a bubble the clock is fake, so the same
+// time.Sleep advances it instantly and the names still differ.
+//
+// WHY THE BUBBLE IS SOUND HERE: CreateBackup does real file I/O (tar+gzip write,
+// SHA-256, os.Rename), but every one of those syscalls RETURNS. A bubble only
+// stalls when a goroutine parks somewhere it can only be woken from outside --
+// netpoll, a signal, an external process. Nothing here does that, and
+// tar/gzip leak no goroutines past CreateBackup, so the bubble drains cleanly.
+//
+// SEMANTIC NOTE (read before adding assertions): inside the bubble time.Now()
+// reports midnight UTC 2000-01-01, so BackupInfo.CreatedAt (backup.go:383) and
+// every archive filename carry year-2000 timestamps. None of these four tests
+// assert on a timestamp value or on real elapsed time, so nothing they check
+// changed. A test that DID assert "created within the last minute" would now be
+// asserting against a frozen fake epoch and must not be bubbled.
+//
+// SEPARATELY: ListBackups reports CreatedAt from info.ModTime() (backup.go:697),
+// i.e. the REAL filesystem mtime, which the fake clock does not touch;
+// enforceRetention sorts by it. TestCleanupOldBackups therefore relies on
+// distinct filenames (fake clock, deterministic) for its count assertion, not on
+// mtime ordering. Do not add an ordering assertion to a bubbled test here
+// without re-checking that.
+
 // TestMultipleBackups tests creating multiple backups
 func TestMultipleBackups(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
-	if err := os.WriteFile(dbPath, []byte("test"), 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		// Arrange
+		tempDir := t.TempDir()
+		dbPath := filepath.Join(tempDir, "test.db")
+		if err := os.WriteFile(dbPath, []byte("test"), 0644); err != nil {
+			t.Fatalf("Failed to create test database: %v", err)
+		}
 
-	config := BackupConfig{
-		BackupDir:        filepath.Join(tempDir, "backups"),
-		MaxBackups:       10,
-		CompressionLevel: 1,
-	}
+		config := BackupConfig{
+			BackupDir:        filepath.Join(tempDir, "backups"),
+			MaxBackups:       10,
+			CompressionLevel: 1,
+		}
 
-	// Act - Create multiple backups
-	info1, err1 := CreateBackup(dbPath, "test", config)
-	time.Sleep(1 * time.Second) // Ensure different timestamps (format is second-precision)
-	info2, err2 := CreateBackup(dbPath, "test", config)
+		// Act - Create multiple backups
+		info1, err1 := CreateBackup(dbPath, "test", config)
+		time.Sleep(1 * time.Second) // Ensure different timestamps (format is second-precision)
+		info2, err2 := CreateBackup(dbPath, "test", config)
 
-	// Assert
-	if err1 != nil {
-		t.Fatalf("First backup failed: %v", err1)
-	}
+		// Assert
+		if err1 != nil {
+			t.Fatalf("First backup failed: %v", err1)
+		}
 
-	if err2 != nil {
-		t.Fatalf("Second backup failed: %v", err2)
-	}
+		if err2 != nil {
+			t.Fatalf("Second backup failed: %v", err2)
+		}
 
-	if info1.Filename == info2.Filename {
-		t.Error("Expected different filenames for different backups")
-	}
+		if info1.Filename == info2.Filename {
+			t.Error("Expected different filenames for different backups")
+		}
 
-	// Verify both files exist
-	if _, err := os.Stat(info1.Path); os.IsNotExist(err) {
-		t.Error("First backup file does not exist")
-	}
+		// Verify both files exist
+		if _, err := os.Stat(info1.Path); os.IsNotExist(err) {
+			t.Error("First backup file does not exist")
+		}
 
-	if _, err := os.Stat(info2.Path); os.IsNotExist(err) {
-		t.Error("Second backup file does not exist")
-	}
+		if _, err := os.Stat(info2.Path); os.IsNotExist(err) {
+			t.Error("Second backup file does not exist")
+		}
+	})
 }
 
 // TestBackupChecksum tests checksum generation
 func TestBackupChecksum(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
-	testData := []byte("specific test data for checksum")
-	if err := os.WriteFile(dbPath, testData, 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		// Arrange
+		tempDir := t.TempDir()
+		dbPath := filepath.Join(tempDir, "test.db")
+		testData := []byte("specific test data for checksum")
+		if err := os.WriteFile(dbPath, testData, 0644); err != nil {
+			t.Fatalf("Failed to create test database: %v", err)
+		}
 
-	config := BackupConfig{
-		BackupDir:        filepath.Join(tempDir, "backups"),
-		MaxBackups:       10,
-		CompressionLevel: 1,
-	}
+		config := BackupConfig{
+			BackupDir:        filepath.Join(tempDir, "backups"),
+			MaxBackups:       10,
+			CompressionLevel: 1,
+		}
 
-	// Act - Create two backups of the same data
-	info1, err1 := CreateBackup(dbPath, "test", config)
-	if err1 != nil {
-		t.Fatalf("First backup failed: %v", err1)
-	}
+		// Act - Create two backups of the same data
+		info1, err1 := CreateBackup(dbPath, "test", config)
+		if err1 != nil {
+			t.Fatalf("First backup failed: %v", err1)
+		}
 
-	// Create another backup with different timestamp but same data
-	time.Sleep(1 * time.Second) // Ensure different timestamp (format is second-precision)
-	info2, err2 := CreateBackup(dbPath, "test", config)
-	if err2 != nil {
-		t.Fatalf("Second backup failed: %v", err2)
-	}
+		// Create another backup with different timestamp but same data
+		time.Sleep(1 * time.Second) // Ensure different timestamp (format is second-precision)
+		info2, err2 := CreateBackup(dbPath, "test", config)
+		if err2 != nil {
+			t.Fatalf("Second backup failed: %v", err2)
+		}
 
-	// Assert
-	// Note: Checksums will be different because timestamps differ
-	// Just verify that checksums exist and are valid hex strings
-	if len(info1.Checksum) != 64 {
-		t.Errorf("Expected checksum length 64 (SHA-256), got %d", len(info1.Checksum))
-	}
+		// Assert
+		// Note: Checksums will be different because timestamps differ
+		// Just verify that checksums exist and are valid hex strings
+		if len(info1.Checksum) != 64 {
+			t.Errorf("Expected checksum length 64 (SHA-256), got %d", len(info1.Checksum))
+		}
 
-	if len(info2.Checksum) != 64 {
-		t.Errorf("Expected checksum length 64 (SHA-256), got %d", len(info2.Checksum))
-	}
+		if len(info2.Checksum) != 64 {
+			t.Errorf("Expected checksum length 64 (SHA-256), got %d", len(info2.Checksum))
+		}
+	})
 }
 
 // TestListBackups tests listing available backups
 func TestListBackups(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	backupDir := filepath.Join(tempDir, "backups")
-	dbPath := filepath.Join(tempDir, "test.db")
-	if err := os.WriteFile(dbPath, []byte("test"), 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		// Arrange
+		tempDir := t.TempDir()
+		backupDir := filepath.Join(tempDir, "backups")
+		dbPath := filepath.Join(tempDir, "test.db")
+		if err := os.WriteFile(dbPath, []byte("test"), 0644); err != nil {
+			t.Fatalf("Failed to create test database: %v", err)
+		}
 
-	config := BackupConfig{
-		BackupDir:        backupDir,
-		MaxBackups:       10,
-		CompressionLevel: 1,
-	}
+		config := BackupConfig{
+			BackupDir:        backupDir,
+			MaxBackups:       10,
+			CompressionLevel: 1,
+		}
 
-	// Create 3 backups (with 1-second sleep to ensure different timestamps)
-	for i := 0; i < 3; i++ {
-		_, err := CreateBackup(dbPath, "pebble", config)
+		// Create 3 backups (with 1-second sleep to ensure different timestamps)
+		for i := 0; i < 3; i++ {
+			_, err := CreateBackup(dbPath, "pebble", config)
+			if err != nil {
+				t.Fatalf("Failed to create backup %d: %v", i, err)
+			}
+			if i < 2 { // Don't sleep after last backup
+				time.Sleep(1 * time.Second)
+			}
+		}
+
+		// Act
+		backups, err := ListBackups(backupDir)
+
+		// Assert
 		if err != nil {
-			t.Fatalf("Failed to create backup %d: %v", i, err)
+			t.Fatalf("ListBackups failed: %v", err)
 		}
-		if i < 2 { // Don't sleep after last backup
-			time.Sleep(1 * time.Second)
-		}
-	}
 
-	// Act
-	backups, err := ListBackups(backupDir)
-
-	// Assert
-	if err != nil {
-		t.Fatalf("ListBackups failed: %v", err)
-	}
-
-	if len(backups) != 3 {
-		t.Errorf("Expected 3 backups, got %d", len(backups))
-	}
-
-	// Verify all backups have proper info
-	for i, backup := range backups {
-		if backup.Filename == "" {
-			t.Errorf("Backup %d has empty filename", i)
+		if len(backups) != 3 {
+			t.Errorf("Expected 3 backups, got %d", len(backups))
 		}
-		if backup.Size <= 0 {
-			t.Errorf("Backup %d has invalid size: %d", i, backup.Size)
+
+		// Verify all backups have proper info
+		for i, backup := range backups {
+			if backup.Filename == "" {
+				t.Errorf("Backup %d has empty filename", i)
+			}
+			if backup.Size <= 0 {
+				t.Errorf("Backup %d has invalid size: %d", i, backup.Size)
+			}
+			if backup.DatabaseType != "pebble" {
+				t.Errorf("Backup %d has wrong type: %s", i, backup.DatabaseType)
+			}
 		}
-		if backup.DatabaseType != "pebble" {
-			t.Errorf("Backup %d has wrong type: %s", i, backup.DatabaseType)
-		}
-	}
+	})
 }
 
 // TestListBackupsEmptyDirectory tests listing from non-existent directory
@@ -891,43 +927,45 @@ func TestDeleteBackup(t *testing.T) {
 
 // TestCleanupOldBackups tests automatic cleanup of old backups
 func TestCleanupOldBackups(t *testing.T) {
-	// Arrange
-	tempDir := t.TempDir()
-	backupDir := filepath.Join(tempDir, "backups")
-	dbPath := filepath.Join(tempDir, "test.db")
-	if err := os.WriteFile(dbPath, []byte("test"), 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		// Arrange
+		tempDir := t.TempDir()
+		backupDir := filepath.Join(tempDir, "backups")
+		dbPath := filepath.Join(tempDir, "test.db")
+		if err := os.WriteFile(dbPath, []byte("test"), 0644); err != nil {
+			t.Fatalf("Failed to create test database: %v", err)
+		}
 
-	config := BackupConfig{
-		BackupDir:        backupDir,
-		MaxBackups:       3, // Keep only 3 backups
-		CompressionLevel: 1,
-	}
+		config := BackupConfig{
+			BackupDir:        backupDir,
+			MaxBackups:       3, // Keep only 3 backups
+			CompressionLevel: 1,
+		}
 
-	// Create 5 backups (cleanup happens automatically after each, keeping only MaxBackups=3)
-	for i := 0; i < 5; i++ {
-		_, err := CreateBackup(dbPath, "test", config)
+		// Create 5 backups (cleanup happens automatically after each, keeping only MaxBackups=3)
+		for i := 0; i < 5; i++ {
+			_, err := CreateBackup(dbPath, "test", config)
+			if err != nil {
+				t.Fatalf("Failed to create backup %d: %v", i, err)
+			}
+			if i < 4 { // Don't sleep after last backup
+				time.Sleep(1 * time.Second) // Ensure different timestamps (format is second-precision)
+			}
+		}
+
+		// Act - List backups after cleanup
+		backups, err := ListBackups(backupDir)
+
+		// Assert
 		if err != nil {
-			t.Fatalf("Failed to create backup %d: %v", i, err)
+			t.Fatalf("ListBackups failed: %v", err)
 		}
-		if i < 4 { // Don't sleep after last backup
-			time.Sleep(1 * time.Second) // Ensure different timestamps (format is second-precision)
+
+		// Should have only 3 backups (oldest 2 should be deleted)
+		if len(backups) != 3 {
+			t.Errorf("Expected 3 backups after cleanup, got %d", len(backups))
 		}
-	}
-
-	// Act - List backups after cleanup
-	backups, err := ListBackups(backupDir)
-
-	// Assert
-	if err != nil {
-		t.Fatalf("ListBackups failed: %v", err)
-	}
-
-	// Should have only 3 backups (oldest 2 should be deleted)
-	if len(backups) != 3 {
-		t.Errorf("Expected 3 backups after cleanup, got %d", len(backups))
-	}
+	})
 }
 
 // TestRestoreBackup tests backup restoration

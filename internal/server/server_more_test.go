@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-08-21
+// last-edited: 2026-08-30
 
 //go:build !windows
 
@@ -310,6 +310,36 @@ func TestAddImportPathFallbackScan(t *testing.T) {
 // WARNING: This test sends SIGTERM to the entire test binary process (not a subprocess).
 // Do not add t.Parallel() to this test OR to any other test in package server.
 // See the warning comment on the syscall.Kill call below for the full rationale.
+//
+// DO NOT WRAP THIS TEST IN A testing/synctest BUBBLE. The 6s sleep and the 60s
+// budget below look like the ideal synctest target -- they are not, and the
+// failure mode is a HANG, not a compile error. Two independent mechanisms were
+// measured against go1.26.0 on 2026-08-30, each fatal on its own:
+//
+//  1. signal.Notify DEADLOCKS A BUBBLE IMMEDIATELY. Start (server_lifecycle.go:457)
+//     does `quit := make(chan os.Signal, 1); signal.Notify(quit, ...)`. Notify's
+//     own enable path blocks on runtime sigqueue, which nothing inside the bubble
+//     can service, so the runtime aborts with
+//     "panic: deadlock: all goroutines in bubble are blocked" at the Notify call
+//     -- before the SIGTERM is ever sent. A bubble does not sandbox a
+//     process-wide signal; it cannot even subscribe to one.
+//
+//  2. A REAL LISTENER FREEZES THE FAKE CLOCK. Start reaches
+//     httpServer.ListenAndServe (server_lifecycle.go:1106), leaving an accept
+//     goroutine parked in netpoll. Per testing/synctest's own rules, "blocking on
+//     I/O, such as reading from a network socket" is NOT durably blocking, so the
+//     bubble never becomes idle, fake time never advances, and time.Sleep never
+//     returns. Measured stack: `goroutine [sleep (durable), synctest bubble 1]`
+//     alongside `goroutine [IO wait, synctest bubble 1]`, test killed by timeout.
+//
+// Converting only the shutdown-path waits does not help either: those waits are
+// exactly what mechanism 2 freezes. Leave this test on the real clock.
+//
+// The t.Parallel() prohibition is therefore UNCHANGED by synctest -- see (1),
+// a bubble cannot contain a process-wide signal. Lifting it needs a different
+// mechanism (re-exec the test binary as a subprocess behind an env guard so the
+// SIGTERM is contained, or drive the shutdown path directly instead of through a
+// real signal), which is filed as follow-up work, not done here.
 func TestServerStartGracefulShutdown(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()

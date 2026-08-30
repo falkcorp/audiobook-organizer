@@ -1,6 +1,7 @@
 // file: internal/itunes/service/transfer_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
+// last-edited: 2026-08-30
 
 package itunesservice
 
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -233,35 +235,46 @@ func TestBackupITLFile_TimestampFormat(t *testing.T) {
 
 // TestBackupITLFile_MultipleBackups verifies that calling backupITLFile twice
 // creates two distinct backup files (different timestamps at second resolution).
-// This test sleeps 1 second to guarantee distinct names.
+// Runs inside a testing/synctest bubble: backupITLFile derives its suffix from
+// time.Now(), so advancing the bubble's FAKE clock by 1.1s is enough to produce
+// a distinct second-resolution name at zero wall-clock cost (~1.1s -> ~0s).
+//
+// SEMANTIC NOTE: the bubble clock starts at midnight UTC 2000-01-01, so the two
+// backups here are named .bak-20000101T000000Z and .bak-20000101T000001Z rather
+// than with today's date. This test asserts only on the COUNT of backup files,
+// never on their timestamp values, so the fake clock changes nothing it checks.
+// The sibling TestBackupITLFile does assert a real-time range and is therefore
+// deliberately NOT bubbled.
 func TestBackupITLFile_MultipleBackups(t *testing.T) {
-	dir := t.TempDir()
-	itlPath := filepath.Join(dir, "iTunes Library.itl")
-	if err := os.WriteFile(itlPath, []byte("itl"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	if err := backupITLFile(itlPath); err != nil {
-		t.Fatalf("first backupITLFile: %v", err)
-	}
-	time.Sleep(1100 * time.Millisecond) // ensure distinct second-level timestamp
-	if err := backupITLFile(itlPath); err != nil {
-		t.Fatalf("second backupITLFile: %v", err)
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("readdir: %v", err)
-	}
-	var bakCount int
-	for _, e := range entries {
-		if e.Name() != filepath.Base(itlPath) {
-			bakCount++
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		itlPath := filepath.Join(dir, "iTunes Library.itl")
+		if err := os.WriteFile(itlPath, []byte("itl"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
 		}
-	}
-	if bakCount != 2 {
-		t.Errorf("expected 2 backup files, got %d", bakCount)
-	}
+
+		if err := backupITLFile(itlPath); err != nil {
+			t.Fatalf("first backupITLFile: %v", err)
+		}
+		time.Sleep(1100 * time.Millisecond) // ensure distinct second-level timestamp
+		if err := backupITLFile(itlPath); err != nil {
+			t.Fatalf("second backupITLFile: %v", err)
+		}
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("readdir: %v", err)
+		}
+		var bakCount int
+		for _, e := range entries {
+			if e.Name() != filepath.Base(itlPath) {
+				bakCount++
+			}
+		}
+		if bakCount != 2 {
+			t.Errorf("expected 2 backup files, got %d", bakCount)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

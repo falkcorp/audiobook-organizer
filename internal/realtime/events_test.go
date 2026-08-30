@@ -1,6 +1,7 @@
 // file: internal/realtime/events_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
+// last-edited: 2026-08-30
 
 package realtime
 
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -639,42 +641,63 @@ func TestHandleSSE_EventDelivery(t *testing.T) {
 	}
 }
 
-// TestHandleSSE_Heartbeat tests heartbeat functionality
+// TestHandleSSE_Heartbeat tests heartbeat functionality.
+//
+// Runs inside a testing/synctest bubble. HandleSSE's 25s heartbeat ticker, the
+// request context's timeout and this test's own wait are all created inside the
+// bubble, so the fake clock advances them the instant every bubbled goroutine is
+// durably blocked. The wall-clock cost drops from ~26s to ~0.
+//
+// The bubble is sound here because nothing in the exercised path touches the
+// outside world: the hub is in-memory, the ResponseWriter is an
+// httptest.NewRecorder backed by a bytes.Buffer, and there is no listener,
+// socket, subprocess or signal handler. Contrast TestServerStartGracefulShutdown
+// in package server, which cannot be bubbled for exactly those reasons.
+//
+// The former testing.Short() skip is gone deliberately: it existed only because
+// the test cost 26 wall-clock seconds. It now runs in short mode too, so `make
+// ci` covers the heartbeat path for the first time.
+//
+// SEMANTIC NOTE: time.Now() inside the bubble reports midnight UTC 2000-01-01,
+// so Event.Timestamp values produced here are fake. This test asserts only on
+// the ": ping" comment frame, never on a timestamp, so the fake clock changes
+// nothing it checks.
 func TestHandleSSE_Heartbeat(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping heartbeat test in short mode")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		hub := NewEventHub()
 
-	gin.SetMode(gin.TestMode)
-	hub := NewEventHub()
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/events", nil)
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/events", nil)
+		// Longer than the 25s ticker so the heartbeat is reachable.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
 
-	// Use longer timeout to allow heartbeat to fire (25s ticker + buffer)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	c.Request = c.Request.WithContext(ctx)
+		// Run HandleSSE in goroutine
+		done := make(chan bool)
+		go func() {
+			hub.HandleSSE(c)
+			done <- true
+		}()
 
-	// Run HandleSSE in goroutine
-	done := make(chan bool)
-	go func() {
-		hub.HandleSSE(c)
-		done <- true
-	}()
+		// Advance the fake clock past the 25s heartbeat tick, then wait for the
+		// handler goroutine to become durably blocked again so the ": ping"
+		// write is guaranteed to have landed before we cancel.
+		time.Sleep(26 * time.Second)
+		synctest.Wait()
 
-	// Wait for heartbeat (25s + buffer)
-	time.Sleep(26 * time.Second)
+		cancel() // Cancel to stop the handler
+		<-done
 
-	cancel() // Cancel to stop the handler
-	<-done
-
-	// Check response body contains SSE comment heartbeat (": ping")
-	body := w.Body.String()
-	if !strings.Contains(body, ": ping") {
-		t.Errorf("Expected SSE comment heartbeat (': ping') in response body, got: %q", body)
-	}
+		// Check response body contains SSE comment heartbeat (": ping")
+		body := w.Body.String()
+		if !strings.Contains(body, ": ping") {
+			t.Errorf("Expected SSE comment heartbeat (': ping') in response body, got: %q", body)
+		}
+	})
 }
 
 // TestHandleSSE_JSONMarshalError tests handling of marshal errors
