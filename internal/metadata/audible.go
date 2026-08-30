@@ -1,7 +1,7 @@
 // file: internal/metadata/audible.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-08-20
+// last-edited: 2026-08-30
 
 package metadata
 
@@ -181,7 +181,7 @@ func (c *AudibleClient) LookupByASIN(asin string) (*BookMetadata, error) {
 	}
 
 	var result audibleProductResponse
-	if err := json.UnmarshalRead(resp.Body, &result, json.DiscardUnknownMembers(true)); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("failed to decode Audible response: %w", err)
 	}
 
@@ -215,7 +215,7 @@ func (c *AudibleClient) searchCatalog(ctx context.Context, searchURL string) ([]
 		return nil, fmt.Errorf("failed to read Audible response: %w", err)
 	}
 	var catalog audibleCatalogResponse
-	if err := json.Unmarshal(body, &catalog, json.DiscardUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(body, &catalog); err != nil {
 		return nil, fmt.Errorf("failed to decode Audible response: %w", err)
 	}
 
