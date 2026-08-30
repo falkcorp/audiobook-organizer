@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_pushdown_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2e9eb1e1-29af-4a5d-8cd9-2be21b5aad0c
 // last-edited: 2026-08-30
 
@@ -506,6 +506,11 @@ func TestIndexPushdownUndecodableRowInPageIsCountedAndCorrected(t *testing.T) {
 	assert.Equal(t, int64(1), s.DecodeFailures()-beforeFailures,
 		"the drop must be counted, not silent")
 
+	// Order matters below this line: assertPathsAgree runs BOTH implementations
+	// over the same corrupt row, so it adds two more decode failures to the
+	// store's counters. The DecodeFailures assertion above must stay ahead of
+	// it — moving it after would silently change what that assertion measures
+	// from "the pushdown counted one drop" to "three drops accumulated".
 	assertPathsAgree(t, s, prefix, ActivityFilter{OperationID: opID, Limit: 5})
 }
 
