@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-23
+// last-edited: 2026-08-30
 
 package config
 
@@ -522,7 +522,11 @@ func TestInitConfig_EmbeddingDefaults(t *testing.T) {
 	assert.Equal(t, "text-embedding-3-large", snap.Embedding.Model)
 	assert.Equal(t, 3072, snap.Embedding.Dimensions)
 	assert.Equal(t, "", snap.Embedding.BaseURL)
-	assert.Equal(t, "chromem", snap.Embedding.VectorBackend)
+	// Was "chromem" until 2026-08-30. That assertion encoded the bug: chromem is
+	// a brute-force cosine scan (210x slower than HNSW at 50K vectors, measured),
+	// so the shipped default silently cost ~1.9 CPU-hours per dedup.full-scan on
+	// a ~61K-book library. Deliberately changed, not quietly edited.
+	assert.Equal(t, "hnsw", snap.Embedding.VectorBackend)
 }
 
 func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
@@ -530,7 +534,10 @@ func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
 	t.Setenv("EMBEDDING_BASE_URL", "http://localhost:11434/v1")
 	t.Setenv("EMBEDDING_MODEL", "bge-m3")
 	t.Setenv("EMBEDDING_DIMENSIONS", "1024")
-	t.Setenv("VECTOR_INDEX_BACKEND", "hnsw")
+	// Deliberately "chromem", not "hnsw": hnsw is now the default, so asserting
+	// hnsw here would pass whether or not the env binding still works. The
+	// non-default value is the only one that proves VECTOR_INDEX_BACKEND is live.
+	t.Setenv("VECTOR_INDEX_BACKEND", "chromem")
 	viper.Reset()
 	InitConfig()
 	snap := Snapshot()
@@ -539,7 +546,7 @@ func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
 	assert.Equal(t, "http://localhost:11434/v1", snap.Embedding.BaseURL)
 	assert.Equal(t, "bge-m3", snap.Embedding.Model)
 	assert.Equal(t, 1024, snap.Embedding.Dimensions)
-	assert.Equal(t, "hnsw", snap.Embedding.VectorBackend)
+	assert.Equal(t, "chromem", snap.Embedding.VectorBackend)
 }
 
 // TestInitConfig_AIBackendLocalBaseURLDefaultsEmpty locks the fresh-install
