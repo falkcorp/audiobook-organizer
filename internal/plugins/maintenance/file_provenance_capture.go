@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
-// last-edited: 2026-08-21
+// last-edited: 2026-08-30
 
 package maintenance
 
@@ -14,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -167,6 +169,7 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 	}
 
 	result := fileProvCaptureResult{Apply: params.Apply, Roots: params.Roots}
+	app := appdirs.Current()
 
 	for _, root := range params.Roots {
 		if err := ctx.Err(); err != nil {
@@ -181,6 +184,20 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 				return nil // a single unreadable dir must not abort the sweep
 			}
 			if d.IsDir() {
+				// Roots are operator-supplied, but that does not make what is
+				// found BELOW one operator-supplied. This op HASHES every
+				// matching file it walks, which is the named harm: pointed at
+				// the library root it would hash multi-GB backup archives.
+				//
+				// ShouldSkipDir is still the right call for a caller-chosen
+				// root: it exempts the root itself and any app dir CONTAINING
+				// it, so deliberately capturing provenance for files under
+				// `<root_dir>/openlibrary-dumps` still works when that
+				// directory is named as the root. Only app dirs found inside a
+				// wider tree are skipped.
+				if pathutil.ShouldSkipDir(root, path, app) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			if _, ok := extSet[strings.ToLower(filepath.Ext(path))]; !ok {

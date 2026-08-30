@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 package maintenance
 
@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -237,11 +239,23 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 	removed := 0
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays))
 
+	// Identical predicate, identical hazard as scheduler.cleanup-old-backups
+	// (internal/scheduler/extra_ops.go) -- see the note in the PR: this rule
+	// exists in three places with two different predicates. The library root
+	// holds a multi-GB backup directory and an OpenLibrary dump directory,
+	// both operator-settable to dot-free names, and this op DELETES.
+	app := appdirs.Current()
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err != nil || info.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if pathutil.ShouldSkipDir(rootDir, path, app) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if strings.Contains(info.Name(), ".bak-") {

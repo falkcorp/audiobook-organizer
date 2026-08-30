@@ -1,10 +1,11 @@
 // file: internal/sweep/temp_cleanup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3b2a1f0-9087-6543-2109-fedcba987654
 
 package sweep
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,7 +36,7 @@ func TestCleanupOrphanedTempFiles_RemovesTempFiles(t *testing.T) {
 		t.Fatalf("write good file: %v", err)
 	}
 
-	removed := CleanupOrphanedTempFiles(tmpDir, nil, "")
+	removed := CleanupOrphanedTempFiles(tmpDir, pathutil.AppDirs{}, nil, "")
 	if removed != len(tempFiles) {
 		t.Errorf("expected %d files removed, got %d", len(tempFiles), removed)
 	}
@@ -56,7 +57,7 @@ func TestCleanupOrphanedTempFiles_RemovesTempFiles(t *testing.T) {
 
 func TestCleanupOrphanedTempFiles_HandlesEmptyDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	removed := CleanupOrphanedTempFiles(tmpDir, nil, "")
+	removed := CleanupOrphanedTempFiles(tmpDir, pathutil.AppDirs{}, nil, "")
 	if removed != 0 {
 		t.Errorf("expected 0 removed from empty dir, got %d", removed)
 	}

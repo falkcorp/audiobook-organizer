@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-08-19
+// last-edited: 2026-08-30
 
 package reconcile
 
@@ -19,11 +19,13 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"howett.net/plist"
@@ -155,7 +157,18 @@ func TranslateITunesPath(location string, mappings []config.ITunesPathMap) strin
 }
 
 // BuildFileIndex walks dirs in parallel and returns filename → []absolutepath.
-func BuildFileIndex(dirs []string, extSet map[string]bool) map[string][]string {
+//
+// `app` names the application-owned directories that must not be indexed, and
+// is a REQUIRED parameter for the reason pathutil.AppDirs documents. dirs[0]
+// is the library root, inside which the application keeps a backup directory
+// and an OpenLibrary dump directory; a file indexed from either becomes a
+// candidate destination for HEALING an iTunes track's path, which would point
+// the library at application state.
+//
+// The exported signature takes a resolved value rather than calling
+// appdirs.Current() internally so the guard is testable without mutating
+// process-wide config.
+func BuildFileIndex(dirs []string, extSet map[string]bool, app pathutil.AppDirs) map[string][]string {
 	var mu sync.Mutex
 	index := make(map[string][]string, 200_000)
 
@@ -166,7 +179,13 @@ func BuildFileIndex(dirs []string, extSet map[string]bool) map[string][]string {
 		go func() {
 			defer wg.Done()
 			_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-				if err != nil || info.IsDir() {
+				if err != nil {
+					return nil
+				}
+				if info.IsDir() {
+					if pathutil.ShouldSkipDir(dir, path, app) {
+						return filepath.SkipDir
+					}
 					return nil
 				}
 				if !extSet[strings.ToLower(filepath.Ext(path))] {
@@ -752,7 +771,13 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 		}
 	}
 	log.Info("itunes-heal: building file index", "dirs", len(indexDirs))
-	fileIndex := BuildFileIndex(indexDirs, extSet)
+	// NOTE: skipDirs above is a hand-rolled inventory of sibling directories
+	// (bkup/, logs/, playlists/, snapshot-list-v1/) under booksRoot. It is
+	// deliberately left alone here -- those are siblings of the library root,
+	// not children of it, and are outside what AppDirs describes. The AppDirs
+	// guard covers what is found INSIDE indexDirs[0] (the library root), which
+	// that inventory never addressed at all.
+	fileIndex := BuildFileIndex(indexDirs, extSet, appdirs.Current())
 	log.Info("itunes-heal: file index built", "unique_filenames", len(fileIndex))
 
 	startIdx := 0

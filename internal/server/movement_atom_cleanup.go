@@ -1,7 +1,7 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-07-17
+// last-edited: 2026-08-30
 
 package server
 
@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	taglib "go.senan.xyz/taglib"
 )
@@ -49,6 +51,7 @@ func (s *Server) stripMovementAtoms(ctx context.Context) {
 
 	// Build safe-write deps from server state so protected paths are guarded.
 	deps := s.safeWriteDeps()
+	app := appdirs.Current()
 
 	slog.Info("Starting movement atom cleanup under …", "root", root)
 	stripped, clean, failed, walkErrs := 0, 0, 0, 0
@@ -69,6 +72,13 @@ func (s *Server) stripMovementAtoms(ctx context.Context) {
 			return nil
 		}
 		if d.IsDir() {
+			// This pass REWRITES tag atoms in place on every .m4b/.m4a it
+			// accepts. The library root contains the application's backup
+			// directory and OpenLibrary dump directory, neither dot-named by
+			// default; an .m4b archived into a backup tree would be edited.
+			if pathutil.ShouldSkipDir(root, path, app) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))

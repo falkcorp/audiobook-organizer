@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-08-19
+// last-edited: 2026-08-30
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -27,8 +27,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -550,11 +552,25 @@ func (r *ExtraOpsRegistrar) RegisterCleanupOldBackupsOp(reg *opsregistry.Registr
 			removed := 0
 			_ = progress.Log("info", fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays), nil)
 
+			// The library root holds application state as well as books: a
+			// backup directory of multi-GB archives and an OpenLibrary dump
+			// directory with an embedded database. Both are operator-settable
+			// to names with no leading dot, so the dot rule alone never
+			// covered them. This op DELETES by filename, so descending into
+			// them is not merely wasted I/O over ~90 GB -- an operator file
+			// named "*.bak-*" parked in the backup directory would be removed.
+			app := appdirs.Current()
 			err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				if err != nil || info.IsDir() {
+				if err != nil {
+					return nil
+				}
+				if info.IsDir() {
+					if pathutil.ShouldSkipDir(rootDir, path, app) {
+						return filepath.SkipDir
+					}
 					return nil
 				}
 				if strings.Contains(info.Name(), ".bak-") {
@@ -631,7 +647,7 @@ func (r *ExtraOpsRegistrar) RegisterTempFileCleanupOp(reg *opsregistry.Registry)
 			}
 			progress := extraOpsProgressAdapter{r: reporter}
 			actID := activityOpID(reporter, p)
-			removed := sweep.CleanupOrphanedTempFiles(config.AppConfig.RootDir, r.Deps.ActivityWriter, actID)
+			removed := sweep.CleanupOrphanedTempFiles(config.AppConfig.RootDir, appdirs.Current(), r.Deps.ActivityWriter, actID)
 			activity.FlushOperation(r.Deps.ActivityWriter, actID)
 			msg := fmt.Sprintf("Removed %d orphaned temp files", removed)
 			_ = progress.Log("info", msg, nil)

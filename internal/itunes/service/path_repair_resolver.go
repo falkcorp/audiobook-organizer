@@ -1,5 +1,5 @@
 // file: internal/itunes/service/path_repair_resolver.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d4f25a1-8e29-4b8b-9a02-3c5e1f9d4b27
 //
 // Pure-function resolvers for the path-repair operation. Each tier
@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"sync"
 	"sync/atomic"
 
@@ -56,6 +58,7 @@ type scanProgressFn func(done, total int)
 // the in-memory state.
 type fsTagScanner struct {
 	root       string
+	app        pathutil.AppDirs
 	extract    bookIDExtractor
 	workers    int            // 0 → runtime.NumCPU() * 4 (tag reads are I/O-bound)
 	progress   scanProgressFn // optional; nil means silent
@@ -66,8 +69,17 @@ type fsTagScanner struct {
 	all   []string
 }
 
-func newFSTagScanner(root string, extract bookIDExtractor) *fsTagScanner {
-	return &fsTagScanner{root: root, extract: extract}
+// newFSTagScanner builds a scanner over `root`.
+//
+// `app` names the application-owned directories under root that must not be
+// scanned, and is REQUIRED for the reason pathutil.AppDirs documents. root is
+// cfg.AudiobookRoot, which is wired from config RootDir -- the library root,
+// inside which the application keeps a backup directory and an OpenLibrary
+// dump directory. Phase 2 below reads TAGS from every file phase 1 enumerates,
+// so an unexcluded app dir costs tag I/O over tens of GB and can put
+// application state into the bookID→paths index used to REPAIR track paths.
+func newFSTagScanner(root string, app pathutil.AppDirs, extract bookIDExtractor) *fsTagScanner {
+	return &fsTagScanner{root: root, app: app, extract: extract}
 }
 
 // withWorkers overrides the default worker count. Useful for tests
@@ -105,7 +117,13 @@ func (s *fsTagScanner) scan() {
 	// be sequential because filepath.WalkDir doesn't parallelize.
 	var paths []string
 	_ = filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() {
+		if err != nil || d == nil {
+			return nil
+		}
+		if d.IsDir() {
+			if pathutil.ShouldSkipDir(s.root, path, s.app) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))

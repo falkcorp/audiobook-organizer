@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_empty_folders.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1000006-0000-0000-0000-000000000006
-// last-edited: 2026-08-23
+// last-edited: 2026-08-30
 
 package jobs
 
@@ -15,7 +15,9 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 func init() { maintenance.Register(&cleanupEmptyFoldersJob{}) }
@@ -44,10 +46,22 @@ func (j *cleanupEmptyFoldersJob) Run(ctx context.Context, _ maintenance.JobStore
 
 	// Collect all directories with a top-down walk, then sort deepest first
 	// so children are processed before their parents.
+	// THIS IS THE HIGHEST-RISK WALKER OF THE SET, because it deletes by
+	// EMPTINESS rather than by name. Every other cleanup job in this package
+	// is protected from the application's own directories by the coincidence
+	// that its filename predicate happens not to match an archive; this one
+	// has no filename predicate at all. Any empty directory found inside the
+	// backup directory or the OpenLibrary dump directory -- a staging dir
+	// between two archive writes, a dump directory not yet populated -- is
+	// removed today, and neither has a leading dot to hide behind.
+	app := appdirs.Current()
 	var dirs []string
 	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || !d.IsDir() || path == root {
 			return nil
+		}
+		if pathutil.ShouldSkipDir(root, path, app) {
+			return filepath.SkipDir
 		}
 		dirs = append(dirs, path)
 		return nil
