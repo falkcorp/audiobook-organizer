@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-08-29
 
@@ -88,7 +88,20 @@ type BackupConfig struct {
 	// the same filesystem, and the process died and was restarted by systemd
 	// every ~17 minutes for hours. A count bound cannot express "do not consume
 	// the disk" when the thing being counted grows 60x.
-	MaxTotalBytes    uint64
+	MaxTotalBytes uint64
+
+	// Compression selects the archive format: "gzip", "zstd" or "none".
+	//
+	// Empty means gzip. That is load-bearing, not laziness: config is persisted
+	// as a full-struct marshal with no `omitempty`, so this field arrives as ""
+	// in every config blob written before it existed, and every archive written
+	// before it existed is gzip. Both have to keep meaning gzip.
+	Compression string
+
+	// CompressionLevel is interpreted by the selected codec. Zero means "codec
+	// default" -- it does NOT mean gzip.NoCompression. See LevelDefault for why
+	// that distinction is the difference between a working upgrade and silently
+	// writing uncompressed 15 GB archives.
 	CompressionLevel int
 	// Progress is optional. See BackupProgress.
 	Progress BackupProgress
@@ -130,6 +143,7 @@ func DefaultBackupConfig() BackupConfig {
 		BackupDir:        "backups",
 		MaxBackups:       10,
 		MaxTotalBytes:    defaultMaxTotalBytes,
+		Compression:      CompressionGzip,
 		CompressionLevel: gzip.BestCompression,
 	}
 }
@@ -286,9 +300,18 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 		return nil, err
 	}
 
+	// Resolve the codec BEFORE creating the file. An unknown compression name
+	// is a configuration error, and failing here leaves nothing behind; failing
+	// after os.Create would leave a zero-byte archive that ListBackups would
+	// then report as a real backup.
+	codec, err := ResolveCodec(config.Compression)
+	if err != nil {
+		return nil, err
+	}
+
 	// Generate backup filename with timestamp
 	timestamp := time.Now().Format("20060102_150405")
-	backupFilename := fmt.Sprintf("audiobooks_%s_%s.tar.gz", databaseType, timestamp)
+	backupFilename := fmt.Sprintf("audiobooks_%s_%s%s", databaseType, timestamp, codec.Extension())
 	backupPath := filepath.Join(config.BackupDir, backupFilename)
 
 	// Create backup file
@@ -298,15 +321,16 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	}
 	defer backupFile.Close()
 
-	// Create gzip writer
-	gzipWriter, err := gzip.NewWriterLevel(backupFile, config.CompressionLevel)
+	// Create the compression writer
+	compWriter, err := codec.NewWriter(backupFile, config.CompressionLevel)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
+		os.Remove(backupPath)
+		return nil, fmt.Errorf("failed to create %s writer: %w", codec.Name(), err)
 	}
-	defer gzipWriter.Close()
+	defer compWriter.Close()
 
 	// Create tar writer
-	tarWriter := tar.NewWriter(gzipWriter)
+	tarWriter := tar.NewWriter(compWriter)
 	defer tarWriter.Close()
 
 	// Add database files to archive
@@ -319,8 +343,8 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	if err := tarWriter.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close tar writer: %w", err)
 	}
-	if err := gzipWriter.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	if err := compWriter.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close %s writer: %w", codec.Name(), err)
 	}
 	if err := backupFile.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close backup file: %w", err)
@@ -462,15 +486,22 @@ func RestoreBackup(backupPath, targetPath string, verify bool) error {
 	}
 	defer backupFile.Close()
 
-	// Create gzip reader
-	gzipReader, err := gzip.NewReader(backupFile)
+	// Pick the decompressor from the archive's own magic bytes rather than from
+	// configuration or from the filename. The setting in force today says
+	// nothing about how an archive taken months ago was written, and restore is
+	// exactly the moment that mismatch would surface.
+	codec, err := SniffCodec(backupFile)
 	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %w", err)
+		return err
 	}
-	defer gzipReader.Close()
+	compReader, err := codec.NewReader(backupFile)
+	if err != nil {
+		return fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
+	}
+	defer compReader.Close()
 
 	// Create tar reader
-	tarReader := tar.NewReader(gzipReader)
+	tarReader := tar.NewReader(compReader)
 
 	// Extract files
 	for {
@@ -579,7 +610,17 @@ func listBackups(backupDir string, withChecksums bool) ([]BackupInfo, error) {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tar.gz") {
+		// Every supported extension, not just the one currently configured.
+		//
+		// This single predicate is what listing, RETENTION (enforceRetention
+		// calls ListBackups) and the organizer's freshness check all share. If
+		// it recognised only .tar.gz, switching the setting to zstd would make
+		// every new archive invisible to retention -- so nothing would ever be
+		// pruned and the archives would grow without bound. That is the exact
+		// shape of the 2026-08-29 outage, where archives filled the filesystem
+		// the live database writes its WAL to and the process died in a restart
+		// loop for hours. A format switch must never disarm retention.
+		if entry.IsDir() || !hasArchiveExtension(entry.Name()) {
 			continue
 		}
 

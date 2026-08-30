@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-29
 
@@ -700,6 +700,22 @@ type Config struct {
 	// single archive.
 	BackupMaxTotalBytes int64 `json:"backup_max_total_bytes" mapstructure:"backup_max_total_bytes"`
 
+	// BackupCompression selects the archive format: "gzip", "zstd" or "none".
+	//
+	// Empty means gzip, which is both the historical format and the value this
+	// field deserializes to in every config blob written before it existed.
+	// Config is persisted as a full-struct marshal with no `omitempty`, so a
+	// zero value that meant "off" would arm itself silently on upgrade -- the
+	// failure mode that disabled chapter consolidation for 12,525 books. It is
+	// validated at read time so a typo is a startup error rather than a backup
+	// that fails hours later at 3am.
+	BackupCompression string `json:"backup_compression" mapstructure:"backup_compression"`
+
+	// BackupCompressionLevel is interpreted by the selected codec; 0 means that
+	// codec's default. It does NOT mean gzip.NoCompression -- see
+	// backup.LevelDefault.
+	BackupCompressionLevel int `json:"backup_compression_level" mapstructure:"backup_compression_level"`
+
 	// Storage quotas
 	EnableDiskQuota    bool `json:"enable_disk_quota"`
 	DiskQuotaPercent   int  `json:"disk_quota_percent"`
@@ -1326,6 +1342,10 @@ func InitConfig() {
 	viper.SetDefault("folder_naming_pattern", DefaultFolderNamingPattern)
 	viper.SetDefault("file_naming_pattern", DefaultFileNamingPattern)
 	viper.SetDefault("create_backups", true)
+	// gzip, not zstd: this default also applies to every existing install on
+	// upgrade, and changing the archive format underneath someone silently is
+	// not a default's job. zstd is opt-in.
+	viper.SetDefault("backup_compression", "gzip")
 
 	// Set storage quota defaults
 	viper.SetDefault("enable_disk_quota", false)
@@ -1792,6 +1812,8 @@ func InitConfig() {
 			CreateBackups:           viper.GetBool("create_backups"),
 			BackupDir:               viper.GetString("backup_dir"),
 			BackupMaxTotalBytes:     viper.GetInt64("backup_max_total_bytes"),
+			BackupCompression:       viper.GetString("backup_compression"),
+			BackupCompressionLevel:  viper.GetInt("backup_compression_level"),
 
 			// Storage quotas
 			EnableDiskQuota:    viper.GetBool("enable_disk_quota"),

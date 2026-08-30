@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-08-29
 
@@ -525,6 +525,8 @@ func (h *Handler) CreateBackup(c *gin.Context) {
 		backupConfig.MaxBackups = *req.MaxBackups
 	}
 	backupConfig.MaxTotalBytes = backup.ResolveMaxTotalBytes(config.AppConfig.BackupMaxTotalBytes)
+	backupConfig.Compression = config.AppConfig.BackupCompression
+	backupConfig.CompressionLevel = config.AppConfig.BackupCompressionLevel
 
 	// Get database path and type from app config
 	dbPath := config.AppConfig.DatabasePath
