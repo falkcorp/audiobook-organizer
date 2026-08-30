@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-08-23
+// last-edited: 2026-08-30
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -547,6 +547,12 @@ type SeriesMergeResult struct {
 // optionally renames the kept series to customName, and relinks authors.
 // It does NOT invalidate the server cache — the caller must do that.
 //
+// Each merged-from series row is deleted only when the UNFILTERED reference
+// count agrees that nothing still points at it; a refusal is recorded in
+// SeriesMergeResult.Errors and leaves MergedCount unincremented. It therefore
+// returns a partial result with a non-empty Errors slice where it used to
+// return a clean one and a stranded book.
+//
 // opID is written into OperationChange records for audit.
 func MergeSeries(
 	_ context.Context,
@@ -611,6 +617,33 @@ func MergeSeries(
 		}
 	}
 
+	// UNFILTERED reference counts, read ONCE before the merge loop and used
+	// below to refuse any delete that would strand a book.
+	//
+	// This loop reassigns what GetBooksBySeriesIDAllVersions hands it, which
+	// covers non-primary versions but still SKIPS TRASHED rows — and it then
+	// deleted mergeID unconditionally, including after a reassignment it had
+	// just recorded as failed. A series whose books are all trashed enumerated
+	// EMPTY, reassigned nothing, and was deleted anyway. That is the shape that
+	// left 6,893 phantom series IDs held by 13,322 live books on production
+	// 2026-08-14; see internal/database/series_bookref.go.
+	//
+	// One scan for the whole run, not one per mergeID. The counts cannot go
+	// stale in a direction that makes the guard wrong: books only ever move AWAY
+	// from a mergeID (onto keepID, which this function never deletes), so
+	// refCounts[mergeID] is an upper bound on what still references it and a
+	// stale-high count refuses rather than permits.
+	//
+	// Fails CLOSED, before anything has been deleted. A store that cannot answer
+	// the unfiltered question aborts the merge rather than falling back to the
+	// filtered count — that fallback IS the bug, and it is silent. The rename
+	// above has already been applied at this point and is deliberately not
+	// rolled back: it strands nothing.
+	refCounts, err := database.SeriesRefCounts(store)
+	if err != nil {
+		return SeriesMergeResult{}, fmt.Errorf("series merge refusing to run without unfiltered reference counts: %w", err)
+	}
+
 	var result SeriesMergeResult
 	for i, mergeID := range mergeIDs {
 		if progress != nil && progress.IsCanceled() {
@@ -638,6 +671,13 @@ func MergeSeries(
 			continue
 		}
 
+		// moved counts reassignments that actually SUCCEEDED, and is the
+		// subtrahend of the reference guard below. It is deliberately NOT
+		// len(books): that is what was ATTEMPTED, and every continue path in
+		// this loop leaves a row still pointing at mergeID while still counting
+		// toward len(books). Using the attempted count would make the guard
+		// pass on exactly the failures it exists to catch.
+		moved := 0
 		for _, bookCore := range books {
 			oldSeriesID := ""
 			if bookCore.SeriesID != nil {
@@ -650,6 +690,14 @@ func MergeSeries(
 				continue
 			}
 			if full == nil {
+				// Was entirely silent — no error, no counter — and then fell
+				// through to the delete. A row the series getter listed but
+				// GetBookByID cannot hydrate is indistinguishable here from a
+				// row that still holds mergeID, so it must be visible AND must
+				// not count toward moved. Mirrors DedupSeries.
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("book %s vanished between the series scan and hydration; "+
+						"series %d kept, it may still reference it", bookCore.ID, mergeID))
 				continue
 			}
 			full.SeriesID = &keepID
@@ -657,6 +705,7 @@ func MergeSeries(
 				result.Errors = append(result.Errors,
 					fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 			} else {
+				moved++
 				_ = store.CreateOperationChange(&database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: opID,
@@ -675,7 +724,30 @@ func MergeSeries(
 		if mergeSeries != nil {
 			mergeSeriesName = mergeSeries.Name
 		}
-		if err := store.DeleteSeries(mergeID); err != nil {
+		// Refuse to delete a series that something we could not reassign still
+		// points at. The unfiltered count minus what we actually MOVED is the
+		// number of rows left holding mergeID.
+		//
+		// Since the enumeration above is GetBooksBySeriesIDAllVersions,
+		// non-primary versions are not among them — that getter returns them,
+		// so they get reassigned and counted in moved. What remains is TRASHED
+		// rows (both series getters skip soft-deleted books, deliberately: a
+		// trashed row cannot be repointed), rows whose UpdateBook failed, and
+		// rows the reference count sees but GetBookByID cannot hydrate.
+		//
+		// The refusal is REPORTED, never silent: it lands in result.Errors,
+		// which the op surfaces through the progress reporter, and MergedCount
+		// is not incremented — a refused delete is not a completed merge.
+		// Books already reassigned above stay reassigned; only the row removal
+		// is refused, leaving a resolvable series ID for the rows we could not
+		// see.
+		if stranded := refCounts[mergeID] - moved; stranded > 0 {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("refusing to delete series %d (%q): %d book(s) still reference it "+
+					"after reassigning %d to %d (trashed rows, which cannot be repointed, or rows "+
+					"whose reassignment failed); the reassignable books were moved, the series row is kept",
+					mergeID, mergeSeriesName, stranded, moved, keepID))
+		} else if err := store.DeleteSeries(mergeID); err != nil {
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("failed to delete series %d: %v", mergeID, err))
 		} else {

@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-08-23
+// last-edited: 2026-08-30
 
 package dedup
 
@@ -758,4 +758,182 @@ func TestDedupSeries_RelinksNonPrimaryVersionBooks(t *testing.T) {
 	assert.Equal(t, 2, result.TotalBooksReassigned,
 		"both rows count as reassigned, including the one the listing getter hides")
 	assert.Empty(t, result.Errors)
+}
+
+// --- SERIES-DELETE-UNGUARDED (#2908): MergeSeries's unfiltered ref guard -----
+//
+// MergeSeries had NO reference guard at all: it enumerated with
+// GetBooksBySeriesIDAllVersions, appended every reassignment failure to
+// result.Errors, and then called DeleteSeries(mergeID) UNCONDITIONALLY -- after
+// a reassignment it had just recorded as failed, and after an enumeration that
+// returned nothing because every referencing row is trashed.
+//
+// The fixtures below all seed the FILTERED/UNFILTERED asymmetry that is the bug:
+// what GetBooksBySeriesIDAllVersions returns and what the unfiltered counter
+// says DISAGREE. A fixture where the two agree passes with or without the guard.
+
+// newMergeSeriesFixture builds a keep+merge pair whose merged-away series
+// enumerates `visible` and whose unfiltered reference count is refCounts.
+func newMergeSeriesFixture(
+	t *testing.T,
+	visible []database.BookCore,
+	refCounts map[int]int,
+) (seriesRefStore, *[]int, *map[string]int) {
+	t.Helper()
+	const (
+		keepID  = 10
+		mergeID = 20
+	)
+	deleted := &[]int{}
+	repointed := &map[string]int{}
+	*repointed = map[string]int{}
+
+	mock := &database.MockStore{}
+	mock.GetSeriesByIDFunc = func(id int) (*database.Series, error) {
+		switch id {
+		case keepID:
+			return &database.Series{ID: keepID, Name: "Original"}, nil
+		case mergeID:
+			return &database.Series{ID: mergeID, Name: "Duplicate"}, nil
+		}
+		return nil, nil
+	}
+	// Set EXPLICITLY, both getters. MockStore.GetBooksBySeriesIDAllVersions
+	// falls back to GetBooksBySeriesIDCoreFunc when its own stub is nil, so
+	// leaving this unset would silently model a different store than the one
+	// MergeSeries actually reads.
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		if id == mergeID {
+			return visible, nil
+		}
+		return nil, nil
+	}
+	mock.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == mergeID {
+			return visible, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := mergeID
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if b.SeriesID != nil {
+			(*repointed)[id] = *b.SeriesID
+		}
+		return b, nil
+	}
+	mock.DeleteSeriesFunc = func(id int) error {
+		*deleted = append(*deleted, id)
+		return nil
+	}
+	return seriesRefStore{MockStore: mock, refCounts: refCounts}, deleted, repointed
+}
+
+// TestMergeSeries_RefusesDeleteWhenEveryReferencingBookIsTrashed is the
+// headline case from #2908.
+//
+// Both series getters skip soft-deleted books, so a series whose books are ALL
+// TRASHED enumerates EMPTY. The old loop reassigned nothing, recorded no error,
+// and deleted the row anyway -- leaving two trashed rows holding a series ID
+// that no longer resolves. This is not an empty fixture: two books genuinely
+// reference series 20, they are simply invisible to the getter.
+func TestMergeSeries_RefusesDeleteWhenEveryReferencingBookIsTrashed(t *testing.T) {
+	store, deleted, repointed := newMergeSeriesFixture(t, nil, map[int]int{20: 2})
+
+	result, err := MergeSeries(context.Background(), store, "op-trashed", 10, []int{20}, "", nil)
+	require.NoError(t, err)
+
+	assert.NotContains(t, *deleted, 20,
+		"series 20 must survive: two trashed rows still reference it and cannot be repointed")
+	assert.Equal(t, 0, result.MergedCount, "a refused delete is not a completed merge")
+	require.Len(t, result.Errors, 1, "the refusal must be reported, not silently skipped")
+	assert.Contains(t, result.Errors[0], "still reference it")
+	assert.Empty(t, *repointed, "nothing was visible to repoint")
+}
+
+// TestMergeSeries_StillDeletesWhenNothingHiddenReferencesIt is the POSITIVE
+// CONTROL. Without it, a guard that refuses EVERY delete passes every test
+// above while silently turning the merge op into a no-op.
+func TestMergeSeries_StillDeletesWhenNothingHiddenReferencesIt(t *testing.T) {
+	store, deleted, repointed := newMergeSeriesFixture(t,
+		[]database.BookCore{{ID: "BOOK_X"}}, map[int]int{20: 1})
+
+	result, err := MergeSeries(context.Background(), store, "op-normal", 10, []int{20}, "", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, *deleted, 20,
+		"the one reference was reassigned, so series 20 is genuinely unreferenced and must be deleted")
+	assert.Equal(t, 1, result.MergedCount)
+	assert.Empty(t, result.Errors)
+	assert.Equal(t, 10, (*repointed)["BOOK_X"])
+}
+
+// TestMergeSeries_RefusesDeleteWhenAReassignmentFailed pins the subtrahend.
+//
+// Nothing is hidden here -- the unfiltered count is 2 and the getter returns 2
+// -- so a guard that subtracts len(books) (what was ATTEMPTED) computes 2-2 == 0
+// and deletes the row while book B is still pointing at it. Only subtracting
+// what actually MOVED catches it. This is the mutation gate for `moved`.
+func TestMergeSeries_RefusesDeleteWhenAReassignmentFailed(t *testing.T) {
+	store, deleted, _ := newMergeSeriesFixture(t,
+		[]database.BookCore{{ID: "A"}, {ID: "B"}}, map[int]int{20: 2})
+	store.MockStore.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == "B" {
+			return nil, errors.New("pebble write failed")
+		}
+		return b, nil
+	}
+
+	result, err := MergeSeries(context.Background(), store, "op-failwrite", 10, []int{20}, "", nil)
+	require.NoError(t, err)
+
+	assert.NotContains(t, *deleted, 20,
+		"book B's reassignment failed, so B still references series 20 — deleting it strands B")
+	assert.Equal(t, 0, result.MergedCount, "a refused delete is not a completed merge")
+	require.Len(t, result.Errors, 2, "the failed write AND the refusal must both be reported")
+	assert.Contains(t, strings.Join(result.Errors, "; "), "still reference it")
+}
+
+// TestMergeSeries_RefusesDeleteWhenABookCannotBeHydrated covers the one branch
+// in the loop that was entirely SILENT: GetBookByID returning (nil, nil).
+//
+// A row the series getter listed but a point-get cannot hydrate is
+// indistinguishable from a row that still holds mergeID, so it must surface as
+// an error AND must not count toward what was moved. It used to be a bare
+// continue that fell straight through to the delete.
+func TestMergeSeries_RefusesDeleteWhenABookCannotBeHydrated(t *testing.T) {
+	store, deleted, _ := newMergeSeriesFixture(t,
+		[]database.BookCore{{ID: "GHOST"}}, map[int]int{20: 1})
+	store.MockStore.GetBookByIDFunc = func(string) (*database.Book, error) { return nil, nil }
+
+	result, err := MergeSeries(context.Background(), store, "op-ghost", 10, []int{20}, "", nil)
+	require.NoError(t, err)
+
+	assert.NotContains(t, *deleted, 20,
+		"GHOST could not be hydrated, so it may still reference series 20")
+	assert.Equal(t, 0, result.MergedCount)
+	require.Len(t, result.Errors, 2, "the unhydratable row AND the refusal must both be reported")
+	assert.Contains(t, strings.Join(result.Errors, "; "), "vanished between the series scan and hydration")
+	assert.Contains(t, strings.Join(result.Errors, "; "), "still reference it")
+}
+
+// TestMergeSeries_RefusesToRunWithoutTheUnfilteredCount pins the fail-closed
+// claim. A store that cannot answer the unfiltered question must abort the
+// merge — never fall back to the filtered count, which is the original bug.
+func TestMergeSeries_RefusesToRunWithoutTheUnfilteredCount(t *testing.T) {
+	mock := &database.MockStore{}
+	mock.GetSeriesByIDFunc = func(id int) (*database.Series, error) {
+		return &database.Series{ID: id, Name: "Whatever"}, nil
+	}
+	mock.DeleteSeriesFunc = func(int) error {
+		t.Fatal("must not delete anything when the unfiltered count is unavailable")
+		return nil
+	}
+	store := noRefCountStore{Store: mock}
+
+	_, err := MergeSeries(context.Background(), store, "op-noref", 10, []int{20}, "", nil)
+	require.Error(t, err, "a store that cannot count unfiltered references must abort the merge")
+	assert.Contains(t, err.Error(), "unfiltered reference counts")
 }

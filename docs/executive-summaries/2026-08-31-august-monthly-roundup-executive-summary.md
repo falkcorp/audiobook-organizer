@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.23.0 -->
+<!-- version: 1.24.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-30 -->
 
@@ -1389,6 +1389,45 @@ rules for what counts as old. That has been recorded rather than fixed here.
 Each of the twenty-one individual checks was then verified by deliberately breaking it and
 confirming a test noticed — all twenty-one did, and two genuine gaps were found and closed
 that way, in checks that had looked fine and were never actually being exercised.
+
+## 32. Deleting a series without asking whether anything still used it (Aug 30)
+
+When two entries for the same series exist — "Discworld" and "  discworld ", say — the
+application folds one into the other: every book filed under the second is moved to the
+first, and the second entry is then removed. Two of the places that do this never asked
+the only question that makes the removal safe: *is anything still pointing at this?*
+
+They asked a narrower question instead. Before removing an entry they listed its books —
+but that listing deliberately hides books in the trash. A series whose books have all
+been trashed therefore listed as empty. Nothing to move, nothing went wrong, entry
+removed. Every one of those trashed books was left holding a reference to a series that
+no longer exists. The same two places also went ahead and removed the entry after a move
+they had *already recorded as having failed*, and one of them had a third path — a book
+the listing named but the database could not then load — that produced no message at all
+before the removal happened.
+
+**Why it mattered.** This is not a hypothetical. A count taken on the live library on
+August 14 found 6,893 series references pointing at series that had been deleted, held by
+13,322 books that are very much still there. Those books show no series at all, and
+nothing in the application revisits them to notice. Two other places that do the same kind
+of merge had already been fixed against exactly this; these two were missed because a
+safety check only protects the code that consults it, and neither of these consulted
+anything.
+
+**The fix.** Both now take a full, unfiltered count of what references each series —
+including trashed books and duplicate copies — once, before they start, and refuse to
+remove any series entry where more books still reference it than they were actually able
+to move. A refusal is reported through the same summary the operation already returns, so
+it appears in the run's error list rather than passing as a quiet success, and it does not
+count as a completed merge. Books that *were* moved stay moved; only the removal is held
+back, which leaves a visible, re-cleanable entry rather than an invisible broken one. If
+the count cannot be obtained at all, both now stop before deleting anything rather than
+falling back on the narrower listing — that fallback is the original bug.
+
+One deliberate limitation, worth stating plainly: this stops new broken references from
+being created. It does not repair the roughly 6,893 that already exist. That repair needs
+its own decision about what a rescued book's series should become, and is recorded as
+outstanding work rather than guessed at here.
 
 ## Themes worth carrying into next month
 

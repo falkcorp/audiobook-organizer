@@ -1,7 +1,7 @@
 // file: internal/server/series_merge_strand_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1c4e29-3a86-4d51-9f70-2c8ad6be4415
-// last-edited: 2026-08-24
+// last-edited: 2026-08-30
 
 package server
 
@@ -100,8 +100,11 @@ func TestMergeSeriesGroupHelper_RepointsNonPrimaryVersions(t *testing.T) {
 // were fixed together but nothing structurally ties them, so a later edit can
 // regress one while the other stays green.
 //
-// Phase 1's DeleteSeries is unconditional, exactly like mergeSeriesGroupHelper:
-// the ref-count guard in this function protects only phase 2 (orphan removal).
+// Phase 1 now has its own unfiltered reference guard (SERIES-DELETE-UNGUARDED,
+// #2908) in addition to the phase-2 orphan guard, so the refCounts below must
+// agree with what the getter returns or the delete is refused and this test
+// observes nothing. That is exactly why the fixture supplies mergeID: 2 — both
+// rows are reassigned, so nothing is left holding the row.
 func TestExecuteSeriesPrune_MergeRepointsNonPrimaryVersions(t *testing.T) {
 	const (
 		keepID     = 1
