@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-29
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -581,15 +582,17 @@ func (o *Organizer) cleanupTempFiles() error {
 		return nil
 	}
 
+	app := appdirs.FromConfig(o.config)
 	return filepath.Walk(o.config.RootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
 			return nil
 		}
 		if info.IsDir() {
-			// .backups lives directly under RootDir and holds multi-GB
-			// archives. Walking it to look for temp files is pure I/O for a
-			// result that cannot be there.
-			if pathutil.ShouldSkipDir(o.config.RootDir, path) {
+			// Application directories under RootDir hold multi-GB archives
+			// and dump files. Walking them to look for temp files is pure I/O
+			// for a result that cannot be there. Excluded by configured path,
+			// not by a leading dot in the name.
+			if pathutil.ShouldSkipDir(o.config.RootDir, path, app) {
 				return filepath.SkipDir
 			}
 			return nil

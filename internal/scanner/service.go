@@ -1,5 +1,5 @@
 // file: internal/scanner/service.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-08-29
 package scanner
@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -363,6 +364,9 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate, i
 
 func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logger.Logger) int {
 	totalFilesAcrossFolders := 0
+	// Same source as the discovery walk in scanner.go -- see the comment
+	// inside the walk below for why they must not diverge.
+	app := appdirs.Current()
 	for _, folderPath := range foldersToScan {
 		if _, err := os.Stat(folderPath); os.IsNotExist(err) {
 			log.Warn("Folder does not exist: %s", folderPath)
@@ -385,9 +389,10 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 				// Must match the discovery walk exactly. If the counter walks
 				// a subtree the scanner skips, the progress denominator counts
 				// files that will never be scanned and the bar can never reach
-				// 100%. A 15 GB .backups directory inside the library would do
-				// precisely that.
-				if pathutil.ShouldSkipDir(folderPath, path) {
+				// 100%. A 15 GB backup directory inside the library would do
+				// precisely that -- and so would an OpenLibrary dump
+				// directory, which has no dot in its name at all.
+				if pathutil.ShouldSkipDir(folderPath, path, app) {
 					return filepath.SkipDir
 				}
 				return nil

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.71.0
+// version: 1.72.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-29
 
@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/dhowden/tag"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -892,6 +893,11 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 		return true
 	}
 
+	// Built once from the process config, exactly as the count walk in
+	// service.go does. The two walks MUST agree on what they skip: if the
+	// counter walks a subtree discovery skips, the progress denominator counts
+	// files that will never be scanned and the bar can never reach 100%.
+	app := appdirs.Current()
 	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if path == rootDir {
@@ -920,7 +926,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			// .itunes-writeback, .failed), and naming them one at a time meant
 			// every new hidden directory had to remember to add itself to a
 			// list it did not know existed.
-			if pathutil.ShouldSkipDir(rootDir, path) {
+			if pathutil.ShouldSkipDir(rootDir, path, app) {
 				return filepath.SkipDir
 			}
 			if !registerDirectory(path, info) {
