@@ -1,6 +1,6 @@
 // file: internal/server/indexed_store_test.go
-// version: 1.3.0
-// last-edited: 2026-08-22
+// version: 1.3.1
+// last-edited: 2026-08-30
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -309,12 +309,10 @@ func TestIndexedStore_EnqueueSafeAfterClose(t *testing.T) {
 	// Concurrent enqueue calls after close should all no-op.
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			srv.enqueueIndex("b1", false)
 			srv.enqueueIndex("b2", true)
-		}()
+		})
 	}
 	wg.Wait()
 	// If we got here without panicking, the test passes.

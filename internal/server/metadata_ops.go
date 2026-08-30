@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-08-27
+// last-edited: 2026-08-30
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -960,9 +960,7 @@ func (s *Server) runBulkWriteBack(
 	}
 
 	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for bookID := range jobCh {
 				// Cancellation is checked per item inside the worker, not only in
 				// the feeder: with a deep buffer the feeder can be finished long
@@ -987,7 +985,7 @@ func (s *Server) runBulkWriteBack(
 					ckptMu.Unlock()
 				}
 			}
-		}()
+		})
 	}
 
 	for i := startIdx; i < total; i++ {

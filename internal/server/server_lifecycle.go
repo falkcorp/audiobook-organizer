@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.33.0
+// version: 3.33.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-30
 
@@ -495,9 +495,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	s.scheduler.Start(shutdown, &backgroundWG)
 
 	ticker := time.NewTicker(5 * time.Second)
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
+	backgroundWG.Go(func() {
 		defer ticker.Stop()
 		for {
 			select {
@@ -536,16 +534,14 @@ func (s *Server) Start(cfg ServerConfig) error {
 				return
 			}
 		}
-	}()
+	})
 
 	// Persist cache observability snapshots to SQLite every 5 minutes so
 	// hit/miss trends survive restarts. PebbleDB-backed deployments skip
 	// persistence inside runCacheStatsSnapshotter.
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
+	backgroundWG.Go(func() {
 		s.runCacheStatsSnapshotter(shutdown)
-	}()
+	})
 
 	// Start auto-scan file watchers if enabled. ONE watcher per enabled
 	// import path — previously only the first enabled path was watched,
@@ -612,20 +608,16 @@ func (s *Server) Start(cfg ServerConfig) error {
 			// UI rather than only in journalctl.
 			watchLog.Error("Auto-scan watcher problem: %v", err)
 		})
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
+		backgroundWG.Go(func() {
 			watcherSupervisor.Run(shutdown)
-		}()
+		})
 	}
 
 	// Periodic cleanup of expired/revoked auth sessions.
 	if s.Ops() != nil {
 		sessionLog := logger.NewWithActivityLog("session-cleanup", s.storeForWiring())
 		sessionCleanupTicker := time.NewTicker(10 * time.Minute)
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
+		backgroundWG.Go(func() {
 			defer sessionCleanupTicker.Stop()
 			for {
 				select {
@@ -635,16 +627,14 @@ func (s *Server) Start(cfg ServerConfig) error {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	// Periodically mark stale operations as failed.
 	if s.Ops() != nil && config.AppConfig.OperationTimeoutMinutes > 0 {
 		staleTimeout := time.Duration(config.AppConfig.OperationTimeoutMinutes) * time.Minute
 		staleTicker := time.NewTicker(1 * time.Minute)
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
+		backgroundWG.Go(func() {
 			defer staleTicker.Stop()
 			for {
 				select {
@@ -654,7 +644,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	// Wait for interrupt signal to gracefully shutdown the server

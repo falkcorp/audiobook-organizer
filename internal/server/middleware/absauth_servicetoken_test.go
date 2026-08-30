@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_servicetoken_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f2b60d4-38a1-4c75-b9e0-71a5c34e8206
-// last-edited: 2026-08-02
+// last-edited: 2026-08-30
 
 package middleware
 
@@ -197,13 +197,11 @@ func TestNoteServiceTokenPairing_ConcurrentIsRaceFree(t *testing.T) {
 	resetPairings(t)
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			noteServiceTokenPairing("family.access", identity("u1", "owner"))
 			_ = ABSServiceToken(ctxWithServiceToken("family.access"))
 			_ = i
-		}(i)
+		})
 	}
 	wg.Wait()
 }

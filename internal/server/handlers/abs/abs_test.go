@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-08-22
+// last-edited: 2026-08-30
 
 package abs_test
 
@@ -996,9 +996,7 @@ func TestRefresh_ConcurrentRefreshesConverge(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			req := httptest.NewRequest(http.MethodPost, "/auth/refresh", bytes.NewReader(nil))
 			req.Header.Set("x-refresh-token", oldRefresh)
@@ -1011,7 +1009,7 @@ func TestRefresh_ConcurrentRefreshesConverge(t *testing.T) {
 				r.refresh, _ = u["refreshToken"].(string)
 			}
 			results[i] = r
-		}(i)
+		})
 	}
 	close(start)
 	wg.Wait()
