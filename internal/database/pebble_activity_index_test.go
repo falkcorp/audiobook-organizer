@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f2a91c4-6b3d-4a52-9c18-2d0e5b7a4e31
 // last-edited: 2026-08-29
 
@@ -146,6 +146,13 @@ func TestPebbleActivityStore_WipeAllActivityWipesIndexes(t *testing.T) {
 	seedIndexedEntries(t, s, "change", time.Now().UTC(), 3)
 	requireSeeded(t, s, 3)
 
+	// A SECOND tier, so the "nothing under act: survives" assertion below is not
+	// vacuously true of one tier's key range. "digest" is the last member of
+	// actTiers and the one CompactByDay deliberately skips
+	// (actCompactableTiers drops it), which makes it the tier most likely to be
+	// missed by a sweep that was reasoned about rather than measured.
+	seedIndexedEntries(t, s, "digest", time.Now().UTC(), 2)
+
 	// An index entry whose primary row was deleted long ago (the population
 	// this fix inherits on production).
 	require.NoError(t, s.DB().Set(
@@ -162,18 +169,22 @@ func TestPebbleActivityStore_WipeAllActivityWipesIndexes(t *testing.T) {
 		[]byte("change:00000000001700000001:01BADJSON"), pebble.Sync))
 
 	opBefore, bookBefore := countIndexKeys(t, s)
-	require.Equal(t, 4, opBefore)
-	require.Equal(t, 4, bookBefore)
+	require.Equal(t, 6, opBefore)
+	require.Equal(t, 6, bookBefore)
+	require.Equal(t, 2, countKeysWithPrefix(t, s, "act:digest:"))
 
 	total, err := s.WipeAllActivity(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), total, "the returned count is primary rows, not index keys")
+	assert.Equal(t, int64(5), total,
+		"the returned count is the primary rows the row pass deleted: not index keys, and not the undecodable row the range sweep removes")
 
 	opKeys, bookKeys := countIndexKeys(t, s)
 	assert.Equal(t, 0, opKeys, "WipeAllActivity must leave no act:op: entries")
 	assert.Equal(t, 0, bookKeys, "WipeAllActivity must leave no act:bk: entries")
 	assert.Equal(t, 0, countKeysWithPrefix(t, s, "act:change:"),
 		"WipeAllActivity must leave no primary rows either, including the one whose JSON will not decode")
+	assert.Equal(t, 0, countKeysWithPrefix(t, s, "act:digest:"),
+		"the digest tier must be wiped too")
 	assert.Equal(t, 0, countKeysWithPrefix(t, s, "act:"),
 		"nothing under the act: prefix may survive a wipe")
 }
