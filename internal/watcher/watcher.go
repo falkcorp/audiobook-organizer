@@ -1,5 +1,5 @@
 // file: internal/watcher/watcher.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-08-29
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
@@ -107,7 +108,7 @@ func (w *Watcher) Start(rootDir string) error {
 	w.rootDir = rootDir
 
 	// Walk the tree and add all directories.
-	if err := w.addRecursive(rootDir); err != nil {
+	if err := w.addRecursive(rootDir, rootDir); err != nil {
 		fsw.Close()
 		return err
 	}
@@ -140,8 +141,18 @@ func (w *Watcher) Stop() {
 	w.mu.Unlock()
 }
 
-func (w *Watcher) addRecursive(root string) error {
-	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+// addRecursive walks `start` and adds every directory to the watch set.
+//
+// libraryRoot is passed SEPARATELY from start, and is what the skip rule is
+// evaluated against. They differ: handleEvent calls this with a newly-created
+// SUBDIRECTORY as `start`. ShouldSkipDir never skips its own root -- otherwise
+// a walk would abandon itself on the first callback -- so passing `start` as
+// the root would exempt exactly the directory we were asked to judge. A
+// creation event inside <root>/openlibrary-dumps would then re-add the entire
+// dump tree to the watch set, which is the bug this parameter split prevents.
+func (w *Watcher) addRecursive(libraryRoot, start string) error {
+	app := appdirs.Current()
+	return filepath.WalkDir(start, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible dirs
 		}
@@ -150,8 +161,10 @@ func (w *Watcher) addRecursive(root string) error {
 			// inside the library tree, and a database backup landing in
 			// <root>/.backups is a multi-GB write that would otherwise fire a
 			// storm of filesystem events and debounce-trigger an auto-scan --
-			// the application reacting to its own backup.
-			if pathutil.ShouldSkipDir(root, path) {
+			// the application reacting to its own backup. app extends that to
+			// application directories whatever they are named: backup_dir is
+			// operator-settable and need not start with a dot.
+			if pathutil.ShouldSkipDir(libraryRoot, path, app) {
 				return filepath.SkipDir
 			}
 			if watchErr := w.fsWatcher.Add(path); watchErr != nil {
@@ -187,7 +200,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	// On Create, if it's a directory, watch it recursively.
 	if event.Op&fsnotify.Create != 0 {
 		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-			_ = w.addRecursive(event.Name)
+			_ = w.addRecursive(w.rootDir, event.Name)
 		}
 	}
 

@@ -1,5 +1,5 @@
 // file: internal/pathutil/hidden_test.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: 9d4b1f38-6c02-4a75-8e3d-2f905c7ab146
 // last-edited: 2026-08-29
 
@@ -10,6 +10,15 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+// Every pre-existing case below passes a ZERO AppDirs. That is the
+// empty-setting regression check, stated once: with no application directories
+// configured, ShouldSkipDir must behave EXACTLY as it did before AppDirs
+// existed -- only the dot rule applies, and nothing else is swallowed. The
+// danger being guarded against is an empty string being treated as a live path
+// prefix (filepath.Clean("") is "."), which would silently skip the entire
+// library. TestShouldSkipDir_EmptyAppDirsWalksWholeTree proves it on a real
+// tree; these prove it case by case.
 
 func TestIsHiddenName(t *testing.T) {
 	for _, tc := range []struct {
@@ -50,7 +59,7 @@ func TestShouldSkipDir_SkipsHiddenChildrenButNeverTheRoot(t *testing.T) {
 		{"/srv/books/audiobook-organizer/.backups", true},
 		{"/srv/books/.failed", true},
 	} {
-		if got := ShouldSkipDir(root, tc.path); got != tc.want {
+		if got := ShouldSkipDir(root, tc.path, AppDirs{}); got != tc.want {
 			t.Errorf("ShouldSkipDir(%q, %q) = %v, want %v", root, tc.path, got, tc.want)
 		}
 	}
@@ -64,23 +73,23 @@ func TestShouldSkipDir_SkipsHiddenChildrenButNeverTheRoot(t *testing.T) {
 // it looks exactly like an empty folder.
 func TestShouldSkipDir_HiddenRootIsStillWalked(t *testing.T) {
 	root := "/srv/.hidden-library"
-	if ShouldSkipDir(root, root) {
+	if ShouldSkipDir(root, root, AppDirs{}) {
 		t.Fatal("the walk root was skipped; an explicitly configured hidden root must still be scanned")
 	}
-	if !ShouldSkipDir(root, "/srv/.hidden-library/.backups") {
+	if !ShouldSkipDir(root, "/srv/.hidden-library/.backups", AppDirs{}) {
 		t.Error("a hidden child of a hidden root must still be skipped")
 	}
-	if ShouldSkipDir(root, "/srv/.hidden-library/abooks") {
+	if ShouldSkipDir(root, "/srv/.hidden-library/abooks", AppDirs{}) {
 		t.Error("ordinary content under a hidden root must be scanned")
 	}
 }
 
 // Trailing separators must not change the verdict for the root.
 func TestShouldSkipDir_RootWithTrailingSeparator(t *testing.T) {
-	if ShouldSkipDir("/srv/books/", "/srv/books") {
+	if ShouldSkipDir("/srv/books/", "/srv/books", AppDirs{}) {
 		t.Error("a trailing separator on the root made the walk skip its own root")
 	}
-	if ShouldSkipDir("/srv/.x/", "/srv/.x") {
+	if ShouldSkipDir("/srv/.x/", "/srv/.x", AppDirs{}) {
 		t.Error("a trailing separator on a hidden root made the walk skip everything")
 	}
 }
@@ -114,7 +123,7 @@ func TestShouldSkipDir_RealWalkSkipsHiddenSubtree(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if ShouldSkipDir(root, path) {
+			if ShouldSkipDir(root, path, AppDirs{}) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -138,19 +147,19 @@ func TestShouldSkipDir_RealWalkSkipsHiddenSubtree(t *testing.T) {
 // folder the scanner cannot see fails SILENTLY: the books just never appear.
 func TestShouldSkipDir_AlternatesIsCarvedOut(t *testing.T) {
 	root := "/srv/books"
-	if ShouldSkipDir(root, "/srv/books/.alternates") {
+	if ShouldSkipDir(root, "/srv/books/.alternates", AppDirs{}) {
 		t.Error(".alternates was skipped; it is library content, not app state")
 	}
-	if ShouldSkipDir(root, "/srv/books/abooks/.alternates") {
+	if ShouldSkipDir(root, "/srv/books/abooks/.alternates", AppDirs{}) {
 		t.Error(".alternates was skipped when nested under a book folder")
 	}
 	// The carve-out is exact, not a prefix match: a neighbouring dot-name must
 	// not inherit visibility just by starting the same way.
-	if !ShouldSkipDir(root, "/srv/books/.alternates-backup") {
+	if !ShouldSkipDir(root, "/srv/books/.alternates-backup", AppDirs{}) {
 		t.Error(".alternates-backup was treated as carved out; the match must be exact")
 	}
 	// And the rule it lives inside still works.
-	if !ShouldSkipDir(root, "/srv/books/.backups") {
+	if !ShouldSkipDir(root, "/srv/books/.backups", AppDirs{}) {
 		t.Error(".backups must still be skipped")
 	}
 }
