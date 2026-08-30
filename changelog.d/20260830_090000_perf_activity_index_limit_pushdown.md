@@ -22,15 +22,20 @@ this path's block cache warms within a run):
 
 | page size | before | after | allocations |
 | --- | --- | --- | --- |
-| limit 1000 | 556–562 ms | 31–32 ms | 1,106,223 → 18,551 |
-| limit 50 | 559–573 ms | 23 ms | 1,106,014 → 1,362 |
+| limit 1000 | 584–589 ms | 34.4–35.3 ms | 1,105,727 → 18,562 |
+| limit 50 | 586–588 ms | 24.8–27.2 ms | 1,105,847 → 1,396 |
 
-That is 17.2–17.9× at limit 1000 and 24.3–25.2× at limit 50 on this machine. An
-independent run of the same benchmarks measured 13.4–14.6× and 17.5–19.0×, so
-the ratio is sensitive to machine load and **the lower bound is the number worth
-quoting**: better than 13× at limit 1000 and better than 17× at limit 50. The
-absolute `after` times were stable across every run; it is the `before` baseline
-that moves.
+That is **16.6–17.1×** at limit 1000 and **21.5–23.7×** at limit 50 in this run.
+
+The ratio is load-sensitive and should be quoted as a floor, not a peak. Three
+independent measurement sessions on the same committed benchmarks produced
+13.4–17.9× (limit 1000) and 17.5–25.2× (limit 50) — so the defensible claim is
+**better than 13× at limit 1000 and better than 17× at limit 50**, and anything
+quoted as a single peak number is an artifact of one session's machine load. The
+allocation counts, by contrast, were stable to within 0.1% across every run, and
+they are the more meaningful figure: the old path's cost is one `Get` plus one
+`json.Unmarshal` per ref, so its allocations scale with the size of the
+operation while the new path's scale with the page.
 
 #### Fixed: what `total` actually means
 
