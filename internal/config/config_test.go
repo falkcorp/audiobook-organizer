@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-30
 
@@ -368,6 +368,12 @@ func TestConfigurationValidation(t *testing.T) {
 
 // TestResetToDefaults tests ResetToDefaults function
 func TestResetToDefaults(t *testing.T) {
+	// Restore the WHOLE struct, not just the three paths this test used to put
+	// back by hand: ResetToDefaults rewrites every field, so the other ~119 were
+	// being left at factory defaults for whatever ran next.
+	before := Snapshot()
+	t.Cleanup(func() { Mutate(func(c *Config) { *c = before }) })
+
 	// Arrange: Set up custom configuration
 	originalRootDir := AppConfig.RootDir
 	originalDatabasePath := AppConfig.DatabasePath

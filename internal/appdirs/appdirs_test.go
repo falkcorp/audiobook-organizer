@@ -1,7 +1,7 @@
 // file: internal/appdirs/appdirs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b4f2917d-30ec-4a68-85c1-6d9e0f27a3b5
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 package appdirs
 
@@ -92,10 +92,79 @@ func TestFromConfig_NilConfigExcludesNothing(t *testing.T) {
 // The scanner's discovery walk (scanner.go) and its file-count walk
 // (service.go) both build AppDirs from the process config. If they ever
 // diverged, the count walk would count files the discovery walk skips and the
-// progress bar could never reach 100%. Both call Current(); this pins that
-// Current() is deterministic for a given config.
-func TestCurrent_IsDeterministic(t *testing.T) {
+// progress bar could never reach 100%. Both call Current(), so Current() must
+// actually READ the process config — not merely return the same thing twice.
+//
+// The previous version of this test asserted only `Current() == Current()`.
+// Nothing in this test binary calls InitConfig, so config.AppConfig is the zero
+// value and both sides were the empty AppDirs{}: the assertion held for the
+// exact failure it was meant to catch. Verified 2026-08-30 by stubbing
+// Current() to `return pathutil.AppDirs{}` — the old test stayed green.
+//
+// So this seeds a production-shaped config and asserts on the resolved value.
+func TestCurrent_ResolvesTheProcessConfig(t *testing.T) {
+	before := config.Snapshot()
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = before }) })
+
+	config.Mutate(func(c *config.Config) {
+		*c = config.Config{
+			RootDir:            "/srv/books",
+			DatabasePath:       "/var/lib/abo/library.db",
+			BackupDir:          "backups", // relative: must anchor to the DB dir
+			OpenLibraryDumpDir: "/srv/books/openlibrary-dumps",
+			PlaylistDir:        "/srv/books/playlists",
+		}
+	})
+
+	got := Current()
+
+	if got == (pathutil.AppDirs{}) {
+		t.Fatal("Current() returned the zero AppDirs from a fully populated config. " +
+			"Every walker would then exclude nothing and the scanner would descend " +
+			"into its own backup and dump directories.")
+	}
+	want := pathutil.AppDirs{
+		BackupDir:          filepath.Clean("/var/lib/abo/backups"),
+		OpenLibraryDumpDir: "/srv/books/openlibrary-dumps",
+		PlaylistDir:        "/srv/books/playlists",
+	}
+	if got != want {
+		t.Fatalf("Current() = %+v, want %+v", got, want)
+	}
+
+	// The resolved value must exclude in practice, not just compare equal.
+	if !pathutil.ShouldSkipDir("/srv/books", "/srv/books/openlibrary-dumps/pebble", got) {
+		t.Error("Current() did not exclude the configured dump dir's subtree")
+	}
+	if pathutil.ShouldSkipDir("/srv/books", "/srv/books/abooks", got) {
+		t.Error("Current() excluded ordinary library content")
+	}
+
+	// Determinism still matters — the two scanner walks must agree — but it is
+	// now asserted on top of a value proven to be non-empty.
 	if a, b := Current(), Current(); a != b {
 		t.Fatalf("Current() returned %+v then %+v; the scanner's two walks must agree exactly", a, b)
+	}
+}
+
+// Current() must agree with FromConfig on the very config it reads, or the
+// walkers that thread a *config.Config and the walkers that call Current()
+// would exclude different trees.
+func TestCurrent_MatchesFromConfigOnTheSameConfig(t *testing.T) {
+	before := config.Snapshot()
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = before }) })
+
+	cfg := config.Config{
+		RootDir:            "/srv/books",
+		DatabasePath:       "/var/lib/abo/library.db",
+		BackupDir:          "/srv/books/backups",
+		OpenLibraryDumpDir: "/srv/books/openlibrary-dumps",
+		PlaylistDir:        "/srv/books/playlists",
+	}
+	config.Mutate(func(c *config.Config) { *c = cfg })
+
+	if got, want := Current(), FromConfig(&cfg); got != want {
+		t.Fatalf("Current() = %+v but FromConfig(same config) = %+v; the two "+
+			"walker entry points must resolve identically", got, want)
 	}
 }
