@@ -1,5 +1,5 @@
 // file: internal/activity/writer.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-08-30
 
@@ -299,9 +299,9 @@ func (w *Writer) drain() {
 // When the store offers the batchRecorder capability the whole slice goes down
 // in one durable commit. It used to call store.Record once per entry, and
 // Record fsyncs per call, so this batching layer amortized ROWS but not
-// FSYNCS — a flush of 100 entries was 100 fsyncs. Measured on this repo at
-// 5,000 rows (-count=5 medians): 101 rows/sec that way against 29,530 rows/sec
-// batched, same durability.
+// FSYNCS — a flush of 100 entries was 100 fsyncs. Measured on this repo at 5,000
+// rows a side, same durability: 76-199 rows/sec that way against 27,440-54,531
+// batched. See RecordBatch for why those are ranges.
 //
 // A store without the capability keeps the per-entry loop, which is slower but
 // otherwise equivalent: it writes the same rows and, importantly, reports a

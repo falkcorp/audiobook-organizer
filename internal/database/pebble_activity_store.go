@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-30
 
@@ -469,11 +469,14 @@ var activityRecordBatchCap = 500
 // WHY: ActivityBatcher and Writer.drain both exist to amortize activity writes,
 // and before this method neither did. Writer.writeBatch received a batch and
 // then called Record once per entry, and Record commits with pebble.Sync — so a
-// "batch" of 100 rows was 100 separate fsyncs. Measured on this repo, 5,000
-// rows at the same durability level and 5 repetitions: a median of 101 rows/sec
-// per-row versus 29,530 rows/sec batched (BenchmarkActivityRecordPerEntry and
-// BenchmarkActivityRecordBatch). The fsync, not the row, was the unit of cost,
-// and the multiplier tracks how many entries share one commit.
+// "batch" of 100 rows was 100 separate fsyncs. Measured on this repo at the same
+// durability level, 5,000 rows an iteration over two runs (eight samples a
+// side): 76-199 rows/sec per-row against 27,440-54,531 rows/sec batched
+// (BenchmarkActivityRecordPerEntry and BenchmarkActivityRecordBatch). Ranges,
+// not medians, because the per-row path climbs monotonically within every run
+// as it warms; even the most favourable pairing leaves a 138x gap. The fsync,
+// not the row, was the unit of cost, and the multiplier tracks how many entries
+// share one commit.
 //
 // ERROR SEMANTICS — deliberate, and different from the per-entry loop it
 // replaces:

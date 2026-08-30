@@ -14,22 +14,24 @@ separate durable commits — 100 fsyncs. There was no batched write path in the
 store at all.
 
 Measured on this repo (`BenchmarkActivityRecordPerEntry` /
-`BenchmarkActivityRecordBatch`, 5,000 rows per iteration, `-count=5`, medians)
-at identical durability — `pebble.Sync` either way:
+`BenchmarkActivityRecordBatch`, 5,000 rows per iteration) at identical
+durability — `pebble.Sync` either way. Two runs, eight samples each side:
 
-| write path | rows/sec (median) | range across 5 runs |
-| --- | --- | --- |
-| one `Record` per entry (what shipped) | 101 | 76 – 116 |
-| batched, 500 entries per commit | 29,530 | 27,440 – 30,336 |
+| write path | rows/sec, all 8 samples |
+| --- | --- |
+| one `Record` per entry (what shipped) | 76 – 199 |
+| batched, 500 entries per commit | 27,440 – 54,531 |
 
-The per-entry samples rise monotonically across the five repetitions (76, 87,
-101, 107, 116) — the slow path warms up, so its median is a mid-range estimate
-rather than a stable figure; the batched samples are flat. The gap is two orders
-of magnitude either way, so the warm-up does not change the conclusion, but the
-honest number for the old path is a range.
+Neither side has a stable median worth quoting. The per-entry path climbs
+monotonically *within* every run (76 → 116 in the first, 114 → 199 in the
+second) — it warms up — and both sides move with machine load. So the honest
+form is the range and a floor: pairing the **fastest** per-entry sample against
+the **slowest** batched one still leaves a **138x** gap, and median against
+median it is nearer 300x. Two orders of magnitude under every pairing, which is
+what the conclusion rests on.
 
-~290x, with no migration and no weakening of the durability guarantee. The
-multiplier tracks how many entries share a commit: a `drain` flush of 100 goes
+No migration, and no weakening of the durability guarantee. The multiplier
+tracks how many entries share a commit: a `drain` flush of 100 goes
 from 100 fsyncs to 1, and a full 500-item early flush from 500 to 1. The fsync,
 not the row, was the unit of cost.
 
