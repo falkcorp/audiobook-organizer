@@ -1,5 +1,5 @@
 // file: internal/database/zz_review2987_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
 // last-edited: 2026-08-30
 
@@ -262,4 +262,49 @@ func TestReview_BoundaryNilVsEmpty(t *testing.T) {
 		t.Logf("%s lim=%d off=%d full{t=%d n=%d nil=%v} paged{t=%d n=%d nil=%v}",
 			status, f.Limit, f.Offset, wantT, len(wantE), wantE == nil, gotT, len(gotE), gotE == nil)
 	}
+}
+
+// ── Randomized differential sweep WITH TIES PERMITTED ────────────────────────
+//
+// Identical to TestReview_RandomizedDifferential except that groups of four
+// entries share a timestamp. The author's fixture and my first sweep both used
+// strictly-increasing timestamps, which forecloses the tie case by construction.
+func TestReview_RandomizedDifferentialWithTies(t *testing.T) {
+	rng := rand.New(rand.NewSource(20260830))
+	totalMismatch, entryMismatch := 0, 0
+	for trial := 0; trial < 25; trial++ {
+		s := newTestPebbleActivityStore(t)
+		opID := fmt.Sprintf("op-tie-%d", trial)
+		n := 4 + rng.Intn(36)
+		base := time.Now().UTC().Add(-24 * time.Hour)
+		for i := 0; i < n; i++ {
+			recAt(t, s, opID, base.Add(time.Duration(i/4)*time.Second), fmt.Sprintf("e%03d", i))
+		}
+		prefix := "act:op:" + opID + ":"
+		keys := indexRefKeys(t, s, prefix)
+		for _, k := range keys {
+			if rng.Intn(4) == 0 {
+				orphanPrimaryRow(t, s, k)
+			}
+		}
+		for probe := 0; probe < 12; probe++ {
+			f := ActivityFilter{OperationID: opID, Limit: rng.Intn(n + 3), Offset: rng.Intn(n + 3)}
+			if !pactIndexPushdownEligible(prefix, f) {
+				continue
+			}
+			wantE, wantT, _ := s.queryByIndexPrefixFull(context.Background(), prefix, f)
+			gotE, gotT, _ := s.queryByIndexPrefixPaged(context.Background(), prefix, f)
+			if wantT != gotT {
+				totalMismatch++
+			}
+			if fmt.Sprint(summaries(wantE)) != fmt.Sprint(summaries(gotE)) {
+				entryMismatch++
+				if entryMismatch <= 3 {
+					t.Logf("ENTRY MISMATCH trial=%d n=%d %+v\n  full : %v\n  paged: %v",
+						trial, n, f, summaries(wantE), summaries(gotE))
+				}
+			}
+		}
+	}
+	t.Logf("with ties: total mismatches=%d  entry mismatches=%d", totalMismatch, entryMismatch)
 }
