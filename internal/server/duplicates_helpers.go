@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-08-24
+// last-edited: 2026-08-30
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -117,9 +117,10 @@ func (s *Server) filterReviewedAuthorGroups(groups []dedup.AuthorDedupGroup) []d
 // executeSeriesPrune performs the actual series prune logic (used by both HTTP handler and scheduler).
 //
 // Counters and the cache invalidation are hoisted to the top and deferred on
-// purpose. This function has six exits — two ctx cancellations, two store
-// failures, the fail-closed refCounter guard, and the normal end — and every one
-// of them can be reached AFTER phase 1 has already repointed books. Invalidating
+// purpose. This function has seven exits — two ctx cancellations, two store
+// failures, both fail-closed reference-count guards (phase 1's and phase 2's),
+// and the normal end — and every one of them can be reached AFTER phase 1 has
+// already repointed books. Invalidating
 // only at the normal exit left the other five serving pre-merge membership under
 // the cached list's 24-hour TTL, which is the 2026-08-14 production symptom
 // quoted below reached from a third direction. A defer is the only form that
@@ -215,6 +216,34 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		groups[key] = append(groups[key], s)
 	}
 
+	// UNFILTERED reference counts for PHASE 1, read once before the merge loop.
+	//
+	// Phase 1's existing repointFailed gate answers "did every row I was HANDED
+	// get repointed?". That is a different question from "is anything still
+	// pointing at this series?", and only the second one is safe to delete on.
+	// GetBooksBySeriesIDAllVersions below returns non-primary versions but still
+	// SKIPS TRASHED rows, so a series whose books are all in the trash
+	// enumerates EMPTY, repoints nothing, passes repointFailed == 0 and used to
+	// be deleted — stranding every trashed row on a series ID that no longer
+	// resolves. That is the surviving half of the hazard that left 6,893 phantom
+	// series IDs held by 13,322 live books (+702 trashed) on production
+	// 2026-08-14; see internal/database/series_bookref.go.
+	//
+	// Read ONCE for the whole library rather than per series: it turns one scan
+	// per duplicate group into one scan total, and the counts cannot go stale in
+	// a direction that makes this guard wrong. Phase 1 only ever moves books AWAY
+	// from a merged-from series, and each series ID belongs to exactly one group
+	// and is visited once, so refCounts[ser.ID] is an upper bound on what still
+	// references it — a stale-high count refuses, never permits.
+	//
+	// Fails CLOSED, and before anything has been deleted. A store that cannot
+	// answer the unfiltered question aborts the prune rather than falling back to
+	// the filtered count; that fallback IS the bug, and it is silent.
+	phase1RefCounts, refCountErr := database.SeriesRefCounts(store)
+	if refCountErr != nil {
+		return fmt.Errorf("series prune refusing to merge without unfiltered reference counts: %w", refCountErr)
+	}
+
 	// Phase 1: Merge duplicates. Counters are declared at the top of the function
 	// so the deferred cache invalidation can observe them on every exit path.
 	dupGroupCount := 0
@@ -299,6 +328,13 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			// is told the prune succeeded. Recording the failure is not enough --
 			// that is what this loop already did.
 			repointFailed := 0
+			// Rows this iteration actually MOVED off ser.ID, counted on the
+			// write succeeding. It is the subtrahend of the reference guard
+			// below and must never be len(books): that is what was ATTEMPTED,
+			// and it would make the guard pass on exactly the failures it
+			// exists to catch. booksRepointed is the run-wide total and cannot
+			// serve here.
+			moved := 0
 			for _, bookCore := range books {
 				oldSeriesID := ser.ID
 				full, herr := store.GetBookByID(bookCore.ID)
@@ -328,6 +364,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 					// still changed the book's series and still invalidates the
 					// cached series list.
 					booksRepointed++
+					moved++
 					if operationID != "" {
 						_ = store.CreateOperationChange(&database.OperationChange{
 							ID:          ulid.Make().String(),
@@ -347,6 +384,29 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 						"delete it, which would leave them holding a series row that no longer "+
 						"exists. Re-run after resolving the errors above.",
 					ser.ID, ser.Name, repointFailed, len(books), keepID))
+				continue
+			}
+			// The reference guard, kept SEPARATE from the repointFailed gate
+			// above on purpose: they answer different questions and fire on
+			// different populations. repointFailed covers rows this loop was
+			// handed and could not write; this covers rows it was never handed
+			// at all. Reaching here means the unfiltered counter sees more
+			// references than GetBooksBySeriesIDAllVersions returned — a
+			// TRASHED row (both series getters skip soft-deleted books, and a
+			// trashed row cannot be repointed) or a row the memdb counts and
+			// Pebble can no longer hydrate.
+			//
+			// Only the row removal is refused. The books that WERE repointed
+			// stay repointed: that is strictly an improvement and rolling it
+			// back would re-strand them. A surviving series row is visible and
+			// re-cleanable; a deleted one is not.
+			if stranded := phase1RefCounts[ser.ID] - moved; stranded > 0 {
+				mergeErrors = append(mergeErrors, fmt.Sprintf(
+					"series %d (%q): %d book(s) still reference it after reassigning %d to %d "+
+						"(trashed rows, which cannot be repointed, or rows the reference count sees "+
+						"and this run could not); REFUSING to delete it, which would leave them "+
+						"holding a series row that no longer exists",
+					ser.ID, ser.Name, stranded, moved, keepID))
 				continue
 			}
 			if err := store.DeleteSeries(ser.ID); err != nil {
@@ -383,6 +443,15 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// The reference counts are computed ONCE for the whole library rather than
 	// per series: it turns 14,626 scans into one, and more importantly it is the
 	// only form in which "referenced by nothing" is actually answerable.
+	//
+	// This is a SECOND, FRESH scan — do NOT "optimize" it into reusing
+	// phase1RefCounts. Phase 1 repoints books ONTO the canonical series it keeps,
+	// so a canonical series that had zero references when phase1RefCounts was
+	// read can hold several by the time this loop runs. Phase 1's guard is
+	// RELATIVE (count minus what it moved) and is monotone-safe against its own
+	// writes; this one is ABSOLUTE (== 0) and is not. Reusing the pre-Phase-1 map
+	// here would delete the merge TARGET out from under every book Phase 1 just
+	// moved into it — a worse bug than the one the guard exists to prevent.
 	refCounter := database.AsSeriesBookRefStore(store)
 	if refCounter == nil {
 		// Deliberately fatal. Falling back to the filtered counter is precisely

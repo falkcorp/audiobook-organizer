@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_series_cache_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1d94b6-2ea8-4f30-9c57-1b0e6a8d3f42
-// last-edited: 2026-08-24
+// last-edited: 2026-08-30
 
 package server
 
@@ -184,11 +184,18 @@ func TestExecuteSeriesPrune_InvalidatesSeriesCacheWhenOnlyBooksWereRepointed(t *
 // not one branch: the invalidation must survive a return that happens BEFORE the
 // end of the function.
 //
-// executeSeriesPrune has six exits and five of them are early. Phase 1 can have
+// executeSeriesPrune has seven exits and six of them are early. Phase 1 can have
 // repointed books before any of them fires, so an invalidation written at the
 // normal exit is skipped precisely when the cache is most wrong. Here the
 // unfiltered reference count fails after phase 1 has merged -- a real, documented
 // case, since MemStore refuses that call when memdb is short.
+//
+// It is the SECOND reference-count call that fails, not the first. Phase 1 now
+// takes its own counts up front and aborts before merging anything if they are
+// unavailable (SERIES-DELETE-UNGUARDED, #2908), so a store that fails every call
+// exits before phase 1 runs and this test would observe nothing. Failing only
+// phase 2's call models memdb going short BETWEEN the phases, which is the
+// early exit that can actually follow a completed merge.
 func TestExecuteSeriesPrune_InvalidatesSeriesCacheOnAnEarlyExit(t *testing.T) {
 	const (
 		keepID  = 1
@@ -201,9 +208,19 @@ func TestExecuteSeriesPrune_InvalidatesSeriesCacheOnAnEarlyExit(t *testing.T) {
 	mock, assignments := seriesPruneMergeFixture(keepID, mergeID, primary, altRip)
 	mock.DeleteSeriesFunc = func(int) error { return nil }
 
-	store := seriesRefCountFailStore{MockStore: mock}
+	store := &seriesRefCountFailStore{
+		MockStore: mock,
+		// Phase 1's read succeeds and agrees with what its getter returns, so
+		// the merge completes and repoints both rows.
+		firstCall: map[int]int{keepID: 2, mergeID: 2},
+	}
 	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err == nil {
 		t.Fatal("a failed reference count must abort the prune")
+	}
+	if store.calls < 2 {
+		t.Fatalf("expected phase 2 to make a second reference-count call, got %d — "+
+			"the abort happened before the merge and the assertions below prove nothing",
+			store.calls)
 	}
 
 	if assignments[primary] != keepID {
@@ -220,10 +237,21 @@ func TestExecuteSeriesPrune_InvalidatesSeriesCacheOnAnEarlyExit(t *testing.T) {
 // seriesRefCountFailStore satisfies the unfiltered-refcount interface (so the
 // fail-closed guard is passed) but fails the call itself, which is what MemStore
 // does when memdb is missing tables.
+//
+// It answers firstCall once and then fails every later call, so a test can put
+// the failure at phase 2 while letting phase 1's own read succeed. calls is
+// exported to the test so it can prove the second call actually happened rather
+// than inferring it from the returned error, which both aborts produce.
 type seriesRefCountFailStore struct {
 	*database.MockStore
+	firstCall map[int]int
+	calls     int
 }
 
-func (seriesRefCountFailStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+func (s *seriesRefCountFailStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	s.calls++
+	if s.calls == 1 && s.firstCall != nil {
+		return s.firstCall, nil
+	}
 	return nil, errors.New("simulated: memdb tables incomplete")
 }
