@@ -1,5 +1,5 @@
 // file: internal/server/series_prune_phase1_refcount_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8c1d64-7a52-4be0-9c31-64d0f2a8ab17
 // last-edited: 2026-08-30
 
@@ -338,14 +338,34 @@ func seriesMergeOpTestReg(t *testing.T) *opsregistry.Registry {
 // test whose subject is "what does this op report".
 type seriesMergeOpReporter struct {
 	opsregistry.Reporter
-	logs []string
+	logs []seriesMergeOpLogLine
+}
+
+// seriesMergeOpLogLine keeps the LEVEL, not just the text. dbReporter copies an
+// entry into op_errors_v2 only at error level or above, so a digest emitted at
+// warn leaves the operation's error table empty and the run reads as clean. A
+// reporter that recorded only messages could not tell those two apart.
+type seriesMergeOpLogLine struct {
+	level   slog.Level
+	message string
 }
 
 func (r *seriesMergeOpReporter) UpdateProgress(_, _ int, _ string) error { return nil }
 func (r *seriesMergeOpReporter) IsCanceled() bool                        { return false }
-func (r *seriesMergeOpReporter) Log(_ slog.Level, message string, _ ...slog.Attr) error {
-	r.logs = append(r.logs, message)
+func (r *seriesMergeOpReporter) Log(level slog.Level, message string, _ ...slog.Attr) error {
+	r.logs = append(r.logs, seriesMergeOpLogLine{level: level, message: message})
 	return nil
+}
+
+// errorLevelLogs returns only the entries that would reach op_errors_v2.
+func (r *seriesMergeOpReporter) errorLevelLogs() []string {
+	var out []string
+	for _, l := range r.logs {
+		if l.level >= slog.LevelError {
+			out = append(out, l.message)
+		}
+	}
+	return out
 }
 
 // newSeriesMergeOpServer wires a Server with just enough for the op's Run body:
@@ -396,14 +416,23 @@ func TestSeriesMergeOp_FailsWhenEveryDeleteWasRefused(t *testing.T) {
 	def, ok := reg.Def("dedup.series-merge")
 	require.True(t, ok)
 
-	err := def.Run(context.Background(), []byte(`{"keep_id":10,"merge_ids":[20]}`),
-		&seriesMergeOpReporter{})
+	reporter := &seriesMergeOpReporter{}
+	err := def.Run(context.Background(), []byte(`{"keep_id":10,"merge_ids":[20]}`), reporter)
 
 	require.Error(t, err, "the op returned nil on a run that merged nothing — it reports "+
 		"success and the requested count, so the operator sees a completed merge while the "+
 		"duplicate is still in the list")
 	assert.Contains(t, err.Error(), "merged 0 of 1",
 		"the op must report what it MERGED, not what it was asked to merge")
+
+	// The digest must reach op_errors_v2, which the db reporter populates only
+	// from error-level entries. Emitting it at warn leaves the operation's error
+	// table empty, so the run still reads as "0 errors" in the UI even once the
+	// status is right.
+	require.Len(t, reporter.errorLevelLogs(), 1,
+		"the refusal digest was not logged at error level, so op_errors_v2 stays empty and "+
+			"the run reports zero errors")
+	assert.Contains(t, reporter.errorLevelLogs()[0], "still reference it")
 }
 
 // TestSeriesMergeOp_SucceedsOnACleanMerge is the POSITIVE CONTROL. Without it,
@@ -416,7 +445,8 @@ func TestSeriesMergeOp_SucceedsOnACleanMerge(t *testing.T) {
 	def, ok := reg.Def("dedup.series-merge")
 	require.True(t, ok)
 
-	require.NoError(t, def.Run(context.Background(), []byte(`{"keep_id":10,"merge_ids":[20]}`),
-		&seriesMergeOpReporter{}),
+	reporter := &seriesMergeOpReporter{}
+	require.NoError(t, def.Run(context.Background(), []byte(`{"keep_id":10,"merge_ids":[20]}`), reporter),
 		"the one reference was reassigned, so the merge genuinely completed and must report success")
+	assert.Empty(t, reporter.errorLevelLogs(), "a clean merge must log no errors")
 }
