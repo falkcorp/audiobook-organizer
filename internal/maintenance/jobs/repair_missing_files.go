@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
 // last-edited: 2026-08-30
 
@@ -148,31 +148,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 	buildIdx := func() {
 		idxOnce.Do(func() {
 			slog.Info("building filename index…")
-			idx := make(map[string][]string, 200000)
-			for _, root := range searchRoots {
-				_ = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-					if walkErr != nil {
-						return nil
-					}
-					if d.IsDir() {
-						// searchRoots includes config RootDir, inside which
-						// the application keeps a backup directory and an
-						// OpenLibrary dump directory. A file indexed from
-						// either becomes a REPOINT TARGET for a book_file row
-						// whose path went missing -- the library would then
-						// point at application state.
-						if pathutil.ShouldSkipDir(root, path, app) {
-							return filepath.SkipDir
-						}
-						return nil
-					}
-					if audioExts[strings.ToLower(filepath.Ext(path))] {
-						base := filepath.Base(path)
-						idx[base] = append(idx[base], path)
-					}
-					return nil
-				})
-			}
+			idx := rmfr_buildFilenameIndex(searchRoots, audioExts, app)
 			idxMu.Lock()
 			filenameIdx = idx
 			idxMu.Unlock()
@@ -259,6 +235,40 @@ type rmfr_result struct {
 	Matches int    `json:"matches,omitempty"`
 	Applied bool   `json:"applied"`
 	Error   string `json:"error,omitempty"`
+}
+
+// rmfr_buildFilenameIndex walks every search root and returns filename →
+// []absolutePath for audio files.
+//
+// Lifted out of the buildIdx closure in Run so the app-directory guard below
+// can be exercised by a test without standing up a store, an iTunes XML and a
+// full job run. No behaviour change.
+func rmfr_buildFilenameIndex(searchRoots []string, audioExts map[string]bool, app pathutil.AppDirs) map[string][]string {
+	idx := make(map[string][]string, 200000)
+	for _, root := range searchRoots {
+		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if d.IsDir() {
+				// searchRoots includes config RootDir, inside which the
+				// application keeps a backup directory and an OpenLibrary dump
+				// directory. A file indexed from either becomes a REPOINT
+				// TARGET for a book_file row whose path went missing -- the
+				// library would then point at application state.
+				if pathutil.ShouldSkipDir(root, path, app) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if audioExts[strings.ToLower(filepath.Ext(path))] {
+				base := filepath.Base(path)
+				idx[base] = append(idx[base], path)
+			}
+			return nil
+		})
+	}
+	return idx
 }
 
 // rmfr_repairOne tries four escalating strategies and returns a result.
