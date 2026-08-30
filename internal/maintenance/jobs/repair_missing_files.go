@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
-// last-edited: 2026-08-23
+// last-edited: 2026-08-30
 
 package jobs
 
@@ -16,10 +16,12 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -44,6 +46,10 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 	opID := maintenance.OperationIDFromCtx(ctx)
 
 	searchRoots := rmfr_searchRoots()
+	// Resolved once for the whole job and threaded to rmfr_repairOne, so the
+	// index walk and the per-book directory scans below cannot disagree about
+	// what is application-owned.
+	app := appdirs.Current()
 
 	allFiles, err := store.GetAllBookFilesCore()
 	if err != nil {
@@ -145,7 +151,19 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 			idx := make(map[string][]string, 200000)
 			for _, root := range searchRoots {
 				_ = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-					if walkErr != nil || d.IsDir() {
+					if walkErr != nil {
+						return nil
+					}
+					if d.IsDir() {
+						// searchRoots includes config RootDir, inside which
+						// the application keeps a backup directory and an
+						// OpenLibrary dump directory. A file indexed from
+						// either becomes a REPOINT TARGET for a book_file row
+						// whose path went missing -- the library would then
+						// point at application state.
+						if pathutil.ShouldSkipDir(root, path, app) {
+							return filepath.SkipDir
+						}
 						return nil
 					}
 					if audioExts[strings.ToLower(filepath.Ext(path))] {
@@ -186,7 +204,7 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 				if ctx.Err() != nil {
 					return
 				}
-				res := rmfr_repairOne(f, metaByBook, pidToLocation, itunesOpts, dryRun, searchRoots, audioExts, buildIdx, getIdx, store, opID)
+				res := rmfr_repairOne(f, metaByBook, pidToLocation, itunesOpts, dryRun, searchRoots, app, audioExts, buildIdx, getIdx, store, opID)
 
 				if opID != "" {
 					resultJSON, _ := json.Marshal(res)
@@ -256,6 +274,7 @@ func rmfr_repairOne(
 	itunesOpts itunes.ImportOptions,
 	dryRun bool,
 	searchRoots []string,
+	app pathutil.AppDirs,
 	audioExts map[string]bool,
 	buildIdx func(),
 	getIdx func() map[string][]string,
@@ -385,6 +404,15 @@ func rmfr_repairOne(
 				if !entry.IsDir() {
 					continue
 				}
+				// os.ReadDir is SINGLE-LEVEL, so filepath.SkipDir has no
+				// meaning here -- the guard has to be a per-entry test on the
+				// joined path instead, and only for directory entries (a file
+				// sitting directly in the root is not inside an app dir).
+				// Without it, `<root_dir>/backups` is enumerated as though it
+				// were an author directory.
+				if pathutil.ShouldSkipDir(root, filepath.Join(root, entry.Name()), app) {
+					continue
+				}
 				if !strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(lastName)) {
 					continue
 				}
@@ -462,6 +490,15 @@ func rmfr_repairOne(
 			}
 			for _, entry := range entries {
 				if !entry.IsDir() {
+					continue
+				}
+				// os.ReadDir is SINGLE-LEVEL, so filepath.SkipDir has no
+				// meaning here -- the guard has to be a per-entry test on the
+				// joined path instead, and only for directory entries (a file
+				// sitting directly in the root is not inside an app dir).
+				// Without it, `<root_dir>/backups` is enumerated as though it
+				// were an author directory.
+				if pathutil.ShouldSkipDir(root, filepath.Join(root, entry.Name()), app) {
 					continue
 				}
 				if !strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(lastName)) {

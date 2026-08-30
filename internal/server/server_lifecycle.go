@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.32.0
+// version: 3.33.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 package server
 
@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -442,7 +443,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 	if s.Ops() != nil {
 		if paths, err := s.Ops().GetAllImportPaths(); err == nil {
 			for _, p := range paths {
-				stopCleanup := transcode.StartCleanupTicker(p.Path, 1*time.Hour, 2*time.Hour)
+				// Each import path is its own walk root. An app directory
+				// configured inside one is reached exactly as it is under the
+				// library root, and this ticker DELETES.
+				stopCleanup := transcode.StartCleanupTicker(p.Path, appdirs.Current(), 1*time.Hour, 2*time.Hour)
 				defer stopCleanup()
 			}
 		}

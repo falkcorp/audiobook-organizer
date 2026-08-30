@@ -1,7 +1,7 @@
 // file: internal/transcode/transcode.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
-// last-edited: 2026-08-18
+// last-edited: 2026-08-30
 
 package transcode
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // transcodeStore is what this package actually calls, measured by emptying the
@@ -439,10 +440,31 @@ func probeFileDuration(filePath string) int64 {
 
 // CleanupStaleTempFiles removes transcode temp files older than maxAge from the given directory tree.
 // Call this periodically (e.g. on server start and via a ticker) to catch orphans from crashed transcodes.
-func CleanupStaleTempFiles(rootDir string, maxAge time.Duration) int {
+//
+// `app` names the application-owned directories that must not be swept, and is
+// REQUIRED for the reason pathutil.AppDirs documents: this function DELETES,
+// and an omitted-by-default parameter reproduces the bug silently at the next
+// new call site. rootDir here is an enabled import path (see
+// server_lifecycle.go), which is a walk root in its own right -- an app
+// directory configured inside one is reached exactly the same way it is under
+// the library root, and ShouldSkipDir's root exemption keeps an import path
+// that IS an app directory fully walked.
+//
+// transcode does not import internal/config; its caller already holds one and
+// builds the value with appdirs.Current().
+func CleanupStaleTempFiles(rootDir string, app pathutil.AppDirs, maxAge time.Duration) int {
 	cleaned := 0
 	_ = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			// Prune the whole subtree: SkipDir also avoids descending into
+			// multi-GB backup archives and an embedded OpenLibrary database,
+			// neither of which can hold a transcode temp file.
+			if pathutil.ShouldSkipDir(rootDir, path, app) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		name := info.Name()
@@ -460,18 +482,18 @@ func CleanupStaleTempFiles(rootDir string, maxAge time.Duration) int {
 }
 
 // StartCleanupTicker runs periodic temp file cleanup. Returns a stop function.
-func StartCleanupTicker(rootDir string, interval, maxAge time.Duration) func() {
+func StartCleanupTicker(rootDir string, app pathutil.AppDirs, interval, maxAge time.Duration) func() {
 	ticker := time.NewTicker(interval)
 	done := make(chan struct{})
 	go func() {
 		// Run once immediately on start
-		if n := CleanupStaleTempFiles(rootDir, maxAge); n > 0 {
+		if n := CleanupStaleTempFiles(rootDir, app, maxAge); n > 0 {
 			slog.Info("transcode startup cleanup removed stale temp files", "count", n)
 		}
 		for {
 			select {
 			case <-ticker.C:
-				if n := CleanupStaleTempFiles(rootDir, maxAge); n > 0 {
+				if n := CleanupStaleTempFiles(rootDir, app, maxAge); n > 0 {
 					slog.Info("transcode periodic cleanup removed stale temp files", "count", n)
 				}
 			case <-done:

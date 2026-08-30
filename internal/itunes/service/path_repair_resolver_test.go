@@ -1,11 +1,12 @@
 // file: internal/itunes/service/path_repair_resolver_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8aef0d23-1c84-4f3d-9b41-2d70eaf1c7c0
 
 package itunesservice
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -151,7 +152,7 @@ func TestFSTagScanner_IndexesAudioFiles(t *testing.T) {
 		return "", nil
 	}
 
-	scan := newFSTagScanner(root, extractor)
+	scan := newFSTagScanner(root, pathutil.AppDirs{}, extractor)
 	one := scan.bookIDToPaths("book-1")
 	assert.Len(t, one, 2)
 	two := scan.bookIDToPaths("book-2")
@@ -182,12 +183,12 @@ func TestFSTagScanner_ParallelMatchesSequential(t *testing.T) {
 		return "book-" + string(base[1]), nil
 	}
 
-	seq := newFSTagScanner(root, extractor).withWorkers(1)
+	seq := newFSTagScanner(root, pathutil.AppDirs{}, extractor).withWorkers(1)
 	seqAll := append([]string(nil), seq.allPaths()...)
 	seqOne := append([]string(nil), seq.bookIDToPaths("book-0")...)
 
 	var progressCalls atomic.Int32
-	par := newFSTagScanner(root, extractor).
+	par := newFSTagScanner(root, pathutil.AppDirs{}, extractor).
 		withWorkers(8).
 		withProgress(func(done, total int) { progressCalls.Add(1) }, 10)
 	parAll := append([]string(nil), par.allPaths()...)

@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-22
+// last-edited: 2026-08-30
 
 package reconcile
 
@@ -17,10 +17,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 	"github.com/oklog/ulid/v2"
@@ -573,6 +575,13 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 
 	var untracked []string
 	seen := make(map[string]bool)
+	// dirs[0] is the library root (see above), inside which the application
+	// keeps a backup directory and an OpenLibrary dump directory. Untracked
+	// files found here become IMPORT CANDIDATES, so an audio file archived
+	// into a backup tree would be offered for import as a new book. The
+	// extension filter below is what happens to stop that today -- a naming
+	// coincidence, not a control.
+	app := appdirs.Current()
 
 	for _, dir := range dirs {
 		if _, err := os.Stat(dir); err != nil {
@@ -584,6 +593,11 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 				return nil // skip errors
 			}
 			if info.IsDir() {
+				// Each entry in dirs is walked as its own root, so an app dir
+				// equal to (or containing) one leaves that tree fully walked.
+				if pathutil.ShouldSkipDir(dir, path, app) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			ext := strings.ToLower(filepath.Ext(path))

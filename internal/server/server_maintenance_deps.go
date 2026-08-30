@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -129,7 +130,12 @@ func (s *Server) TranscodeMalformedM4BFiles(ctx context.Context, progress func(p
 // ---- store helpers ----
 
 func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
-	return sweep.CleanupOrphanedTempFiles(rootDir, s.activityWriter, opID)
+	// appdirs.Current() rather than a new deps-interface method: the sweep
+	// DELETES, and the maintenance plugin's deps interface would have to carry
+	// an AppDirs accessor for every future walker otherwise. server already
+	// reads the process config, so resolving here keeps the interface at one
+	// method and the rule at one resolver.
+	return sweep.CleanupOrphanedTempFiles(rootDir, appdirs.Current(), s.activityWriter, opID)
 }
 
 func (s *Server) CleanupTrashedVersions() int {

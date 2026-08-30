@@ -1,7 +1,7 @@
 // file: internal/remux/transcode.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-18
+// last-edited: 2026-08-30
 
 package remux
 
@@ -16,7 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	taglib "go.senan.xyz/taglib"
 )
 
@@ -85,6 +87,11 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 		return fmt.Errorf("TranscodeMalformedFiles: RootDir not configured")
 	}
 
+	// Both walks below MUST agree on what they skip: the first is the progress
+	// denominator for the second. A subtree counted but not processed makes
+	// the bar unable to reach 100%; one processed but not counted overshoots.
+	app := appdirs.Current()
+
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return fmt.Errorf("TranscodeMalformedFiles: ffmpeg not found: %w", err)
 	}
@@ -116,6 +123,18 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 		if walkErr != nil {
 			return nil
 		}
+		if d.IsDir() {
+			// The library root holds the application's own state as well
+			// as books -- a backup directory of multi-GB archives and an
+			// OpenLibrary dump directory containing an embedded database
+			// of ~1,200 files. Neither has a leading dot by default, so
+			// nothing excluded them before. This pass opens and REWRITES
+			// files it accepts, so descending is not merely wasted I/O.
+			if pathutil.ShouldSkipDir(root, path, app) {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if isTranscodeCandidate(path, d) {
 			total++
 		}
@@ -133,7 +152,19 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 			return fs.SkipAll
 		default:
 		}
-		if walkErr != nil || d.IsDir() {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			// The library root holds the application's own state as well
+			// as books -- a backup directory of multi-GB archives and an
+			// OpenLibrary dump directory containing an embedded database
+			// of ~1,200 files. Neither has a leading dot by default, so
+			// nothing excluded them before. This pass opens and REWRITES
+			// files it accepts, so descending is not merely wasted I/O.
+			if pathutil.ShouldSkipDir(root, path, app) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if !isTranscodeCandidate(path, d) {

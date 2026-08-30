@@ -1,7 +1,7 @@
 // file: internal/server/server_helpers.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 8a40b808-2bf2-4a35-893c-ad5e3351dbae
-// last-edited: 2026-05-25
+// last-edited: 2026-08-30
 
 package server
 
@@ -12,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
@@ -123,14 +125,33 @@ func calculateLibrarySizes(rootDir string, importFolders []database.ImportPath) 
 
 	// Recalculating library sizes (cache expired)
 
+	// appdirs.Current() is resolved here, in the function body, rather than
+	// threaded as a parameter: this function is passed as a VALUE to
+	// sysinfo.NewSystemService (registry_wire.go), so widening its signature
+	// would ripple into a file this change must not touch.
+	app := appdirs.Current()
+
 	// Calculate library size
 	librarySize = 0
 	if rootDir != "" {
 		if info, err := os.Stat(rootDir); err == nil && info.IsDir() {
 			filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-				if err == nil && !info.IsDir() {
-					librarySize += filePhysicalSize(info)
+				if err != nil {
+					return nil
 				}
+				if info.IsDir() {
+					// Not a deletion hazard -- a WRONG ANSWER. The reported
+					// "library size" currently includes the application's own
+					// backup archives and OpenLibrary dumps, which on a real
+					// install is tens of GB of storage attributed to books
+					// that do not exist. It is also the slowest walk on the
+					// startup path, and it re-walks that data every TTL.
+					if pathutil.ShouldSkipDir(rootDir, path, app) {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				librarySize += filePhysicalSize(info)
 				return nil
 			})
 		}
@@ -144,13 +165,23 @@ func calculateLibrarySizes(rootDir string, importFolders []database.ImportPath) 
 		}
 		if info, err := os.Stat(folder.Path); err == nil && info.IsDir() {
 			filepath.Walk(folder.Path, func(path string, info os.FileInfo, err error) error {
-				if err == nil && !info.IsDir() {
-					// Skip files that are under rootDir to avoid double counting
-					if rootDir != "" && strings.HasPrefix(path, rootDir) {
-						return nil
-					}
-					importSize += filePhysicalSize(info)
+				if err != nil {
+					return nil
 				}
+				if info.IsDir() {
+					// Each import path is its own walk root, so an app dir
+					// configured inside one is reached the same way it is
+					// under the library root.
+					if pathutil.ShouldSkipDir(folder.Path, path, app) {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				// Skip files that are under rootDir to avoid double counting
+				if rootDir != "" && strings.HasPrefix(path, rootDir) {
+					return nil
+				}
+				importSize += filePhysicalSize(info)
 				return nil
 			})
 		}

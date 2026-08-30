@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 01ad6c79-5f3f-4ee1-a07a-1f4b3a8c0d12
-// last-edited: 2026-08-18
+// last-edited: 2026-08-30
 //
 // PathRepairer dumps the iTunes XML, finds tracks whose Location no
 // longer exists on disk, re-discovers the correct path via three tiers
@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -247,7 +248,7 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 			_ = progress.Log("info",
 				fmt.Sprintf("tier B: scanning audiobook root in parallel root=%s workers=%d",
 					r.cfg.AudiobookRoot, runtime.NumCPU()*4), nil)
-			scanner := newFSTagScanner(r.cfg.AudiobookRoot, r.bookIDExtractor).
+			scanner := newFSTagScanner(r.cfg.AudiobookRoot, appdirs.Current(), r.bookIDExtractor).
 				withProgress(func(done, total int) {
 					_ = progress.Log("info",
 						fmt.Sprintf("tier B: tag scan progress %d/%d", done, total), nil)

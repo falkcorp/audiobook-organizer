@@ -1,10 +1,11 @@
 // file: internal/transcode/transcode_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
 
 package transcode
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,7 +219,7 @@ func TestCoverage_CleanupStaleTempFiles(t *testing.T) {
 	}
 	os.Chtimes(regularPath, pastTime, pastTime)
 
-	cleaned := CleanupStaleTempFiles(tmpDir, 1*time.Hour)
+	cleaned := CleanupStaleTempFiles(tmpDir, pathutil.AppDirs{}, 1*time.Hour)
 	if cleaned != 2 {
 		t.Errorf("expected 2 cleaned, got %d", cleaned)
 	}
@@ -242,14 +243,14 @@ func TestCoverage_CleanupStaleTempFiles(t *testing.T) {
 
 func TestCoverage_CleanupStaleTempFiles_EmptyDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	cleaned := CleanupStaleTempFiles(tmpDir, 1*time.Hour)
+	cleaned := CleanupStaleTempFiles(tmpDir, pathutil.AppDirs{}, 1*time.Hour)
 	if cleaned != 0 {
 		t.Errorf("expected 0 cleaned, got %d", cleaned)
 	}
 }
 
 func TestCoverage_CleanupStaleTempFiles_NonexistentDir(t *testing.T) {
-	cleaned := CleanupStaleTempFiles("/nonexistent/path", 1*time.Hour)
+	cleaned := CleanupStaleTempFiles("/nonexistent/path", pathutil.AppDirs{}, 1*time.Hour)
 	if cleaned != 0 {
 		t.Errorf("expected 0 cleaned, got %d", cleaned)
 	}
@@ -260,7 +261,7 @@ func TestCoverage_CleanupStaleTempFiles_NonexistentDir(t *testing.T) {
 func TestCoverage_StartCleanupTicker(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	stop := StartCleanupTicker(tmpDir, 100*time.Millisecond, 1*time.Hour)
+	stop := StartCleanupTicker(tmpDir, pathutil.AppDirs{}, 100*time.Millisecond, 1*time.Hour)
 	// Wait a bit for at least one tick
 	time.Sleep(250 * time.Millisecond)
 	stop()

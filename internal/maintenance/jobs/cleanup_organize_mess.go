@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_organize_mess.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000007-0000-0000-0000-000000000007
-// last-edited: 2026-08-17
+// last-edited: 2026-08-30
 
 package jobs
 
@@ -18,7 +18,9 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 func init() { maintenance.Register(&cleanupOrganizeMess{}) }
@@ -47,6 +49,11 @@ func (j *cleanupOrganizeMess) Run(ctx context.Context, _ maintenance.JobStore, r
 		return fmt.Errorf("root_dir not accessible: %w", err)
 	}
 
+	// Like cleanup-empty-folders, this job deletes by EMPTINESS, not by name,
+	// so nothing about a directory's contents protects it -- only whether the
+	// walk reaches it at all. The backup and OpenLibrary dump directories both
+	// live inside the library root under operator-settable, dot-free names.
+	app := appdirs.Current()
 	var dirs []string
 	walkErr := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -58,7 +65,16 @@ func (j *cleanupOrganizeMess) Run(ctx context.Context, _ maintenance.JobStore, r
 		if path == rootDir {
 			return nil
 		}
-		if strings.HasPrefix(filepath.Base(path), ".") {
+		// REPLACES a hand-rolled `strings.HasPrefix(base, ".")` check that
+		// lived here. It is replaced rather than supplemented, deliberately:
+		// keeping both would defeat pathutil's `.alternates` carve-out in this
+		// one job, which is precisely the "inventory, not a rule" divergence
+		// pathutil's doc comment was written to end. BEHAVIOUR CHANGE, stated
+		// plainly: a `<root_dir>/.alternates` directory is now walked here
+		// where it was skipped before. That is the intended semantics -- it is
+		// library content, and an empty one being tidied away is the same
+		// outcome as any other empty content directory.
+		if pathutil.ShouldSkipDir(rootDir, path, app) {
 			return filepath.SkipDir
 		}
 		dirs = append(dirs, path)

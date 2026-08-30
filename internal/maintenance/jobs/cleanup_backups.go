@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_backups.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000021-0000-0000-0000-000000000021
-// last-edited: 2026-08-17
+// last-edited: 2026-08-30
 
 package jobs
 
@@ -14,7 +14,9 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 func init() { maintenance.Register(&cleanupBackupsJob{}) }
@@ -41,13 +43,32 @@ func (j *cleanupBackupsJob) Run(ctx context.Context, _ maintenance.JobStore, rep
 		slog.Warn("cleanup-backups RootDir not configured")
 		return nil
 	}
+	// The application keeps its own state INSIDE the library root: a backup
+	// directory of multi-GB database archives and an OpenLibrary dump
+	// directory holding an embedded database. Both are operator-settable to
+	// names with no leading dot, so nothing here ever excluded them.
+	//
+	// backupFileRe does not currently match a database archive
+	// (backup.go names those "audiobooks_<type>_<timestamp>.tar.{gz,zst}"),
+	// so today this job walks ~90 GB and deletes nothing from it. That is a
+	// NAMING COINCIDENCE, not a control -- the same class of accidental
+	// protection PR #2974 replaced with a rule. A ".backup"- or ".bak"-suffixed
+	// file parked in either tree by an operator or a future archive format
+	// would be deleted with no warning.
+	app := appdirs.Current()
 	removed := 0
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if d.IsDir() {
+			if pathutil.ShouldSkipDir(root, path, app) {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if !backupFileRe.MatchString(filepath.Base(path)) {
 			return nil
