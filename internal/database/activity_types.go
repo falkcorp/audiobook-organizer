@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-06-10
+// last-edited: 2026-08-29
 
 // Package database — activity log types and helpers previously defined in
 // activity_store.go (the legacy SQLite backend). Extracted here in fable5
@@ -97,6 +97,22 @@ const maxDigestItems = 500
 type SourceCount struct {
 	Source string `json:"source"`
 	Count  int    `json:"count"`
+}
+
+// ActivityIndexRepairResult holds the outcome of a RepairActivityIndexes run.
+//
+// Deleted is Orphaned+Malformed for a run that finished; on an error or a
+// cancellation it is the number actually committed, never a projection.
+type ActivityIndexRepairResult struct {
+	// Scanned is how many act:op:/act:bk: index entries were examined.
+	Scanned int64 `json:"scanned"`
+	// Orphaned is how many pointed at a primary row that no longer exists.
+	Orphaned int64 `json:"orphaned"`
+	// Malformed is how many carried a reference that cannot be turned back
+	// into a primary key at all (so no reader could follow them either).
+	Malformed int64 `json:"malformed"`
+	// Deleted is how many index entries were actually removed.
+	Deleted int64 `json:"deleted"`
 }
 
 // RecompactResult holds the outcome of a RecompactDigests operation.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-08-24
+// last-edited: 2026-08-29
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -271,10 +271,14 @@ type CleanupRunners interface {
 type ActivityLogOps interface {
 	// ActivityFlushOp flushes the activity log for the given operation.
 	ActivityFlushOp(opID string)
-	// CompactActivityLog runs the activity log compact+summarize+prune cycle.
+	// CompactActivityLog runs the activity log compact+summarize+prune cycle
+	// and then repairs orphaned activity secondary index entries.
+	// indexOrphansRemoved is reported separately because it counts index keys,
+	// not activity rows: folding it into pruned would overstate how much
+	// history the run discarded.
 	CompactActivityLog(ctx context.Context,
 		compactionDays, changeDays, debugDays int,
-	) (compacted int, summarized int, pruned int, err error)
+	) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error)
 }
 
 // WriteBackOps covers the iTunes write-back queue.

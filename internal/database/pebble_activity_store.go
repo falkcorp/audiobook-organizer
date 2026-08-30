@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -30,8 +30,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -40,6 +42,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
 )
 
 // Tunables for the bounded query path. These are vars (not consts) so tests can
@@ -201,6 +204,108 @@ func pactPrimaryKeyFromRef(ref []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return []byte("act:" + s), true
+}
+
+// pactIndexFamilyPrefixes are the two secondary-index key families Record
+// writes alongside every primary row. They are NOT tiers — actTiers contains
+// none of them — so a tier range scan never sees them, which is exactly how
+// they went undeleted for so long.
+var pactIndexFamilyPrefixes = []string{"act:op:", "act:bk:"}
+
+// pactPrimaryKeySuffix splits a primary key "act:<tier>:<20d-unix-nano>:<ulid>"
+// and returns everything after the tier — "<20d-unix-nano>:<ulid>" — which is
+// byte-for-byte the suffix Record appended to both secondary index keys.
+func pactPrimaryKeySuffix(key []byte) (string, bool) {
+	s := string(key)
+	if !strings.HasPrefix(s, "act:") {
+		return "", false
+	}
+	rest := s[len("act:"):]
+	i := strings.IndexByte(rest, ':') // end of <tier>
+	if i < 0 {
+		return "", false
+	}
+	rest = rest[i+1:]
+	if strings.IndexByte(rest, ':') < 0 { // must still hold <nanos>:<ulid>
+		return "", false
+	}
+	return rest, true
+}
+
+// pactIndexKeysFor returns the act:op: / act:bk: keys Record wrote alongside
+// primaryKey, so a delete of the primary can remove them in the SAME batch.
+//
+// WHY the ids are read from the DECODED ENTRY: op_id and book_id are not
+// recoverable from the primary key, which carries only tier, timestamp and
+// ULID. The alternatives were (a) a third key family mapping primary → index
+// keys, which costs an extra write on EVERY Record plus a new invariant to keep
+// consistent, and (b) re-scanning act:op:/act:bk: per delete, which is
+// O(whole index) per row. Decoding wins here for a reason specific to these
+// call sites and not generally true: every path that deletes a primary row
+// (Summarize, Prune, WipeAllActivity, CompactByDay) already goes through
+// scanTierKVs, which json.Unmarshals EVERY row it returns — Summarize and
+// CompactByDay cannot group by day/op/type without it. So reading
+// e.OperationID and e.BookID here adds ZERO additional decodes; the marginal
+// cost of this fix is one string concat per non-empty id. A prune does not get
+// slower because of it.
+//
+// WHY the nanos+ulid come from the PRIMARY KEY and never from e.Timestamp:
+// Record derived both keys from one time.Time, but the entry has since
+// round-tripped through JSON. Pebble's Delete of a key that does not exist
+// succeeds silently, so one nanosecond of drift would ship a "fix" that
+// deletes nothing and reports no error. Slicing the suffix off the key that is
+// definitely being deleted cannot drift.
+func pactIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool) {
+	suffix, ok := pactPrimaryKeySuffix(primaryKey)
+	if !ok {
+		return nil, false
+	}
+	var keys [][]byte
+	if e.OperationID != "" {
+		keys = append(keys, []byte("act:op:"+e.OperationID+":"+suffix))
+	}
+	if e.BookID != "" {
+		keys = append(keys, []byte("act:bk:"+e.BookID+":"+suffix))
+	}
+	return keys, true
+}
+
+// pactDeleteEntry stages the full deletion of one activity row: its primary key
+// AND the secondary index entries Record wrote with it, in the same batch.
+//
+// EVERY deletion path must go through this. Before it existed, Prune,
+// Summarize, CompactByDay and WipeAllActivity each deleted kv.key alone, so
+// nothing in the codebase ever deleted an act:op: or act:bk: key:
+// WipeAllActivity did not wipe all activity, and on production act:op: alone
+// reached ~0.783 GiB of a ~1.342 GiB activity keyspace — roughly 60% — largely
+// index rows whose primary row had been pruned months earlier.
+//
+// UNDECODABLE ROWS: scanTierKVs drops a row whose stored JSON will not decode,
+// so such a row never reaches here and its PRIMARY key is not deleted either.
+// That is the deliberate choice, not an oversight: the primary/index pair stays
+// intact together, no new orphan is manufactured from a row whose ids we cannot
+// read, and the drop is counted and reported in aggregate by pactDecodeTally —
+// it is never silent. The one contract that cannot live with that is
+// WipeAllActivity, which therefore deletes both index prefixes wholesale
+// instead of row-by-row; see its doc comment.
+func pactDeleteEntry(batch *pebble.Batch, kv pactKV) error {
+	if err := batch.Delete(kv.key, nil); err != nil {
+		return err
+	}
+	idxKeys, ok := pactIndexKeysFor(kv.key, kv.entry)
+	if !ok {
+		// A primary key this malformed cannot have had index keys derived from
+		// it by Record, so there is nothing to delete — but it is not silent.
+		slog.Warn("[activity] malformed primary key: deleted the row, derived no index keys",
+			"key", string(kv.key))
+		return nil
+	}
+	for _, k := range idxKeys {
+		if err := batch.Delete(k, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ── ActivityStorer implementation ─────────────────────────────────────────────
@@ -442,7 +547,7 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 			return totalDeleted, setErr
 		}
 		for _, kv := range g.kvs {
-			if delErr := batch.Delete(kv.key, nil); delErr != nil {
+			if delErr := pactDeleteEntry(batch, kv); delErr != nil {
 				batch.Close()
 				return totalDeleted, delErr
 			}
@@ -477,7 +582,7 @@ func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, erro
 		}
 		batch := s.db.NewBatch()
 		for _, kv := range kvs[i:end] {
-			if err := batch.Delete(kv.key, nil); err != nil {
+			if err := pactDeleteEntry(batch, kv); err != nil {
 				batch.Close()
 				return deleted, fmt.Errorf("pebble_activity_store: prune batch delete: %w", err)
 			}
@@ -615,6 +720,22 @@ func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
 // prior tiers stay deleted; rows not yet reached are left untouched. There is
 // no partial-tier bookkeeping to resume: a retry just calls WipeAllActivity
 // again, which rescans every tier and deletes whatever remains.
+//
+// After the tier scan, the act:op: and act:bk: index families are removed
+// wholesale with DeleteRange. This method's contract is its name, and a
+// row-by-row index delete could not honour it: an entry whose stored JSON does
+// not decode is dropped by scanTierKVs, so its ids are unreadable and its index
+// entries would survive a "wipe all"; the same is true of every index row
+// orphaned before this leak was closed. A range delete needs neither the ids
+// nor a decode. It is safe because these two prefixes are not tiers — actTiers
+// holds none of them — and the only other key the activity subsystem owns is
+// the backfill sentinel "system:backfill:activity_pebble_v1_done", which is
+// outside "act:" entirely.
+//
+// The returned count stays PRIMARY ROWS ONLY, because that is what the
+// ActivityRetention doc promises callers ("rows actually deleted"); counting
+// index keys would silently inflate the number the wipe endpoint shows a user.
+// The index side is reported in the log line instead.
 func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 	var total int64
 	for _, tier := range actTiers {
@@ -635,7 +756,7 @@ func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error
 			}
 			batch := s.db.NewBatch()
 			for _, kv := range kvs[i:end] {
-				if err := batch.Delete(kv.key, nil); err != nil {
+				if err := pactDeleteEntry(batch, kv); err != nil {
 					batch.Close()
 					return total, fmt.Errorf("pebble_activity_store: wipe batch delete: %w", err)
 				}
@@ -648,7 +769,225 @@ func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error
 			total += int64(end - i)
 		}
 	}
+
+	// Sweep both index families wholesale. See the doc comment: this is what
+	// makes "wipe all" true for index rows whose primary is undecodable or was
+	// already gone, neither of which the per-row path above can reach.
+	if err := ctx.Err(); err != nil {
+		return total, err
+	}
+	idxBatch := s.db.NewBatch()
+	defer idxBatch.Close()
+	for _, prefix := range pactIndexFamilyPrefixes {
+		lower := []byte(prefix)
+		upper := []byte(prefix[:len(prefix)-1] + ";") // ';' is one above ':'
+		if err := idxBatch.DeleteRange(lower, upper, nil); err != nil {
+			return total, fmt.Errorf("pebble_activity_store: wipe index range %s: %w", prefix, err)
+		}
+	}
+	if err := idxBatch.Commit(pebble.Sync); err != nil {
+		return total, fmt.Errorf("pebble_activity_store: wipe index commit: %w", err)
+	}
+	slog.Info("[activity] wipe removed all secondary index entries",
+		"prefixes", pactIndexFamilyPrefixes, "primary_rows_deleted", total)
+
 	return total, nil
+}
+
+// activityRepairChunkSize is how many index rows one repair worker checks per
+// task. Large enough that the errgroup dispatch is noise next to the work,
+// small enough that at most NumCPU*chunk index keys are resident at once.
+var activityRepairChunkSize = 1000
+
+// pactIndexRow is one secondary-index key/value pair read by the repair scan.
+type pactIndexRow struct {
+	key []byte // act:op:<id>:<nanos>:<ulid> or act:bk:<id>:<nanos>:<ulid>
+	ref []byte // "<tier>:<nanos>:<ulid>" — the primary key minus the "act:" prefix
+}
+
+// pactRepairCounters accumulates a RepairActivityIndexes run across workers.
+type pactRepairCounters struct {
+	scanned   atomic.Int64
+	orphaned  atomic.Int64
+	malformed atomic.Int64
+	deleted   atomic.Int64
+
+	mu           sync.Mutex
+	firstBadKey  string
+	firstBadSeen bool
+}
+
+func (c *pactRepairCounters) noteMalformed(key []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.firstBadSeen {
+		c.firstBadSeen = true
+		c.firstBadKey = string(key)
+	}
+}
+
+func (c *pactRepairCounters) result() ActivityIndexRepairResult {
+	return ActivityIndexRepairResult{
+		Scanned:   c.scanned.Load(),
+		Orphaned:  c.orphaned.Load(),
+		Malformed: c.malformed.Load(),
+		Deleted:   c.deleted.Load(),
+	}
+}
+
+// RepairActivityIndexes deletes act:op: / act:bk: index entries whose primary
+// row no longer exists.
+//
+// WHY THIS EXISTS: closing the leak (see pactDeleteEntry) stops NEW orphans; it
+// gives the ones already stored no route to deletion. Preventing corruption is
+// not repairing it. On production the activity keyspace measured ~1.342 GiB
+// with act:op: alone at ~0.783 GiB, the bulk of it index rows pointing at
+// primaries pruned long ago; nothing in the codebase could remove them.
+//
+// CONCURRENCY (per the repo's whole-collection rule): the meaningful per-item
+// work is the existence check — one point lookup per index row — not the
+// iteration, so the iteration stays a single sequential scan per family and the
+// LOOKUPS fan out. Rows are cut into fixed chunks and handed to an errgroup
+// bounded by runtime.NumCPU(). Every index key is produced exactly once by one
+// sequential iterator and lands in exactly one chunk, so the chunks are DISJOINT
+// BY CONSTRUCTION and two workers can never delete the same key; each worker
+// commits its own batch and no shared mutable state is touched except atomic
+// counters. The refs are deliberately NOT all materialized for a merge-join
+// against the primary keyspace: holding a 0.78 GiB key set in memory is the
+// exact shape of the OOM this file's history is about.
+//
+// A malformed ref (one pactPrimaryKeyFromRef rejects) is DELETED and counted
+// separately, not skipped: queryByIndexPrefix cannot follow it either, so it is
+// dead weight by definition. The first such key is logged with the total.
+func (s *PebbleActivityStore) RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error) {
+	c := &pactRepairCounters{}
+	for _, prefix := range pactIndexFamilyPrefixes {
+		if err := ctx.Err(); err != nil {
+			return c.result(), err
+		}
+		if err := s.repairIndexFamily(ctx, prefix, c); err != nil {
+			return c.result(), err
+		}
+	}
+
+	res := c.result()
+	if res.Malformed > 0 {
+		slog.Warn("[activity] repair deleted index entries with an unusable reference",
+			"malformed", res.Malformed, "first_key", c.firstBadKey)
+	}
+	slog.Info("[activity] secondary index repair complete",
+		"scanned", res.Scanned, "orphaned", res.Orphaned,
+		"malformed", res.Malformed, "deleted", res.Deleted)
+	return res, nil
+}
+
+// repairIndexFamily scans one index prefix sequentially and fans the existence
+// checks out over a bounded worker pool.
+func (s *PebbleActivityStore) repairIndexFamily(ctx context.Context, prefix string, c *pactRepairCounters) error {
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(prefix),
+		UpperBound: []byte(prefix[:len(prefix)-1] + ";"), // ';' is one above ':'
+	})
+	if err != nil {
+		return fmt.Errorf("pebble_activity_store: repair new iter (%s): %w", prefix, err)
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.NumCPU())
+
+	chunk := make([]pactIndexRow, 0, activityRepairChunkSize)
+	dispatch := func() {
+		if len(chunk) == 0 {
+			return
+		}
+		batchRows := chunk
+		chunk = make([]pactIndexRow, 0, activityRepairChunkSize)
+		// SetLimit makes this block once NumCPU chunks are in flight, which is
+		// what bounds resident memory to NumCPU*activityRepairChunkSize rows.
+		g.Go(func() error { return s.repairIndexChunk(gctx, batchRows, c) })
+	}
+
+	seen := 0
+	var scanErr error
+	for iter.First(); iter.Valid(); iter.Next() {
+		if seen%activityCtxCheckInterval == 0 {
+			if ctxErr := gctx.Err(); ctxErr != nil {
+				scanErr = ctxErr
+				break
+			}
+		}
+		seen++
+		row := pactIndexRow{
+			key: append([]byte(nil), iter.Key()...),
+			ref: append([]byte(nil), iter.Value()...),
+		}
+		chunk = append(chunk, row)
+		if len(chunk) >= activityRepairChunkSize {
+			dispatch()
+		}
+	}
+	dispatch()
+
+	if closeErr := iter.Close(); closeErr != nil && scanErr == nil {
+		scanErr = closeErr
+	}
+	if waitErr := g.Wait(); waitErr != nil {
+		return waitErr
+	}
+	if scanErr != nil {
+		return fmt.Errorf("pebble_activity_store: repair scan (%s): %w", prefix, scanErr)
+	}
+	return nil
+}
+
+// repairIndexChunk checks one disjoint chunk of index rows and deletes the ones
+// whose primary row is gone or whose reference is unusable.
+func (s *PebbleActivityStore) repairIndexChunk(ctx context.Context, rows []pactIndexRow, c *pactRepairCounters) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var dead [][]byte
+	for _, r := range rows {
+		c.scanned.Add(1)
+		primary, ok := pactPrimaryKeyFromRef(r.ref)
+		if !ok {
+			c.malformed.Add(1)
+			c.noteMalformed(r.key)
+			dead = append(dead, r.key)
+			continue
+		}
+		_, closer, getErr := s.db.Get(primary)
+		if getErr != nil {
+			if errors.Is(getErr, pebble.ErrNotFound) {
+				c.orphaned.Add(1)
+				dead = append(dead, r.key)
+				continue
+			}
+			return fmt.Errorf("pebble_activity_store: repair get primary %q: %w", string(primary), getErr)
+		}
+		// Pebble hands back a closer on every HIT; not closing it leaks once
+		// per live index row, which on production is millions of rows.
+		if closeErr := closer.Close(); closeErr != nil {
+			return fmt.Errorf("pebble_activity_store: repair close primary: %w", closeErr)
+		}
+	}
+	if len(dead) == 0 {
+		return nil
+	}
+
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for _, k := range dead {
+		if err := batch.Delete(k, nil); err != nil {
+			return fmt.Errorf("pebble_activity_store: repair delete index: %w", err)
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("pebble_activity_store: repair commit: %w", err)
+	}
+	c.deleted.Add(int64(len(dead)))
+	return nil
 }
 
 // CompactByDay collapses all compactable tier entries into daily digest rows.
@@ -803,7 +1142,12 @@ func (s *PebbleActivityStore) CompactByDay(ctx context.Context, olderThan time.T
 
 		batch := s.db.NewBatch()
 
-		// Delete old digest if present.
+		// Delete old digest if present. This is a plain Delete, not
+		// pactDeleteEntry: digest rows are written just below with neither an
+		// OperationID nor a BookID, so Record never indexed them and there is
+		// nothing for the helper to find. findExistingDigest also returns only
+		// the key, not a decoded entry, so routing it through the helper would
+		// mean re-reading a row to derive index keys that cannot exist.
 		if existingKey != nil {
 			if err := batch.Delete(existingKey, nil); err != nil {
 				batch.Close()
@@ -817,9 +1161,9 @@ func (s *PebbleActivityStore) CompactByDay(ctx context.Context, olderThan time.T
 			return result, fmt.Errorf("pebble_activity_store: compact set digest: %w", err)
 		}
 
-		// Delete originals.
+		// Delete originals, plus each one's act:op:/act:bk: index entries.
 		for _, kv := range dg.kvs {
-			if err := batch.Delete(kv.key, nil); err != nil {
+			if err := pactDeleteEntry(batch, kv); err != nil {
 				batch.Close()
 				return result, fmt.Errorf("pebble_activity_store: compact delete original: %w", err)
 			}

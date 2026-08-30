@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-08-19
+// last-edited: 2026-08-29
 
 package maintenance
 
@@ -134,7 +134,7 @@ func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Clean activity log",
-		Description:     "Compacts old change entries into daily digests and prunes old debug entries.",
+		Description:     "Compacts old change entries into daily digests, prunes old debug entries, and removes orphaned activity index entries.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -148,7 +148,7 @@ func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	compacted, summarized, pruned, err := p.deps.CompactActivityLog(
+	compacted, summarized, pruned, indexOrphans, err := p.deps.CompactActivityLog(
 		ctx,
 		p.deps.ActivityLogCompactionDays(),
 		p.deps.ActivityLogRetentionChangeDays(),
@@ -157,8 +157,8 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	if err != nil {
 		return err
 	}
-	msg := fmt.Sprintf("Activity log cleanup: compacted %d, summarized %d, pruned %d",
-		compacted, summarized, pruned)
+	msg := fmt.Sprintf("Activity log cleanup: compacted %d, summarized %d, pruned %d, orphaned index entries removed %d",
+		compacted, summarized, pruned, indexOrphans)
 	logging.Info(ctx, msg)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil

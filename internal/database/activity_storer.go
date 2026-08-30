@@ -1,7 +1,7 @@
 // file: internal/database/activity_storer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package database
 
@@ -37,6 +37,29 @@ type ActivityRetention interface {
 	WipeAllActivity(ctx context.Context) (int64, error)
 	CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error)
 	RecompactDigests(ctx context.Context) (RecompactResult, error)
+	// RepairActivityIndexes deletes secondary index entries (act:op:, act:bk:)
+	// whose primary row no longer exists. Until 2026-08-29 no deletion path
+	// removed index entries at all, so every pruned, summarized, compacted or
+	// wiped row left its indexes behind permanently — on production act:op:
+	// alone held ~0.783 GiB of a ~1.342 GiB activity keyspace. The leak is
+	// closed in the delete paths; this is the repair for what they already
+	// left, and it is idempotent, so the maintenance job can run it nightly.
+	//
+	// It sits here rather than behind an optional interface + type assertion
+	// (the backup.Checkpointable shape) for two measured reasons, both checked
+	// rather than assumed. First, precedent: RecompactDigests directly above is
+	// equally backend-specific and already lives here, and
+	// MigrateSystemActivityLogs is documented as a no-op on the Pebble backend
+	// — the interface already carries exactly this category, so an optional
+	// interface would be a second pattern for one kind of thing. Second, cost:
+	// the compiler says widening breaks ONE test fake
+	// (metafetch.capturingActivityStore) beyond the three real
+	// implementations. Checkpointable earns its type assertion by hanging off
+	// database.Store, which has ~398 methods and many mocks; ActivityStorer has
+	// four implementations. The assertion would also add a fallback branch that
+	// does nothing and says nothing when it misses — the failure shape this
+	// repo keeps getting burned by — to buy back one three-line fake.
+	RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error)
 	MigrateSystemActivityLogs() (int, error)
 }
 

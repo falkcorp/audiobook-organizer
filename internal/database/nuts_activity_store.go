@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package database
 
@@ -651,6 +651,20 @@ func (s *NutsActivityStore) CompactByDay(ctx context.Context, olderThan time.Tim
 // It returns 0 entries migrated (they're already in the unified store).
 func (s *NutsActivityStore) MigrateSystemActivityLogs() (int, error) {
 	return 0, nil
+}
+
+// RepairActivityIndexes is a documented no-op for the NutsDB backend.
+//
+// NutsDB has the same defect — its deletion paths (Summarize, Prune,
+// WipeAllActivity, CompactByDay above) delete from the tier bucket only and
+// never touch the per-id "act:op:<id>" / "act:bk:<id>" buckets — but this
+// backend is retired and unwired (TASK-22; PebbleActivityStore is the only
+// store constructed in production), so there is no orphan population here to
+// repair and no way to exercise a repair against a live NutsDB. Returning a
+// zero result is therefore accurate for this backend rather than a silent
+// skip; the leak itself is recorded in the PR that closed the Pebble one.
+func (s *NutsActivityStore) RepairActivityIndexes(_ context.Context) (ActivityIndexRepairResult, error) {
+	return ActivityIndexRepairResult{}, nil
 }
 
 // RecompactDigests re-derives type, tier, and tags on every stored daily-digest
