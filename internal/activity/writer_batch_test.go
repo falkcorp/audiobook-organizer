@@ -1,5 +1,5 @@
 // file: internal/activity/writer_batch_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c7e5f10-9a63-4d84-8b21-4e0d7c395a6f
 // last-edited: 2026-08-30
 
@@ -119,8 +119,17 @@ func TestWriteBatch_UsesOneCommitForTheWholeFlush(t *testing.T) {
 	store := newCountingBatchStore(t)
 	w := NewWriter(store, 200)
 
+	var out bytes.Buffer
+	w.stdout = &out
+
 	const n = 100
 	w.writeBatch(writerTestEntries(n))
+
+	// A successful flush must say NOTHING. reportLoss is called on every flush,
+	// not only failing ones, so a wrong guard in it would print a warning per
+	// flush -- in the component the whole log system tees through, which is the
+	// worst possible place to emit steady-state noise.
+	assert.Empty(t, out.String(), "a successful flush must be silent, got %q", out.String())
 
 	assert.Equal(t, int64(1), store.batchCalls.Load(), "the whole flush must be one batched write")
 	assert.Zero(t, store.recordCalls.Load(), "no entry may take the per-entry commit path")
@@ -160,9 +169,13 @@ func TestWriteBatch_FallsBackToPerEntryWithoutTheCapability(t *testing.T) {
 	w := NewWriter(noBatchStore{ActivityStorer: store}, 200)
 	require.Nil(t, w.batchStore, "the fixture must not expose RecordBatch, or it tests the wrong path")
 
+	var out bytes.Buffer
+	w.stdout = &out
+
 	const n = 20
 	w.writeBatch(writerTestEntries(n))
 
+	assert.Empty(t, out.String(), "a successful fallback flush must be silent too, got %q", out.String())
 	assert.Zero(t, store.batchCalls.Load(), "no batched write is available here")
 	assert.Equal(t, int64(n), store.recordCalls.Load(), "every entry takes its own commit")
 	assert.Equal(t, n, countActivityKeys(t, store.PebbleActivityStore, "act:change:"), "primary rows")
