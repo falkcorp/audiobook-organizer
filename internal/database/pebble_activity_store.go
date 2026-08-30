@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-29
 
@@ -739,6 +739,13 @@ func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
 // backfill sentinel "system:backfill:activity_pebble_v1_done", which is outside
 // "act:" — and ';' is one above ':' in ASCII, so ["act:", "act;") is exactly
 // that prefix and nothing beyond it.
+//
+// The blast radius was ENUMERATED, not reasoned about: every "act"-prefixed key
+// literal in internal/ is either act:<tier>: for a member of actTiers (all seven,
+// "digest" included — so the digest rollup is inside the sweep, and the test
+// seeds a digest row so the assertion is not vacuously true of one tier) or one
+// of the two index families. The unrelated "action:..." literals are activity
+// field values rather than keys, and sort after "act;" regardless.
 //
 // The returned count stays PRIMARY ROWS ONLY and is therefore a LOWER BOUND: it
 // counts the rows deleted individually above, so a row the scan could not decode

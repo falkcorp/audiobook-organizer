@@ -34,7 +34,11 @@ Both halves are fixed:
   what makes its name true for the rows that pass cannot reach: an index entry
   orphaned before this fix, and — caught by test, not assumed — a PRIMARY row
   whose stored JSON will not decode, which `scanTierKVs` drops and which was
-  therefore surviving a "wipe all" too.
+  therefore surviving a "wipe all" too. The range's bounds were checked by
+  enumerating every `act`-prefixed key literal in `internal/`: the only families
+  under it are `act:<tier>:` for each of the seven `actTiers` (including
+  `digest`, which `CompactByDay` skips) and the two index families, so the sweep
+  is exactly the activity keyspace and no wider.
 - **The existing orphans have a route out.** A new repair pass finds index
   entries whose primary row no longer exists and deletes them, and it now runs
   as the last step of the nightly `maintenance.cleanup-activity-log` job, which
