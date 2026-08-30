@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_activity_log_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8b1f37-92ad-4e60-b3d1-8a4f26c0e7b9
 // last-edited: 2026-08-29
 
@@ -25,8 +25,10 @@ func (d activityCleanupDeps) CompactActivityLog(_ context.Context, _, _, _ int) 
 // TestCleanupActivityLog_ReportsIndexOrphanCount pins the reporting half of the
 // index-repair wiring. The repair pass runs inside CompactActivityLog and its
 // count is a separate return value; dropping it on the floor here would leave a
-// nightly job that silently reclaims hundreds of megabytes and tells the
+// nightly job that silently deletes millions of index keys and tells the
 // operator nothing, which is indistinguishable from a job that did nothing.
+// (Deliberately "keys", not "megabytes": a Pebble delete writes a tombstone and
+// frees no space until a later compaction.)
 func TestCleanupActivityLog_ReportsIndexOrphanCount(t *testing.T) {
 	p := New(activityCleanupDeps{indexOrphans: 7411})
 	rep := &fakeReporter{}
