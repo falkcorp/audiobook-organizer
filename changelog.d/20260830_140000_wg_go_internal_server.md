@@ -13,8 +13,12 @@ hangs `Wait()` or panics with a negative counter.
 The five converted background goroutines in `Server.Start` (WebSocket system
 metrics, cache-stats snapshotter, auto-scan watcher supervisor, session cleanup,
 stale-operation sweep) are the ones that matter: they are joined by the 30-second
-shutdown grace period, and they have no test coverage, so a counter mistake there
-would only ever surface in production at shutdown.
+shutdown grace period. They are also the only converted production sites the test
+suite actually exercises end to end — `TestServerStartGracefulShutdown` starts the
+server, SIGTERMs it, and rides the shutdown path down to `backgroundWG.Wait()`.
+The two worker pools converted alongside them (`runBulkWriteBack` in
+`metadata_ops.go`, the candidate-fetch pool in `metadata_candidate_op.go`) have no
+test that reaches them at all, before or after this change.
 
 `FileIOPool.worker` no longer calls `p.wg.Done()` itself; its single caller
 starts it through `p.wg.Go`, which owns the counter. A comment on `worker` records
