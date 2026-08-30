@@ -1,5 +1,5 @@
 // file: internal/activity/writer.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-08-30
 
@@ -55,6 +55,16 @@ type batchRecorder interface {
 // shrink it.
 var flushChunkSize = 500
 
+// The production store must satisfy batchRecorder, checked at COMPILE time.
+//
+// The runtime assertion in NewWriter is deliberate, but on its own it is not
+// enough of a guarantee: every test fixture that "has" the capability declares
+// its OWN RecordBatch method, so none of them can observe the real store losing
+// it. If PebbleActivityStore.RecordBatch's signature ever drifted, or the
+// method were renamed, prod would silently fall back to one fsync per entry and
+// the whole suite would still pass. This line makes that a build failure.
+var _ batchRecorder = (*database.PebbleActivityStore)(nil)
+
 // Writer is an io.Writer that tees log output to stdout AND sends
 // parsed entries through a buffered channel to an ActivityStore.
 type Writer struct {
@@ -106,7 +116,11 @@ func (w *Writer) logBatchPath() {
 		w.stdout.Write([]byte("[INFO] activity: batched activity writes enabled (one commit per flush)\n")) //nolint:errcheck
 		return
 	}
-	w.stdout.Write([]byte("[INFO] activity: store has no batch write path, falling back to one commit per entry\n")) //nolint:errcheck
+	// WARN, not INFO: this is a real degradation, not a configuration note. It
+	// costs two orders of magnitude of write throughput (one fsync per row
+	// instead of one per flush), and it means some wrapper is intercepting the
+	// store without forwarding RecordBatch — which is worth seeing named.
+	w.stdout.Write([]byte("[WARN] activity: store has no batch write path, falling back to one fsync per entry\n")) //nolint:errcheck
 }
 
 // SetSkipSources replaces the set of log sources that are dropped before
@@ -289,8 +303,9 @@ func (w *Writer) drain() {
 // 5,000 rows (-count=5 medians): 101 rows/sec that way against 29,530 rows/sec
 // batched, same durability.
 //
-// A store without the capability keeps the per-entry loop, which is correct,
-// just slower. Which path is live is logged once at Start.
+// A store without the capability keeps the per-entry loop, which is slower but
+// otherwise equivalent: it writes the same rows and, importantly, reports a
+// lost row exactly the same way. Which path is live is logged once at Start.
 func (w *Writer) writeBatch(entries []database.ActivityEntry) {
 	for i := range entries {
 		EnrichTags(&entries[i])
@@ -298,28 +313,46 @@ func (w *Writer) writeBatch(entries []database.ActivityEntry) {
 
 	if w.batchStore != nil {
 		written, err := w.batchStore.RecordBatch(entries)
-		if err != nil {
-			// Report on stdout, NOT through slog. This Writer is the io.Writer
-			// the log system tees into, so an slog call here would parse back
-			// into this same channel — and because this path only runs when the
-			// store is failing, each failure would enqueue an entry whose own
-			// flush fails and logs again. A persistent disk error would become
-			// a write amplification loop instead of a report. sendEntry's
-			// channel-full warning writes to stdout for the same reason.
-			//
-			// The count comes from RecordBatch's return value, not from the
-			// error text: it is the number of rows actually made durable, so
-			// the loss reported here cannot overstate what survived.
-			w.stdout.Write([]byte(fmt.Sprintf( //nolint:errcheck
-				"[WARN] activity: batched write lost %d of %d entries: %v\n",
-				len(entries)-written, len(entries), err)))
-		}
+		// The count comes from RecordBatch's return value, not from the error
+		// text: it is the number of rows actually made durable, so the loss
+		// reported here cannot overstate what survived. RecordBatch's own
+		// message describes only the commit that failed, which on a multi-chunk
+		// call is a subset of the loss — len(entries)-written is the whole of it.
+		w.reportLoss(len(entries)-written, len(entries), err)
 		return
 	}
 
+	// The fallback must not be quieter than the path it stands in for. Record
+	// returns an error per entry and the pre-batch code discarded it, so a
+	// store without the capability used to lose rows in total silence. Count
+	// them and report through the same line, so "did we lose activity rows?"
+	// has one answer regardless of which path ran.
+	lost := 0
+	var lastErr error
 	for _, e := range entries {
-		w.store.Record(e) //nolint:errcheck
+		if _, err := w.store.Record(e); err != nil {
+			lost++
+			lastErr = err
+		}
 	}
+	w.reportLoss(lost, len(entries), lastErr)
+}
+
+// reportLoss writes one line naming how many rows of a flush failed to reach
+// the store. It is a no-op when nothing was lost.
+//
+// It reports on stdout, NOT through slog. This Writer is the io.Writer the log
+// system tees into, so an slog call here would parse back into this same
+// channel — and because this only runs when the store is failing, each failure
+// would enqueue an entry whose own flush fails and logs again. A persistent
+// disk error would become a write-amplification loop instead of a report.
+// sendEntry's channel-full warning writes to stdout for the same reason.
+func (w *Writer) reportLoss(lost, total int, err error) {
+	if lost <= 0 && err == nil {
+		return
+	}
+	w.stdout.Write([]byte(fmt.Sprintf( //nolint:errcheck
+		"[WARN] activity: write lost %d of %d entries: %v\n", lost, total, err)))
 }
 
 // Flush synchronously drains any entries currently in the channel without

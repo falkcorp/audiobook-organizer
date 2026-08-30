@@ -58,6 +58,15 @@ not the row, was the unit of cost.
   several commits rather than staged into one unbounded batch — this service has
   already OOMed once on an unbounded activity path.
 
+`Writer`'s per-entry fallback used to discard `Record`'s error outright, so a
+store without the batch capability lost rows in total silence while the batched
+path reported every loss. Both branches now report through one line, so "did we
+lose activity rows?" has one answer regardless of which path ran. The startup
+line naming the fallback is a `[WARN]`, not an `[INFO]` — it is a real
+degradation — and a compile-time assertion binds the production store to the
+capability, because every "capability present" test fixture declares its own
+`RecordBatch` and so none of them could observe the real store losing it.
+
 **Error semantics** are deliberate and documented in the code. An entry whose
 JSON will not marshal is the only failure attributable to a single row: it is
 dropped, the rest of the flush still commits, and the returned count and error

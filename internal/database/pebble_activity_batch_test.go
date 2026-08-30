@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_batch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b41d0c7-3e59-4a16-b2d7-6f9c1a840e35
 // last-edited: 2026-08-30
 
@@ -18,6 +18,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"testing"
 	"time"
@@ -209,7 +210,6 @@ func TestRecordBatch_SplitsOverTheCap(t *testing.T) {
 	ts := time.Now().UTC().Add(-time.Hour)
 	const n = 11 // 4 + 4 + 3 — deliberately not a multiple of the cap
 
-	before := pactRecordBatchCommits.Load()
 	written, err := s.RecordBatch(batchTestEntries(n, ts))
 	require.NoError(t, err)
 	require.Equal(t, n, written)
@@ -217,13 +217,75 @@ func TestRecordBatch_SplitsOverTheCap(t *testing.T) {
 	// The commit count is the actual subject. 11 entries look identical on disk
 	// whether they went down in one commit or three, so asserting only on rows
 	// would pass against a cap that had stopped splitting anything.
-	assert.Equal(t, int64(3), pactRecordBatchCommits.Load()-before,
+	assert.Equal(t, int64(3), s.recordBatchCommits.Load(),
 		"11 entries at a cap of %d must be 3 commits, not one unbounded batch", activityRecordBatchCap)
 
 	assert.Equal(t, n, countKeysWithPrefix(t, s, "act:change:"), "primary rows across the split")
 	opKeys, bookKeys := countIndexKeys(t, s)
 	assert.Equal(t, n, opKeys, "act:op: keys across the split")
 	assert.Equal(t, n, bookKeys, "act:bk: keys across the split")
+}
+
+// TestRecordBatch_AccountsAcrossChunks pins the multi-chunk arithmetic.
+//
+// The counts a caller reports come from the RETURN value, so they have to be
+// whole-call figures, not per-chunk ones. Here the middle chunk fails entirely
+// (every one of its entries is unmarshalable), which also drives the staged==0
+// path: that chunk must be skipped without committing an empty batch, and the
+// chunks either side of it must still land.
+func TestRecordBatch_AccountsAcrossChunks(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+
+	orig := activityRecordBatchCap
+	activityRecordBatchCap = 4
+	t.Cleanup(func() { activityRecordBatchCap = orig })
+
+	ts := time.Now().UTC().Add(-time.Hour)
+	entries := batchTestEntries(11, ts) // chunks of 4 + 4 + 3
+	for i := 4; i < 8; i++ {            // the whole middle chunk
+		entries[i].Details = map[string]any{"unmarshalable": make(chan int)}
+	}
+
+	written, err := s.RecordBatch(entries)
+	require.Error(t, err, "dropping four entries must not be silent")
+	assert.Equal(t, 7, written, "the first and last chunks survive, the middle one does not")
+	assert.Contains(t, err.Error(), "dropped 4 of 11 entries",
+		"the report must be whole-call, not per-chunk")
+
+	assert.Equal(t, 7, countKeysWithPrefix(t, s, "act:change:"), "only the good rows are durable")
+	assert.Equal(t, int64(2), s.recordBatchCommits.Load(),
+		"the all-bad middle chunk must be skipped, not committed empty")
+}
+
+// TestRecordBatch_CommitFailureNamesTheWholeCallLoss covers the other early
+// return. A commit failure abandons the rest of the CALL, not just the chunk
+// that failed, so the message has to say so: with a cap of 4 and 11 entries,
+// failing the first commit loses all 11, not the 4 that were staged. Reporting
+// the staged count would understate the loss by seven rows.
+//
+// A read-only handle is the deterministic way to make Commit fail: staging
+// succeeds, the durable write does not.
+func TestRecordBatch_CommitFailureNamesTheWholeCallLoss(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ro.pebble")
+	db, err := pebble.Open(dir, &pebble.Options{})
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	ro, err := pebble.Open(dir, &pebble.Options{ReadOnly: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ro.Close() })
+
+	s := NewPebbleActivityStore(ro)
+
+	orig := activityRecordBatchCap
+	activityRecordBatchCap = 4
+	t.Cleanup(func() { activityRecordBatchCap = orig })
+
+	written, err := s.RecordBatch(batchTestEntries(11, time.Now().UTC().Add(-time.Hour)))
+	require.Error(t, err)
+	assert.Zero(t, written, "nothing reached the disk")
+	assert.Contains(t, err.Error(), "lost 11 of 11 entries",
+		"a commit failure abandons the whole call, and the message must not name only the failed chunk")
 }
 
 // TestRecordBatch_DropsUnmarshalableEntryAndCommitsTheRest pins the chosen
