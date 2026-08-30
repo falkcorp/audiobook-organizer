@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.22.0 -->
+<!-- version: 1.23.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-25 -->
+<!-- last-edited: 2026-08-30 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-25 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-30 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the 29 dated summaries in this directory
 from 2026-08-04 to 2026-08-19, linked inline below.
@@ -1330,6 +1330,65 @@ One deliberate change of default came with this. Because the box now really does
 files on disk, it no longer starts ticked. The setting on this library has automatic
 organizing switched off, and a box that arrives pre-ticked is not a choice anyone made.
 Organizing on import is now something you opt into.
+
+## 31. The library's own filing cabinets, walked as if they were books (Aug 30)
+
+The library folder is not only books. Sitting inside it are two directories the
+application keeps for itself: the place database backups are written, and the place a
+large public book catalogue is downloaded and unpacked to. Together they hold roughly a
+hundred gigabytes — individual backup archives are around fifteen gigabytes each, and the
+catalogue directory alone contains over a thousand files.
+
+Nothing marked those directories as off-limits. Every routine that sweeps the library —
+counting how much space it uses, looking for files that need repairing, hunting for
+leftovers to tidy away, offering unrecognised audio for import — simply started at the
+top of the folder and walked everything beneath it, application storage included.
+
+Work that shipped the day before established the rule that this should not happen, and
+applied it to the four sweeps that already had a place to put it. This change finishes
+the job. A survey of the whole codebase found sixteen places that walk the library
+folder, not the six that had been identified — ten more than expected, in code that had
+never been looked at from this angle. Every one of them now consults the same single
+list of application-owned directories.
+
+**Why it mattered.** Three separate consequences, of increasing severity.
+
+The mildest is wasted effort and wrong numbers: the reported size of the library included
+a hundred gigabytes that are not books, and repair tools were reading through a thousand
+catalogue files looking for audio that was never there.
+
+More serious, several of these sweeps offer up what they find as *candidates* — files to
+import as new books, or destinations to re-point an existing book at. Anything they
+surfaced from application storage was an invitation to aim the library at its own
+internal data.
+
+Most serious, seven of the sixteen delete things. Five of those decide what to delete by
+looking at the file's name, and it was worth establishing exactly what those names are
+before assuming anything. The answer was reassuring but uncomfortable: database archives
+happen to be named in a way that none of the five deletion rules match. Nothing in the
+backup folder was being destroyed — but only by coincidence of naming, which is precisely
+the kind of accidental protection the rule was introduced to replace.
+
+The other two deleters were a live problem, not a near-miss. They do not look at names at
+all: they remove any directory they find empty, anywhere under the library folder. An
+empty directory inside the backup area or the catalogue area — one waiting to be filled,
+or left behind between runs — was being deleted, and had been all along.
+
+**The fix.** Every one of the sixteen sweeps now checks the shared list before descending
+into a directory. Where a sweep looks at only one level of folders rather than walking a
+whole tree, the check is applied to each folder individually, because the usual "skip this
+branch" instruction has no meaning there — a detail worth spelling out, because getting it
+wrong would have looked correct and done nothing.
+
+Some walks were deliberately left alone and are listed in the change itself with the
+reason, because an unnecessary exclusion in a cleanup routine stops it cleaning what it
+should. Two of the sixteen also revealed that "delete old backup files" exists three
+separate times in the codebase, written three times, with two of the three using different
+rules for what counts as old. That has been recorded rather than fixed here.
+
+Each of the twenty-one individual checks was then verified by deliberately breaking it and
+confirming a test noticed — all twenty-one did, and two genuine gaps were found and closed
+that way, in checks that had looked fine and were never actually being exercised.
 
 ## Themes worth carrying into next month
 
