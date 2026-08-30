@@ -1,5 +1,5 @@
 // file: internal/server/bg_wg_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a2f7c41-9b6d-4e18-8c05-1d7a4e2b9f63
 // last-edited: 2026-08-30
 
@@ -64,12 +64,20 @@ func TestNamedWaitGroupGoRegistersNameWhileRunning(t *testing.T) {
 	}
 }
 
-// TestNamedWaitGroupGoDeregistersOnPanic pins the defer ordering inside Go:
-// Done runs via defer, so a panicking fn still deregisters its name and
-// decrements the counter rather than wedging Shutdown's Wait forever. This is
-// the property the converted cache warmers rely on — their own
-// defer warmerRecover(...) runs first (inside fn), so in production the panic
-// is recovered before Go's deferred Done fires.
+// TestNamedWaitGroupGoDeregistersOnPanic pins that an fn which panics and
+// recovers its own panic still deregisters its name and decrements the
+// counter, rather than wedging Shutdown's Wait forever. That is the shape the
+// converted cache warmers actually have in production: each one's
+// defer warmerRecover(...) runs inside fn, so fn returns normally and Go
+// deregisters on the way out.
+//
+// It does NOT pin the `defer` in Go's own body. Because fn recovers before
+// returning, rewriting Go to `go func(){ fn(); n.Done(name) }()` leaves this
+// test — and the whole package — green (verified: -race -count=5, exit 0).
+// Pinning that would need an fn whose panic escapes to Go's frame, which no
+// converted site has: those without a recover would take the process down
+// regardless of where Done sits, so the property is moot in production and
+// not worth teaching Go to recover for.
 func TestNamedWaitGroupGoDeregistersOnPanic(t *testing.T) {
 	var n namedWaitGroup
 
