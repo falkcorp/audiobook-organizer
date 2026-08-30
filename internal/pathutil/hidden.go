@@ -1,5 +1,5 @@
 // file: internal/pathutil/hidden.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5a2c7e91-4d38-4b06-9c1f-7e0a3b58d264
 // last-edited: 2026-08-29
 
@@ -130,11 +130,35 @@ func underDir(dir, path string) bool {
 	return true
 }
 
-// IsAppDir reports whether `path` is an application-owned directory or lives
-// beneath one, and must therefore be kept out of library sweeps REGARDLESS of
-// what it is named.
-func (a AppDirs) IsAppDir(path string) bool {
+// skipsUnderRoot reports whether `path` is application-owned FROM THE
+// PERSPECTIVE OF A WALK ROOTED AT `root`, and must therefore be kept out of
+// that sweep regardless of what it is named.
+//
+// The `root` parameter is not decoration, and this method is deliberately
+// unexported so no caller can reach the root-unaware version by accident.
+//
+// An app dir that CONTAINS the walk root -- including one EQUAL to it -- is
+// ignored entirely. Without that, exempting only the root itself buys nothing:
+// WalkDir's first callback survives and every descendant is skipped, so a
+// library laid out as author/title/ scans to ZERO BOOKS with no error
+// anywhere. Same silent outcome as abandoning the walk, reached one callback
+// later. This is not only the misconfigured `backup_dir == root_dir` case: the
+// scanner walks each enabled import path as its own root, so an import path
+// added at or under `<root_dir>/openlibrary-dumps` would silently contribute
+// nothing.
+//
+// Ignoring such a dir is the same principle the root exemption already
+// encodes: an explicitly configured walk root is a deliberate choice by the
+// operator, and everything below it is what they asked to be walked. Exclusion
+// applies to app directories found INSIDE the tree being walked, never to the
+// tree itself.
+func (a AppDirs) skipsUnderRoot(root, path string) bool {
 	for _, dir := range a.all() {
+		if underDir(dir, root) {
+			// This app dir is the walk root or an ancestor of it. Honouring it
+			// would skip the entire requested tree.
+			continue
+		}
 		if underDir(dir, path) {
 			return true
 		}
@@ -162,14 +186,15 @@ func (a AppDirs) IsAppDir(path string) bool {
 //
 //   - The walk root is checked FIRST and never skipped, even when it is itself
 //     dot-prefixed or app-owned. filepath.WalkDir yields the root as its first
-//     callback, so returning SkipDir there abandons the entire walk. If the
-//     app-dir test ran first, a misconfiguration setting backup_dir equal to
-//     root_dir would make every scan silently find zero books -- precisely the
-//     class of failure this file exists to prevent. An explicitly configured
-//     root is a deliberate choice; only what is found BELOW it is subject to
-//     these rules. (Callers that walk a SUBTREE must pass the library root
-//     here, not the subtree start, or this exemption hands back the very
-//     directory they meant to exclude.)
+//     callback, so returning SkipDir there abandons the entire walk. An
+//     explicitly configured root is a deliberate choice; only what is found
+//     BELOW it is subject to these rules. NOTE that this exemption alone is
+//     NOT what protects a walk rooted at an app dir -- it saves exactly one
+//     callback, and the descendants would still be skipped. skipsUnderRoot
+//     carries that guarantee; see its comment.
+//   - Callers that walk a SUBTREE of the library should pass the library root
+//     here, not the subtree start, or the exemption hands back the very
+//     directory they meant to exclude. The watcher does exactly this.
 //   - The app-dir test then beats the `.alternates` carve-out. A carve-out
 //     exists so deliberately dot-named CONTENT stays visible; it must not
 //     resurrect an app-owned tree that merely happens to sit at such a name.
@@ -183,7 +208,7 @@ func ShouldSkipDir(root, path string, app AppDirs) bool {
 	if filepath.Clean(root) == filepath.Clean(path) {
 		return false
 	}
-	if app.IsAppDir(path) {
+	if app.skipsUnderRoot(root, path) {
 		return true
 	}
 	base := filepath.Base(path)

@@ -54,3 +54,17 @@ Handled deliberately, and covered by tests:
 - `backup.ResolveDir` remains the single authority for resolving `backup_dir`,
   and the new `internal/appdirs` package is the single place that builds the
   directory set, so the scanner's discovery and count walks cannot drift apart.
+
+One further hole was found in review and closed in the same change: exempting
+only the walk root itself bought nothing. `filepath.WalkDir`'s first callback
+survived, and then every *descendant* was matched and skipped — so a library
+laid out as `author/title/` with `backup_dir` set to the library root scanned to
+**zero books**, the same silent outcome as abandoning the walk, reached one
+callback later. This was reachable without anyone setting `backup_dir =
+root_dir`: the scanner walks each enabled import path as its own root, so an
+import path added at or under `<root_dir>/openlibrary-dumps` would have
+silently contributed nothing. An application directory that equals or contains
+the walk root is now ignored entirely, on the same principle the root exemption
+already encodes — an explicitly configured walk root is a deliberate choice, and
+exclusion applies to application directories found *inside* the tree being
+walked, never to the tree itself.

@@ -1,5 +1,5 @@
 // file: internal/pathutil/appdirs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e4a90-58fd-42b7-9e06-1a3d8b5f0c24
 // last-edited: 2026-08-29
 
@@ -125,17 +125,62 @@ func TestShouldSkipDir_AppDirOutsideRootIsHarmless(t *testing.T) {
 	}
 }
 
-// The walk root is exempt even when it IS an app dir. WalkDir yields the root
-// as its first callback, so skipping it abandons the walk entirely -- a
-// misconfigured backup_dir == root_dir would make every scan silently find
-// zero books.
-func TestShouldSkipDir_AppDirAsWalkRootIsNotSkipped(t *testing.T) {
+// A walk rooted AT an app dir must walk its whole tree, not just survive the
+// first callback.
+//
+// Exempting only `path == root` buys nothing on its own: WalkDir's first
+// callback succeeds and then every DESCENDANT is skipped, so a library laid
+// out as author/title/ scans to zero books -- the same silent outcome as
+// abandoning the walk, reached one callback later. The original version of
+// this test asserted only the root itself and therefore passed while that hole
+// was wide open, certifying a guarantee the code did not provide.
+func TestShouldSkipDir_AppDirAsWalkRootWalksWholeTree(t *testing.T) {
 	app := AppDirs{BackupDir: "/srv/books"}
 	if ShouldSkipDir("/srv/books", "/srv/books", app) {
 		t.Fatal("the walk root was skipped; this abandons the entire walk on the first callback")
 	}
 	if ShouldSkipDir("/srv/books/", "/srv/books", app) {
 		t.Fatal("a trailing separator on the root made the walk skip its own root")
+	}
+	// THE ASSERTION THAT WAS MISSING: descendants of a walk root that is
+	// itself an app dir must still be walked.
+	for _, p := range []string{
+		"/srv/books/Author",
+		"/srv/books/Author/Title",
+		"/srv/books/Author/Title/disc1",
+	} {
+		if ShouldSkipDir("/srv/books", p, app) {
+			t.Errorf("%q was skipped; a walk rooted at an app dir must see its whole tree, not just its root", p)
+		}
+	}
+}
+
+// An app dir that is an ANCESTOR of the walk root must be ignored too. The
+// scanner walks each enabled import path as its own root, so an import path
+// added at or under an application directory would otherwise contribute
+// nothing, silently.
+func TestShouldSkipDir_AppDirAboveWalkRootIsIgnored(t *testing.T) {
+	// backup_dir is an ancestor of the library root.
+	app := AppDirs{BackupDir: "/srv"}
+	for _, p := range []string{"/srv/books/Author", "/srv/books/Author/Title"} {
+		if ShouldSkipDir("/srv/books", p, app) {
+			t.Errorf("%q was skipped because an app dir sits ABOVE the walk root", p)
+		}
+	}
+	// An import path rooted inside the dump dir walks in full.
+	dumps := AppDirs{OpenLibraryDumpDir: "/srv/books/openlibrary-dumps"}
+	if ShouldSkipDir("/srv/books/openlibrary-dumps", "/srv/books/openlibrary-dumps/sub", dumps) {
+		t.Error("an import path rooted at the dump dir scanned nothing; the operator asked for that tree explicitly")
+	}
+	// But from the LIBRARY root, that same dir is still excluded -- proving
+	// the ancestor rule is scoped to the walk, not a blanket disable.
+	if !ShouldSkipDir("/srv/books", "/srv/books/openlibrary-dumps/sub", dumps) {
+		t.Error("the dump dir must still be excluded from a walk rooted at the library root")
+	}
+	// A sibling app dir is unaffected by the root being under a different one.
+	both := AppDirs{BackupDir: "/srv", OpenLibraryDumpDir: "/srv/books/openlibrary-dumps"}
+	if !ShouldSkipDir("/srv/books", "/srv/books/openlibrary-dumps", both) {
+		t.Error("an ancestor app dir must not disable the OTHER app dirs")
 	}
 }
 
