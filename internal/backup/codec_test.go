@@ -1,5 +1,5 @@
 // file: internal/backup/codec_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d41f6a2-58bc-4e07-b3d9-1a6c082e4f75
 // last-edited: 2026-08-29
 
@@ -338,5 +338,143 @@ func TestRestoreReadsAGzipArchiveWrittenBeforeThisChange(t *testing.T) {
 	}
 	if string(got) != string(body) {
 		t.Fatalf("restored contents %q != %q", got, body)
+	}
+}
+
+// TestBadCompressionDoesNotPruneBackups is the regression test for the worst
+// defect this feature nearly shipped.
+//
+// enforceRetention runs before the archive is written, so if the codec is only
+// resolved afterwards, a single typo in backup_compression deletes archives on
+// every attempt and never writes a replacement. With the byte bound and
+// production-sized archives the first attempt alone strips history to the
+// one-archive floor -- and the organizer logs it as a warning and proceeds.
+func TestBadCompressionDoesNotPruneBackups(t *testing.T) {
+	dir := t.TempDir()
+	existing := []string{
+		"audiobooks_pebble_20260101_000001.tar.gz",
+		"audiobooks_pebble_20260102_000002.tar.gz",
+		"audiobooks_pebble_20260103_000003.tar.gz",
+	}
+	for _, n := range existing {
+		if err := os.WriteFile(filepath.Join(dir, n), bytes.Repeat([]byte("x"), 1024), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "data.dat"), []byte("payload"), 0o600); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+
+	cfg := DefaultBackupConfig()
+	cfg.BackupDir = dir
+	cfg.MaxBackups = 1 // retention would delete two of the three
+	cfg.Compression = "zstandard"
+
+	if _, err := CreateBackup(src, "pebble", cfg); err == nil {
+		t.Fatal("a bad compression name must fail the backup")
+	}
+
+	after, err := ListBackups(dir)
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(after) != len(existing) {
+		t.Fatalf("a failed backup destroyed history: %d archives remain of %d "+
+			"(retention ran before the config error was detected)", len(after), len(existing))
+	}
+}
+
+// TestBadLevelDoesNotPruneBackups is the same guard for an out-of-range level,
+// which reaches gzip.NewWriterLevel and fails just as late.
+func TestBadLevelDoesNotPruneBackups(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{
+		"audiobooks_pebble_20260101_000001.tar.gz",
+		"audiobooks_pebble_20260102_000002.tar.gz",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "d.dat"), []byte("p"), 0o600); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+
+	cfg := DefaultBackupConfig()
+	cfg.BackupDir = dir
+	cfg.MaxBackups = 1
+	cfg.Compression = CompressionGzip
+	cfg.CompressionLevel = 99
+
+	if _, err := CreateBackup(src, "pebble", cfg); err == nil {
+		t.Fatal("an out-of-range gzip level must fail the backup")
+	}
+	after, _ := ListBackups(dir)
+	if len(after) != 2 {
+		t.Fatalf("a failed backup destroyed history: %d of 2 archives remain", len(after))
+	}
+}
+
+// TestRestoreOfAnEmptyArchiveIsAnError: extracting nothing is a failed restore.
+// A 0-byte file sniffs as "none", yields a valid empty tar, and would otherwise
+// tell the caller their database was restored.
+func TestRestoreOfAnEmptyArchiveIsAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"zero-bytes", nil},
+		{"zero-filled", make([]byte, 1024)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			archive := filepath.Join(dir, "audiobooks_pebble_20260829_000000.tar.gz")
+			if err := os.WriteFile(archive, tc.body, 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			err := RestoreBackup(archive, t.TempDir(), false)
+			if err == nil {
+				t.Fatal("restoring an empty/truncated archive reported success; " +
+					"the caller would believe their database was recovered")
+			}
+			if !strings.Contains(err.Error(), "no entries") {
+				t.Fatalf("error should say the archive was empty, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestListBackupsIgnoresForeignArchives: backup_dir may be a shared directory.
+// A foreign .tar must not become a retention deletion target, and must not make
+// newestBackupAge report a fresh backup and suppress the real one.
+func TestListBackupsIgnoresForeignArchives(t *testing.T) {
+	dir := t.TempDir()
+	ours := "audiobooks_pebble_20260829_010203.tar.zst"
+	foreign := []string{"nightly-etc.tar", "photos-2025.tar.gz", "random.tar.zst"}
+
+	if err := os.WriteFile(filepath.Join(dir, ours), []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for _, n := range foreign {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+
+	got, err := ListBackups(dir)
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(got) != 1 || got[0].Filename != ours {
+		var names []string
+		for _, b := range got {
+			names = append(names, b.Filename)
+		}
+		t.Fatalf("only this program's archives may be listed; got [%s] -- "+
+			"foreign files here become retention DELETION targets and suppress auto-backup",
+			strings.Join(names, ", "))
 	}
 }
