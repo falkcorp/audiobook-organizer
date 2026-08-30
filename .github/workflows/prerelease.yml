@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.0.0
+# version: 3.0.1
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-08-29
+# last-edited: 2026-08-30
 
 name: Prerelease on Merge
 
@@ -31,7 +31,7 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@375d3b9e3aae2db19678edba325c2081c54a2aff # main: pin GORELEASER_CURRENT_TAG so a stable cut builds the stable tag
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@66924760e0c0eeee3212789dd77f0a337e675f26 # main 2026-08-30: EPIPE-under-pipefail guard fixes (github-common#353, #355) — collection was silently skipping
     with:
       release-type: 'auto'
       prerelease: true
