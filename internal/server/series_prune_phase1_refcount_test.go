@@ -1,5 +1,5 @@
 // file: internal/server/series_prune_phase1_refcount_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8c1d64-7a52-4be0-9c31-64d0f2a8ab17
 // last-edited: 2026-08-30
 
@@ -199,4 +199,105 @@ func (s noRefCountPruneStore) UpdateBook(id string, b *database.Book) (*database
 }
 func (s noRefCountPruneStore) CreateOperationChange(c *database.OperationChange) error {
 	return s.m.CreateOperationChange(c)
+}
+
+// TestExecuteSeriesPrune_Phase2DoesNotReuseThePrePhase1RefCounts pins the one
+// constraint that turns this fix into a WORSE bug if it is "optimized" away.
+//
+// Phase 1's guard is RELATIVE (unfiltered count minus what it moved) and is
+// monotone-safe against its own writes: it only ever moves books AWAY from a
+// merged-from series. Phase 2's is ABSOLUTE (== 0) and is not, because phase 1
+// moves books ONTO the series it KEEPS. A canonical series that was referenced
+// by nothing when phase 1's counts were taken can hold several rows by the time
+// phase 2 runs — and phase 2 reading the stale map would delete it out from
+// under every book phase 1 just moved into it.
+//
+// The fixture is the realistic shape: series 1 and 2 have no books the LISTING
+// getter can see, so 1 wins the canonical vote on the tie-break, but series 2
+// holds two non-primary versions that the complete-set getter does return.
+// Phase 1 moves both onto series 1 and deletes series 2. Series 1 goes from 0
+// references to 2 across that step, which is exactly the divergence.
+func TestExecuteSeriesPrune_Phase2DoesNotReuseThePrePhase1RefCounts(t *testing.T) {
+	const (
+		keepID  = 1
+		mergeID = 2
+	)
+	s := newSeriesPruneServer(t)
+
+	mock := &database.MockStore{}
+	seriesCalls := 0
+	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
+		seriesCalls++
+		if seriesCalls == 1 {
+			return []database.Series{
+				{ID: keepID, Name: "Discworld"},
+				{ID: mergeID, Name: "  discworld "},
+			}, nil
+		}
+		// Phase 2 re-fetches to account for the merge: series 2 is gone.
+		return []database.Series{{ID: keepID, Name: "Discworld"}}, nil
+	}
+	// Neither series has a book the LISTING getter shows, so the canonical vote
+	// ties at zero and falls through to the lower ID.
+	mock.GetBooksBySeriesIDCoreFunc = func(int) ([]database.BookCore, error) { return nil, nil }
+	mock.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == mergeID {
+			return []database.BookCore{{ID: "alt-rip-a"}, {ID: "alt-rip-b"}}, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := mergeID
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+	mock.UpdateBookFunc = func(_ string, b *database.Book) (*database.Book, error) { return b, nil }
+	deleted := []int{}
+	mock.DeleteSeriesFunc = func(id int) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+
+	store := &seriesPhasedRefCountStore{
+		MockStore: mock,
+		// Before phase 1: series 1 is referenced by nothing, series 2 by its two
+		// non-primary versions. After phase 1: both moved onto series 1.
+		perCall: []map[int]int{{keepID: 0, mergeID: 2}, {keepID: 2}},
+	}
+
+	if err := s.executeSeriesPrune(context.Background(), store, seriesPruneNoopProgress{}, ""); err != nil {
+		t.Fatalf("executeSeriesPrune: %v", err)
+	}
+	if store.calls < 2 {
+		t.Fatalf("phase 2 made no reference-count call of its own (calls=%d); it is reading "+
+			"phase 1's stale map", store.calls)
+	}
+	for _, id := range deleted {
+		if id == keepID {
+			t.Fatalf("the merge TARGET series %d was deleted; phase 1 had just repointed two "+
+				"books onto it, and both now hold a series ID that no longer resolves. "+
+				"Phase 2 must take its own fresh count, not reuse phase 1's.", keepID)
+		}
+	}
+	if len(deleted) != 1 || deleted[0] != mergeID {
+		t.Fatalf("expected only the merged-away series %d deleted, got %v -- if empty, "+
+			"phase 1 never merged and this test proves nothing", mergeID, deleted)
+	}
+}
+
+// seriesPhasedRefCountStore answers a DIFFERENT reference count per call, so a
+// test can model the library changing between phase 1 and phase 2 — which is
+// exactly what phase 1's own repointing does. A single static map cannot
+// express that, and is why no existing fixture could observe this.
+type seriesPhasedRefCountStore struct {
+	*database.MockStore
+	perCall []map[int]int
+	calls   int
+}
+
+func (s *seriesPhasedRefCountStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	s.calls++
+	if s.calls <= len(s.perCall) {
+		return s.perCall[s.calls-1], nil
+	}
+	return s.perCall[len(s.perCall)-1], nil
 }
