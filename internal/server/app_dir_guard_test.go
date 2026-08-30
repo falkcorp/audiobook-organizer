@@ -1,5 +1,5 @@
 // file: internal/server/app_dir_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f6a92d4-3b58-4e07-ac21-5d8b04e3719f
 // last-edited: 2026-08-30
 
@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,9 +75,23 @@ func TestCalculateLibrarySizes_ExcludesAppDirs(t *testing.T) {
 		resetLibrarySizeCache()
 		root := t.TempDir()
 		prevBackup, prevDump := config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir
+		prevDB, prevPlaylist := config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir
+		// Zero EVERY field appdirs.FromConfig reads, not just these two.
+		// backup.ResolveDir SYNTHESIZES "backups" when BackupDir is unset and
+		// anchors it to the database's own directory, so clearing BackupDir alone
+		// still produces a live absolute exclusion whenever DatabasePath is set --
+		// and 25 sibling tests in this package do set it. The assertion below is the
+		// real guarantee: it fails loudly if FromConfig ever grows a source field
+		// that nobody zeroed here, instead of letting this subtest quietly stop
+		// testing the empty case while still passing.
 		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
+		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
+		if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+			t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
+		}
 		t.Cleanup(func() {
 			config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = prevBackup, prevDump
+			config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = prevDB, prevPlaylist
 		})
 		writeN(t, filepath.Join(root, "Author", "Book", "book.m4b"), 1000)
 		writeN(t, filepath.Join(root, "backups", "archive.tar.zst"), 500_000)
@@ -134,9 +150,23 @@ func TestStripMovementAtoms_SkipsAppDirs(t *testing.T) {
 				withAppDirConfig(t, root)
 			} else {
 				prevBackup, prevDump := config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir
+				prevDB, prevPlaylist := config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir
+				// Zero EVERY field appdirs.FromConfig reads, not just these two.
+				// backup.ResolveDir SYNTHESIZES "backups" when BackupDir is unset and
+				// anchors it to the database's own directory, so clearing BackupDir alone
+				// still produces a live absolute exclusion whenever DatabasePath is set --
+				// and 25 sibling tests in this package do set it. The assertion below is the
+				// real guarantee: it fails loudly if FromConfig ever grows a source field
+				// that nobody zeroed here, instead of letting this subtest quietly stop
+				// testing the empty case while still passing.
 				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
+				config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
+				if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+					t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
+				}
 				t.Cleanup(func() {
 					config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = prevBackup, prevDump
+					config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = prevDB, prevPlaylist
 				})
 			}
 
