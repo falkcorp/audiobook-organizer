@@ -1,5 +1,5 @@
 // file: internal/dedup/hydrate_chromem_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-29
 
@@ -25,18 +25,33 @@ import (
 // case that used to be invisible, because the mirror helpers swallowed the
 // Upsert error and the hydrated counter incremented anyway.
 type fakeVectorANNStore struct {
-	upserted map[string]bool // "entityType/entityID" -> seen
-	failOn   map[string]bool // "entityType/entityID" -> Upsert returns an error
+	upserted  map[string]bool // "entityType/entityID" -> Upsert RETURNED SUCCESS
+	attempted map[string]bool // "entityType/entityID" -> Upsert was CALLED
+	failOn    map[string]bool // "entityType/entityID" -> Upsert returns an error
 }
+
+// errFakeUpsert is a package-level sentinel so tests can assert on it with
+// errors.Is rather than substring-matching the message.
+var errFakeUpsert = errors.New("chromem: simulated upsert failure")
 
 func newFakeVectorANNStore() *fakeVectorANNStore {
-	return &fakeVectorANNStore{upserted: map[string]bool{}, failOn: map[string]bool{}}
+	return &fakeVectorANNStore{
+		upserted:  map[string]bool{},
+		attempted: map[string]bool{},
+		failOn:    map[string]bool{},
+	}
 }
 
+// Upsert records the ATTEMPT separately from the SUCCESS. Without that split,
+// "row X is absent from upserted" is satisfied both by a row the engine
+// correctly filtered out and by a row whose write failed — so an assertion on
+// a failing key would be guaranteed by the double's own construction and would
+// test nothing.
 func (f *fakeVectorANNStore) Upsert(_ context.Context, entityType, entityID string, _ []float32, _ map[string]string) error {
 	key := entityType + "/" + entityID
+	f.attempted[key] = true
 	if f.failOn[key] {
-		return errors.New("chromem: simulated upsert failure")
+		return errFakeUpsert
 	}
 	f.upserted[key] = true
 	return nil
@@ -355,8 +370,8 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	}
 	if stats.FirstMirrorError == nil {
 		t.Error("FirstMirrorError = nil, want the sampled ANN-store write failure")
-	} else if !strings.Contains(stats.FirstMirrorError.Error(), "simulated upsert failure") {
-		t.Errorf("FirstMirrorError = %v, want it to carry the store's failure", stats.FirstMirrorError)
+	} else if !errors.Is(stats.FirstMirrorError, errFakeUpsert) {
+		t.Errorf("FirstMirrorError = %v, want it to wrap %v", stats.FirstMirrorError, errFakeUpsert)
 	}
 
 	// --- a completed run must not be flagged incomplete ---
@@ -374,5 +389,76 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 		if fake.upserted[id] {
 			t.Errorf("%s should NOT have been mirrored into the ANN store", id)
 		}
+	}
+	// The mirror-error rows must have been ATTEMPTED — "absent from upserted"
+	// alone is satisfied by the fake's own failOn branch, so without this the
+	// assertion above could not tell a failed write from a `continue` placed
+	// before the mirror call.
+	for _, id := range mirrorFailBooks {
+		if !fake.attempted[id] {
+			t.Errorf("%s should have been attempted (it passes every filter); the failure must come from the store, not an earlier skip", id)
+		}
+	}
+	for _, id := range mirrorFailAuthors {
+		if !fake.attempted[id] {
+			t.Errorf("%s should have been attempted; the failure must come from the store, not an earlier skip", id)
+		}
+	}
+	// ...and the rows that were filtered out must NOT have been attempted.
+	for _, id := range []string{"book/ORPHAN_0", "book/NONPRIMARY_0", "book/STALE_0", "book/EMPTY_0"} {
+		if fake.attempted[id] {
+			t.Errorf("%s reached the ANN store; it should have been filtered out first", id)
+		}
+	}
+}
+
+// TestHydrateChromem_CancelledRunIsFlaggedIncomplete pins the one case where
+// the BookRows == BooksAccounted() identity is documented NOT to hold. A run
+// cut short by its context leaves rows unclassified, and the resulting nonzero
+// unaccounted total must be readable as "we stopped early", not as an
+// uncounted skip path. It also pins that the partial accounting is returned
+// rather than discarded: before this, the cancellation path skipped the
+// summary log entirely, so a 30-minute timeout over ~39K rows — the run an
+// operator most wants to inspect — was the one with no bucket visibility.
+func TestHydrateChromem_CancelledRunIsFlaggedIncomplete(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	engine.SetChromemStore(newFakeVectorANNStore())
+	engine.embedClient = ai.NewEmbeddingClientWithOptions("k", "bge-m3", "")
+
+	primary := true
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		return &database.Book{ID: id, Title: "Book", IsPrimaryVersion: &primary}, nil
+	}
+	for i := range 5 {
+		if err := es.Upsert(database.Embedding{
+			EntityType: "book",
+			EntityID:   fmt.Sprintf("BOOK_%d", i),
+			Vector:     []float32{1, 2, 3, 4},
+			Model:      "bge-m3",
+		}); err != nil {
+			t.Fatalf("seed book %d: %v", i, err)
+		}
+	}
+
+	// Cancelled before the first row, so the loop classifies nothing.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stats, err := engine.HydrateChromem(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("HydrateChromem err = %v, want context.Canceled", err)
+	}
+	if !stats.Incomplete {
+		t.Error("Incomplete = false on a cancelled run, want true — a nonzero unaccounted total would otherwise read as an uncounted skip path")
+	}
+	if stats.BookRows != 5 {
+		t.Errorf("BookRows = %d, want 5 (the rows were read before the loop bailed)", stats.BookRows)
+	}
+	if stats.BooksAccounted() != 0 {
+		t.Errorf("BooksAccounted() = %d, want 0 — nothing was classified", stats.BooksAccounted())
+	}
+	// The identity is expected to BREAK here; that is the documented contract.
+	if stats.BookRows == stats.BooksAccounted() {
+		t.Error("BookRows == BooksAccounted() on a cancelled run; this test can no longer observe the incomplete case")
 	}
 }
