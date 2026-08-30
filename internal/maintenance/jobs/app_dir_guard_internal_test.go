@@ -88,3 +88,99 @@ func TestRepairMissingFiles_ReadDirGuardSkipsAppDirs(t *testing.T) {
 			"with nothing configured the walker must behave exactly as before")
 	})
 }
+
+// TestRepairMissingFiles_FilenameIndexSkipsAppDirs pins the WalkDir filename
+// index. Anything it indexes is a candidate REPOINT TARGET for a book_file row
+// whose path went missing, so an entry from the backup or OpenLibrary dump tree
+// would aim a library row at application state.
+func TestRepairMissingFiles_FilenameIndexSkipsAppDirs(t *testing.T) {
+	audioExts := map[string]bool{".m4b": true}
+
+	seed := func(t *testing.T) string {
+		t.Helper()
+		root := t.TempDir()
+		for _, p := range []string{
+			filepath.Join(root, "Author", "Book", "library.m4b"),
+			filepath.Join(root, "backups", "archived.m4b"),
+			filepath.Join(root, "openlibrary-dumps", "db", "dumped.m4b"),
+		} {
+			require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+			require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
+		}
+		return root
+	}
+
+	t.Run("app dirs configured: their audio is not indexed", func(t *testing.T) {
+		root := seed(t)
+		idx := rmfr_buildFilenameIndex([]string{root}, audioExts, pathutil.AppDirs{
+			BackupDir:          filepath.Join(root, "backups"),
+			OpenLibraryDumpDir: filepath.Join(root, "openlibrary-dumps"),
+		})
+		require.Len(t, idx["library.m4b"], 1)
+		require.Empty(t, idx["archived.m4b"], "a backup-tree file must never be a repoint target")
+		require.Empty(t, idx["dumped.m4b"], "an OL-dump file must never be a repoint target")
+	})
+
+	t.Run("empty AppDirs: whole tree indexed, exactly as before", func(t *testing.T) {
+		root := seed(t)
+		idx := rmfr_buildFilenameIndex([]string{root}, audioExts, pathutil.AppDirs{})
+		require.Len(t, idx, 3, "with nothing configured behaviour is unchanged")
+	})
+}
+
+// TestRepairMissingFiles_Tier5ReadDirSkipsAppDirs pins the SECOND single-level
+// os.ReadDir guard — tier 5's flat author-directory scan, which is a separate
+// code path from tier 4 and needs its own fixture to be reached at all.
+//
+// Tier 5 matches a file whose STEM equals the title parsed from the stored
+// filename, directly inside an author directory (no album level). The app
+// directory is again named to MATCH the author-name substring test, so the
+// guard is genuinely exercised.
+func TestRepairMissingFiles_Tier5ReadDirSkipsAppDirs(t *testing.T) {
+	audioExts := map[string]bool{".m4b": true}
+
+	setup := func(t *testing.T) (root, missing string) {
+		t.Helper()
+		root = t.TempDir()
+		authorDir := filepath.Join(root, "Smithson-archive")
+		require.NoError(t, os.MkdirAll(authorDir, 0o755))
+		// Flat: the audio file sits directly in the author dir (tier 5 shape),
+		// and its stem equals the title parsed from the stored filename.
+		require.NoError(t, os.WriteFile(filepath.Join(authorDir, "Winter Tales.m4b"), []byte("x"), 0o644))
+		return root, filepath.Join(root, "gone", "01 Winter Tales.m4b")
+	}
+
+	call := func(t *testing.T, root, missing string, app pathutil.AppDirs) rmfr_result {
+		t.Helper()
+		return rmfr_repairOne(
+			database.BookFileCore{ID: "f1", BookID: "b1", FilePath: missing},
+			// No title => tier 4 is skipped entirely, so only the tier-5 guard
+			// can decide the outcome of this fixture.
+			map[string]rmfr_bookMeta{"b1": {title: "", author: "Jane Smithson-archive"}},
+			map[string]string{},
+			itunes.ImportOptions{},
+			true,
+			[]string{root},
+			app,
+			audioExts,
+			func() {},
+			func() map[string][]string { return map[string][]string{} },
+			noopBookFileMutator{},
+			"",
+		)
+	}
+
+	t.Run("app dir configured: tier 5 does not enumerate it", func(t *testing.T) {
+		root, missing := setup(t)
+		res := call(t, root, missing, pathutil.AppDirs{
+			OpenLibraryDumpDir: filepath.Join(root, "Smithson-archive"),
+		})
+		require.Empty(t, res.NewPath, "a file inside an app dir must never become a repair target")
+	})
+
+	t.Run("empty AppDirs: unchanged pre-existing behaviour", func(t *testing.T) {
+		root, missing := setup(t)
+		res := call(t, root, missing, pathutil.AppDirs{})
+		require.NotEmpty(t, res.NewPath, "with nothing configured the walker must behave as before")
+	})
+}

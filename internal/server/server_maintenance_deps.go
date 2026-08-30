@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -25,7 +26,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
-	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
