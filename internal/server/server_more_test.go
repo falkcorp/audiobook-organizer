@@ -316,13 +316,18 @@ func TestAddImportPathFallbackScan(t *testing.T) {
 // failure mode is a HANG, not a compile error. Two independent mechanisms were
 // measured against go1.26.0 on 2026-08-30, each fatal on its own:
 //
-//  1. signal.Notify DEADLOCKS A BUBBLE IMMEDIATELY. Start (server_lifecycle.go:457)
-//     does `quit := make(chan os.Signal, 1); signal.Notify(quit, ...)`. Notify's
-//     own enable path blocks on runtime sigqueue, which nothing inside the bubble
-//     can service, so the runtime aborts with
-//     "panic: deadlock: all goroutines in bubble are blocked" at the Notify call
-//     -- before the SIGTERM is ever sent. A bubble does not sandbox a
-//     process-wide signal; it cannot even subscribe to one.
+//  1. A BUBBLE CANNOT SUBSCRIBE TO A SIGNAL AT ALL. Start (server_lifecycle.go:457)
+//     does `quit := make(chan os.Signal, 1); signal.Notify(quit, ...)`. That
+//     channel is created inside the bubble, but os/signal's delivery goroutine
+//     lives outside it, and synctest's documented isolation rule is that
+//     "operating on a bubbled channel, timer, or ticker from outside the bubble
+//     panics". This is a design property, not a toolchain quirk -- it was
+//     measured fatal on BOTH toolchains, with go1.27 naming the cause outright:
+//     go1.26.0: panic: deadlock: all goroutines in bubble are blocked
+//     (raised at the signal.Notify call, before any SIGTERM is sent)
+//     go1.27.0: fatal error: select on synctest channel from outside bubble
+//     A bubble does not sandbox a process-wide signal; it cannot even
+//     subscribe to one.
 //
 //  2. A REAL LISTENER FREEZES THE FAKE CLOCK. Start reaches
 //     httpServer.ListenAndServe (server_lifecycle.go:1106), leaving an accept
