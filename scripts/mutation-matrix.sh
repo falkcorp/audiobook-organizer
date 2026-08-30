@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/mutation-matrix.sh
-# version: 1.3.0
+# version: 1.4.0
 # guid: 7f3b6d21-4c98-4e07-b153-2a86f0e9c47d
 # last-edited: 2026-08-30
 #
@@ -80,7 +80,7 @@
 #
 # ── WHY EACH KILL NAMES THE TEST THAT CAUGHT IT ───────────────────────────────
 #
-# There is a fifth failure mode no guard can prevent, only make visible: a FLAKY
+# There is a further failure mode no guard can prevent, only make visible: a FLAKY
 # suite. Guard 2 checks the baseline once, so a test that fails intermittently
 # can score a mutation as KILLED without the mutation having been detected at
 # all -- and a bare killed/survived count gives you no way to notice.
@@ -256,7 +256,15 @@ emit ""
 
 killed=0; survived=0; notapplied=0; buildfail=0; total=0
 
-while IFS='|' read -r name file expr; do
+# `|| [[ -n ... ]]` KEEPS A FINAL LINE THAT HAS NO TRAILING NEWLINE. Without it
+# `read` returns non-zero on that line, bash leaves the loop before running the
+# body, and the last mutation in the table is never executed -- silently, because
+# "mutations attempted" is counted inside the loop and so is short by one too.
+# Found on 2026-08-30: activity-index-pushdown.muts ended without a newline, so
+# M18 had never once run, and M18 is the entry documented as an EXPECTED
+# equivalent survivor. A survivor that is simply ABSENT from the report reads
+# exactly like "confirmed survived, do not chase".
+while IFS='|' read -r name file expr || [[ -n "${name:-}${file:-}${expr:-}" ]]; do
     name="$(echo "${name:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     file="$(echo "${file:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     # NO `\x7c` -> `|` rewrite here. perl reads `\x7c` as a literal pipe itself,
