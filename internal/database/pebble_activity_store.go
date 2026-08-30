@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-30
 
@@ -1804,18 +1804,400 @@ func (s *PebbleActivityStore) scanTierKVs(ctx context.Context, tier string, sinc
 // Handles both op and book secondary indexes.
 //
 // This is the fast path Query takes whenever OperationID or BookID is set, so
-// GET /api/v1/operations/:id/activity never reaches scanNewestFirst. It
-// therefore needs its own cancellation checks: without them, threading a
-// request context into Query would be cosmetic on that endpoint and an
-// abandoned operation-transcript request would keep scanning to completion.
-// ctx is checked every activityCtxCheckInterval rows in BOTH loops, and on
-// cancellation the accumulated slices are dropped (explicit nil) so they become
-// garbage immediately rather than being handed to a caller that has gone away.
+// GET /api/v1/operations/:id/activity never reaches scanNewestFirst.
 //
-// Known cost, unchanged here: this collects every ref for the id and decodes
-// all of them before slicing by offset/limit, so it is bounded by the number of
-// entries for one operation rather than by f.Limit.
+// It dispatches between two implementations that MUST return identical
+// (entries, total) for every input they both accept:
+//
+//   - queryByIndexPrefixPaged — the limit pushdown. Reads the index newest-first
+//     and decodes only the requested page. Taken when pactIndexPushdownEligible
+//     says every predicate in f is either trivially true or decidable without
+//     the stored entry.
+//   - queryByIndexPrefixFull — the historical full materialization. Taken for
+//     every other filter shape, and kept byte-for-byte as the reference
+//     implementation the differential tests compare the pushdown against.
 func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix string, f ActivityFilter) ([]ActivityEntry, int, error) {
+	if pactIndexPushdownEligible(prefix, f) {
+		return s.queryByIndexPrefixPaged(ctx, prefix, f)
+	}
+	return s.queryByIndexPrefixFull(ctx, prefix, f)
+}
+
+// pactIndexPushdownEligible reports whether f can be served by the pushdown
+// without changing EITHER the returned page or the returned total.
+//
+// The rule is one question asked of every field matchesFilter reads: can this
+// predicate be decided without the stored ActivityEntry? Anything that needs a
+// decoded field the secondary index does not carry forces the full path,
+// because the pushdown decodes only the page and would otherwise count rows
+// into `total` that matchesFilter would have rejected. `total` drives the UI's
+// pager, and a wrong page count raises no error anywhere — it is exactly the
+// kind of silent wrong answer that must not be traded for speed.
+//
+// Decidable, therefore allowed:
+//
+//   - The id the index family is keyed by. Every ref under "act:op:<X>:" was
+//     written by prepareEntry/backfill from an entry whose OperationID was X, so
+//     f.OperationID == X is true by construction on the op path (and the same
+//     for BookID on the book path). It is re-asserted per page row anyway — see
+//     queryByIndexPrefixPaged — so a corrupt index cannot leak a wrong row.
+//   - f.Since / f.Until. matchesFilter does not read them and this path applies
+//     no time bounds, so BOTH implementations ignore them identically. That is a
+//     pre-existing defect of the index path (GET /api/v1/activity?operation_id=
+//     X&since=... silently ignores `since`), deliberately NOT fixed here: fixing
+//     it belongs in its own change with its own test, and "fixing" it inside a
+//     performance PR would silently change results for that endpoint.
+//
+// NOT decidable, therefore refused:
+//
+//   - Type, Level, Source, Search, Tags, ExcludeSources, ExcludeTags — none of
+//     these fields exist anywhere in the index key or its ref value.
+//   - The OTHER id: f.BookID on the op path (and f.OperationID on the book
+//     path). Query never routes there today, but queryByIndexPrefix is reachable
+//     directly and a book filter cannot be decided from the op index.
+//   - Tier and ExcludeTiers, even though the ref value's first component IS a
+//     tier. That tier is the one baked into the PRIMARY KEY, while matchesFilter
+//     compares f.Tier against the decoded e.Tier — and those two can disagree:
+//     pebble_activity_backfill.go builds both keys from the NutsDB BUCKET's tier
+//     while marshalling the entry body untouched, so a backfilled row whose body
+//     Tier differs from its bucket would be filtered differently by the two
+//     paths. Pushing tier down would be right for every row Record wrote and
+//     wrong for that population, so it is refused outright.
+//
+// Negative Limit or Offset also refuse: queryByIndexPrefixFull ends in
+// all[start:end], which PANICS when end < start, and preserving a panic exactly
+// is safer than quietly inventing a clamp the callers have never seen. The HTTP
+// layer cannot produce either (ParsePaginationParams forces limit into [1,1000]
+// and offset >= 0), so this only guards direct in-process callers.
+func pactIndexPushdownEligible(prefix string, f ActivityFilter) bool {
+	if f.Limit < 0 || f.Offset < 0 {
+		return false
+	}
+	if f.Type != "" || f.Level != "" || f.Source != "" || f.Search != "" {
+		return false
+	}
+	if f.Tier != "" || len(f.ExcludeTiers) > 0 {
+		return false
+	}
+	if len(f.Tags) > 0 || len(f.ExcludeSources) > 0 || len(f.ExcludeTags) > 0 {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(prefix, "act:op:"):
+		return f.BookID == ""
+	case strings.HasPrefix(prefix, "act:bk:"):
+		return f.OperationID == ""
+	default:
+		// An unknown index family: neither id predicate can be justified by
+		// construction, so refuse rather than guess.
+		return false
+	}
+}
+
+// pactIndexScan is one newest-first pass over a secondary-index range, holding
+// the primary keys the refs point at without having touched a single primary row.
+//
+// The primary keys live in ONE arena []byte with an end-offset per key rather
+// than in a [][]byte: at 50k refs the per-ref slice header plus allocation cost
+// more than the whole scan (measured: 52k allocations for the [][]byte shape
+// against 614 for the arena, 16.3ms against 6.2ms).
+//
+// byTier groups positions by the ref's tier component so the existence pass can
+// walk one primary iterator per tier IN KEY ORDER. That grouping is safe even
+// though tier as a FILTER is not (see pactIndexPushdownEligible): the ref's tier
+// is by definition the tier in the primary key it reconstructs, whatever the
+// entry body says, so it always locates the right range.
+type pactIndexScan struct {
+	arena  []byte
+	ends   []int32
+	byTier []pactTierPositions
+}
+
+// pactTierPositions is one tier's positions within a pactIndexScan, in the
+// newest-first order the scan produced them (so DESCENDING by primary key).
+type pactTierPositions struct {
+	tier string
+	pos  []int32
+}
+
+// key returns the primary key at position i. It aliases the arena and must not
+// be retained past the scan.
+func (sc *pactIndexScan) key(i int32) []byte {
+	start := int32(0)
+	if i > 0 {
+		start = sc.ends[i-1]
+	}
+	return sc.arena[start:sc.ends[i]]
+}
+
+func (sc *pactIndexScan) len() int { return len(sc.ends) }
+
+// scanIndexRefs walks [prefix, prefix-with-';') in REVERSE and reconstructs the
+// primary key of every ref, newest-first.
+//
+// Reverse is what makes the pushdown possible at all: the index key is
+// act:op:<id>:<20d-unix-nano>:<ulid>, and because the nanos are zero-padded to a
+// fixed 20 digits, lexicographic key order IS chronological order. Iterating
+// backwards therefore yields exactly the newest-first order the full path
+// produced with a sort.Slice over every decoded entry.
+func (s *PebbleActivityStore) scanIndexRefs(ctx context.Context, prefix string) (*pactIndexScan, error) {
+	// Upper bound: replace trailing ':' with ';' to cover the entire id sub-namespace.
+	upperPrefix := prefix[:len(prefix)-1] + ";"
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(prefix),
+		UpperBound: []byte(upperPrefix),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pebble_activity_store: queryByIndex new iter: %w", err)
+	}
+	defer iter.Close()
+
+	sc := &pactIndexScan{}
+	seen := 0
+	for iter.Last(); iter.Valid(); iter.Prev() {
+		if seen%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+		}
+		seen++
+
+		ref := iter.Value()
+		// Same rejection as pactPrimaryKeyFromRef: a ref with no ':' cannot be
+		// turned into a primary key, so the full path skips it and it is absent
+		// from that path's total. Skipping it here keeps the two totals equal.
+		ti := bytes.IndexByte(ref, ':')
+		if ti < 0 {
+			continue
+		}
+
+		pos := int32(len(sc.ends))
+		sc.arena = append(sc.arena, "act:"...)
+		sc.arena = append(sc.arena, ref...)
+		sc.ends = append(sc.ends, int32(len(sc.arena)))
+
+		tier := ref[:ti]
+		bucket := -1
+		for i := range sc.byTier {
+			// string(tier) in a comparison does not allocate; assigning it does,
+			// which is why the string is only built when a NEW tier appears.
+			if sc.byTier[i].tier == string(tier) {
+				bucket = i
+				break
+			}
+		}
+		if bucket < 0 {
+			sc.byTier = append(sc.byTier, pactTierPositions{tier: string(tier)})
+			bucket = len(sc.byTier) - 1
+		}
+		sc.byTier[bucket].pos = append(sc.byTier[bucket].pos, pos)
+	}
+	if err := iter.Error(); err != nil {
+		// The full path returns whatever it had scanned so far, which turns a
+		// read error into a silently short total. A truncated pager is a wrong
+		// answer nothing surfaces, so the pushdown reports it instead.
+		return nil, fmt.Errorf("pebble_activity_store: queryByIndex scan: %w", err)
+	}
+	return sc, nil
+}
+
+// markLiveRefs sets alive[i] for every scanned position whose PRIMARY ROW STILL
+// EXISTS, and returns how many that is.
+//
+// WHY existence has to be checked for every ref, not just the page: an
+// act:op:/act:bk: ref outlives its primary row. Deletion paths only started
+// removing index keys recently, and on production act:op: had reached ~0.783 GiB
+// of a ~1.342 GiB activity keyspace, largely refs whose row was pruned months
+// earlier. The full path skips those refs, so they are absent from its total.
+// A pushdown that counted index keys instead would report a total inflated by
+// whatever fraction of the index is stale — on real data, a large one.
+//
+// WHY a merge, not a point Get per ref: db.Get costs ~7.9µs per ref here (50k
+// refs = 393ms, barely faster than the 564ms full path — the Get, not the
+// json.Unmarshal, is what the old implementation was actually paying for).
+// Walking one KEY-ONLY iterator per tier in ascending key order instead costs
+// ~330ns per ref, because an operation's rows are contiguous in time and the
+// iterator advances rather than re-seeking from the root. The positions in each
+// tier bucket are descending (the scan is newest-first), so they are walked in
+// reverse to feed the iterator strictly ascending targets — which is what makes
+// "the iterator is already past this key ⇒ this key does not exist" sound.
+func (s *PebbleActivityStore) markLiveRefs(ctx context.Context, sc *pactIndexScan, alive []bool) (int, error) {
+	live := 0
+	for _, bucket := range sc.byTier {
+		pit, err := s.db.NewIter(&pebble.IterOptions{
+			LowerBound: []byte("act:" + bucket.tier + ":"),
+			UpperBound: []byte("act:" + bucket.tier + ";"),
+		})
+		if err != nil {
+			return 0, fmt.Errorf("pebble_activity_store: queryByIndex primary iter (tier=%s): %w", bucket.tier, err)
+		}
+
+		positioned := false
+		checked := 0
+		for i := len(bucket.pos) - 1; i >= 0; i-- {
+			if checked%activityCtxCheckInterval == 0 {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					pit.Close()
+					return 0, ctxErr
+				}
+			}
+			checked++
+
+			k := sc.key(bucket.pos[i])
+			if !positioned || !pit.Valid() || bytes.Compare(pit.Key(), k) < 0 {
+				pit.SeekGE(k)
+				positioned = true
+			}
+			if pit.Valid() && bytes.Equal(pit.Key(), k) {
+				alive[bucket.pos[i]] = true
+				live++
+				pit.Next()
+			}
+		}
+		if err := pit.Error(); err != nil {
+			pit.Close()
+			return 0, fmt.Errorf("pebble_activity_store: queryByIndex primary scan (tier=%s): %w", bucket.tier, err)
+		}
+		pit.Close()
+	}
+	return live, nil
+}
+
+// queryByIndexPrefixPaged is the limit pushdown: it counts with key scans and
+// decodes only the page.
+//
+// Cost, against the full path it replaces: the full path did one db.Get and one
+// json.Unmarshal for EVERY entry of the operation before slicing out the page —
+// 50,000 of each to return 1,000 rows. This does one index scan, one key-only
+// existence merge, and exactly len(page) Gets and decodes.
+//
+// HOW total stays exactly what the full path returns: total is the number of
+// refs whose primary row exists, which is the same set the full path accumulates
+// into `all` — minus only rows whose stored JSON will not decode. Those are the
+// one divergence and it is bounded to that case: a row that EXISTS but whose
+// body cannot be unmarshalled into an ActivityEntry is counted here and was not
+// counted by the full path. Pebble checksums its blocks, so disk corruption
+// surfaces as a Get error (already handled as "gone"), not as garbage bytes; the
+// reachable route is a schema change that makes historical rows undecodable, and
+// that is loud in the page itself. Rows inside the page window ARE decode-checked
+// and DO correct the total, so the divergence needs an undecodable row that the
+// caller never pages to.
+//
+// ORPHANED REFS MUST NOT CONSUME A PAGE SLOT. The page is taken by rank over the
+// SURVIVING refs, never by position in the index, so a pruned row at the newest
+// position shifts the whole page up by one instead of silently returning
+// limit-1 rows. Same for a row that vanishes between the existence pass and the
+// fetch, and for one that fails matchesFilter.
+func (s *PebbleActivityStore) queryByIndexPrefixPaged(ctx context.Context, prefix string, f ActivityFilter) ([]ActivityEntry, int, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, 0, ctxErr
+	}
+
+	sc, err := s.scanIndexRefs(ctx, prefix)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	alive := make([]bool, sc.len())
+	total, err := s.markLiveRefs(ctx, sc, alive)
+	if err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		// The full path's `all` is nil here, and all[0:0] on a nil slice is nil.
+		// Returning an empty non-nil slice instead would be a visible difference
+		// to any caller that distinguishes them.
+		return nil, 0, nil
+	}
+
+	capacity := f.Limit
+	if room := total - f.Offset; room < capacity {
+		capacity = room
+	}
+	if capacity < 0 {
+		capacity = 0
+	}
+	page := make([]ActivityEntry, 0, capacity)
+
+	tally := &pactDecodeTally{}
+	defer tally.log("queryByIndexPrefix pushdown prefix=" + prefix)
+
+	rank := 0
+	fetched := 0
+	for i := 0; i < sc.len() && len(page) < f.Limit; i++ {
+		if !alive[i] {
+			continue
+		}
+		if rank < f.Offset {
+			rank++
+			continue
+		}
+		if fetched%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, 0, ctxErr
+			}
+		}
+		fetched++
+
+		primaryKey := sc.key(int32(i))
+		val, closer, getErr := s.db.Get(primaryKey)
+		if getErr != nil {
+			// Deleted between markLiveRefs and now (a concurrent prune). The
+			// full path would not have counted it either, so drop it from the
+			// total AND do not let it consume a page slot.
+			total--
+			continue
+		}
+		var entry ActivityEntry
+		s.entriesDecoded.Add(1)
+		jsonErr := json.Unmarshal(val, &entry)
+		closer.Close()
+		if jsonErr != nil {
+			s.decodeFailures.Add(1)
+			tally.record(primaryKey, jsonErr)
+			total--
+			continue
+		}
+		// Belt and braces on the "the index decides the id" assumption in
+		// pactIndexPushdownEligible: if a ref under act:op:<X>: ever points at a
+		// row whose OperationID is not X, the full path would have rejected it
+		// here and so does this.
+		if !matchesFilter(entry, f) {
+			total--
+			continue
+		}
+		page = append(page, entry)
+		rank++
+	}
+
+	if len(page) == 0 && total == 0 {
+		return nil, 0, nil
+	}
+	return page, total, nil
+}
+
+// queryByIndexPrefixFull is the pre-pushdown implementation, unchanged.
+//
+// It stays because it is the only correct answer for a filter that reads entry
+// fields the secondary index does not carry (see pactIndexPushdownEligible), and
+// it doubles as the reference implementation the differential tests run
+// side-by-side with queryByIndexPrefixPaged over the same fixture. It is
+// deliberately NOT "improved" — every difference between it and the pushdown
+// must be a difference the pushdown introduced, not one the reference drifted
+// into.
+//
+// It needs its own cancellation checks: without them, threading a request
+// context into Query would be cosmetic on that endpoint and an abandoned
+// operation-transcript request would keep scanning to completion. ctx is checked
+// every activityCtxCheckInterval rows in BOTH loops, and on cancellation the
+// accumulated slices are dropped (explicit nil) so they become garbage
+// immediately rather than being handed to a caller that has gone away.
+//
+// Known cost: this collects every ref for the id and decodes all of them before
+// slicing by offset/limit, so it is bounded by the number of entries for one
+// operation rather than by f.Limit.
+func (s *PebbleActivityStore) queryByIndexPrefixFull(ctx context.Context, prefix string, f ActivityFilter) ([]ActivityEntry, int, error) {
 	// Upper bound: replace trailing ':' with ';' to cover the entire id sub-namespace.
 	upperPrefix := prefix[:len(prefix)-1] + ";"
 
@@ -1846,6 +2228,9 @@ func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix str
 		refs = append(refs, valCopy)
 	}
 
+	tally := &pactDecodeTally{}
+	defer tally.log("queryByIndexPrefix full prefix=" + prefix)
+
 	var all []ActivityEntry
 	for i, ref := range refs {
 		if i%activityCtxCheckInterval == 0 {
@@ -1863,9 +2248,17 @@ func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix str
 			continue
 		}
 		var entry ActivityEntry
+		// Counted like every other decode site in this store. Before this, the
+		// index path was the ONE scan invisible to EntriesDecoded/DecodeFailures,
+		// so "this query is bounded" could not be asserted about the very
+		// endpoint the bound matters most for, and an undecodable row here was
+		// dropped by a bare `continue` with no counter and no log.
+		s.entriesDecoded.Add(1)
 		jsonErr := json.Unmarshal(val, &entry)
 		closer.Close()
 		if jsonErr != nil {
+			s.decodeFailures.Add(1)
+			tally.record(primaryKey, jsonErr)
 			continue
 		}
 		if matchesFilter(entry, f) {
