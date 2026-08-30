@@ -1,7 +1,7 @@
 // file: internal/server/apikey_expiry_sweep.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 481f65a7-e54a-4be2-b43e-d6d992fcbd60
-// last-edited: 2026-07-03
+// last-edited: 2026-08-30
 
 package server
 
@@ -30,8 +30,8 @@ const (
 // that behavior.
 //
 // It runs forever until s.bgCtx is canceled (intended to be started from
-// Server.Start via `s.bgWG.Add("apikey-expiry-sweep"); go func() { defer
-// s.bgWG.Done("apikey-expiry-sweep"); s.warnExpiringAPIKeys() }()`, mirroring
+// Server.Start via `s.bgWG.Go("apikey-expiry-sweep", func() {
+// s.warnExpiringAPIKeys() })`, mirroring
 // the other long-lived store-touching goroutines) ticking every
 // apiKeyExpirySweepInterval and logging slog.Warn for:
 //   - active keys with ExpiresAt == nil (legacy, never-expiring keys) — once
