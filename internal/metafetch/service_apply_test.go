@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package metafetch
 
@@ -73,6 +73,10 @@ func (c *capturingActivityStore) WipeAllActivity(context.Context) (int64, error)
 
 func (c *capturingActivityStore) CompactByDay(context.Context, time.Time) (database.CompactResult, error) {
 	return database.CompactResult{}, nil
+}
+
+func (c *capturingActivityStore) RepairActivityIndexes(context.Context) (database.ActivityIndexRepairResult, error) {
+	return database.ActivityIndexRepairResult{}, nil
 }
 
 func (c *capturingActivityStore) RecompactDigests(context.Context) (database.RecompactResult, error) {

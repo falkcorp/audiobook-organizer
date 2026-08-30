@@ -1,7 +1,7 @@
 // file: internal/database/activity_store_instrumented.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-0002-bcde-000000000002
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 package database
 
@@ -207,6 +207,25 @@ func (i *InstrumentedActivityStorer) RecompactDigests(ctx context.Context) (Reco
 	span.SetAttributes(
 		attribute.Int("touched", result.Touched),
 		attribute.Int("skipped", result.Skipped))
+	return result, nil
+}
+
+// RepairActivityIndexes traces the RepairActivityIndexes operation.
+func (i *InstrumentedActivityStorer) RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error) {
+	ctx, span := tracer.Start(ctx, "activity_store.repair_activity_indexes")
+	defer span.End()
+
+	result, err := i.store.RepairActivityIndexes(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.Bool("error", true))
+		return ActivityIndexRepairResult{}, err
+	}
+	span.SetAttributes(
+		attribute.Int64("scanned", result.Scanned),
+		attribute.Int64("orphaned", result.Orphaned),
+		attribute.Int64("malformed", result.Malformed),
+		attribute.Int64("deleted", result.Deleted))
 	return result, nil
 }
 

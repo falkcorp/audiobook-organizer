@@ -1,7 +1,7 @@
 // file: internal/database/dual_write_activity_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f6a7b8c9-d0e1-0006-f012-000000000006
-// last-edited: 2026-08-23
+// last-edited: 2026-08-29
 
 // Package database — dual-write wrapper for the activity migration window.
 //
@@ -176,6 +176,24 @@ func (d *DualWriteActivityStore) RecompactDigests(ctx context.Context) (Recompac
 	}
 	if nutsErr != nil {
 		slog.Warn("[dual-write] nuts RecompactDigests failed", "err", nutsErr)
+	}
+
+	if d.ReadFromPebble {
+		return pebbleRes, pebbleErr
+	}
+	return nutsRes, nutsErr
+}
+
+// RepairActivityIndexes runs on both; returns the active backend's result.
+func (d *DualWriteActivityStore) RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error) {
+	nutsRes, nutsErr := d.nuts.RepairActivityIndexes(ctx)
+	pebbleRes, pebbleErr := d.pebble.RepairActivityIndexes(ctx)
+
+	if pebbleErr != nil {
+		slog.Warn("[dual-write] pebble RepairActivityIndexes failed", "err", pebbleErr)
+	}
+	if nutsErr != nil {
+		slog.Warn("[dual-write] nuts RepairActivityIndexes failed", "err", nutsErr)
 	}
 
 	if d.ReadFromPebble {

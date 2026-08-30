@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-08-20
+// last-edited: 2026-08-29
 
 package maintenance
 
@@ -102,8 +102,8 @@ func (d fakeDeps) MetadataUpgradeRun(_ context.Context, _ int, _ operations.Prog
 func (d fakeDeps) OptimizeAIScanStore() error { return nil }
 func (d fakeDeps) OptimizeOLStore() error     { return nil }
 func (d fakeDeps) PruneOldLogs(_ int) error   { return nil }
-func (d fakeDeps) CompactActivityLog(_ context.Context, _, _, _ int) (int, int, int, error) {
-	return 0, 0, 0, nil
+func (d fakeDeps) CompactActivityLog(_ context.Context, _, _, _ int) (int, int, int, int64, error) {
+	return 0, 0, 0, 0, nil
 }
 func (d fakeDeps) HasDedupEngine() bool                { return false }
 func (d fakeDeps) HasMetadataFetchService() bool       { return false }
