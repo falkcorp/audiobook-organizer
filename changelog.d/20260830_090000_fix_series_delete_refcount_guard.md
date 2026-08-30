@@ -35,5 +35,16 @@ phase 1 repoints books ONTO the series it keeps, so reusing the pre-phase-1
 counts there would delete the merge target out from under everything phase 1
 just moved into it.
 
-This PREVENTS future stranding. It does not repair the ~6,893 series IDs already
-phantom; that repair is tracked separately.
+The operation that runs the interactive merge now reads the result it was given
+rather than discarding it: a run in which every delete was refused used to report
+"merged 3 series" and a green status, because the caller logged the *requested*
+count on a hardcoded success. It now reports what actually merged and fails the
+run when anything was refused. Repeated IDs in a merge request are also collapsed
+up front, so a request that names the same series twice can no longer produce a
+spurious "still references it" error for a series it correctly deleted.
+
+This PREVENTS future stranding on these paths. It does not repair the ~6,893
+series IDs already phantom, and it is not all of the paths: two more series
+deletes carry the same trashed-row hole and are tracked rather than fixed here —
+`mergeSeriesGroupHelper` (series-normalize) and the `maintenance.series-denumber`
+operation. Both need a signature or layering change of their own.

@@ -595,6 +595,28 @@ func MergeSeries(
 		}
 	}
 
+	// De-duplicate mergeIDs before anything reads them.
+	//
+	// The IDs arrive straight off a JSON params blob and nothing upstream
+	// de-dupes them. A repeated ID was previously harmless-if-odd: the second
+	// visit enumerated nothing and deleted an already-deleted row. With the
+	// reference guard below it becomes a FALSE ALARM instead -- the second visit
+	// sees moved == 0 against a refCounts entry that still holds the pre-delete
+	// count, and reports "N books still reference it" for a series it had just
+	// correctly deleted. That would fail an entirely successful merge.
+	//
+	// Order is preserved so progress reporting stays in the caller's order.
+	seenMergeID := make(map[int]bool, len(mergeIDs))
+	uniqueMergeIDs := make([]int, 0, len(mergeIDs))
+	for _, id := range mergeIDs {
+		if id == keepID || seenMergeID[id] {
+			continue
+		}
+		seenMergeID[id] = true
+		uniqueMergeIDs = append(uniqueMergeIDs, id)
+	}
+	mergeIDs = uniqueMergeIDs
+
 	total := len(mergeIDs)
 	if progress != nil {
 		_ = progress.Log("info",
@@ -649,6 +671,10 @@ func MergeSeries(
 		if progress != nil && progress.IsCanceled() {
 			return result, fmt.Errorf("cancelled")
 		}
+		// Redundant since the de-duplication above also drops keepID, and kept
+		// deliberately: this is the guard that stops the loop deleting the
+		// series it is merging INTO, and it should not depend on a filter
+		// twenty lines away staying correct.
 		if mergeID == keepID {
 			continue
 		}
@@ -735,18 +761,31 @@ func MergeSeries(
 		// trashed row cannot be repointed), rows whose UpdateBook failed, and
 		// rows the reference count sees but GetBookByID cannot hydrate.
 		//
-		// The refusal is REPORTED, never silent: it lands in result.Errors,
-		// which the op surfaces through the progress reporter, and MergedCount
-		// is not incremented — a refused delete is not a completed merge.
-		// Books already reassigned above stay reassigned; only the row removal
-		// is refused, leaving a resolvable series ID for the rows we could not
-		// see.
+		// The refusal is REPORTED, never silent, and MergedCount is not
+		// incremented — a refused delete is not a completed merge. Books
+		// already reassigned above stay reassigned; only the row removal is
+		// refused, leaving a resolvable series ID for the rows we could not see.
+		//
+		// "Reported" was VERIFIED against the caller, not assumed. Landing in
+		// result.Errors is necessary and was not sufficient: the sole caller
+		// (server.RegisterSeriesMergeOp) discarded the result entirely and
+		// reported len(mergeIDs) as the merged count on a hardcoded "success",
+		// and the summary digest below went out at warn, which the db reporter
+		// does not copy into op_errors_v2. Both were fixed with this guard. If
+		// you add a second caller, make it read result.Errors.
 		if stranded := refCounts[mergeID] - moved; stranded > 0 {
+			// mergeSeriesName can be empty when the GetSeriesByID above failed,
+			// and a bare `series 4021 ("")` strips the one identifier that makes
+			// the message actionable.
+			named := mergeSeriesName
+			if named == "" {
+				named = "name unavailable"
+			}
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("refusing to delete series %d (%q): %d book(s) still reference it "+
 					"after reassigning %d to %d (trashed rows, which cannot be repointed, or rows "+
 					"whose reassignment failed); the reassignable books were moved, the series row is kept",
-					mergeID, mergeSeriesName, stranded, moved, keepID))
+					mergeID, named, stranded, moved, keepID))
 		} else if err := store.DeleteSeries(mergeID); err != nil {
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("failed to delete series %d: %v", mergeID, err))
@@ -764,9 +803,16 @@ func MergeSeries(
 		}
 
 		if progress != nil {
+			// "Processed", not "Merged": this counter advances once per loop
+			// iteration whichever branch above was taken, so on a run where
+			// every delete was REFUSED it used to stream "Merged 3/3 series
+			// (100.00%)" while MergedCount stayed at zero. The live progress
+			// stream is what an operator watches; it must not assert an
+			// outcome the summary then contradicts.
 			pct := float64(i+1) * 100.0 / float64(total)
 			_ = progress.UpdateProgress(i+1, total,
-				fmt.Sprintf("Merged %d/%d series (%.2f%%)", i+1, total, pct))
+				fmt.Sprintf("Processed %d/%d series (%d merged, %.2f%%)",
+					i+1, total, result.MergedCount, pct))
 		}
 	}
 
@@ -819,12 +865,21 @@ func MergeSeries(
 	}
 
 	if progress != nil {
-		msg := fmt.Sprintf("Series merge complete: merged %d, %d errors",
-			result.MergedCount, len(result.Errors))
+		msg := fmt.Sprintf("Series merge complete: merged %d of %d, %d errors",
+			result.MergedCount, total, len(result.Errors))
 		_ = progress.Log("info", msg, nil)
 		if len(result.Errors) > 0 {
+			// "error", not "warn". The db reporter copies an entry into
+			// op_errors_v2 only at error level or above, so a warn digest left
+			// the op's error table EMPTY -- and a refused delete then read as a
+			// clean run with zero errors. The caller also returns a non-nil
+			// error now (duplicates_ops.go), which is the other half of making
+			// this visible.
 			errDetail := strings.Join(result.Errors[:minInt(len(result.Errors), 10)], "; ")
-			_ = progress.Log("warn", fmt.Sprintf("Errors: %s", errDetail), nil)
+			if len(result.Errors) > 10 {
+				errDetail += fmt.Sprintf(" (and %d more)", len(result.Errors)-10)
+			}
+			_ = progress.Log("error", fmt.Sprintf("Errors: %s", errDetail), nil)
 		}
 		denom := total
 		if denom == 0 {
