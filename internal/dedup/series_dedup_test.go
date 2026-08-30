@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
 // last-edited: 2026-08-30
 
@@ -936,4 +936,30 @@ func TestMergeSeries_RefusesToRunWithoutTheUnfilteredCount(t *testing.T) {
 	_, err := MergeSeries(context.Background(), store, "op-noref", 10, []int{20}, "", nil)
 	require.Error(t, err, "a store that cannot count unfiltered references must abort the merge")
 	assert.Contains(t, err.Error(), "unfiltered reference counts")
+}
+
+// TestMergeSeries_DeduplicatesRepeatedMergeIDs pins the false alarm the
+// reference guard would otherwise create.
+//
+// mergeIDs comes straight off a JSON params blob and nothing upstream de-dupes
+// it. A repeated ID used to be harmless-if-odd: the second visit enumerated
+// nothing and re-deleted an already-deleted row. With the guard it becomes a
+// FALSE REFUSAL — the second visit sees moved == 0 against a refCounts entry
+// still holding the pre-delete count, and reports "still reference it" for a
+// series it had just correctly deleted. Since the op now fails on any recorded
+// error, that would fail an entirely successful merge.
+func TestMergeSeries_DeduplicatesRepeatedMergeIDs(t *testing.T) {
+	store, deleted, _ := newMergeSeriesFixture(t,
+		[]database.BookCore{{ID: "BOOK_X"}}, map[int]int{20: 1})
+
+	// The same ID three times, plus keepID itself, which must also be dropped:
+	// deleting the series being merged INTO is the worst possible outcome.
+	result, err := MergeSeries(context.Background(), store, "op-dupe", 10,
+		[]int{20, 20, 10, 20}, "", nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, []int{20}, *deleted, "series 20 must be deleted exactly once, and never series 10")
+	assert.Equal(t, 1, result.MergedCount)
+	assert.Empty(t, result.Errors,
+		"a repeated ID must not produce a spurious refusal for a series that was correctly deleted")
 }

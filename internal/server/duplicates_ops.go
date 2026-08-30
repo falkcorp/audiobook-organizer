@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-08-24
+// last-edited: 2026-08-30
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -689,23 +689,63 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			}
 			logging.Info(ctx, "series merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
 
-			_, err := dedup.MergeSeries(ctx, store, opID, p.KeepID, p.MergeIDs, p.CustomName, progress)
+			result, err := dedup.MergeSeries(ctx, store, opID, p.KeepID, p.MergeIDs, p.CustomName, progress)
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "series merge failed", "err", err)
 				return err
 			}
 
+			// The result is READ, not discarded, and every count below is the
+			// one MergeSeries actually achieved.
+			//
+			// This used to throw the result away and report len(p.MergeIDs) as
+			// the merged count on a hardcoded "success". MergeSeries returns
+			// (result, nil) on its normal path, so a run in which every delete
+			// was REFUSED -- the state SERIES-DELETE-UNGUARDED (#2908) added,
+			// and the state the ~6,893 phantom-ID population will actually
+			// produce -- rendered as "Series merge completed: merged 3 series",
+			// status success, zero errors. That trades a data-loss bug for a
+			// silent no-op, which is the same failure one layer up.
+			//
+			// A non-nil return is what puts the refusal in front of the
+			// operator: the reporter's op_errors_v2 table only records
+			// error-level entries, and MergeSeries's own digest goes out at
+			// warn. executeSeriesPrune already reports its refusals this way.
+			// The op is ResumeDrop with no retry policy, so failing here marks
+			// the run and does not re-attempt the merge.
 			s.dedupCache.InvalidateAll()
-			op.SetStatus("success")
-			logging.Info(ctx, "series merge complete", "kept_id", p.KeepID, "merged_count", len(p.MergeIDs))
+			logging.Info(ctx, "series merge complete", "kept_id", p.KeepID,
+				"merged_count", result.MergedCount,
+				"requested_count", len(p.MergeIDs),
+				"errors", len(result.Errors))
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
+				msg := fmt.Sprintf("Series merge completed: merged %d of %d series into series %d",
+					result.MergedCount, len(p.MergeIDs), p.KeepID)
+				if len(result.Errors) > 0 {
+					msg = fmt.Sprintf(
+						"Series merge INCOMPLETE: merged %d of %d series into series %d, %d error(s) — "+
+							"a merged-from series is kept whenever books that could not be reassigned "+
+							"(trashed rows) still reference it",
+						result.MergedCount, len(p.MergeIDs), p.KeepID, len(result.Errors))
+				}
 				activity.EmitInfo(s.activityWriter, opID, "dedup.series-merge", "dedup",
-					fmt.Sprintf("Series merge completed: merged %d series into series %d", len(p.MergeIDs), p.KeepID),
-					activity.AlwaysShow)
+					msg, activity.AlwaysShow)
 			}
+
+			if len(result.Errors) > 0 {
+				op.SetStatus("failed")
+				detail := strings.Join(result.Errors[:min(len(result.Errors), 10)], "; ")
+				if len(result.Errors) > 10 {
+					detail += fmt.Sprintf(" (and %d more)", len(result.Errors)-10)
+				}
+				return fmt.Errorf("series merge merged %d of %d series with %d error(s): %s",
+					result.MergedCount, len(p.MergeIDs), len(result.Errors), detail)
+			}
+
+			op.SetStatus("success")
 			return nil
 		},
 	})

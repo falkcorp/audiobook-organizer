@@ -1,5 +1,5 @@
 // file: internal/server/series_prune_phase1_refcount_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8c1d64-7a52-4be0-9c31-64d0f2a8ab17
 // last-edited: 2026-08-30
 
@@ -7,10 +7,20 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // SERIES-DELETE-UNGUARDED (#2908): the PHASE 1 reference guard.
@@ -300,4 +310,113 @@ func (s *seriesPhasedRefCountStore) GetAllSeriesBookRefCounts() (map[int]int, er
 		return s.perCall[s.calls-1], nil
 	}
 	return s.perCall[len(s.perCall)-1], nil
+}
+
+// --- the dedup.series-merge OP, not just the domain function ----------------
+//
+// MergeSeries recording a refusal in result.Errors is necessary and was NOT
+// sufficient. Its sole caller — RegisterSeriesMergeOp — discarded the result
+// entirely, set status "success", and reported len(p.MergeIDs) as the merged
+// count. MergeSeries returns (result, nil) on its normal path, so a run in
+// which EVERY delete was refused rendered as "Series merge completed: merged 3
+// series", green, zero errors.
+//
+// That is the same failure one layer up: a guard whose refusal nobody can see
+// is a silent no-op. These tests are at the op boundary on purpose — a test of
+// MergeSeries alone cannot observe it, which is exactly how it survived.
+
+func seriesMergeOpTestReg(t *testing.T) *opsregistry.Registry {
+	t.Helper()
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
+	return opsregistry.New(m, slog.New(slog.DiscardHandler), 1, nil)
+}
+
+// seriesMergeOpReporter is the minimum Reporter the op needs. The embedded
+// interface is nil, so any method the op calls that is not overridden here
+// panics loudly rather than passing silently — which is what we want from a
+// test whose subject is "what does this op report".
+type seriesMergeOpReporter struct {
+	opsregistry.Reporter
+	logs []string
+}
+
+func (r *seriesMergeOpReporter) UpdateProgress(_, _ int, _ string) error { return nil }
+func (r *seriesMergeOpReporter) IsCanceled() bool                        { return false }
+func (r *seriesMergeOpReporter) Log(_ slog.Level, message string, _ ...slog.Attr) error {
+	r.logs = append(r.logs, message)
+	return nil
+}
+
+// newSeriesMergeOpServer wires a Server with just enough for the op's Run body:
+// the store it merges through and the dedup cache it invalidates.
+func newSeriesMergeOpServer(t *testing.T, store database.Store) *Server {
+	t.Helper()
+	return &Server{
+		store:      store,
+		dedupCache: cache.New[gin.H]("dedup-test", time.Hour),
+	}
+}
+
+// newSeriesMergeOpStore builds a keep(10)+merge(20) pair where series 20
+// enumerates `visible` and its UNFILTERED reference count is refCount.
+func newSeriesMergeOpStore(visible []database.BookCore, refCount int) seriesRefCountingStore {
+	mock := &database.MockStore{}
+	mock.GetSeriesByIDFunc = func(id int) (*database.Series, error) {
+		return &database.Series{ID: id, Name: fmt.Sprintf("Series %d", id)}, nil
+	}
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		if id == 20 {
+			return visible, nil
+		}
+		return nil, nil
+	}
+	mock.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == 20 {
+			return visible, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := 20
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+	mock.UpdateBookFunc = func(_ string, b *database.Book) (*database.Book, error) { return b, nil }
+	mock.DeleteSeriesFunc = func(int) error { return nil }
+	return seriesRefCountingStore{MockStore: mock, refCounts: map[int]int{20: refCount}}
+}
+
+// TestSeriesMergeOp_FailsWhenEveryDeleteWasRefused: series 20's two books are
+// all trashed, so it enumerates empty, the delete is refused, and the op must
+// NOT report a completed merge.
+func TestSeriesMergeOp_FailsWhenEveryDeleteWasRefused(t *testing.T) {
+	reg := seriesMergeOpTestReg(t)
+	s := newSeriesMergeOpServer(t, newSeriesMergeOpStore(nil, 2))
+	require.NoError(t, s.RegisterSeriesMergeOp(reg))
+	def, ok := reg.Def("dedup.series-merge")
+	require.True(t, ok)
+
+	err := def.Run(context.Background(), []byte(`{"keep_id":10,"merge_ids":[20]}`),
+		&seriesMergeOpReporter{})
+
+	require.Error(t, err, "the op returned nil on a run that merged nothing — it reports "+
+		"success and the requested count, so the operator sees a completed merge while the "+
+		"duplicate is still in the list")
+	assert.Contains(t, err.Error(), "merged 0 of 1",
+		"the op must report what it MERGED, not what it was asked to merge")
+}
+
+// TestSeriesMergeOp_SucceedsOnACleanMerge is the POSITIVE CONTROL. Without it,
+// an op that always failed would pass the test above.
+func TestSeriesMergeOp_SucceedsOnACleanMerge(t *testing.T) {
+	reg := seriesMergeOpTestReg(t)
+	s := newSeriesMergeOpServer(t,
+		newSeriesMergeOpStore([]database.BookCore{{ID: "BOOK_X"}}, 1))
+	require.NoError(t, s.RegisterSeriesMergeOp(reg))
+	def, ok := reg.Def("dedup.series-merge")
+	require.True(t, ok)
+
+	require.NoError(t, def.Run(context.Background(), []byte(`{"keep_id":10,"merge_ids":[20]}`),
+		&seriesMergeOpReporter{}),
+		"the one reference was reassigned, so the merge genuinely completed and must report success")
 }

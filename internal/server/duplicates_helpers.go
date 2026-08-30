@@ -119,8 +119,11 @@ func (s *Server) filterReviewedAuthorGroups(groups []dedup.AuthorDedupGroup) []d
 // Counters and the cache invalidation are hoisted to the top and deferred on
 // purpose. This function has seven exits — two ctx cancellations, two store
 // failures, both fail-closed reference-count guards (phase 1's and phase 2's),
-// and the normal end — and every one of them can be reached AFTER phase 1 has
-// already repointed books. Invalidating
+// and the normal end. All but two of them can be reached AFTER phase 1 has
+// already repointed books — the exceptions are phase 1's own reference-count
+// guard and the initial GetAllSeries failure, which both return before any
+// repointing happens and are listed here only so the count is honest.
+// Invalidating
 // only at the normal exit left the other five serving pre-merge membership under
 // the cached list's 24-hour TTL, which is the 2026-08-14 production symptom
 // quoted below reached from a third direction. A defer is the only form that

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.24.0 -->
+<!-- version: 1.25.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-30 -->
 
@@ -1410,9 +1410,16 @@ before the removal happened.
 August 14 found 6,893 series references pointing at series that had been deleted, held by
 13,322 books that are very much still there. Those books show no series at all, and
 nothing in the application revisits them to notice. Two other places that do the same kind
-of merge had already been fixed against exactly this; these two were missed because a
+of merge had already been fixed against exactly this; the two here were missed because a
 safety check only protects the code that consults it, and neither of these consulted
 anything.
+
+There was a second way this stayed invisible. The interactive "merge these series" button
+reported what it had been *asked* to do, not what it did — so even once the removal was
+correctly refused, the screen said "merged 3 series" and the operation finished green. A
+refusal nobody can see is a silent no-op, which is the same failure in a different costume.
+That reporting now says how many of the requested merges actually happened, and a run with
+any refusal in it is marked as incomplete rather than successful.
 
 **The fix.** Both now take a full, unfiltered count of what references each series —
 including trashed books and duplicate copies — once, before they start, and refuse to
@@ -1424,10 +1431,17 @@ back, which leaves a visible, re-cleanable entry rather than an invisible broken
 the count cannot be obtained at all, both now stop before deleting anything rather than
 falling back on the narrower listing — that fallback is the original bug.
 
-One deliberate limitation, worth stating plainly: this stops new broken references from
-being created. It does not repair the roughly 6,893 that already exist. That repair needs
-its own decision about what a rescued book's series should become, and is recorded as
-outstanding work rather than guessed at here.
+Two limitations, both worth stating plainly rather than leaving to be discovered. First,
+this stops new broken references from being created; it does not repair the roughly 6,893
+that already exist. That repair needs its own decision about what a rescued book's series
+should become, and is recorded as outstanding work rather than guessed at here. Second,
+these were two of four places that remove a series entry, not the last two. A review of
+this change found two more carrying the same blind spot — one in the routine that tidies
+up series names, one in the routine that strips numbers out of them. Neither can take the
+same fix without a structural change to how it reaches the database, so both were written
+down as outstanding rather than patched in passing. Counting them and saying so is the
+point: the earlier round of this same fix was believed to have finished the job, and had
+not.
 
 ## Themes worth carrying into next month
 
