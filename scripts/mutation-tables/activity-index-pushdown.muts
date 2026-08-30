@@ -1,0 +1,60 @@
+# Mutation table for the activity secondary-index limit pushdown.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/database/ \
+#     --table scripts/mutation-tables/activity-index-pushdown.muts
+#
+# WHAT THIS TABLE IS FOR. queryByIndexPrefixPaged returns a page AND a `total`,
+# and `total` is serialized to the UI's pager with no error channel anywhere. A
+# wrong count here is the exact shape of defect this repo keeps shipping: a 200
+# OK with a plausible wrong number. So the mutations below are aimed at the
+# COUNT and the ORDER, not at whether the function returns rows at all — any
+# fixture notices the latter, and none of the defects an adversarial review
+# found in this code would have been caught by that.
+#
+# The `total--` corrections (M06-M08) get one mutation each rather than one for
+# the group, because each is a separate arithmetic claim about a separate
+# population (pruned / undecodable / foreign) and a fixture can easily contain a
+# row for one and none for the others.
+#
+# M09 IS A KNOWN EQUIVALENT MUTANT and is expected to SURVIVE. Removing
+# pit.Next() leaves the merge correct: the very next iteration re-seeks whenever
+# the iterator is not already past the target, so dropping the advance costs a
+# SeekGE and changes no answer. It is listed rather than omitted so that nobody
+# rediscovers it and "fixes" it with a test asserting an implementation detail.
+# Confirm it stays survived; do not chase it.
+
+# ── the existence merge that defines `total` ─────────────────────────────────
+M01 count every ref, alive or not | internal/database/pebble_activity_store.go | s/if pit\.Valid\(\) && bytes\.Equal\(pit\.Key\(\), k\) \{/if true {/
+M02 never mark anything alive | internal/database/pebble_activity_store.go | s/alive\[bucket\.pos\[i\]\] = true/_ = i/
+M03 total ignores the merge result | internal/database/pebble_activity_store.go | s/\tlive\+\+\n/\t\n/
+
+# ── the reverse scan the newest-first order rests on ─────────────────────────
+M04 scan the index forward instead of backward | internal/database/pebble_activity_store.go | s/for iter\.Last\(\); iter\.Valid\(\); iter\.Prev\(\) \{/for iter.First(); iter.Valid(); iter.Next() {/
+
+# ── the two scan-time rejections that keep the two totals equal ──────────────
+M05 accept a key that only PREFIX-matches the id | internal/database/pebble_activity_store.go | s/if !pactIndexKeyNamesExactly\(iter\.Key\(\), prefix\) \{/if false {/
+M06 accept a ref that cannot become a primary key | internal/database/pebble_activity_store.go | s/if ti < 0 \{\n\t\t\tcontinue\n\t\t\}/if ti < -1 {\n\t\t\tcontinue\n\t\t}/
+
+# ── the three per-population corrections to `total` ──────────────────────────
+M07 pruned-between-passes row stays in total | internal/database/pebble_activity_store.go | s/if getErr != nil \{\n(.*\n)*?\t\t\ttotal--\n/if getErr != nil {\n/
+M08 undecodable row stays in total | internal/database/pebble_activity_store.go | s/\t\t\ts\.decodeFailures\.Add\(1\)\n\t\t\ttally\.record\(primaryKey, jsonErr\)\n\t\t\ttotal--\n/\t\t\ts.decodeFailures.Add(1)\n\t\t\ttally.record(primaryKey, jsonErr)\n/
+M09 foreign row in the page stays in total | internal/database/pebble_activity_store.go | s/if !matchesFilter\(entry, f\) \{\n\t\t\ttotal--\n/if !matchesFilter(entry, f) {\n/
+
+# ── the page is taken by RANK over survivors, not by index position ──────────
+M10 an orphaned ref consumes a page slot | internal/database/pebble_activity_store.go | s/\t\tif !alive\[i\] \{\n\t\t\tcontinue\n\t\t\}/\t\tif !alive[i] {\n\t\t\trank++\n\t\t\tcontinue\n\t\t}/
+M11 a foreign row in the page consumes a rank | internal/database/pebble_activity_store.go | s/if !matchesFilter\(entry, f\) \{\n\t\t\ttotal--\n\t\t\tcontinue\n\t\t\}/if !matchesFilter(entry, f) {\n\t\t\ttotal--\n\t\t\trank++\n\t\t\tcontinue\n\t\t}/
+
+# ── the ordering contract both paths are held to ─────────────────────────────
+M12 drop the tie-break, leaving ties unordered | internal/database/pebble_activity_store.go | s/\t\treturn strings\.Compare\(b\.entryID, a\.entryID\)/\t\treturn 0/
+M13 tie-break ascending instead of descending | internal/database/pebble_activity_store.go | s/\t\treturn strings\.Compare\(b\.entryID, a\.entryID\)/\t\treturn strings.Compare(a.entryID, b.entryID)/
+M14 sort oldest-first instead of newest-first | internal/database/pebble_activity_store.go | s/\t\tif c := b\.entry\.Timestamp\.Compare\(a\.entry\.Timestamp\); c != 0 \{/\t\tif c := a.entry.Timestamp.Compare(b.entry.Timestamp); c != 0 {/
+
+# ── the write-time guard that keeps key order == chronological order ─────────
+M15 admit pre-epoch timestamps into the keyspace | internal/database/pebble_activity_store.go | s/if e\.Timestamp\.UnixNano\(\) < 0 \{/if false {/
+
+# ── the eligibility gate that decides whether the pushdown runs at all ───────
+M16 push down a filter the index cannot decide | internal/database/pebble_activity_store.go | s/\tif f\.Type != "" \x7c\x7c f\.Level != "" \x7c\x7c f\.Source != "" \x7c\x7c f\.Search != "" \{\n\t\treturn false\n\t\}/\t\n/
+M17 push down on an unknown index family | internal/database/pebble_activity_store.go | s/\t\t\/\/ An unknown index family: neither id predicate can be justified by\n\t\t\/\/ construction, so refuse rather than guess\.\n\t\treturn false/\t\treturn true/
