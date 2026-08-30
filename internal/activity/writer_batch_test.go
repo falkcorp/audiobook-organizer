@@ -1,5 +1,5 @@
 // file: internal/activity/writer_batch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c7e5f10-9a63-4d84-8b21-4e0d7c395a6f
 // last-edited: 2026-08-30
 
@@ -217,6 +217,39 @@ func TestWriteBatch_ReportsAPartialLoss(t *testing.T) {
 	assert.Contains(t, out.String(), "lost 1 of 5 entries")
 	assert.Equal(t, 4, countActivityKeys(t, store.PebbleActivityStore, "act:change:"),
 		"the four good rows must still be durable")
+}
+
+// failingRecordStore fails every per-entry Record and offers no RecordBatch, so
+// a Writer given one takes the fallback path with a store that is losing rows.
+type failingRecordStore struct {
+	database.ActivityStorer
+}
+
+func (failingRecordStore) Record(database.ActivityEntry) (int64, error) {
+	return 0, fmt.Errorf("simulated per-entry failure")
+}
+
+// TestWriteBatch_FallbackReportsLostRows holds the fallback to the same
+// standard as the batched path.
+//
+// Before this, the fallback loop discarded Record's error outright: a store
+// without the batch capability lost rows in total silence, while the batched
+// path reported every loss. Two branches of one function with opposite loss
+// semantics is exactly the shape that makes an outage unexplainable — the
+// answer to "did we lose activity rows?" must not depend on which branch ran.
+func TestWriteBatch_FallbackReportsLostRows(t *testing.T) {
+	store := newCountingBatchStore(t)
+	w := NewWriter(failingRecordStore{ActivityStorer: store}, 50)
+	require.Nil(t, w.batchStore, "the fixture must take the per-entry fallback")
+
+	var out bytes.Buffer
+	w.stdout = &out
+
+	w.writeBatch(writerTestEntries(6))
+
+	logged := out.String()
+	assert.Contains(t, logged, "lost 6 of 6 entries", "the fallback must name how many rows went missing")
+	assert.Contains(t, logged, "simulated per-entry failure", "the cause must be reported")
 }
 
 // TestFlush_WritesEveryQueuedEntryInOneCommit covers the other caller changed

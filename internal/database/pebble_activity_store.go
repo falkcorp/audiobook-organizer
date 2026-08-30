@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-30
 
@@ -88,6 +88,25 @@ type PebbleActivityStore struct {
 	// decodeFailures counts entries dropped because their stored JSON could
 	// not be decoded. Dropped rows are also logged per-scan in aggregate.
 	decodeFailures atomic.Int64
+
+	// recordBatchCommits counts the durable commits RecordBatch has made on
+	// THIS store.
+	//
+	// It exists because a commit leaves NO trace in the keyspace: 11 entries
+	// look identical on disk whether they went down in one commit or three, so
+	// a test for activityRecordBatchCap that only counted stored keys would
+	// pass against a cap that had stopped working — the whole point of the cap
+	// is the number of commits, and that number is otherwise unobservable.
+	// Pebble exposes no per-commit counter (LogWriterMetrics carries throughput
+	// and queue-length gauges only), so the instrument has to live here.
+	//
+	// It is per-store rather than a package var so that a test can read it as
+	// an absolute count of its own store's commits. A package-level counter is
+	// shared by every test in the package that records anything, which makes
+	// the reading correct only while no two of them run concurrently — an
+	// invariant nothing enforces and that t.Parallel() would quietly break.
+	// One atomic add per commit, i.e. once per activityRecordBatchCap rows.
+	recordBatchCommits atomic.Int64
 
 	sourcesMu    sync.Mutex
 	sourcesCache map[string]pactSourcesCacheEntry
@@ -438,20 +457,10 @@ func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
 // once per row, and raising the cap further buys nothing measurable.
 //
 // A var, not a const, following activityQueryScanBudget above, so tests can
-// shrink it and exercise the split without seeding hundreds of entries.
+// shrink it and exercise the split without seeding hundreds of entries. It is
+// package-scoped state: a test that overrides it must restore it and must not
+// run in parallel with another test in this package that records entries.
 var activityRecordBatchCap = 500
-
-// pactRecordBatchCommits counts the durable commits RecordBatch has made.
-//
-// It exists because a commit leaves NO trace in the keyspace: 11 entries look
-// identical on disk whether they went down in one commit or three, so a test
-// for the cap that only counted stored keys would pass against a cap that had
-// stopped working — the whole point of the cap is the number of commits, and
-// that number is otherwise unobservable. Pebble exposes no per-commit counter
-// (LogWriterMetrics carries throughput and queue-length gauges only), so the
-// instrument has to live here. One atomic add per commit — that is once per
-// activityRecordBatchCap rows, not once per row.
-var pactRecordBatchCommits atomic.Int64
 
 // RecordBatch writes every entry in entries, committing at most
 // activityRecordBatchCap of them per durable commit. It returns the number of
@@ -480,22 +489,29 @@ var pactRecordBatchCommits atomic.Int64
 //     the realistic causes (a full or failing disk, a closed DB) fail the
 //     retries too, and retrying per-entry would issue up to 500 further fsyncs
 //     against a disk that just failed one — turning a logged loss into an I/O
-//     storm. The count of rows lost is in the error, and Writer.writeBatch
-//     reports it; losing activity rows is acceptable, losing them silently is
-//     not.
+//     storm. Losing activity rows is acceptable; losing them silently is not.
 //
-// The count returned is always the number of rows actually durable, so a caller
-// can report the loss as len(entries) - written without trusting the error text.
+// Both early returns abandon the rest of the call, not just the failed commit,
+// so the loss they name is len(entries)-written — every entry in the failed
+// chunk plus every chunk after it, none of which is attempted. That is also the
+// figure a caller should report: the count returned is always the number of
+// rows actually made durable, so len(entries)-written is authoritative without
+// trusting the error text.
 func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (int, error) {
 	if len(entries) == 0 {
 		return 0, nil
 	}
 
+	// A cap of zero would never advance start, and the staged == 0 continue
+	// below would spin the loop forever rather than failing. It is a test-only
+	// var, but a suite that hangs is worse than one that fails, so clamp it.
+	chunk := max(activityRecordBatchCap, 1)
+
 	written := 0
 	var prepareErrs []error
 
-	for start := 0; start < len(entries); start += activityRecordBatchCap {
-		end := min(start+activityRecordBatchCap, len(entries))
+	for start := 0; start < len(entries); start += chunk {
+		end := min(start+chunk, len(entries))
 
 		batch := s.db.NewBatch()
 		staged := 0
@@ -510,7 +526,8 @@ func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (int, error) 
 				// Join whatever was already dropped by prepare: abandoning the
 				// batch must not also abandon the report of the earlier losses.
 				return written, errors.Join(
-					fmt.Errorf("pebble_activity_store: record batch staging lost %d entries: %w", staged+1, err),
+					fmt.Errorf("pebble_activity_store: record batch staging lost %d of %d entries: %w",
+						len(entries)-written, len(entries), err),
 					errors.Join(prepareErrs...))
 			}
 			staged++
@@ -523,11 +540,12 @@ func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (int, error) 
 		if err := batch.Commit(pebble.Sync); err != nil {
 			batch.Close()
 			return written, errors.Join(
-				fmt.Errorf("pebble_activity_store: record batch commit lost %d entries: %w", staged, err),
+				fmt.Errorf("pebble_activity_store: record batch commit lost %d of %d entries: %w",
+					len(entries)-written, len(entries), err),
 				errors.Join(prepareErrs...))
 		}
 		batch.Close()
-		pactRecordBatchCommits.Add(1)
+		s.recordBatchCommits.Add(1)
 		written += staged
 	}
 
