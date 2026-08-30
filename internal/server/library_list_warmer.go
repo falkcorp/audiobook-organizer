@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-23
+// last-edited: 2026-08-30
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -597,11 +597,9 @@ func (s *Server) warmAudiobookListCache() {
 	// against their closed stores. The Add happens while the parent
 	// warmer's own bgWG entry is still held, so it can never race a
 	// completed bgWG.Wait in Stop().
-	s.bgWG.Add("library-list-trickle-warmer")
-	go func() {
-		defer s.bgWG.Done("library-list-trickle-warmer")
+	s.bgWG.Go("library-list-trickle-warmer", func() {
 		s.runTrickleWarmer(trickleQueries)
-	}()
+	})
 }
 
 // runTrickleWarmer pops one query per tick from the backlog, runs it,

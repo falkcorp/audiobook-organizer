@@ -1,6 +1,7 @@
 // file: internal/server/bg_wg.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cf86ebb1-cc97-4d0d-8a9b-03d5c4faa7c1
+// last-edited: 2026-08-30
 
 // namedWaitGroup wraps sync.WaitGroup and keeps a concurrent set of
 // goroutine names so that when the 30s shutdown grace period expires we
@@ -10,6 +11,7 @@
 // Contract mirrors sync.WaitGroup:
 //   - Add(name) increments the counter and registers the name.
 //   - Done(name) decrements the counter and removes the name.
+//   - Go(name, fn) does both around a new goroutine (preferred).
 //   - Wait() blocks until the counter reaches zero.
 //   - Running() returns a snapshot of the currently-registered names.
 //
@@ -52,6 +54,20 @@ func (n *namedWaitGroup) Done(name string) {
 	}
 	n.mu.Unlock()
 	n.wg.Done()
+}
+
+// Go registers name, starts fn in a new goroutine, and deregisters name
+// when fn returns. Mirrors sync.WaitGroup.Go while keeping the name registry
+// that lets Shutdown log *which* goroutines outlived the grace period.
+//
+// The Add is performed synchronously in the calling goroutine, before fn is
+// started, so a concurrent Wait() can never miss this registration.
+func (n *namedWaitGroup) Go(name string, fn func()) {
+	n.Add(name)
+	go func() {
+		defer n.Done(name)
+		fn()
+	}()
 }
 
 // Wait blocks until the counter reaches zero, identically to sync.WaitGroup.Wait.

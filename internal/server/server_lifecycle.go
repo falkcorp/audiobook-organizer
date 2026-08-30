@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.33.1
+// version: 3.34.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-30
 
@@ -397,16 +397,12 @@ func (s *Server) Start(cfg ServerConfig) error {
 		// Shutdown drains it before Pebble closes. Started before the worker
 		// so a backlog left by the previous process starts draining even if
 		// the worker is immediately saturated.
-		s.bgWG.Add("search-reconciler")
-		go func() {
-			defer s.bgWG.Done("search-reconciler")
+		s.bgWG.Go("search-reconciler", func() {
 			s.runSearchReconciler()
-		}()
-		s.bgWG.Add("index-worker")
-		go func() {
-			defer s.bgWG.Done("index-worker")
+		})
+		s.bgWG.Go("index-worker", func() {
 			s.runIndexWorker()
-		}()
+		})
 		// Route the /audiobooks?search= path through Bleve.
 		if s.audiobookService != nil {
 			s.audiobookService.SetSearchIndex(s.searchIndex)
@@ -891,28 +887,24 @@ func warmerRecover(name string) {
 
 func (s *Server) startCacheWarmers() {
 	// Pre-warm facets cache (genres/languages) - lightweight, <1 second
-	s.bgWG.Add("facets-warmer")
-	go func() {
-		defer s.bgWG.Done("facets-warmer")
+	s.bgWG.Go("facets-warmer", func() {
 		defer warmerRecover("facets")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
 		s.warmFacetsCache()
-	}()
+	})
 	// Pre-warm library size cache via filesystem walk so any later refresh
 	// path (nightly maintenance, manual rescan) starts with current data.
 	// The hot path of /system/status reads DB stats (PR #1137); this just
 	// keeps the FS-based numbers fresh in the 24h-TTL package cache.
-	s.bgWG.Add("library-sizes-warmer")
-	go func() {
-		defer s.bgWG.Done("library-sizes-warmer")
+	s.bgWG.Go("library-sizes-warmer", func() {
 		defer warmerRecover("library-sizes")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
 		s.warmLibrarySizes()
-	}()
+	})
 	// Pre-warm the audiobook list cache after memdb is published. Fires
 	// the most common library-page queries (title asc/desc, -review:matched,
 	// library_state filter) so the user's first load doesn't pay the full
@@ -922,52 +914,42 @@ func (s *Server) startCacheWarmers() {
 	// store after Close() — panic "pebble: closed" from a trickle-warmer
 	// tick minutes into an internal/server package run
 	// (PEBBLE-CLOSED-SWEEPTICK-RESIDUAL family, warmer leg).
-	s.bgWG.Add("library-list-warmer")
-	go func() {
-		defer s.bgWG.Done("library-list-warmer")
+	s.bgWG.Go("library-list-warmer", func() {
 		defer warmerRecover("library-list")
 		s.warmAudiobookListCache()
-	}()
-	s.bgWG.Add("authors-warmer")
-	go func() {
-		defer s.bgWG.Done("authors-warmer")
+	})
+	s.bgWG.Go("authors-warmer", func() {
 		defer warmerRecover("authors")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
 		s.warmAuthorsCache()
-	}()
-	s.bgWG.Add("series-warmer")
-	go func() {
-		defer s.bgWG.Done("series-warmer")
+	})
+	s.bgWG.Go("series-warmer", func() {
 		defer warmerRecover("series")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
 		s.warmSeriesCache()
-	}()
+	})
 	// Pre-warm the metadata-results set. Memoised with a 60s TTL since #2142, but
 	// nothing populated it at boot, so the cache was cold after every restart and
 	// the first request into the match UI paid the whole build (~34s measured).
 	// Memoising moved that cost onto one unlucky request; warming removes it.
-	s.bgWG.Add("metadata-results-warmer")
-	go func() {
-		defer s.bgWG.Done("metadata-results-warmer")
+	s.bgWG.Go("metadata-results-warmer", func() {
 		defer warmerRecover("metadata-results")
 		if s.bgCtx.Err() != nil {
 			return // server already shutting down — skip, never warm a closing store
 		}
 		s.warmMetadataResultsCache()
-	}()
+	})
 
 	// Low-frequency background sweep that WARN-logs API keys approaching
 	// expiry or lacking one entirely (legacy keys) — observability only,
 	// never enforcement (SEC-1/PROC-6).
-	s.bgWG.Add("apikey-expiry-sweep")
-	go func() {
-		defer s.bgWG.Done("apikey-expiry-sweep")
+	s.bgWG.Go("apikey-expiry-sweep", func() {
 		s.warnExpiringAPIKeys()
-	}()
+	})
 }
 
 // configureAndStartHTTP builds s.httpServer (and, when TLS is configured,
@@ -1143,9 +1125,7 @@ func (s *Server) startBackfills() {
 	// Backfill external ID mappings from existing iTunes PIDs (one-time,
 	// idempotent). Tracked via bgWG for the same reason as the embedding
 	// backfill: we can't let it hold Pebble iterators while CloseStore runs.
-	s.bgWG.Add("external-id-backfill")
-	go func() {
-		defer s.bgWG.Done("external-id-backfill")
+	s.bgWG.Go("external-id-backfill", func() {
 		// This startup-goroutine path has no op reporter (only the UOS plugin
 		// op maintenance.external-id-backfill does), so progress is surfaced
 		// via a plain slog.Info instead of reporter.UpdateProgress — this is
@@ -1156,7 +1136,7 @@ func (s *Server) startBackfills() {
 		if err := s.backfillExternalIDs(startupProgressLogger("external-id-backfill")); err != nil {
 			slog.Warn("startup external-id-backfill failed", "err", err)
 		}
-	}()
+	})
 
 	// AcoustID fingerprint backfill. CONC-9 removed the serial server-side
 	// duplicate (backfillAcoustIDs) in favor of the parallel plugin op
@@ -1198,9 +1178,7 @@ func (s *Server) startBackfills() {
 	// inline here: a test can call that, but it cannot call the body of this
 	// goroutine, and a guard that cannot reach the real call site does not
 	// guard it.
-	s.bgWG.Add("versiongroup-backfill")
-	go func() {
-		defer s.bgWG.Done("versiongroup-backfill")
+	s.bgWG.Go("versiongroup-backfill", func() {
 		if err := s.bgCtx.Err(); err != nil {
 			return
 		}
@@ -1223,40 +1201,34 @@ func (s *Server) startBackfills() {
 		if err := b.BackfillVersionGroupIndex(); err != nil {
 			slog.Warn("versiongroup-backfill", "err", err)
 		}
-	}()
+	})
 
 	// Strip shwm/©mvi/©mvn atoms from audiobook files (one-time). These
 	// classical-music atoms crash Apple Devices for Windows at sync.
 	// Checks bgCtx per file (SYS-1) so shutdown stops the walk early instead
 	// of blowing the 30s grace period on a first-run walk over a large
 	// library; a canceled run resumes on the next startup.
-	s.bgWG.Add("strip-movement-atoms")
-	go func() {
-		defer s.bgWG.Done("strip-movement-atoms")
+	s.bgWG.Go("strip-movement-atoms", func() {
 		s.stripMovementAtoms(s.bgCtx)
-	}()
+	})
 
 	// Re-mux M4B/M4A files with malformed atom structures so taglib,
 	// AtomicParsley, and Apple Devices can read them (one-time).
 	// Checks bgCtx per file (SYS-1); same early-stop behavior as
 	// stripMovementAtoms above.
-	s.bgWG.Add("remux-malformed-m4b")
-	go func() {
-		defer s.bgWG.Done("remux-malformed-m4b")
+	s.bgWG.Go("remux-malformed-m4b", func() {
 		// See the external-id-backfill goroutine above for why this logs
 		// progress via slog rather than a reporter (C2).
 		if err := s.remuxMalformedM4BFiles(s.bgCtx, startupProgressLogger("remux-malformed-m4b")); err != nil {
 			slog.Warn("startup remux-malformed-m4b failed", "err", err)
 		}
-	}()
+	})
 
 	// Build the search index on first startup (or if it got wiped).
 	// Tracked via bgWG so shutdown can wait for in-flight indexing
 	// instead of letting it run under a closing DB.
 	if s.searchIndex != nil {
-		s.bgWG.Add("build-search-index")
-		go func() {
-			defer s.bgWG.Done("build-search-index")
+		s.bgWG.Go("build-search-index", func() {
 			if s.searchIndex.RecreatedForMappingChange() {
 				// The index was just deleted and recreated empty because the
 				// mapping version changed. An empty index is precisely what
@@ -1283,7 +1255,7 @@ func (s *Server) startBackfills() {
 			// the shortfall so the reconciler repairs it. See
 			// search_coverage.go.
 			s.reconcileSearchIndexCoverage()
-		}()
+		})
 	}
 
 	// One-time startup jobs: transcode malformed M4B files, then quarantine any
@@ -1291,16 +1263,14 @@ func (s *Server) startBackfills() {
 	// so shutdown waits for them and they don't race against the HTTP server.
 	// transcodeMalformedM4BFiles checks bgCtx per file (SYS-1); same
 	// early-stop behavior as stripMovementAtoms above.
-	s.bgWG.Add("transcode+quarantine")
-	go func() {
-		defer s.bgWG.Done("transcode+quarantine")
+	s.bgWG.Go("transcode+quarantine", func() {
 		// See the external-id-backfill goroutine above for why this logs
 		// progress via slog rather than a reporter (C2).
 		if err := s.transcodeMalformedM4BFiles(s.bgCtx, startupProgressLogger("transcode-malformed-m4b")); err != nil {
 			slog.Warn("startup transcode-malformed-m4b failed", "err", err)
 		}
 		s.quarantineKnownBadFiles()
-	}()
+	})
 }
 
 // startupProgressLogger returns a C2/H7 progress callback that logs via slog,

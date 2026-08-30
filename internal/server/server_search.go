@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-07-05
+// last-edited: 2026-08-30
 
 package server
 
@@ -148,9 +148,7 @@ func (h *serverOrganizeHooks) OnCollision(currentBookID, occupantPath string) {
 	if h.server.embeddingStore == nil || h.server.store == nil {
 		return
 	}
-	h.server.bgWG.Add("organize-collision-hook")
-	go func() {
-		defer h.server.bgWG.Done("organize-collision-hook")
+	h.server.bgWG.Go("organize-collision-hook", func() {
 		occupant, err := h.server.store.GetBookByFilePath(occupantPath)
 		if err != nil {
 			slog.Warn("organize-collision hook lookup failed", "occupantPath", occupantPath, "err", err)
@@ -173,7 +171,7 @@ func (h *serverOrganizeHooks) OnCollision(currentBookID, occupantPath string) {
 		}
 		slog.Info("organize-collision created dedup candidate between and (occupant of )", "currentBookID", currentBookID, "occupant", occupant.ID, "occupantPath", occupantPath)
 		h.server.markDuplicatesFlaggedDirty("upsert_candidate")
-	}()
+	})
 }
 
 // fireDedupOnImport runs the dedup engine's Layer 1 + Layer 2 checks for
@@ -196,11 +194,9 @@ func (s *Server) fireDedupOnImport(bookID string) {
 	if s.dedupEngine == nil || bookID == "" {
 		return
 	}
-	s.bgWG.Add("dedup-on-import")
-	go func() {
-		defer s.bgWG.Done("dedup-on-import")
+	s.bgWG.Go("dedup-on-import", func() {
 		if _, err := s.dedupEngine.CheckBook(s.bgCtx, bookID); err != nil {
 			slog.Warn("dedup-on-import CheckBook()", "bookID", bookID, "err", err)
 		}
-	}()
+	})
 }
