@@ -6,6 +6,7 @@
 package server
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,4 +102,57 @@ func TestCalculateLibrarySizes_ExcludesAppDirs(t *testing.T) {
 			"an app dir inside an import path must be excluded too")
 		require.Greater(t, importSize, int64(0))
 	})
+}
+
+// TestStripMovementAtoms_SkipsAppDirs pins the movement-atom cleanup walk.
+//
+// This walker REWRITES tag atoms in place on every .m4b/.m4a it accepts, so an
+// unguarded walk edits audio files archived inside the backup tree.
+//
+// The observable is the Visited counter, not file state: a malformed fixture is
+// left byte-identical whether it was skipped or visited-and-failed, so file
+// state alone could not distinguish a working guard from a deleted one.
+func TestStripMovementAtoms_SkipsAppDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		appDirs     bool
+		wantVisited int
+	}{
+		{"app dirs configured: only library audio is visited", true, 1},
+		{"empty AppDirs: whole tree visited, exactly as before", false, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := database.NewPebbleStore(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = store.Close() })
+
+			root := t.TempDir()
+			prevRoot := config.AppConfig.RootDir
+			config.AppConfig.RootDir = root
+			t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+			if tc.appDirs {
+				withAppDirConfig(t, root)
+			} else {
+				prevBackup, prevDump := config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir
+				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
+				t.Cleanup(func() {
+					config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = prevBackup, prevDump
+				})
+			}
+
+			for _, p := range []string{
+				filepath.Join(root, "Author", "Book", "library.m4b"),
+				filepath.Join(root, "backups", "archived.m4b"),
+				filepath.Join(root, "openlibrary-dumps", "db", "dumped.m4b"),
+			} {
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+				require.NoError(t, os.WriteFile(p, []byte("not a real m4b"), 0o644))
+			}
+
+			srv := &Server{store: store}
+			res := srv.stripMovementAtoms(context.Background())
+			require.Equal(t, tc.wantVisited, res.Visited,
+				"files inside an app directory must not be opened for tag rewriting")
+		})
+	}
 }

@@ -32,21 +32,37 @@ var movementAtoms = []string{"SHOWWORKMOVEMENT", "MOVEMENTNUMBER", "MOVEMENTNAME
 // stops early via fs.SkipAll when canceled (SYS-1), so shutdown's 30s grace
 // period is not blown by a first-run walk over a large library. A canceled
 // run does not write the done flag, so the next startup resumes the cleanup.
-func (s *Server) stripMovementAtoms(ctx context.Context) {
+// movementAtomCleanupResult reports what the walk actually visited.
+//
+// The function previously returned nothing, which made its walk unobservable:
+// a file inside an app directory is left byte-identical whether it was skipped
+// or visited-and-failed, so file state alone cannot tell a working guard from a
+// deleted one. Returning the counters gives the guard a real instrument. Both
+// production call sites use the call as a statement and are unaffected.
+type movementAtomCleanupResult struct {
+	Stripped  int
+	Clean     int
+	Failed    int
+	WalkErrs  int
+	Visited   int // Stripped + Clean + Failed: every file the walk accepted
+	Completed bool
+}
+
+func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResult {
 	store := s.Ops()
 	if store == nil {
-		return
+		return movementAtomCleanupResult{}
 	}
 
 	if setting, err := store.GetSetting(movementAtomCleanupKey); err == nil && setting != nil && setting.Value == "true" {
 		slog.Info("Movement atom cleanup already completed, skipping")
-		return
+		return movementAtomCleanupResult{Completed: true}
 	}
 
 	root := config.AppConfig.RootDir
 	if root == "" {
 		slog.Warn("stripMovementAtoms RootDir not configured, skipping")
-		return
+		return movementAtomCleanupResult{}
 	}
 
 	// Build safe-write deps from server state so protected paths are guarded.
@@ -109,22 +125,29 @@ func (s *Server) stripMovementAtoms(ctx context.Context) {
 	slog.Info("Movement atom cleanup stripped, already clean, errors",
 		"stripped", stripped, "clean", clean, "failed", failed, "walk_errors", walkErrs)
 
+	res := movementAtomCleanupResult{
+		Stripped: stripped, Clean: clean, Failed: failed, WalkErrs: walkErrs,
+		Visited: stripped + clean + failed,
+	}
+
 	if ctx.Err() != nil {
 		slog.Info("movement atom cleanup canceled before completion — done flag not written, will resume next startup")
-		return
+		return res
 	}
 	if err != nil {
 		slog.Warn("movement atom cleanup: walk did not complete — done flag not written, will re-run next startup")
-		return
+		return res
 	}
 	if serr := store.SetSetting(movementAtomCleanupKey, "true", "bool", false); serr != nil {
 		// Previously swallowed: a failed write meant a silent full re-walk
 		// on every boot. Do not claim completion.
 		slog.Error("movement atom cleanup: failed to persist done flag — cleanup will re-run on next startup",
 			"key", movementAtomCleanupKey, "err", serr)
-		return
+		return res
 	}
 	slog.Info("Movement atom cleanup complete — done flag persisted", "key", movementAtomCleanupKey)
+	res.Completed = true
+	return res
 }
 
 // removeMovementAtomsFromFile reads the file's tags, removes the three
