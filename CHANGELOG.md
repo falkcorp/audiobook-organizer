@@ -1,11 +1,12351 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.181.0 -->
+<!-- version: 3.182.0 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-07-18 -->
+<!-- last-edited: 2026-08-30 -->
 
 # Changelog
 
 <!-- scriv-insert-here -->
+
+<a id='changelog-v0.221.0'></a>
+## v0.221.0 — 2026-08-30
+
+### Added
+
+#### Backups can now be stored somewhere other than the database's own disk
+
+Where database backups are written is now a setting (`backup_dir`) instead of
+being fixed to a folder next to the database. Pointing it at different storage
+is the real fix for what took the app down on 29 August: a backup that shares a
+disk with the database it is protecting can fill that disk and take the database
+with it.
+
+Leaving the setting empty keeps the previous behaviour exactly.
+
+#### How much space backups may use is now a setting
+
+`backup_max_total_bytes` sets the ceiling on the total size of kept backup
+archives. Leaving it unset keeps the previous built-in limit of 40 GB.
+
+This pairs with the setting above. Moving backups onto a much larger drive
+achieved little while the app still refused to use more than 40 GB for them —
+with a backup of this database being around 15 GB, that allowed roughly one
+backup to be kept no matter how much room the new drive had.
+
+#### `GET /api/v1/authors/ref-audit` — classify author references before repairing them
+
+`book.AuthorID` is a denormalized pointer that `DeleteAuthor` does not sweep, so
+deleting an author can leave books pointing at an id that no longer exists. The
+new read-only endpoint takes a comma-separated `ids` list (up to 5000 per
+request, deduplicated) and sorts each id into one of three buckets:
+
+- **live** — the author row still exists; the reference is fine.
+- **tombstoned** — the row is gone but a tombstone redirects it to a canonical
+  author, so reads still resolve. Untidy, not broken, and not repair scope.
+- **dangling** — no row and no tombstone. Genuinely broken.
+
+The distinction matters because `GetAuthorByID` follows tombstone redirects: an
+audit that only asks "is this id in the live author list?" counts merged-away
+authors as damage and overstates the problem. The response also names the
+redirect target for each tombstone, so a tombstone pointing at a second deleted
+author is visible rather than silently counted as self-healing.
+
+The endpoint writes nothing — it exists to scope a repair, not to perform one.
+
+- `maintenance.WithRawParams` / `maintenance.RawParamsFromCtx` — the live channel by which
+  a maintenance job reads its own run parameters. `MaintenanceJob.Run` takes only
+  `dryRun`, and the previously documented route (`store.GetOperationParams(opID)`, reading
+  `opstate:<opID>:params`) lost its writer when the v1 op minter was retired: that key is
+  now written only by `internal/organizer` and `internal/itunes`, never on the maintenance
+  path. Params now travel on the context alongside the operation id, taken verbatim from
+  the v2 operations row — which both resume paths already preserve, so a restarted run
+  still sees the operator's actual choice.
+
+  Known issue, reported but **not** fixed here: four other maintenance jobs still read
+  parameters through that same dead `store.GetOperationParams(opID)` path and therefore
+  receive nothing —
+  `revert-metadata-fetch` (whose `fetch_op_ids` is required, so the job always errors),
+  `bulk-fetch-metadata`, `bulk-deluge-import` and `scan-composer-tags`. They are a
+  separate call path from the fix above and were left untouched; each needs its params
+  struct added to `maintenanceJobOpParams` (or its own decode off `RawParamsFromCtx`)
+  before its parameters can arrive.
+
+- Backup archives can now be compressed with **zstd** instead of gzip, or left
+  uncompressed, via the new `backup_compression` setting (`gzip`, `zstd`,
+  `none`) and `backup_compression_level`. gzip remains the default, so existing
+  installations are unaffected until they opt in.
+
+- The AI endpoint pool design now covers the hardware it actually runs on:
+  per-endpoint device selection, a `host` grouping so endpoints sharing a machine
+  cannot over-commit it, and availability windows so a desktop GPU can be used
+  only overnight while a dedicated box runs around the clock.
+
+- **Bulk prune of copy-on-write book version snapshots.** A new
+  `prune-book-snapshots` maintenance job prunes version history across the whole
+  library instead of one book at a time, keeping the newest `keep_count` (default
+  10) snapshots per book. Measured on production: `book_ver:` holds 7.65 GB, of
+  which 85.4% is a `book_sig_v1` copy that is unchanged in 96% of edits.
+
+#### Selecting the chromem vector backend is now audible
+
+`chromem` remains a deliberately selectable fallback — coder/hnsw had a SIGSEGV
+crash loop in June 2026 and chromem is the simple escape hatch — but a fallback
+nobody can tell they are running is a trap rather than a fallback. Building the
+vector store on chromem now emits a WARN naming the backend, stating that it is
+a brute-force scan rather than an approximate index, and that query cost grows
+linearly with the corpus. HNSW stays silent, so the warning carries information.
+
+The warning deliberately omits a vector count: the store is constructed empty
+at wiring time and hydrated later, so there is no count available there that
+would not require doing real work purely to log it.
+
+#### `embedding.vector_backend` is validated
+
+The setting is enum-like but was never validated, so an unknown value — a typo
+such as `hnws` — was accepted silently and the exact-match selection test
+downgraded it to the brute-force scan with no error surface at all. This is the
+same defect `database_type` and `organization_strategy` were already guarded
+against. `Config.Validate()` now normalizes an empty value to `hnsw` and rejects
+anything that is not `hnsw` or `chromem`. The normalization runs before the
+enum check on purpose: the upgrade path legitimately produces `""`, and
+rejecting that would stop those installs from starting.
+
+### Changed
+
+- Updated the library reliability audit to record the durable split-book batch
+  repair workflow and its preview-only production validation gate.
+
+- **Corrected a note in the project's own TODO that would have sent the next person looking in the wrong place.** While double-checking a scan-cache bug that was already fixed, it turned out the notes still claimed that two separate ways a book can go "never scanned" were completely unrelated, so fixing one could never help the other. That was not true: a multi-file audiobook filed under its folder rather than its first file showed up in *both* counts at once, and the fix for one moved both. The note now says so, and flags that the numbers it asks someone to go and read must be re-read fresh rather than compared against the old, pre-fix figures.
+
+### Removed
+
+- `GetOperationParams` is removed from the `maintenance.JobStore` interface. It had no
+  writer on the maintenance path, so any job calling it received nothing, silently and
+  forever. Taking the method away means a future job cannot reach for it — the mistake
+  stops compiling instead of returning empty results.
+
+### Fixed
+
+#### `GET /api/v1/config` no longer returns metadata-source credentials in cleartext
+
+The config endpoint masked the scalar `google_books_api_key` as `AIz****35bE`
+while returning **the same key in full cleartext** a few fields later at
+`metadata_sources[].credentials.apiKey` — two different maskings of one secret
+in a single response. `MaskSecrets` covered the five scalar secret fields and
+never walked `MetadataSources`, so any credential stored there (the Hardcover
+token, and any provider added later) leaked the same way. The endpoint requires
+`settings:manage`, which limits exposure, but the key was still readable by
+anyone who could reach it and was being written into logs and transcripts by
+anything that dumped the config.
+
+`MaskSecrets` now masks every metadata-source credential value.
+
+The deep copy in `maskMetadataSourceCredentials` is load-bearing, not defensive
+style. `MaskSecrets` starts with `masked := cfg`, a **shallow** struct copy: the
+`MetadataSources` slice header is copied but the backing array is shared with
+the live `AppConfig`, and each `Credentials` map is a reference. Masking in
+place would have overwritten the running process's real credentials with the
+mask, and every provider client would then have authenticated with
+`AIz****35bE`. The slice is reallocated and each map rebuilt so the response is
+masked and the live config is untouched.
+
+Empty credential values stay empty rather than becoming `****`, so the UI can
+still distinguish "not configured" from "configured but hidden".
+
+**Scope:** this covers the metadata-source credentials and the five scalar
+secret fields. Several other secrets are still returned in cleartext — the OAuth
+client secrets, the Deluge web password, and the download-client passwords and
+Sabnzbd API key. Masking those safely needs the same round-trip work described
+below done for each one, so they are tracked separately rather than half-fixed
+here.
+
+#### Saving settings no longer overwrites a stored API key with its own mask
+
+Masking a value that the UI sends back is only safe if the server refuses the
+echo, and it did not. Two paths were affected, and the second was already live
+before this release:
+
+- **Metadata-source credentials.** `metadata_sources` is not in `secretFieldKeys`,
+  so it flows through `json.Unmarshal`, which replaces the whole slice —
+  credentials included. The Settings page sends `metadata_sources` on *every*
+  save, copying the credentials straight out of app state, which was populated
+  from the masked `GET`. Without a guard, masking the response would have turned
+  a disclosure bug into permanent credential loss on the very next save.
+- **The five scalar secrets.** `secretFieldKeys` keeps these out of the JSON
+  round-trip, but the explicit apply above it wrote whatever the payload carried,
+  including an echoed mask. The browser avoids this by never seeding the input
+  from the response, but that is a client-side convention, not an invariant —
+  any script doing `GET` → edit → `PUT` destroyed the key. This was a
+  pre-existing bug, not one introduced here.
+
+Both are now rejected server-side: a value equal to the mask of the currently
+stored secret is never written through. A genuinely new value still replaces the
+old one, so rotation works. Clearing still works too — an empty scalar clears
+the secret as before. An empty metadata-source credential is instead treated as
+"unchanged", because that payload shape cannot distinguish "clear this" from
+"absent", and refusing to destroy a credential through an ambiguous path is the
+safer reading; clear one by supplying a new value or removing the source.
+
+This failure would have been close to invisible. `MaskSecret` is idempotent —
+`MaskSecret("AIz****35bE")` is `"AIz****35bE"` — so the response after a
+destructive write is byte-identical to the response after a successful one. The
+Settings page would keep displaying `AIz****35bE` over a wiped key, and nothing
+would surface until the provider started returning 401.
+
+Every property above is mutation-tested, including the call sites: deleting the
+restore call from `UpdateConfig` (while leaving the function perfectly correct)
+fails the round-trip test, and neutering the scalar guard fails the scalar test.
+
+**Operators should rotate any API key that was previously exposed this way.**
+
+#### A request merged into a queued operation could be silently dropped
+
+`dispatchCycle` snapshots every queued row via `ListQueuedOperationsV2()`
+**without** holding `r.mu`, then claims a row later under the lock. For any def
+declaring `MergeQueuedParams`, a merge could land in that gap:
+
+1. `dispatchCycle` reads row X, `Params={book_ids:[A]}`.
+2. `EnqueueOp` merges book B, persists `{book_ids:[A,B]}`, and hands the caller
+   X's operation id — so the caller believes B is queued.
+3. `dispatchCycle` reaches X and claims it. X was genuinely unclaimed at step 2,
+   so `tryMergeQueuedParams` was right to merge into it.
+4. The `queuedRun` was built from the **step 1 snapshot**, so the run applied
+   `[A]` only.
+
+Book B was never processed, progress reported `complete` against a total that
+never counted it, and the operation row showed `[A,B]` forever. A silent drop
+with a success receipt — and the caller had no way to detect it.
+
+This affected all three defs that gained `MergeQueuedParams`:
+`metadata.batch-apply-cached`, `metadata.batch-save`, and
+`library.bulk-write-back`. It is the same shape as the 2026-08-21 incident that
+introduced the merge feature — that fix closed the large hole and left a smaller
+one in the same place.
+
+The merge side was already correct. `tryMergeQueuedParams` holds `r.mu` across
+its whole read-merge-write and skips any row already in `r.running`, so the
+claim is a real barrier: once published, no further merge can touch that row.
+That is what makes a plain re-read sufficient. The dispatcher now re-reads the
+row after claiming it, and both interleavings are safe — merge-then-claim is
+caught by the re-read, claim-then-merge is refused by the merge.
+
+Failure is handled closed. If the re-read errors, or the row vanished (cancel or
+delete between snapshot and claim), the claim is released and the operation is
+retried on a later cycle rather than running with params that could not be
+confirmed — running the snapshot on a read error would be the exact drop this
+guard exists to prevent. Releasing the claim also has to remove the stub handle
+from `r.running`, since Gate 0 consults it and a leaked handle would strand the
+operation permanently; that undo is now a single `releaseClaim` helper shared
+with the pre-existing worker-channel-full path instead of being duplicated.
+
+Only defs that actually declare `MergeQueuedParams` can change while queued, so
+every other operation keeps the snapshot and pays no extra read.
+
+All four properties are mutation-tested — shipping the snapshot, failing open on
+a read error, skipping the claim release, and dropping the merge-only narrowing
+each fail a specific test. Package passes under `-race`.
+
+#### The Whisper server can now run on a machine without an NVIDIA GPU
+
+`scripts/whisper_server.py` hardcoded `device="cuda"`, so it was GPU-only and
+died at model load on any other host. That is why the Mac had no Whisper server
+running at all while the Go service was configured to call one — every
+transcription request went to a host where nothing was listening.
+
+The device is now resolved at startup: `WHISPER_DEVICE` if set, otherwise CUDA
+when `ctranslate2.get_cuda_device_count() > 0`, otherwise CPU. Existing CUDA
+hosts resolve to `cuda` exactly as before.
+
+`compute_type`'s default had to follow the device. ctranslate2's CPU backend
+does not implement `float16`, so leaving the old unconditional `"float16"`
+default would have swapped the hardcoded-`cuda` crash for a compute-type crash
+and left CPU hosts just as broken. The default is now `float16` on CUDA
+(unchanged) and `int8` on CPU; `WHISPER_COMPUTE_TYPE` still overrides both.
+
+ctranslate2 has no Metal/MPS backend, so Apple Silicon runs on CPU. That is
+fine in practice — verified end to end on an M1 Max: `small.en` at `int8`
+loads in about ten seconds, the batched inference pipeline is available, and a
+synthesized clip round-trips correctly through `POST /transcribe`. The
+production server reaches it over the LAN (`/health` returns 200).
+
+The startup banner also reported `device=cuda` unconditionally; it now prints
+the device actually in use, so a misconfigured host is visible in the log
+instead of being silently wrong.
+
+`/health` now also reports the resolved `device` and `compute_type`. This is not
+cosmetic. ctranslate2's `get_cuda_device_count()` returns 0 rather than raising
+when `cudaGetDeviceCount` fails, so the probe cannot tell "no GPU installed"
+from "GPU transiently unavailable" — a driver reset, a TDR, another process
+holding the card. Before this change the GPU host would crash on CUDA loss and
+its supervisor would restart it, which was loud and self-healing: every restart
+re-tried CUDA. With a CPU fallback in place it instead comes up on CPU, serves
+healthy 200s about ten times slower, and stays pinned there for the life of the
+process. Reporting the device makes that visible to a health check instead of
+leaving it in a log line nobody reads. Adding fields is backward compatible —
+the Go client decodes into a struct containing only `batch_pipeline` and ignores
+unknown fields.
+
+`WHISPER_DEVICE=auto` is now treated as "probe", not as a literal device. It is
+a legal ctranslate2 device string, so it would have loaded correctly, but the
+Python-level `device` variable would have stayed `"auto"` — picking `int8` on a
+working GPU and printing `device=auto` in the banner, which is the same
+silently-wrong-banner defect this change set out to fix.
+
+The module docstring said the server must run on a machine with a fast GPU. It
+now describes the actual behaviour, including `WHISPER_DEVICE` and the absence
+of a ctranslate2 Metal/MPS backend.
+
+#### A database backup can no longer fill the disk and kill the database
+
+On 2026-08-29 production had been restarting every ~17 minutes for hours and no
+library scan had ever completed. New downloads never appeared in the library,
+and every one of the 28 scheduled tasks except one showed "last run: never".
+
+The cause was the backup taken before organizing. It archives the whole database
+into `backups/`, which sits on the **same filesystem as the database**. That
+filesystem reached 100% full, so the archive write failed — and then PebbleDB,
+writing its own log to the same filesystem, hit `no space left on device` and
+the process exited. systemd restarted it, the scan resumed, the backup ran
+again, and the cycle repeated.
+
+Three things combined, and all three are fixed:
+
+- **Nothing checked for free space.** The backup opened the archive file and
+  streamed into it until the write failed, consuming the last free bytes on the
+  way. It now measures the space it needs first and refuses if the archive plus
+  a 2 GiB margin will not fit. The margin matters because the database stays
+  live for the 20-25 minutes the archive takes; leaving room for exactly the
+  archive still starves the database of room to write meanwhile. A refused
+  backup logs a warning and organizing continues, which is what already happened
+  for any other backup failure.
+- **Old backups were only cleaned up after a successful backup.** Exactly
+  backwards: when the disk was full the backup failed, so the cleanup that would
+  have freed room never ran, and every retry refilled the disk. Cleanup now runs
+  before the archive is written as well, and accounts for the archive about to
+  be created — so a backup that only fits after cleanup can now be taken.
+- **The retention limit was a file count, on files that had grown 60x.** It kept
+  the newest 10 archives. That was written when an archive was 247 MB, for 2.5 GB
+  retained. Archives are now about 15 GB, so the same rule was aiming to keep
+  150 GB — on a 141 GB disk. The limit was not failing; it was doing exactly
+  what it was told, and what it was told had become impossible. Retention is now
+  bounded by total size as well (40 GiB by default), so growth in archive size
+  can no longer turn the policy into the thing that fills the disk.
+
+If your backups directory is already oversized, this change will not delete
+anything on its own beyond the new limits; check `backups/` and remove old
+archives if the filesystem is still full.
+
+Also: the free-space helper that already existed for the system dashboard moved
+to a shared location so the backup path uses the same implementation rather than
+a second copy.
+
+#### A book that failed to apply no longer disappears from the review queue for good
+
+When you apply metadata to a batch of books, the rows vanish from the queue
+immediately — the apply itself runs in the background, and hiding them straight
+away is what makes the queue usable. If the background job then failed on some
+of those books, they were supposed to come back so you could deal with them.
+They never did.
+
+The code that reloads the queue from the server could only *add* row states, not
+change ones already set. Applying had already marked every book in the batch as
+applied locally, so the reload had nothing left to correct — the server's answer
+was quietly discarded for exactly the books it mattered for. A book the apply
+failed on stayed hidden behind the default "Hide applied" filter with no way
+back, and nothing told you. The queue just looked finished.
+
+This was worse for bulk applies than single ones, because a single click could
+mark hundreds of books at once.
+
+The reload now lets the server correct the local state once the background job
+has actually finished, so a book that did not get applied returns to the queue.
+Books still being worked on keep their applied state until their job ends, so
+rows do not flicker back to pending while the server is still working on them.
+
+Nothing about the immediate hide-on-apply behaviour changes.
+
+#### Applying metadata from the Search dialog no longer looks like it did nothing
+
+The Search button on a "no match" row lets you find and apply a candidate by
+hand — it is the only way to fix a book the automatic matching gave up on. The
+apply worked, but the queue then re-read the row and threw the answer away, so
+the book vanished under the default "Hide rejected" filter with nothing to show
+it had succeeded. The same thing happened when a re-fetch found a candidate for
+a row that had previously come back with no match: the row stayed marked
+rejected even though it no longer was.
+
+The queue now keeps track of which rows it marked itself versus which ones you
+decided about, so it can correct its own marks without overwriting your
+decisions. A book that has actually had metadata written is now shown as
+applied even if it had been skipped or rejected earlier in the session — what
+happened to the file wins over what was planned for it.
+
+#### The disk-full safeguard can now clear the space it needs, instead of getting stuck
+
+Yesterday's fix stopped the app filling its own disk with database backups — it
+now refuses to start a backup there is no room for, which is what was crashing
+the app every seventeen minutes.
+
+Watching it run in production showed the refusal worked but left the app stuck.
+The check for free space happened *before* the clean-up of old backups, so the
+app correctly declined to make things worse and then had no way to make things
+better: the old copies that caused the shortage were never cleared, and every
+later attempt declined for exactly the same reason. Only someone deleting files
+by hand could break the deadlock.
+
+Old copies are now cleared before that check, so the app can recover on its own.
+
+#### A clean-up will never delete your last backup
+
+Making the clean-up actually run revealed that it could delete *everything*. The
+size limit can be impossible to satisfy — if a new backup is 30 GB and the limit
+is 40 GB, no existing 15 GB copy can be kept — and the clean-up would keep
+deleting until nothing was left, to make room for a new copy that might then
+fail. That could leave you with no backups at all.
+
+The most recent backup is now never deleted to make room. If the size limit
+cannot be met without it, the app keeps the backup and says so in the log, since
+that is a setting that needs a person to look at it — either a larger limit, or
+a backup location that is not on the same disk as the database.
+
+#### Scans and sweeps no longer look inside folders whose name starts with a dot
+
+The app keeps its own working files inside the library folder — backups,
+playlists, iTunes write-back staging. Anything named with a leading dot is now
+skipped by the library scan, by the file counter that drives the progress bar,
+by the folder watcher, and by the organiser.
+
+Previously only one such folder was skipped, by name, which meant every new one
+had to remember to add itself to a list. This matters more now that backups can
+live in the library folder: a 15 GB backup archive would otherwise be discovered
+and considered for import as though it were an audiobook, and writing one would
+have triggered the folder watcher into starting a scan.
+
+A folder you deliberately point the app at is still scanned, even if its own
+name starts with a dot. The rule applies to what is found inside it.
+
+One folder is deliberately exempt: `.alternates`, which will hold alternate
+versions of a book. That is library content rather than app working state, so
+the scan must still see it. The exemption is an exact name match, and it is kept
+in one place so future exceptions do not get scattered across the code.
+
+#### A backup that could not be deleted was counted as deleted anyway
+
+When clearing out old backups to stay within the size limit, the app counted
+every archive it *tried* to remove as removed — including ones the removal
+actually failed on. It would then stop early, believing it had freed room that
+was still occupied, and quietly stay over its limit.
+
+This became possible to hit now that backups can live in a shared folder, where
+the app may find archives it does not have permission to delete. Failed
+deletions are now counted honestly, and the app says so in the log rather than
+carrying on with wrong numbers.
+
+#### The backup log now says where the backup is going
+
+Backups record the destination folder, not just the database being backed up.
+If the destination setting is ever lost, archives silently revert to sitting
+beside the database — the arrangement that filled the disk — and nothing said
+so. Now it does.
+
+#### Listing backups no longer reads every backup file
+
+Asking the app what backups exist used to make it read every backup archive from
+beginning to end in order to compute a checksum for each one — a checksum
+nothing actually used. With around 16 GB of backups that page simply never
+loaded.
+
+The same listing runs during every backup, before deciding whether old backups
+need clearing out. That decision takes an instant, but it was preceded by
+reading the entire backup folder: the backup that reported failing "after
+18m38s" spent almost all of that time reading files in order to report that the
+disk was full.
+
+Listing is now instant. Checksums are still available for anyone who wants to
+verify a backup's integrity — they are just requested deliberately rather than
+computed every time.
+
+#### Activity log secondary indexes are now deleted with their entries (and existing orphans are repaired)
+
+The activity log keeps three key families in PebbleDB: the primary row
+(`act:<tier>:<nanos>:<ulid>`) plus two secondary indexes that let
+`GET /api/v1/operations/:id/activity` and the per-book activity view answer
+without scanning the log (`act:op:<op_id>:…` and `act:bk:<book_id>:…`).
+`Record` wrote all three in one batch. **Nothing ever deleted the last two.**
+
+Every deletion path — `Prune`, `Summarize`, `CompactByDay` and
+`WipeAllActivity` — scans only the primary tier key range and deleted only
+`kv.key`, so each pruned, summarized, compacted or wiped row left its two index
+entries behind permanently. Two consequences, both real:
+
+- `WipeAllActivity` did not wipe all activity. The rows a user asked to be
+  destroyed left behind index keys that still carry the operation id and the
+  book id in the key itself.
+- The orphans accumulated without bound. Measured on production: the activity
+  keyspace was ~1.342 GiB, of which `act:op:` alone was ~0.783 GiB — roughly
+  60% — largely index entries whose primary row had been gone for months.
+
+Both halves are fixed:
+
+- **The leak is closed.** All four deletion paths now delete a row's
+  `act:op:`/`act:bk:` entries in the same batch as the row. The ids come from
+  the entry, which those paths already decode (they cannot group by day,
+  operation or type otherwise), so a prune does not get slower; the timestamp
+  and ULID come from the primary key being deleted rather than from the entry's
+  round-tripped `Timestamp`, because a Pebble delete of a key that does not
+  exist succeeds silently and one nanosecond of drift would have produced a fix
+  that deleted nothing and reported no error. `WipeAllActivity` additionally
+  range-deletes the entire `act:` prefix once its row pass completes, which is
+  what makes its name true for the rows that pass cannot reach: an index entry
+  orphaned before this fix, and — caught by test, not assumed — a PRIMARY row
+  whose stored JSON will not decode, which `scanTierKVs` drops and which was
+  therefore surviving a "wipe all" too. The range's bounds were checked by
+  enumerating every `act`-prefixed key literal in `internal/`: the only families
+  under it are `act:<tier>:` for each of the seven `actTiers` (including
+  `digest`, which `CompactByDay` skips) and the two index families, so the sweep
+  is exactly the activity keyspace and no wider.
+- **The existing orphans have a route out.** A new repair pass finds index
+  entries whose primary row no longer exists and deletes them, and it now runs
+  as the last step of the nightly `maintenance.cleanup-activity-log` job, which
+  reports the count it removed. It is idempotent, so a later run that finds
+  nothing costs one scan and says zero. Index entries carrying a reference that
+  cannot be turned back into a primary key at all are deleted too, and counted
+  separately — no reader could follow them either.
+
+Note on what "removed" means here: the repair reports **index keys removed**,
+which is the number to quote. It is not a disk-space figure. A Pebble delete
+writes a tombstone; bytes come back only at a later compaction, which is a
+separate operation with its own cost on this deployment. The 0.783 GiB above
+works out to roughly 6M index entries if it is a logical key+value byte sum and
+roughly 24M if it is compressed disk usage (measured: 35.30 compressed bytes per
+synthetic `act:op:` entry over a 200,000-entry sample); which of the two the
+production figure was is not established.
+
+- **Builds and deploys no longer break on a Go 1.27+ machine.** The Makefile now
+  pins `GOTOOLCHAIN=go1.26.0` for every build, test and deploy target, including
+  the ones defined in a developer's own (gitignored) `Makefile.local`. Previously
+  a machine whose default Go was 1.27 would fail every build with
+  `undefined: fastrand64` / `undefined: hashFn` from `github.com/cockroachdb/swiss`,
+  which reaches removed runtime internals via `//go:linkname` — and because
+  `GOTOOLCHAIN=auto` only ever upgrades to a *newer* toolchain, it would never
+  step down to the 1.26.0 that `go.mod` asks for. Hit for real on 2026-08-24 when
+  `make deploy-debug` died mid-build.
+- **A failed `make ci` in a parallel sweep can no longer look like a passing one.**
+  The sweep coordinator piped `make ci` into `tee` and then checked the exit
+  status, which was `tee`'s (always 0) rather than make's — so a broken tree could
+  be pushed and turned into a PR. The command now runs under `set -o pipefail`.
+
+- **`recompute-book-aggregates` could never be re-run, and the escape hatch it printed to
+  the operator did nothing.** The job's `Force` flag was declared in `DefaultParams()` and
+  read nowhere. It was dropped at three separate layers: `POST /maintenance/jobs/:job_id`
+  bound only `dry_run` from the request body, `maintenanceJobOpParams` had no `force`
+  field, and `MaintenanceJob.Run`'s signature carries only `dryRun` — so a submitted
+  `{"force": true}` was discarded before it reached any job code. Meanwhile two
+  operator-facing messages, one logged and one shown in the operation log, both said "Use
+  Force=true to override". Net effect: one clean non-dry run set the
+  `book_aggregates_v1_done` sentinel and disabled the job **permanently**, while telling
+  the operator there was a way out.
+
+  This mattered beyond the job itself. `notifyBookFileChange` swallows aggregate-recompute
+  errors on the stated grounds that "the backfill job acts as a safety net for any
+  misses"; an unrunnable job is not a safety net. That comment has been corrected to say
+  what is now true — the remedy exists, but nothing invokes it automatically.
+
+  `Force` is now wired end to end: the dispatcher binds `force`, `maintenanceJobOpParams`
+  carries it, and the sentinel gate reads it. An operator can rebuild every book's
+  aggregates with `POST /api/v1/maintenance/jobs/recompute-book-aggregates`
+  `{"dry_run": false, "force": true}`. The web UI's Run button still sends no `force` key,
+  which is unchanged behaviour and the safe default.
+
+- **Embedding hydration no longer discards vectors silently.** `HydrateChromem`
+  read 39,658 book embedding rows on production and put 17,706 into the vector
+  index; the other 21,952 vanished with only 1 of them reported anywhere,
+  because three of the four book skip paths incremented no counter and logged
+  nothing. Every skip path now has a named bucket — empty vector, stale model,
+  orphaned (the book no longer exists), lookup error, and non-primary version —
+  and one summary line reports all of them, so the gap between the ANN store's
+  `truth_count` and its `graph_count` is fully explained instead of being a
+  mystery. Orphan rows are counted separately from lookup errors, which the old
+  code conflated by discarding `GetBookByID`'s error: an orphan is a correct
+  permanent skip, a lookup error means a live book fell out of dedup. The
+  orphan count is the cleanup signal for a book-side counterpart to
+  `dedup.cleanup-orphan-author-embeddings`; no rows are deleted here.
+
+#### Library walks now skip application directories by path, not by name
+
+Library sweeps were kept out of the application's own directories by a **naming
+coincidence** rather than a rule. `pathutil.ShouldSkipDir` skipped anything
+dot-prefixed, and the case it was written for — multi-GB database backups — was
+protected only because `backup_dir` happened to default to
+`<root_dir>/.backups`. But `backup_dir` is an operator-settable absolute path:
+point it at `<root_dir>/backups` (same location, no dot) and every walker
+descends into the archives, hashing them and considering them for import.
+
+Worse, one application directory never had a dot at all.
+`openlibrary_dump_dir` defaults to `<root_dir>/openlibrary-dumps`, and was
+being walked on **every scan** — dump archives plus a nested embedded database
+of its own, thousands of files, none of them library content. `playlist_dir`
+has the same shape.
+
+`ShouldSkipDir` now takes a required `pathutil.AppDirs` value holding the
+resolved, absolute application directories, and skips them and everything
+beneath them regardless of what they are named. The parameter is **required,
+not variadic or optional**, on purpose: an optional parameter can be silently
+omitted at a new call site, which reproduces this exact bug in a new place with
+no diagnostic. Making it required turns "a new walker forgot the exclusion"
+into a compile error.
+
+All four production walkers were updated — the scanner's discovery walk, the
+scanner's file-count walk, the organizer's temp-file cleanup, and the
+filesystem watcher.
+
+The watcher needed a second fix. `addRecursive` was called both with the
+library root and, from `handleEvent`, with a newly-created **subdirectory**.
+Since `ShouldSkipDir` never skips its own walk root (returning `SkipDir` on the
+first callback would abandon the whole walk), passing the subdirectory as the
+root exempted the very directory being judged: a create event inside the
+OpenLibrary dump directory would have re-added the entire dump tree to the
+watch set. The library root and the walk start are now separate parameters.
+
+Handled deliberately, and covered by tests:
+
+- **An empty setting never matches.** `filepath.Clean("")` returns `"."`, a
+  live relative prefix — cleaning an unset setting before checking it for
+  emptiness could have silently skipped the entire library. The empty check
+  happens first, and with a zero `AppDirs` the walkers behave exactly as they
+  did before, with only the dot rule applying.
+- **Sibling prefixes are safe.** Matching is component-wise via `filepath.Rel`,
+  not `strings.HasPrefix`, so `<root>/backups2` is not skipped when
+  `<root>/backups` is the backup directory.
+- **A directory configured outside the library root** is simply never reached,
+  and is not an error.
+- **Relative paths are dropped rather than guessed at.** Resolving one against
+  the process working directory could fabricate a match on a subtree nobody
+  configured; failing open costs I/O, failing closed is silent data loss.
+- `backup.ResolveDir` remains the single authority for resolving `backup_dir`,
+  and the new `internal/appdirs` package is the single place that builds the
+  directory set, so the scanner's discovery and count walks cannot drift apart.
+
+One further hole was found in review and closed in the same change: exempting
+only the walk root itself bought nothing. `filepath.WalkDir`'s first callback
+survived, and then every *descendant* was matched and skipped — so a library
+laid out as `author/title/` with `backup_dir` set to the library root scanned to
+**zero books**, the same silent outcome as abandoning the walk, reached one
+callback later. This was reachable without anyone setting `backup_dir =
+root_dir`: the scanner walks each enabled import path as its own root, so an
+import path added at or under `<root_dir>/openlibrary-dumps` would have
+silently contributed nothing. An application directory that equals or contains
+the walk root is now ignored entirely, on the same principle the root exemption
+already encodes — an explicitly configured walk root is a deliberate choice, and
+exclusion applies to application directories found *inside* the tree being
+walked, never to the tree itself.
+
+- **Maintenance jobs now actually receive their custom parameters.** Five jobs read
+  their non-`dry_run` parameters from a code path that had lost its writer, so every
+  one of them silently ran with defaults no matter what the operator sent:
+
+  - `revert-metadata-fetch` — `fetch_op_ids` is REQUIRED, so this job could only ever
+    return the error `fetch_op_ids required: ...`. It was 100% non-functional.
+  - `bulk-fetch-metadata` — `prefer_audible` and `skip_cached` were pinned to `false`.
+  - `bulk-deluge-import` — `max_books` was pinned to `0` (unlimited).
+  - `scan-composer-tags` — `fix_mode` was pinned to `set_narrator`, so an operator
+    asking for `clear` silently got the opposite behaviour.
+  - `prune-book-snapshots` — `keep_count` was pinned to its default of 10.
+
+  Two independent layers were broken. The jobs read
+  `store.GetOperationParams(opID)`, a Pebble key whose only writer
+  (`operations.SaveParams`) lost its last maintenance-path caller when the v1
+  operation minter was retired — the read outlived its writer. And the run route
+  itself bound only `dry_run` and enqueued a fixed three-field struct, dropping every
+  other key before it could reach the params blob at all. Fixing either alone changes
+  nothing; the jobs now read `maintenance.RawParamsFromCtx`, and
+  `POST /api/v1/maintenance/jobs/:job_id/run` now forwards every key the operator
+  sent.
+
+  The catalogue route was the tell throughout: `GET /api/v1/maintenance/jobs`
+  advertises each job's `default_params`, so the API published `fetch_op_ids` and
+  `fix_mode` to clients while the run route threw them away.
+
+- **The hydrated count now means "reached the index", not "we tried".** The
+  helpers that write a vector into the ANN store were best-effort and swallowed
+  their `Upsert` failure, so a rejected write still incremented the hydrated
+  count and the summary line claimed a row was in the graph when it was not.
+  They now report the failure and it lands in its own `books_mirror_error` /
+  `authors_mirror_error` bucket. The nil-book, empty-author-id and
+  empty-vector early returns were the same lie surviving in a corner — a row
+  that hit one of them was counted as hydrated without ever reaching the
+  graph — so those are reported too.
+- **Corrupt embedding records are no longer invisible.** The store dropped any
+  record that failed to parse without counting it, which made its row count
+  disagree — permanently and silently — with the raw key count the ANN store
+  reports as its `truth_count`. Those are the exact two numbers operators are
+  told to compare. The new `ListByTypeCounted` reports the difference and
+  hydration surfaces it as `book_rows_undecodable` / `author_rows_undecodable`;
+  a corrupt row is a live book with no route into deduplication.
+- **A partial hydrate can no longer be misread as a clean one.** A run cut
+  short by its context, or one whose row listing failed, used to return with no
+  summary line emitted at all — so the 30-minute timeout over ~39K rows, the
+  run an operator most wants to inspect, was the one with no bucket
+  visibility. The accounting is now logged on those paths and flagged
+  `incomplete`, and a nonzero unaccounted total raises the line's severity at
+  runtime rather than being checked only by a unit test: a future skip path
+  added with no counter is exactly the defect this accounting exists to make
+  visible, and no test can see a skip path that does not exist yet. The line
+  also reports `model_check_active`, because `embeddingModelMatches` returns
+  true unconditionally when no embed client is wired, which makes the
+  stale-model buckets structurally zero and otherwise unreadable.
+
+- An unset backup compression level no longer means `gzip.NoCompression`. It
+  previously would have: level 0 is "store" in the standard library, so a
+  configuration that omitted the level would have written large archives with no
+  compression at all, with no error and no log line. Zero now means "this
+  codec's default".
+- Backup listing, retention and the auto-backup freshness check recognise every
+  archive format rather than only `.tar.gz`. Recognising just one format would
+  have made archives in any other format invisible to retention, so nothing
+  would ever have been pruned.
+- Restoring an archive now identifies its format from the archive's own magic
+  bytes instead of the current configuration or the filename, so archives
+  written under an earlier setting -- or renamed -- still restore.
+
+- **The HNSW embedding snapshot was discarded on every restart.** The staleness
+  guard compared the in-memory graph size against the raw PebbleDB row count, but
+  the graph is a *filtered* projection of those rows — hydration skips empty
+  vectors, stale-model rows, orphaned entities, and non-primary versions. In
+  production that meant 17,706 vectors against a truth count of 39,658 (44.6%), so
+  the check was true by construction and fired on every boot. The snapshot is now
+  validated against the row count recorded when it was exported, so a legitimately
+  filtered graph is kept and only a genuinely outdated snapshot is rebuilt.
+
+- **`prune-book-snapshots` ignored its `keep_count` parameter.** The job read run
+  parameters via `GetOperationParams`, which resolves a PebbleDB key that only
+  `operations.SaveParams` writes — and the maintenance dispatcher stopped calling
+  that when the v1 operation minter was retired. Every run therefore silently used
+  the default retention of 10 regardless of what was requested. It now reads the
+  live parameter channel, and a zero or unparseable `keep_count` falls back to the
+  default instead of being treated as "keep nothing".
+
+- Extended the app-owned-directory walk guard from PR #2974 to the 16 remaining
+  library-root walkers that never called `pathutil.ShouldSkipDir` at all. Cleanup,
+  remux, transcode, reconcile, provenance-capture, path-repair and library-size
+  walks no longer descend into the database backup directory or the OpenLibrary
+  dump directory when those live inside `root_dir`.
+- `cleanup-empty-folders` and `cleanup-organize-mess` delete by EMPTINESS rather
+  than by filename, so an empty directory inside the backup or OpenLibrary dump
+  tree was being removed. That is now prevented.
+- The reported library size no longer counts database archives and OpenLibrary
+  dumps as audiobook storage.
+
+#### Dedup vector index now defaults to HNSW instead of the brute-force chromem scan
+
+`embedding.vector_backend` selects the in-memory ANN index used by dedup
+Layer 2. Despite the name, `chromem` is not an approximate index — the code
+itself calls it a "brute-force cosine scan" — so its per-query cost grows
+linearly with the number of indexed vectors. `hnsw` (coder/hnsw) is
+sub-linear.
+
+Measured on this repo at 1024 dimensions with the `is_primary_version` filter:
+
+| corpus | chromem | HNSW | ratio |
+|---|---|---|---|
+| 10K vectors | 9.18 ms/op | 0.51 ms/op | 17.9x |
+| 50K vectors | 111.9 ms/op | 0.53 ms/op | 210x |
+
+`dedup.full-scan` issues roughly one query per book. Across a ~61,000-book
+library that is the difference between about 32 seconds and about 1.9
+CPU-hours per full scan — with no error, no unusual log line, and nothing in
+the UI to distinguish the two.
+
+`chromem` was the shipped default in **two** places: the
+`viper.SetDefault("embedding.vector_backend", ...)` call in `InitConfig` and a
+hardcoded struct literal in `ResetToDefaults`. Both now default to `hnsw`.
+
+A third, less obvious default was doing the same damage: the selection site in
+`internal/server/registry_wire.go` tested `cfg.Embedding.VectorBackend ==
+"hnsw"` and fell through to chromem for *every* other value, including the
+empty string. An upgraded install whose stored `config_blob` predates the field
+gets `""` out of `migrateEmbeddingBlob`, and `viper.SetDefault` never runs on
+that path — so flipping only the two literals would have left the trap live for
+the entire upgraded population. An empty value now resolves to the default,
+both in `Config.Validate()` and at the selection site itself.
+
+**Production is unaffected by this change.** The deployed instance already
+selects HNSW through the `VECTOR_INDEX_BACKEND` environment binding, which
+takes precedence over every default here. Deploying this does not rebuild,
+re-hydrate, or otherwise change the index it is already running. What changes is
+fresh installs, installs that lose the environment variable, and installs whose
+persisted config never carried the field — all three of which silently got the
+brute-force scan before.
+
+#### The config default-inheritance audit no longer hides the key it exists to report
+
+`logDefaultsPreservedOverBlob` enumerates the config keys a stored `config_blob`
+did not contain, which therefore kept their shipped default. It exists because
+that inheritance used to be invisible: on production, `scheduled.library_scan`
+came back `{enabled:false, interval:0}` from a blob that never mentioned it, and
+nothing had been scanning for new books.
+
+The line caps its enumeration at 40 keys. A real install inherits ~122, and
+`scheduled.library_scan.interval` sorts past the cut — so the audit written to
+make that key visible was dropping that exact key, while saying only
+"(list truncated)" with no indication of how much was missing.
+
+Two changes:
+
+- The audit's key set is now computed by `defaultsPreservedOverBlob`, which is
+  complete and never truncates. Truncation belongs to the log renderer alone, so
+  callers and tests can ask what actually inherited rather than what fit on a
+  line.
+- A truncated line now reports `omitted=<N>`, so `count` reconciles against the
+  names printed instead of leaving the operator to measure the gap by hand.
+
+The enumeration is still bounded, because it is data-scaled rather than
+source-bounded: `Config` carries operator-controlled maps (plugins, per-source
+credentials, per-kind dedup confidence, per-model embedding thresholds), so an
+unbounded line would grow with the install.
+
+#### `internal/config` no longer depends on test execution order
+
+`go test ./internal/config -shuffle=on` failed on 20 of 24 seeds on unmodified
+main. CI does not shuffle, so every green run in the package was weaker evidence
+than it appeared.
+
+`TestDefaultInheritanceIsLogged` asserted that the *rendered* log line contained
+`scheduled.library_scan.interval` — an assertion on presentation, not behaviour.
+Whether it held depended on how many keys were non-zero in the process-wide
+`AppConfig` when it ran, which depended on which test ran before it: after a test
+that zeroed the struct ~2 keys inherited and the assertion passed; after one that
+called `ResetToDefaults()` 122 inherited, the list truncated, and it failed.
+
+The test now seeds `ResetToDefaults()` deliberately — the production shape, which
+exercises the truncation boundary rather than dodging it — and asserts the key
+against the untruncated set. The log assertions remain, so deleting the
+`slog.Info` call still reddens it, and the line is additionally checked to
+reconcile against itself (`count == printed + omitted`).
+
+The tests that mutate the process-wide config without restoring it were the
+underlying order dependence and now restore it via `t.Cleanup`:
+`TestResetToDefaults` (restored 3 of ~122 fields), `TestResetToDefaultsPreservesPaths`,
+and all five tests in `blob_preserves_defaults_test.go` — including
+`TestNoAuditLineWhenBlobIsComplete`, which zeroed `AppConfig` wholesale and was
+the polluter that made the default ordering pass by accident.
+
+#### `appdirs.Current()` is now tested for what it returns, not just for repeating itself
+
+`TestCurrent_IsDeterministic` asserted `Current() == Current()`. Nothing in that
+test binary calls `InitConfig`, so `config.AppConfig` was the zero value and both
+sides were the empty `AppDirs{}` — the assertion held for precisely the failure it
+was meant to catch. Stubbing `Current()` to `return pathutil.AppDirs{}` left it
+green.
+
+Replaced with tests that seed a production-shaped config and assert the resolved
+directories, that a relative `backup_dir` anchors to the database directory, that
+the result excludes the dump subtree and not ordinary content, and that `Current()`
+agrees with `FromConfig` on the same config. Determinism is still asserted, on top
+of a value proven non-empty.
+
+#### Activity log writes now batch their fsyncs, not just their rows
+
+`ActivityBatcher` and `Writer.drain` both exist to amortize activity writes —
+collect entries for up to 15 seconds (60 second cap), flush early at 500 items,
+and hand the whole flush to the store at once. They amortized **rows**. They did
+not amortize **fsyncs**.
+
+`Writer.writeBatch` received the flush and then looped, calling
+`store.Record(e)` once per entry, and `PebbleActivityStore.Record` commits every
+entry with `batch.Commit(pebble.Sync)`. So a "batch" of 100 entries was 100
+separate durable commits — 100 fsyncs. There was no batched write path in the
+store at all.
+
+Measured on this repo (`BenchmarkActivityRecordPerEntry` /
+`BenchmarkActivityRecordBatch`, 5,000 rows per iteration) at identical
+durability — `pebble.Sync` either way. Two runs, eight samples each side:
+
+| write path | rows/sec, all 8 samples |
+| --- | --- |
+| one `Record` per entry (what shipped) | 76 – 199 |
+| batched, 500 entries per commit | 27,440 – 54,531 |
+
+Neither side has a stable median worth quoting. The per-entry path climbs
+monotonically *within* every run (76 → 116 in the first, 114 → 199 in the
+second) — it warms up — and both sides move with machine load. So the honest
+form is the range and a floor: pairing the **fastest** per-entry sample against
+the **slowest** batched one still leaves a **138x** gap, and median against
+median it is nearer 300x. Two orders of magnitude under every pairing, which is
+what the conclusion rests on.
+
+No migration, and no weakening of the durability guarantee. The multiplier
+tracks how many entries share a commit: a `drain` flush of 100 goes
+from 100 fsyncs to 1, and a full 500-item early flush from 500 to 1. The fsync,
+not the row, was the unit of cost.
+
+**What changed**
+
+- `PebbleActivityStore.RecordBatch` stages every entry — the primary row and its
+  `act:op:` / `act:bk:` index entries — into one `pebble.Batch` and commits once
+  with `pebble.Sync`.
+- `Record` and `RecordBatch` now share one `prepareEntry` helper that normalizes
+  the entry, marshals it, and derives its keys. Neither path builds a key of its
+  own any more. This matters because Pebble's delete of a missing key succeeds
+  *silently*: an index key written in a slightly different format would be
+  undeletable forever and nothing would report an error — which is exactly the
+  defect that left ~0.783 GiB of orphaned `act:op:` rows on production. The
+  index keys come from `pactIndexKeysFor`, the same derivation `pactDeleteEntry`
+  uses to remove them, so "what this writes is what `Prune` deletes" is now true
+  by construction.
+- `Writer.writeBatch` uses the batched path when the store offers it, via a
+  narrow `batchRecorder` interface and a runtime type assertion (the
+  `backup.Checkpointable` shape) rather than a new method on
+  `database.ActivityStorer`. A store without the capability keeps the per-entry
+  loop and is still correct, just slower. Which path is live is logged at
+  startup, so a missed assertion is never silent. `Writer.Flush` had the same
+  one-fsync-per-entry shape and now goes through `writeBatch` too.
+- Commits are capped at 500 entries each, and a larger flush is split across
+  several commits rather than staged into one unbounded batch — this service has
+  already OOMed once on an unbounded activity path.
+
+`Writer`'s per-entry fallback used to discard `Record`'s error outright, so a
+store without the batch capability lost rows in total silence while the batched
+path reported every loss. Both branches now report through one line, so "did we
+lose activity rows?" has one answer regardless of which path ran. The startup
+line naming the fallback is a `[WARN]`, not an `[INFO]` — it is a real
+degradation — and a compile-time assertion binds the production store to the
+capability, because every "capability present" test fixture declares its own
+`RecordBatch` and so none of them could observe the real store losing it.
+
+**Error semantics** are deliberate and documented in the code. An entry whose
+JSON will not marshal is the only failure attributable to a single row: it is
+dropped, the rest of the flush still commits, and the returned count and error
+name the loss. A commit failure is not attributable to any entry and loses the
+whole commit; it deliberately does *not* retry per-entry, because the realistic
+causes (a full or failing disk) would fail the retries too and turn one logged
+loss into up to 500 more fsyncs against a disk that just failed one. Either way
+the loss is reported — to stdout rather than through `slog`, because this writer
+*is* what the log system tees into, so logging a failed flush would enqueue an
+entry whose own flush fails and logs again.
+
+<a id='changelog-v0.220.0'></a>
+## v0.220.0 — 2026-08-29
+
+### Added
+
+- **`POST /api/v1/operations/backfill-scan-cache`** makes the per-file scan-cache
+  migration something an operator can actually run. It seeds the new file-keyed scan
+  cache from the existing book-level stamps and gives single-file books the
+  `book_file` row the scan never creates for them. Until it has been run once, every
+  `book_file` row reads as "never scanned", so the first scan after deploying the
+  file-keyed reader re-reads and re-hashes the whole library — 4–6 hours here, and the
+  opposite of what a scan cache is for. Dry-run by default: an apply must be opted
+  into with `?dry_run=false`.
+
+- **A scan no longer loses its filename parsing when the AI service is
+  unreachable.** Setting `llm_mode` to `openai-fallback-local` now makes the
+  scan try the local AI backend when the remote one cannot be reached, instead
+  of giving up on those books. That setting has existed for months but did
+  nothing — it behaved exactly like the plain `openai` setting, so choosing it
+  bought nothing.
+
+  Being unreachable and being refused are treated differently, which is the
+  point. A service that cannot be reached might be reachable somewhere else, so
+  it is worth asking the other backend. A rejected request — a wrong or expired
+  key, or an exhausted quota — is wrong everywhere, so it stops immediately
+  rather than being re-asked once per batch for the rest of the scan.
+
+  When no backend can answer, the scan finishes and moves on to its remaining
+  steps rather than stalling, and the affected books keep the metadata derived
+  from their filenames.
+
+#### Metadata review — hide known runtime mismatches
+
+Reviewers can now hide candidates whose known runtime differs materially from the
+library book. The filter starts off, and candidates with no duration information
+remain visible so missing metadata is never treated as a matching runtime.
+
+- Reviewed split-book candidate IDs can now be preflighted and queued as one
+  durable bulk operation. The request defaults to a dry run, rejects overlap,
+  and snapshots candidates before queueing.
+
+### Changed
+
+- When an Audiobookshelf client asks to sort the library by something this
+  server has no equivalent for — File Modified, File Birthtime, the three
+  Progress sorts, or Randomly — the server now says so in its log and
+  lists the sorts it does support (at most once a minute, so a client cannot
+  flood it). Previously it returned the books in an
+  unspecified order and said nothing at all, so there was no way to tell an
+  unsupported sort from one that had quietly stopped working.
+
+- **Books with no value for the sorted field now sort last in ascending order
+  on every field**, matching what the indexed path always did. This is a
+  visible reordering for the ~19 fields that have no index and therefore always
+  took the fallback — genre, publisher, language, format, codec, quality,
+  edition, library state, sample rate, and the duration/bitrate/file-size
+  aliases. Descending reverses it, because the store serves descending as a
+  full reversal of the key order.
+
+- `sample_rate` is now sortable. The API accepted it as a valid sort field and
+  then silently ignored it, because only the `sample_rate_hz` spelling had a
+  comparator.
+
+#### The Audiobookshelf filter menu is no longer rebuilt on every request
+
+The endpoint behind the filter menu is requested during every library page load
+and was doing three full passes over the library each time, with no caching. It
+took just over 7 seconds per call against the production library, and a second
+call cost the same as the first. It is now built at most once every five minutes
+and shared, like the author and narrator lists already were.
+
+Separately, when that shared list did need rebuilding, every request that
+arrived in the meantime started its own rebuild rather than waiting for the one
+already running — so several people opening the library at the same moment each
+set off their own full pass over it. That was already happening: the home
+shelves, the search box and the filtered book views all use that list. Rebuilds
+are now shared: the first request does the work and the rest wait for it.
+
+### Fixed
+
+- **Corrected a false claim in `TODO.md`'s aggregate section.** It said *"Still open:
+  the `CreateBookFile`-per-row half, i.e. the 92.1% above"* — but #2866 converted
+  exactly that site; `relink_unlinked.go:369` now calls `BatchCreateBookFiles`, which
+  coalesces to one recompute per book, and a test pins it. The section now states what
+  genuinely remains (the singular `CreateBookFile`, and the never-built
+  `BeginAggregateBatch` scope) instead of a scope a later PR had already closed.
+- Checked off 8 `TODO.md` entries verified complete against the code at HEAD.
+
+- **The scan cache is now keyed per file instead of per book** (database half of
+  `docs/plans/2026-08-24-per-file-scan-cache-design.md`). It was consulted per *file*
+  during the walk but built from *book* rows, so for a multi-file audiobook — one book
+  row, many files — at most one file in N could ever be represented and the rest were
+  re-read and re-hashed on **every** scan. Measured on production: *"436 of 500
+  scan-cache write-backs skipped because no book row exists at the path"*.
+  `GetScanCacheMap` now reads `book_file` rows, which fixes the value grain in the same
+  move: each entry carries that file's own mtime and size rather than the containing
+  directory inode's (128 bytes, observed). `UpdateScanCache` mirrors its stamp onto the
+  file row for single-file books so the reader and writer stay at one grain, and a
+  backfill can seed history so the first scan after deploy is not a whole-library
+  cold re-read. The backfill also creates the one missing `book_file` row for
+  single-file books that never had one — the scan never creates rows for those, so
+  a file-keyed cache would otherwise have turned the population that caches
+  *correctly today* into permanent misses. **The backfill is not yet wired to any
+  caller** — it must be invoked once before the new reader is deployed, or the
+  first scan re-reads the whole library.
+
+- **The new unsupported-sort warning could be made to consume memory, and could
+  be silenced permanently.** The warning remembered every distinct sort value a
+  client had sent so it would only report each one once. It remembered the value
+  in full — a sort parameter can be up to a megabyte — and stopped remembering
+  new ones after 64, which meant two things: a client sending long junk values
+  could make the server hold tens of megabytes for as long as it ran, and a
+  client sending 64 different junk values permanently used up the budget, after
+  which the server went back to saying nothing about genuinely unsupported
+  sorts. The warning now remembers only *when* it last spoke, not *what* was
+  asked for, and reports at most once a minute. It cannot be flooded, and it
+  cannot be switched off by a client.
+
+  The endpoint requires authentication, so this needed a valid client or a
+  leaked token; an earlier note describing it as unauthenticated was wrong.
+
+- The **file errors** and quick-query views (missing covers, in import path, no
+  ISBN, duplicates flagged) now respect the search box, filters, and sort you
+  have set, instead of silently ignoring them.
+
+  Opening one of these views while a search or filter was active returned every
+  book in that category, not just the ones matching what you had asked for. The
+  filter chips stayed lit above the results and the total at the top counted the
+  unfiltered set, so there was nothing on screen to indicate the narrowing had
+  been dropped. Reaching this took no unusual steps: the "file errors" tile on
+  the Dashboard links straight into the library, carrying whatever filters were
+  already applied.
+
+  Page counts and totals now agree with what is listed, and results in these
+  views also show fingerprint coverage, which the file-errors view previously
+  left blank.
+
+- **Sorting inside a series, author, or narrator view did nothing.** Those
+  drill-downs never read the `sort` query parameter at all, so every option in
+  the Sort By menu — including Title — returned the group's own order. They now
+  sort, and they sort the whole filtered set before cutting out the requested
+  page rather than reordering the rows already on screen.
+
+- **The same sort could return two different orders depending on config.**
+  Unknown values were ranked at opposite ends by the two code paths that order
+  a library page: the memdb sorted indexes put a missing value *last*
+  ascending, while the materialise-and-sort fallback ran it through
+  `derefInt`/`derefStr` first, turning a nil year into the year 0 and a nil
+  narrator into `""` — both of which sort *first*. Which order a request got
+  depended on whether its sort could be pushed down, i.e. on
+  `enabled_sort_indexes`, not on anything the caller asked for. `title` diverged
+  in three further ways: the index normalises the title, falls back to the
+  original filename, and pushes empties to the end; the fallback did none of
+  those.
+
+  There is now one ordering rule (`database.SortBooks`) that both paths call.
+
+- **Docker builds stay on Go 1.26.** The grouped dependency update attempted to
+  move both Go builder images to 1.27, which does not compile this repository.
+  Both images remain pinned to the Go 1.26 manifest, and Dependabot now ignores
+  Go 1.27+ Docker-image upgrades while continuing to accept 1.26 updates.
+
+- Sorting the library by year came back in the order books were added rather
+  than by year. This was the default configuration, so it affected a normal
+  install. The same fault affected sorting by bitrate. Counter-intuitively, it
+  was *switching a sort index on* that broke those sorts — with the index off
+  they were already working.
+- Sorting by author or series returned an arbitrary order in the fallback mode
+  the server enters when its in-memory index is unavailable. The author's name
+  is now looked up rather than read from a field the stored record does not
+  always contain, so both modes agree.
+- Sorted pages are now fetched a page at a time instead of loading the whole
+  matching library and discarding all but one page.
+
+- **Library sorting returned an ordered page of the wrong books when memdb was
+  unavailable.** While the in-memory index is not serving reads — during the
+  startup warmup, when it is disabled, or permanently after its write buffer
+  overflows — the store picked a page of books in storage order and only then
+  sorted it. Because the page it handed back was internally in the right order,
+  nothing looked wrong: asking for the 50 oldest books returned 50 books
+  correctly ordered by year that were not the 50 oldest. The page is now chosen
+  from the fully ordered set, so sorting means the same thing on both backends.
+
+#### Server bootstrap skill documents the usable bearer-key response
+
+The server-bootstrap instructions now wait for the fresh token file after a
+service restart, request the pseudo-terminal required by production sudo, and
+extract the issued bearer key from the API's standard `data` response envelope.
+
+- Sorting the library by author, series, year, genre, language, publisher,
+  codec, quality, edition, bitrate or sample rate did nothing. The list came
+  back in the order books happened to be stored, with no error and no visible
+  sign that the sort had been ignored — 13 of the 23 available sort options
+  were affected. Sorting by title, narrator, duration, file size or format
+  always worked. All of them work now, including on later pages: asking for
+  the second page of books sorted by author now returns the books that
+  actually belong there.
+
+- A mistyped or unrecognised sort option no longer causes the server to load
+  the entire matching library in order to sort it by nothing. The request is
+  still accepted and returns the same books as before; it is simply no longer
+  expensive.
+
+- **A book with no known author could never get one.** When the organizer files a
+  book whose author it cannot determine, it puts the book in an "Unknown Author"
+  folder and includes that name in the filename. The next library scan then read
+  the name back out of the filename and recorded "Unknown Author" as if it were
+  the real author — after which every part of the system that offers to fill in a
+  missing author skipped the book, because as far as it could tell the author was
+  already known. The scan now recognises the placeholder as the system's own
+  "not known yet" marker in both places it parses names out of file paths, so
+  these books are offered for automatic parsing again and the answer is no longer
+  thrown away on arrival. Books already recorded this way are re-examined the next
+  time their file changes or a full rescan is run; they are not repaired
+  retroactively by this change alone.
+
+#### The Audiobookshelf author filter no longer lists authors with no books
+
+Opening the filter menu in an Audiobookshelf client and picking an author often
+led to an empty shelf. The filter list was built from every author row in the
+database, while the Authors tab beside it was built from the authors who
+actually appear on a book the library shows. In the production library those
+are very different lists: 4,975 of 12,854 authors — 38.7% — have no visible
+book at all. Every one of them was offered as something you could filter by,
+and every one of them returned nothing.
+
+The same applied to narrators, from a different source with the same shape.
+
+Both lists now come from the shared contributor index the Authors and Narrators
+tabs already use, so what the filter menu offers is exactly what the library can
+show you.
+
+#### Sorting the Audiobookshelf authors list now actually sorts it
+
+`?sort=` and `?desc=` were read from the request and echoed back in the response
+— the reply said which ordering had been applied — but no sorting ever happened.
+The list came back in name order regardless, so sorting by number of books, or
+reversing the order, appeared to be accepted and did nothing.
+
+Sorting by name, last-name-first, number of books, date added and date updated
+now works, in both directions. A sort this server has no field for is logged
+instead of being silently ignored.
+
+- **`CreateAuthor` no longer mints a duplicate row for every concurrent caller.**
+  It was check-then-create with nothing serializing the two steps, and the window was
+  not narrow: 24 concurrent calls with an identical name produced 24 distinct author
+  rows, reproducibly. Because the `author:name` index maps one name to exactly one id,
+  every duplicate beyond the indexed one was *unreachable by name lookup* — so books
+  attached to those rows were silently orphaned from any name-based resolution. The
+  scanner resolves authors from inside its worker pool, once per book, so an import
+  that first meets an author across several books at once minted a row per worker.
+
+#### The authors list no longer claims an ordering it did not apply
+
+Sorting the Audiobookshelf authors list started working in the previous change,
+but only for the orderings this server can actually perform. For anything else —
+sort by file birthtime, for instance, which nothing in the library records — the
+reply still stated that the requested ordering had been applied. It had not; the
+list came back in its usual order.
+
+The reply now describes the order the list is actually in. Ask for something we
+can do and it says so; ask for something we cannot and it reports the default
+order, which is what you received.
+
+The request still succeeds rather than failing. Refusing to return the list at
+all because the app asked for an ordering this server does not offer would empty
+the Authors tab, which is a worse outcome than showing the authors in a
+different order and saying which.
+
+- **Single-file audiobooks are no longer re-read and re-hashed on every scan.**
+  The scan created file records only for multi-file and directory books, so a
+  book that is one file got none. That was survivable until the scan cache moved
+  to per-file records: with no file record there is nothing for the cache to key
+  on, so every single-file book in the library was re-read in full on every scan,
+  forever. The scan now gives every book its file record, and a single-file
+  book's record correctly stays with its file rather than being moved to the
+  containing folder.
+
+- **Importing a file now actually organizes it when you ask.** The "Organize
+  into library after import" checkbox sent its setting to the server, and the
+  server decoded it and did nothing with it — you got a success message and the
+  file never moved. It is now honored. The checkbox also **defaults to off**:
+  now that ticking it really moves files on disk, that has to be something you
+  choose rather than something that happens because you did not notice a box
+  was already ticked.
+
+- **An imported book now has a link to its own audio file.** Books added
+  through file import were created without the row that connects a book to the
+  file it plays, so nothing downstream could find the audio: not playback, not
+  organize, not the file list. The link is now created at import. This is
+  separate from, and additional to, the scan-path version of the same symptom
+  being fixed elsewhere.
+
+  This is also why organizing on import would have appeared to work and quietly
+  done nothing: the organize pass skips any book it cannot see files for, and
+  an imported book was always in that state.
+
+- BookFile backfill now reports an auditable JSON result, repairs both directory
+  and single-file books, and fails visibly when a BookFile row cannot be saved.
+
+- Opening an operation from the notifications bell now loads a bounded recent
+  activity tail instead of a large scan transcript. The dialog can download the
+  complete raw operation log as a gzip attachment without rendering it in the
+  browser.
+
+- CI now checks out Git LFS fixtures and recursively initializes submodules.
+
+- Book-file backfill now writes each eligible book's file rows atomically in one batch.
+
+- Bound concurrent metadata file writes across operations and emit a warning
+  when persisted configuration explicitly disables chapter consolidation.
+
+- Resumed operations now start the watchdog from the new attempt rather than
+  inheriting a stale progress timestamp and being immediately canceled.
+
+- Opening an author or series from an audiobook detail screen now resolves the
+  matching resource on the Audiobookshelf-compatible API instead of falling
+  through to a missing app API route.
+
+- Metadata-review provider filters now recognize the display names stored in
+  cached candidates, and accepted bulk applies immediately clear selected cards
+  from the default review view.
+
+#### Organizer preserves files when generated destination names collide
+
+When two different books expand to the same organized filename, the first
+destination remains untouched and the next file is written as
+`filename_copy1.ext`, then `filename_copy2.ext` as needed. This preserves both
+audio files and keeps their extensions unchanged while retaining the existing
+exclusive-create transfer safeguards against overwrites.
+
+- A split-book candidate is retained when a merge is incomplete, rather than
+  disappearing after a partial file-reassignment failure.
+
+#### Hitting the 10-RC limit now cuts a minor release instead of failing the build
+
+Once a version accumulated 10 release candidates, the `Prerelease on Merge`
+workflow went red on *every* subsequent merge to `main` and stayed red — while
+doing nothing at all to stop the pile-up. `v0.219.3` reached `rc.33`, twenty-three
+past the limit, with the guard failing the whole way.
+
+The guard could never have worked as written, because it runs *after* the
+`prerelease` job has already minted the RC tag. Failing the run reports a problem
+that has already happened; it cannot prevent the next one. The only thing that
+actually resets the ordinal is cutting the next stable version.
+
+So the threshold check now promotes instead of failing:
+
+- `.github/scripts/check-rc-ordinal.sh` (2.0.0) only **counts and reports**. It
+  emits `rc_count` and `at_threshold` to `$GITHUB_OUTPUT` and exits `0` whether or
+  not the threshold was reached. Deciding what to do about the verdict is the
+  caller's job. Usage errors still exit `2`.
+- `.github/workflows/prerelease.yml` (3.0.0) dispatches `release-prod.yml` with
+  `release-type=minor` when `at_threshold` is true.
+
+Two details that would otherwise have made this a silent no-op:
+
+- The dispatch **must** authenticate with `JF_CI_GH_PAT`. A `workflow_dispatch`
+  made with the default `GITHUB_TOKEN` is silently ignored by GitHub — a
+  `GITHUB_TOKEN` run cannot trigger another workflow run. Falling back to
+  `GITHUB_TOKEN` would have produced a green step that promoted nothing, so a
+  missing PAT is a hard failure here rather than a quiet success.
+- The step refuses to stack dispatches. Between this run and the release landing,
+  every further merge to `main` mints another RC and re-enters the job; without a
+  check for an already-queued or in-progress `release-prod` run, each one would
+  queue a duplicate minor cut.
+
+### Documentation
+
+- Record the deployed reliability fixes, interrupted full scan, and validated
+  local Ollama worker in the library reliability status audit.
+
+### Improved
+
+- Compatible queued cached-metadata apply requests now merge their book lists
+  into one operation without changing a running operation or mixing write-back
+  modes.
+
+#### Compatible queued metadata write-back selections now coalesce
+
+Queued `Batch Save to Files` and `Bulk Tag Write-back` requests now combine
+their selected books into one operation when their behavior options match. A
+request with different organize, force, or rename settings remains separate,
+and running operations are never changed.
+
+<a id='changelog-v0.219.2'></a>
+## v0.219.2 — 2026-08-25
+
+### Changed
+
+- The RC cleanup workflow is now armed: publishing a stable release deletes all but the
+  newest 3 release candidates for that version, and their tags. It shipped in dry-run
+  because nothing had ever verified the delete path — the workflow had run 300 times and
+  succeeded zero times. It has since been exercised live against the full backlog (260
+  releases and their tags across three base versions, 0 failures, every stable release
+  tag intact), so RC counts no longer need a manual sweep to stay bounded.
+
+### Fixed
+
+- **The Mock Freshness check could not see a newly generated mock.** It compared
+  with `git diff`, which only looks at tracked files, so adding an interface and
+  forgetting to commit its generated mock left an untracked file that the check
+  reported as "up to date" — the exact case the job exists to catch. It now uses
+  `git status --porcelain`, which sees untracked and modified entries alike.
+
+- **The memory-leak scan filed bug reports when its own scanner crashed.** Any
+  non-zero exit was recorded as `has_leaks=true`, and the report job then opened
+  and auto-merged a TODO.md entry claiming leaks that were never detected.
+  `check-memory-leaks.py` returns 1 for findings, but an uncaught Python
+  exception also exits 1, so the exit code alone cannot tell the two apart; the
+  job now requires the scanner to have actually reported findings, and fails
+  loudly as a scanner failure otherwise.
+
+- **The leak count wrote a malformed line into `$GITHUB_OUTPUT`.** `grep -c`
+  prints `0` *and* exits 1 when nothing matches, so `$(grep -c ... || echo "0")`
+  captured both its output and the fallback, emitting `leak_count=0` followed by
+  a stray `0` line.
+
+- **Stable releases could not be cut.** No stable has published since v0.219.0
+  (Aug 20): a dispatch for `v0.219.1` built `v0.219.1-rc.96` instead and failed
+  uploading assets that the rc.96 release already had, leaving an empty draft
+  behind. goreleaser takes its version from the tag `git describe` finds at
+  HEAD, and this repo cuts an RC per merge, so that tag is always an RC. Picks
+  up the github-common fix that exports `GORELEASER_CURRENT_TAG` explicitly.
+
+<a id='changelog-v0.219.1'></a>
+## v0.219.1 — 2026-08-24
+
+### Added
+
+#### Duplicate review moved into the unified workspace
+
+`/review` now has a working duplicates lane: a filter rail, a book-against-book
+comparison, bulk merge and dismiss, the compare drawer, and the full keyboard
+path (`j`/`k` to move, `m` to merge, `d` to dismiss, `s` to select, `Shift+A`
+for the page, `Enter` for the drawer, `?` for the list). Two of the three lanes
+now render in one place; the review queue is the last one still living on its
+old screen.
+
+The recommended-keep decision moved with it, into a module both the ★ chip and
+the `m` shortcut import. It was previously a private function whose comment
+promised the two "can never drift" — true while they sat in one file, and no
+longer guaranteed once a port split them across a hook and a view.
+
+#### The review queue is now the third lane of `/review`
+
+Regroup holds render in the unified workspace alongside metadata and dupes, with the
+same recommendation panel, evidence, per-hold action override and bulk actions the
+standalone page had. Every lane now lives in one screen; nothing points at an older
+surface any more.
+
+#### CI now runs the two checks that nothing was running
+
+Neither failure above was detectable from CI, because neither check ran there —
+`sdkguard` existed only in the local `Makefile`, and nothing compiled the
+`bench` build tag at all. A new `SDK Deps & Bench Build` job in
+`.github/workflows/ci.yml` runs both.
+
+A new `make bench-check` target typechecks the bench-tagged tree, and `make ci`
+now depends on it alongside `sdkguard`, so the local and CI contracts match and
+neither can quietly start checking less than the other. It is deliberately
+distinct from the existing `build-bench`, which links a real binary scoped to
+what `main` can reach; `bench-check` compiles `./...` with no output file.
+(`build-bench` would in fact have caught this particular breakage — it simply
+never ran anywhere.)
+
+Note that, like the existing interface-width ratchet, this job **reports but
+does not block**: main's required checks are currently just "Minimal CI /
+Minimal CI Summary", "Require changelog fragment" and "TODO Fragment Headers".
+Making it binding is a branch-protection change, i.e. a human action.
+
+#### `maintenance.metadata-cache-reap` — clear cache rows whose book is gone
+
+The by-cause split added earlier today named 3,354 orphaned metadata-cache rows
+— 23% of the cache — pointing at books that no longer exist. Nothing could read
+them and nothing could clear them; the only remedy the tooltip could offer had
+no implementation behind it. This op is that implementation.
+
+It deletes, which is worth stating plainly next to `missing-file-repoint`'s
+"NEVER deletes a row" and the 2026-08-19 decision that removed
+`missing-file-repair`'s delete path. That decision is not being reversed. It
+concerned `book_file` rows — library records pointing at audio the owner owns,
+where a wrong delete destroys the only pointer to real bytes. A metadata-cache
+row is derived, regenerable, already expendable under its own 30-day TTL, and
+keyed to a book nothing in the product can reach.
+
+Three properties make it safe to run and safe to interrupt:
+
+- **Absence and failure are different buckets.** `GetBookByID` returns
+  `(nil, nil)` for a missing key and `(nil, err)` for a real fault. Only the
+  first is an orphan; a lookup error is counted, reported and skipped, so a bad
+  day for the store cannot read as thousands of books to forget.
+- **Every row is re-resolved at delete time**, not trusted from the plan. A book
+  restored or re-imported between the scan and the write stops being an orphan
+  and is spared.
+- **Dry run is the default**, the delete cap defaults to 500, and a per-row TSV
+  naming every scanned row is written on every run — for a delete op the report
+  is the only record of what was destroyed and the only way to know what to
+  re-fetch.
+
+Soft-deleted books are not orphans, and this was measured rather than assumed:
+the library holds 16,124 of them, but `GetBookByID` applies no soft-delete
+filter, so their cache rows resolve and are never reaped.
+
+#### Refetch stale metadata without leaving `/review`
+
+The stale chip's tooltip has always ended "refetch to be sure", which named a
+remedy the workspace had no way to reach: the only metadata fetch entry points
+were two dialogs on the Library page. On production that chip reads 5,771 of
+5,774 reviewable rows, so the sentence was pointing at almost the entire queue
+and offering nothing.
+
+The chip is now the path. Clicking it asks for confirmation — naming the count,
+because "refetch stale" reads as a tidy-up until you see that it is thousands of
+calls to external metadata providers — and then starts the existing batch fetch
+as a background operation. Individual stale rows carry their own refetch button
+and go straight through; one book is not worth a dialog.
+
+No server change was needed. The lane already loads the whole review set
+(`limit=0`, paginated client-side), so the full stale set is in hand without a
+round trip, and `batchFetchCandidates` already accepts explicit book IDs.
+
+Which rows count as stale is the part worth stating: the predicate is
+`is_fresh === false`, not falsy. The payload distinguishes three states — stale,
+fresh, and *no age at all* — and sweeping a row with no age into a bulk provider
+fetch would act on a claim the server never made. The chip's own visibility
+still follows the server's `stale` count, so when the two disagree the count is
+still reported but no action is offered.
+
+- **Auto-revert when `main` goes red.** CI is no longer a pre-merge gate — anything
+  can land, the gate runs after the merge, and if it fails, `main` is automatically
+  restored to its last commit with a green run. A bug is filed naming every reverted
+  commit, its PR, and its individual gate verdict. The selector refuses to act rather
+  than guess when the evidence is thin: no green anchor in the window, a span wider
+  than three commits, or a previous auto-revert inside the span. A red run is
+  re-run once before anything is blamed, so a flake costs a retry instead of a revert.
+
+#### Keep-A / keep-B shortcuts, and a focus pointer that stays in range
+
+`a` and `b` merge the focused pair keeping that specific side. `m` still follows
+the recommendation, but `recommendedKeepSide` returns null on a tie and renders
+no chip — so on exactly the pairs where the reviewer has to think, `m` was the
+shortcut telling them the least, and disagreeing with it meant reaching for the
+mouse. Both new keys are lowercase; Shift+A arrives as `A`, so select-all can
+never merge a pair.
+
+The help overlay lists both, and a test asserts the documented set matches the
+keys the suite exercises, so a future shortcut cannot ship undocumented.
+
+Deciding the bottom row also used to leave the focus pointer past the end of the
+list. `visible[focusedIndex]` was then undefined, which the handler reads as "no
+focused row" — every shortcut became a silent no-op until the refetch landed.
+The pointer is now clamped where it is read rather than corrected afterwards, so
+the out-of-range value is never observable.
+
+#### Rows say which signal put the pair on screen
+
+The `layer` chip names the collector that FOUND a candidate; nothing on the row
+said what evidence justified it, so answering "why is this pair here" meant
+expanding the evidence panel — once per pair, across a queue where most pairs
+rest on a single signal.
+
+Primary signals now render as chips on the row itself: `exact file`,
+`ISBN/ASIN`, `same source record`, and the rest. Since no certain pair in this
+queue rests on a fuzzy title match, that turns most of the triage from a
+judgement into a read.
+
+Supporting signals (`duration`, `folder_path`) are deliberately left off the
+row. The scorer excludes them from the noisy-OR product and a supporting-only
+set can never reach an eligible score, so they can corroborate a pair but never
+be the reason one exists — a chip beside the primaries would claim otherwise.
+They remain in the evidence panel. An unrecognised kind renders its own raw
+name rather than an empty chip, so a new collector cannot go invisible.
+
+#### Book locations now appear in every form a client can actually use
+
+The review page used to show only the server-side path for a book, which is
+the one form that is useless on the machine you are usually sitting at. It now
+shows the Windows drive path and the UNC path alongside it, each with its own
+copy button, and on macOS and Linux the server path is an `smb://` link for
+your file manager to open.
+
+Nothing new appears until path aliases are configured, and they are seeded
+automatically from the iTunes path mappings that already exist, so an
+unconfigured install renders exactly what it did before.
+
+#### An append-only record of every hash a file has ever had
+
+The database kept exactly two hash slots per file, `original_file_hash` and
+`post_metadata_hash`, and `WriteTagsSafe` overwrote both on every tag write.
+The history was therefore destroyed as fast as it was made: after two writes
+the first pair was simply gone, and nothing recorded that it had existed.
+
+That is not a hypothetical loss. An attempt to recover books whose tags had
+been stripped failed on exactly this — the stored hash had been recorded
+*after* the damage, so it described the damaged copy, and there was no earlier
+value to compare against. A two-slot column can only ever answer "what is it
+now", never "what was it before".
+
+Files now carry a provenance chain: an append-only sequence of events, each
+recording what happened and every fingerprint the file had at that moment.
+Nothing in the chain is ever updated or deleted.
+
+The record is a *set* of digests rather than one hash, because no single
+fingerprint answers every question:
+
+- `sha256_full` — SHA-256 over the whole file. Proves two paths hold identical
+  bytes right now. Changes on any tag write, by construction.
+- `sha256_chunk` — the scanner's cheap variant (first 10MB ‖ last 10MB ‖ size
+  above 100MB), so existing `file_hash` rows reconcile without rehashing.
+- `size_bytes`, `duration_sec` — cheap, always available, and the first-pass
+  key for matching across a mutation.
+- `audio_md5`, `acoustid_seg0` — digests of the decoded audio, unchanged by
+  any tag edit. These are what make a file identifiable across its own history.
+- `torrent_hash` — the Deluge infohash of the source release. It identifies
+  where the bytes came from rather than what they currently are, so it survives
+  every local mutation and is often the only remaining link to a pristine
+  original.
+
+Three properties are load-bearing, and each is pinned by a test that fails when
+the property is removed:
+
+**The chain keys on `book_file_id`, not on a hash.** Keying on content would
+mint a new identity on every tag write and chain nothing to anything. Files seen
+before they have a row are recorded as orphans keyed by full hash, and adopted
+into the chain on import, so a file observed outside the library and then
+imported reads back as one continuous history.
+
+**The pre-change state is recorded before the mutation, not after.** A ledger
+written after the write loses precisely the crash it exists to explain. A failed
+tag write now still leaves the prior state on record.
+
+**Two events in the same nanosecond both survive.** The timestamp-keyed layout
+this follows would otherwise silently overwrite one, and a ledger that loses
+entries is worse than none, because it still reads as authoritative.
+
+Looking a hash up returns the events that carried it, whether or not the file
+still has it — which is the thing the two columns could never do.
+
+#### Capture a file's hash before anything touches it
+
+`maintenance.file-provenance-capture` walks directories outside the library,
+digests each audio file, and records a provenance event.
+
+The library's own files get an event whenever the organizer writes tags. Files
+outside it have never been hashed by anything, so the first time we copy, move,
+or retag one, the pristine state is already gone — there is no earlier value to
+compare against, which is precisely how a tag-stripping incident became
+unrecoverable. `/mnt/bigdata/books/abooks` is the concrete case: 5,192 files,
+6 of them hashed.
+
+These events are orphans — there is no `book_file` row yet — keyed by
+full-file SHA and adopted into a real chain on import, so a file observed
+outside the library and later imported reads back as one continuous history.
+
+Four behaviours are deliberate and each is pinned by a test:
+
+- **Roots are required, with no default.** A default would mean a mistyped or
+  omitted parameter silently starts a full-file SHA-256 over every mounted
+  volume.
+- **A dry run does not hash.** Hashing is the entire cost of this op, so a dry
+  run as expensive as the real thing is one nobody would run first. It reports
+  what it would capture.
+- **Re-running is idempotent.** An observation already in the ledger for the
+  same content at the same path is skipped, so repeated sweeps do not pile
+  duplicates into an append-only store. A file whose content *changed* is a
+  genuinely new observation and is recorded.
+- **What the cap left out is reported, and one bad directory does not end the
+  sweep.** An unreadable subdirectory is counted and walking continues past it;
+  a sweep that quietly stops early is the false confidence this op exists to
+  remove.
+
+#### Search for a book's metadata yourself, from the review workspace
+
+Automatic fetching keys off a book's **own tags**, which means it cannot rescue
+a book whose tags are the problem. This library has plenty of those: author
+fields holding a release-group tag (`[PZG]`, 274 books), a studio name
+(`Big Finish Productions`, 426), or the book's own title
+(`The Way of Shadows`, 310). Those rows sit at `no_match` permanently,
+because every automatic retry asks the same wrong question and gets the same
+answer.
+
+The only way to type a corrected query was a dialog on the Library page. Phase 7
+kept that dialog for exactly this reason — it and its bulk sibling are the only
+callers of `searchMetadataForBook` in the frontend — but the workspace still
+had no way to reach it, so the review cache could drain and never refill from
+the screen built to review it.
+
+Unmatched rows now carry a search action that opens the existing dialog against
+that book. Matched rows deliberately do not: they already have a candidate
+awaiting a decision, and offering a manual search there invites re-litigating a
+call the reviewer has not made yet.
+
+Worth knowing when you go looking for it: those rows are hidden by **two**
+defaults, not one. `hideNoMatch` is on, and a `no_match` row is additionally
+seeded with the row state `rejected`, which `hideRejected` also filters. Clear
+both to work the unmatched pile.
+
+#### The provenance ledger can now prove it wasn't rewritten, and it survives its own database
+
+Two gaps in the file provenance ledger, both surfaced by asking whether we
+should move it to a purpose-built append-only database like immudb. The answer
+was no — that was already evaluated and rejected, and its inability to delete
+is now a hard blocker because `AdoptOrphanEvents` legitimately *moves* rows.
+Both gaps close inside the store we already have.
+
+**A hash chain per file.** Every event carries a digest of itself and of its
+predecessor, so a rewritten or deleted row breaks the link and is detectable on
+read. The digest is over an explicit **length-prefixed, versioned** encoding
+rather than `json.Marshal`: field order is not promised forever, a JSON tag
+rename would silently invalidate every historical hash, and without length
+prefixes moving a character across a field boundary leaves the concatenation
+identical — the chain would be forgeable.
+
+The link follows **append order**, not event time. Those differ, and routinely:
+a pre-write observation gets recorded after the fact, and an adopted orphan
+keeps its original timestamp and lands in the middle of a chain. Linking by
+time would fork the chain on every honest write.
+
+**A store-wide sequence**, assigned in the same Pebble batch as the event so a
+crash cannot burn a number — a burned number is indistinguishable from a
+deleted row. It buys the one thing a per-file chain cannot: a **gap proves rows
+were deleted wholesale**, including the deletion of an entire file's chain,
+which the chain link can never notice because the evidence goes with it.
+
+**An append-only JSONL export**, `maintenance.file-provenance-export`. The
+chain proves nothing was rewritten in place; it cannot help if the database is
+corrupted or restored from a backup taken before an incident — and a ledger
+database would have had that same failure. A plain file on disk survives it.
+The op never rewrites a byte it has written, resumes from a durable cursor, and
+advances that cursor **only after the bytes are fsynced**: a failure duplicates
+lines, which a reader collapses on `seq`, rather than skipping events forever
+with nothing to say so.
+
+Sequence slots whose event row has vanished are exported as explicit `missing`
+markers rather than skipped, because that slot is the evidence.
+
+#### Worth knowing
+
+The verifier reports **three** states, not two. `unchained` means the events
+predate this change — legitimate, and not an error. Conflating that with
+`broken` would flag the entire existing library on the first run after deploy
+and teach everyone to ignore the report.
+
+Verification runs inside the export, including on a dry run. So the default
+invocation — no `apply` — is a read-only ledger health check that writes
+nothing. A verifier with no caller is decoration; this one has a job.
+
+**What this does not do is *prevent* anything.** Any code holding the raw
+database handle can still delete a row, and no in-process guard can forbid it.
+What is now true is that doing so is loud on the next read, and that anything
+already exported cannot be taken back.
+
+#### A tiered census of every open TODO, and a plan to finish them
+
+`TODO.md` had grown to 10,849 lines and nobody could say how much work was
+actually left in it. It now has an answer: **roughly 378 distinct open items**,
+tiered, with a plan for retiring each tier.
+
+The count took two tries. `TODO.md` encodes tasks two different ways — checkbox
+bullets through the body, and a numbered backlog in the tail where "done" is
+struck-through rather than unchecked — and the first census saw only the
+checkboxes. Reconciling the 54 `todo-sync` GitHub issues against those
+checkboxes suggested 24 issues were stale and closeable; spot-checking 18 of
+them found 17 alive in the numbered backlog. Exactly one issue (`DOCS-1`,
+#1276) is genuinely orphaned. Both mistakes are written into the plan so the
+next pass does not repeat them.
+
+The tiers: **37** items already done and just never checked off, **29** blocked
+on a decision only the owner can make (several sit on production data-loss
+paths), and **319** actionable. Of those 319, only 125 cite a file path
+concrete enough to schedule against — the remaining 194 describe real work in
+terms of symbols and behaviours, so the first wave of execution is a scoping
+pass, not an implementation pass.
+
+Also surfaced along the way: four finished commits sitting in worktrees with no
+pull request, against zero open PRs on the repo.
+
+Planning only — no code changed, and nothing was executed.
+
+#### Read-only census tool for ungrouped-but-explicitly-non-primary books
+
+`tools/cmd/orphan-nonprimary-census` counts books that have no version group
+(`VersionGroupID` nil/empty) **and** are explicitly marked non-primary
+(`IsPrimaryVersion` set to `false`, not merely unset). This is a distinct,
+much smaller anomaly — **116 books**, measured against production
+2026-08-23 — from the 2,776 books with no `IsPrimaryVersion` flag at all.
+The codebase's own convention treats a nil flag as primary/visible, so the
+tool deliberately excludes nil rather than counting it as non-primary, which
+would have inflated the census roughly 24x. The tool is strictly read-only:
+it fetches the book list from the API and writes a CSV report (with
+`CreatedAt`/`UpdatedAt` for correlating the anomaly against known job runs);
+it performs no database writes, no file moves, and no mutating API calls.
+
+The anomaly is **growing**: the same cross-tab taken 2026-08-14 found 41 of
+these rows, so the population nearly tripled in nine days while the library
+itself shrank by 7,112 books.
+
+Three defects in the tool's own fetch loop were found and fixed while running
+it against production, two of which could have made it under-report while
+still looking clean: it paged with `page_size` (which the handler ignores —
+it reads `limit`), it terminated on the response's `count` field (which
+reports the *primary* count, 41,741, against a stream of 56,727), and it
+never sent `show_quarantined`. It now also counts duplicate rows served
+during offset paging and warns that the result is a lower bound when any
+appear, since a row served twice means another was skipped.
+
+#### Scheduled detect-only backstop for `auto-revert.yml`
+
+`auto-revert.yml` only reacts to the `Continuous Integration` gate via a
+`workflow_run` event, which can be silently missed (Actions outage, a run
+that never reaches `completed`, the event simply not firing) — leaving a red
+`main` with nothing watching it. Added `auto-revert-backstop.yml`, a
+scheduled workflow (`*/15 * * * *`, plus `workflow_dispatch` for manual
+testing) that polls `gh run list` for the latest `Continuous Integration` run
+against `main`'s tip. When that run is red and at least 30 minutes old, it
+files a DETECT-ONLY issue explaining that `auto-revert.yml` did not act — it
+never pushes, reverts, or decides what to revert. Before filing, it checks
+for an existing open issue whose title matches `CI red on main at <sha>` (the
+same phrase `auto-revert.yml`'s own issue-filing step uses) so a repeat run
+does not file a duplicate for the same commit; this is also the dedupe check
+`auto-revert.yml`'s existing "File the bug" step lacks today, so the two
+workflows can now recognize each other's issues.
+
+#### `find_spurious_stranded_book_rows.py` — report-only scan for Book rows the .tmp-rename bug may have spuriously created
+
+From 2026-03-03 to 2026-08-15 a path-construction bug (fixed, see
+`scripts/repair_stranded_tracks.py`) turned `"<title> - <track>/<total_tracks>"`
+into a real directory + file split, and the scanner reacted by creating one
+spurious `Book` row per stranded file — 85 for a single real book in one
+observed case. `scripts/find_spurious_stranded_book_rows.py` reuses
+`repair_stranded_tracks.find_bogus_dirs()` to find the wreckage directories
+still on disk, pages through the live `GET /api/v1/audiobooks` API, and
+cross-references two heuristics (a purely-numeric title, a file path whose
+containing directory ends `" - <digits>"`) against that set to report counts
+by confidence bucket. It is strictly REPORT-ONLY — no delete, restore, or
+mutation call of any kind — so a human can decide what, if anything, to do
+about soft-delete/purge archaeology before any restore is proposed.
+
+#### `reconcile-book-counts` — read-only diagnostic for the "3,954-book gap" TODO item
+
+Added `tools/cmd/reconcile-book-counts`, a read-only CLI that compares the
+store's `ListBookIDs()` (the true live-book-ID set) against the exact code
+path `/api/v1/audiobooks` uses for a `library_state`-empty,
+`is_primary_version`-unset list — called directly, bypassing HTTP — and
+prints the actual set difference (not just a count gap), with each
+differing book's `library_state`, `marked_for_deletion`, `is_primary_version`,
+`quarantined_at`, and `quarantine_reason`. It also states, as historical
+context rather than a re-derived claim, that TODO.md's own "C716 resolved"
+section already traced the original 67,824-live-books figure this item cites
+to a Bleve `DocCount()` snapshot polluted by 3,953 stale soft-deleted docs
+(a leak since fixed on main) rather than a genuine third invisible-books
+population, and offers an optional `-bleve` flag to re-run that specific
+`DocCount()`-vs-`ListBookIDs()` cross-check against a copy of the search
+index. The tool never writes to the store or the search index: it deliberately
+uses the raw `bleve.Open` (which errors on a missing/mismatched index rather
+than deleting and recreating it, unlike this repo's `internal/search.Open`)
+so no write path exists even by accident, and both `-db` and `-bleve` must
+point at copies since Pebble takes an exclusive lock on the directory it
+opens. Verified against a seeded 6-book store that the set-difference output
+correctly attributes a quarantined book's absence from the list to
+`quarantined_at`.
+
+#### `internal/database/iface_assert.go` — compile-time assertions for 4 missing interfaces
+
+Added compile-time proof that PebbleStore satisfies OAuthIdentityStore, MetadataCacheStore, RejectedMetadataStore, and ReviewStore. These interfaces were already implemented but lacked their conformance assertions, leaving a 4-item gap in compile-time coverage. This hardens the codebase against accidental regressions: if PebbleStore ever drops a method from any of these 4 interfaces, the build now fails here instead of surfacing as a runtime nil from a failed type assertion elsewhere.
+
+#### `dedup.series-dedup` now defaults to a dry run
+
+The series-dedup operation merged duplicate series and deleted the losing rows
+with no preview of any kind, which made it a latent hazard (TODO.md L3966 —
+it has never actually run in production, 0 of 10,161 operations). `DedupSeries`
+now takes a `dryRun bool`, `SeriesDedupParams` carries `dry_run` (a `*bool`, so
+absent and explicitly-false stay distinguishable), and both the op and
+`POST /series/deduplicate` default it to TRUE: a call that says nothing gets a
+preview that writes nothing. Pass `{"dry_run": false}` to apply.
+
+The preview and the apply share one loop. Every read, every grouping decision
+and every canonical-series pick runs identically in both modes; only the two
+mutating calls (`UpdateBook`, `DeleteSeries`) are guarded, so the preview cannot
+drift from the apply it predicts. `SeriesDedupResult` gained
+`TotalBooksReassigned` and `DryRun`, and the activity row and log lines now say
+which mode ran — an operator who cannot tell a preview from an apply in the
+activity log is the trap this change exists to prevent.
+
+This is behaviour-changing for the endpoint: callers that previously POSTed an
+empty body to `/series/deduplicate` and got a merge now get a preview.
+
+The web client's "Merge All" action passes `dry_run: false` explicitly. The
+`deduplicateSeries()` helper takes that flag as a **required** argument rather
+than an optional one: the server's absent-means-preview default is correct for
+an op that deletes series rows, but it would otherwise make an omitted argument
+here silently mean "preview" — and the only caller is a confirm dialog whose
+text promises a merge that cannot be undone. Requiring every caller to state
+which mode it wants keeps the safe server default without letting a caller
+inherit it by accident.
+
+#### Documented the `todo.d` fragment race that leaves finished work unchecked in `TODO.md`
+
+`scripts/assemble_todo.py` runs daily and `git rm`s every fragment it folds into
+`TODO.md`, so a fragment can be assembled between the PR that files it and the PR that
+finishes the work — leaving an unchecked entry for work that is already done, and making
+the finishing PR's own deletion of the fragment a silent no-op. This happened on
+2026-08-10 with a 26-minute window (#2272 filed, collected, #2273 finished, cleaned up by
+hand in #2274). `todo.d/README.md` gains a "Finishing work that had a fragment" section
+and `CLAUDE.md`'s Post-Task Hygiene list gains a matching bullet: grep `TODO.md` before
+merging and check the entry off by hand. Both record why the obvious mechanical guards
+cannot work, so nobody tries to harden the PR-body heuristic into a guarantee.
+
+#### `search_index_docs_total` gauge exported on `/metrics`
+
+The search index had no metrics at all: `books_total` was exported, but its
+counterpart — the search index's own document count — was not, so a
+divergence between the two (e.g. the 2026-08-14 incident where 67,824
+indexed documents sat against 63,871 live books) had no dashboard signal and
+went unnoticed until a user reported broken search results.
+
+Added `audiobook_organizer_search_index_docs_total`, a gauge fed by Bleve's
+`DocCount()` on the same 5-second ticker that already updates `books_total`,
+so the two can be graphed together in Grafana/Prometheus. The gauge counts
+index documents, not live books, and its Help text says so explicitly — it
+can legitimately exceed `books_total` when stale or soft-deleted documents
+remain indexed, and that gap is exactly the condition this metric exists to
+surface.
+
+Deliberately does not touch `DocCount()`'s callers elsewhere, does not open
+or recreate the index from the metrics path, and does not add the
+`search_index_dropped_total` / `search_index_dirty_backlog` metrics — those
+are a separate TODO item with their own task and land in a follow-up PR
+against the same registration block.
+
+#### `prerelease.yml` now fails when a version accumulates 10 RCs
+
+Added a `check-rc-ordinal` job to `.github/workflows/prerelease.yml`, running
+after the reusable prerelease job, that lists releases via `gh release list`
+(same tagName-parsing pattern already used in `cleanup-rc-releases.yml`),
+counts how many `-rc.N` releases exist for the base version the run just
+minted, and fails the job (`exit 1`) once that count reaches 10. Per the
+owner's 2026-08-08 directive ("we are never to get above 10 RCs"), the next
+step past 10 is a stable release, not `rc.11`. The counting logic lives in
+`.github/scripts/check-rc-ordinal.sh` so it can be exercised locally against
+JSON fixtures (`testdata/gh-release-list-10rc.json`,
+`testdata/gh-release-list-1rc.json`) — a workflow-only change would otherwise
+be untestable outside CI. Only counts RCs sharing the exact base version of
+the tag just created; a first RC on a brand-new base, or RCs belonging to a
+different base version in the same release list, do not trip the guard.
+Deliberately does not touch `cleanup-rc-releases.yml`'s existing keep-latest-3
+pruning on stable promotion, and does not add any auto-promotion behavior —
+auto-cutting a stable release without a human gate is a separate, more
+consequential decision left for the owner.
+
+#### Export a playlist as `.m3u`
+
+`GET /api/v1/playlists/:id/export.m3u` returns a playlist as a standard
+`#EXTM3U` file — an `#EXTINF:<seconds>,<title>` line followed by the file path,
+one pair per book, in playlist order. Static playlists export `BookIDs`; smart
+playlists export `MaterializedBookIDs`, i.e. the last evaluation rather than a
+live re-query, matching the convention the playlist DTO already uses. A smart
+playlist that has never been materialized exports a header-only file instead of
+erroring, as does an empty playlist.
+
+Paths are absolute (`Book.FilePath`), chosen to round-trip through this repo's
+own importer: `parseM3UFile` in the scanner takes an absolute entry as-is and
+resolves a relative one against the `.m3u` file's own directory, so relative
+paths would only work if the download were saved back into that exact source
+directory.
+
+The attachment filename is derived from the user-chosen playlist name and run
+through `pathvalidation.SanitizeFilename`, so a playlist named
+`../../etc/passwd` or one containing quotes or CRLF cannot escape the filename
+or inject a second response header. Book titles have CR/LF flattened for the
+same reason — a newline in a title would otherwise forge an extra playlist
+entry. Commas in titles are preserved: `#EXTINF` splits on the first comma
+only, so they are unambiguous.
+
+Books whose ID no longer resolves, or which have no file path, are dropped
+rather than written as blank lines.
+
+#### Collapsed sidebar now exposes Library's In Progress and Finished sub-nav
+
+With the sidebar collapsed to icon-only width, the Library group rendered a
+single icon with no way to reach the In Progress or Finished sub-routes — they
+were reachable only after expanding the whole sidebar. Clicking the collapsed
+Library icon now opens a menu listing All Books, In Progress, and Finished,
+each navigating via the same `handleNavigation(path)` the expanded sidebar
+uses. Selection highlighting in the menu reuses the existing
+`isSubItemSelected()` decoded-search-param matcher (#2193), so the active
+sub-item still highlights correctly and the original pathname-only comparison
+bug is not reintroduced. The collapsed Library icon's broader "on some
+Library-family page" selected state (matching `/library`, `/fingerprints`,
+`/series`, `/authors`) is unchanged.
+
+#### `POST /api/session/local` — the offline-upload probe no longer 404s the ABS connection
+
+The Audiobookshelf-compatible surface registered `/api/session/:id/sync` and
+`/api/session/:id/close` but had no `/api/session/local`, so every request to it fell
+through to the SPA catch-all. That matters because ShelfPlayer sends this endpoint after
+every play/pause with `maxAttempts:1` and treats a 404 as "the connection is offline"
+(design spec §1.8.8 item 1); §1.9.1 softens it to non-fatal for the two clients we
+actually target, but the minimum bar is still a 2xx with a non-empty body. The new
+handler is deliberately a stub: it authenticates, then answers the same bare `OK` that
+`/sync` and `/close` answer via `respondPlainOK`, and persists nothing. Its sibling
+`/api/session/local-all` is the endpoint that will actually apply offline progress. The
+route is also added to `absRouteList()` so the reserved-prefix guard test covers it —
+without that entry the route would 301 into the `/api/v1` app API and look implemented
+while returning the wrong shape.
+
+#### Prune expired ABS sessions on the existing cleanup schedule
+
+The session-cleanup goroutine in server_lifecycle.go now also calls DeleteExpiredABSSessions alongside DeleteExpiredSessions on the same 10-minute ticker. This ensures revoked and expired abs_sess: records are pruned regularly instead of accumulating indefinitely, matching the existing behavior for browser sessions.
+
+#### Regression tests for the two untested deluge hydrate-then-import sites
+
+Three call sites hydrate a memdb-slim `BookFileCore` into a full `BookFile` with
+`GetBookFileByID` before handing it to the deluge import, and each guards the
+result with `if hydrateErr != nil || full == nil`. Only one of the three —
+`runCentralization` in `internal/plugins/deluge` — had a test covering that
+guard. The other two were unprotected: `handleDiscoveryImport`
+(`internal/server/deluge_discovery.go`) and `bulkDelugeImportJob.Run`
+(`internal/maintenance/jobs/bulk_deluge_import.go`).
+
+Each now has a `_HydrateFailure` test covering both arms of the guard — a
+hydrate that returns an error, and one that returns `(nil, nil)` for a row that
+simply is not there — plus a `_HydrateSuccess` companion over the same fixture
+as a positive control, so the failure assertions cannot pass against an empty
+pending list.
+
+The failure tests assert the exact error string rather than a failure count,
+and say so in a comment, because a count cannot detect the regression they
+exist to catch. If the guard is deleted, the nil `BookFile` flows into
+`ImportToLibrary` / `bdi_importToLibrary`, whose own nil check returns an error
+straight away — producing an identical `failed=1`, one-result, `Status: "error"`
+shape, and never reaching `UpdateBookFile` either. Only the message differs
+(`"ImportToLibrary: bookFile is nil"` instead of the store's error or
+`"book file not found"`), so the string is the sole discriminating signal.
+
+Verified by mutation: disabling the guard entirely fails both variants in both
+packages, and narrowing it to `if hydrateErr != nil` fails only the
+`(nil, nil)` variant — which is what makes covering both arms worth the lines.
+
+No production code changed.
+
+#### Guard TestServerStartGracefulShutdown's SIGTERM against future parallelism
+
+Added prominent guard comments to TestServerStartGracefulShutdown in internal/server/server_more_test.go to prevent accidental addition of t.Parallel() to this test or any other test in the server package. This test sends SIGTERM to the entire test binary process to simulate graceful shutdown; running it in parallel with other tests would make them receive an unexpected process-wide signal, causing non-deterministic failures. The comments serve as a trap to catch parallelism additions before they cause intermittent test failures in CI.
+
+#### Frontend test covering the dedup "partial fp %" book-signature coverage badge
+
+`EmbeddingDedupTab` renders a warning chip labelled `partial fp <n>%` whenever a
+candidate book's `book_sig_coverage_pct` is non-null and below 100, warning the
+reviewer that the similarity match came from a silence-padded signature. Nothing
+covered that conditional, so both the label text and the `< 100` boundary could
+regress silently. `web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx`
+now renders the tab against stubbed dedup APIs and asserts the badge appears at
+62%, and is absent at exactly 100% and when the value is null or undefined. Each
+case first asserts a book side actually rendered, so the "badge is absent" checks
+cannot pass on a card that failed to mount.
+
+- The AI author scan now appears in the operations timeline and notification bell
+  like every other long-running job. It runs as an `ai.author-scan` v2 operation
+  with real progress, cancellation, and resume-after-restart.
+
+- Operations v2 can now store a result payload of its own. `OperationV2Row.ResultData`
+  existed as a placeholder but had no writer, so any op producing output a caller reads
+  back — reconcile previews, diagnostic exports, AI suggestion sets — could only put it
+  on the legacy v1 operations row. `SetOperationV2Result` on the store and
+  `ReporterSetResult` on the registry give it somewhere native to go. This is the
+  prerequisite for retiring v1 operation rows entirely.
+
+- A repair tool for old operations that are still shown as "pending" even though
+  they finished. Operations created before August 16th never had their final
+  status recorded, so the operations list has been reporting long-finished jobs
+  as if they were still running. The new **Backfill Legacy Operation Status**
+  operation works out what each one actually did — from the newer operation
+  record that really ran the work — and corrects it.
+
+  It reports what it *would* change by default and only writes when explicitly
+  told to, so the plan can be reviewed first.
+
+- **A library scan can now cover the whole library without re-hashing all of
+  it.** The new `include_root_dir` scan parameter folds the organized library
+  root into a scan while keeping the incremental skip, so unchanged files are
+  still passed over. Previously the only way to reach the library root was
+  `force_update`, which also switched the skip off — so "scan everything" and
+  "re-read every byte of everything" could not be asked for separately. On a
+  library of ~154,000 files that is the difference between minutes and hours.
+  The default is unchanged: a plain scan still skips the library root.
+
+- **A "Scan Everything" option next to Full Rescan.** The Library toolbar's
+  Full Rescan button now has a dropdown with a second option that includes the
+  organized library root in the scan while still skipping files that haven't
+  changed — reaching the backend's `include_root_dir` capability, which was
+  previously only available via the API directly. Full Rescan itself is
+  unchanged: it still re-hashes everything.
+
+- **Force a rescan of one book.** `POST /audiobooks/:id/force-rescan` flags a
+  single book for a full re-read by the next scan. Unchanged files in the same
+  folder are still skipped, so rescanning one book costs one book — not the
+  whole folder. In the UI this is the new **Force Rescan** button on a book's
+  detail page.
+
+- The library scan now reports its skip rate. `shouldSkipFile` previously
+  returned a bare boolean with no counter, log or metric, so a scan that skipped
+  every file and a scan that skipped none produced byte-identical logs. Each
+  decision is now classified and counted, and the completion summary reports how
+  many files were skipped plus which re-read reason dominated: cache-miss,
+  changed, forced-rescan, stat-error, or cache-disabled. The five reasons are
+  counted separately because they call for different fixes -- "changed" is the
+  scan working as designed, while "cache-miss" is the population that gets
+  re-read on every tick forever.
+
+#### Scans stop re-reading files that are still being written
+
+An incremental scan re-read and re-hashed a file every single pass for as long
+as that file kept changing. A book being copied onto the library, a download
+still landing, a file being retagged by another tool — each one changed mtime
+and size between scans, so the scanner read it again, hashed it again, and
+stored whatever half-written metadata happened to exist at that moment. On a
+44k-file library that is a large amount of repeated work spent on the files
+least likely to yield a good answer.
+
+Scans now wait for a file to go quiet before re-reading it. A file the library
+already knows about is only re-read once its mtime is at least
+`min_rescan_age_hours` old (default 144 — six days). Set it to `-1` to turn the
+behaviour off entirely.
+
+This deliberately does **not** delay discovery, and it is not a general scan
+cooldown:
+
+- a path the library has never seen is new, and is read immediately;
+- a book explicitly flagged for rescan (the per-book force-rescan button) is
+  read on the next scan regardless of its age;
+- a full sweep (`force_update`) disables the scan cache outright, so the gate is
+  never consulted at all.
+
+The scan summary now reports how many files were held back, broken out from the
+files that were skipped as genuinely unchanged — the two mean different things,
+and a run dominated by held-back files means something is churning the library
+rather than that the cache is doing its job.
+
+#### The library now does a full re-read once a week, on a schedule that survives restarts
+
+Until now the only automatic scan was the incremental one every six hours, which
+skips any file whose size and modification time are unchanged. That is the right
+default, but it means a file whose contents changed without its timestamp moving —
+or one whose metadata was never read correctly the first time — could stay stale
+indefinitely.
+
+There is now a weekly **full sweep** that re-reads and re-hashes everything,
+including the organized library root. It is on by default and both knobs are
+configurable (`scheduled.library_scan_full.period_hours`, default 168).
+
+The scheduling deliberately does not use a seven-day timer. Timers here live only
+in memory, so a timer set for seven days is reset every time the service restarts.
+Production restarted **146 times in the preceding 30 days** — a mean uptime of
+roughly five hours — so a weekly timer would have been reset long before it ever
+elapsed and would have run **exactly zero sweeps**, while logging a perfectly
+healthy-looking schedule the entire time. Instead the sweep records when it last
+ran and checks hourly whether a week has passed, which is unaffected by restarts.
+
+Deploying this does not start a sweep. With no recorded history the first check
+writes down the current time and waits a full period, so upgrading never kicks off
+an unannounced multi-hour re-read of the whole library.
+
+Pressing **Run now** on the task ignores the weekly schedule and sweeps immediately,
+so you can take the first one whenever the library is quiet rather than waiting a
+week. (Previously the button would have reported success and done nothing on any day
+but the due one.)
+
+- **A written plan for making repeat scans fast.** Books made of several files are currently re-read and re-fingerprinted from scratch on every scan, however recently they were checked. The reason is now understood and measured, and the fix is written up for review before any code changes: the scanner remembers what it has already read per *book*, but decides what to skip per *file*, and those two stop matching as soon as a multi-file book is filed under its folder. The plan also records what has to happen before a larger follow-up change (telling Deluge when files move) so that work is not started in the wrong order.
+
+- `BatchCreateBookFiles` — creates many `book_file` rows in one atomic batch with a single
+  coalesced aggregate recompute per book, and refuses a batch carrying the same iTunes
+  persistent ID twice (the per-row uniqueness check reads committed state, so it cannot
+  see a duplicate staged earlier in the same batch). The maintenance relink op's directory
+  branch now uses it; production log attribution measured that one loop at 92.1% of all
+  attributed aggregate recomputes.
+
+- `MoveBookFilesToBookBulk` — moves rows from many source books into one target in a
+  single atomic batch, recomputing each distinct book exactly once. Added because making
+  the singular form recompute both books would otherwise have been a performance
+  regression: three callers move files in a loop and two of them move one file per call,
+  so a regroup covering 2,000 files would have paid 4,000 recomputes, each re-reading the
+  target's entire and growing file set. `internal/merge/service.go`,
+  `maintenance/itunes_regroup.go` and `maintenance/fs_regroup_xml.go` now use it. Both
+  regroup paths fall back to per-file moves if the batch fails, preserving the resilience
+  they had: a frozen plan can name a file that vanished before the apply, and one such
+  file must not block every other move in its group.
+
+- New `library.ai-parse` operation. A scan queues one per 200 candidate books;
+  they share a concurrency key so they run one at a time in the background
+  rather than opening dozens of concurrent LLM connections. Cancellable, and
+  visible in the operations UI with per-batch progress.
+
+  The queued batch writes only the fields it filled, and resolves its target by
+  row ID. If that row was demoted to a version-group member in the meantime, the
+  write is redirected to the group's primary rather than landing on the copy
+  nobody looks at.
+
+  Per-batch progress is reported through the operation, so a long batch is
+  visible in the UI and is not cancelled by the inactivity watchdog. The
+  operation reports what it actually did — batches attempted, books parsed,
+  save failures — into its own record, and fails if the AI phase stopped
+  early. It no longer reports a filename count it did not achieve.
+
+  Each queued book carries its database row ID, not just its file path. Organize
+  moves files in place under the library root (`ReOrganizeInPlace` is a real
+  `os.Rename` for every book already under it), so a path queued during a scan
+  can name nothing by the time the batch runs. The path is kept only as a
+  fallback for a row the ID no longer finds.
+
+- A manual workflow to delete orphan RC tags — `vX.Y.Z-rc.N` git tags with no GitHub
+  release attached. The RC cleanup workflow enumerates *releases* and deletes each one's
+  tag with it, so a tag whose release is already gone is invisible to it. 684 such tags
+  had accumulated, from RC series abandoned as far back as `v0.206.1`. They were inert
+  (the notes diff base resolves the newest stable tag, and the RC-count guard counts
+  releases) but bloated every clone and every `git ls-remote`. Ships dry-run by default,
+  refuses to run if any tag with a release leaks into the orphan list, and tolerates
+  per-tag failures so a rate limit cannot abort the sweep partway.
+
+### Changed
+
+- `dedup.breakdown-backfill` now reports a **band histogram** alongside its counts:
+  `band_counts` (CERTAIN/HIGH/MEDIUM/REVIEW plus a named `BELOW` bucket for
+  sub-REVIEW scores this op deliberately persists), `certain_signals_eq_1`,
+  `certain_primary_kind_counts` (CERTAIN rows bucketed by how many distinct
+  auto-resolve primary signal kinds they carry: `0`/`1`/`2+`), and
+  `certain_signal_sets` (CERTAIN rows grouped by their full distinct signal set).
+  The band alone is not the auto-merge gate — `dedup.auto-resolve` requires ≥2
+  distinct kinds from `exact_file`/`exact_acoustid`/`isbn_asin`/`metadata_hash` —
+  and since a nil breakdown is itself a refusal reason, an `apply=true` backfill
+  *creates* auto-merge eligibility that did not exist. The bucket is the
+  corroboration clause **evaluated alone**: not an upper bound (suppressors,
+  implausible audio and conflicting identifiers refuse independently) nor a
+  lower bound (a `0`/`1` row with a whole-book-signature `true_dup` label is
+  eligible anyway). The op's store surface stays `ListCandidates` +
+  `UpdateCandidateScore`. Counted on apply runs too.
+- `dedup.DistinctAutoResolvePrimaryKinds` is now exported and is the single
+  implementation of that corroboration rule; `autoResolveEligible` calls it
+  instead of inlining the allow-list, and its audit reason string is now in a
+  deterministic order rather than Go's map-iteration order.
+
+#### Consolidated ad-hoc `os.Getenv` reads into the existing cobra/viper config pipeline
+
+Following up on the 2026-08-20 configuration-option audit, replaced 25 direct
+`os.Getenv`/`os.Setenv` call sites scattered across `internal/ai`,
+`internal/database`, `internal/dedup`, `internal/itunes/service`,
+`internal/maintenance/jobs`, `internal/metadata`, `internal/plugins/acoustid`,
+`internal/plugins/maintenance`, `internal/search`, `internal/server`,
+`internal/telemetry`, `internal/transcribe`, and the `dedup-bench` CLI tools
+with reads from `config.AppConfig`, sourced through the same
+`viper.SetDefault`/`viper.BindEnv` mechanism every other setting in this repo
+already uses. Every one of these variables was previously read live at each
+call site instead of once at startup, so a running process could disagree with
+itself about a setting depending on which code path happened to read the env
+var first.
+
+New unified/renamed settings: `ACOUSTID_API_KEY`, `DEDUP_CHROMEM_LAZY`,
+`ITUNES_WRITEBACK_DRYRUN`, `FP_PARALLEL_WORKERS`, `WHISPER_CLIP_CACHE_DIR`,
+`WHISPER_BATCH_SLEEP_MS`, `OPENAI_BASE_URL` (widened from a dedup-bench-only
+override — it also governs `internal/ai`'s production OpenAI client),
+`ABS_AUTH_PROBE`, `ABS_ITUNES_POSITION_BACKFILL_USER_ID`,
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `LIST_WARMER_TRICKLE_INTERVAL_MS`,
+`LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS`, `BLEVE_DESCRIPTION_MAX_CHARS`, and
+per-provider metadata base-URL overrides `AUDIBLE_BASE_URL`,
+`OPENLIBRARY_BASE_URL`, `AUDNEXUS_BASE_URL`, `GOOGLE_BOOKS_BASE_URL` (now
+resolved through `config.AppConfig.MetadataSources[].BaseURL`). Consolidated
+`LIST_WARMER_HEAP_DELTA_MB` and its legacy alias `LIST_WARMER_MAX_HEAP_MB` into
+one viper key bound to both names, so either still works. Behavior is
+unchanged; only the read path moved from live process-env lookups to the
+config snapshot populated at `InitConfig()`.
+
+Two packages that could not import `internal/config` directly (an import-cycle
+constraint in `internal/database`, and a deliberate package-movability design
+in `internal/itunes/service/writeback_batcher.go`) got a package-level setter
+and a config-injected struct field respectively, matching existing idioms
+already used elsewhere in each package rather than introducing a new pattern.
+
+`.env.example` dropped `HOST`, `PORT`, `AO_DB`, and `AO_DIR` — all four were
+already dead per the audit (documented but never read by any Go code) — in
+favor of documenting the real keys (`--host`/`--port` flags, `ROOT_DIR`,
+`DATABASE_PATH`) and every newly consolidated variable above.
+
+- `dedup.breakdown-backfill` was run with `apply=true` against production: 18,311
+  pre-T015 pending candidates now carry a `ScoreBreakdown`, `Band` and
+  `FormulaVersion` (0 score errors, 0 update errors). No status, layer or
+  similarity was touched and no book was merged or deleted. Verified by a
+  follow-up dry run: `skipped_has_breakdown` went 838 → 19,149 and the remaining
+  759 targets are all zero-signal rows, which are unscorable by design.
+
+#### The review rail now says why entries are unreviewable, not just how many
+
+`unreviewable` was computed by subtracting the reviewable rows from the total.
+The number was right and useless: on the live library it read 8,532 with nothing
+to say about what caused it. The three cases need opposite remedies — a row
+whose book is gone can only be reaped, a row with no stored candidate can be
+refetched — and the subtraction happened far from the code that knew which was
+which.
+
+Each cause is now counted where it happens and reported as
+`unreviewable_by_cause`. The chip's tooltip names the actual split (3,354
+orphaned, 5,178 with no candidate) and the remedy each one calls for.
+`unreviewable` itself is unchanged: it is now summed from the causes rather than
+inferred, which is the same value.
+
+#### `sdkguard` is now a two-tier check with a tracked snapshot
+
+`tools/cmd/sdkguard` was restructured to enforce the policy it documents:
+
+- **Tier 1 (roots)** — the packages `pkg/plugin/sdk` imports *directly* must be
+  declared in `allowedRoots`. This is the SDK's public contract; widening it
+  requires a human edit and cannot be silenced by regenerating anything.
+- **Tier 2 (closure ratchet)** — the full transitive internal dependency set
+  must match the committed `tools/cmd/sdkguard/internal-deps.txt` exactly, in
+  **both** directions. New deps and stale entries both fail.
+
+Legitimate growth is accepted with
+`go run ./tools/cmd/sdkguard/main.go -update`, which rewrites that tracked file
+so the change lands in the pull request diff where a reviewer sees it, rather
+than as a stderr line in a job nobody reads. Verified with four negative
+controls: a forbidden direct import, an unrecorded new dependency, a stale
+snapshot entry (all exit 1), and the clean tree (exit 0).
+
+#### The tree is gofmt-clean, and stays that way
+
+`gofmt -l` reported **43 unformatted Go files across 24 packages**. All are now
+formatted, and a new `make fmt-check` target asserts it — wired into `make ci`
+and into the CI job alongside `sdkguard` and `bench-check`.
+
+This is the third instance of the pattern that produced those two guards, and it
+was found while fixing them: `grep -rn 'gofmt' .github/workflows/ Makefile`
+returned **zero hits**. Formatting was verified in neither CI nor the developer
+command, so drift accumulated with nothing to report it.
+
+The sweep and the gate landed together, in that order deliberately: a format gate
+that precedes its own sweep is red on 43 pre-existing files from its first run,
+which is the failure mode the `--enable-only nolintlint` comment in `ci.yml`
+describes for errcheck — a permanently-red job gets switched off by whoever sees
+it next.
+
+`fmt-check` reports rather than rewriting. A gate that silently reformats a
+contributor's working tree conceals the drift it exists to surface.
+
+**On inertness.** The sweep is *not* whitespace-only — a first pass assumed so and
+was wrong. Alongside indentation, `gofmt` split `stmt; os.Exit(1)` onto separate
+lines, expanded inline struct definitions to multi-line form, and normalised doc
+comments to the Go 1.19+ heading style. `git diff -w` is therefore not empty. What
+establishes that nothing changed semantically is that all 24 affected packages
+pass `go test -short` (22 with tests, 2 without) and `gofmt` is idempotent on the
+result.
+
+The CI job is renamed from `SDK Deps & Bench Build` to **`Repo Guards`**, since it
+now covers three checks rather than two. The old name was not yet referenced
+anywhere — it had not been added to the required-checks list.
+
+**Still reports rather than blocks.** As with the other two guards, `Repo Guards`
+is not among main's required checks (`Minimal CI / Minimal CI Summary`, `Require
+changelog fragment`, `TODO Fragment Headers`), so a change that re-breaks
+formatting goes red and can still merge. Making it binding is a branch-protection
+change.
+
+#### The metadata lane owns its own layout, like the other two
+
+`RegroupPanel` and `DupesPanel` were each extracted when their lane was
+ported, so `ReviewWorkspace`'s lane branch read as one line for regroup, one
+line for dupes, and sixty for metadata. The oldest lane was the only one still
+assembled inside the shell, purely because it predated the pattern the later
+ports established.
+
+`MetadataPanel` closes that. The shell now owns lane selection and the
+cross-lane chrome; each lane owns its layout. No behaviour changes — all 226
+review tests pass untouched.
+
+The stale-refetch confirmation deliberately stays in the shell. Refetching every
+stale row is thousands of calls to external metadata providers, and the dialog
+guarding it is cross-lane chrome sitting next to the rescore dialog. The panel
+raises the intent; the shell decides how to ask. A single-row refetch needs no
+dialog and is handled in the panel.
+
+#### Recorded why the Prometheus setup script is immune to the shell version's indentation bug
+
+`scripts/setup-prometheus-auth.py` builds its Prometheus job block from a fixed template rather
+than reading indentation out of the existing config, which is exactly why it never hit the crash
+that the older shell script did. Nothing about the script changed; a comment now says so, so the
+next person to compare the two does not have to re-derive it.
+
+#### `internal/database/store.go` — InitializeStore/CloseStore now synchronize globalStore through the existing mutex
+
+`InitializeStore` wrote the package-level `globalStore` bare (`globalStore = s`),
+and `CloseStore` read and nil'd it bare (`store := globalStore; globalStore = nil`)
+even though `GetGlobalStore`/`SetGlobalStore` already lock/unlock `globalStoreMu`
+correctly. `CloseStore` masked the resulting race with a `time.Sleep(100ms)`
+"brief pause to let in-flight goroutines notice the nil" comment — a workaround,
+not a fix. `InitializeStore` now calls the existing `SetGlobalStore(s)` setter,
+and `CloseStore` takes `globalStoreMu.Lock()` around its read-then-nil sequence,
+so a concurrent `GetGlobalStore()` reader can never observe a store that
+`CloseStore` is in the middle of closing. The sleep workaround is removed.
+Behavior is unchanged for every existing caller; only the synchronization
+tightened. Blast radius is test-only today — every non-test, non-comment caller
+of `GetGlobalStore()` was already absent from the codebase.
+
+#### `internal/database` test suite — cut `-short` wall-clock cost by ~23% (329s → 252s avg)
+
+Profiled `internal/database`'s `-short` test run (`go test -short -v -json`, ranked
+by per-test duration) and found the top 4 offenders were all in
+`memdb_warmup_writeloss_test.go`, together costing ~95s (29% of the whole
+package's ~323s of top-level test time). Their shared `seedBooksStore` helper
+built the widened warmup-race window by calling `CreateBook` 2,000–3,000 times
+in a loop; `CreateBook` commits its own `pebble.Sync` batch and issues a
+second, separately-synced `RecordPathChange` write per call, so seeding cost
+2n fsyncs for n books. `seedBooksStore` now writes all n `book:` rows in a
+single synced Pebble batch, skipping the path-history write these tests never
+read. On-disk row bytes and the scan surface the warmup tests exercise are
+unchanged (verified via `ListBookIDs`/`GetBookByID`, and `DeleteBook`'s
+path-index teardown is a no-op on a key that was never written) — every test's
+non-vacuous write/delete-during-warmup assertion still fires, and no test's
+`t.Skip` rate changed. Measured before/after, 2 runs each: `-short` averaged
+329s → 252s; the full (non-`-short`) suite averaged 386s → 300s. Test count
+(`grep -c '"Action":"run"'` on `-json` output) held at 921 before and after.
+
+Profiling also found a second, larger cost concentrated in `RunMigrations` —
+~90 test call sites across 7 files each re-run all 60 migrations from a fresh
+store (~0.9–2.4s per call, dominating `store_coverage_test.go`,
+`extra_coverage_test.go`, and `book_file_test.go`). That fix would mean either
+changing production migration-durability code or building a shared
+golden-template fixture reused by ~90 tests with different local helper
+signatures — out of scope for this change; filed as a follow-up in `todo.d/`.
+
+#### `CollectDuration` — narrow tagStore parameter to `database.BookTagSingletonStore`
+
+CollectDuration's tagStore parameter has been narrowed from the full dedup.Store interface to the narrower database.BookTagSingletonStore interface (3 methods: GetBookTagsDetailed, RemoveBookTagsByPrefix, AddBookTagWithSource). The function only calls database.EnsureSingletonBookTag, which requires only these three methods. Both existing call sites already satisfy the narrower type, so no call-site changes were required. Updated doc comments to reflect the narrowed requirement and clarify that dedup.Store already embeds this interface.
+
+#### August executive-summary roundup now covers through 2026-08-19
+
+The monthly roundup at `docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md`
+consolidated 22 individual executive summaries dated 2026-08-10 through
+2026-08-19 that had accumulated unlinked since the roundup's last pass. Each
+gets its own short, plain-language entry grouped by theme — the dead filter
+panel, requests that silently went to the wrong place, search returning zero
+results as if that were a neutral answer, records that claimed success or
+non-existence when neither was true, audio-file metadata, and the two
+infrastructure threads (the 580 MB startup read and the database-access
+narrowing). The "Individual write-ups this consolidates" line was updated from
+seven summaries (Aug 4–9) to 29 (Aug 4–19). No source summary was edited or
+deleted; where two summaries describe the same symptom differently (the
+catalogue rebuild gap and the trash-visibility bug both explaining the same
+"All Jobs and Classes" search), the roundup says so explicitly rather than
+picking one account.
+
+#### Execution manifest now records the five human gates as settled, not pending
+
+`docs/plans/2026-07-10-execution-manifest.md` still presented INIT-5 T2, INIT-6,
+INIT-7, INIT-8 and INIT-9's TASK-06 REPO-SIZE-1 as open STOP-FOR-HUMAN gates,
+tagged `DECISIONS-PENDING #1`–`#5`, with Phase C listing all five as decisions
+still to present. The owner answered all five via AskUserQuestion on 2026-08-21:
+INIT-5 T2, INIT-6 and INIT-8 parked, INIT-7's hold confirmed, and REPO-SIZE-1
+decided as Option (d) — forward-only hygiene plus a GitHub Support gc, with no
+history rewrite. Anyone reading the manifest was being told that work was blocked
+on a human when it was not.
+
+Each state was re-verified against the repo before being written down. Two details
+differ from the summary the update was drafted against: INIT-7 is recorded as
+"hold confirmed" rather than parked, because the owner's answer was "keep on hold"
+and `parked` is only the scout package's internal classification; and INIT-6's
+PR #1935 is recorded as merged — it is a plan doc that landed while the spec review
+it was written for never happened — rather than as still open. The status-column
+header, the 2026-07-17 status blockquote and the two Phase-A bullets that assumed
+INIT-5 T2 and REPO-SIZE-1 were still gated were refreshed to match.
+
+#### `TODO.md` — the 2026-05-01 re-audit close-out now records what was actually verified
+
+Item 42 ("2026-05-01 re-audit block close-out pass") claimed the whole
+TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10/PERF-1 finding set was resolved or moot. Re-running
+every check at HEAD found the claim right in eight places and wrong in one, and right for the
+wrong reason in another.
+
+DEAD-1 was recorded as resolved on a grep covering three of the four symbols the finding
+named. The fourth, `linkAsVersion` (`internal/itunes/service/importer.go:1780`, listed as
+R-5 evidence in `docs/archive/codebase-evaluation.md:107`), is still there: `gopls references`
+gives it exactly two references and both are tests. `staticcheck` U1000 counts in-package test
+usage as usage, so no linter was ever going to surface it. It is now spun out as its own
+`todo.d/` item instead of staying buried under a struck-through close-out — the failure mode
+this change exists to prevent, since a wrongly-closed item leaves nobody's list.
+
+TEST-2 was recorded from the test's *existence* and backing store, but the original finding
+was a test *failure*, so the test has now been run
+(`go test ./internal/database/ -run TestStoreAdditionalCoverageSQLite -count=1` → `ok`).
+PERF-1's note is sharpened from "obsolete as scoped" to superseded-with-numbers: the finding
+asked for pagination, and `19e129d48` deliberately moved eleven more whole-library ops to the
+unbounded `GetAllBooksCore(0,0)` form to stop fixed-limit truncation — 58 such call sites now
+exist, up from ~20. What retired the OOM risk was the switch to the ~50x lighter Core-typed
+read (the full-`Book` `GetAllBooks` method no longer exists in production at all — its 32
+remaining non-test occurrences are all comments), not pagination, so residual memory
+exposure is reduced rather than eliminated.
+
+The remaining sub-items (CTX-4, LOG-5, R-9, R-10, DEP-1a-d) re-verified clean, and the
+close-out is re-anchored to the commit the checks were actually run against.
+
+#### Dedup docs truth-up — production's numbers no longer wear a "sandbox" label
+
+`docs/dedup/STATUS.md` presented a five-stage "Sandbox validation results" table whose
+purge-apply row read `purgeable=7,891, keep=278, review=2,150` over `10,319` scanned. Those
+are production's figures, matching the 2026-07-18 prod journal line verbatim, and the sandbox
+purge-apply wave (T03) has never run. The table is now split: production's stage numbers sit
+under the production section with the journal line quoted as their source, and the sandbox
+rows that depend on T03 read `PENDING — awaiting T03 sandbox purge wave` rather than being
+back-filled with prod's number. The sandbox classify pass keeps its own genuine measurement
+(purgeable 7,878 of 10,304 scanned) — a different population from prod's, 15 candidates
+apart, not a drift; both breakdowns sum exactly to their own totals. The section heading
+"PROVEN END-TO-END ON SANDBOX" was corrected, since the apply steps were only ever proven on
+production.
+
+Every surviving `9,074` / `10,319` mention in `STATUS.md` and
+`docs/operations/pending-prod-actions.md` is now labelled as the 2026-07-17 baseline, and the
+post-drain `1,311` is date-stamped rather than stated in the present tense: prod measured
+`5,947` exact-pending on 2026-08-12, a ~4.5× regrowth in 3.5 weeks, so the candidate source —
+not the queue size — is the open problem. `pending-prod-actions.md` gains the prod journal
+line as provenance for the CONS-10/PH-2 rows, a new row for the measured regrowth carrying a
+"measure before purging again" gate, and a caveat on its own "dedup mutations: sandbox-first"
+standing rule recording that the drain did not meet it — the prod apply had no sandbox apply
+to diff against, and T03 is still owed.
+
+#### Every live doc under `docs/` now carries the mandatory file-version header
+
+`CLAUDE.md` requires a `file`/`version`/`guid`/`last-edited` header block on every
+file, but 37 live (non-archived) docs predated strict enforcement and had none, so
+the repo could not tell "this doc was never headered" apart from "someone dropped
+the header on an edit". All 37 now carry the standard four-line HTML-comment block,
+each with its own freshly generated guid. The change is purely additive — four
+comment lines plus a blank line ahead of the existing content, no prose touched.
+
+Two files needed more than a blind prepend. The ADRs
+`docs/architecture/2026-06-01-server-handler-extraction-design.md` and
+`docs/architecture/embedding-store-db-selection.md` carry bold-label
+`**Date:**`/`**Status:**`/`**Author:**` metadata; that is content, not a competing
+header format, so the comment block goes above it rather than replacing it.
+`docs/development/writing-a-plugin.md` already had all four fields, but wrapped in a
+single `<!-- ... -->` block comment — the only doc of 860 in that shape, and
+invisible to the repo-wide `^<!-- file:` presence check. It was converted to the
+one-line-per-field form the rest of the tree uses and bumped to 1.0.1, keeping its
+existing guid.
+
+The 21 files under `docs/superpowers/fleet-status/` and `docs/superpowers/fleet-tasks/`
+are agent-written tracking files, similar in spirit to the header-exempt `todo.d/` and
+`changelog.d/` fragments, but no exemption for them is documented anywhere in the repo.
+They are headered here on the standing rule that a documented exception beats an
+undocumented one; formally exempting them later is a separate decision.
+
+#### `ScoreOneResultWithBreakdown`'s zero-base path now goes through `scoreRecorder`
+
+The `base == 0` early return in `internal/metafetch/service_scoring.go`
+hand-built its single `ScoreStep` (base id, label, op, operand, running,
+detail) as a composite literal, duplicating the exact shape that
+`newScoreRecorder` already constructs and that
+`ApplyNonBaseAdjustmentsWithBreakdown`'s own base step already uses. A
+hand-built literal on one path and the shared recorder on the sibling path is
+how the two drift the first time a field is added to `ScoreStep` or the base
+step's construction changes — the recorder path gets the new field, the
+literal quietly doesn't.
+
+The branch now builds `rec := newScoreRecorder(0, "Title/author match",
+detail)` and returns `bd.Score, *bd` where `bd := rec.breakdown()` — both
+return values now come from the same recorder instance. The first pass at
+this change returned a hardcoded `0` alongside `*rec.breakdown()`; a mutation
+test (bumping the recorder's base from `0` to `1`) showed those two values
+can silently diverge (`breakdown.Score=1, returned score=0`) while every
+other test kept passing, including the very test meant to guard this path —
+because that test only checked the hardcoded literal, not the breakdown.
+Deriving both return values from `bd` closes that gap: the same mutation now
+fails `TestBreakdown_ZeroBaseIsExplained` directly, which was extended with
+explicit `Operand`/`Running`/`Score` value pins (previously it only checked
+`len(Steps)`, `Op`, non-empty `Detail`, and internal consistency — none of
+which catch a wrong-but-self-consistent value).
+
+Field values (`Score`, `Steps` length, `Detail` text, `Operand`, `Running`)
+are unchanged from before this refactor, so no golden fixture or existing
+consumer of the breakdown (review UI evidence panel) observes any behavior
+difference — this is a construction-source change, not an output change.
+
+Note: no existing test pins the zero-base step's exact `Detail` text (this
+was true before this change too); a typo there would not fail CI. That gap
+is pre-existing and out of scope for this refactor.
+
+After this change, `internal/metafetch/score_breakdown.go` is the only file
+in the package that constructs a `ScoreStep` composite literal outside test
+files — every other `ScoreStep` in the package is now produced by
+`scoreRecorder`.
+
+#### `serviceregistry` — typed accessors for the config and event-bus services (ARCH-8)
+
+`serviceregistry.Get[T](c, name)` lets a caller pick the string key and the return
+type `T` independently at each call site. Every existing call site already used a
+`Key*` constant (`keys.go`), so a misspelled key was already a compile error before
+this change — but the key and `T` could still be paired wrong (e.g.
+`Get[*plugin.EventBus](c, KeyConfig)`, a valid key with the wrong type): that
+type-checked and only panicked at the type assertion inside `Get` at runtime. Added
+`config.GetConfig(c)` and `plugin.GetEventBus(c)` — thin, named wrappers that fix
+the key and the return type together, in one function signature — for the two
+services consumed with a single consistent type across many builders: config (15
+call sites across 9 files) and eventbus (3 call sites across 2 files — 2 inside
+ServiceDef `Build` closures, 1 in post-build wiring code in
+`internal/server/registry_wire.go`'s `wireServerFromContainer`; eventbus is an
+always-built "core"-group leaf with no dependencies). A wrong key/type pairing
+for either service is now impossible to express, instead of a runtime panic. Both
+accessors resolve lazily at the same call-time point the old bare `Get[T]` calls
+did, so no registration-order behavior changed. Updated all 18 call sites (12
+files) to use the new accessors.
+
+What did NOT change: a service that is genuinely missing, or not declared in a
+builder's `Needs`, still panics — same message, same place, via the wrapped
+`Get[T]`. Making that compile-time-impossible would require typing the `Needs`
+declaration itself, which is a container redesign out of scope here.
+
+Left `serviceregistry.Get[T](c, serviceregistry.KeyStore)` untouched: that key is
+deliberately used with ~15-20 different narrowed interface types across consumers
+(the earlier store-decoupling work), so a single typed accessor can't serve it
+without forcing callers back onto one wide interface.
+
+#### `TagComparison` — remove dead expanded state and Collapse wrapper
+
+The `expanded` state in `TagComparison.tsx` was always true and never toggled — it was initialized with `useState(true)` and only ever set back to true. The e2e test that used to verify toggle behavior (`tag-comparison-toggle`) was intentionally deleted on 2026-08-09, indicating the UI toggle was deliberately dropped rather than merely lost. Removed the state variable, the `setExpanded(true)` call in the snapshot-select effect, and the surrounding `<Collapse>` wrapper, allowing the metadata table to always render without conditional visibility.
+
+#### `setupMockApi` dispatcher audited: none of the 10 remaining `startsWith()` catch-alls shadow a more-specific branch
+
+Audited every one of the 10 `pathname.startsWith(...)` prefix catch-alls in the
+E2E mock dispatcher (`web/tests/e2e/utils/test-helpers.ts`) for the hazard that
+was fixed earlier at `/api/v1/audiobooks/batch`: a specific branch placed *below*
+a prefix catch-all that also matches it, making the specific branch unreachable
+so the request silently returns the generic response instead. The audit covered
+both branch forms in the dispatcher — all 67 `pathname === '...'` exact matches
+and all 24 `pathname.match(/.../)` regex branches — and found **zero** shadowed
+branches, so no ordering change was needed and no runtime behaviour changed. Two
+latent (not currently shadowing) observations are recorded for follow-up: the
+`/api/v1/works` catch-all has no trailing slash, so it would also swallow a
+future `/api/v1/workspaces...` path, and the `/api/v1/backup/list` branch above
+it carries no HTTP-method guard.
+
+#### Removed the now-redundant `react-is` npm override from `web/package.json`
+
+The `"react-is": "^19.0.0"` entry in `web/package.json`'s `overrides` object was added
+by the MUI upgrade prep commit (`chore(web): MUI upgrade step 0 prep — normalize icon
+imports, pin react-is`) to force a React-19-compatible `react-is` while the tree was
+still mid-upgrade. That upgrade is finished: `react` is on `^19.2.8` and
+`@mui/material` on `^9.3.1`, and `@mui/material`/`@mui/utils` now declare
+`react-is: ^19.2.8` as a direct dependency of their own, so the root `react-is`
+resolves to 19.2.8 with or without the override. Keeping it only hid the fact that
+MUI no longer needs the help.
+
+Dropping the override lets three long-tail transitive consumers resolve `react-is`
+honestly instead of being force-upgraded across two major versions: `prop-types`
+(`^16.13.1`) and `hoist-non-react-statics` (`^16.7.0`) now get a nested 16.13.1, and
+the dev-only `pretty-format` (`^17.0.1`) gets a nested 17.0.2. That is three added
+lockfile entries and is correct semver behavior, not a regression — the root
+`react-is` that MUI and application code resolve is unchanged at 19.2.8, and nothing
+under `web/src` imports `react-is` directly. `npm run build`, `npm run lint`,
+`npx tsc --noEmit`, and all 752 tests across 91 files stay green, and `npm audit`
+still reports 0 vulnerabilities. The two remaining overrides (`minimatch`,
+`brace-expansion`) are security pins and were deliberately left alone.
+
+#### ABS timeBase field documented as permanent allowance
+
+Added explanatory comment to the hardcoded `timeBase: "1/1000"` value in the ABS file-to-DTO mapper. The real ABS reports ffprobe's actual stream time_base, but this codebase does not capture it at import, and no known client divides by this value. Per owner decision 2026-08-12, the field is set to a fixed placeholder rather than adding an ingest field and backfill for a value nothing consumes. The allowance should be revisited only if a client is found to actually use timeBase.
+
+#### iTunes `ListBooks` search path no longer materializes every match at once
+
+`ITunesHandler.ListBooks`'s search path called `store.SearchBooks(search, 0, 0)`
+— `limit=0` means "no limit" — to materialize every substring match before
+post-filtering for a non-empty `ITunesPersistentID`, since `SearchBooks` has no
+PID filter of its own. On a large library a single broad query could pull the
+whole matching set into memory on a request path (PERF-4).
+
+Bounded the fetch to a new `itunesSearchOverfetchWindow = 10000` constant,
+mirroring the existing `searchPostFilterWindow` over-fetch-then-post-filter
+precedent in `internal/audiobooks/service_query.go`. When the window is
+exhausted, the handler now logs `slog.Warn` with the query and window size so a
+truncated result is never silently reported as complete — the PID-narrowing
+behavior is otherwise unchanged, since a naive small limit could hide
+legitimate iTunes-linked matches found further down the scan. A `search=""`
+request is unaffected: it already takes the separate
+`ListBooksByITunesPID` pushdown path.
+
+**What this does not change:** the underlying scan still walks the entire
+`book:*` keyspace. `PebbleStore.SearchBooks` has no cursor — it restarts at
+`iter.First()` and counts forward — so the window only stops the walk early on
+queries that match more than 10000 books. Typical queries match far fewer and
+scan exactly as much as before; what is bounded is the memory the handler
+holds, not the work the store does. Giving that path a real seek is a separate
+change.
+
+#### Task-scheduler and maintenance-window endpoints moved off the legacy v1 operations handler
+
+`GET /tasks`, `POST /tasks/:name/run`, `PUT /tasks/:name`, `POST
+/maintenance-window/run`, `GET /maintenance-window/status`, and `PUT
+/maintenance-window/config` now live on their own `SchedulerHandler`
+(`internal/server/handlers/scheduler_admin.go`) instead of
+`internal/server/handlers/operations.Handler`. These six routes are scheduler
+configuration and control, not v1 operation records, and were never coupled
+to the legacy `operations` table — bundling them with the v1 handler meant
+retiring that legacy surface elsewhere in this backlog would have read as
+"delete task scheduling." Route paths, request/response shapes, and
+permissions (`auth.PermSettingsManage` throughout) are unchanged; this is
+purely an internal code-organization move with no behavior change.
+
+#### Log ABS_API_ENABLED's actual boot-time value unconditionally
+
+The ABS Audiobookshelf-compatible surface now logs its enabled/disabled state on every boot, regardless of whether it is active. Previously, when ABS_API_ENABLED was false (the default), the boot sequence would log nothing about ABS, making it impossible to verify the feature's state by examining logs. Now operators can always determine the ABS configuration at boot time by grepping production logs for the new unconditional log line, without requiring access to the deployed configuration file.
+
+#### TODO.md — Tier A close-out (Wave 1)
+
+TODO: closed 8 stale items verified against HEAD (2026-08-21 master-plan Wave 1).
+
+- Starting a second AI author scan while one is already running now queues it
+  behind the first instead of running both at once. The scan is a paid
+  whole-library AI pass, and two concurrent runs were almost always an accidental
+  double-click.
+
+- **iTunes import and sync no longer create legacy v1 operation rows.** Both ops
+  now run entirely on operations v2: the id returned by `POST /itunes/import` and
+  `POST /itunes/sync` names a v2 run, and the import-status endpoints read that
+  row. The response shape is unchanged, but `status` now reports the full v2
+  vocabulary (`queued`, `running`, `completed`, `failed`, `canceled`,
+  `interrupted_*`) instead of the narrower v1 set it was mirrored into.
+
+#### OpenLibrary download and import report enqueue failures
+
+Both endpoints used to answer `202 Accepted` with `"message": "download
+started"` even when the work could not be queued, falling back to running it in
+a detached goroutine under an id that tracked nothing — no progress, no
+cancellation, no resume, and no record afterwards that it had run. They now
+report the failure instead.
+
+- **iTunes path-reconcile and path-repair no longer create legacy v1 operation
+  rows.** Both are now native v2 operations, so what happens to an interrupted
+  run is decided solely by the operation's own `ResumePolicy` instead of by two
+  mechanisms that disagreed. Neither auto-resumes after a restart — a six-hour
+  library-writing operation that restarts itself on every deploy is a known way
+  to jam the work queue — so re-trigger by hand if a run is interrupted.
+- Both endpoints now return `{operation_id, status}` (repair also echoes
+  `dry_run`) instead of a full legacy operation record. No UI consumes these;
+  they are operator endpoints.
+
+- **Author merge and production-author resolution no longer create legacy
+  operation records.** Both are now native v2 operations. The undo/provenance
+  ledger they write is unaffected — it is keyed per operation and read per book,
+  and both sides moved together.
+
+- **The duplicate-detection actions no longer create legacy operation records.**
+  All eight are now native v2 operations. The undo/provenance ledger that series
+  merge and series prune write is unaffected: it is keyed by the operation id
+  that writes it and read back per book, and both sides moved together.
+
+#### Scheduler uses the real dedup parameter types
+
+Three scheduled dedup tasks declared their own local copies of parameter structs
+that live in `internal/dedup`. A copy is coupled to the real type only by its
+JSON field names, so the two drift apart silently — and all three had:
+they still carried a `legacy_op_id` the operations stopped reading, and the
+series-prune copy had additionally never gained the `detail` field the real type
+has. They now use the real types, so the compiler catches any future divergence.
+
+- Metadata candidate fetches are now tracked entirely in the current operations
+  system rather than being mirrored into the older one. Fetches started before this
+  change stay fully visible in the Resume Review picker and the review screens —
+  both are read together.
+- Candidate fetches now appear with the correct label in the activity feed.
+
+- Folder auto-scans and batch metadata write-backs are tracked entirely in the current
+  operations system. Neither writes a row into the older one any more.
+
+- Reconcile scans and applies are now tracked entirely in the current operations
+  system. Scans run before this change stay visible, with their previews intact —
+  the "latest scan" view reads both the old and new records together.
+
+#### Scanner's permanent-AI-failure check now reuses internal/ai's typed classification
+
+`isPermanentAIFailure` re-parsed the error text on every call to guess whether
+an AI backend failure was permanent (billing, auth, revoked key) or transient,
+even though `internal/ai`'s `DoWithRetry` already classifies OpenAI API errors
+against the real `openai-go` SDK error type and wraps confirmed-permanent ones
+in the exported `*ai.PermanentError`. `isPermanentAIFailure` now checks
+`errors.As(err, &permErr)` for that type first, falling back to the existing
+substring-marker list only for errors that never went through `DoWithRetry` or
+that didn't come back as a structured `*openai.Error` (a real possibility for
+an OpenAI-compatible-but-not-quite baseURL, e.g. Ollama).
+
+The marker list drops the two generic HTTP-status-text entries
+(`"401 Unauthorized"`, `"403 Forbidden"`): any real `*openai.Error` producing
+that text already carries `StatusCode` 401/403, which the typed classifier
+catches unconditionally, so `DoWithRetry` has already wrapped it in
+`*ai.PermanentError` by the time this code runs. The provider-specific code
+markers (`insufficient_quota`, `credit_balance_exhausted`, `invalid_api_key`,
+`account_deactivated`, plus the Anthropic markers) are kept: the production
+quota error this package's tests are built from carries
+`"type": "insufficient_quota"` but `"code": "credit_balance_exhausted"`, and
+the typed classifier's HTTP-429 branch only matches `Code == "insufficient_quota"`
+— so that real-world response is *not* covered by the typed path and still
+needs the text fallback.
+
+All eight existing table-driven cases in `ai_failure_test.go` keep their
+original verdict under the new implementation, verified by running them
+against it before any test changes. Two new tests cover the typed path
+directly: `TestIsPermanentAIFailure_TypedPermanentError` (a bare
+`*ai.PermanentError` with no marker substring in its message still returns
+true) and `TestIsPermanentAIFailure_TransientErrorNotFlagged` (a plain
+network-timeout error stays false).
+
+#### Close out the six TODO items retired by the Haiku wave
+
+Five source items are marked done and one is annotated in place: the hardcoded ABS
+`timeBase`, the `CollectDuration` tagStore widening, the dead `store.go:17` doc
+reference, the unused `internal/scanner/mocks` package, ABS gap N-5, and the
+`ChapterConsolidationThresholdMin` factory-reset omission.
+
+N-5 is struck through rather than checkbox-ticked because it is a numbered
+sub-item under the ABS coverage-gaps group, matching how N-6 was already closed.
+The `ChapterConsolidationThresholdMin` finding is annotated inline rather than
+ticked because it is one of seven findings inside the CFG-AUDIT triage group —
+ticking the group would have falsely closed the other six.
+
+The wave merged seven PRs but retires six TODO items. TASK-015 (stop committing
+`series_dedup.py`'s generated caches) shipped in it and closes no checkbox: its
+source line is the REPO-SIZE-1 numbered entry, which is a stop-for-human
+decision the task does not resolve.
+
+- Maintenance jobs now record a single operation instead of two. Starting a job used to
+  create a row in the old operations table *and* a row in the current one; the old row was
+  never shown anywhere — the operations timeline and the activity bell both stopped reading
+  it some time ago — but it was still swept on every restart, which is how finished jobs
+  could reappear as "pending" and be resumed a second time. The job's own operation ID is now
+  the only one, and it is the ID the API returns, so an operation you start is one you can
+  actually look up.
+- An interrupted maintenance job now resumes with the `dry_run` the operator actually chose,
+  read back from the operation itself. It previously had to be reconstructed from a separate
+  saved copy, falling back to the job's advertised default when that copy was missing.
+
+- Removed two dead method declarations from the scheduler's store interface.
+  `CreateOperation` and `UpdateOperationError` were declared as requirements but
+  called from nowhere in the package; with the last v1 operation minter retired,
+  re-measuring the interface against the compiler enumerated five methods rather
+  than the seven its comment claimed. No behaviour change.
+
+#### Book detail's version-group chip now shows how many versions there are
+
+The chip read "Version Group Linked" — present but silent about size, unlike
+the iTunes chip rendered directly beside it, which has always carried its PID
+count. It now reads `Version Group (N)`, counting the same `versions` array
+that `BookDetailVersionGroup` renders below it rather than a separately
+fetched number, so the header and the tray cannot disagree.
+
+The count mirrors that component's own fallback (`versions.length > 0 ?
+versions : [book]`): before the array loads, the tray still lists one row, so
+the header reads `(1)` rather than `(0)`. A count contradicting the list
+underneath it would be worse than no count at all.
+
+The "Primary Version" marker this was grouped with was **not** missing — it has
+been present since `c3638b221` and is unchanged here. It now has test coverage,
+along with the count: the chip's absence for an ungrouped book, its presence
+and value for a grouped one, and the primary/alternate distinction.
+
+- **Library scans spend far less time waiting on AI filename parsing.** When a
+  book's tags don't yield a usable title, the scan asks a language model to
+  parse it from the filename. Those requests were issued strictly one at a time,
+  once per 500-book chunk — on a 40,000-book library that was the single largest
+  contributor to scan wall-clock, ahead of reading the files themselves. They
+  now run a few at a time against the same backend, with the existing per-batch
+  pacing preserved so the request rate stays modest. Scans that abort AI parsing
+  because the backend is down still do so, and now stop sooner.
+
+#### The series-normalize affected-book list stays on the filtered getter
+
+A previous entry widened `executeSeriesNormalizeCore`'s affected-book list to the
+complete set, on the reasoning that a row the merge repoints should also have its
+file moved. **That reasoning was wrong and the change has been reverted.**
+
+`affectedBookIDs` is not a record of what was repointed — it is the worklist for
+`ReOrganizeInPlace` and the tag write-back, so it decides which *files* are
+touched. The organizer deliberately never organizes a non-primary version while a
+primary exists in its version group, and `duplicates_ops.go` calls
+`ReOrganizeInPlace` directly, bypassing that filter. Widening the list therefore
+did not keep row and file in sync; it overrode organize policy from the outside.
+
+It would also have collided. The default folder and file naming patterns carry no
+codec, quality or edition variable, so a primary and its alternate rip compute the
+**same** destination path — one would claim it and the other would be refused, with
+the winner decided by emission order rather than by which copy is primary.
+
+Repointing an alternate rip and moving its file are separate questions with
+different answers. Only the first belongs in the stranding fix.
+
+#### A residual was renamed because its old name understated it
+
+`SERIES-MERGE-TRASHED-ROWS-RESIDUAL` is now `SERIES-MERGE-UNGUARDED-DENOMINATOR`.
+
+Every guard added by the series-merge work counts against *what the membership
+getter returned*, and that getter reads the in-memory index unconditionally when
+warm, with no completeness check of its own. Two populations sit outside the guard,
+not one:
+
+- **Books in the trash**, excluded by design. Latent — it bites when one is restored.
+- **Books the in-memory index has lost** while their on-disk row survives. There are
+  four documented causes, one of which needs no restart. That is a **live, primary,
+  untrashed** book: the getter never returns it, the guard's failure count stays at
+  zero, the delete proceeds, and the row is stranded immediately with nothing
+  raised.
+
+The second is structurally the same defect this work removed from the
+series-renumbering job — a guard whose sample space is the filtered getter's own
+output, so the rows the bug lives on can never trip it. It was reintroduced one
+layer up while fixing the original.
+
+The two halves share one fix but are not one decision: refusing on a trashed row
+changes what a healthy run does, while refusing on a lost index row only fires when
+the store is already known-degraded and prevents immediate loss. The second is worth
+splitting out if the first stalls.
+
+- **Renamed the misleading rescan endpoint.** `POST /audiobooks/:id/rescan`
+  never caused a rescan: it re-checks file sizes on disk and corrects them,
+  without re-reading tags or audio. It is now
+  `POST /audiobooks/:id/reconcile-files`, and the UI button is labelled
+  **Reconcile File Sizes**. The old `/rescan` path still works and still does
+  exactly what it always did, so nothing that calls it changes behaviour.
+- The book detail page's folder-rescan button is now labelled **Rescan Whole
+  Folder** and warns that some folders hold over a thousand files.
+
+- **Correction to the previous release note.** The earlier fix was described as stopping multi-file books from being re-read and re-fingerprinted on every scan. That was measured and is **not** what it does — those books are still re-read every scan, for two separate reasons in how the scan record is stored. What the fix does deliver is that chapter lists are saved and the book is no longer counted as missing. Making scans actually skip unchanged multi-file books is still outstanding and is tracked as follow-up work.
+
+- Pinned `mockery` to **v3.7.4** (was v3.7.1) in `ci.yml`, `scripts/setup-mockery.sh` and
+  the `Makefile` comments, and regenerated the affected mocks. The versions produced
+  different output, so a locally-regenerated mock failed the `Mock Freshness` gate.
+  Note that `ci.yml`'s own file header coincidentally reads `version: 3.7.1`; that is the
+  workflow file's version, not the mockery pin.
+
+- Removed a redundant recompute per transferred iTunes ID. Clearing an ID changes neither
+  runtime nor size, so recomputing the previous owner's totals was pure waste — inside the
+  method whose entire purpose is to avoid exactly that.
+
+- **The filename sequence-number vocabulary now lives in one place.** Deciding
+  "what track number does this filename carry" was implemented independently in
+  the importer (`scanner.extractSeqNumber`) and in the repair-side classifier
+  (`itunesservice.trackNum`), and the two had drifted: the importer had no
+  trailing-number pattern, so a folder of files named `Name 001`…`Name 080` read
+  as no sequence at all, while the repair classifier could read them the whole
+  time.
+
+  The shared vocabulary moves to `internal/trackseq`, and a conformance corpus is
+  asserted through each caller's own public entry point — so the next divergence
+  fails a test instead of shipping. That control is the point of the change; the
+  deduplication is a side effect.
+
+  The two *policies* are deliberately left separate. The importer asks "is this
+  folder one book?" and must bias against welding unrelated books together; the
+  repair classifier asks "are these existing rows an already-shattered book, and
+  what shape?" One function serving both biases would serve neither.
+
+### Removed
+
+#### The surfaces `/review` replaced
+
+`MetadataReviewDialog`, the standalone `ReviewQueue` page and `UnifiedDedupTab` are
+deleted, along with the "Legacy View" toggle on the dedup page. Everything they did
+lives in the three lanes of `/review`.
+
+The other nine dedup tabs stay. Only `UnifiedDedupTab` overlapped the dupes lane —
+author dedup, series dedup, split-books, reconcile, AI review, embedding clusters and
+AcoustID are separate tools the workspace does not cover. They are no longer framed
+as "legacy". The metadata search dialogs stay too: they *populate* candidates, which
+is the opposite of reviewing them, and they are the only callers of that endpoint.
+
+#### web: Delete the unreachable "Bulk Fetch Metadata" dialog and its dead handlers
+
+Removed the `Bulk Fetch Metadata` dialog from `LibraryDialogs.tsx` — its opening state, `bulkFetchDialogOpen`, was only ever initialized `false` and never set `true` anywhere in `web/src`, so the dialog could never be shown. Also removed the props (`bulkFetchDialogOpen`, `handleCancelBulkFetch`, `bulkFetchProgress`, `bulkFetchInProgress`, `handleBulkFetchMetadata`) from `LibraryDialogsProps`, the corresponding state/handlers in `Library.tsx` (`bulkFetchCancelRef`, `bulkFetchDialogOpen`/`setBulkFetchDialogOpen`, `bulkFetchInProgress`, `bulkFetchProgress`/`setBulkFetchProgress`, `handleCancelBulkFetch`), and the prop-passing block at the `<LibraryDialogs>` call site. `handleBulkFetchMetadata` itself was also removed: once the dialog's `onClick` handler was gone, it had no remaining callers — the live "Fetch Selected" button on the toolbar wires to the separate `handleFetchReview`/`api.batchFetchCandidates` flow, not to this one. The `hasSelection` prop on `LibraryDialogsProps` was removed too since the deleted dialog was its only consumer inside `LibraryDialogs.tsx`; `Library.tsx`'s own `hasSelection` value is untouched and still used elsewhere. `getResultLabel` and `BulkActionProgress` (still used by the surviving bulk-organize dialog) were left alone. No test asserted the removed dialog's presence.
+
+#### Unused `internal/scanner/mocks` generated package
+
+Deleted the unused generated mock package `internal/scanner/mocks/` which was no longer imported anywhere in the codebase. The package's internal/scanner tests already use a hand-written test double (fullMockScanner) to avoid import cycles, making the mockery-generated version redundant. Also removed the corresponding entry from `.mockery.yaml`.
+
+- The `audiobook_organizer_maintenance_resume_params_fallback_total` counter, which measured
+  a fallback that no longer exists. It was never part of a release; no alert or dashboard
+  referenced it.
+
+#### `isPathWithinTarget` in `internal/backup`
+
+Dead outside its own tests since the restore path moved to `safepath.Join`, and
+its containment test was the weaker `strings.Contains(rel, "..")` form rather
+than the `filepath.Rel` escape check the live path uses — a second, drifting
+copy of a security check, with six tests exercising a function production no
+longer calls. One of them, `TestIsPathWithinTargetRejectsAbsolutePath`, asserted
+in its body the opposite of what its name claimed. Removed along with its tests;
+`safepath` remains the single containment mechanism.
+
+#### A second, unreachable copy of this endpoint
+
+`internal/server/operations_v2_handlers.go` held a near-identical twin of the
+timeline handler plus two others, and no route registered any of them. Every symbol
+in the file was unused outside it.
+
+It mattered because the file came with its own tests, which built their own router
+and pointed it at the dead code. Anyone strengthening this endpoint's tests there
+would have watched them pass green while production behaviour never changed. The
+file and its tests are gone; the live handler's tests are in
+`internal/server/handlers/`.
+
+#### The timeline says which of its results predate the window it names
+
+Operations that are still running are returned however old they are — deliberately,
+because an operation that has not finished is current no matter when it started.
+A library scan running for nearly two hours once returned an *empty* timeline in
+production while it was logging once a second, which reads as "nothing is
+running."
+
+That is the right behaviour and it made the new self-describing window partly
+untrue. A scan queued three weeks ago and never finished answers a one-hour
+query with one result, under a stated window of one hour — which reads as "this
+job ran once in the last hour."
+
+Those rows are now counted separately, so the window the reply names is true of
+the rows it is claimed for. An answer that describes its own scope has to describe
+the results that escape that scope too, or it is just a more confident version of
+the wrong answer.
+
+### Fixed
+
+#### Bulk merge could act on more duplicates than were on screen
+
+The control reads "Merge everything matching this filter", but the endpoint
+behind it never accepted a band — and band is the primary filter on that
+screen. Narrowing to one band and pressing it merged every pending candidate in
+the library. Merges are the hardest operation here to undo, so this could not
+be discovered safely.
+
+Band and book now travel with the request. The "both unmatched" filter cannot
+be expressed by that endpoint at all, because it describes the two books rather
+than the pair, so the action is refused outright while that filter is on rather
+than quietly sent without it. Now that everything else narrows correctly, the
+filter looks more trustworthy than it did, which makes the one field that
+cannot travel more dangerous rather than less.
+
+#### "Show duplicates of this book" found nothing unless it was on the first page
+
+Opening a book's duplicates from the fingerprint column filtered the rows
+already loaded rather than asking the server, so a book whose duplicate sat
+further down the list showed an empty result underneath a banner naming that
+book. The filter is now applied server-side, which also makes the count beside
+it honest and the empty state truthful — it can finally say "no duplicate
+candidates for this book" and mean it.
+
+#### A `?book=` deep link fetched the whole library before narrowing
+
+Arriving at the dupes lane for a specific book rendered once with no filter applied,
+requested every pending candidate in the library, then threw that response away and
+asked again with the filter. The URL's two filters are now read once, above the lane,
+and passed in — so the first render is already correct and a deep link costs one
+request instead of two. The larger the library, the more the discarded one cost.
+
+#### Shift+A said "the current page" but selected only the search's matches
+
+The shortcut has always selected what is on screen, which is the right behaviour --
+staging rows a reviewer cannot see for an irreversible merge is not a feature. The
+help text described something larger. The label now matches, and says that the search
+narrows it.
+
+- **A server started without `--dir`/`root_dir` registered ZERO operations and still
+  reported healthy.** Op registration in `internal/server/server.go` was wrapped in
+  `if config.AppConfig.RootDir != ""` for test convenience, which silently dropped the
+  maintenance plugin *and* the entire `opRegistrars` loop — measured at **145 op defs
+  (99 of them maintenance)** that do not register when `RootDir` is unset. Registration
+  is now unconditional; the tests set up the `UpsertOpDefinitionV2` expectation they
+  were avoiding, via a shared `allowOpDefinitionUpserts` helper.
+  `TestNewServer_RegistersOpsWithEmptyRootDir` pins it, and was verified to fail with
+  the gate restored.
+
+#### The review summary counted books it could not show you
+
+The metadata review rail reported "10,730 matched" and "14,306 total" over a list that
+could never hold more than 5,774 rows. The counts were tallied over every cache entry
+whose book still existed, while the list additionally dropped any entry with no stored
+candidate — and the `errors` field was hardcoded to zero, so nothing in the response
+hinted that roughly 5,178 rows had gone missing between the count and the list.
+
+The endpoint now decides what is reviewable first and derives the counts, the page and
+the total from that one set, so they cannot disagree. `errors` reports real decode
+failures. What the cache holds but nobody can act on — a missing book, or an entry with
+no candidate ever stored — is reported separately as `unreviewable` and shown as its own
+chip, because the honest answer to "why is this number smaller than I expected" is a
+number, not a subtraction the reviewer has to work out.
+
+#### "Approve all" said 484 and meant 714
+
+Bulk approve is scoped by hold type on the server, so it acts on every pending hold of
+that type — but the queue only ever loaded the first 500 holds and labelled each bucket
+with what it had loaded. On the current library that is a bucket reading 484 over a
+button that decides 714, with no way to tell from the screen.
+
+The bucket now shows both numbers when they differ, and the button names the scope it
+actually has: **"Approve all 714"**. The per-type totals come from the count the sidebar
+badge already polls, so the honest number costs nothing to obtain.
+
+#### One bucket's skipped-holds report erased another's
+
+Bulk approve runs each hold's own recommendation and refuses the undecidable ones, then
+lists what it skipped so those holds can be handled by hand. That list was stored in a
+single slot, so acting on a second bucket silently discarded the first bucket's list
+while those holds were still sitting there waiting for a decision. Reports are now kept
+per type and dismissed individually.
+
+#### Leaving the lane no longer leaves its request running
+
+The review queue's fetch could not be cancelled — the request simply ran to completion
+against a lane nobody was looking at. It now aborts, like the other two lanes.
+
+#### `/review` deep links open the lane they are about
+
+The workspace always opened on the metadata lane regardless of the URL, which made
+the dupes lane's own entry point unreachable: a `?book=` link arrived, metadata
+opened, and because each lane only fetches while it is the visible one, the
+server-side entity filter that link exists to trigger never ran.
+
+`/review` now reads the lane from the URL — `?lane=` when named, otherwise inferred
+from `?book=` / `?band=`, falling back to metadata. The lane is seeded from the URL
+at mount rather than mirrored to it, so switching lanes still costs exactly one
+fetch.
+
+#### "View duplicates" on a book page now goes somewhere
+
+The duplicate-metadata warning linked to `/dedup/candidates`, a route the app has
+never registered, as a raw anchor, with no book id. It now links to the dupes lane
+of `/review` for that specific book, through the router.
+
+#### Rescore no longer reports a dry run as the real thing
+
+The workspace's "Rescore" command called the rescore endpoint with `apply=false` and
+reported "Rescore started". It inspected candidates and wrote nothing. It is now two
+commands — `Rescore (dry run)` and `Rescore and apply…` — with the applying one
+behind a confirmation.
+
+#### "Review" in the operations bell no longer reloads the app
+
+It set `window.location.href` to reach a modal over the library. It navigates to
+`/review`.
+
+#### Auto-resolve's suppressor guard could never fire
+
+`autoResolveEligible` refused a CERTAIN pair whose `ScoreBreakdown.Suppressors`
+list was non-empty — but no production code path has ever populated that field.
+`unified.ComposeScore` is its only writer, and all three live callers
+(`engine.go`, `rescore.go`, `calibrate_composite.go`) pass `nil`. The scan path
+compounds it: a pair that fails `PairEligibility` is DELETED outright rather
+than scored, so a suppressed pair never acquires a stored breakdown at all. An
+empty list was therefore the only value the code could persist, and the guard
+passed vacuously on every candidate in the library — not just the 18,311 rows
+written by `dedup.breakdown-backfill`.
+
+`autoResolveEligible` now evaluates `PairEligibility(bookA, bookB)` LIVE at the
+gate. Both book records are already in hand there and the predicate is pure with
+no I/O, so this costs nothing per pair. It also catches a pair that became
+suppressed after its score was written — a version group assigned later, say —
+which a stored snapshot could not.
+
+The stored-list check is retained ahead of it rather than replaced, so a legacy
+row written by an older binary that did record suppressors still refuses, with a
+distinct reason string in the audit sample saying which guard fired.
+
+The pre-existing regression test set `Suppressors` directly on the fixture, so
+it passed against the broken code. The two new cases leave the stored list empty
+and make the books themselves suppressed — the shape real data actually takes —
+and both fail when the live check is removed.
+
+#### A failed metadata fetch no longer stacks a wall of identical toasts
+
+The library page watches the operations store for the metadata fetch it started,
+but never forgot the operation once it finished. The store rebuilds its
+operation array from scratch on every poll, so the watcher re-ran on every tick
+and re-fired its result. Error toasts do not auto-dismiss, so a failed fetch
+piled up identical, undismissable "Metadata fetch failed." toasts until it hit
+the notification cap. Success had the same fault, bounded only by navigating
+away.
+
+#### `make ci`'s staticcheck gate is green again
+
+Three findings had accumulated on `main` and reproduced on a clean checkout, so
+every `make ci` run was red before any new work started. The gate is not a
+required check today, which is how they survived.
+
+Two were genuinely inert and are simply removed: a redundant `score =
+asinRec.score` in the ASIN branch of `service_search.go` that was overwritten
+unconditionally eleven lines later, and a vestigial `errs` field on the
+`captureRegistry` test double, whose `RegisterOp` hardcodes `return nil` and
+never appended to it.
+
+The third was not inert. `scoreRecorder.add` was reported unused, but it was
+unused because `ApplyNonBaseAdjustmentsWithBreakdown` hand-built its own
+`ScoreStep` literals instead of going through the recorder — an additive step
+that duplicated `add` field for field, and a multiplicative one that duplicated
+`mul`. Deleting `add` would have silenced the linter and left the duplication
+permanently unflagged, since nothing else would ever point at it. The function
+now uses `newScoreRecorder`/`mul`/`add`, which restores the invariant the
+recorder exists for: a factor cannot be applied without being recorded, because
+applying it *is* recording it.
+
+That conversion is covered by the golden fixtures that pin these totals
+bit-for-bit — verified by mutation rather than assumed, since a green suite
+proves nothing about a path it does not exercise: halving the rich-metadata
+bonus fails 11 assertions, halving the compilation penalty fails 7.
+
+#### The review lane now shows how old a cached candidate is
+
+The metadata cache has a 30-day TTL whose stated contract is that older entries
+stay readable and the UI flags them and offers a refresh. The review listing
+sent no timestamp at all, so there was nothing to flag with — and on the live
+library **10,949 of 10,952** cache entries are past that TTL, the oldest fetched
+three months ago. Every one of them was presented as though freshly fetched.
+
+Review rows now carry `fetched_at` and `is_fresh`, the rail shows how many of
+the rows in front of you are stale, and each stale row is marked with its actual
+age. Nothing is hidden or dropped: staleness is a caveat on the list, not a
+shortfall.
+
+#### The bench-tagged build compiles again
+
+`go build -tags bench ./...` had been broken since 2026-04-18. Commit `b6fe7c5a`
+("refactor: extract internal/dedup package from server") moved
+`AuthorDedupGroup` and `FindDuplicateAuthors` from `internal/server` to
+`internal/dedup` and updated `internal/server/bench.go`, but missed four call
+sites in `cmd/dedup_bench.go`, `cmd/dedup_bench_batch.go`,
+`cmd/dedup_bench_runner.go` and `cmd/dedup_bench_types.go`.
+
+Because those files sit behind `//go:build bench`, neither `go build ./...` nor
+`make ci` ever compiled them, so the breakage survived four months of green CI.
+The four references are repointed at `internal/dedup`; no conversion was needed,
+since `AuthorData.Authors` was already `[]database.Author`.
+
+#### `make sdkguard` passes again
+
+The SDK dependency guard had been failing since 2026-07-18 on three packages
+that leaked into `pkg/plugin/sdk`'s dependency tree: `internal/audioutil` (via
+`internal/fingerprint`), `internal/syncapi/progress` and `internal/cache` (both
+via `internal/database`).
+
+None of the three is a real contract violation — all are *transitive* deps of
+packages the guard already approved, invisible to SDK consumers. The guard's own
+doc comment claimed it allowed approved packages "and their own transitive
+dependencies", but it matched against a flat hand-maintained list, so every
+transitive dep that landed through an unrelated PR showed up as a violation.
+
+#### The reaper's report now records what happened, not what was planned
+
+Found by reading a real production report after the first apply: all 3,354
+deleted rows carried the reason `would reap`. The decision is recorded during
+the plan phase and the file is written after the apply, so the wording never
+caught up with the outcome. On a dry run that is accurate. On an apply it tells
+someone auditing the deletion that nothing was deleted.
+
+The sharper problem was underneath it. A row that was SPARED — because the book
+came back on the delete-time re-check, or because the delete itself failed — was
+written to the report identically to one that was destroyed. Those counts existed
+only in the summary line, so the file could say which rows were *candidates* but
+not which ones actually went. For an op whose report is the only record of what
+it destroyed, that is the one question it has to answer.
+
+Each attempted row is now restamped with its real outcome: `reaped` / `DELETED`,
+`spared-revived`, `delete-error`, or `recheck-error`, with the underlying error
+text where there was one. Rows the apply never attempted keep the plan's wording,
+and a dry run is unchanged — restamping those would claim deletions that never
+happened. The log line's samples are restamped too, so they cannot contradict the
+file they point at.
+
+- **The TODO collector could never push, and had not since 2026-08-10.** `main`
+  carried three required status checks while `todo-collect` commits with `[skip ci]`,
+  so the checks it was waiting on could never report and every push was rejected with
+  `GH006`. Ten days and 143 fragments had backed up. The required checks contradicted
+  `.github/branch-protection.json`, which has declared `"required_status_checks": null`
+  since January; removing them restored the repo to its own checked-in configuration.
+
+#### Deciding a duplicate pair no longer risks merging it twice
+
+Found while making the dupes lane faster to triage, which is what turns this
+from rare into routine. A decision is asynchronous and the refetch that reflects
+it is slower still. In between, the deciding row was unchanged and still read
+`status: pending`, so a second keypress at the same focus index dispatched
+against it again — merging one pair twice, irreversibly, while the pair the
+reviewer believed they had just decided stayed pending and unremarked.
+
+The obvious guard is wrong. Blocking the keyboard while a request is in flight
+drops keystrokes silently during every round-trip, which is the same defect
+wearing different clothes: the reviewer pressed a key, nothing happened, and
+they moved on believing it landed.
+
+A dispatched decision now suppresses its row immediately, before the await, so
+its id is unreachable from the handler at all. Focus advances to the next
+pending pair as a consequence rather than as a second mechanism that could
+disagree, and the refetch leaves the critical path.
+
+Two details carry the correctness. A failed decision puts its row back —
+otherwise an optimistic removal outlives the request that justified it and the
+pair drops out of the queue silently. And the suppression is retired by
+intersection with what the server returns, not cleared wholesale on any refetch:
+a row decided while a refetch was in flight is still pending in that response,
+and clearing on arrival would resurrect it and re-arm the double-merge.
+
+- **Auto-revert bug reports no longer assert a cause they cannot know.** A commit
+  with no CI run was labelled as carrying a skip-ci marker. That is only one of
+  several reasons a commit has no run — GitHub starts workflows for the tip of a
+  push only, so every interior commit of a rebase-merged PR also lands with zero
+  runs. Issue #2652 blamed a marker on three such commits, none of which had one.
+  The label is now "no gate run — never verified", with no cause attached.
+- **A failed job lookup can no longer put a raw HTTP error body into the bug
+  report.** `gh api` prints its error body on stdout, so a plain redirect captured
+  it and `|| true` hid that anything went wrong. A dry run filed a report whose
+  "Failing jobs" list was the four lines of a 404 error object. The output is now
+  used only when the call actually succeeds, and a manual dispatch (which has no
+  gate run to read) skips the lookup instead of 404-ing into it.
+
+#### A failed hash-column update is no longer silent
+
+`WriteTagsSafe` ended with `_ = opts.Store.UpdateBookFileHashes(...)`. A
+failure there let the columns drift away from the files on disk with no record
+anywhere. It still cannot fail the write — the bytes are already committed, and
+returning an error would invite a retry that writes the file twice — but it is
+now logged with the file and row it concerns, and the ledger holds the digests
+regardless.
+
+#### A merge you trigger by hand is now as reversible as one the system makes
+
+`Engine.UnmergeAuto` reverts both books to their pre-merge snapshots, and it
+only ever worked for Tier-1 auto-merges. The journal it reads from was written
+in exactly one place — `autoMergeCertain` — so a merge dispatched from the
+review lane recorded no pre-merge snapshot timestamps at all. There was nothing
+to revert *to*.
+
+That put the guarantee precisely backwards. The merges the system makes on its
+own, after scoring a pair as CERTAIN, were the reversible ones. The merges a
+person triggers by keystroke while triaging a queue — faster, less deliberated,
+and far more likely to be a mistake — were the ones with no undo.
+
+The sequence now lives in `Engine.MergeJournaled` and both paths share it:
+capture the pre-merge `book_ver` baselines, write a provisional journal entry,
+merge, then patch the same key with the authoritative winner, loser, and
+snapshot timestamps. A provisional-write failure remains a **hard** error that
+skips the merge, because an irreversible merge with no undo key is a worse
+outcome than no merge at all — and that invariant now protects both callers
+instead of one.
+
+The review-lane endpoint refuses with 503 when the dedup engine is unavailable,
+rather than falling back to the un-journalled merge service. Silently making a
+merge irreversible is the failure mode this exists to prevent, so it is stated
+rather than hidden, matching how every other engine-dependent endpoint on that
+handler already behaves.
+
+This closes the first of the three gaps recorded under `MERGE-UNDO`. The other
+two — reversing the external-ID reassignment, and an endpoint to invoke the
+undo — are unchanged and still open. Journalling is the prerequisite for both:
+neither can be built against merges that recorded nothing.
+
+#### Activity log `Summarize` no longer folds multiple days into one summary row
+
+`CompactByDay` (the daily-digest step) has always grouped strictly by calendar
+day. `Summarize` — the older-tier rollup that runs alongside it in the same
+maintenance job — did not: it grouped only by `(operation_id, type)`. Routine
+entries commonly share both fields empty (e.g. `scan_progress`), so every such
+entry across the entire summarization window (default 90 days) collapsed into
+a single `"N entries (first to last)"` row, silently swallowing weeks or
+months of history into one event instead of one per day.
+
+`Summarize` in both `PebbleActivityStore` and `NutsActivityStore` now includes
+the entry's calendar day (UTC) in the group key, matching `CompactByDay`'s
+boundary. One summary row is written per day per `(operation_id, type)` group.
+
+#### `is_primary_version` in the listing response now reports the same boolean the filter used
+
+`GET /api/v1/audiobooks` returned rows whose serialized `is_primary_version`
+contradicted the filter that had just selected them. Every filter in the
+pipeline resolves a nil `IsPrimaryVersion` to **primary** — the memdb index
+declares it structurally (`memdb_schema.go`, `effectiveBoolFieldIndex{Default:
+true}`), `pebble_store.go`'s filter matches it so the degraded read path cannot
+answer differently, and PR #2786 brought the in-Go post-filters into line — but
+the serializer passed the raw nullable pointer straight through. Because
+`database.Book` tags the field `json:"is_primary_version,omitempty"`, a nil
+pointer omitted the key **entirely**: a client that asked for
+`?is_primary_version=true` got back rows with no `is_primary_version` field at
+all, which the web UI reads as falsy. In production that is the ~5,731 books
+that have no version group and no explicit flag. Nothing was hidden or dropped;
+the filter was right and the field was wrong, so any client trusting the field
+over the filter disagreed with the server about those books.
+
+`GetAudiobooksWithTotal` now normalizes the flag to the effective boolean at its
+return boundary — covering all three producers that feed it (the Bleve search
+branch, the author/series `BookCore.ToBook()` branches, and the
+`bookSummariesToBooks` pushdown) — and again before the page enters the list
+cache, so a cache hit and a cache miss cannot answer the same request
+differently. The convention itself now has a name,
+`database.EffectiveIsPrimaryVersion`, instead of living only in the inline
+`flag == nil || *flag` expressions each reader had to already know about.
+
+**API contract change:** for a book with no stored flag, `is_primary_version`
+changes from **absent** to `true` in the `/api/v1/audiobooks` response body. An
+explicit `false` is still emitted as `false` and still excluded from
+`?is_primary_version=true`. Scope is the listing response only — the store still
+returns the raw tri-state and `GET /audiobooks/:id` is unchanged, so the book
+detail page's "Primary Version" chip does not light up on ungrouped books.
+Making the flag explicit on disk remains the separate, deliberate
+`maintenance.normalize-primary-flags` job from PR #2449.
+
+#### `ci.yml` — `scripts/test_check_memory_leaks.py` now runs in CI
+
+The repo-guards job ran `unittest discover` only against
+`.github/workflows/scripts`, so `scripts/test_check_memory_leaks.py` — the
+regression test for the actively-used `scripts/check-memory-leaks.py` checker
+(wired into the Makefile's `check-memory-leaks` target and
+`memory-leak-scan.yml`) — was never executed by any workflow. Added a second
+`unittest discover -s scripts -p 'test_*.py' -v` invocation to the same step so
+the test now runs on every PR and push.
+
+#### Stop committing `series_dedup.py`'s generated dump/fix cache files
+
+The `testdata/series_dump.json` and `testdata/series_fix.json` files are runtime artifacts generated by the `scripts/series_dedup.py` maintenance script, not test fixtures. They are no longer committed to git and have been added to `.gitignore`, reducing repository size and avoiding unnecessary churn from local script runs.
+
+#### APIRateLimitPerMinute default drift
+
+Unified APIRateLimitPerMinute default from 0 (fresh install, unlimited) to 100 (factory reset and .env.example). Fresh installs that never set an explicit value will now get the documented production-safe default of 100 requests/minute instead of unlimited (0). This is a behavior change for any zero-config deployment relying on the previous unlimited default—review deployment configurations for any hardcoded rate-limit assumptions.
+
+#### Factory reset was disabling chapter consolidation
+
+The `ResetToDefaults()` function omitted `ChapterConsolidationThresholdMin` from the configuration struct literal, causing factory resets to silently set the field to zero (disabled). A user who disabled consolidation deliberately and then performed a factory reset would see consolidation re-enabled at the documented default of 10 minutes. The field is now properly restored to its default value of 10 on factory reset.
+
+#### Version-group backfill scan no longer silently skips non-digit-leading book IDs
+
+`BackfillVersionGroupIndex`'s iterator bounds were `[]byte("book:0")`..`[]byte("book:;")`
+— a byte range that only covers book IDs whose first character is an ASCII
+digit (`0x30`-`0x39`). A book ID starting with a letter, `-`, or any other
+non-digit sorted outside that range and was silently excluded from the scan:
+no error, no log, just a book that never got its `book:versiongroup:<gid>:<id>`
+secondary index row written.
+
+This is currently latent rather than an observed data-loss bug: every book ID
+in production today is a ULID minted by `CreateBook`, and a ULID's first
+character is always a digit (`0`-`7`) given the 48-bit millisecond-timestamp
+encoding used until roughly the year 10889. But `CreateBook` only mints a ULID
+`if book.ID == ""` — a caller-supplied non-ULID ID (via an import path, a test
+fixture, or a future ID scheme change) is constructible today and would have
+been invisible to this backfill with no error surfaced anywhere.
+
+Fixed by widening the bounds to the true prefix range for `book:`
+(`[]byte("book:")`..`[]byte("book;")`), matching the idiom already used
+elsewhere in this package (e.g. `book_file;`, `metadata_cache;`). The scan's
+existing one-colon structural filter already discriminates primary book rows
+from secondary index rows independent of the byte range, so widening the
+bounds is safe. The backfill's completion sentinel was bumped
+`versiongroup_index_v2_done` -> `versiongroup_index_v3_done` so every
+deployment — including ones that already completed the v2 run under the
+narrower bounds — re-runs once under the wider bounds.
+
+Not fixed here, and pre-existing (not introduced by this change): the scan's
+one-colon structural filter itself assumes a book ID never contains a colon.
+That assumption is not enforced anywhere either — the same `CreateBook`
+conditional minting means a caller-supplied ID could contain a colon (e.g.
+`book:my:id`) and would be silently skipped by the filter regardless of the
+now-widened byte range. Tracked as a follow-up in `todo.d/` rather than
+patched here, since the correct fix is enforcing "no colon" once at
+`CreateBook`, not re-checking it at every scan site.
+
+Note: this exact `book:0`/`book:;` byte-range pattern (and its `author:`,
+`series:`, `author_alias:`, `import_path:`, `book_file:`, and `work:`
+equivalents) appears at roughly 47-50 other iterator call sites across
+`internal/database` — two independent regexes (one anchored on the
+`[]byte`-wrapped lower bound, one on the bare-string upper bound) gave 48 and
+50 hits respectively on `origin/main` before this fix (47 and 49 once this
+PR's own site is excluded); they disagree because they anchor on different
+halves of the pair, and neither is an AST-level census, so both are lower
+bounds, not an exact total. Those sites are out of scope for this change and
+were not touched; the per-file breakdown and both grep commands are recorded
+in `todo.d/2026-08-23-book-id-colon-gap-and-fragile-digit-bound-census.md`
+for a follow-up sweep — re-run the census before sizing that work.
+
+Re-scan cost of the v2 -> v3 sentinel bump: the widened bounds now also visit
+the ~10 known `book:<index>:` secondary-index families under the same
+`book:` prefix (`asin`, `author`, `hash`, `isbn13`, `organizedhash`,
+`originalhash`, `path`, `series`, `versiongroup`, `work` — see the existing
+comment at `pebble_store.go:655`), which the old narrower bounds excluded
+entirely (their names all start with a letter, sorting above the old `;`
+upper bound). Every one of those keys has 2+ colons, so the backfill's
+`strings.Count(key, ":") != 1` filter rejects them before any JSON decode —
+each extra key costs one cheap Pebble `iter.Next()` plus a string count, not
+a full unmarshal. Code inspection (not a prod measurement) of where those
+families are written (`pebble_store.go:1162,1277,2121,2129,2174`, etc.) shows
+most are written 0 or 1 times per book, so the extra key count for a
+~40-45K-book library is on the order of 10^5-10^6 additional cheap iterator
+steps — expected to add a low-single-digit number of seconds to the one-time
+re-run, not materially change its order of magnitude. This is a reasoned
+estimate derived from the code, not a benchmarked figure.
+
+#### `WipeAllActivity` is now cancellable from its live request path
+
+`WipeAllActivity` — the full activity-log wipe reachable from `handleWipe`, a
+real HTTP handler — ran to completion uncancellably even after the client
+disconnected. It walked every tier's rows into memory, then deleted them in
+500-row batches, with no way for an abandoned request to stop it, the same
+defect class already fixed for the unbounded `Query`/`GetDistinctSources`
+scans (a prior production outage: 30 abandoned requests held 30.8 GB with zero
+connected clients).
+
+`WipeAllActivity` now takes a `context.Context` and checks it before each
+tier's scan and before each 500-row delete batch, so an abandoned wipe stops
+promptly instead of draining the whole log server-side. The change cascades
+through every `ActivityStorer` implementation: `PebbleActivityStore` (both
+new checkpoints, plus its already-context-aware `scanTierKVs`),
+`NutsActivityStore` (a coarser per-tier check only — it is retired/unwired
+and its scan has no per-row ctx plumbing to extend), `DualWriteActivityStore`
+(forwards ctx to both backends unchanged), and `InstrumentedActivityStorer`
+(forwards ctx into its span and — unlike its sibling methods — now returns
+the real partial count on error instead of a hardcoded `0`, since silently
+reporting "0 deleted" for a wipe that actually deleted rows would misinform
+every caller of the traced wrapper).
+
+On cancellation, `WipeAllActivity` returns the count of rows **actually
+deleted so far** — never a fabricated full or zero count — alongside
+`ctx.Err()`. Rows not yet reached are left untouched; there is no
+partial-tier bookkeeping to resume, so a plain retry finishes the job by
+rescanning and deleting whatever remains. `ctx` plumbing does not change
+what gets deleted, only whether an abandoned wipe stops early.
+
+Covered by a new regression test that proves cancellation stops the delete
+loop mid-tier (500 of 750 seeded rows deleted, not 0 and not all 750), rather
+than merely asserting the returned error is non-nil.
+
+#### `POST /maintenance/wipe` now names the targets that did not finish
+
+Every wipe target recorded its deleted-row count and, on error, logged a
+warning and carried on — then the handler logged `"wipe complete"` and
+returned HTTP 200. A partial count is indistinguishable from a full one, so
+a wipe that stopped halfway reported as a wipe that succeeded.
+
+This was merely imprecise until now: no target could previously return a
+partial count together with an error. Making `WipeAllActivity` cancellable
+creates the first way for it to happen, and it is reachable on any abandoned
+request. The response gained an `incomplete` array naming the targets whose
+wipe returned an error, and the terminal `"wipe complete"` log is now a
+`"wipe stopped early"` warning carrying the same list whenever that array is
+non-empty.
+
+All seven targets are treated the same way rather than only `activity`. They
+have always shared the shape — an errored wipe reported as a finished one —
+and having the response mean "complete" for six targets and "possibly
+partial" for the seventh would be worse than either rule applied uniformly.
+
+#### Triaged the remaining misc CodeQL alerts: Go false positives dismissed via the API, JS findings fixed or dismissed with reasoning
+
+Closes out the last sub-part of `SEC-CODEQL-BACKLOG`. Two Go findings and six
+JS findings, none previously assessed.
+
+`go/uncontrolled-allocation-size` (alert #966) at
+`internal/database/memdb_summaries.go:154`: re-verified the `cap0` clamp
+bounds the *initial capacity* passed to `make([]BookSummary, ...)` to <= 4096
+regardless of caller-supplied `limit`. The slice can still grow past that via
+`append` — the loop's only stop condition is `len(out) >= limit`, so the real
+peak size is `min(limit, matching rows)`, bounded by the corpus rather than
+by any fixed ceiling. That corpus-bound (not attacker-bound) property is what
+makes this a false positive, and is why the allocation is not "uncontrolled"
+even though it is not capped at 4096 either. Dismissed via the code-scanning
+API citing the clamp, and a code comment records the fuller reasoning for
+future readers (the comment is documentation only; the API dismissal is what
+actually closes the alert — the legacy LGTM.com suppression-comment syntax
+does nothing in this repo's CodeQL setup).
+
+`go/clear-text-logging`, previously assessed as a false positive at
+`internal/server/server.go:360` (alert #1472, dismissed 2026-08-11) had
+drifted: the code moved to `internal/server/server_lifecycle.go` and a
+sibling site in `internal/server/library_list_warmer.go` picked up its own
+alert. Re-anchored both by current file:line — alert #1595
+(`server_lifecycle.go:1211`) and alert #1594 (`library_list_warmer.go:177`) —
+confirmed the `%T`-renders-only-the-type-name reasoning still holds at both
+sites (neither depends on which function supplies the store value), and
+dismissed both via the API. A third open alert for this rule, #47
+(`cmd/root.go:265`), is a different pattern — a masked API key print, not a
+`%T` call — and was left open as out of scope for this task.
+
+Three `js/remote-property-injection` alerts (#1597-#1599) in
+`web/src/pages/BookDetail.tsx` flag a URL route param used as a computed
+object key (`{ ...prev, [id]: value }`). Per the ECMAScript spec, the
+`[[Prototype]]`-assignment special case for `__proto__` applies only to the
+literal, non-computed `__proto__: value` form in an object literal — never
+to a computed key — so no `Object.prototype` pollution is reachable even
+when `id === "__proto__"`. Dismissed via the API with that reasoning.
+
+Two `js/trivial-conditional` alerts were genuine dead code, not false
+positives, and were fixed rather than suppressed: `web/src/utils/operationPolling.ts:65`
+guarded a `timeoutId` that was still its initial `null` and could never be
+truthy; `web/src/pages/Diagnostics.tsx:296` re-checked `operationId` after an
+earlier guard in the same function had already guaranteed it was truthy.
+Both guards were removed.
+
+One `js/insecure-temporary-file` alert (#508) in `scripts/record_demo.js` was
+also a real finding: it wrote a demo audiobook fixture to a predictable
+`/tmp/demo-audiobooks-<timestamp>` path created with a plain `mkdirSync`,
+which is vulnerable to symlink-race attacks on a shared `/tmp`. Switched to
+`fs.mkdtempSync`, which atomically creates a directory with an unpredictable
+random suffix.
+
+#### Deleting an author no longer strands the books that still reference it
+
+`DELETE /authors/:id` and `POST /authors/bulk-delete` decided whether an author
+was empty by calling `GetBooksByAuthorIDCore`, the per-author listing that backs
+the books shown for an author in the UI. That listing deliberately skips books
+in the trash and non-primary (duplicate) versions, and it does not surface
+co-author credits that live only in the `book_authors` junction table. Those
+books all still hold the `author_id`, so an author whose books were all trashed,
+all alternate versions, or attached only as a co-author counted as zero and the
+row was deleted out from under them — and an author's name exists only in that
+row, so the reference was not recoverable afterwards. This is the same
+instrument-confusion that, on the series side, had stranded 13,322 live books
+behind 6,893 series IDs that no longer resolved.
+
+Both handlers now guard on a new unfiltered counter,
+`database.AuthorBookRefStore.GetAllAuthorBookRefCounts`, implemented for both
+the memdb and Pebble backends. It applies no deletion or primary-version
+filters, counts junction rows and the legacy `Book.AuthorID` field, and dedups
+per `(book, author)` pair rather than per book — a per-book skip would drop a
+legacy author whose own book's credit list does not name it, which is the same
+fail-open in a new place. The capability is resolved through `AsCapability`, so
+it is found through the Bleve search-index decorator that wraps the store in
+production rather than only on a bare `*PebbleStore`.
+
+The guard fails **closed**: a store that cannot answer the unfiltered question
+makes the delete refuse with a 500 rather than fall back to the filtered count,
+because that fallback is the bug and it fails silently, reporting success while
+deleting. `POST /authors/bulk-delete` now takes the count once for the whole
+request instead of once per ID, so an unreadable count fails the request with
+nothing deleted rather than deleting the remaining IDs on a guess.
+
+The same guard now covers the **bulk purge**, `maintenance.purge-empty-authors`,
+which is the highest-volume instance of the bug: it selected on the filtered
+`GetAllAuthorBookCounts` and then deleted every match, and its own notes record
+4,975 of 12,854 authors as zero-book on the live library. ("Zero-book" is the
+candidate set, strictly wider than "eligible", which also depends on the
+`require_zero_files` parameter — 4,153 of those also had zero files.) Deletion is now gated
+on the unfiltered count while the filtered one still picks the candidate set and
+reports `zero-book`; a new `held-back(still referenced)` figure in the op summary
+surfaces the difference. The guard is applied before the dry-run branch, so
+`apply=false` and `apply=true` report and delete an identical set.
+
+Three fail-open defects in the unfiltered Pebble scan were fixed alongside,
+matching the corrections made to the series scan. A row that could not be
+decoded was skipped rather than reported; neither iterator's `Error()` was
+checked, so a truncated scan returned a short count with no error; and the scan
+bounded itself with a hand-written `book_authors:~` upper bound, which excludes
+every book ID whose first byte sorts above `~` (0x7E) — that is, every non-ASCII
+ID, since UTF-8 lead bytes start at 0xC2. Book IDs are caller-supplied (importers
+and restore paths mint their own), so those books' whole credit lists fell
+outside the scan. All three make a delete guard answer "referenced by nothing"
+when the truth is "could not read" — for the `book_authors` table especially,
+where a book's second and subsequent authors exist nowhere else that this
+counter reads. All three now abort or are correctly bounded.
+
+**That scan is not, however, the one production runs**, and an earlier draft of
+this entry implied otherwise. The counter has two implementations — the Pebble
+scan above, and a scan of the in-memory query layer — and it prefers the
+in-memory one whenever that layer is available, which is hardcoded on. So every
+production call took the memdb path, and the hardening described above had been
+applied only to the path that never ran. This is the same defect that was found
+and fixed on the series side, and the series half was already merged and
+carrying it.
+
+The in-memory layer is a lossy copy: it is rebuilt from disk at startup and
+deliberately skips rows it cannot decode or insert rather than refusing to start,
+and a write rejected by a memdb index rule at runtime leaves the same gap. A
+dropped `book_authors` row is a co-author credit that exists nowhere the counter
+reads, so the author counts zero and the purge deletes a name that cannot be
+recovered. The
+memdb counter now refuses to answer from a table it knows is short, naming
+**both** tables it scans rather than only the books table — a guard that named
+only books would still have missed exactly the co-author case above.
+
+The refusal does not stall anything: the call falls through to the Pebble scan,
+which is authoritative and, now that its own three defects are fixed, actually
+trustworthy to fall back to. So the answer is *correct*, not merely safe, and
+`purge-empty-authors` keeps running rather than waiting for a restart. Every
+caller takes the count once per operation, not once per author, so the slower
+path costs one extra scan.
+
+Review of this PR then found a **fourth** way the in-memory copy loses rows, and
+it defeated everything above. The three known ways all end with the memdb
+transaction being thrown away, which is how one central handler catches them.
+This one ends with the transaction being *committed*: when the book-sync step
+cannot re-read a book's credit list from disk, it had already cleared the old
+rows and simply skipped putting anything back — so the copy committed an empty
+set for that book and went on reporting itself complete. A detector wired to the
+failure path is structurally blind to a loss that travels the success path.
+
+It was also strictly more permissive than the path this PR had just hardened: the
+read fails on an unreadable credit list, and on that same row the disk scan now
+refuses outright. The sync step now leaves the existing rows alone and flags the
+table instead. Retaining them is not by itself correct — they may be out of date
+in the other direction — which is why the flag is required rather than optional.
+
+Two smaller corrections from the same review. The two passes of the disk scan
+each read the database at their own moment in time, so a book created between
+them could have its credit list missed by the first pass and its record seen by
+the second, making its co-authors look unreferenced; both passes now read a
+single consistent snapshot. And the message logged when the copy is known short
+was raised from a warning to an error, because the condition does not clear
+without a restart — until then every other reader of that copy is being served
+from it with no guard at all.
+
+`GET /authors/:id/books` deliberately still uses `GetBooksByAuthorIDCore`: it is
+a display listing, not a delete guard, and the filtering is correct there.
+
+#### `PebbleStore.UpdateCollection` now rejects a stale-version write instead of silently losing it
+
+`UpdateCollection` read the current row and then unconditionally bumped
+`col.Version = prev.Version + 1` — the `Version` field looked like optimistic
+concurrency control but was pure last-write-wins. Two concurrent
+read-modify-write cycles on the same collection (for example two
+`AddBookToCollection` calls racing on the same collection from two ABS
+clients) could silently clobber each other: the second write always won, and
+the first caller's change vanished with no error and no signal to retry.
+
+`UpdateCollection` now compares the caller's `col.Version` against the
+currently-stored `prev.Version` before writing, and rejects the write with an
+error wrapping the new `database.ErrCollectionVersionConflict` sentinel on a
+mismatch. Five of the six production call sites
+(`internal/server/handlers/collections.go`'s `UpdateCollection` and
+`MaterializeCollection`, and `internal/server/handlers/abs/collections.go`'s
+`UpdateCollection`, `AddBookToCollection`, and `RemoveBookFromCollection`) now
+detect that with `errors.Is` and translate it into an HTTP 409 instead of a
+500 — the sentinel was added deliberately in favor of the string-match
+pattern (`strings.Contains(err.Error(), "already in use")`) the duplicate-name
+conflict in this same package still uses, since `internal/database` already
+declares sentinels elsewhere (`ErrSettingNotFound`, `ErrNoHNSWSnapshot`) and a
+message-based check silently stops matching if the wording ever changes. The
+sixth caller, which discards the error (`GetCollection`'s best-effort
+re-materialization cache write), is unchanged on purpose — see the comment at
+its call site — a lost cache refresh under concurrent access is harmless; the
+next read recomputes it.
+
+This check is a plain equality comparison, not a "Version == 0 means
+unconditional write" special case: a caller that read the row first always has
+`col.Version == prev.Version` by construction (including a legacy row whose
+JSON predates the `Version` field, which unmarshals to 0 on both sides), so a
+normal sequential update is never rejected. A caller that never read the row —
+Version left at its Go zero value — now correctly conflicts against a
+since-updated row, which is exactly the class of bug this closes; treating
+zero as a bypass would have reopened it. The check is not atomic with the
+write (no lock is held across the read-check-commit), so it does not close a
+race between two goroutines racing inside the same process at the same
+instant; it closes the far more common case of two separate request cycles
+whose reads and writes interleave, which is what the production call sites
+above actually do.
+
+`MockStore.UpdateCollection`'s default (unconfigured) behavior deliberately
+does **not** enforce this compare-and-swap — it holds no collections state to
+validate a caller's `Version` against, consistent with its documented
+"permissive by default" contract. This is a documented divergence, not an
+instance of the memdb/pebble dual-implementation drift class fixed previously
+(that class was two real backends silently disagreeing; `MockStore`
+implements no business logic here to drift). Tests that need to exercise the
+conflict path set `UpdateCollectionFunc` themselves.
+
+#### `internal/database/store.go:17` — Repoint dead doc reference to archived design spec
+
+The comment on line 17 referenced `docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md`, which was removed when `docs/superpowers/` became gitignored. Restored the original archived design document to `docs/archive/superpowers/plans/2026-04-17-store-interface-segregation-design.md` and repointed the reference, so readers following the link land on a real file.
+
+#### `MockStore`'s remaining 89 hardwired-zero-return methods are now overridable
+
+313 of `MockStore`'s 399 methods already followed the `if m.XFunc != nil {
+return m.XFunc(...) }` override pattern, but 89 were silently hardwired to a
+fixed zero value with no way for a test to override them — a trap for the next
+test author, who reasonably assumes every method on the struct works the same
+way. `GetAllAuthorBookCounts` was the item that surfaced this: it already had
+an override field, but `TestListAuthors_Success` never set it and never
+asserted `BookCount`, so the test passed against the always-empty default
+without anyone noticing the mock could not express a non-zero count for the
+89 methods that lacked the same escape hatch.
+
+Every one of the 89 methods now gets its own `<MethodName>Func` field on
+`MockStore`, wired with the same nil-check-then-fallback pattern as the other
+313. This is purely additive and behavior-preserving: with no override set, a
+method returns exactly what it returned before (including
+`UpdateBookRating`'s existing `UpdateBookRatingError` field and
+`MarkITunesSynced`'s `int64(len(bookIDs))` computed fallback). A handful of
+methods (`MergeChapterBooks`, `FlagMetadataHashDuplicate`,
+`RecomputeBookAggregates`, and the `*V2`/`Review*` op-store stubs) had blank
+`_` parameters that could not be forwarded to an override call; those were
+renamed to the parameter names already used in the corresponding `Store`
+interface declaration, which does not change the method's type signature.
+
+#### Merging into an existing version group no longer leaves two primaries
+
+`merge.MergeBooks` writes the `is_primary_version` flag only for the books
+passed into the call. When the merge reused an existing version group's ID —
+because one of its books already belonged to that group — any member that had
+joined the group in a prior merge and was absent from this call kept its
+`is_primary_version=true`, so the group ended up with two primary members. Every
+downstream reader assumes "primary" is unique within a group, so the corruption
+surfaced as duplicate books in the library, wrong counts, and wrong dedup
+decisions; a prod sample on 2026-08-11 found 10 of 15 inspected groups in this
+state. The merge now loads the group's full live membership before it writes
+anything and demotes every member that is not the elected winner. An unset
+(`nil`) flag is treated as primary — which is how the store reads it — and is
+rewritten to an explicit `false` rather than left alone. The election rule is
+unchanged: an explicit `primary_id` still wins, and the auto-pick still uses
+`BookIsBetter` over the books in the call, so pre-existing members are demoted
+but never re-elected.
+
+#### Replaced the 15 dead POST /maintenance/{job-name} entries with the real generic dispatch route
+
+`docs/api/openapi.json` documented 15 individual POST paths
+(`/maintenance/backfill-book-files`, `cleanup-backups`, `cleanup-empty-folders`,
+`cleanup-organize-mess`, `cleanup-series`, `dedup-books`, `enrich-book-files`,
+`fix-author-narrator-swap`, `fix-book-file-paths`, `fix-library-states`,
+`fix-read-by-narrator`, `fix-version-groups`, `generate-itl-tests`,
+`recompute-itunes-paths`, `refetch-missing-authors`) whose `operationId`s
+(`handleBackfillBookFiles`, etc.) name Go functions that do not exist anywhere
+in the codebase today — verified both by source grep and against the live
+router table (`s.router.Routes()` on a fully-wired test server). Those
+handlers were real once: `refactor(server): remove old sync maintenance
+handlers (ASYNC-CLEAN-1)` (2a1d4e09, 2026-05-01) deleted all ~29 of them when
+the maintenance job dispatcher was unified behind a single generic route,
+`POST /maintenance/jobs/{job_id}` (`internal/server/maintenance_dispatcher.go`,
+wired in `internal/server/server_lifecycle.go`). The spec's per-job stub
+entries were never cleaned up at the time, and survived the 2026-08-12 union
+merge along with the rest of the drift it inherited.
+
+Deleted all 15 stale entries and added one accurate replacement path,
+`POST /maintenance/jobs/{job_id}`, documenting the real dispatch shape: a
+`job_id` path parameter (enum of the 37 currently-registered maintenance job
+IDs, a superset of the 15 removed names — jobs like `bulk-fetch-metadata` and
+`scan-duplicate-files` were never individually stubbed in the spec at all), an
+optional `dry_run` request body field, and the actual 202/400/401/403/404/409
+response shape read from the handler. A single generic entry with an enum is
+the accurate representation here, not 15 separate paths — see
+`.claude/skills/api-doc/SKILL.md`'s warning against exactly this class of
+bogus per-job path.
+
+The 37-ID enum was cross-checked three ways: `ID() string` grep and
+`maintenance.Register(` grep over `internal/maintenance/jobs/*.go` (excluding
+`_test.go`) both give 37, and a throwaway test dumping `maintenance.All()` on
+a fully-wired server gives 41 — the extra 4 are `test-probe-advertises-*` and
+`orphan-row-blocking-probe`, registered only by `_test.go` `init()` functions
+in `internal/server/maintenance_dryrun_default_test.go` and
+`maintenance_orphan_row_test.go`, never compiled into a production binary.
+37 is correct.
+
+`/maintenance-window/run` (a different, unrelated route family, still live)
+and `/maintenance/wipe` (confirmed still live at
+`internal/server/server_lifecycle.go`, admin-only) were left untouched;
+neither was ever a member of the stale 15. `/maintenance/wipe` and
+`GET /maintenance/jobs` (the job catalogue endpoint) turned out to have no
+spec entry of their own either — that gap predates this change and is
+recorded in `todo.d/2026-08-21-openapi-doc-maintenance-jobs-and-wipe.md`
+rather than being silently left.
+
+#### OpenAPI spec no longer documents the unregistered /torrents endpoint
+
+The spec included a bare /torrents endpoint with no direct route in the application — only the Deluge-group-prefixed `/deluge/torrents` variant is registered. Removed this spurious entry to keep the API documentation consistent with actual routes.
+
+#### `abs-target-client-contract.md` §11 "safe to stub" list re-verified against real routes/logs, not the fixture corpus
+
+The 2026-08-11 list claimed playlists, collections, series detail, authors detail,
+`/api/me/sessions`, `/api/me/listening-sessions`, and all four stats endpoints were
+either implemented stubs or deliberately out-of-scope decisions. Re-checked each entry
+against `internal/server/wire_abs_routes.go`, `handlers/abs/handler.go`'s route table,
+this document's own §9/Appendix A, and `TODO.md`'s production request-log findings
+instead of the fixture corpus (which, per the playlist incident, proves absence-of-fixture
+never absence-of-request).
+
+Playlists and collections are now fully implemented (2026-08-13 / 2026-08-16) and removed
+from the list. Series detail (`GET /api/series/:id`) and authors detail
+(`GET /api/authors/:id`) are still unimplemented but are **not** out-of-scope decisions —
+`TODO.md` documents real production requests for both that 301 into a 404, the same
+failure class the playlist bug was — so they moved out of "safe to stub" into an explicit
+open-gap note. `/api/me/sessions`, `/api/me/listening-sessions`, and the stats family were
+already fully implemented per §9/Appendix A of the same document; §11 had drifted out of
+sync with the rest of the file. The remaining admin-only entries (tasks, users, backups,
+search/match/tools/upload/filesystem, api-keys, emails) are split into "genuinely 404" vs.
+"redirects into a live, permission-gated app route" (same defect class as the playlist
+bug, un-triggered only because no target client is known to call them) and marked
+"could not verify against a request log" rather than "holds," since no in-repo evidence
+settles client-side call behavior for that bucket.
+
+#### Metadata-apply activity rows now name the book and render a missing old value as `(none)`
+
+Rows written to the unified activity log by a metadata apply read as
+`Applied narrator: Alex Kozlowski → Grant Cartwright` — no book title anywhere in
+the line, so in the mixed activity feed there was no way to tell which book had
+been changed without clicking through. When the previous value was empty (a first
+`audiobook_release_year`, say) the line degraded further to `Applied
+audiobook_release_year:  → 2021`, a dangling arrow that reads as a rendering bug
+rather than as "there was no prior value". The summary now leads with the book's
+title (falling back to its ID when the title is empty) and renders an empty
+from-value as `(none)`: `The Whispering Night: Applied audiobook_release_year:
+(none) → 2021`. Display-string only — the `book_id`, `details` payload and the
+`metadata_change` records themselves are unchanged.
+
+#### Applying metadata no longer writes the same file twice
+
+A book whose database held more than one row for the same file on disk was processed once per
+row rather than once per file. Every file's tags were written twice, the renamer was told the
+book had twice as many parts as it really did (so track numbering came out wrong), and the
+second rename of a file failed outright because the first had already moved it — which is what
+produced the "no such file or directory" error when applying metadata. The apply pipeline now
+collapses duplicate rows to one row per file before it writes anything, keeping whichever copy
+carries the most evidence about the file (its audio fingerprint, then duration, then checksum).
+Duplicate rows are still left in the database for the existing cleanup job to remove; this
+change only stops them from affecting an apply.
+
+#### The AcoustID LSH backfill no longer rewrites every row when the store is wrapped
+
+The backfill has a fast path that skips files already present in the fingerprint index. It found
+that capability with a direct type check on the store it was handed, so the moment any wrapper sat
+in front of the store — a decorator, a search-index layer — the check quietly came back empty and
+the job re-saved every single file instead of only the ones that needed it. It now looks through
+wrappers, so the skip works regardless of how the store is composed.
+
+#### Change Log row — restored a real, keyboard-reachable "Compare snapshot" button
+
+The Change Log row for a `metadata_apply`/`tag_write` entry opened the
+snapshot comparison view only on mouse click; there was no way to reach or
+activate it from the keyboard, and it had no accessible name for screen
+readers. Added a real `Button` labeled "Compare snapshot" alongside the
+existing Revert button, so it is focusable and activates on Enter/Space for
+free. The row itself keeps its existing mouse-click convenience but is
+deliberately not made into a `role="button"` container: it already nests one
+interactive control (the Revert button, joined now by Compare snapshot), and
+`role="button"` elements have "Children Presentational: True" in the ARIA
+spec, so nesting real interactive controls inside one is unsupported and an
+`aria-label` on the row would have overridden the accessible name computed
+from the row's own text (timestamp, type, summary), leaving every actionable
+row announcing as just "Compare snapshot, button." The new button's own
+`onClick` calls `stopPropagation()`, mirroring the existing Revert button, so
+neither a mouse click nor a native Enter/Space activation on Compare
+snapshot also fires the row's own click handler a second time.
+
+#### Validate the two unvalidated client-side navigation sinks
+
+`web/src/pages/Login.tsx`'s post-login `redirectTo` (from `location.state.from`)
+and `web/src/pages/BookDetail.tsx`'s two "back to library" navigations (from
+`sessionStorage['library_return_url']`) previously handed an unvalidated
+string straight to `navigate()`. Neither was exploitable today only because
+nothing in the codebase currently writes an attacker-reachable value into
+either sink, but that made them latent open-redirect targets for the next
+feature that writes to `location.state.from` or `library_return_url`. Both
+now run through a new `sanitizeReturn` in `web/src/utils/safeReturn.ts` — a
+direct TypeScript port of the same-named guard already protecting the
+server-side redirect target in `internal/server/handlers/oauth_login.go`
+(single leading `/`, no second leading `/` or `\`, no backslash anywhere) —
+and fall back to `/dashboard` and `/library` respectively when the value is
+rejected, rather than navigating to it or throwing.
+
+#### Cancelling an operation the registry has never heard of no longer reports success
+
+`Registry.Cancel` had three branches: a running op with a live cancel func,
+a stub handle claimed by the dispatcher but not yet picked up by a worker,
+and everything else — a fallback that tried `SetOperationV2StatusIfQueued`
+and then returned `nil` regardless of whether that update actually touched a
+row. An id that was never queued or running at all — already terminal, or
+simply made up — took the same fallback path and got the same `nil`, making
+"I cancelled it" indistinguishable from "there was nothing here to cancel."
+
+`Cancel` now returns the new sentinel `registry.ErrOpNotFound` when the
+fallback's `updated` flag comes back false, and only returns `nil` when a
+running op was actually signalled, a stub was flagged, or a queued row was
+actually marked canceled. `DELETE /api/v1/operations/v2/:id`
+(`CancelOperationV2`) translates that into HTTP 404 instead of the previous
+204 — a caller can now tell "nothing to cancel" apart from "cancelled." A
+second, unwired duplicate of this handler (`Server.handleCancelOperationV2`
+in `internal/server/operations_v2_handlers.go`, reachable only from its own
+test file, not from any production route) was deleted rather than patched,
+so it cannot silently diverge from the fix. The legacy `DELETE
+/operations/:id` route is unaffected on purpose: it already tolerates any
+`Cancel` error by falling through to a force-update, which remains the
+correct behavior for that route pending its separate retirement.
+
+Contract change: `DELETE /api/v1/operations/v2/:id` now answers 404, not
+204, for an unknown or already-terminal operation id.
+
+#### Approving more books during a running batch apply no longer silently discards them (ENQ-DEDUP-1)
+
+`EnqueueOp`'s `ConcurrencyKey` dedupe matched on the operation-definition id alone: if any op for the same def was already queued or running, the new request returned that op's id and its params were thrown away. On 2026-08-21 in production, approving additional books while `metadata.batch-apply-cached` was running neither queued a second job nor grew the running one — the caller was told the enqueue succeeded, and the approved books were never applied. The same silent drop applied to every def whose params carry an explicit selection (`metadata.batch-save`, `library.bulk-write-back`, `library.organize`, `maintenance.bulk-write-back`, `maintenance.regroup-shattered-ai`, `maintenance.chapters-backfill`, `acoustid.fingerprint-rescan`).
+
+An enqueue now reuses an active op only when the request asks for the same work: byte-equal marshalled params, a cron-scheduled def (`Schedule != nil`), or a new explicit `OperationDef.DedupeQueuedRuns` opt-in. Otherwise it creates a second QUEUED row and returns the new op's id. This is safe because the dispatcher's Gate 3 already refuses to *start* a second op holding the same `ConcurrencyKey` — the key was always meant to serialize runs, never to drop queue entries carrying different work — so the second job waits for the first and then runs. The comparison is deliberately byte-equality rather than semantic JSON equality: a differing key order or whitespace queues a redundant run that Gate 3 serializes, whereas canonicalizing would reintroduce a path that discards a caller's request.
+
+The behaviour the dedupe was originally written for is unchanged: repeated identical enqueues (a double-clicked button, a scheduler tick passing the same fixed params) still collapse onto the one active op. `DedupeQueuedRuns` is set on **no** definition in this change; it exists for a future def whose params legitimately vary between runs that must not both happen. Note for operators: the Active Operations panel will now show a second queued job in cases where it previously showed none — that is the fix, not a regression.
+
+#### organizer: duplicate `book_file` rows no longer inflate `totalTracks` or race the rename phase
+
+`planTargetPaths` (`internal/organizer/pipeline.go`) now collapses rows whose
+`filepath.Clean`'d, trimmed `FilePath` is identical, keeping the first such row
+in the caller's original order. Previously two `book_file` rows pointing at
+the same path each planned their own `FileRenameEntry`, so `RenameFiles` moved
+the file on the first entry and failed `stat rename source ...: no such file
+or directory` on the second — the exact production failure on 2026-08-21,
+where a 21-file book had 42 rows, `totalTracks` came out as 42, and the
+"file naming pattern does not distinguish" collision branch fired and
+suffixed every file in the book unnecessarily. `totalTracks` still counts
+Missing rows toward its total (unchanged), so a partially-missing book keeps
+stable, position-derived track numbers; only true duplicate-path rows are
+collapsed.
+
+#### `/search` narrators no longer emit hardcoded numBooks: 0
+
+The `/api/libraries/:id/search` endpoint was emitting narrator objects with `numBooks: 0` to match a misread of the ABS specification. Per the contract and the existing `/api/libraries/:id/narrators` handler's correct implementation, the field must be omitted entirely when unknown, not emitted with a false value. Narrator objects in search results now match the correct shape by omitting the numBooks field.
+
+#### ABS listening-stats read failures are now logged and counted instead of silent (ABS-N6)
+
+`GET /api/me/listening-stats` deliberately keeps answering 200 with `totalTime:
+0` when the underlying `ListenedSeconds` read fails — a 5xx here trips the
+same AudioBooth connection-status indicator the endpoint exists to keep green,
+so failing loudly would trade one cosmetic bug for the identical one. That
+tradeoff was undocumented at runtime: the failure produced no log line and no
+metric, so a persistently-failing read looked identical to a user who really
+had listened zero seconds.
+
+The read failure now logs `slog.Warn` with the user ID and error, and
+increments a new `audiobook_organizer_abs_listening_stats_read_failures_total`
+Prometheus counter, so the silent 0 becomes observable without changing the
+response the client sees. The counter has no labels — it counts one specific
+read path, not a dimensioned family — so it is a plain `prometheus.Counter`
+rather than a `CounterVec`.
+
+#### N-10: advertised login rate limit (10/10min) now matches the real throttle (15/15min)
+
+`GET /status` (and the `serverSettings` block in the `/login` and `/auth/refresh` bodies) advertised 10 requests per 600000ms, while the throttle in `absauth` actually allows 15 failures per 15 minutes. Both values are now derived from the `absauth` constants, so the advertisement cannot drift from the code that issues the 429.
+
+The comment alongside them claimed a client could use these to pace itself. It cannot, and the comment now says so: `absauth` charges only failed attempts, and the budget is shared per source IP between `/login` and `/auth/refresh`, so the advertised number is an upper bound rather than a login allowance.
+
+The two ABS oracle fixtures keep their captured values. Publishing our own policy where the oracle recorded its ABS defaults is a deliberate divergence, so it is declared as a named conformance allowance instead of being edited into the capture.
+
+#### `EnableRateLimit=false` did not actually disable API rate limiting (CFG-AUDIT)
+
+`setupRoutes` built the `/api/v1` rate limiter purely from
+`api_rate_limit_per_minute > 0` and only ever used `enable_rate_limit` to log
+a warning; the flag never gated whether the real limiter was installed. A
+deployment that set `enable_rate_limit: false` while leaving
+`api_rate_limit_per_minute` at a positive value (including the config
+default) got full rate-limit enforcement anyway. `enable_rate_limit` is now
+required alongside a positive `api_rate_limit_per_minute` before the real
+limiter is wired up; either being false/zero installs the passthrough
+no-op handler, matching the documented master-switch/threshold split. The
+separate per-IP auth throttle in `internal/server/absauth/` is unaffected —
+this flag was never meant to control it.
+
+#### Soft-deleting an indexed book left it searchable until the next reconcile pass
+
+`indexedStore.UpdateBook` unconditionally enqueued a reindex on every book
+update, including a soft-delete (`SoftDeleteBook` sets `MarkedForDeletion` and
+calls `UpdateBook` like any other field edit). The index worker's
+`IndexBookByID` reads the book back via `GetBookByID`, which does not filter
+`MarkedForDeletion`, so it upserted the just-trashed book straight back into
+Bleve — the book stayed searchable until the periodic
+`reconcileSearchIndexCoverage` pass happened to notice the stale doc and
+delete it, which could be minutes away. `UpdateBook` now checks the updated
+row's own trash bit and enqueues a delete instead of a reindex when it is
+soft-deleted, so the search index and the trash agree immediately with no
+reconcile pass required. Added
+`TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile` (fails against the
+pre-fix code, passes after) and the companion
+`TestIndexedStoreUpdateBook_RestoreStillReindexes` guard proving restore
+(`MarkedForDeletion` true→false) still reindexes correctly.
+
+#### `TestOrganizeService_PerformOrganize_NoBooksToOrganize` now mocks the store method `PerformOrganize` actually calls
+
+`PerformOrganize`'s non-`BookIDs` branch pages through `GetAllBooksCore`, never
+`GetAllBooks`. The test stubbed `GetAllBooksFunc`, which is never consulted on
+that path — `MockStore.GetAllBooksCore` defaults to `(nil, nil)` regardless of
+it, so the test passed vacuously (zero books, `err == nil`) for a reason
+unrelated to its stub. Fixed the stub to `GetAllBooksCoreFunc`, and added
+`TestOrganizeService_PerformOrganize_WithBooks` as the anti-vacuity twin: it
+feeds `PerformOrganize` a real book and asserts the filtering
+(`GetBookFiles`, `GetAuthorByID`) and organize (`CreateBook`, plus the
+organized copy landing on disk) side effects actually fired, so a
+`PerformOrganize` that silently no-ops on every book would fail this suite
+instead of passing it.
+
+#### OperationActivityPanel — stop re-appending the last SSE log line on every progress tick
+
+The SSE-append effect re-ran on every progress tick because `op` (selected from `activeOperations` via `.find()`) gets a new reference every time the store updates `progress`, `total`, or `message` — even when the actual log event hasn't changed. The effect unconditionally appended `latestLogEvent`, so the same log line was duplicated once per tick. Fixed by tracking the last-appended event's monotonic `sequence` number (already provided by the store) in a ref and skipping when unchanged; `op` is now read through a ref updated in its own effect, so progress updates no longer trigger the append logic at all.
+
+#### Double-clicking a maintenance job ran it twice
+
+Clicking a maintenance job a second time while the first was still queued or
+running started a second run over the same rows instead of joining the first.
+`EnqueueOp` has merged same-parameter requests since #2688, and #2709 gave every
+maintenance def a `ConcurrencyKey` so two runs at least could not overlap — but
+the merge itself never fired for this family, so the second click still queued a
+redundant full pass that ran after the first finished.
+
+The reason was `legacy_op_id`. Every request that bridges to a v1 operations row
+mints a fresh ULID for that row and stamps it into the operation's parameters.
+The merge compares parameters byte-for-byte, so two requests for identical work
+never compared equal — and this affects far more than maintenance: itunes, dedup,
+AI review, metadata, entities, reconcile, diagnostics and filesystem operations
+all carry the same stamp and all missed the same merge.
+
+Measured in #2717 with a dose-response pair: hold `legacy_op_id` constant and the
+merge fires; vary only it and the merge stops. It was the sole discriminator.
+
+The id is per-request bookkeeping, not work identity, so it is now excluded from
+the comparison rather than removed from the parameters — the stamp itself is
+load-bearing. It is what lets a finished v2 run move its v1 row off `pending`
+(the bridge added after every maintenance row of 2026-08-14 sat at `pending`
+while the jobs had actually completed), and maintenance jobs key their
+activity-log entries off it.
+
+Two things were deliberately kept narrow:
+
+- **Only `legacy_op_id` is ignored, and only when both sides carry it.**
+  Everything else is still compared byte-for-byte, so a differing `dry_run` still
+  queues a second run. That guard matters: `cleanup-series` deletes every
+  single-book series in its first phase, and absorbing an operator's real apply
+  into an already-running preview would silently discard the apply.
+- **The merged request's v1 row is deleted rather than left behind.** It is
+  twinned to nothing — only the winning run's row gets its status mirrored — so
+  it would have sat at `pending` forever and been re-resumed on every restart,
+  which is the same stuck-row pathology through a different door. The response
+  now returns the winning run's id, so callers poll the run that is actually
+  doing their work.
+
+- Cancelling an AI author scan from the operations view now actually stops it.
+  The cancel path matched an operation id against a field that held an id from
+  the old operations system, so the two never matched and the cancel silently did
+  nothing while the scan carried on.
+
+- An AI scan interrupted by a restart is no longer left running forever with
+  nothing tracking it. A batch scan re-attaches to the job OpenAI is still
+  holding; a realtime scan, whose requests died with the process, is now marked
+  failed instead of appearing to still be in progress.
+
+- Three failure paths in the scan's cross-validation step left the scan stuck at
+  "scanning" indefinitely and made it impossible to cancel. They now mark the
+  scan failed.
+
+- The "stale operations" view could not see the stuck operations it was meant to
+  surface. It ignored anything marked "pending", which is exactly the state the
+  stuck rows are in, so it reported nothing was wrong while they sat there. The
+  clear button used a different rule and *did* act on them — so the list you were
+  shown and the rows the button touched disagreed.
+
+- **The iTunes import panel could spin forever on an import that had already
+  finished.** Its poller stopped only on `completed` or `failed`, so cancelling
+  an import — or having the server restart mid-import — left the progress bar
+  animating and the 2-second poll re-arming indefinitely. Terminal-status
+  detection is now shared and covers cancellation and every `interrupted_*`
+  variant.
+- **The iTunes panel no longer detects an import already running when you open
+  it.** It matched an operation type (`itunes_import`) that the operations-v2
+  store never emits — it exposes the def id's tail segment (`import`) — so the
+  check silently never fired and a running import looked idle until you
+  refreshed. It now matches on `def_id`.
+
+#### Diagnostics export never downloaded
+
+Requesting a diagnostics export appeared to hang forever. The progress bar sat
+at "generating" and the ZIP never downloaded, even though the export itself had
+been written to disk successfully within a minute or two.
+
+The export endpoint minted its own operation id, started the real work under a
+*different* id, and returned the first one to the browser:
+
+    opID := ulid.Make().String()
+    _, err := store.CreateOperation(opID, "diagnostics_export", nil)
+    ...
+    if _, enqErr := h.registry.EnqueueOp(ctx, "diagnostics.export", params); enqErr != nil {
+
+The id from `EnqueueOp` — the one belonging to the operation that actually runs
+— was discarded. The browser polled the id it was given, which named a row the
+progress endpoint had stopped serving when the v1 operation routes were retired,
+so the poll never once reported completion and the download step it gates never
+ran.
+
+This is the same defect fixed for the eight duplicate-detection actions
+(#2736), in a second place. The export now returns the id of the operation that
+runs, and the download endpoint reads that operation's stored result.
+
+#### Large diagnostics exports were being cancelled part-way
+
+Separately from the above, an export that took more than five minutes was
+killed while it ran. The export reported no progress at all between "starting"
+and "finished", and the operations watchdog cancels anything that goes quiet
+for five minutes — so on a large library the export was terminated every time,
+while the half-built ZIP went on being written to a file nothing would serve.
+
+Exports now report progress as each part of the archive is written, and stop
+promptly when cancelled.
+
+#### A failed export now says so
+
+If an export failed, was cancelled, or was killed by the watchdog, the download
+endpoint reported it as still in progress. The page waited forever and never
+showed the reason, which was recorded but never read. Failures are now reported
+as failures, with the reason.
+
+The AI-diagnostics submission on the same page shares the broken poller and is
+**not** fixed here — it is not yet a registered operation at all, and converting
+it is tracked separately.
+
+- **An interrupted iTunes path-repair preview could come back as a real apply.**
+  `POST /operations/itunes-path-repair` defaults to a dry run, but if the server
+  restarted mid-run, the legacy resume path re-queued the operation with no
+  parameters at all — which decodes to `dry_run: false`. The preview resumed in
+  apply mode and rewrote locations in the live iTunes library, with nothing in
+  the original request having asked for it. Resume is now explicitly dry-run,
+  and new runs no longer take that path at all. The equivalent bug in
+  maintenance jobs was fixed earlier; this was its untreated twin.
+
+- **Merging authors reported "Failed to merge" for merges that actually
+  succeeded.** The merge endpoint returned the id of a legacy operation record,
+  but the progress dialog looks operations up in the newer operations system,
+  where that id does not exist. The lookup failed, the error surfaced as a merge
+  failure, and the merge itself had already completed — so the same authors could
+  be merged again in a second attempt. The endpoint now returns the id the
+  progress dialog can actually resolve. Affects both the Authors page and the
+  duplicate-authors review tab.
+
+- **Every duplicate-detection action reported failure for work that actually
+  succeeded.** Book and author duplicate scans, series duplicate refresh, series
+  deduplicate, series prune, series merge, series normalize and book merge all
+  handed the progress bar the id of a legacy operation record. When the older
+  operation lookups were retired on 2026-08-16, the page started resolving those
+  ids against the newer operations system, where they do not exist — so the
+  lookup failed and surfaced as an error, while the scan or merge itself had
+  already completed. All eight now return an id the page can resolve.
+- **Merging duplicate books failed a second, separate way.** The merge call read
+  the response envelope instead of the operation inside it, so it had no id to
+  follow at all. Merging reported failure even once the id above was correct.
+
+#### Triggering "transcode" from the tasks page now says why it failed
+
+The `transcode` scheduled task cannot run unattended — it needs a `book_id`, and
+the scheduler's trigger signature has no way to carry one. It handled that by
+creating an operations row, immediately stamping an error onto it, and returning
+it. Because the run endpoint answers `202 Accepted` for any operation it gets
+back, the caller was told the task had been accepted, with the actual reason
+("transcode requires parameters — use the operations API directly") buried
+inside a row nobody was looking at.
+
+It now returns that message as an error, which the endpoint reports as a `400`
+with the text in the response body, and writes no operations row at all.
+
+- **Interrupted metadata candidate fetches now resume instead of stopping silently.**
+  A bulk fetch cut short by a restart previously relied on a hand-written recovery
+  pass that only ran at startup. The operations system now owns the resume, and a
+  resumed run skips books it already fetched — so recovering a 10,000-book fetch no
+  longer risks re-requesting every book from the external metadata services.
+- **A cancelled fetch is recorded as cancelled**, not as completed. A run stopped
+  part-way used to be indistinguishable from one that finished.
+
+- **Adding a library folder now reports its scan correctly.** The "add folder" response
+  handed back an id from the retired operations system, so the progress the UI polled for
+  never arrived and the folder's book count did not refresh until the page was reloaded.
+  The id now refers to the scan that actually runs.
+- **Saving metadata to files reports against the run that actually happens**, for the same
+  reason — the batch write-back returned an id that could not be looked up.
+
+- **The reconcile screen could stop showing your last scan.** Starting a reconcile
+  scan handed back a tracking id that the operations endpoints no longer
+  recognised, so the page had no reliable way to follow the run it had just
+  started.
+
+#### `/search` narrator results now carry a non-optional `id` that actually resolves
+
+Narrator objects in `GET /api/libraries/:id/search` were emitted as `{"name": ...}` with no `id`. Contract §6.3 records that the target client's `Narrator.id` is non-optional and that a single element without it throws the entire list, so any search matching a narrator could break the client's decode.
+
+The names now come from the same cached contributor index that backs `GET /narrators`, not from the raw store. That is what makes the id usable rather than merely present: the index splits compound credits and covers visible books only, so a search hit carries the same id the Narrators tab publishes and the `narrators.<id>` filter resolves. Sourcing from the raw store would emit a well-formed, cleanly decodable id for a person who does not exist — the stored credit `"Jeff Hays, Annie Ellicott"` is two people — giving a search hit that opens onto an empty list. `/search` already read this index for authors; narrators were the last contributor list still on the raw store.
+
+`searchResponse.Narrators` is retyped from `[]any` to `[]narratorDTO`, so the compiler now enforces the element shape that drifted. `numBooks` is still omitted, preserving the previous fix.
+
+Two regression tests: one pins both halves of §6.3 on the element, and one asserts the id `/search` publishes equals the id `/narrators` publishes and then resolves through the filter. The latter is the assertion that catches the compound-credit case; the search oracle records `narrators: []`, so conformance passes vacuously and cannot see element-level defects at all.
+
+#### Removed 20 group-relative duplicate paths from the OpenAPI spec
+
+`docs/api/openapi.json` documented 20 root-level paths (`/login`, `/logout`,
+`/me`, `/sessions`, `/sessions/{id}`, `/setup`, `/books`, `/import`,
+`/import-status/{id}`, `/import-status/bulk`, `/library-status`, `/sync`,
+`/test-mapping`, `/validate`, `/write-back`, `/write-back/preview`, `/{id}`,
+`/{id}/results`, `/{id}/apply`, `/{id}/cancel`) that were group-prefix-stripping
+artifacts left over from the pre-2026-08-12 spec merge (see
+`changelog.d/20260812_113000_openapi_union_merge.md`): each one's `operationId`
+names a handler that is actually registered under `/auth`, `/itunes`, or
+`/ai/scans`, and a correctly-prefixed sibling documenting the same handler
+already existed elsewhere in the spec (e.g. `/auth/login` for `/login`,
+`/itunes/books` for `/books`, `/ai/scans/{id}` for `/{id}`). Deleted the 20
+bogus entries; the correctly-prefixed twins are unaffected.
+
+11 further candidates from the same source TODO item were deliberately **not**
+deleted, because no correctly-prefixed twin exists yet in the spec: `/invites`,
+`/invites/{token}`, `/invite`, `/accept-invite`, `/status` (documents Deluge's
+status handler, not the ABS-compat surface's literal root `/status`),
+`/test-connection`, `/rebuild`, `/write-back-all`, `/{id}/deactivate`,
+`/{id}/reactivate`, `/{id}/reset-password`. Each backs a live, real
+`s.router.Routes()` entry (verified with a throwaway test against a fully-wired
+test server, not by grepping source — grouped Gin routes have no literal path
+string to grep for). Deleting them would have left those endpoints completely
+undocumented rather than merely mislabeled, which is a worse outcome than the
+duplicate-path problem this cleanup was meant to fix.
+
+#### Running a maintenance job twice no longer starts two copies at once
+
+Clicking "Run" on a maintenance job while that same job was already running started
+a second copy immediately, with both copies working over the same books at the same
+time. Because each copy reads a record, changes part of it, and writes the whole
+record back, two copies running together could overwrite each other's work — the
+second one finishing last would silently undo whatever the first had just saved.
+
+A second request now waits for the first to finish and then runs, instead of running
+alongside it. Nothing is dropped or ignored: both runs still happen, one after the
+other. A run started with different settings than the one already in progress — a
+dry run versus a real run, say — is still kept as its own separate run rather than
+being folded into the first.
+
+The cause was that all 37 maintenance jobs left their "don't run this alongside
+itself" marker blank, and every one of the three checks that would have queued the
+second request is skipped when that marker is blank. So none of the protections had
+ever applied to maintenance jobs at all. Each job now carries its own marker, and
+jobs still run freely alongside *different* jobs — only alongside themselves are
+they held back.
+
+#### abs: Log warning when GetAllSeriesBookCounts() query fails
+
+Added an slog.Warn call when GetAllSeriesBookCounts() fails in the LibrarySeries endpoint, with the message "abs: series book counts unavailable, reporting 0 for all series". This makes silent failures visible in logs while maintaining graceful degradation—the endpoint continues to serve a successful response with zero counts rather than failing the entire series list. A test (TestLibrarySeries_CountsErrorLogsWarning) verifies the warning logs on error and does not appear on the happy path.
+
+#### Never send empty batchFetchCandidates({}) from the Search providers command
+
+The 'Search providers…' command in the Metadata menu now sends an explicit selection for unmatched books (`{ selection: { filter: { only_unmatched: true } } }`) instead of an empty request body. The empty body was causing the server to return 400 'book_ids or selection is required'. This command now follows the same pattern as the working 'Bulk search selected…' sibling, providing a real library-wide target for the provider search operation.
+
+- **Renaming or organizing a single book no longer leaves a permanent stray record
+  behind.** Each of those actions created an operation record that was never
+  completed, never displayed anywhere, and never cleaned up — one per rename, one
+  per organized book, accumulating for as long as the library has been in use.
+  Nothing read them, so nothing noticed. They are no longer created.
+
+- The AI duplicate-author review and its apply step now report the operation
+  that actually runs. Both used to hand back the id of a bookkeeping row that
+  no longer had a status route behind it, so progress for a review that was
+  running fine could not be looked up at all.
+
+- A completed operation's result is now readable whichever way the operation
+  stored it. `GET /operations/:id/result` only knew the older of the two
+  places results are kept, so an operation that had been moved to the newer
+  one wrote its output and then had no way to hand it back — the AI review's
+  suggestions were about to land in exactly that gap.
+
+- Starting a review while one of the same kind is already running still hands
+  back the run in flight rather than starting a second one, and a review of
+  the *other* kind is no longer blocked by it.
+
+#### Series deletes no longer strand books that the filtered count cannot see
+
+Both series deleters decided "is this series still referenced?" from
+`GetAllSeriesBookCounts` / `GetBooksBySeriesIDCore`. Those getters skip rows
+that are `MarkedForDeletion` or non-primary — correct for a badge, wrong as an
+existence test. A series with one primary book and three non-primary versions
+reads as `count == 1`; the deleter unlinked the one visible book, deleted the
+series row, and left the other three pointing at an ID that no longer exists.
+
+This is the mechanism behind the damage already recorded in
+`internal/database/series_bookref.go`: **6,893 phantom series IDs held by
+13,322 live books plus 702 trashed ones**, measured 2026-08-14.
+
+Fixed by giving both deleters the UNFILTERED count. A new exported helper
+`database.SeriesRefCounts` resolves the capability through the decorator chain
+(the live store is wrapped by the Bleve search-index decorator, so a bare type
+assertion against `*PebbleStore` fails in production) and returns
+`GetAllSeriesBookRefCounts`. Three call sites now refuse to delete when the
+unfiltered count exceeds the rows they actually reassigned:
+
+- `internal/dedup/series_dedup.go` — the refusal is recorded in
+  `result.Errors` and the series row is kept. The check sits *before* the
+  `dryRun` branch, so the preview and the apply make the same decision.
+- `internal/maintenance/jobs/cleanup_series.go` phase 1 — a 1-book series whose
+  unfiltered count is higher is skipped rather than collapsed.
+- `internal/maintenance/jobs/cleanup_series.go` merge path — the merged-from
+  series row is kept and a warning logged.
+
+All three fail **closed**: a store that cannot answer the unfiltered question
+aborts rather than falling back to the filtered count.
+
+Review of the first cut found two ways the guard could pass on the very failure
+it exists to catch, both now fixed:
+
+- The refusal compared the unfiltered count against `len(books)` — the rows the
+  merge loop *attempted* — rather than the rows it actually reassigned. A book
+  whose `UpdateBook` failed still counted as moved, so a series with no hidden
+  rows at all could be deleted while a book still pointed at it. Both merge
+  paths now count successful reassignments only, and the previously-silent
+  "listed but could not hydrate" case is reported instead of ignored.
+- `getAllSeriesBookRefCountsPebble` never checked `iter.Error()` and skipped
+  undecodable book rows, so a truncated or partially-corrupt scan returned a
+  short map with a nil error. Because every guard reads a missing entry as
+  "unreferenced", that undercount was fail-**open** at all three call sites at
+  once. Both paths are now fatal.
+
+Refusals are also no longer invisible: a group in which every merge was refused
+no longer counts as an applied merge, phase-1 skips are counted, and both are
+surfaced through the job reporter rather than only `slog`.
+
+#### Frontend build no longer warns about deprecated Vite/Rolldown build options
+
+`npm run build` was printing `advancedChunks option is deprecated, please use
+codeSplitting instead` on every run. Vite 8.2.1 (rolldown-vite) has, as of this
+version, deprecated both `build.rollupOptions` and its nested
+`output.advancedChunks` in favor of `build.rolldownOptions` /
+`output.codeSplitting` — same shape, just renamed; `web/vite.config.ts` now
+uses the new names.
+
+Re-verified the no-duplicate-React-instance invariant the manual chunking
+depends on (a prior Vite 8 migration attempt shipped two live React instances
+into the `mui` and `vendor` chunks, producing a React error #130 crash on
+every page) by grouping every emitted chunk's sourcemap `sources` by *exact
+module file path*, not just package name — a package can legitimately have
+different files land in different chunks (e.g. `react-dom/client.js`'s actual
+renderer vs. `react-dom`'s small shared-internals shim used by MUI), so a
+per-package check produces false positives. Zero files land in more than one
+chunk, before and after the rename; the emitted `dist/assets/*.js` manifest is
+byte-identical to the pre-change build.
+
+Also raised `chunkSizeWarningLimit` from the 500 kB default to 600 kB. The one
+chunk over that line is `mui-*.js` (510 kB minified / 153.59 kB gzip) — needed
+even on the login screen since MUI core is imported eagerly in `App.tsx`, and
+its size is diffuse across 122 component subpaths with no dead weight to trim
+(no single component over 5.5% of the chunk). Splitting it further would trade
+one request for several at the same total byte count, so it's left as one
+chunk rather than force-split to satisfy the warning.
+
+- `GET /api/v1/maintenance/scan-composer-tags/:id` and
+  `GET /api/v1/maintenance/repair-missing-files/:id` now resolve an operation ID from either
+  era. Runs started before this release keep working, and runs started after it stop
+  returning 404.
+
+#### `ai_backend.local_base_url` no longer defaults to a developer's LAN IP
+
+The fresh-install default for `ai_backend.local_base_url` was a hardcoded
+address on one developer's LAN (`http://192.168.0.20:11434/v1`, their own
+Ollama host). `ResetToDefaults()` repeated the same hardcoded value. Every
+other install silently inherited it as a "configured" local endpoint:
+`EffectiveLLMMode()` treats any non-empty `LocalBaseURL` as proof a local
+backend is set up and selects local mode, so a fresh install on someone
+else's network would try to reach a dead address instead of falling back to
+OpenAI or disabled. Both defaults are now the empty string. Verified
+`EffectiveLLMMode`/`EffectiveEmbeddingMode` fall through cleanly to the
+non-local mode when `LocalBaseURL` is empty — added test coverage for that
+fall-through and for the empty fresh-install default.
+
+#### Deriving a paid LLM backend from a bare API key is no longer possible
+
+Removing the hardcoded address made a second, latent problem live. With no
+local endpoint configured, `EffectiveLLMMode()` fell through to
+`AIBackendModeOpenAI` whenever an API key was present and any LLM consumer was
+enabled — and `enable_ai_parsing` defaults to **true**. That is the exact shape
+of the 2026-08-16 incident recorded in that function's own comment, where a
+blank config silently selected a paid service and ran a library scan until the
+account hit `credit_balance_exhausted`.
+
+That fallback was deliberate and documented, but it had been effectively
+unreachable on a default install: the hardcoded LAN address always won the
+local branch first. Removing the address would have armed it for every install
+with a key and no local endpoint.
+
+Derivation now stops at `disabled`. Opting in to a paid backend is explicit
+only — set `ai_backend.llm_mode = "openai"`, which returns before any
+derivation runs. **This is a behaviour change** for any install that relied on
+the key-plus-consumer fallback and had explicitly cleared
+`ai_backend.local_base_url`; such installs must now set `llm_mode` to keep
+using OpenAI. Two existing tests that asserted the old derivation were updated.
+
+Not changed: `EffectiveEmbeddingMode()` has the same bare-key fallback shape
+(`embedding.enabled` also defaults true). It reads `embedding.base_url`, which
+already defaulted to empty, so this change does not affect it — the exposure
+there is pre-existing and is left for its own task.
+
+- Maintenance result lookups no longer report a database failure as a missing
+  operation. The two operator-facing result routes
+  (`/api/maintenance/composer-scan/:id` and the missing-file repair route) read
+  two operations keyspaces, and a failed read was being folded into "operation
+  not found" — answering `404` and logging nothing, which pointed the operator at
+  a bad id when the database was the thing that had broken. A store failure now
+  logs at `error` and answers `500`; a genuinely unknown id still answers `404`.
+- A maintenance run that cannot obtain an operation id now says so at `warn`
+  before the id is used, rather than only when the activity summary is skipped.
+  An empty id also disables per-item result writes and any resume skip-set keyed
+  off them, none of which surfaced as an error anywhere.
+- Five maintenance jobs no longer declare a resume policy that contradicts
+  themselves. `bulk-deluge-import`, `cleanup-empty-folders`,
+  `refetch-missing-authors`, `repair-missing-files` and `scan-composer-tags` all
+  report that they can be resumed while declaring `ResumeDrop`; they had been
+  resuming only through a legacy startup branch removed when the last v1 operation
+  minter was retired, which left them silently never resuming. They now declare
+  `ResumeRestart`, which resumes the existing run in place with its original
+  `dry_run` preserved.
+
+  **Scope:** this restores resume for a run interrupted by a hard kill, where the
+  row is left `running`. It does not restore it after an ordinary shutdown — a
+  separate, pre-existing gap means the startup sweep cannot see a run that shut
+  down cleanly, whatever its policy says. See the TODO entry on
+  `resumeAfterStartup`.
+- An interrupted `bulk-fetch-metadata` run no longer discards its record of
+  completed books. It tracks them against its operation id, and its previous
+  `ResumeRequeue` policy issued a new id on every resume, so a resumed run
+  re-fetched the entire library over the network. It now resumes in place, subject
+  to the same scope note above.
+- Long-running operations are no longer force-abandoned after three restarts
+  despite having done real work. An operation's high-water progress mark only
+  advanced when a job called `Checkpoint`, and maintenance jobs have no way to
+  call it, so the mark sat at zero permanently and the infinite-restart guard
+  concluded they had accomplished nothing. Progress reports now advance the mark.
+- Stopped logging a spurious "uncheckpointed" warning every five minutes against
+  every long-running maintenance job. The check now applies only to operations
+  that declared a checkpoint interval and then missed it, instead of to every
+  operation that merely resumes in place.
+
+- An operation stopped by a server restart is now recorded as interrupted rather
+  than as cancelled. Both cases previously wrote the same "cancelled" status, so
+  nothing could tell work the server interrupted apart from work someone
+  deliberately stopped. A run cancelled by a user, or killed by the stuck-operation
+  watchdog, still records as cancelled — deliberately, so it can never be revived
+  later. Nothing resumes automatically as a result of this change; it only corrects
+  what is recorded.
+
+- AI diagnostics analysis now reports its own progress while it runs. The
+  request went off into a background task that the rest of the system did not
+  know about, so the page could only show what little that task wrote down by
+  hand — and if it died early, nothing said so and the run simply sat there.
+
+- Results from a long AI analysis no longer go missing. Collecting them depended
+  on finding the run among the hundred most recent operations, but a batch is
+  allowed to take up to a day, by which time a busy library had pushed it out of
+  that list. When that happened the finished results were thrown away and
+  nothing reported a problem.
+
+- Submitting an analysis while AI is switched off used to report success and
+  quietly produce nothing. It now says plainly that it could not submit.
+
+- The confirmation message no longer reads "AI analysis submitted: undefined
+  request(s)" — it never had a number to show at that point, and the count now
+  arrives with the progress updates instead.
+
+- **AI quota exhaustion is no longer retried as a transient error.** A 429 response
+  carrying a quota/credit-exhaustion marker is now classified as permanent by checking
+  both the provider's `type` and `code` fields, rather than `code` alone. The real
+  OpenAI payload puts `insufficient_quota` in `type` while `code` holds
+  `credit_balance_exhausted`, so the previous check returned false for genuine
+  exhaustion and the retry helper burned its full attempt budget with backoff against
+  an API that could not succeed — on 2026-08-16 that failed all 77 batches of a library
+  scan and cost a completed 3,917-file walk when the watchdog cancelled it. Ordinary
+  rate limits remain transient and still get their backoff.
+
+#### Series merges no longer strand alternate versions of a book
+
+Merging two duplicate series moved the books out of the one being deleted and
+then deleted it. But it asked for those books with `GetBooksBySeriesIDCore`,
+which is a *listing* getter: it deliberately hides non-primary versions,
+because an alternate rip of a book is a duplicate of something already shown.
+
+Hiding a row from a list and leaving it behind in a merge are different things,
+and the merge loop treated them as the same. Every alternate version of a book
+in the merged-away series was left pointing at a series ID that no longer
+existed. `internal/database/series_bookref.go` records the production scale of
+this shape: 6,893 phantom series IDs held by 13,322 live books.
+
+Added `GetBooksBySeriesIDAllVersions`, the complete-set counterpart, mirroring
+the `GetBooksByAuthorIDWithRoleCore` fix made to the author getters on
+2026-08-14. Three call sites in `internal/dedup/series_dedup.go` now use it:
+the two reassignment loops that repoint books before deleting a series, and the
+pass that links the merged authors onto the kept series' books. That third one
+was not stranding rows — it was silently *under-applying a write*: a
+non-primary version skipped there never received the merged author credits, and
+nothing revisits it afterwards, so the omission was permanent.
+
+The dedup scan's series preview card deliberately still uses the listing
+getter. It is display-only and cannot strand anything, and switching it would
+re-introduce a separate bug fixed earlier this month, where a series listing
+showed every alternate rip alongside the book it duplicates.
+
+Two limits worth stating plainly:
+
+- `AllVersions` does **not** mean unfiltered. Soft-deleted (trashed) books are
+  still excluded from both getters, because a trashed row cannot be repointed.
+- This therefore closes only half the hazard, and the remaining half is not
+  covered everywhere. The scheduled dedup pass (`DedupSeries`) has an
+  unfiltered reference-count guard that refuses to delete a series a trashed
+  row still points at; that guard was left in place and is still load-bearing.
+  The manually-invoked merge (`MergeSeries`) has **no such guard** and deletes
+  the series unconditionally, so a trashed row there is still stranded. That
+  gap predates this change and is not introduced by it, but it is worth
+  stating plainly rather than implying the guard covers both paths.
+
+A code comment and the operator-facing refusal message both claimed the
+skipped rows were "trashed or non-primary". The non-primary half became false
+with this change — that getter now returns them — so both were corrected to
+name the causes that actually remain: trashed rows, and rows whose
+reassignment failed.
+
+The regression is pinned by a conformance test keyed on the **getter pair**
+rather than on a list of call sites — it asserts `AllVersions` returns a
+superset of `Core`, differing by exactly the non-primary version, on both the
+in-memory and on-disk backends. The task brief that prompted this work
+enumerated three call sites to convert; there were four. A per-site checklist
+cannot catch a site nobody wrote down, or one added later. A structural
+assertion about the getters themselves fails on both.
+
+- **Nightly maintenance has not run since Aug 21 — fixed.** The maintenance
+  window crashed on its first task every night, taking all 12 nightly jobs down
+  with it. It supervised each task by polling the *legacy* operations table for
+  an id that only exists in the v2 registry; that lookup returns "not found" as
+  a nil with no error, and the guard checked only the error, so it dereferenced
+  nil five seconds into task one. The tasks themselves were healthy the whole
+  time — `dedup.author-scan` completed successfully at each of the timestamps
+  the window reported as failed.
+- **The window no longer waits forever on an interrupted task.** Its terminal
+  status set omitted `interrupted_dropped` and `interrupted_quiesced`, which is
+  how `library.scan` and `metadata.batch-save` routinely end, so a window that
+  survived the crash would have blocked on them until its context expired.
+- **Interrupted tasks are now reported honestly.** A dropped task counts as a
+  failure (its work is discarded and never resumed); a quiesced or canceled one
+  is reported as incomplete rather than as success. The nightly summary also
+  separates "never started" from "started and did not finish".
+
+#### A library scan no longer stops dead on a single unreadable file
+
+Scanning your library has been giving up partway through for the last three
+days, always at the same place. It reported the same 14,912 books processed
+every time and then stopped, so anything past that point in the library was
+never looked at — and because the count it showed kept changing slightly
+(40,109 books one run, 40,089 the next), it looked like the scan was making
+progress when it was not.
+
+One file was stopping everything. Reading a file's tags means handing it to a
+parser that trusts what the file says about its own structure, and a file that
+lies about that can send the parser into a read that never finishes. There was
+no time limit on that step and no way to interrupt it, so cancelling the scan
+did not help either: the scan was told to stop, said it had stopped, and the
+underlying read carried on forever.
+
+Reading a single file is now given a generous time limit — long enough that a
+big file on a slow network drive is never affected — and a file that exceeds it
+is treated the same way as any other unreadable file. The scan notes the
+failure, falls back to naming the book from its filename, and moves on to the
+next one instead of stopping.
+
+The scan will now finish. The file that caused this is still unreadable, and it
+will now show up as a failure you can see rather than as a scan that quietly
+never ended.
+
+- **The book list could serve books you had filtered out.** When the database
+  was still warming up after a restart, a request for a filtered page (for
+  example "primary versions only") was answered correctly the first time, but
+  the *unfiltered* results were saved under the filtered request's name. Every
+  later identical request was served those saved results, including books the
+  filter was meant to exclude. It affected any excluded book, not just an
+  edge case, and cleared itself once warmup finished — so it looked
+  intermittent. The saved copy is now only reused when it genuinely answers
+  the request that asked for it.
+
+#### `is_primary_version` post-filters now treat a nil flag as primary, matching storage's default
+
+`GetAudiobooks`' author/series/search post-filter (`internal/audiobooks/service_query.go`)
+classified a book with `IsPrimaryVersion == nil` as **non-primary**
+(`b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`). Both storage layers
+disagree: `pebble_store.go`'s own `IsPrimaryVersion` filter and the memdb
+`is_primary_version` index (`memdb_schema.go`, `Default: true`) both treat a
+nil flag as primary. The mismatch meant a nil-flagged book fetched via
+`GetBooksByAuthorIDCore` (which itself counts nil as primary) could then be
+silently dropped from `?is_primary_version=true` results, or wrongly
+included in `?is_primary_version=false` results, on the exact same request
+that the library-wide pushdown path answered correctly.
+
+The post-filter now reads `b.IsPrimaryVersion == nil || *b.IsPrimaryVersion`,
+so `GetAudiobooks`' author/series/search path and the library-wide pushdown
+path in `service_query.go` now classify a nil-flagged book the same way. The
+same fix was applied to the identical expression in
+`CountAudiobooksFiltered`'s legacy `GetAllBooksCore` fallback — a defensive,
+currently-unreachable branch (the pushdown path added for fingerprint
+filters now covers every case that used to fall through), but it carries
+the exact same faulty comparison and would misclassify the same rows if it
+were ever exercised, so left inconsistent it would silently reintroduce the
+bug for whatever future filter combination finally reaches it.
+
+This fixes only the two `service_query.go` sites the task targeted. A
+broader grep (`IsPrimaryVersion != nil &&` across `internal/`) turns up
+dozens more call sites in `dedup`, `reconcile`, `itunes`, `organizer`, and
+elsewhere — most use the nil-safe negative form
+(`!= nil && !*IsPrimaryVersion`, which already treats nil as primary
+correctly), but a handful use the same positive form fixed here. Auditing
+and, where needed, fixing those is out of scope for this change; see
+`TODO.md`'s `is_primary_version` investigation for that fuller inventory.
+
+#### Deleting an author now actually clears its `book_authors` junction rows
+
+`DeleteAuthor` swept the `book_author:` keyspace. The live junction is
+`book_authors:` — plural. Nothing matched, so every author delete left its
+junction rows behind, and the orphans accumulated: readers that resolve a
+book's authors through the junction kept seeing an author row that no longer
+existed.
+
+The sweep now walks the live keyspace. The junction stores one row per book
+(`book_authors:<bookID>` → a JSON array of `BookAuthor`), so a matching row
+cannot simply be deleted — it may carry co-authors that must survive. Each
+row is rewritten without the deleted author and removed outright only when
+that author was its sole entry. Both writes join the same batch the author
+row is deleted in, so the junction can never outlive the author it points at,
+and the same edits are mirrored into memdb, which is what the query layer
+actually reads when it is enabled.
+
+The scan bound is `prefixUpperBound("book_authors:")` rather than a literal
+`"book_authors:~"` sentinel. Book IDs are opaque strings, and `~` is 0x7E, so
+a literal bound silently skips every id whose first byte is higher — all
+non-ASCII ids included. Rows a sweep skips are precisely the orphans it
+exists to remove.
+
+Cost: one full junction scan per author delete. Pebble has no author → books
+reverse index and building one needs a backfill migration, so bulk callers
+pay this per author; recorded as a follow-up rather than fixed here.
+
+#### The series delete guard could still report a series as unreferenced when it had simply failed to read it
+
+The nightly `dedup.series-prune` job deletes a series only when nothing points
+at it any more. The counter that answers that question was hardened in an
+earlier fix so it would **abort** rather than return a short count — because a
+short count reads as "referenced by nothing", which is the permissive answer
+being handed to something that deletes on it. That hardening was real, and in
+production it never ran.
+
+`GetAllSeriesBookRefCounts` has two implementations: a scan of the on-disk
+store, and a scan of the in-memory query layer. It prefers the in-memory layer
+whenever that layer is available, and availability is hardcoded on. So every
+production call took the in-memory path, and the hardening had been applied
+only to the other one.
+
+The in-memory layer is a **lossy** copy. It is rebuilt from disk at startup, and
+that rebuild deliberately skips any row it cannot decode or cannot insert rather
+than refusing to start at all — one bad row must not leave the service with no
+index. But those rows were then dropped silently and the layer was published as
+though it were complete. A dropped book row is a book whose series reference
+nobody can see, so the series counts zero and becomes eligible for deletion
+while the book is still on disk holding its ID. That is the exact failure the
+guard exists to prevent, arriving through the door the guard was not watching.
+
+The rebuild now records what it lost, and the counter refuses to answer from a
+table it knows is short. Two details worth stating:
+
+- **Only one of the two ways to lose a row was ever counted.** Rows rejected by
+  an index rule were tallied; rows that failed to decode were not, so the
+  `skipped_total` figure an operator would check after a restart could read zero
+  through a rebuild that had dropped every unreadable row in the library. Both
+  paths are counted now, split by cause — "12 unreadable rows" and "12 rejected
+  rows" call for opposite fixes — and the startup log line is accurate for the
+  first time.
+- **Making the loss visible immediately exposed a second, older bug.** Author
+  aliases are stored under a key prefix shared with two internal indexes, and
+  the rebuild — unlike every comparable step beside it — never filtered them
+  out. One of those indexes holds a plain number where a record was expected, so
+  a library containing a single author alias would have reported a loss on every
+  single restart. That had been harmless while losses were silent; it would have
+  become a permanent false alarm the moment anything acted on it. The filter the
+  neighbouring steps already had is now there too, which also stops the other
+  index quietly inflating the reported row count.
+- **The refusal does not stall the job.** When the in-memory layer is known to
+  be short, the call falls through to the on-disk scan, which is authoritative
+  and already hardened. So the answer is *correct*, not merely safe, and the
+  nightly prune keeps running instead of waiting for the next restart.
+
+**Startup is not the only way a row goes missing, and the other way was the one
+that mattered.** A write can succeed on disk and then be rejected by an
+in-memory index rule, leaving the identical gap with no restart involved — and
+that happens in steady state, which is where the service actually spends its
+life. Review of the first version of this fix caught that it was being logged
+and otherwise ignored, so the guard would still have passed while the
+deleting job ran. It is now recorded too.
+
+Because that rejection happens inside a caller-supplied operation, there is no
+way to tell *which* set of records lost the row, so it is treated as though any
+of them might have. That deliberately errs toward refusing: the cost is a
+slower, correct answer read from disk, and the cost of the other direction is a
+deleted record.
+
+Whether this ever actually stranded a series has **not** been measured, and the
+number is not recoverable after the fact — a deletion that happened because a
+row could not be read leaves no record of the row it could not read. What can be
+checked going forward is the `skipped_total` figure in the startup log: it is
+now accurate, and a non-zero value means the on-disk scan is being used instead.
+
+#### `AsSeriesBookRefStore`'s capability test now exercises the decorator chain
+
+`TestAsSeriesBookRefStore_ResolvesPebbleStore` asserted only a bare
+`*PebbleStore`, `nil`, and `struct{}{}`. All three pass against a plain
+`s.(SeriesBookRefStore)` type assertion, so the test could not distinguish
+`AsCapability` from the bare assertion it exists to replace — confirmed by
+mutation, which printed `ok`.
+
+Production never holds a bare `*PebbleStore`: it is wrapped in the Bleve
+`indexedStore` decorator, which embeds the `Store` interface and therefore does
+not promote `SeriesBookRefStore`. Against a decorator the bare assertion finds
+nothing and the series-delete guard silently no-ops — the case the guard exists
+for. The test now covers the decorated store and the decorator that omits
+`Unwrap` (which must NOT be reached around).
+
+#### Backup restore — the zip-slip guard's filesystem assertions could not fail
+
+The `go/zipslip` containment guard on `RestoreBackup` (alert #13) was already in
+place: `internal/backup/backup.go` normalises each tar entry name and routes the
+join through `safepath.Join`, which rejects anything that escapes the restore
+root after cleaning. Landed in `e5cf51f5` and hardened onto `safepath` in
+`bbb9f503`. That part needed no change.
+
+What did need changing was the test suite defending it. Three of the tests
+claimed a filesystem-level assertion and none of them could fail.
+`TestRestoreBackupValidatesAllEntries` used an entry named `../../escape` and
+then stat'ed `tempDir/extract/escape` — a path *inside* the restore directory,
+i.e. the single location that entry provably cannot reach.
+`TestRestoreBackupRejectsZipslipAttack` stat'ed `tempDir/escaped.txt` for an
+entry that resolves four levels higher, and `TestRestoreBackupRejectsDotDotInPath`
+asserted only on the error string. All three passed whether or not the guard
+existed.
+
+Each malicious entry now escapes exactly one level, into the test's own
+`t.TempDir()`, and the assertion is a directory listing of that parent with an
+allow-list rather than a stat of one guessed path — so an escape under any name
+is caught, not just the name the test author predicted. The filesystem check
+runs *before* the error-contract check and uses `t.Error` rather than `t.Fatal`,
+because a `t.Fatal` on the error return short-circuits the only assertion that
+cannot pass vacuously. Verified by mutation: replacing the guard with a bare
+`filepath.Join` makes all three report the escaped file by name and path.
+
+Also added `TestRestoreBackupIgnoresSymlinkEntries`, pinning the fact that
+`tar.TypeSymlink` and `tar.TypeLink` entries fall through to the default branch
+and are skipped — an archive cannot plant a symlink out of the restore root and
+write through it later. Nothing enforced that before, so link support could have
+been added without anyone noticing the containment check does not cover
+`Linkname`.
+
+- **Organizing a book no longer adopts a file that merely happens to be the same
+  size as the one it was about to place.** When a file already sat at a book's
+  destination path, the organizer decided whether that file was "ours" from byte
+  length alone — so two unrelated audiobooks of identical length would be treated
+  as one, and the book's row would silently be pointed at the other book's audio
+  with nothing recording what it used to say. Equal size is now only a free
+  pre-filter; sameness is proven by hashing both files in full, and anything the
+  check cannot read or verify is left alone rather than adopted.
+
+#### Menus can no longer leave the whole page unclickable
+
+Every `Menu` in the app — including every `Select` — could stall part-way
+through closing. MUI's Modal root is `position: fixed` with `inset: 0` and only
+becomes `visibility: hidden` once the modal has fully exited, so a stalled exit
+leaves an invisible full-viewport layer with `pointer-events: auto` swallowing
+every click on the page until a reload. The menu looks closed; the app is dead.
+
+`MuiMenu` shipped with `transitionDuration.exit: 0`. `theme.ts`'s own
+investigation record is explicit that zeroing the duration only *narrows* the
+race rather than closing it — the instrumented probe recorded there still
+stalled 12 runs out of 20 with a numeric duration supplied. Menus were left on
+that weaker mitigation only because `MuiDrawer` received the proven one first;
+there was never a reason for the two to differ.
+
+`MuiMenu` now carries `slotProps: { transition: { exit: false } }`, the same
+line `MuiDrawer` has. `false` takes react-transition-group's synchronous
+`performExit` branch: with no timeout to wait on, there is no window in which
+the completion callback can fail to run, so the Modal unmounts in the same
+tick. `transitionDuration` keeps `enter: 225` — only the exit path ever
+stalled — and retains `exit: 0` so a call site that deliberately opts back into
+an exit animation still gets a fast one rather than the ~280ms `auto` the
+original defect rode on.
+
+The collapsed sidebar's Library menu had been given this fix inline as a
+stopgap while the global change was pending. That copy is removed: two copies
+of one mitigation invite drift, and a local copy implies that Menu is special
+when it is not.
+
+Pinned by four new cases in `theme.slot-merge.test.ts`, which feed the real
+theme defaults through MUI's real `resolveProps` — the mitigation only reaches
+a Menu if MUI keeps merging `slotProps` per-slot instead of replacing the whole
+object, and that is MUI's contract to change, not ours.
+
+#### Three more series-merge paths no longer strand non-primary versions
+
+A series merge repoints every book it is handed to the surviving series and then
+deletes the merged-away one. Three paths read `GetBooksBySeriesIDCore` — the
+**listing** getter, which hides non-primary versions — so an alternate rip of a
+book was never repointed, and the series it still pointed at was deleted out from
+under it. TASK-029 fixed this shape inside `internal/dedup/series_dedup.go`; these
+are the paths outside it.
+
+- `internal/server/duplicates_helpers.go` — two sites. `mergeSeriesGroupHelper`
+  had **no guard at all**: its `DeleteSeries` is unconditional, so every hidden
+  row was stranded. The `executeSeriesPrune` merge loop had the same shape.
+- `internal/plugins/maintenance/series_denumber_op.go` — this one *looked*
+  defended and was not. It refuses to delete unless `movedAll` is true, but
+  `movedAll` starts `true` and is only ever set `false` inside the loop over the
+  rows the filtered getter returned. A row that getter excluded is never
+  iterated, so it can never flip the flag and the delete proceeds anyway. The
+  guard's sample space was the filtered set the bug lives outside of.
+
+`internal/maintenance/jobs/cleanup_series.go` was audited and deliberately **not**
+changed here. It does not strand: its guard is driven by an independently-sourced
+*unfiltered* count, so it refuses the delete instead. Its problem is the mirror
+image — the refusal is permanent — and it was fixed separately.
+
+> **Correction.** An earlier revision of this entry also described widening
+> `executeSeriesNormalizeCore`'s affected-book list to the complete set. That
+> change was wrong and has been reverted; see the follow-up entry for why. This
+> paragraph is left as a correction rather than deleted, because the reasoning
+> behind the mistake is the same one this whole entry is about.
+
+#### cleanup-series stops refusing merges it is safe to make
+
+The `cleanup-series` job compared an **unfiltered** reference count against a
+**filtered** membership read. Those answer different questions, so any series
+holding a non-primary version (an alternate rip of a book already in it) failed
+the comparison and was refused — not once, but on every run, forever.
+
+The guard was never wrong; it was misaligned, and refusing was the safe side to
+err on. Reading the complete-set getter aligns the two so the guard now fires
+only on rows the run genuinely cannot reach: trashed books (both series getters
+skip soft-deleted rows) and rows the memdb counts but Pebble can no longer
+hydrate. Those still refuse, and the tests that pin that behaviour are unchanged.
+
+Two paths were affected:
+
+- **Merging duplicate series** (`csMergeSeriesGroup`) — now repoints every
+  version before removing the series row.
+- **Collapsing 1-book series** — previously compared the reference count against
+  the literal `1`, so "one primary book plus its alternate rips" always refused.
+  It now unlinks the complete set and compares against that.
+
+**Behaviour change worth noting:** the second path will now collapse series it
+previously kept. That is the job doing what it was written to do — a series
+holding one book and its alternate rips *is* a one-book series — but it does mean
+more series rows are removed than before. Candidate selection still uses the
+filtered getter, so alternate rips cannot make a 1-book series look like a
+multi-book one and thereby escape collapsing.
+
+`csUnlinkAndDeleteSeries` now takes the full set and is fail-closed: the series
+row is deleted only after every unlink has succeeded, because deleting after a
+partial unlink would strand exactly the rows that failed.
+
+- **A library scan no longer overwrites metadata you curated.** The scanner
+  overlays values read from a file's own tags onto the existing row on every
+  rescan, and it did so unconditionally — so if you corrected a title, author,
+  series, narrator, language or publisher in the UI while the file's embedded
+  tags still held the old value, the next scheduled scan silently wrote the old
+  value back. The scan now checks each field's provenance first and leaves
+  anything you locked or explicitly set alone. If that provenance cannot be
+  read, the scan skips the overlay rather than risk overwriting an edit it
+  could not verify.
+
+#### A failed repoint no longer deletes the series anyway
+
+Reading the complete-set getter fixed *which* books a series merge tries to move.
+It did nothing about what happens when moving one **fails** — and both merge loops
+in `internal/server/duplicates_helpers.go` recorded the failure and then deleted
+the series regardless, leaving the failed row pointing at nothing.
+
+That is the same end state as the stranding bug, reached through the error path
+instead of the getter, with one difference that makes it worse: `executeSeriesPrune`
+returns `nil` either way, so the operation is marked successful and the activity
+feed reports a completed prune.
+
+Three branches reached the delete — a hydrate error, an update error, and a book
+the membership getter lists but a later point-get cannot resolve. The last of
+those returned `(nil, nil)`, was neither counted nor logged, and so could strand a
+row leaving **no trace whatsoever**. It is reachable rather than theoretical: the
+Pebble store returns `(nil, nil)` on `ErrNotFound`, and the getter may serve a row
+from the memdb that the point-get can no longer hydrate.
+
+Both paths are now fail-closed — the series row is removed only after every book
+has been repointed — and a refusal names the series, how many of its books were
+affected, and what to do next.
+
+Also fixed: the canonical-series vote silently treated a series whose book count
+failed to load as empty, so a transient read error could decide which of two
+duplicate series got **deleted**, leaving no record of having done so.
+
+#### A refused series merge no longer leaves the series list stale
+
+Making the merge fail-closed introduced this, and it was caught in review before it
+reached anyone's library.
+
+The cached series list is dropped only when a run "cleaned" something, on the
+stated reasoning that *"a run that cleaned nothing must NOT invalidate: it changed
+nothing."* That held when a merge either completed or errored out.
+
+Refusing the delete created a third outcome: books get repointed to the surviving
+series, and then nothing is removed. The cleaned count stays at zero, so the cache
+is kept — while every one of those books now belongs to a different series. The
+series list goes on serving pre-merge membership for up to 24 hours.
+
+That is the same stale-list symptom measured in production on 2026-08-14, quoted in
+the very comment that justified the condition, reached from the opposite direction.
+Repointed books are now counted in their own right, and the invalidation message
+reports both numbers.
+
+#### A partial series-normalize no longer discards the work that succeeded
+
+Also introduced alongside the fail-closed change. Recording a collection error
+turned a swallowed failure into one that aborted the operation — which skipped
+organize and tag write-back for **every** book in the run, not just the series that
+failed.
+
+The renames and merges have already committed by the time that error surfaces, so a
+re-run finds nothing to normalize, computes no actions, and those files are never
+organized: the failure was permanent rather than retryable. The operation now
+organizes and retags the books it did collect, and then reports the failure. The
+status is still `failed` — deferring it buys file consistency, not silence.
+
+This is a deliberate trade-off between two imperfect outcomes. Organizing moves
+files to match series rows that genuinely changed; not organizing leaves committed
+renames with their files under the old paths and no way to retry. The second is
+worse, and silent.
+
+#### The operations timeline now answers the question you asked it
+
+`GET /api/v1/operations/timeline` accepted `def_id` and `limit` in the sense that
+it did not complain about them. It did not read them. Gin drops unknown query keys
+silently, so the handler saw only `since` — and `since` defaults to **fifteen
+minutes**.
+
+A query written the natural way, `?def_id=library.scan&limit=200`, reads as *"the
+last 200 runs of the library scan."* What it actually asked for was *"everything in
+the last quarter hour."* On a quiet system that comes back with one unrelated row,
+which is indistinguishable from **"this job has never run."**
+
+That is not a hypothetical misreading. It produced three wrong conclusions in two
+days: a scan population recorded as 9 runs when the true 7-day figure was 21, a
+nightly-maintenance failure count recorded as 3 nights when it was 7 for 7 — in a
+document that shipped with the undercount — and a diagnosis of a "broken filter"
+that was briefly confirmed against a second, unrelated bug.
+
+Both parameters are now real. `def_id` selects one operation type; `limit` bounds
+the rows returned, up to 1000.
+
+**Where the filter is applied is the whole fix.** The store sorts and truncates
+before the handler sees anything, so filtering a page the store had already cut
+would answer *"the runs of this job that happen to fall in the newest 200 overall"* —
+a different plausible wrong answer in place of the old one. Queued rows would go
+first, because they sort last. The filter therefore runs across the whole window,
+and the limit is applied after it.
+
+#### The timeline says what it looked at
+
+An answer that describes its own scope cannot be mistaken for a complete census, so
+the response now carries the window it measured (`since`, `window_start`), the
+filter it applied (`def_id`), and the bound it used (`limit`).
+
+It also reports `matched` — how many runs were in the window before the limit — and
+`truncated`. Those are facts rather than the usual guess: counting the matches
+before trimming is the only way to tell *"exactly 200 existed"* from *"there were
+more."* When a scan is large enough to hit the server's own internal bound, the
+reply says `scan_capped`, meaning the total is a floor and no *"it never happened
+before X"* claim can rest on it.
+
+Two inputs are now refused instead of quietly ignored: a negative `since`, which put
+the window boundary in the future and returned a near-empty list that read as
+"nothing happened", and a `limit` that is not a positive number, which used to fall
+back to the default with no way for the caller to notice.
+
+The one behaviour left deliberately unchanged is the fifteen-minute default for
+`since`. It is now stated in every reply rather than being invisible.
+
+#### A series prune that refused to delete anything no longer reports success
+
+The series merge was taught to stop and refuse when it could not move every book
+out of a series before deleting it. That refusal ends with the words *"Re-run
+after resolving the errors above."*
+
+It was delivered to a run that reported itself green. `executeSeriesPrune`
+returned "no error" no matter what happened inside it, so the operation was
+marked **success** and the activity feed said *"Series prune completed."* Every
+recorded failure — a book that could not be loaded, a refused delete, a skipped
+orphan sweep — reached the operator only as a warning line truncated to ten
+entries.
+
+So the protection worked and nobody found out. The duplicate series stay,
+membership split across both rows, and no re-run ever happens because nothing
+asks for one.
+
+The run now finishes its work and then reports the failure, with counts and the
+first ten reasons.
+
+This is the same mistake as the cache bug fixed a day earlier, in a different
+place. Repoint-some-books-then-refuse is an outcome that did not exist when these
+conditions were written, and it has to be taught to **every** condition that reads
+the same facts — not just the first one somebody notices.
+
+#### Books that vanish mid-run are no longer organized silently into nothing
+
+After a series is renamed, the normalize operation moves each affected book's
+files to match. If a book could not be loaded at that moment, it was skipped with
+no log, no counter and no error — while still being counted in *"organizing the N
+books it collected."*
+
+The book keeps its old file path and stale tags. A re-run cannot fix it: the
+series name is already clean, so a second run finds nothing to do and never looks
+at that book again. The silence was permanent.
+
+These are now counted, named individually in the log, and folded into the
+operation's outcome. Sixty lines away in the same feature, the identical
+situation already blocked a delete; here it counted for nothing.
+
+#### A transient error can no longer decide which duplicate series gets deleted
+
+When several series look like duplicates of one another, the one with the most
+books is kept and the rest are merged into it and removed. A series whose book
+count failed to load counted as **zero** books — so it lost, and losing means
+being deleted.
+
+One momentary read error could hand a 400-book series to a 2-book typo of itself.
+The books survive, but the surviving row is the wrong one, and every external
+reference to the original is gone. The run reported success.
+
+A count that cannot be read now disqualifies that whole group of duplicates. The
+merge is skipped and reported, and can be retried; the wrong outcome could not be
+undone from the summary.
+
+#### The series list no longer goes stale when a prune exits early
+
+The cached series list was dropped at the end of the prune. The function has six
+ways out and five of them are earlier — a cancellation, a failed listing, a failed
+reference count. Any of those can happen *after* books have already been moved,
+which is exactly when the cached list is most wrong.
+
+It is now dropped on every exit path.
+
+#### Two failures that reported "0 errors"
+
+A failed refresh of the series list skipped the **entire** orphan sweep while the
+summary still read *"0 orphans deleted, 0 errors"* — a clean bill of health from a
+phase that never ran.
+
+Separately, if the list of series could not be read at all, the normalize
+operation reported *"complete, 0 affected books"* with status success, and the
+dry-run preview showed an empty, clean-looking action list. Nothing had been
+examined in either case. An empty result now means "nothing needs doing"; a
+failure says so.
+
+#### Splitting an author, or turning one into a narrator, no longer breaks the book's author link
+
+Two actions in the authors screen — splitting a combined author like
+`"Author1 / Author2"` into separate people, and reclassifying an author as a
+narrator — relinked the affected books correctly in one place and forgot them
+in another. Books whose main author was the one being changed kept an internal
+pointer to an author record that had just been deleted.
+
+The effect depended on which screen you were looking at. In the library list
+those books showed **no author at all**; open one directly and it still showed
+the old name. The same book gave two different answers, and nothing reported an
+error either way. Because the duplicate-cleanup screen runs these actions in
+bulk, a single click could affect many books at once.
+
+Now the split moves the book to the correct individual author, and the
+reclassify promotes whichever author remains — or, if the reclassified person
+was the only author listed, leaves the book with no author link rather than a
+broken one.
+
+One remnant is not fixed: a book left with no author can still show the old
+name on its detail page, because that stored copy of the name cannot currently
+be cleared. The library list is unaffected. **Books already affected are not
+repaired by this change** — it stops new ones from being created.
+
+Two other copies of this logic (the scheduled author-split job and the
+maintenance author-split scan) were already correct; the screen actions were
+the ones that had drifted.
+
+- **Series merges no longer read their book list from a memory index known to be
+  missing rows.** Every path that merges one series into another first asks which
+  books belong to the series being merged away, repoints them, and then deletes the
+  old series. That question was answered from an in-memory index without ever
+  checking whether the index was complete. When rows had gone missing from it — which
+  the database already detects and records — the merge repointed only the books it was
+  shown, reported success, and deleted the series anyway, leaving the books it never
+  saw pointing at a series that no longer existed. Those books then render with no
+  series and are effectively unfindable by series. An earlier instance of this same
+  shape left 13,322 books holding 6,893 series IDs that had been deleted out from
+  under them.
+
+  The lookup now notices when the index is short and reads from the authoritative
+  on-disk store instead, so the merge completes **correctly** rather than either
+  silently stranding books or refusing to run. Seven merge paths are covered, not
+  just the one where the problem was found.
+
+  Series *listing* pages deliberately keep reading from the fast in-memory index even
+  when it is short: a missing row there is a slightly incomplete page, not a deleted
+  series, and a lost row is not repaired until the next restart — so making every
+  series page fall back to a full scan would be a permanent slowdown in exchange for
+  nothing.
+
+  Books in the trash are unaffected by this change and are still covered separately.
+
+- **The authoritative series scan that fall-through relies on no longer answers
+  short in silence.** Making the merge getter fall through to the on-disk scan
+  (above) promoted that scan from a listing read to the read a `DeleteSeries` is
+  authorized against, and it had none of the hardening that role requires. It
+  skipped book rows it could not decode — which is the *same* condition that
+  makes the in-memory index refuse, so the repair path was blind to exactly one
+  of the three triggers that send callers down it. It scanned
+  `["book:0","book:;")`, a range that only covers IDs whose first character is a
+  digit, so a caller-supplied letter-leading book ID was invisible to every
+  series merge (latent: generated IDs are ULIDs and start with a digit — the
+  same bounds bug fixed in the version-group backfill one day earlier). And it
+  never checked the iterator's error, so a truncated scan and a complete one
+  both returned success. All three now fail closed. Widening the bounds admits
+  the secondary indexes, whose values are bare book IDs rather than book JSON,
+  so the structural one-colon key filter and the now-fatal decode are a single
+  change and must not be separated.
+- Fixed the same iterator-bounds defect in `getAllSeriesBookRefCountsPebble`,
+  the unfiltered counter that three series-delete sites consult before removing
+  a row. It scanned `["book:0", "book:;")`, so a book whose ID does not begin
+  with a digit was absent from the returned map — and absence is exactly the
+  signal those callers read as "referenced by nothing, safe to delete".
+- Added fault-injection tests (`vfs/errorfs`) for both hardened scans, proving
+  each refuses rather than returns a partial answer when a storage-layer read
+  fails mid-scan. This closes the one gap a mutation-testing pass had flagged
+  as untestable without machinery the codebase didn't have — it did, one
+  constructor argument away.
+
+- An operation interrupted by a restart is now actually resumed. The startup
+  resume sweep took its candidates from the "active" index, which drops a row the
+  moment its status stops being queued or running — so every operation a graceful
+  shutdown left `interrupted_quiesced` became invisible to it and never came back,
+  no matter what its resume policy said. A library scan stranded this way sat
+  untouched for hours across a deploy. The sweep now scans for interrupted rows
+  directly, and only the most recent interrupted run of each operation is
+  resumed — a live queued or running run always wins — so a month of accumulated
+  interruptions cannot all restart at once.
+
+#### Author dedup suggestions no longer change between identical scans
+
+`FindDuplicateAuthors` walked its last-name buckets by ranging a Go map, which
+has randomized iteration order. Its grouping is greedy — the first author of a
+similar-name pair to be visited becomes the group's anchor and the other is
+absorbed into it — so the *contents* of the suggested groups, not just their
+order, differed from one scan to the next with no change to the underlying
+library. Both grouping phases now iterate in sorted order, making the result a
+function of the data alone.
+
+#### Batch file writes no longer leave a book's total duration and size stale
+
+Adding, updating and deleting a book's files each recomputed that book's total
+duration and file size afterwards. `BatchUpsertBookFiles` — the path used by
+whole-library backfills, the scanner and the iTunes importer — did not. The rows it
+wrote were correct; only the parent book's summed fields were left at whatever a
+previous single-file write or the original import had set.
+
+Nothing reported this. The write succeeded, the files were right, and the totals
+were quietly wrong. A backfill that corrected every file it touched could therefore
+finish successfully and leave those books still displaying the old totals — which
+also makes the correction look like it did nothing on re-read, and invites running
+it again.
+
+One caller had already hit this and worked around it locally: the duration backfill
+runs its own second pass, with a note explaining that the batch path would not do it.
+So the gap was known in one place and never fixed where it lived, leaving every other
+caller with the bug.
+
+The batch path now recomputes each affected book once **per call**, after the write
+commits — the same shape `DeleteBookFilesByIDs` already used. Once per book rather
+than once per row is the point: the recompute re-reads the book's entire file set, so
+doing it per row is what turns an N-file write into an N² read.
+
+Per call, not per job — a caller that flushes in chunks and does not group its rows
+by book will still recompute a book once per chunk that book appears in. That is
+bounded and vastly better than per row, but it is not a promise of exactly one
+recompute per book across a whole backfill.
+
+Two details that are easy to get wrong, and are now pinned by tests:
+
+- **The recompute follows the row, not the request.** A batch upsert matches an
+  existing file by iTunes ID or by path and adopts that row's owner, so a file
+  submitted under one book can land on another. The book that gets recomputed is
+  the one actually written.
+- **Deleting every file does not zero a book's duration.** A deliberate
+  partial-data rule keeps the last known good value rather than letting a
+  temporarily-missing file destroy it. A comment on the bulk-delete path claimed
+  the opposite; it has been corrected.
+
+#### A file discovered mid-write is no longer stuck with partial metadata
+
+Adding the age gate on its own would have introduced a new way to lose data. A
+file discovered part-way through being written is unknown to the scan cache, so
+it is read immediately and a book row is created from whatever bytes existed at
+that instant. When the write finished, the mtime change would have put that row
+behind the age gate for a full six days, leaving the library showing metadata
+read from a partial file.
+
+The scan-cache write-back now re-arms the per-book rescan flag whenever it
+stamps a file that is still inside the age window, so such a file is re-read on
+the next scan instead of being deferred. Before the gate this case healed
+itself on the very next pass; it still does.
+
+#### Files that were being re-read and re-hashed on every single scan are now visible
+
+The scan records "I have read this file, at this size and timestamp" so the next
+scan can skip it. That bookkeeping step could be abandoned three different ways —
+the file could not be examined, the database lookup failed, or there was simply no
+library entry for that path — and **none of the three were recorded anywhere**. All
+three looked exactly like success.
+
+The consequence was permanent rather than transient. A file with no recorded scan
+state is treated as never scanned, so it is re-read and re-hashed on *every*
+subsequent scan, forever, reporting nothing. The third case is the troubling one:
+it happens structurally for files that duplicate an already-linked copy, which
+means the waste concentrates on precisely the files that are most expensive to
+process, and it can never resolve on its own.
+
+Each cause is now counted separately and reported in the scan summary, so the size
+of the problem can finally be measured rather than guessed at. This change makes
+the waste visible; it does not yet eliminate it.
+
+#### A file that finished downloading mid-scan could stay flagged as "suspicious" forever
+
+A file smaller than the minimum book size is flagged as suspicious and then read in
+full — a slow step, during which a still-downloading file can finish and grow past
+the threshold. The bookkeeping then recorded the file's *new* size, so every later
+scan considered it unchanged and skipped it, and the suspicious flag never cleared.
+It now records the size the decision was actually made on, so the next scan notices
+the mismatch, re-reads the file, and clears the flag by itself.
+
+#### The scanner was erasing the totals it had just computed
+
+Fixing the batch path exposed that it did not help the highest-volume caller. When the
+scanner creates a book's files it loads the book once at the start, writes the files,
+and then — for books whose path points at a file rather than a folder, i.e. single-file
+audiobooks — writes that original copy back to normalise the path. That copy still has
+the totals from before the write.
+
+`UpdateBook` preserves a field on nil for nine fields; duration and file size are not
+among them, so the nils in the stale copy were written straight through, discarding what
+the recompute had just stored. Every single-file audiobook the scanner imported had its
+totals computed and then erased inside one function.
+
+The scanner now re-reads the book before that final write. If the re-read fails it falls
+back to the old behaviour and says so in the log, rather than losing the values silently.
+
+This is worth recording as a pattern rather than an incident. The batch fix was correct,
+and on the most common path it would still have appeared to do nothing, because something
+downstream quietly undid it. Shipping it without checking the callers would have counted
+as a success.
+
+#### Failed total recalculations after a bulk write are now reported once, loudly
+
+When a bulk write finished and some books' totals could not be recalculated, each failure
+produced one line among however many the run emitted — in a job touching 175,000 rows, a
+run where every recalculation failed and one where none did were distinguishable only by
+searching the log, and both reported success. Bulk writes now also emit a single summary
+naming how many books were affected and a sample of them.
+
+The note in the code claiming a maintenance job would clean up any misses has been
+removed, because that job cannot currently run a second time — its documented override is
+accepted but never read. That is recorded as a separate defect; in the meantime the
+failure is at least visible.
+
+- **Multi-file audiobooks were re-read and re-hashed on every single scan, and their chapters were never saved.** When the scanner imports a book made of several files, it stores the book under the folder that contains them rather than under the first file. That move happened quietly, and the rest of the scan carried on looking for the book under the old name — so it found nothing. Two things then failed without saying a word: the scanner never recorded that it had already read the book, so every later scan read and re-fingerprinted every file in it from scratch, forever; and the book's chapter list was thrown away instead of saved. Single-file books were never affected, which is why scans looked fine. Measured on the production library on 2026-08-24: affected books had no "last scanned" timestamp at all.
+
+#### Repairing a multi-file audiobook no longer slows down with every track
+
+The repair that reconnects a book to its audio files created those files one at a
+time, and after each one it re-added the book's totals from scratch — which means
+re-reading every file it had created so far. A book with 200 tracks did not do 200
+units of work, it did about twenty thousand.
+
+Production logs settled how much this mattered: of all the total-recalculations that
+could be attributed to a specific cause, **92% came from this one loop**, by a wide
+margin the largest single source in the system.
+
+The files for one book are now written together, in one operation, and the totals are
+re-added once at the end. The result is the same; the work no longer grows with the
+square of the track count.
+
+Two things worth knowing about the new bulk-create:
+
+- **It creates; it does not update.** It deliberately does not look for an existing
+  file to modify, unlike the bulk-*upsert* used elsewhere. The repair already checks
+  whether the book has any files before it starts, so there is nothing to match. Using
+  it where an update was meant would add duplicate rows rather than change existing
+  ones, which is why that behaviour is now written down as a test rather than left to a
+  comment.
+- **It refuses a batch containing two files with the same iTunes identifier.** That
+  identifier is supposed to name exactly one file. The existing per-file check consults
+  what is already saved, so it cannot see another file being written in the same
+  operation — the two would both pass and both be written. It now stops instead.
+
+**One caller was deliberately not converted.** The directory-probe repair creates files
+one at a time by the same pattern and still does. It accounts for a small share of the
+measured volume, and it decides per file whether to create one at all, so converting it
+is a real change in shape rather than a mechanical swap. It is left as it is rather than
+changed without the same evidence.
+
+- **Multi-file audiobooks imported before today stayed broken, and nothing could bring them back.** An earlier fix stopped the scanner from losing track of a multi-file book when it files it under its containing folder — but only for books imported from that point on. Any book already filed that way was invisible to every later scan: the scanner looked for it under the name of its first file, found nothing, and quietly skipped saving its chapter list and recording that it had been scanned. That repeated on every scan, with no way out. The scanner now recognises a book that is already filed under its folder and picks it back up, so these books recover on the next scan instead of staying stuck. It only claims a book when that folder's book demonstrably contains the file in question, so one book's chapters can never be written onto another.
+- **The scanner now says something when it cannot find a book it just saved.** That lookup could fail silently, taking the book's chapters and scan record down with it and leaving no trace in the log.
+
+- **Moving files between books left BOTH books' runtime and size wrong, permanently.**
+  `MoveBookFilesToBook` is the only store method that changes which book a `book_file`
+  row belongs to, and it recomputed neither side. Duration and FileSize moved out of the
+  source and into the target while both books kept their pre-move totals: the source went
+  on counting runtime it no longer owned, and the target did not count what it had just
+  gained. Nothing re-derived either figure afterwards —
+  `maintenance.recompute-book-aggregates` is one-shot and refuses to run once its sentinel
+  is set — so the wrong numbers were permanent rather than eventually correct.
+
+  This is the merge path. All seven production callers are dedup/merge/regroup flows, so
+  **every merge of two duplicate books left the survivor displaying a runtime that
+  predated the merge.** The method now recomputes both books and refreshes the moved rows
+  in memdb (which had kept the old owner, making the move invisible to the UI until the
+  next warmup).
+
+- **Auto-organize now does the same thing the manual organize button does.** When a book was filed into the library automatically after a scan, it took a shortcut: it moved the file and pointed the book record at the new location, and that was all. It never recorded that the copy in your library and the original file are two versions of the same book, never advanced the book past "imported", and left no undo history — so an automatic organize could not be undone the way a manual one can. Worse, because the original file is left in place, a later scan would rediscover it and work out the relationship all over again by re-reading and fingerprinting it, to learn something the organizer already knew. Automatic organizing now runs the same code path as the manual one, so all of that is recorded correctly the first time.
+- **Books filed automatically are no longer given "Unknown Author" folder names.** The shared path defers a book with no identified author until its metadata is fetched, instead of baking a placeholder into the folder name. The automatic path had been skipping that check.
+
+- **RC cleanup now actually runs.** `cleanup-rc-releases.yml` had never
+  succeeded once in 300 recorded runs (297 skipped, 3 failed). It passed
+  `--arg` to `gh --jq`, which only real `jq` accepts, so every stable release
+  died with `unknown command "base" for "gh release list"`. Old release
+  candidates piled up unchecked — 268 of them, 180 for `v0.218.1` alone —
+  which in turn broke two things downstream: `gh release list`'s default
+  30-item cap could no longer see existing drafts (producing duplicate
+  same-tag drafts), and goreleaser's `{{ .PreviousTag }}` resolved to an RC
+  instead of the previous stable, so release notes diffed from the wrong base.
+  The enumeration now uses `gh api --paginate` instead of a fixed `--limit`,
+  which had its own truncation bug against this repo's 460+ releases.
+  Added a `workflow_dispatch` entry point with a `dry_run` input so the
+  delete path can be exercised safely before it is armed.
+
+- The library scan no longer blocks on AI filename parsing. Books whose metadata
+  could not be extracted from tags are now handed to a queued `library.ai-parse`
+  operation instead of being sent to the LLM inline at the end of every folder.
+  Previously the scan held the `library.scan` concurrency key for the whole AI
+  phase — a sequence of LLM round trips with a 2 second delay between batches —
+  so on a library-sized scan the LLM, not the disk, set the scan's wall clock.
+  A scan now finishes at disk speed and the parsing drains behind it.
+
+- **`BatchCreateBookFiles` was not atomic, despite its documentation saying so.** Taking an
+  iTunes persistent ID from its previous owner went through a helper that commits its own
+  write and recomputes its own book — writes the batch could not roll back. Combined with
+  the duplicate-PID check added alongside it, that turned a rare timing window into a
+  guaranteed one: the first row's transfer committed, the second row was rejected, the batch
+  was discarded, and an **unrelated book was left with its ID stripped and pointing at a row
+  that never came to exist.** The operation is now genuinely all-or-nothing.
+
+- **A file row belonging to no book is now refused instead of silently orphaned.** It was
+  previously written anyway, then invisible to every lookup, counted in no total, and logged
+  nowhere at all.
+
+- **A failed file-size read during relink repair is now logged.** It leaves that file
+  recorded as zero bytes, and because a book's total only guards itself when *every* file is
+  unreadable, a single readable file among many unreadable ones let a badly understated total
+  overwrite the correct one — with no warning anywhere.
+
+- **iTunes PID transfers now commit with the row that claims them.** Creating a
+  `book_file` that carries an iTunes persistent ID already held by another row
+  transfers ownership by clearing the PID from the prior owner. That clear went
+  through `ClearITunesPID`, which commits a database batch of its own, while the
+  row taking the PID was written in a separate, later batch. Any failure in
+  between — a marshal error, an index write, or the commit itself — left the PID
+  erased from the old row and never written to the new one, so it belonged to
+  nobody and nothing reported an error. The transfer is now staged into the same
+  batch as the row claiming the PID, so it lands with that row or not at all.
+  Affects `CreateBookFile` (reachable today: the version-split copies in the
+  organizer and metafetch apply paths carry PIDs onto new rows) and
+  `BatchCreateBookFiles` (not reachable before this change — its only caller,
+  the maintenance relink repair, builds rows without PIDs — so no stored data
+  was affected there).
+
+- **Prereleases stopped reporting `failure` on every single run.** The release
+  pipeline detected Python from `pyproject.toml` and ran a full Python release
+  (setup-python, twine, `pytest`) against a file that only holds Black's
+  line-length config -- no `[project]` table, no pytest -- so it died with
+  `pytest: command not found` (exit 127). That failure tripped the
+  `always() && !failure()` gate on `Create GitHub Release`, which silently
+  skipped the draft, the changelog body, the floating tags, the GitHub Packages
+  publish, and the "fail at 10 RCs" guard, while goreleaser kept minting RC tags
+  from inside the Go job. `prerelease.yml` and `release-prod.yml` now pass
+  `disabled-languages` (ghcommon #350) to opt out explicitly, and their
+  `reusable-release.yml` pin moves to `6acc4d03`.
+- Prerelease builds no longer build Docker images. `docker-enabled: false` was
+  documented in-repo as not working: the reusable workflow's language flags are
+  "force ON" switches where `false` means "auto-detect", so "never build this"
+  was unexpressible. `disabled-languages: 'python,docker'` expresses it.
+  `release-prod.yml` keeps Docker on deliberately.
+
+- **Version lists no longer sort a nil-flagged book below the group's primaries.**
+  `sortVersions` read `Book.IsPrimaryVersion` as a raw `*bool` (`!= nil && *flag`),
+  so a book whose flag was never written sorted as non-primary — while every listing
+  filter, and the memdb index it is built from, treat a nil flag as *primary*. The
+  comparator now resolves primacy through `EffectiveIsPrimaryVersion`, the helper
+  whose doc comment already named this exact hazard.
+- **The same comparator was not a valid strict weak ordering.** With two primaries it
+  answered `less(i,j)` and `less(j,i)` both true, so `sort.Slice` was free to emit any
+  permutation of the tied rows instead of ordering them by title.
+
+- The RC cleanup workflow no longer aborts partway through a large purge. Each
+  deletion is two mutating API calls (the release and its git ref), so clearing a
+  backlog of hundreds runs into GitHub's secondary rate limit; a bare
+  `gh release delete` under `set -euo pipefail` would abort mid-purge and report a
+  red job indistinguishable from a broken workflow. Failures are now tolerated,
+  counted, and surfaced as warnings, the loop is paced, and the run summary reports
+  a `Failed` count. The operation is idempotent, so a re-run finishes the tail.
+
+- **An organized copy could become the version group's primary while owning none
+  of the audio.** When `CreateOrganizedVersion` copied a book's per-file rows to
+  the organized copy, a read failure was discarded by an `err == nil` guard and a
+  write failure by `_ =`. Both fell through to the version-group handover, which
+  demotes the original to `organized_source` and marks it non-primary. The result
+  was a version group whose primary row had no files and whose superseded row held
+  the only audio — reported as a successful organize, with nothing logged.
+
+  Both errors are now handled. The per-file copy goes through
+  `BatchCreateBookFiles`, which is atomic, so a failure writes no rows at all and
+  transfers no iTunes persistent ID off the original's file rows. On failure the
+  half-built organized copy is rolled back — author links cleared, book row
+  deleted, copied files removed under the library root — and the error is returned
+  before the original is touched, so the original keeps its audio *and* stays
+  primary.
+
+  A book with zero file rows is still legitimate and is unaffected; that is the
+  case `ensureSingleFileBookFile` backfills.
+
+- **Sorting the library in an Audiobookshelf client did nothing.** Picking "Published
+  Year" (or Author, Date Added, Duration, File Size, Last Updated) returned the right
+  books in arbitrary order behind a `200 OK`, with nothing logged. The entire sort
+  parser for `/api/libraries/:id/items` was a substring test for `"title"`, so every
+  other key left the sort field empty — and an empty sort field does not error, it
+  falls through to an unordered index walk. The dotted keys clients actually send
+  (`media.metadata.publishedYear`, `addedAt`, …) are now mapped to real store sort
+  fields, the `year` and `author` sort indexes are enabled by default, and a sort whose
+  index is disabled now logs a warning instead of silently returning unordered rows.
+  Date Added, Last Updated, Duration and File Size map correctly but stay unindexed on
+  purpose: each index taxes scan insert throughput, and enabling one is a single config
+  line if it is ever asked for.
+
+- **A folder of tracks named `Name 001`…`Name 080` was imported as one book per
+  track instead of one audiobook.** The multi-file detector's sequence-number
+  patterns covered `Chapter NN`, `Part N of M`, `Track NN`, `Disc NN`,
+  `(76 of 85)`, a LEADING `01 - `, and a bare `01` — but nothing matched a
+  **trailing** number, which is one of the most common ways a ripped audiobook
+  names its tracks.
+
+  With no number extracted from any file, the detector's pattern quorum failed and
+  the folder was never grouped, so the scan wrote a separate book row per file —
+  each titled with its own file stem, each taking the folder name as its author,
+  each in its own version group. Measured on the production library: an 80-file
+  folder became 80 books.
+
+  Note that the tag requirement was never the obstacle. The detector already
+  groups untagged tracks on sequential filenames alone (AP-5); it simply could not
+  read the filenames.
+
+  Fixed by one pattern, ordered last so keyword forms still win — `Part 1 of 8`
+  must keep extracting 1, not the total. A folder of unrelated titles that happen
+  to end in a year is still rejected by the existing density check.
+
+  **This prevents new bad rows. It does not repair rows already written that way.**
+
+- **Diagnosed why new books never appear.** The scan finds and ingests them, but the
+  rows it writes are structurally malformed: each track becomes its own book, the
+  folder name is used as the author, and the filename as the title. Separately,
+  **536 books sit in 312 version groups that elect no primary**, which makes them
+  unreachable from a library page that requests primary-only. Measured via the
+  existing `elect-missing-primaries` dry run. The write-up also clears three dead
+  ends — the scan root is correct and must NOT be repointed, an import path's empty
+  `last_scan` proves nothing because only `library.folder-auto-scan` writes it, and
+  the `AUDIOBOOK_ROOT_DIR` env var is inert.
+
+- The CodeQL alert triage helper fetched only the first page of alerts. `issue_manager`
+  requested `per_page=100` with no page walk and returned that page, so with 327 open
+  alerts in this repo it reported "Found 100 open CodeQL alerts" and filed issues for
+  100, silently dropping 227. A truncated list still produces a plausible number, which
+  is why it went unnoticed. It now follows pagination, and a mid-walk network error
+  returns the alerts already collected rather than an empty list that reads like a
+  clean scan.
+
+- **A multi-file book was skipped whole when only its first file was unchanged.**
+  The scan's incremental-skip decision consulted the book's representative file
+  and nothing else, so a six-part audiobook whose fifth segment changed on disk
+  was skipped entirely — the new audio never reached the row, and the book's
+  duration, size and chapter timeline went on describing the previous contents.
+
+  The decision is now taken across every file the book owns, and the book is
+  reprocessed if any one of them is unskippable. Skipping is per file; processing
+  is per book — a book's aggregates are functions of the whole set, so
+  reprocessing only the changed file would corrupt them in the other direction.
+
+  The file list comes from the walk's own grouping, never from the book's stored
+  path, which keeps the per-file scan cache a stepping stone rather than a new
+  dependency on that field.
+
+  Two attribution fixes came with it: a failed `stat` is now a named re-read
+  reason rather than counted ad hoc at one call site, and a book deferred by the
+  rescan-age gate is reported as **too-fresh** rather than collapsed into
+  *unchanged*. The run summary breaks those two apart on purpose — a library that
+  is churning must not read as a cache doing its job.
+
+  This does not yet make multi-file books skippable: their segments have no cache
+  entry, because the cache is still keyed per book. Closing that is the per-file
+  scan cache's job.
+
+### Security
+
+#### Least-privilege `permissions:` on the three burndown/triage workflows
+
+`hard-burndown.yml`, `nightly-burndown.yml` and `triage-poll.yml` declared no
+top-level `permissions:` block, so each handed the repository-default
+`GITHUB_TOKEN` to the reusable workflow it calls
+(`actions/missing-workflow-permissions`). All three now declare
+`contents: read`.
+
+This is not a guess. A called workflow's token is the intersection of its own
+`permissions:` with the caller's, and both
+`falkcorp/github-common/.github/workflows/reusable-burndown.yml` and
+`reusable-triage-poll.yml` already declare exactly `contents: read` at the top
+level, with no job-level block requesting more. The effective token was
+therefore already capped at `contents: read`; naming the same set in the caller
+cannot reduce what these workflows can do, it only stops the caller passing
+along the repository default.
+
+Nothing in them needs more: every GitHub write the burndown performs
+(`gh pr edit`, `gh pr comment`) authenticates with a GitHub App token minted
+from `BURNDOWN_BOT_APP_ID` + `BURNDOWN_BOT_PRIVATE_KEY`, which workflow
+permissions do not govern.
+
+#### Dockerfile — Pin SHA256 checksums for fetched utfcpp and taglib tarballs
+
+Added SHA256 verification for utfcpp v4.0.6 and taglib v2.0.2 tarballs downloaded in the Dockerfile build stage. Each tarball is now downloaded to a file, verified against its pinned checksum via `sha256sum -c`, and extracted only after verification succeeds. A compromised or tampered upstream release now fails the build loudly instead of silently compiling into the image.
+
+#### `go/path-injection` — two of four findings resolved, two deliberately left open
+
+The four still-open `go/path-injection` alerts were each traced from
+attacker-controlled input to sink. The result is a split, not a clean sweep.
+
+**Resolved as verified false positives** (dismissed via the code-scanning API):
+`listAudioFiles` in `internal/metadata/assemble.go` enumerates a directory every
+caller has already put through `fileops.ValidateUserPath` or the scanner's
+configured import roots, and the synchronous-scan fallback in
+`internal/server/handlers/filesystem.go` stats a path produced by
+`pathvalidation.CleanAbsolutePath` behind a `PermSettingsManage` route.
+
+**Left open:** the two `os.Stat(op.backupPath)` rollback sinks in
+`internal/fileops/safe_operations.go`. The containment argument first offered for
+them does not hold. `op.backupPath` is built by
+`safepath.Join(filepath.Dir(targetPath), …)`, so its containment *root* is
+derived from the tainted value; `safepath.Join` is a lexical prefix check against
+whatever root it is handed and so proves nothing about `targetPath` itself. What
+constrains these callers is upstream (`fileops.ValidateUserPath`, and the
+`IsAllowedPath` gate on the one request-controlled route into `Book.FilePath`),
+and none of those helpers resolves symlinks. The comments at both sites now name
+the real guards and state what is *not* proven.
+
+Also recorded: **source suppression comments do not work in this repository.**
+`internal/audiobooks/service_mutation.go` has carried
+`// lgtm[go/path-injection]` since 2026-06-23 and its alert has remained open
+across two months of scans. Every `go/path-injection` alert this repo has ever
+resolved was either fixed in code or dismissed via the UI/API; none closed from a
+comment. The inert markers have been removed so they stop implying otherwise.
+
+#### Closed out the 3 justified `go/disabled-certificate-check` CodeQL alerts
+
+Alerts #379 (`internal/mtls/provisioning.go`), #974
+(`tools/cmd/merge-split-books/main.go`), and #959
+(`tools/cmd/reconcile-paths/main.go`) each disable TLS certificate
+verification for a specific, already-documented reason: #379 is a one-time
+bootstrap handshake before a trusted client cert exists; #974 and #959 are
+operator-run CLI tools (not server code, and not importable — both are
+`package main` with no other importers) connecting to this server's own
+self-signed cert. Each justification was re-verified clause-by-clause at HEAD
+(caller reachability traced, `package main` non-importability confirmed) and
+still holds, so all three were dismissed via the code-scanning API with
+`dismissed_reason: "won't fix"` and a comment recording the re-verification.
+
+A prior draft of this task (TASK-084 v1) would have added inline suppression
+comments using the legacy LGTM.com marker syntax instead. That syntax does
+nothing in this repository's GitHub code scanning setup — it was proven inert
+on PR #2781, where alerts stayed open with the marker present. No such markers
+were added; the API dismissal is the only mechanism that actually changes an
+alert's state here.
+
+No source files were touched — a candidate comment-only edit to
+`merge-split-books/main.go` (documenting its TLS-skip rationale, to match
+`reconcile-paths/main.go`) was considered but dropped: inserting lines above
+the flagged `tls.Config{InsecureSkipVerify: true}` would move its
+`path:line`, and this repo has already seen a dismissed alert reappear at a
+shifted line for the same sink (`#1094`/`#1105`). Left as a follow-up for
+someone willing to verify the shifted alert re-closes cleanly.
+
+### Known regression
+
+- **A book organized during the same scan is filed before AI parsing fills its
+  series.** Auto-organize runs when the scan finishes, which is now before the
+  queued parsing drains, so the folder pattern's `{series}` is substituted from a
+  row the AI has not enriched yet. The row ends up with the right series and the
+  file in a non-series folder, and nothing re-organizes it. Previously the inline
+  AI phase ran first and organize saw the finished metadata.
+
+  It bites a fresh import hardest: a book with no database row yet is always
+  nominated, so on a first scan the whole library is in this cohort. For existing
+  rows it is much narrower — a row that already has a title and an author is not
+  nominated at all. The fix is to re-organize the books a batch materially
+  changed, which means moving files on the strength of an operation's output;
+  that is a decision to take deliberately, not a side effect to slip in here.
+
+### Internal
+
+- Recorded what the v1-operations-retirement sweep has actually measured in
+  `docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md`: the corrected
+  call-site census, why two of the program's steps are really one, the three
+  distinct migration shapes the plan had assumed were one, and the two live bugs
+  the work surfaced. No behaviour change.
+
+### Known residuals
+
+Recorded rather than fixed, because each changes what a run does to a real library
+rather than correcting a defect. Tracked in `todo.d`:
+
+- **Trashed rows are still invisible to all three merge paths.** Both series
+  getters exclude soft-deleted books by design, so a series holding one live book
+  and one trashed book is still deleted with the trashed row pointing at it. The
+  guard needed already exists and is already used *in the same function*:
+  `executeSeriesPrune`'s phase 2 fails closed on the unfiltered reference count,
+  with a comment calling the filtered fallback "the failure family this repo keeps
+  rediscovering" — while phase 1, sixty lines above, has none. Adding it makes the
+  prune refuse merges it currently completes.
+- **A repointed non-primary version keeps stale series tags,** because nothing adds
+  it to any write-back list. The fix is to split one list into an organize list
+  (filtered) and a write-back list (complete), which would begin writing tags to
+  files this operation has never touched.
+- **`MergeSeries`, the store-level primitive, has no reference-count guard at all.**
+  Every guard described here lives in a caller, so a new caller inherits none of
+  them.
+
+### Performance
+
+#### Author deduplication runs 9.3x faster
+
+The most expensive loop in author dedup compared every pair of distinct author
+last names with Jaro-Winkler similarity: 26,357,430 pairs on the production
+library's 7,261 distinct surnames, on a single core, each comparison allocating
+two rune slices and two match bitmaps.
+
+Three changes, none of which alters which authors get grouped:
+
+- **A provable length screen.** Because matches cannot exceed the shorter
+  string and the Winkler prefix boost is capped at 4 characters, a Jaro-Winkler
+  score of at least `t` requires the two strings' lengths to be within `5t-4` of
+  each other — at the 0.95 threshold used here, within a factor of 4/3. An
+  integer rune-count comparison therefore rules out 61% of pairs before any
+  string work happens. The bound is conservative by construction, so it can only
+  reduce how many comparisons run, never which pairs are accepted.
+- **Sharding the scan.** Deciding which names are similar reads shared state and
+  writes none, so it now runs across all cores, while the order-dependent
+  grouping it feeds stays serial. Workers pull outer indices from an atomic
+  counter rather than claiming fixed ranges, because the inner loop shrinks as
+  the outer index advances and a static split would leave one worker holding
+  most of the work.
+- **Not repeating work that never changes.** Each surname's length was being
+  recounted on every comparison it took part in — 52.7 million counts to learn
+  7,261 fixed facts — and the loop opened with a check for two surnames being
+  equal, which cannot happen because the list is built from unique keys. Both
+  are gone.
+
+Measured at production shape on 10 cores: **4.62s to 0.50s**. Output verified
+byte-identical to the previous implementation, pinned by a golden test that
+records the full grouping rather than a group count.
+
+This site was missed by the 2026-07-05 concurrency audit because it iterates
+derived last-name strings rather than books or authors, so it did not match the
+collection shapes that sweep looked for. That audit has been updated: all five
+of its priority items were already complete, and it now warns against being read
+as a live TODO list.
+
+### Fixed (tests)
+
+Two tests were checking less than they claimed.
+
+The cache fix above shipped with no test that could detect its removal — the
+existing pair covered "rows removed" and "nothing happened", never the
+books-moved-but-nothing-removed state the fix exists for. Reverting it left the
+suite green.
+
+And the test written to prove the refusal survives the sweep that follows it used
+a fixture whose book-membership lookups returned fixed answers, ignoring the
+repoints performed during the test. That kept one specific regression invisible:
+reverting the sweep to the filtered count — the defect that produced 6,893 phantom
+series references in production — still passed. The fixture now answers from live
+state, so it fails.
+
+A fixture that cannot reach a code path cannot host a defect on it, and a passing
+mutation score only ever covers the defects the fixture makes reachable.
+
+### Testing
+
+- The relink repair test named `...AndAggregatesOnce` **never checked "once"**. Measured: it
+  passes unchanged against an implementation that recomputes three times instead of one, so
+  the regression it was named for could have landed under a green suite. It has been renamed
+  to what it actually verifies, and the missing property is now pinned by a test that fails
+  on that exact regression.
+
+- Likewise, the duplicate-ID test could not observe the atomicity bug: its fixture had no
+  previous owner, so the one code path that breaks atomicity was never entered, and its
+  "nothing was written" assertion inspected the wrong book. Both gaps are now covered.
+
+<a id='changelog-v0.219.0'></a>
+## v0.219.0 — 2026-08-20
+
+Documented that OperationDef.Permissions is declarative only: the field is
+persisted to op_definitions_v2 but never checked when triggering an operation.
+Per-job permission enforcement currently exists solely on the legacy v1
+maintenance dispatcher, which the next refactor step removes.
+
+Fixed: `POST /operations/v2` now enforces the permissions each operation
+declares. Previously every operation sat behind a single blanket `scan.trigger`
+check, so an account with the `editor` role could start maintenance operations
+that the older maintenance route reserved for administrators.
+
+- **Fixed:** `maintenance.missing-file-repoint` discarded 71,914 of its 71,954 per-row
+  decisions. It now writes every one to a TSV (`reports/missing-file-repoint-<opID>.tsv`,
+  overridable with `reportPath`) with a `bucket` column, so a dry run can actually be
+  reviewed before the apply. `no-shape` and `no-bytes` rows previously produced no
+  record at all.
+- **Fixed:** the in-log sample kept the first 40 decisions in arrival order, which on the
+  first prod run meant 40 collision rows from 3 adjacent books and zero of the 14,439
+  rows it would rewrite. It is now stratified per bucket.
+- **Fixed:** the collision warning asserted "the flattened-directory shape" as the cause.
+  Measured on prod, the colliding rows belong to duplicate book records; the message now
+  states what was counted instead of a cause it had not checked.
+
+- **Fixed:** `maintenance.missing-file-repoint` declared no `Liveness`, so the server
+  refused to start. The op now declares `LivenessRunItems`, matching its two siblings.
+- **Fixed:** the maintenance plugin's def guard hand-copied a subset of the registry's
+  registration rules, so it could only ever catch clauses its author had enumerated.
+  `Registry.RegisterOp`'s stateless checks are now exported as `registry.ValidateOpDef`
+  and the guard calls that, making the unit test equal the boot check by construction.
+
+### Added
+
+- `maintenance.missing-file-audit` now reports an identity-signal census alongside
+  its counts: for missing rows and (as a control) present rows, how many carry a
+  file hash, an AcoustID fingerprint, a duration, a size, an iTunes PID or a
+  transcription. This is the input that decides which missing-file repairs can be
+  *verified* rather than guessed. The op remains read-only.
+
+- `docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md` — the plan to promote all 37
+  maintenance jobs from the single `maintenance.job` bridge to their own v2 `OperationDef`s.
+
+  This also settles the one open question in
+  `docs/audits/2026-08-16-store-interface-decomposition.md`: v2's
+  `Run func(ctx, params json.RawMessage, reporter Reporter) error` takes **neither** a
+  `database.Store` **nor** a `dryRun`, so dissolving the bridge **deletes** the 398-method
+  parameter instead of narrowing it. The 37-file atomic edit the audit warned about happens
+  inside work that touches those files anyway.
+
+  Measured, and smaller than it looked: **9** jobs declare `CanResume()`, but only **3** use
+  legacy checkpoint storage and **0** use v2's `reporter.Checkpoint`. The other 6 checkpoint
+  nothing, so their resume already means "re-run from scratch" — exactly `ResumeRestart`'s
+  semantics.
+
+  🔴 **Retiring the v1 operations table is blocked on this.** `maintenance_dispatcher.go` still
+  writes a legacy row per run and persists the operator's `dry_run` via `operations.SaveParams`;
+  `resumeLegacyOp` reads both back. That `SaveParams` prevents a real data-loss bug — resume used
+  to default `DryRun` to false and turn an interrupted PREVIEW into a real mutation, and 7 of the
+  9 resumable jobs advertise `dry_run:true`, one of which deletes directories. `OperationV2Row`
+  already has a `Params` field, so a v2-native resume replays it by construction — but that
+  rehoming has to land before the legacy rows go.
+
+#### Interface width is now a ratchet, not a suggestion
+
+`scripts/check-interface-width.sh` compares the `interfacebloat` finding count
+against `.interface-width-baseline` (28 at time of writing) and fails if it goes
+up — or if it goes down without the baseline being lowered in the same change,
+so ground taken stays taken.
+
+Two escape hatches, both leaving a reviewable trace: `//nolint:interfacebloat`
+with a mandatory explanation (a bare or unexplained directive is itself a
+finding), or raising the number in a file whose only purpose is to hold it.
+
+The gate counts findings rather than listing files because the count is the
+stable half of golangci-lint's output and the paths are not. Measured on
+`b7f4627b`: 28 findings from the repo root, from inside a worktree, and from an
+isolated clone — but three of those four runs attributed findings to the wrong
+checkout, because the result cache is keyed by file content and replays whichever
+path was recorded first. `.golangci.yml` now excludes `.worktrees/` for
+determinism; that does not change the number.
+
+The two tools driving the interface split sweep also moved out of `/tmp` into
+`scripts/`: `split_interface.py` and `verify_interface_split.py`.
+
+- CI now runs the interface-width ratchet (`scripts/check-interface-width.sh`) as
+  its own `Interface Width Ratchet` job, failing a PR that raises the
+  `interfacebloat` count above the committed baseline — or lowers it without
+  lowering the baseline in the same change.
+- `golangci-lint` now runs in CI at all, via the shared `go-lint` job. It had
+  never executed: `.golangci.yml` existed and no workflow invoked it (`make ci`
+  runs staticcheck, not golangci-lint).
+- Super-linter runs in advisory mode — it reports and never blocks.
+
+#### `mutation-matrix.sh` — a runner for hand-authored semantic mutations
+
+`make mutate` (gremlins) generates mutants from the syntax tree: flip a
+conditional boundary, invert a negation, swap an operator. That is the right
+tool for breadth and it needs no authoring.
+
+It cannot express the mutation that has mattered most here, because that
+mutation is *semantic* rather than syntactic. The one that motivated this:
+
+    report.SignalsMissing.tally(f)   <->   report.SignalsPresent.tally(f)
+
+Swapping the two arms of a census is a perfectly valid program. No operator
+changed, no boundary moved, nothing is syntactically suspicious — and it
+silently inverts the meaning of every number the audit reports. gremlins will
+never generate it. A human who knows what the code *means* writes it in one
+line of a table.
+
+So `scripts/mutation-matrix.sh` runs a table of `NAME | FILE | PERL_EXPRESSION`
+rows against one package and reports, per mutation, whether the suite caught it.
+gremlins for breadth, this for the specific lies you are worried about.
+
+Four guards, each covering a way this kind of harness reports a number that is
+not a measurement — all four have burned someone on this repo already:
+
+1. **Refuses a dirty tree.** The restore path is `git checkout -- <file>`,
+   which does not distinguish a mutation from your uncommitted work.
+2. **Requires a green baseline.** Against a red suite every mutation records as
+   "killed" without the mutation having anything to do with it, and the score
+   reads 100% while measuring nothing.
+3. **Verifies each mutation actually applied.** A perl pattern that matches
+   nothing leaves the file untouched and the suite passes — reported as
+   `NOT-APPLIED`, which is a broken instrument, not a result.
+4. **Separates a build failure from a kill.** A mutation that does not compile
+   fails `go test` for reasons unrelated to your assertions. Reported as
+   `BUILD-FAIL`.
+
+The score's denominator is killed+survived; not-applied and build-fail are
+excluded deliberately, since counting them would let a broken table inflate the
+number this exists to protect.
+
+There is a fifth failure mode no guard can prevent, only make visible: a flaky
+suite. The baseline is checked once, so an intermittently-failing test can score
+a mutation as killed without the mutation being detected at all. The remedy is
+the third column — **every killed line records which test caught it**, so you
+can check a mutation was caught by the test you expected rather than by
+unrelated noise. This is not theoretical: during development a mutation to the
+missing-file census was reported killed by `TestChaptersBackfill_...` *and* the
+census test, which is how the flake was spotted at all.
+
+Results are emitted incrementally, so the run ends with an explicit
+`# END OF RUN` marker. A file without it did not finish, and its totals are
+partial — a distinction a reader skimming to the last result line cannot
+otherwise make.
+
+Ships with `scripts/mutation-tables/missing-file-census.muts` as the worked
+example — 22 mutations over the missing-file identity-signal census, which on
+its first run killed 11 and left 10 survivors, every one of them a counter that
+executed on each test run and was never read.
+
+Run it with `make mutate-matrix PKG=./internal/... TABLE=scripts/mutation-tables/x.muts`.
+
+#### A shape-classification pass that can size the recoverable population
+
+`maintenance.missing-file-audit` takes a new `{"classify": true}` parameter.
+It runs over **every** missing row rather than the sample, derives the flat path
+each track-slash row's bytes would live at, and asks the filesystem whether they
+are there. It reports how many rows are recoverable, how many match the shape
+but have genuinely lost their bytes, and how many do not match at all.
+
+This exists because the sample could never answer "how many". The audit collects
+its sample as the first N missing rows in iteration order, so it is clustered by
+book — widening it yields a wider clustered sample, not a rate.
+
+The pass plants deliberately bogus control paths in the same stat batch and
+**fails the whole run** if any of them resolve. Without that check, "every
+candidate resolved" would be equally consistent with a stat that always succeeds
+against a wrong mount. It is off by default because it doubles the stat load on
+a network mount.
+
+#### A costed decision document for the PebbleStore struct split
+
+`docs/plans/2026-08-19-pebblestore-struct-split-decision.md` supplies the
+per-method evidence the surface-split plan said it lacked, so the question can be
+answered yes or no rather than left open.
+
+Per-method analysis of all 558 `*PebbleStore` methods: 420 touch core fields
+only, 118 touch no struct fields at all, and just **20 (3.6%)** touch any
+domain-local field. `db` alone is touched by 407.
+
+This confirms the original "N facades over one object" objection while inverting
+what it means. It was offered as evidence the state is dangerously entangled; the
+measurement shows the domains have almost no state to entangle. There are no
+lock-ordering hazards to design around — so the split is mechanically low-risk
+and high-churn, and it decomposes a method set rather than decoupling state.
+
+The document does **not** recommend proceeding. It makes the trade visible, names
+the only 20 methods needing thought, orders the work so all structural risk lands
+in a single reviewable first PR, and records that its own numbers have not been
+independently reproduced and should be re-derived before execution.
+
+- `docs/plans/2026-08-19-server-store-narrowing-worklist.md` — a measured, ranked
+  worklist for narrowing `Server.Store()`, with the finding that reframes it: the 90
+  interfaces a store gets passed into are already the per-consumer narrow
+  dependencies, so those call sites are narrow at the callee already and the wide
+  accessor only governs the 88 direct calls. 60 of the 90 contribute zero unique
+  methods, and narrowing every callee individually would remove only 83 of the 268.
+
+- Mocks and behaviour tests for two capability resolvers: `warmupWaiter` (the
+  contributor cache must not be built before the memdb warmup completes) and
+  `keyCounter` (the db-health Pebble section is omitted when the capability is
+  absent, but reports zeros when the count *fails* — an asymmetry that is easy to
+  collapse into a bug). All six tests were mutation-verified.
+
+- **The review queue's `duplicate-of` action now applies.** Approving a hold as
+  `duplicate-of` used to return `501 Not Implemented`, leaving the only way to clear
+  such a hold a rejection. It now merges the folder's debris into the canonical book
+  through `CombineBooks` — the same merge the `combine` action and the duplicates UI
+  already use. The canonical book is read from the dedup track's candidate rows,
+  which is where that relationship is recorded; the regroup classifier only ever sees
+  one folder at a time, which is why it could not name it. When the dedup track names
+  no book outside the folder, names more than one, or names a book that has since
+  been deleted, the apply refuses with a message saying which case it hit, so the
+  hold lands in "failed" rather than being marked done while nothing happened.
+
+#### Full configuration-option audit (`docs/audits/2026-08-20-config-option-audit.md`)
+
+Added a full inventory and grep-verified audit of every configuration option in
+the tree — 565 distinct options across `internal/config/config.go`, its
+persistence/DB-settings layer, every CLI flag, ad-hoc `os.Getenv` call sites
+outside `internal/config`, the frontend Settings UI, and the deploy surface
+(`config.yaml`, `.env.example`, `docker-compose.yml`, Prometheus configs, the
+systemd unit).
+
+Produced by a 25-agent fan-out: 13 inventory agents extracted every option (866
+raw entries, deduplicated to 565), then 12 domain-scoped agents each verified
+real usage via grep, checked naming consistency across the Go struct / env var
+/ YAML key / frontend layers, and evaluated whether each default value still
+makes sense — every finding is grep-verified, not inferred from a field's name.
+
+No production code changed. Notable findings surfaced for follow-up: 55 options
+with zero behavior-gating call sites (including two entire Settings-UI
+subsystems — Storage Quotas and Memory Limits — that are fully unenforced),
+`EnableRateLimit=false` not actually disabling rate limiting, an
+`ai_backend.local_base_url` default that points at a hardcoded developer LAN
+IP, a `ResetToDefaults()` bug that silently disables chapter consolidation, a
+3-way default mismatch on `MetadataFetchCacheTTLDays`, a fully inert
+`--enable-sqlite3-i-know-the-risks` flag, and `AO_DB`/`AO_DIR` env vars that are
+documented everywhere but never read by any Go code.
+
+#### Every review lane can now explain how it reached its verdict
+
+The dedup lane's score-breakdown panel has been promoted to a shared
+`EvidencePanel` used by all three review lanes, and the metadata scorer now
+records the derivation of the number it ships rather than only the number.
+
+The panel does **not** render the three lanes the same way, because their scores
+are not the same kind of thing. Evidence is a discriminated union over how the
+number was actually computed, and each kind gets the encoding its arithmetic
+supports:
+
+- **dedup** is a weighted sum of calibrated signals, so it keeps the stacked
+  share bar. That bar asserts "these parts sum to the whole", which is true here.
+- **metadata** is `(base × factors) + terms`, and can be replaced outright by an
+  LLM rerank or a direct ASIN match. A multiplicative factor has no share of a
+  total, so it renders as an ordered waterfall — a replay of the real pipeline.
+  Feeding it to the share bar would have produced segments summing to nothing
+  meaningful, which is worse than no bar at all because it still looks complete.
+- **review queue** reaches its recommendations by rules over observed counts
+  rather than arithmetic on them, so it renders named facts and no bar. Drawing
+  one would be inventing a computation that does not exist.
+
+The metadata backend gained `score_breakdown` on every candidate: the whole
+chain is recorded, not just the base scorer, including the author/narrator/
+series/duration multipliers and the wholesale substitution performed by rerank
+and direct-ASIN matches. "The breakdown explains the score" is enforced as a
+property — replaying the recorded steps must reproduce the shipped score — and
+is asserted over a 160-combination cross product plus the real search path.
+
+#### `/review` is now the unified review workspace
+
+Dedup, metadata apply, and the review queue share one screen: a lane switcher, three
+command menus, a filter rail, the comparison spine, and a bulk-action footer. The
+metadata lane is live; the other two announce where their surface still lives rather
+than rendering an empty spine.
+
+There is no `review_show_legacy` toggle. One user, no migration window — a
+compatibility gate would be pure cost with nobody to protect, and shipping both
+surfaces indefinitely recreates the fragmentation this work exists to remove. The
+safety net is git until the old surfaces are deleted.
+
+#### Every candidate can now explain its own score, in place
+
+The recorded scoring derivation renders wherever a reviewer judges a candidate: the
+compact row's expanded detail and the two-column card. It replays the real pipeline —
+base, then each multiplier and term in the order applied — and reconciles to the number
+on the chip. A candidate scored before the instrumentation existed says so, because a
+blank panel reads as "no signals fired" rather than "nothing was recorded".
+
+- **`maintenance.missing-file-repoint` — restores books whose files were renamed out
+  from under them.** A 2026-08-20 audit found 71,954 of 532,296 `book_file` rows
+  pointing at paths that no longer exist, leaving **16,265 books with no resolvable
+  file at all** — unplayable and undownloadable. Just under half those rows (35,296)
+  are recoverable: the bytes are still on disk under a flattened, zero-padded name
+  (`…/Corruption - 2/35.mp3` in the database vs `…/Corruption - 02.mp3` on disk).
+  This operation rewrites those rows to point at the real file.
+
+  It **never deletes a row** — that is why it is a separate operation from
+  `maintenance.missing-file-repair`, whose delete path was removed. It defaults to a
+  dry run, and refuses to touch anything it cannot prove: a row is skipped when
+  several rows would land on the same file (the flattened-directory case), when the
+  target is already claimed by another row, when the file's size on disk disagrees
+  with the size recorded for the row, or when both padded and unpadded names exist.
+  Every skip is counted and reported, so nothing is silently passed over.
+
+### Changed
+
+- Every maintenance job now declares its own execution policy (`ResumePolicy`, `Timeout`,
+  `ConcurrencyKey`, `Liveness`, `Capabilities`) via a new `Policy()` method on
+  `maintenance.MaintenanceJob`. Nothing reads these yet — the `maintenance.job` bridge still
+  supplies its own hardcoded values — so behaviour is unchanged. This is the declaration step
+  that lets each job become its own v2 `OperationDef` in a follow-up.
+
+- **Retracted the AI-batch concurrency recommendation in the scan-split plan.**
+  `docs/plans/2026-08-17-split-scan-ai-phase.md` previously recommended giving the
+  scan's AI batch loop a bounded worker pool of 2–4, on the strength of a probe
+  showing 1.86×/2.43× speedups from concurrent requests. That probe used 8-token
+  completions at ~0.27s each, while a real batch is 20 filenames taking ~21s — it
+  measured request-latency headroom, not compute headroom. Direct GPU telemetry
+  taken during the production scan shows the device at 92–93% utilization, i.e.
+  saturated: a client-side pool has no spare throughput to claim. The plan's
+  first PR is now just the inter-batch sleep removal (~10% of AI time).
+- **Recorded that the LLM host was hardware thermal-throttling throughout the
+  measurement.** The card ran at 97 C against its own 95 C shutdown spec and 92 C
+  slowdown threshold, with `HW Thermal Slowdown: Active` and a cumulative
+  slowdown counter of ~2h25m, holding clocks at 1860 MHz against a 2130 MHz
+  maximum (~87% of rated clock). The measured 69.4% AI share of scan wall-clock
+  therefore has a hardware component, not a purely architectural one, and any
+  before/after comparison for the sleep removal must record GPU temperature and
+  clock alongside it. Cancelling the load dropped the card 97 C → 61 C in 70s and
+  cleared the latched throttle, so the cooler works; sustained 100%-duty inference
+  simply exceeds it.
+
+- Maintenance jobs now register one operation definition each (`maintenance.<job-id>`)
+  instead of sharing a single `maintenance.job` definition. Each job's resume policy,
+  timeout, concurrency key, liveness mode and capabilities now come from the job's own
+  `Policy()` declaration rather than one hardcoded set applied to all 37. Per-job
+  variation was structurally impossible before this.
+
+- Maintenance jobs now receive a `maintenance.JobStore` instead of the full
+  `database.Store`. `Store` resolves to 398 methods across 40 sub-interfaces; the 37 jobs
+  between them use 12 of those sub-interfaces — 187 methods, a 53% smaller contract. A job
+  that needs a genuinely new database capability now has to add a line to `JobStore`, which
+  makes widening it a visible decision rather than a silent one.
+- Two metadata-cache helpers in the database package (`GetCachedMetadataFetchWithMaxAge`,
+  `PutCachedMetadataFetch`) now take the `RawKVStore` they were already limited to using,
+  rather than the whole store.
+
+#### `internal/database/iface_misc.go` split into six domain files
+
+One file held **27 interface declarations**, including `BookFileStore` at 27
+methods — the second-widest interface in the package. A file named `misc` is
+where wide interfaces go to avoid review, and that is measurably what happened.
+
+The 27 declarations now live in files named for what they cover:
+`iface_bookfile.go` (book files, segments, hash bookkeeping), `iface_auth.go`
+(API keys, roles, sessions, invites), `iface_catalog.go` (collections, works,
+narrators, versions), `iface_system.go` (settings, stats, maintenance, raw KV,
+lifecycle, import paths), plus the per-user and metadata stores appended to the
+existing `iface_user.go` and `iface_metadata.go` rather than creating a second
+file for a domain that already had one.
+
+Declaration-only change: no method was added, removed, or re-signatured, and no
+consumer moves. Verified by extracting every interface and its method count
+before and after — 27 interfaces before, 27 after, every count identical.
+
+First step of the interface-decomposition program; the splits of the wide
+interfaces themselves follow.
+
+#### `BookFileStore` split from 27 methods into eight focused interfaces
+
+`BookFileStore` was the second-widest interface in `internal/database` at 27
+methods, referenced by 20 files. It is now assembled from eight interfaces of
+2–5 methods each: `BookFileReader`, `BookFileWriter`, `BookFileDeleter`,
+`BookFileHashStore`, `BookFileFingerprintStore`, `BookFileITunesStore`,
+`BookFileDelugeStore`, and `BookFileStatsStore`.
+
+The name `BookFileStore` is retained as their composition, so **no consumer
+changes and the method set is byte-identical**. Consumers can now depend on the
+two or three methods they actually use instead of inheriting all 27; the
+composition is the transitional shape, not the destination.
+
+Verified two ways: the method names were extracted from the old declaration and
+from the union of the eight new ones and diffed (27 before, 27 after, identical),
+and the type checker independently proves it, since every implementation —
+`PebbleStore` at 496 methods and `database.MockStore` at 399 among them — fails
+to compile if a method is dropped or re-signatured. `interfacebloat` violations
+in `internal/database` drop from 14 to 13.
+
+#### `BookReader` split from 35 methods into ten focused interfaces
+
+`BookReader` was the widest interface in `internal/database` at 35 methods,
+referenced by 13 files. It is now assembled from ten interfaces of 2–8 methods:
+`BookByIDReader`, `BookBulkReader`, `BookLookupReader`, `BookDuplicateReader`,
+`BookRelationReader`, `BookSearchReader`, `BookCountReader`,
+`BookSnapshotReader`, `BookLifecycleReader`, and `BookITunesReader`.
+
+The name `BookReader` is retained as their composition, so the method set is
+byte-identical and no consumer moves — verified by diffing the method names
+(35 before, 35 after, identical) and independently by the type checker, which
+fails every implementation if a method is dropped or re-signatured.
+
+The composition carries an explicit `//nolint:interfacebloat` with a written
+reason: at ten embeds it is still over the width threshold, and it exists only
+until consumers migrate to the piece each actually uses. That is the intended
+use of the override — the directive is greppable and disappears with the alias.
+
+#### `OperationStore`, `OpsV2Store` and `TagStore` split into focused interfaces
+
+Three of the widest interfaces in `internal/database` are now assembled from
+small, named pieces instead of being one flat list:
+
+- **`OperationStore`** (30 methods, 19 referencing files) → 7 interfaces of 3–5:
+  lifecycle, reads, resumable state, per-entity changes, logs, results, pruning.
+- **`OpsV2Store`** (32 methods, 13 referencing files) → 8 interfaces of 2–6:
+  definitions, lifecycle, queue, state/checkpoints, observability, dependency
+  revisions, completions, batch buckets.
+- **`TagStore`** (27 methods, 6 referencing files) → 6 interfaces of 4–5. The
+  seam here was already latent in the naming: the same nine operations repeated
+  three times for books, authors and series, now split reader/writer per entity.
+
+Each original name is retained as the composition of its pieces, so every method
+set is byte-identical and no consumer moves. Verified per interface by diffing
+the method names before and after (27→27, 30→30, 32→32, all identical) and
+independently by the type checker. Mocks are unaffected — `mockery` regenerates
+to no diff.
+
+All three compositions land at 6–8 embeds, under the width threshold, so none
+needs an override. `interfacebloat` violations in `internal/database`: 14 → 11.
+
+#### `ServerDeps` split from 43 methods into fourteen focused interfaces
+
+`ServerDeps` in `internal/plugins/maintenance` was **the widest interface in the
+repository** at 43 methods — wider than anything in `internal/database`, which is
+where the interface debt had been assumed to live. Its own neighbouring comment
+described it as a "25-method" interface, which had not been true for some time.
+
+It is now assembled from fourteen interfaces of 1–7 methods, named for what they
+do: `StoreProvider`, `MetadataRunners`, `SeriesRunners`, `MediaFileRunners`,
+`CleanupRunners`, `ActivityLogOps`, `WriteBackOps`, `DedupRunners`,
+`CacheInvalidator`, `TranscriptionRunners`, `StoreOptimizer`, `CapabilityProbes`,
+`RuntimeConfig`, and `OpEnqueuer`.
+
+The name is retained as their composition, so `*server.Server` still satisfies it
+implicitly and the test fakes asserting `var _ ServerDeps = ...` compile unchanged.
+
+The concrete payoff is in `plugin_test.go`, which skips three tests with
+"requires full ServerDeps stub". An op that needs only `CapabilityProbes` and
+`RuntimeConfig` can now depend on those two instead of stubbing all 43 methods.
+
+#### Five more `internal/database` interfaces split into focused pieces
+
+- **`BookWriter`** 16 → 6: mutations, sync markers, version history, tombstones,
+  scan-failure counters, aggregate recomputation.
+- **`AuthorReader`** 13 → 4: lookup, aliases, author-book relations, counts.
+- **`ExternalIDStore`** 11 → 3: reads, writes, tombstone/reassignment lifecycle.
+- **`ActivityStorer`** 10 → 4: writer, reader, retention, lifecycle.
+- **`MetadataStore`** 10 → 3: field states, change history, alternative titles.
+
+Each original name is retained as the composition of its pieces, so every method
+set is byte-identical and no consumer moves — verified per interface by diffing
+method names (16→16, 13→13, 11→11, 10→10, 10→10, all identical) and by the type
+checker. `mockery` regenerates to no diff.
+
+With this, every composition in `internal/database` is at or under the width
+threshold except `Store` itself. Violations in the package drop from 13 to 8, and
+the eight that remain are all 9-method interfaces one method over the line.
+
+#### Four handler-side store interfaces split into focused pieces
+
+The handler packages declare their own store interfaces rather than taking
+`database.Store`, which is the right idiom — but four of them had grown as wide
+as the database ones they were meant to avoid:
+
+- **`EntitiesStore`** (30 methods) → 8 interfaces of 1–7.
+- **`AudiobooksStore`** (22) → 8 interfaces of 1–5.
+- **`LibraryStore`** (19) → 6 interfaces of 2–4.
+- **`SystemStore`** (16 methods + 1 embedded `database.SettingsStore`) → 7
+  interfaces of 1–4, plus the embed carried through verbatim.
+
+Each original name is retained as the composition of its pieces, so every method
+set is byte-identical and no consumer moves.
+
+`SystemStore` is grouped into 7 rather than 8 deliberately: `interfacebloat`
+counts a carried embed as a declared entry, so 8 groups plus the embed would
+have been 9 and tripped the width gate. `GetSystemActivityLogs` and
+`GetRecentOperations` are both dashboard event feeds and merge cleanly.
+
+Verified by comparing the **full signature set** — methods *and* embeds,
+followed one level through the composition — before and after each split
+(30→30, 22→22, 17→17, 19→19, all identical), plus the type checker. The
+method-name-only check used on earlier splits could not have caught a dropped
+embed: an earlier run of the splitter silently discarded
+`database.SettingsStore` because its regex was anchored at end-of-line and the
+embed carried a trailing comment. `go build` caught that one only because a
+caller happened to need the embedded type; an unused embed would have vanished
+without a sound. The stronger check is what the remaining splits now use.
+
+#### Six more interfaces split, and a note on the ones deliberately left alone
+
+- **`logger.Logger`** (10) → 5: `LevelLogger` (the five leveled methods most
+  consumers actually want), `ProgressReporter`, `ChangeRecorder`,
+  `CancellationReporter`, `SubLoggerFactory`.
+- **`fsRegroupStore`** (11) and **`itunesRegroupStore`** (9) → 5 each, **three of
+  them shared**. The file already described them as twins; nine of their methods
+  were the same nine, written out twice. They now embed one set of shared
+  declarations, so the vocabulary is visible in the type instead of being two
+  parallel lists that can drift apart silently.
+- **`UserPlaylistStore`** (9) → reader/writer.
+- **`BookVersionStore`** (9) → reader / writer / disposition reader.
+- **`APIKeyStore`** (9) → reader / writer / lifecycle / usage recorder.
+
+Each original name is retained as the composition of its pieces, so every method
+set is byte-identical and no consumer moves; verified by comparing the full
+signature set — methods *and* embeds — against the base revision.
+
+Also adds `docs/audits/2026-08-18-interface-width-shapes.md`, which classifies the
+remaining findings by structure. Five of them (`database.Store` 40,
+`itunes/service.Store` 17, `server.bookHandlerStore` 12, `maintenance.JobStore`
+12, `organizer.Store` 9) are compositions of embedded interfaces with **zero
+declared methods**. They could all be turned green by regrouping their embeds into
+buckets of eight, which would change nothing about what any consumer can reach.
+They need narrowing by actual usage instead, and the audit says so where someone
+staring at a red build will find it.
+
+#### Four more handler interfaces split
+
+- **`MetadataStore`** (14 methods + an embedded `database.BookStore`) → 7:
+  entity resolution, change recording, rejections, copy-on-write snapshots,
+  filtered book queries, the legacy operation row, and rating writes.
+- **`MetadataFetchService`** (13) → 7: fetch, candidate cache, apply, cover
+  download, write-back, no-match marking, history.
+- **`VersionsStore`** (11) → 6, including `VersionRawKVDeleter` — a one-method
+  declaration for `DeleteRaw`, the most dangerous thing in the set, which is
+  precisely why it is now visible on its own rather than buried at position
+  eleven of eleven.
+- **`AuthStore`** (11) → 4: user reads, user writes, sessions, roles.
+
+Each original name is retained as the composition of its pieces, so every method
+set is byte-identical and no consumer moves. `MetadataStore` lands at exactly 8
+declared entries (7 groups plus the carried embed), the width limit.
+
+- The seven checkpoint/params helpers in `internal/operations/state.go` now take
+  one-method interfaces (`OperationStateWriter`, `OperationStateReader`,
+  `OperationStateDeleter`, `OperationParamsWriter`, `OperationParamsReader`)
+  instead of `database.OperationStore` (30 methods) and, in `LoadParams`'s case,
+  `database.Store` (398 methods). Each helper only ever used a single method.
+  `state.go` no longer imports `internal/database` at all.
+
+- Split `abs.Store` (10 methods) into `ABSUserStore` / `ABSSessionReader` /
+  `ABSSessionWriter`, and `audiobooks.AudiobookService` (13 methods) into
+  `AudiobookReader` / `AudiobookTrashService` / `AudiobookUserTagService` /
+  `AudiobookViewDecorator`. Both original names are retained as the composition
+  of their pieces, so the method sets are unchanged and no consumer moves.
+
+- `organizer.Store` now declares the 16 methods the organizer package actually
+  calls, grouped into five focused interfaces plus the in-package
+  `OrganizerStore`, instead of embedding nine whole `database.*` interfaces. Its
+  reachable surface drops from 179 distinct methods to 22.
+
+#### `itunesservice.Store` narrowed from 17 database embeds to 7 measured interfaces
+
+`Store` is what `internal/server` hands to the iTunes service, and it embedded 17
+`database.*` interfaces — roughly 171 methods. Its comment explained the width as
+"iTunes is a hub", but that was not the cause. Each of the six subsystems behind
+it (write-back batcher, path reconciler, path repairer, playlist sync, position
+sync, track provisioner) and the import pipeline held `Store` itself rather than
+the slice it used, so `Store` had to stay wide enough to satisfy all of them.
+
+That is why the aggregate could not be argued down on its own terms, and why the
+earlier audit listed it as resisting the split. Once the six leaves were narrowed
+to their measured usage, re-probing `Store` returned 24 direct calls and 10
+assignability constraints — and all 24 direct calls turned out to live in a
+single file, `importer.go`. `Store` is now seven names: the six subsystem
+interfaces plus `importerStore`.
+
+`importerStore` is itself grouped by what the import pipeline does — `bookLookup`,
+`bookWriter`, `contributorWriter`, `itunesImportState`, and
+`importerCheckpointStore` — rather than sized to fit the linter. Moving the
+importer's field off `Store` also moved its four `operations.*` checkpoint
+constraints with it, which is what brought the result to 7 entries.
+
+The `interfacebloat` count drops 4 → 3 and `.interface-width-baseline` is lowered
+in the same commit. No consumer changed: Go interfaces are satisfied
+structurally, so narrowing a parameter type can never break a caller.
+
+#### Callbacks no longer take a store at all; five more parameters narrowed
+
+Two callback types threaded a database interface through their signature purely so
+the implementation could reach a couple of methods:
+
+- `undo.OnFileMovedFunc` — an inline `database.BookReader` + `database.BookVersionStore`, 44 methods
+- `versions.NotifyDelugeFunc` — `database.Store`, all 398
+
+Neither needed a store in the signature. The implementor already has one, so both
+callbacks now take only their data (`bookID`, paths, versions) and the caller closes
+over whatever it needs. That removes the dependency rather than narrowing it: there
+is no interface to name, nothing to keep in sync, and no cross-package import. The
+existing test callback in `internal/undo` never touched its store parameter either.
+
+This matters beyond tidiness. Function types must match identically for assignment,
+so a store threaded through a callback forces every implementor to accept the same
+wide type. Dropping the parameter is what makes that constraint disappear.
+
+Where a store genuinely is needed, the parameter is now sized to measured usage:
+
+| site | demanded | used |
+| --- | --- | --- |
+| `undo.PreflightUndoConflicts` / `checkFileMoveConflict` | 398 | 2 |
+| `undo.RunUndoOperation` / `revertChange` | 90 | 4 |
+| `sweep.SweepArchivedBooks` | 78 | 3 |
+| `deluge.NotifyDelugeAfterUndo` | 44 | 2 |
+| `deluge.NotifyDelugeAfterVersionSwap` | 44 | 1 |
+| `deluge.NotifyDelugeAfterOrganize` | 9 | 1 |
+
+#### `OrganizeStore` was an alias to all 398 methods, on a stale justification
+
+`internal/server/handlers/organize.go` declared `type OrganizeStore = database.Store`
+with a comment explaining that `organizer.Organizer.SetStore` and
+`deluge.NotifyDelugeAfterOrganize` "both require the full `database.Store`
+interface, so a narrower subset would not satisfy those call sites."
+
+Neither requires it. `SetStore` takes `organizer.OrganizerStore` — four lookups.
+The deluge notifier needs one method. The comment was accurate when written and
+went stale when those two were narrowed; nothing re-checked it, so a 398-method
+alias outlived its reason by two refactors.
+
+`OrganizeStore` is now eleven methods: `organizer.OrganizerStore`,
+`logger.ActivityLogWriter`, and six direct calls.
+
+#### The six parameters that forced `database.BookStore` on ten other interfaces
+
+`database.BookStore` is 51 methods (`BookReader` + `BookWriter`), and ten consumer
+interfaces across `internal/server`, `internal/reconcile`, `internal/audiobooks`,
+`internal/maintenance` and `internal/metadata` embedded it. None of them wanted 51
+methods. They embedded it because Go interface satisfaction is structural: six
+function signatures took a `database.BookStore`, so every value that had to reach
+one of them was obliged to carry the whole book surface.
+
+Probing each of the six with an empty interface and reading the compiler's
+enumeration shows what they actually call:
+
+| forcing site | demanded | used |
+| --- | --- | --- |
+| `batch.NewBatchService` | 51 | 3 |
+| `sweep.SweepTombstones` | 51 | 3 |
+| `undo.revertMetadataUpdate` | 51 | 2 |
+| `cmd.purgeSeedBooks` | 51 | 2 |
+| `sweep.AuditFileConsistency` | 51 | 1 |
+| `metadata.ImportMetadata` | 51 | 1 |
+
+Seven distinct methods across all six sites. `AuditFileConsistency` declared a
+dependency on 51 methods to call `GetAllBooksCore` once.
+
+Each parameter now names a local interface sized to its measured usage —
+`purgeStore`, `metadataReverter`, `batchBookStore`, `tombstoneSweeper`,
+`fileAuditor`, `importMetadataStore`. The probe reported zero assignability
+constraints, so nothing downstream required the wide type; no caller changed.
+
+There are now no non-test positions outside `internal/database` that take a
+`database.BookStore` as a parameter or field. The ten embeds that were held up by
+these six signatures are no longer forced and can be narrowed on their own terms,
+which is what unblocks `handlers/operations.OperationsStore` and
+`handlers/metadata.MetadataStore`.
+
+#### `CLAUDE.md` records the scope-vs-depth distinction
+
+Neither `CLAUDE.md` nor the global instructions said anything about how deep to go on
+a problem, and the closest guidance in memory — a "surgical precision" note — read
+"Touch only what was explicitly asked. Do not expand scope, fix adjacent issues, or
+'clean up while you're in there.'"
+
+That rule is about *scope*, but it was being applied to *depth*: it justified making
+the smallest change to the assigned problem rather than the correct one. The two are
+now separated explicitly.
+
+- **Scope** — stay on target. Unchanged.
+- **Depth** — on that target, apply the correct fix, not the smallest one. Refactoring
+  and call-site churn are an acceptable price. Never pre-emptively discount a fix as
+  "cosmetic", "mechanical", or "not worth the churn".
+
+The section includes the 2026-08-18 worked example and one further rule that came out
+of it: **when a comment explains why something must stay wide, verify the claim before
+believing it.** Two were checked that day and both were stale.
+
+#### Sixteen pass-through store interfaces narrowed to measured usage
+
+Each of these had a body of nothing but `database.*` embeds and declared no method
+of its own — pure width propagation, no expressed intent. Every one was measured by
+emptying the interface and reading the compiler's enumeration rather than by
+grepping, and none of the changes altered a caller.
+
+| interface | was | now |
+| --- | --- | --- |
+| `reconcile.Store` | 115 | 9 |
+| `scanner.scanServiceStore` | 93 | 5 |
+| `search.indexBuilderStore` (2 sites) | 81 | 4 |
+| `transcode.transcodeStore` | 62 | 2 |
+| `handlers/metadata.MetadataStore` | 59 | 18 |
+| `metadata.batchUpdateStore` | 56 | 7 |
+| `handlers.PlaylistStore` | 52 | 7 |
+| `sysinfo.SystemServiceStore` | 45 | 4 |
+| `aiscan.Store` | 43 | 7 |
+| `playlist.playlistEvalStore` | 43 | 2 |
+| `handlers.CollectionEvalStore` | 43 | 2 |
+| `activity.changelogStore` | 42 | 3 |
+| `writeback.outboxStore` (2 sites) | 41 | 3 |
+| `metafetch.metadataStateStore` | 16 | 5 |
+| `sysinfo.dashboardStore` | 13 | 2 |
+| `auth.seedStore` | 13 | 2 |
+
+`playlist.playlistEvalStore` is the clearest illustration: its own doc comment named
+the exact two methods it needs — `GetBookByID` for sort enrichment, `GetUserBookState`
+for per-user filters — and then embedded `database.BookReader` +
+`database.UserPositionStore`, 43 methods. The author knew precisely what was needed.
+The width came from two package-private helpers one level down that took the wide
+types; narrowing those released the declaration.
+
+Six of the sites were inline anonymous interfaces in parameter position — the form
+no line-oriented tool can see and the one with nowhere to write down why.
+
+#### Eight more store parameters narrowed in `internal/server`
+
+| site | was | now |
+| --- | --- | --- |
+| `server.maintenanceStore` | 131 | 12 |
+| `handlers/operations.OperationsStore` | 115 | 17 + `database.SettingsStore` |
+| `duplicates_helpers.seriesPruneStore` | 111 | 6 |
+| `duplicates_helpers.seriesMergeStore` (2 sites) | 60 | 2 |
+| `handlers/ai.aiHandlerStore` | 51 | 3 |
+| `middleware.authSessionStore` (2 sites) | 25 | 7 |
+| `middleware.authKeyStore` | 20 | 4 |
+
+`effectivePermissionsFor` took `database.RoleStore` — six methods — for a single
+`GetRoleByID` lookup. That one parameter is what forced `RoleStore` into both auth
+composites; narrowing it released them.
+
+`OperationsStore` had embedded `database.BookStore` with the note "structural
+satisfaction requires the full". That was accurate when written and stopped being
+true when the sweep/audit parameters were narrowed. Its constraint is now
+`sweep.fileAuditor` (one method) and `sweep.tombstoneSweeper` (three).
+
+`database.SettingsStore` stays embedded rather than method-listed: it is four
+methods and already the right size. Using the domain pieces is the goal — the
+problem was never that the pieces existed, it was that consumers took the union.
+
+Both `maintenanceStore` and `OperationsStore` are kept as compositions of focused
+interfaces rather than flat method lists. `interfacebloat` counts declared entries,
+so a flat list of the methods actually used trades a smaller method set for a wider
+declaration — narrowing one axis while regressing the other.
+
+#### `SchedulerDeps.Store` was `func() database.Store` — all 398 methods for seven
+
+The scheduler received the whole store through a getter field. Probing it reports
+seven calls: `GetSetting`, `SetSetting`, `CreateOperation`, `GetOperationByID`,
+`UpdateOperationError`, `GetOperationV2`, `ListActiveOperationsV2`. The field is now
+`func() SchedulerStore`.
+
+Because Go requires function types to be **identical** for assignment, a
+`func() database.Store` cannot be assigned to a `func() SchedulerStore` even though
+`database.Store` satisfies `SchedulerStore`. The wiring sites therefore use a small
+adapter closure rather than a bare method value. A nil `database.Store` converts to a
+nil `SchedulerStore`, so the documented "may return nil before the DB is up" contract
+is unchanged.
+
+#### The last inline undo store parameter
+
+`server.RunUndoOperation` took an inline anonymous interface embedding
+`database.BookStore` + `BookVersionStore` + `OperationStore` — 90 methods — for the
+five that `undo.RunUndoOperation` and the Deluge callback need between them.
+
+With this, every interface in the codebase whose body was nothing but `database.*`
+embeds has been narrowed, except `maintenance.JobStore`, which is settled by its own
+arbitration.
+
+#### `maintenance.JobStore` narrowed from 187 methods to 52
+
+`JobStore` was twelve `database.*` embeds. #2534 had already brought `Run`'s parameter
+down from `database.Store` (398 methods, 40 embeds) to this, and the arbitration
+deliberately chose a shared store over per-job interfaces. What it could not know is
+how little of the 187 the jobs touch.
+
+Measured by emptying `JobStore` and reading the compiler's enumeration across all 37
+jobs: **37 methods called directly, plus 15 more reached only through the narrow
+slices in `jobs/store_slices.go` — 52 of 187.** No job body changed.
+
+It is kept as a composition of seven focused interfaces rather than a flat list of 52,
+because `interfacebloat` counts declared entries: the flat form trades a smaller method
+set for a wider declaration. Seven leaves one slot of headroom under the limit of
+eight, so the next job needing a new capability adds a method to a group instead of
+restructuring the type.
+
+`.interface-width-baseline` drops 3 → 2. Its own note had said this item was settled
+by the #2534 arbitration and that the number was "expected to hold until those
+decisions are taken" — that decision was taken. #2534's choice of a shared store over
+per-job interfaces still stands; what changed is that the shared store no longer
+carries 135 methods nobody calls.
+
+`database.MockStore` still satisfies the narrower interface, so the job tests that
+build one compile unchanged.
+
+#### `MigrationFunc` took all 398 store methods; migrations use six
+
+`type MigrationFunc func(store Store) error` handed every migration the whole store.
+Measured by swapping the parameter for an empty interface and reading the compiler's
+enumeration: **60 of the 61 migration functions touch the store not at all.** The
+Pebble schema is created by store initialisation, so most migrations log a line and
+return nil.
+
+The one that does use it, `migration007Up`, type-asserts straight past the interface
+to `*PebbleStore` for an unexported method — so the width was never what let it work,
+and the assertion still compiles against a narrow interface.
+
+`migrationStore` is now six methods: the runner's own version bookkeeping
+(`GetUserPreference`, `SetUserPreference`, `GetAllUserPreferences`) plus the three
+`migration014UpPebble` uses to rewrite book rows.
+
+#### `audiobookStore` narrowed from 172 transitive methods to 50
+
+`AudiobookService` reached its store through ten wholesale `database.*` embeds —
+171 methods promoted to reach the 50 it actually uses. The interface now declares
+those 50 explicitly, in eight groups named for the entity each one touches
+(`bookReader`, `bookWriter`, `contributorResolver`, `contributorHydrator`,
+`bookTagStore`, `bookFileStore`, `perUserStateStore`, plus the pre-existing
+`authorSeriesStore` embedded by name).
+
+Every method was enumerated with an empty-interface compiler probe rather than by
+reading call sites: 44 direct calls plus six that arrive through the three
+forwarding constraints. No function body changed, and no call site changed —
+narrowing a parameter type cannot break a caller.
+
+This also retires a recorded verdict that the declaration was irreducible without
+first splitting `AudiobookService`. The arithmetic behind that verdict assumed all
+50 methods had to be inlined as method lines, which needs nine groups against a
+limit of eight; embedding `authorSeriesStore` by name spends one entry for nine of
+them and leaves 41 for seven groups. `docs/audits/2026-08-18-interface-width-shapes.md`
+§6 carries the correction. The separate finding that a service with 50 distinct
+store dependencies is too big still stands and remains filed in `todo.d/`.
+
+The interface-width ratchet drops from 2 to 1; the sole remaining finding is
+`database.Store` itself.
+
+#### Seven server-side constructor wrappers stopped re-declaring `database.Store`
+
+`internal/server/audiobooks_compat.go` exists so the server package can keep using
+the pre-move names of seven services. Each wrapper re-declared its parameter as
+`database.Store` — 398 methods — and then forwarded the value into a constructor
+that asks for far less. Four of the seven targets already declared a narrow
+interface, so the wrapper was actively widening what callers had to satisfy.
+
+They are now function-value aliases (`var NewRevertService = audiobookspkg.NewRevertService`),
+the pattern the same file already used for `applyOverrideToPayload`. An alias takes
+its signature from the target, so the narrow parameter propagates for free — and
+when the three targets that still take `database.Store` are narrowed, these seven
+follow with no second edit. `database` is no longer imported by the file at all.
+
+Also narrows `revertServiceStore` from three wholesale `database.*` embeds to the
+five methods a compiler probe measured: four direct calls plus `GetAllImportPaths`.
+
+No behaviour change: calling a function-valued variable is identical at every call
+site, and narrowing a parameter cannot break a caller.
+
+- `readstatus.RecomputeUserBookState` and `readstatus.SetManualStatus` declared an
+  **anonymous** composite interface — `interface{ database.BookFileStore;
+  database.UserPositionStore }`, roughly 86 methods — inline in their signatures,
+  for the four methods they actually call. That interface is now named
+  `readstatus.Store` and narrowed to those four.
+- Two callers that only carried those wide surfaces to satisfy it are narrowed as
+  a result: `positionSyncStore` (86 transitive methods → `readstatus.Store` plus 6
+  direct calls) and `handlers.ReadingStore` (→ `readstatus.Store` plus 3). Both now
+  state the forwarding relationship by embedding the interface they forward to.
+  No behaviour change; no function bodies were edited.
+
+- Narrowed the store interfaces in `internal/audiobooks` to what a compiler probe
+  measured they actually use. `metadataStateStore` went from two full `database.*`
+  surfaces to the single method it calls (`RecordMetadataChange`), and
+  `authorSeriesStore` from `AuthorReader`+`SeriesReader` wholesale to the 9 methods
+  it reads, grouped by entity. No behaviour change: no function bodies were edited.
+- Deleted `audiobookUpdateStore`, which restated `audiobookStore` under a second
+  name. Its own direct-call set was one method (`GetBookByID`), and
+  `NewAudiobookUpdateService` forwards straight into `NewAudiobookService`.
+  This drops the tree's `interfacebloat` count from 5 to 4.
+
+- Narrowed four of the iTunes service's per-subsystem store interfaces to the
+  methods a compiler probe measured them using: `WriteBackStore` 102 transitive
+  methods → 5, `pathReconcilerStore` 108 → 4, `provisionerStore` 51 → 5, and
+  `playlistSyncStore` 9 → 4. Each previously embedded whole `database.*`
+  surfaces. No behaviour change — no function bodies were edited, and the
+  `interfacebloat` count is deliberately unchanged, because all four declared
+  fewer than 8 entries before and after. The width they carried was never
+  visible to the linter.
+
+- `persistRepairResult` took a whole `database.OperationStore` (30 methods) to make
+  one call, `UpdateOperationResultData`. Narrowed to a one-method
+  `opResultWriter`.
+- That signature was the reason `pathRepairerStore` could not be narrowed with the
+  other iTunes subsystem stores: it is now 121 transitive methods → a composition of
+  four already-narrow interfaces (`tierAStore`, `pidLookup`, `opResultWriter`,
+  `operations.OperationStateDeleter`) plus its 3 remaining direct calls. This was the
+  last of the six subsystem stores still embedding whole `database.*` surfaces.
+
+#### `metafetch.Service` narrowed from `database.Store` to 64 measured methods
+
+`metafetch.Service` held its store as `database.Store` — the 398-method union — in
+both its struct field and its constructor. It now declares the **64 methods** a
+compiler probe measured: 36 direct calls plus five forwarding constraints, in seven
+declared entries.
+
+Two things had to be narrowed first, because both took `database.Store` themselves
+and so re-imposed the union on anything that forwarded a store into them:
+
+- **`database.EnsureSingletonBookTag`** and its two siblings for authors and
+  series. Each took the full union to call **three** methods on one entity. They
+  now take `BookTagSingletonStore` / `AuthorTagSingletonStore` /
+  `SeriesTagSingletonStore` — exported, so callers can embed them by name rather
+  than restate the three methods.
+- **The three checkpoint helpers** in `internal/metafetch/pipeline_checkpoint.go`.
+  These forward to `organizer`, where the same three functions *already* declared
+  `database.UserPreferenceStore` — and `internal/server` has an identical copy that
+  was *also* already narrowed. The metafetch copy was an unnarrowed duplicate of an
+  already-narrowed twin.
+
+No function body changed and no call site changed.
+
+#### `organizer.PreviewService` now uses its own package's `Store`
+
+`internal/organizer` declares a `Store` interface — 22 methods in six composed
+entries — and `Service` and `RenameService` both take it. `PreviewService` was the
+lone holdout, declaring `database.Store` (398 methods) in its struct field and its
+constructor. A compiler probe confirmed it needs nothing `Store` does not already
+carry, so the fix required **no new interface**: it now takes `Store` like its two
+siblings.
+
+That in turn unblocked two of the three thin organizer wrappers in
+`internal/audiobooks`. `NewRenameService` and `NewOrganizePreviewService` probed to
+exactly the same three constraints and no direct calls of their own, so they share
+one `organizerWrapperStore` declaration rather than two identical ones.
+
+`NewOrganizeService` is the remaining holdout — it also builds a `metafetch.Service`,
+so it stays on `database.Store` until that lands.
+
+- `audiobooks.NewOrganizeService` no longer takes `database.Store`. It takes
+  `organizer.Store` composed with `metafetch.Store` — the two services it
+  actually forwards its store into. `metafetch`'s consumer interface is exported
+  for this, matching the `organizer.Store` precedent. This was the last
+  `database.Store` constructor parameter in `internal/audiobooks`.
+
+- Those eleven sites no longer name `database.Store`. The anonymous-interface
+  assertion was the last shape in the codebase that re-imposed the 398-method
+  union without being visible to interface-shaped greps or to `interfacebloat`.
+
+- `internal/merge` no longer depends on `database.Store`. `Service`, `NewService`
+  and the nine free functions now take measured slices — 18 methods across five
+  grouped interfaces instead of 398. `collision.go` and `register.go` no longer
+  import `internal/database` at all.
+
+- `dedup/dataset.StoreAdapter` holds a two-method `AdapterSource` instead of a
+  full `database.Store`. Its comment had claimed it needed the full interface;
+  the adapter exists because of a method-name mismatch (`GetBookByID` vs
+  `GetBook`), which has nothing to do with width.
+
+- `internal/versions` no longer depends on `database.Store`. Its nine functions
+  take measured slices — 12 methods across seven grouped interfaces, plus
+  `database.ImportPathStore` embedded by name for the one forwarding constraint.
+  Two of the nine (`scanFileHashMatch`, `ResumeVersionSwaps`) are stubs that
+  never touch the store at all and now say so.
+
+- Nine `serviceregistry.Get[database.Store]` call sites now assert the interface
+  their constructor actually takes. Five of those constructors were already
+  narrow, so the wide assertion was purely vestigial. `internal/config` and
+  `internal/backup` were narrowed to reach the same place.
+
+- Four more packages dropped `database.Store` for measured slices:
+  `internal/organizer`'s two free functions (2 methods), `internal/deluge` (2),
+  `internal/metabatch` (4) and `internal/diagnostics` (12). None had a
+  forwarding constraint, so each is a leaf that had been carrying all 398
+  methods to use a handful.
+
+- `internal/metafetch` is now free of `database.Store`. The ISBN enrichment
+  service takes four methods, the two free functions in `batch.go` take one
+  each, and both `register.go` sites plus the `TryGet` in `lifecycle.go` assert
+  what their constructor takes. `register.go` and `lifecycle.go` no longer
+  import `internal/database`.
+
+- `internal/dedup` no longer depends on `database.Store`. Its engine and entry
+  points take 27 measured methods plus twelve forwarding constraints, all
+  embedded by name. `merge.BookWriter` and `merge.UserProgressMerger` are
+  exported so cross-package callers can name what they forward into.
+
+- Four plugins dropped `database.Store`: `acoustid` (7 methods), `deluge` (6),
+  `metafetch` (2), and `itunes` — whose store field was **deleted**, not
+  narrowed, because it was never read.
+
+- Thirteen leaf helpers in `internal/server`, `internal/server/handlers` and
+  `internal/server/middleware` take measured store slices instead of
+  `database.Store` — between one and eight methods each. `undo.ConflictChecker`
+  and `versions.TrashedVersionCleaner` are exported so the server wrappers that
+  forward into them can name the requirement.
+
+- `internal/reconcile` (4 methods) and `internal/scanner` (22) no longer depend
+  on `database.Store`. `dedup.Store` is exported so callers that forward into
+  `MergeBooks` and `MergeSplitBookCluster` can name the requirement.
+
+#### The missing-file repair job never deletes anything again
+
+`maintenance.missing-file-repair` used to delete `book_file` rows whose bytes
+were gone, for any book that still had at least one surviving file. That
+deletion has been removed outright, and the job is now a report: it stats every
+row, groups the dead ones per book, and surfaces what needs a human decision.
+Passing `{"apply": true}` is now a hard error rather than a silent no-op, so a
+caller still asking for the old behaviour is told the behaviour is gone instead
+of being told it succeeded.
+
+The reason is the 2026-08-17 full-population audit. Between 2026-03-03 and
+2026-08-15 the shipped default filename format put the track number as
+`{track}/{total_tracks}`, and the `/` was never sanitised — so "track 70 of 131"
+became a directory named `... - 70` containing a file named `131.mp3`. The disk
+was later repaired; the database rows were not. Every one of the 101 rows of
+that shape checked in the audit had its bytes present on disk under the flat
+name. Those rows are the only pointer to a file that exists, and the old job
+classified them as safe to prune.
+
+The job's `library.write` capability was dropped along with the code, and the
+narrow `bookFileBulkDeleter` interface it used was deleted, so re-adding
+deletion now requires writing the interface again and justifying it.
+
+- `internal/importer`'s `Store` is no longer `= database.Store`. It is seven
+  measured methods plus four forwarding constraints embedded by name, and
+  `CheckImportCollisions` takes a smaller slice still. `internal/audiobooks`'s
+  two registry lookups assert its own constructors' types.
+
+- Ten more `internal/server` helpers take measured store slices: the two bulk
+  metadata fetches, the candidate fetcher, the metadata-results cache, the file
+  I/O pool, the merge reroute and the Deluge adapter.
+
+#### `dedup.build-isbn-index` resolves its store capability instead of asserting on the concrete type
+
+The op obtained its `ISBNIndexStore` with a bare type assertion on the plugin
+store, whose failure message read `expected *database.PebbleStore`. It now
+resolves through the decorator chain with `database.AsCapability`, the same
+pattern applied across this sweep.
+
+This fixes no live failure and the distinction is worth stating plainly: the
+service registry holds the **bare** store (`Override("store", resolvedStore)`
+runs once, before the wrapper exists, and is never re-seeded), so the assertion
+succeeds as things currently stand. What it removes is the fragility — any
+wrapper embedding the `database.Store` interface satisfies the plugin's own
+store interface while hiding the concrete type, and the assertion would then
+fail. All three methods (`WriteISBNIndexForBook`, `IsISBNIndexBuilt`,
+`SetISBNIndexBuilt`) were compile-probed individually against `database.Store`
+and are uniformly absent from it, so no part of the composite is reachable
+through a decorator's own method set.
+
+Unlike the other conversions in this sweep, this call site fails *loudly* — it
+returns an error naming the missing capability rather than silently degrading —
+so the error string was corrected to name the capability rather than the
+concrete type it no longer requires.
+
+This was the last production site still reaching the concrete store through an
+unguarded assertion; its sibling in `internal/dedup` was converted earlier.
+
+#### The server's database handle now exposes 88 methods instead of 398
+
+`internal/server` used one accessor for two different jobs: calling the database
+directly, and handing the database to another component that declares its own,
+much narrower requirements. Because it was one accessor, both jobs got the full
+398-method interface.
+
+It is now split by role. `Ops()` returns the 88 methods the server actually
+invokes — measured, not estimated, by resolving the receiver type of every call
+so that the common `store := s.Store(); store.X()` pattern is counted (271 of 315
+uses are not immediately dotted, so a text search cannot see them). A separate,
+deliberately awkward `storeForWiring()` keeps the full interface for the handful
+of places that genuinely pass the store onward.
+
+The effect is on what ordinary code can reach: calls made against the full
+interface inside `internal/server` drop from 216 to 49, and the distinct methods
+reachable that way drop from 88 to 22.
+
+No behaviour changes — every edit is a type-level rename.
+
+#### The interface-width baseline now records what a count of 0 does not mean
+
+`.interface-width-baseline` holds `0` and documents at length how the number can
+lie, but never stated that the threshold is `max: 8` or that two declarations
+are over it today under explained `//nolint:interfacebloat` directives —
+`BookReader` (10 entries) and `ServerDeps` (14). Read without that, `0` means
+"nothing is wide," which is not what it measures.
+
+Both suppressions are intentional and both are currently off-limits: `BookReader`
+by the standing decision to migrate consumers to the ten pieces rather than
+shrink it in place, `ServerDeps` because it sits in the hands-off missing-file
+repair lane.
+
+Recorded because the omission actually misled a reader, and the ad-hoc script
+written to double-check it was also wrong — it reported `TranscriptionRunners`
+at 12 entries when it has 2, counting each line of a multi-line parameter list
+as a separate entry. golangci-lint is the authority on declared-entry counts.
+
+No behaviour change; the gate still reports `baseline=0 actual=0`.
+
+- `internal/plugins/dedup` (8 methods + 2 named constraints) and five holdout
+  functions in `internal/plugins/maintenance` no longer take `database.Store`.
+  The maintenance five compose interfaces that package already declared.
+
+#### The PebbleStore split plan's "shared mutable core" argument was measured, and half of it was wrong
+
+`docs/plans/2026-08-19-split-the-pebblestore-surface.md` argued the struct cannot
+be partitioned by domain because its fields — one `*pebble.DB`, the memdb layer,
+**five mutexes**, a generation counter and a warmup lifecycle — are shared across
+every domain. That section was written from reading the struct declaration rather
+than measuring usage.
+
+Measured across the 48 non-test files declaring `*PebbleStore` methods, resolving
+each file's actual receiver name: `db` is used by 45/48 and the memdb accessor by
+10/48, but **every mutex is used by exactly one domain file** — `counterMu` by
+authors, `opsMu`/`opsLogSeq` by ops-v2, `reviewMu` by review, and so on. The
+mutexes were offered as proof the state cannot be partitioned; they are the part
+that partitions most cleanly.
+
+The conclusion survives its broken premise: `db` and the memdb layer really are
+cross-cutting, so a split still yields facades over a shared core. What changes is
+that the core is ~6 fields rather than 18, and the split is therefore a
+cost/benefit decision rather than a design impossibility — a decision that belongs
+to a human, since it is 558 methods across 48 files against production.
+
+Recorded with its own limits: the counts are file-level, not method-level, and two
+earlier passes at these figures were wrong (18/48 and 61 files) before the receiver
+name was resolved per file.
+
+- All eight `serviceregistry.Get[database.Store]` sites in `registry_wire.go`
+  assert what their consumer takes; the file no longer mentions `database.Store`.
+- `database.GetAIJobs` takes `any` instead of `Store`. It only forwards to
+  `AsCapability`, which takes `any`, so declaring `Store` imposed 398 methods to
+  satisfy a call that constrains nothing.
+
+- `maintenance.StoreProvider` no longer hands the maintenance ops the full
+  398-method `database.Store`. `Store()` is replaced by three accessors: `OpsStore()`
+  for the common path (53 methods, grouped into eight sub-interfaces each under the
+  `interfacebloat` limit), plus `ReconcileStore()` and `PlaylistStore()` for the two
+  ops that forward a store into another package and were dragging 46 extra methods
+  into everyone else's requirement.
+
+  Measured with `go/packages` at full type resolution: `internal/plugins/maintenance`
+  went from 111 call sites reaching 39 methods on a `database.Store` value to **no
+  `database.Store` value in the package at all**, and consumer declarations of the
+  type fall from 9 to 8. Every accessor returns the same underlying store, so no
+  behaviour changes and no wrapper is allocated.
+
+- The `*PebbleStore` struct-split decision doc is marked PARKED at lowest priority
+  rather than left open, and tracked as a TODO fragment so it stays visible without
+  competing for attention. It has been costed twice and corrected twice; the doc now
+  says so up front, along with the two traps that produced the earlier wrong numbers.
+
+- The remaining bare `store.(*database.PebbleStore)` assertions in production
+  code (scanner chapter extraction, dedup's ISBN/ASIN index wiring,
+  `migration007Up`, and the db-health endpoint's Pebble section) now resolve
+  through the decorator chain as well, leaving none outside tests. All four were
+  traced and are reached with the **bare** store today, so none of them was
+  broken — this is hardening so they stay correct by construction, since every
+  one of them fails silently and looks like an unsupported backend rather than a
+  bug.
+
+- The ABS contributor-cache warm takes its store as a function argument
+  (`spawnContributorWarm`) instead of capturing it. The store must be read before
+  `Server.Start` overwrites that field, and that ordering was previously held in
+  place only by a comment; as a parameter it is a language guarantee, since Go
+  evaluates arguments in the caller. It is also now testable — the old inline form
+  could only be reached through `wireABSRoutes`, which returns early unless
+  `ABS_API_ENABLED` is set and calls `os.Exit(1)` on a misconfigured ABS block, so
+  `-race` never entered the path at all.
+
+- Corrected the justification comment on the dedup-candidate cascade's
+  corrupt-record branch. It claimed a leftover far-side entity-index entry would
+  be cleaned up by that book's own deletion, which is not guaranteed — the book
+  may never be deleted. The entry is in fact inert: the entity index has exactly
+  two consumers and both re-resolve every hit through the candidate record,
+  skipping anything that does not resolve. The comment now states that, and warns
+  against adding a consumer that trusts the index directly.
+
+- `AcoustIDScan`'s Tier-0 LSH candidate lookup now resolves its store through
+  the decorator chain (`database.AsCapability`) behind a named
+  `lshCandidateStore` interface, instead of a two-method anonymous assertion
+  written inline at the call site. The two methods have opposite reachability —
+  `GetBookFileByID` is part of `database.Store`, `LookupAcoustIDCandidates` is
+  `*PebbleStore`-only — so the combined assertion silently takes the worse of
+  the two and fails through any decorator. The engine holds the bare store
+  today, so this is hardening rather than a fix; it is worth doing because the
+  call site's nil check is silent, and a nil there drops the whole scan onto the
+  O(n) segment walk with no log line and no error.
+
+- `SeriesRunners.ExecuteSeriesPrune` and `ExecuteSeriesNormalizeCore` no longer
+  take a store parameter. They threaded a 398-method `database.Store` from the
+  caller purely so the implementation could reach a store it already held; the
+  parameter is removed rather than narrowed, and the nil-store guard moved to the
+  implementation with it.
+
+- Narrowed eleven more `database.Store` consumers to focused interfaces, taking
+  the non-test consumer count outside `internal/database` from 38 to 18: the
+  scheduler's extra-ops registrar, the AI / diagnostics / split-book HTTP
+  handlers, the operations registry service, the batch poller, the bulk
+  metadata-fetch-by-ID op, the version-group backfiller resolution, and the
+  `diagnostics` CLI subcommands.
+- `internal/plugin.Deps.Store` is gone rather than narrowed. It was write-only:
+  the server set it and no plugin ever read it.
+- `metabatch.Store`, `sweep.ArchiveSweepStore`, `diagnostics.Store` and
+  `merge.Store` are now exported so callers can name them instead of reaching
+  for `database.Store`.
+
+- No production code outside `internal/database` names `*database.PebbleStore`
+  any more. The remaining 10 `database.AsPebbleStore` call sites — db-health's
+  Pebble section, the book-aggregates backfill sentinel, the AcoustID
+  fingerprint reset, scanner chapter persistence, dedup's ISBN index wiring, and
+  five sites that only wanted the raw `*pebble.DB` handle — now go through named
+  capability interfaces or new store-taking constructors. No behaviour change:
+  `AsPebbleStore` already walked the decorator chain, so every site resolves
+  exactly as before. What changes is that resolving the concrete store is now
+  something only `internal/database` does, which is the precondition for ever
+  splitting that type (`docs/plans/2026-08-19-split-the-pebblestore-surface.md`).
+- `database.NewEmbeddingStoreFromStore`, `NewPebbleMetricsStoreFromStore`,
+  `NewAIScanStoreFromStore` and `NewPebbleActivityStoreFromStore` are new. Their
+  `*pebble.DB`-taking twins forced five packages to unwrap the store themselves;
+  handing those callers an `interface{ DB() *pebble.DB }` would have traded a
+  dependency on our concrete type for one on pebble's, so the unwrap moved into
+  `internal/database` instead.
+
+- The six `/maintenance/wipe` helpers (`wipeBookFiles`, `wipeSegments`,
+  `wipeBooks`, `wipeAuthors`, `wipeSeries`, `wipeExternalIDs`) now resolve their
+  raw key-space operations through a named `prefixWiper` capability interface
+  instead of `database.AsPebbleStore`. No behaviour change — `AsPebbleStore`
+  already walked the decorator chain, so both spellings resolve identically
+  today. What changes is that `internal/server` no longer names
+  `*database.PebbleStore` for this, which is a prerequisite for ever splitting
+  that type. `WipeByPrefixes` and `CountByPrefix` were compile-probed and are
+  both absent from `database.Store`, so they share the same reachability and the
+  composite carries no hidden weak member.
+
+- `database.Store`'s 40 directly-embedded sub-interfaces are grouped into six
+  domain composites — `catalogStore`, `mediaStore`, `accountStore`,
+  `enrichmentStore`, `operationsStore`, `platformStore`. This is a regrouping,
+  not a narrowing: the method set is byte-identical (`verify_interface_split.py`
+  reports `Store 40 -> 40 IDENTICAL`) and no consumer moved. It clears the last
+  `interfacebloat` finding in the repository, so the interface-width baseline
+  drops from 1 to **0** and any new over-wide interface now fails CI outright.
+  The six composites are unexported on purpose: exported, they would be six new
+  nameable wide types that `interfacebloat` can never flag (each declares <= 8
+  entries), which is precisely the re-widening this lane exists to prevent.
+
+- `.mockery.yaml` gained `prefixWiper` and `aggregatesBackfillMarker`, generated
+  in-package with `_test.go` filenames since both are unexported (the
+  `metadataLLMBackend` arrangement). The config records that these mocks are for
+  call-site behaviour tests only and must never be used to test the `resolveX`
+  functions: a mock satisfies its interface by construction, so it would pass in
+  exactly the case those tests exist to catch.
+
+- The E2E workflow can regenerate visual-regression goldens on demand
+  (`update_snapshots`) and uploads failure artifacts. Goldens are per-platform,
+  so the Linux ones cannot be produced on a developer's macOS machine; without
+  this there was no supported way to update them at all.
+
+#### The metadata review dialog's data layer was lifted, not rewritten
+
+Its filter chain, grouping pass, client-side paginator and debounced apply pipeline now
+live in one hook. Callers take slices of the derivation chain rather than re-deriving
+it, and behaviour that had never been tested now is — including two guards that only
+misbehave under a race:
+
+- **stale-response discard** — a slow page-1 fetch that resolves after page 2 must not
+  overwrite it. Without this the reviewer reads stale rows under a fresh page number,
+  with nothing on screen to indicate it.
+- **page clamp** — filters can shrink the result set below the current page index.
+  This is now *derived* rather than corrected in an effect, so there is no frame where
+  the page slices past the end of the list and the spine flashes empty.
+
+Two behaviours whose comments describe intent rather than mechanism are covered
+directly, because both read as oversights and are not: a skipped row stays actionable
+(skip means "not now"), and hiding multi-book matches also deselects them, so
+"Apply Selected" cannot apply a book the toggle claims to have removed.
+
+`handleClose` was deliberately **not** carried over. It exists because a dialog closes
+and has one moment to tell the library to refresh; a route does not close. The
+workspace refreshes when the apply operation actually finishes — more accurate than the
+dialog's version, which fired on close whether or not the background op had done
+anything.
+
+### Removed
+
+- **`make check-mock-fresh` deleted.** The target claimed to catch a `MockStore` that had
+  drifted from the `Store` interface, and could not: it ran `go generate
+  ./internal/database/...` in a repo with zero `//go:generate` directives (mocks are
+  generated from `.mockery.yaml`), so its regeneration step was a no-op and the
+  `git diff --exit-code` that followed only ever detected an uncommitted edit. Measured by
+  adding a method to `Store` and leaving the mock alone — the exact drift it named — it
+  printed `==> Mock is fresh.` and exited 0. Its failure message also told you to run
+  `make generate`, a target that does not exist.
+
+  It was deleted rather than repaired because no coverage depends on it: `Store`/mock
+  divergence is a compile error via the assertions at `internal/database/iface_assert.go:12`
+  and `internal/database/mock_store.go:30`, `vet` runs over every package as a `test-short`
+  prerequisite, and `mocks-check` regenerates from `.mockery.yaml` and diffs. All three go
+  red on the same mutation. `make ci` now runs one mock gate instead of two.
+
+- The `maintenance.job` operation ID. An in-flight operation still naming it at restart
+  is dropped with a warning, which is the same path it took before — the shared
+  definition's policy was already "drop on restart", so behaviour across the upgrade is
+  unchanged.
+
+- The write-only package-level store global in `internal/maintenance` (`InjectStore` /
+  `GetStore`). It was set once at startup and never read by anything.
+
+- Deleted `internal/server/interfaces.go`. Its four interfaces
+  (`bookHandlerStore`, `userHandlerStore`, `playlistHandlerStore`,
+  `metadataHandlerStore`) had no references outside their own file — nothing
+  took them as a parameter or field. The handlers they claimed to document now
+  live in `internal/server/handlers/*` with their own enforced narrow
+  interfaces.
+
+### Fixed
+
+- Blocked the approved `maintenance.missing-file-repair` apply before it ran.
+  A full-library `missing-file-audit` (532,296 rows) plus an on-disk
+  discriminating test showed that a large share of "missing" `book_file` rows
+  are database residue of the 2026-03-03→2026-08-15 `segment_title_format`
+  slash bug, and their audio files are still on disk under the current
+  `{title} - {track:02d}` name. 24 of 24 tested delete candidates (768.5 MB)
+  pointed at files that exist. Those rows need repointing, not deletion.
+
+- Corrected the resume policy planned for maintenance jobs that report `CanResume()` but store no
+  checkpoint. They were slated to declare `ResumeRestart`, which means *reload the last
+  checkpoint*; the value meaning *re-run from zero* is `ResumeRequeue`. The mislabel was not
+  cosmetic: the watchdog writes an `uncheckpointed` strike against every `ResumeRestart`
+  operation that goes quiet, and a separate guard force-drops one whose progress high-water mark
+  never advances — both of which describe a job that never checkpoints.
+
+- Corrected the `registry.Reporter` implementer counts in `reporter_db.go` and `reporter.go`
+  (21 → 24 types, 13 → 15 test fakes). The old figures came from a name-shaped estimate; the
+  new ones are structural — every implementer must declare `RunPhase`, and `sdk.Reporter` is
+  a type alias of `registry.Reporter` rather than a second interface.
+
+#### Linter configs moved to the repo root, so manual runs and CI finally agree
+
+Every linter config lived in `.github/linters/`, and the Super Linter env files
+pointed at them with values like `.github/linters/.golangci.yml`. Super Linter
+resolves `*_CONFIG_FILE` as a filename *relative to* `LINTER_RULES_PATH`, so
+those resolved to `.github/linters/.github/linters/...` — and four of the eight
+pointers named files that did not exist anywhere in the repo.
+
+The deeper problem was that running a linter by hand used different rules than
+CI intended:
+
+- **yamllint had two configs that disagreed.** `.yamllint` (line-length 80,
+  `document-start` left at yamllint's default of *required*) is what bare
+  `yamllint` auto-discovered; `.yaml-lint.yml` (line-length 120,
+  `document-start: disable`) is what pre-commit and Super Linter were pointed at.
+  The `document-start` split was the sharpest: under the auto-discovered config
+  yamllint flagged **19 of 19** files in `.github/workflows/` for a missing
+  `---`, because **0 of 19** have one. The repo's convention is consistently no
+  leading `---`, so consolidating onto the `disable` setting matches what the
+  code actually does — the alternative was a 19-file reformat nobody asked for.
+  Consolidated onto `.yamllint` with the content that was in force.
+- **black's config was in a file black never reads.** `[tool.black]` with
+  `line-length = 100` sat in `.python-black`; `black .` looks only for
+  `pyproject.toml` and so silently used its default of 88. Moved to
+  `pyproject.toml`.
+
+All configs are now at the repo root under the names their tools discover:
+`.golangci.yml`, `.markdownlint.json`, `.prettierrc`, `.pylintrc`, `.yamllint`,
+`pyproject.toml`, `ruff.toml`, `clippy.toml`, `rustfmt.toml`, and the
+`super-linter-*.env` files. `.github/linters/` is deprecated and holds only a
+pointer note. `.pre-commit-config.yaml` was repointed, which also fixed a
+pre-existing break where it referenced `.prettierrc.json` — a file that has
+never existed here.
+
+Super Linter now runs in advisory mode (`DISABLE_ERRORS=true`): it reports
+everything and never fails a PR.
+
+#### Maintenance ops now register the permission their job actually asks for
+
+`registerMaintenanceJobOp` hardcoded `settings.manage` for all 37 maintenance
+operations. That was harmless while `OperationDef.Permissions` was persisted and
+read by nothing — but #2536 made `POST /operations/v2` enforce it, which turned
+the hardcoded value into the operative one.
+
+`bulkFetchMetadataJob` is the single job implementing `PermissionAware`, and it
+asks for `library.edit_metadata`. Its def declared `settings.manage`, so a caller
+holding exactly the permission the job requires was refused, while a caller with
+`settings.manage` and no metadata rights was let through. The v1 dispatcher route
+applied the correct rule, so the two trigger paths disagreed — and phase 1 of the
+kill-v1 plan deletes the one that was right.
+
+The def now uses the job's own `PermissionAware` value where it has one and
+defaults to `settings.manage` otherwise, deliberately identical to the v1
+dispatcher's rule so retiring that route cannot change who can run what.
+
+- The width gate is enforced by the ratchet script rather than by a
+  `golangci-lint --enable-only interfacebloat` selector. golangci-lint exits
+  non-zero on any finding and the tree legitimately holds five, so the selector
+  form would have been red on every PR from the day it landed.
+
+#### The interface-width ratchet no longer reports a count it cannot measure
+
+The gate could be wrong in both directions depending on nothing more than which
+git worktrees existed on disk and what was in a cache directory. Both were
+measured on 2026-08-18 against a true count of 4.
+
+**It could fail on a clean tree.** Run from `.worktrees/pathrepair` it reported
+"interface width went UP (4 -> 6)". The two extra findings were `BookReader` and
+`ServerDeps` — both of which carry an explained `//nolint:interfacebloat` at
+exactly the line each was reported against, in the live tree. golangci-lint had
+attributed them to `../absplit/...`, a worktree that had been deleted.
+
+**Worse, it could pass silently on a tree with four findings.** Run from the repo
+root while `.worktrees/widthgate` existed, it reported `actual=0` — all four
+findings replayed with `.worktrees/` paths, where `.golangci.yml`'s exclusion
+dropped them. The gate then said "went DOWN (4 -> 0)" and advised setting the
+baseline to 0. Following that advice would have disabled the gate permanently,
+which makes this the more dangerous half: a silent pass whose own remediation
+text argues for making the silence permanent.
+
+Root cause for both: golangci-lint's result cache is keyed by file *content*, and
+every git worktree of this repo declares the same module path with byte-identical
+files, so an unchanged file replays whichever path was recorded first — outliving
+the checkout that produced it. A finding's path is not cosmetic. `//nolint`
+suppression is resolved by re-reading the source at the reported position, and
+the `\.worktrees/` exclusion matches on that same path. So a replayed path either
+loses a suppression (leaking a finding) or gains an exclusion (hiding one).
+
+Package loading was never involved: each worktree has its own `go.mod`, so
+`go list ./...` from the repo root returns zero packages under `.worktrees/`.
+Only cached *positions* cross the boundary.
+
+`scripts/check-interface-width.sh` now scopes `GOLANGCI_LINT_CACHE` to the
+worktree it runs in, so positions can only come from the current checkout, and
+exits 2 — "the instrument did not run" — if any reported path fails to resolve,
+rather than reporting a number. That joins the existing exit-2 case for a v1
+binary reading the v2 config; exit 1 stays reserved for a real ratchet violation.
+
+This also corrects `.golangci.yml`, which documented the cross-worktree
+attribution problem but concluded "it does not change the number". That held only
+while no declaration carried a `//nolint` — suppressed findings are exactly the
+ones it fails for.
+
+#### Narrowing an interface by listing its methods made the width gate red
+
+`interfacebloat` counts **declared entries**, not transitive methods. Replacing a
+body of four `database.*` embeds with the nine methods actually used cuts the method
+set from 115 to 9 — and raises the declared width from 4 to 9. Two interfaces crossed
+the limit that way and the ratchet went 3 → 5.
+
+`reconcile.Store` is now a composition of four focused interfaces (`bookReader`,
+`bookWriter`, `importPathReader`, `operationRecorder`) holding the same nine methods.
+
+`handlers/metadata.MetadataStore` was worse: it was **already** a correct composition
+of six focused interfaces, and the only thing wrong with it was one embed —
+`database.BookStore`, 51 methods. Flattening it to a method list destroyed a good
+split to fix a single line. It is restored as the composition, with the embed
+replaced by a four-method `MetadataBookStore`. `MetadataRejectionStore` is also
+restored: an unbounded string replacement had appended four methods to it as well,
+because its closing lines matched the same pattern.
+
+Mocks for `MetadataStore` and `PlaylistStore` regenerated.
+
+- `scanner.SetScanHooks` wrote an unsynchronised package-level global that scan
+  worker goroutines read from `saveBookToDatabase`, so installing or clearing
+  hooks raced with any scan still running. Because the operations registry runs
+  scans in the background, a test's deferred `SetScanHooks(nil)` genuinely
+  overlapped a scan started by an earlier test — which is how it surfaced, as
+  `race detected during execution of test` in `TestAddImportPathFallbackScan`.
+  The global is now guarded by an `RWMutex` and read once through a helper, which
+  also closes a nil-check TOCTOU: the old code re-read the global three times, so
+  hooks could go nil between the check and the call.
+
+- `scripts/check-interface-width.sh` reported a finding count of `0` when
+  `golangci-lint` failed to run at all — most often a stale v1 binary earlier on
+  `PATH`, which exits 3 without linting because this repo's config is v2 format.
+  The `0` was then diagnosed as "interface width went DOWN", a confident and
+  entirely wrong message. The script now inspects the exit code and treats
+  anything other than 0 or 1 as a run failure with its own message.
+
+- Eleven capability lookups resolved the store decorator by hand
+  (`store.(interface{ Unwrap() database.Store })`) and unwrapped exactly one
+  level. They now use `database.AsCapability`, which walks the whole chain. The
+  production chain is one deep today, so this was correct by accident: a second
+  decorator would have silently disabled query pushdown, the broken-file count,
+  quick queries and transcribe stats — each degrading to a slower or empty path
+  rather than failing. This is the same failure mode `store_capability.go` was
+  written for after it reached production on 2026-07-30.
+
+- `internal/activity`'s registration resolved the concrete store with a bare
+  `store.(*database.PebbleStore)`, which fails through the `indexedStore`
+  decorator and silently takes the "non-Pebble backend" branch — disabling the
+  Pebble activity store and falling back to NutsDB-only. It now uses
+  `database.AsPebbleStore`.
+
+- `acoustid`'s reset-all op resolved its batched fast path with a bare
+  `p.store.(*database.PebbleStore)`. That fails through the `indexedStore`
+  decorator the server installs at startup, so in production the op silently
+  took the per-row fallback — roughly 100× slower, with nothing logged to say
+  the fast path had been skipped. It now uses `database.AsPebbleStore`.
+
+#### A crash in the metadata-apply path, and three checks that were not checking
+
+`staticcheck` reported 11 findings across 10 sites, all pre-existing, which meant
+`make ci` could not pass on `main`. It now reports none. Three of the ten were real
+defects rather than lint noise.
+
+**A nil dereference in applying metadata.** `service_apply.go` read `updatedBook.Title`
+immediately after `UpdateBook` returned, while a `!= nil` check on the same variable sat
+thirty lines further down — after the read that would already have crashed. The real
+store never returns a nil book without an error, but `database.MockStore` returns exactly
+that whenever its `UpdateBookFunc` is unset, so any test driving this path through the
+default mock would panic. The call site now fails with a clear message instead of
+dereferencing, and the misplaced check is gone.
+
+**A regression guard with a hole in it.** All five iTunes operations are unimplemented
+stubs. `TestStubOps_NoCronSchedule` exists to keep them from carrying cron schedules —
+the incident it was written for had stubs burning a green "success" row every 10 and 30
+minutes without doing any work. The test covered three of the five; `itunes.path-repair`
+was covered by nothing, which is why it was the only one the linter could see as unused.
+It is now covered.
+
+**A test that would have passed on wrong data.** The regroup dry-run test seeded six
+shattered chapter books plus one lone single-file book, collected all seven IDs, and then
+never looked at them. It asserted that exactly one review hold was created and that the
+hold named the right folder — but never that the hold covered the right *books*. A hold
+that swept in the lone single-file book it is supposed to skip would have passed. It now
+asserts membership exactly.
+
+A fourth case of the same shape: the author-conjunction repair's write recorder declared
+a field for book updates and never populated it, so a dry run that wrote a book was
+invisible to the test built to "assert on silence."
+
+The remaining findings were genuinely dead code and were removed, including a v2-to-legacy
+operation converter that nothing called and nothing should — the operations registry keeps
+the legacy row up to date by writing it, so converting at read time would have been a
+second source of truth for the same row.
+
+- Two more hand-rolled decorator walks replaced with `database.AsCapability`:
+  `library_list_warmer.go`'s `unwrapStore` (its own bound of 8, half the shared
+  `maxUnwrapDepth`) and an inline one in `server.go`. #2580 reported the
+  repo-wide count as zero; that was true only of the single-line anonymous
+  spelling it had grepped for. A named local interface and a multi-line
+  anonymous one both survived it.
+
+- Three registry builders resolved the concrete store with a bare
+  `store.(*database.PebbleStore)` and returned a typed-nil "unsupported backend"
+  value when it failed — which it does through the `indexedStore` decorator.
+  They now use `database.AsPebbleStore`.
+
+#### Twelve tables no longer push the whole page sideways on a phone
+
+Twelve tables across seven screens — diagnostics, activity log, metadata history,
+book detail, and two dedup tabs — rendered without any horizontal overflow
+container. On a narrow screen a table wider than the viewport had nowhere to
+scroll, so it stretched the page itself and every other element on it went
+off-centre, with the whole body scrolling sideways.
+
+They are now wrapped in `TableContainer`, which scrolls the table on its own
+rather than the page. Twenty other tables in the app already did this, either via
+`TableContainer` or an equivalent `overflowX` wrapper; these were the ones that
+had been missed.
+
+No visual change on a desktop-width screen.
+
+#### The PebbleStore split evidence is reproduced, and one headline figure corrected
+
+`docs/plans/2026-08-19-pebblestore-struct-split-decision.md` shipped with one
+open caveat: its per-method counts came from a single sitting and had not been
+reproduced, so the document told its own reader to re-derive them before acting.
+That re-derivation is done, with a **different instrument** — a `go/parser` AST
+walk sharing no code with the original regex and brace-extraction pass.
+
+**The structure held; one published number did not.** The count of methods
+touching a domain-local field was **20 (3.6%)**; it is **14 (2.5%)**.
+
+This was not a measurement error — both passes counted correctly, but both were
+asked the wrong question. They classified `libGen` and `counterMu` as
+domain-local, while the same document's "Corrections" note reverses exactly that
+assignment (`libGen` crosses domains; `counterMu` guards the shared `nextID`
+allocator, so both are core). The contradiction was on the page all along: the
+headline said 20, the prose said 10 + 2 + 1 + 1. Six methods leave the set —
+`LibraryGeneration`, `CreateBook`, `UpdateBook`, `DeleteBook`, `nextID` and
+`CreateNarrator` — and the plan's own step 1 already assumed as much by placing
+`libGen`, `counterMu` and `nextID` in the core struct.
+
+The correction makes the case for the split **stronger**: even less state is
+domain-local than claimed, and the remaining 14 sit in four files with ten of
+them in ops-v2.
+
+Two robustness checks were added. No unexported helper touches a genuinely
+domain-local field (55 of 62 touch a field, but all core), so helper indirection
+cannot add a method to the 14. And `mem()` is the only field-hiding accessor on
+the struct — enumerated rather than assumed — so the census's one special case
+is complete. `117 no struct fields` is now labelled an upper bound, since some
+of those reach `db` transitively.
+
+The document still does **not** recommend proceeding. The split remains proposed
+and unapproved, and nothing in the struct has been touched.
+
+- Corrected the PebbleStore-surface plan's account of the 10 remaining
+  `database.Store` consumer references. The count was right; the label "6 by
+  design" was not. `Server.Store()` had been glossed as part of the composition
+  root, when it is a public accessor handing the full 398-method type to **216
+  call sites using 88 distinct methods** — the largest remaining consumer
+  surface, and larger than the `StoreProvider.Store()` hole already tracked
+  (111 calls / 39 methods). Re-derived with `go/packages` at full type
+  resolution; `types.Info.Selections` follows the `store := s.Store()` idiom
+  that grep cannot, which is why earlier grep-shaped counts undercounted the
+  production refs as 5 rather than 7.
+
+- `database.GetOpsV2` and `server.resolveVGBackfiller` declared their parameter as
+  `database.Store` while doing nothing but forwarding the value to `AsCapability`,
+  which takes `any`. That imposed all 398 methods on every caller to satisfy a call
+  that constrains nothing — the same reasoning already recorded in `GetAIJobs`'s doc
+  comment fifteen lines below `GetOpsV2`. Both now take `any`.
+
+  These were the last two *production* declarations pinning a narrowed
+  `Server.Store()` at the full interface. The measured required width of
+  `internal/server` drops from **398 to 268**, and the callees demanding the whole
+  type fall from 4 to 2 — the survivors being the composition root and a test
+  helper. This does not narrow the accessor; it removes the floor that made
+  narrowing arithmetically impossible.
+
+- The ABS contributor-cache warm no longer races the search-index decorator. It
+  waited for the memdb warmup through a bare `store.(*database.PebbleStore)`
+  assertion read from *inside* a goroutine spawned at route-wiring time, while
+  `Server.Start` later overwrites `s.store` with the Bleve `indexedStore`
+  wrapper. `WaitForWarmup` is not part of `database.Store`, so the assertion
+  succeeded against the bare store and failed against the wrapper: whether the
+  warm waited at all was decided by scheduling. When it lost, the contributor
+  cache was built against a half-published memdb and served that view of a
+  library that does not exist for its whole TTL. The store is now read
+  synchronously at wiring time and resolved through the decorator chain, so the
+  unsynchronized read is gone rather than merely having both of its outcomes
+  made correct. Note this path is not exercised under `-race` today — the
+  wiring test reaches `wireABSRoutes` only with `ABSAPIEnabled` false, which
+  returns before the warm — so the detector's silence was absence of coverage,
+  not absence of a race.
+
+- The chapter-extraction idempotency test skipped on every CI run. It guarded on
+  `ffprobe` and an audio fixture it never used — the code path returns before any
+  probe or file access — and no workflow installs ffmpeg. The assertion that a
+  rescan does not re-extract and overwrite an existing chapter list had therefore
+  never executed in CI. The guards are gone; the test now runs everywhere.
+
+- **Deleting a book now removes its dedup candidates.** `DeleteBook` tore down the
+  book's main row, signature sidecar, path/version-group/work/hash indexes,
+  embedding row and chapters — but never the dedup candidates that referenced it.
+  Only one of its sixteen call sites cleaned up after itself, so archive sweeps,
+  reconcile, diagnostics, iTunes/FS regroup, batch operations and the audiobooks
+  service each left candidates pointing at books that no longer exist. Those rows
+  can never be actioned (clicking Merge returned "book not found") and can never
+  be re-scored, because every producer iterates live books only — so they
+  accumulated in the pending review queue permanently. A 2026-08-19
+  `dedup.breakdown-backfill` dry run counted 2,504 of them. The teardown now lives
+  in `DeleteBook` itself, so every caller is covered by construction, and the key
+  list is shared with `DeleteCandidate` so the two cannot drift apart.
+
+- `scripts/check-interface-width.sh` aborted silently with exit 1 whenever the
+  tree was **clean**. Its stale-path check piped `grep` under `set -euo pipefail`
+  without a guard, and `grep` exits 1 when it matches nothing — so zero findings
+  killed the script before it printed a count, a comparison, or any message. The
+  bug was unreachable until now because the baseline had never been below 1.
+  Exit 1 is also this gate's own "width went UP/DOWN" code, so a clean tree would
+  have reported in CI as a ratchet violation with no explanation.
+
+- The six `/maintenance/wipe` helpers had no test asserting **which** key
+  prefixes they pass. Each deletes a whole keyspace by raw Pebble prefix, so a
+  typo'd or dropped prefix deletes the wrong data — or, for `wipeSegments`,
+  silently leaves the `bfs:` secondary index pointing at deleted segments — and
+  every existing test would still have passed. All six are now pinned to their
+  exact prefixes, along with the dry-run/wipe asymmetry in `wipeSegments`
+  (the count uses `bf:` only while the wipe uses `bf:` and `bfs:`).
+- The `recompute-book-aggregates` backfill sentinel is now tested for whether the
+  job **honours** it, not just whether it can read it. Both halves are pinned:
+  the short-circuit on a set sentinel, and the write on completion that makes
+  the short-circuit reachable next run.
+
+#### The evidence consistency check could not detect the failure it existed for
+
+`Math.abs(recomposed - score) > 1e-6` is `false` when `recomposed` is `NaN`,
+because `NaN` is unordered against every value. A breakdown that could not be
+replayed at all was therefore reported as a *verified* derivation and rendered
+as a panel of empty rows — confidently blank, which is the worst available
+outcome for a feature whose entire job is showing how a verdict was reached.
+
+`NaN` arrives by a realistic route: the frontend's `MetadataScoreStep` is a
+hand-written mirror of Go's `ScoreStep`, and a renamed JSON tag makes every
+`operand` arrive `undefined`. That seam is now covered by a fixture the Go test
+emits from the real search path and the frontend suite consumes, so drift breaks
+one side or the other instead of reaching a reviewer.
+
+Writing that test surfaced a second defect at the same seam: rendering a drifted
+payload threw on `undefined.toFixed()`, unmounting the entire review screen over
+one malformed row. Worse, `NaN%` is an invalid CSS length, so the browser
+discarded the width and the unparseable step drew as a **full** bar — reading as
+the strongest signal on screen. Unreadable steps now render as an em-dash at
+zero width with the incompleteness explained.
+
+#### Sort state, lock state, and icon-only buttons were invisible to assistive tech
+
+Upgrading MUI surfaced that a number of controls had no accessible name at all,
+and that two pieces of state were carried *only* by which icon glyph rendered:
+
+- the library's sortable column headers now expose `aria-sort`;
+- the metadata lock toggle now exposes `aria-pressed`;
+- the book-card overflow menu, the file-browser path controls, the breadcrumb
+  root, the search clear button and the canonical-name edit button now have real
+  accessible names.
+
+This was found because the end-to-end suite had been reaching these controls
+through `data-testid` attributes that MUI stamps on its own icons. That is an
+internal debug affordance, not public API, and MUI 9 emits it only in
+development builds — so every such selector silently matched nothing against the
+production bundle the suite actually tests. The selectors now use accessible
+names and ARIA state, which is both what a screen reader consumes and what
+cannot vanish in a dependency bump.
+
+#### A chip inside a paragraph broke the row layout it sat in
+
+The compact row rendered its title as a `<p>` and put a `Chip` — a `<div>` — inside it
+on the no-match and error branches. That is invalid HTML: the browser closes the
+paragraph early and the chip escapes the row's layout. Carried in from the dialog by
+the mechanical port and fixed here.
+
+- **Three maintenance-plugin guard tests had been skipped since 2026-05-12 and are
+  now enabled.** They asserted that every operation declares a resume policy, declares
+  its capabilities, and has a unique namespaced ID — each skipped with "requires full
+  ServerDeps stub", which was not accurate: the registry interface has two methods and
+  the operation definitions do not touch dependencies when they are constructed, so the
+  whole table can be checked with a small fake.
+
+  The cost was real. A new operation shipped without a resume policy, the package tests
+  passed, and the failure appeared only when **the server refused to start** — the
+  registry rejects an unspecified resume policy at boot, so it took down the binary
+  smoke test and the end-to-end suite instead of failing in a unit test a second after
+  the code was written.
+
+  Enabling the capability check also surfaced `maintenance.auto-match-transcribed`,
+  which applies metadata candidates to books but declared no capabilities at all, so
+  permission enforcement had nothing to gate it on. It now declares library read and
+  write.
+
+### Documentation
+
+- `docs/audits/2026-08-18-interface-width-shapes.md` gained a Part 2 recording
+  what the interface-width sweep measured: the width linter counts declared
+  entries and is blind to transitive surface, parameter types are what propagate
+  width across packages, per-interface usage figures for the remaining wide
+  compositions, the three counting bugs that produced plausible-but-wrong numbers
+  along the way, and a per-PR breakdown of the 28 → 5 `interfacebloat` reduction
+  with the reason each of the five survivors was parked rather than split.
+- `docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md` corrected: it no
+  longer claims nothing has started, and records the three plan assumptions the
+  sweep invalidated.
+- August executive-summary roundup gained a plain-language section on the sweep.
+
+<a id='changelog-v0.218.1'></a>
+## v0.218.1 — 2026-08-17
+
+- Documented the 2026-08-16 overnight session: four silent-failure fixes (#2480-#2483),
+  two production deploys, and the discovery that three scheduled tasks (library_organize,
+  library_size_refresh, metadata_upgrade) are enabled but structurally unable to run.
+
+- `make test-short` now runs the suite once with `-race` and `-coverprofile` together
+  instead of twice. Measured on an idle machine: 966s -> 500s (-48%), with byte-identical
+  coverage (47.0%). The discarded second run also hid its own failures behind
+  `>/dev/null 2>&1`; that failure mode is gone.
+
+- Metadata review: added a **Hide Multi-Book Matches** toggle that hides any book sharing a
+  match with another book — the grouped cards with "Skip All" — so the unambiguous
+  one-book-one-match rows can be worked through on their own. Hidden books are also
+  deselected, so "Apply Selected" cannot apply one that was ticked beforehand.
+
+- Updated the 2026-08-16 overnight handoff with the `test-short` measurement result
+  (#2485) and the final completed/remaining counts.
+
+- Fixed a write-back loop that rewrote audio files on every run. MP4 freeform atoms carry a
+  four-byte data header that leaked into the value, so `SERIES_INDEX` read back as
+  `"\x00\x00\x00\x004"`; `strings.TrimSpace` does not strip NUL, so the numeric parse failed
+  and the field stayed 0. The write landed, the read said "missing", and the next run wrote
+  again — forever. Raw tag values are now cleaned centrally. Also fixed three copies of a
+  bare `.(int)` assertion on `series_index`/`year` that silently dropped the tag when a
+  caller passed a string or JSON float.
+
+- Turning the library scan off now actually turns it off. If you had the older
+  "scan on startup" option switched on, switching the scheduled library scan to
+  off was accepted without complaint but the scan kept running, because the two
+  settings were combined and the older one won. The old setting is now folded
+  into the per-task settings the first time you change them, so what the screen
+  shows is what the scheduler does.
+
+- Fixed the end-to-end test double for cancelling an operation, which still
+  answered on the old address after the real cancel moved to a new one. No
+  effect on the application itself — the cancel button was working; the test
+  harness was not following it.
+
+### Added
+
+#### The end-to-end suite now runs in CI
+
+Until now **nothing** ran the Playwright suite automatically. It existed, was
+maintained, and gated nothing — which is how six spec files, silently broken by
+a bad fixture parameter in April 2026, stayed dead until August. Four months in
+which every one of those tests could have caught a regression and none of them
+could report it.
+
+Split by cost, because a full run builds the frontend *and* the Go binary and
+then drives two browser engines — far too slow to sit in the fast PR gate next
+to Minimal CI:
+
+- **pull requests** run chromium only, and only when `web/**` or Go sources
+  changed. That catches essentially all content drift and logic regressions.
+- **nightly** runs chromium and webkit, catching the engine-specific failures a
+  single-engine PR run would miss.
+- **manual dispatch** can request either.
+
+Playwright browsers are installed explicitly with `--with-deps`. That is
+load-bearing rather than boilerplate: browser binaries are pinned to the
+installed Playwright version, and a mismatch fails at *launch* — "Executable
+doesn't exist at .../webkit-NNNN" — which reads like a broken test suite when
+it is actually a broken environment.
+
+The companion `reuseExistingServer` hazard needs no fix here: the config
+disables reuse whenever `CI` is set, so CI always builds its own server. The
+danger is confined to local runs, where on 2026-08-08 a server left running for
+hours was silently reused and produced a fully green 130-test suite against a
+frontend bundle that predated the fixes under test.
+
+- **Optional sorted indexes for the library list.** Sorting by anything other
+  than title currently disables pagination and materialises the entire
+  filtered set — all 366,916 books — to return 50 of them. Nine sort fields
+  (author, narrator, series, year, created_at, updated_at, duration,
+  file_size, bitrate) can now be given a memdb sorted index, turning that into
+  an ordered streaming walk the way title already works.
+
+  **Off by default.** Each index costs real memory, and this was measured
+  rather than estimated: at 100,000 books, enabling all nine took heap from
+  2,645 to 6,395 bytes per book (+142%), which extrapolates to **+1,312 MB**
+  at production scale, with inserts 2.8× slower. The design doc's estimate of
+  "tens of MB per sort field" was optimistic by roughly an order of magnitude,
+  because go-memdb's radix tree is immutable and path-copies nodes on every
+  insert, so cost tracks node count rather than key length.
+
+  With `enabled_sort_indexes` empty — the default — behaviour is exactly as
+  before. Enable fields individually once you know which sorts are actually
+  used, and re-measure warmup afterwards.
+
+#### Import your iTunes smart (dynamic) playlists
+
+There is now a maintenance operation, **Import iTunes smart (dynamic)
+playlists**, that reads smart playlists out of an iTunes library, translates
+each one's Smart Criteria into our own query language, and creates a matching
+smart playlist here. It is idempotent — playlists already imported are skipped
+by their iTunes ID — and it defaults to a dry run that tells you what it would
+import before it writes anything.
+
+The translation code for this had existed and been tested for months. Nothing
+ever called it, so no playlist had ever been imported, and because there was no
+operation there was also no error to notice. This adds the missing invocation.
+
+The import only ever *reads* the iTunes library and writes to our own database.
+
+Two things were fixed while wiring it up, both of which would have made a
+successful-looking run do nothing useful:
+
+- **Imported playlists would have been invisible.** They were stamped as owned
+  by the internal `_local` identity, but the playlist list is scoped to the
+  signed-in account, so every imported playlist would have been hidden from
+  every real user while the importer reported a healthy count. The owning
+  account is now explicit.
+- **Dry run now means something.** The underlying importer had no dry-run mode,
+  so a dry-run setting would have been a switch wired to nothing. It now parses
+  and translates every playlist and reports exactly what it would create,
+  without writing a row.
+
+**Known limitation, stated up front:** on real iTunes 12.13 libraries the binary
+`.itl` reader currently surfaces no smart playlists at all, even though the same
+library's XML export contains hundreds of them. The operation detects this case
+and says so loudly instead of reporting a clean "0 imported" that would read
+like an empty library. Until that is resolved the import will not find your
+playlists — the tracking entry has the measurements and the two candidate fixes.
+
+#### iTunes smart playlists now import from the XML export
+
+The importer previously read only the binary `iTunes Library.itl`, which
+extracts **zero** smart playlists from real iTunes 12.13.10.3 libraries. The XML
+export of the *same* library carries **292**, each with an intact Smart Criteria
+blob. iTunes maintains both files, so this reads the one that is legible.
+
+`maintenance.itunes-playlist-import` now takes `libraryPath` and picks the
+reader by extension, defaulting to the configured `itunes.library_read_path`
+(usually the XML). The old `itlPath` parameter still works. Reading the binary
+`.itl` now logs a warning pointing at the XML.
+
+Measured on the live 153 MB export: **351 playlists, 292 smart**, parsed in
+under four seconds.
+
+#### An inventory of every place the code throws an error away
+
+We kept finding the same bug in different clothes: a write fails, the error is
+assigned to `_`, and the operation reports success. This audit goes looking for
+all of them at once instead of waiting to trip over the next one.
+
+It groups **1,125 discarded-error sites** by *failure shape* rather than listing
+them flat, because the shape is what determines whether a discard is a bug:
+
+- discarded parse of external input — where a malformed request body can flip a
+  dry-run into a real apply;
+- discarded writes — including the **undo log**, where a failed write means a
+  completed file move is permanently unundoable and nothing says so;
+- errors collapsed into an empty result the caller cannot tell apart from
+  "legitimately nothing";
+- `continue` on error inside a loop with no counter, so N failures and zero
+  failures produce identical output;
+- fallbacks that trigger only on a *zero* result, so a partial failure looks
+  like a success.
+
+A large fraction are **correct and deliberate**, and those are called out
+explicitly so the real list is not drowned in noise. A discard on a progress
+report is fine. A discard on a rollback is not.
+
+The three worst, all in the irreversible-data-loss bucket: a rollback after a
+failed copy whose own failure is ignored, leaving a half-written audiobook while
+the returned error reads as though nothing happened; a checksum-mismatch
+recovery that ignores whether the recovery worked and leaves a known-corrupt
+file in place; and an iTunes library restore whose error string literally says
+`(restored original)` while discarding the result of the restore.
+
+The audit ships with a 13-wave fix plan ordered by blast radius, with the file
+set of every wave disjoint from every other so waves can be worked
+independently. It also records what was **not** checked, so nobody reads it as
+exhaustive.
+
+- **Documented the Audiobookshelf client↔server API in two documents**, splitting what we
+  must serve now from the full upstream surface:
+  - `docs/reference/abs-target-client-contract.md` — the contract for our two target clients
+    (AudioBooth, Absorb), consolidating five chronological audit passes in which later
+    sections repeatedly overturned earlier ones. Reading the original spec top-to-bottom and
+    stopping early yields a wrong answer; this states only the surviving contract, with the
+    overturned claims preserved in an appendix.
+  - `docs/reference/abs-upstream-api-reference.md` — all **223** upstream routes at tag
+    `v2.36.0` with `file:line` citations, the complete Socket.IO event catalogue (45
+    server→client, 9 client→server), every auth flow, and the version gates that make
+    claiming `2.36.0` a commitment rather than a label.
+- **`docs/audits/2026-08-11-abs-coverage-gap-audit.md`** — coverage matrix scored on three
+  axes (upstream has it / we serve it / a target client actually calls it), because a
+  two-column diff against upstream produces mostly false gaps.
+
+#### `POST /api/v1/cache/invalidate` (admin) for clearing a stale cache
+
+Every existing cache route was read-only, so the only remedy for cache
+staleness was restarting the process — roughly ten minutes of unusable
+library while the in-memory query layer warms back up. The new admin-gated
+endpoint takes an optional `{"cache": "list"}` body, defaults to every
+registered cache, and returns per-cache drop counts read *before*
+invalidating, so an operator gets confirmation of what was actually cleared
+rather than a bare `200`. A mistyped cache name is rejected rather than
+answered with "dropped 0", which would read as "already clean".
+
+This is not made redundant by the generation counter: the counter only
+advances on the store's three book-level writes, so batch writes, direct
+in-memory writes and index-only edits still bypass it. The endpoint is the
+lever for those.
+
+- **Five production findings surfaced by comparing values**, filed rather than fixed
+  alongside test work: `BookFile.Duration` is an `int` (2.431 s lost across six tracks,
+  `startOffset` drifting 2.200 s by track 6, ~0.4 s per track boundary);
+  `/api/me/sessions` reports `itemsPerPage` as the item count rather than the page size
+  where its siblings in `stats.go` get it right; `deviceInfo.deviceType` is never derived
+  from the User-Agent; `BookFile.BitrateKbps` is int-kbps so 96208 bps round-trips as
+  96000; and `publishedYear` renders `Book.PrintYear` as an int, so a raw `"800BC"` tag
+  comes back `"800"`. See `todo.d/20260812-bookfile-duration-integer-seconds.md`.
+
+#### Executive summary for the Activity-page memory outage
+
+`docs/executive-summaries/2026-08-12-the-page-nobody-was-looking-at-executive-summary.md`
+covers PR #2318 in plain language: the Activity page read the entire history into memory
+on every request, ignored client disconnect, and was never limited in how many copies
+could run at once — thirty were still allocating against a 30 GB cap with zero clients
+connected.
+
+Written per `docs/process/executive-summaries.md`, which this change qualifies for on two
+counts: it fixes something that took production down repeatedly, and it has a wide blast
+radius (an interface change that deleted the uncancellable code path outright).
+
+States what is not claimed: the memory snapshot explains the one crash that was captured,
+not all five, and log compaction still has the same read-everything shape and must not be
+triggered yet.
+
+- Wave 0 of the silent-failure sweep: a single-linter `.golangci.yml` (errcheck with
+  `check-blank: true`, which is the whole point — errcheck's default ignores `_ = f()`,
+  the exact form of every discard the sweep exists to fix), plus `internal/errhandling`
+  providing the two primitives waves 4–13 need: `MustLog` for a deliberate one-off
+  discard that leaves an auditable WARN, and `SkipCounter` for loops that `continue`
+  on error and silently report a wrong denominator. Added `make lint-errcheck` and
+  `make lint-errcheck-full`. Not wired into `make ci` — 922 findings is a backlog to
+  burn down, not a gate to fail on today.
+
+- **`TestUnimplementedNamespacesHaveNoAppAPITwin` / `TestCollisionNamespacesAreStillColliding`**
+  replace that grep with a check derived from `router.Routes()`, the flattened table gin
+  actually matches against and the only complete oracle for which paths exist. The first
+  fails if a namespace marked unimplemented has a live `/api/v1` twin; the second fails if
+  a collision entry's twin ever disappears, so the list cannot rot into a lie. Both were
+  verified by reintroducing the bug in each direction, and the first guards against a
+  vacuous pass by asserting the route table is populated before trusting any negative
+  result.
+
+30 days of production logs show zero unversioned requests to any of the six namespaces —
+validated method-agnostically against a query shape that does return traffic for the
+`/api/v1` forms — so no client is known to have been affected by either regression.
+
+#### Executive summary for the search pagination and count fix
+
+`docs/executive-summaries/2026-08-12-the-second-page-that-was-never-there-executive-summary.md`
+covers PR #2326 in plain language: search returned an empty page two for every filtered
+query, and the reported result count was the length of the page rather than the number of
+matches.
+
+Written per `docs/process/executive-summaries.md`, which this change qualifies for on blast
+radius — the library screen always sends a filter, so this was every user-facing search
+rather than an edge case.
+
+Includes the before/after measurement taken on the live server (1/0/0 becoming 5/1/0 across
+the first three pages, count constant at 6 across every page size), and states what is not
+fixed: multi-word queries still behave close to an OR, and counts past 10,000 matches are a
+logged lower bound rather than exact.
+
+#### Chapter backfill op — single-file audiobooks were all serving one chapter
+
+Every audiobook that predates 2026-07-30 has been served over the ABS API with a
+**single chapter spanning the entire file**. Measured on production before the
+fix: 500 sampled library items all had `numChapters == numAudioFiles`, and all
+213 single-file containers longer than 10,000 s reported exactly 1 chapter — a
+24-hour audiobook delivered as one unnavigable block titled with the book's own
+name. Meanwhile 19 of 40 randomly probed `.m4b`/`.m4a` files on disk carry real
+embedded markers, 16 to 118 chapters each.
+
+Root cause: chapter extraction is a write-path-only feature.
+`SaveChaptersForBook` has exactly one non-test caller,
+`scanner.PersistChaptersForBook`, reached only from the `saveBook` success
+branch. The feature shipped after the library was scanned, and incremental scans
+skip unchanged files via the scan cache, so no pre-existing book was ever probed
+and none ever would be. Production logs show zero extraction warnings across 14
+days — it was not failing, it was never running.
+
+The failure stayed invisible because the read path has a fallback: with nothing
+persisted, the ABS mapper synthesizes chapters from the track list. For a
+multi-file book that yields one chapter per file, which looks right. For a
+single-file book it yields one chapter for the whole book, which looks like a
+book that simply has no chapters.
+
+New op `maintenance.chapters-backfill` probes single-file books with no persisted
+chapters and writes the real timeline. Dry run unless `{"apply": true}`, refuses
+to start without `ffprobe`, bounded worker pool at `runtime.NumCPU()`, and
+`{"bookIds": [...]}` restricts a run to an explicit cohort. It writes only the
+`chapters:` keyspace — no book row is touched, so the write-back-wipe class does
+not apply, and `DeleteChaptersForBook` reverts a book to today's behaviour.
+
+Multi-file books are skipped deliberately: their persisted form is byte-identical
+to the mapper's live synthesis, so writing it changes no response while creating
+a staleness hazard the read path cannot detect (`len(stored) > 0` short-circuits
+the live synthesis, so a stale persisted list would silently win after a book
+gains or loses a file).
+
+#### ABS playlist list serves real playlists instead of a hardcoded empty page
+
+`GET /api/libraries/:libraryId/playlists` was `h.EmptyPage` — a compile-time
+constant that never touched a store. It now maps the existing user-playlist model
+onto the upstream ABS playlist shape, with items expanded and ordered.
+
+The model is **`UserPlaylist`**, not `Playlist`. `internal/database` carries two
+unrelated types with similar names: `Playlist` is the legacy series M3U
+auto-generator (int ids, `SeriesID`, `FilePath`), while `UserPlaylist` (ULID ids,
+`static`/`smart`, `BookIDs`, `CreatedByUserID`) is what the nine app routes under
+`/api/v1/playlists` actually serve. Mapping the legacy type would have produced a
+list unrelated to anything the web UI shows.
+
+Behaviour worth knowing:
+
+- Scoped per user via `ListUserPlaylistsForUser` — the unscoped variant would
+  disclose every user's playlists to every caller.
+- Smart playlists resolve through `MaterializedBookIDs`, never by re-running the
+  query: evaluation needs the Bleve index and this read path must not depend on it.
+  An unevaluated smart playlist renders as an empty playlist rather than an error.
+- Playlist order is preserved as the listening order; a reference to a deleted book
+  is dropped rather than emitted as an item with a null `libraryItem`.
+- `libraryItemId` is the 36-char sync UUID, never the 26-char Book ULID — Absorb
+  splits compound ids by fixed byte offset.
+- A nil playlist store keeps the previous empty-page behaviour rather than 500-ing.
+
+**Scope.** This is the LIST route only. Upstream ABS has roughly twelve playlist
+routes (create, update, delete, item add/remove, batch, create-from-collection);
+none are implemented. `/api/playlists` continues to 301 into the app-API twin, and
+no engine-level routing was touched.
+
+**This does not make playlists appear.** Production returned
+`{"items":[],"count":0}` from `/api/v1/playlists` on 2026-08-13 — there are no
+playlists to list yet, blocked on the separate iTunes importer gap. Zero of the 28
+ABS fixtures request a playlist path, and the target-client contract §11 lists
+playlists among the surfaces explicitly safe to stub, so the empty page this
+replaces was contract-correct rather than a defect.
+
+- `POST /api/v1/operations/elect-missing-primaries` repairs version groups that
+  elect no primary, choosing the earliest-created member deterministically. It
+  **defaults to a dry run** — an apply must be requested explicitly with
+  `?dry_run=false` — and re-reads live group membership before each write so it
+  can never add a second primary to a group that gained one concurrently.
+
+#### `maintenance.booksig-sidecar-migrate` — realizes the 580 MB startup saving
+
+PR #2387 moved the five `BookSig*` dedup-signature fields out of each `book:`
+row and into a `book_sig:<id>` sidecar, so that startup stops reading data it
+throws away. It shipped with **fallback-first reads**: a row that still carries
+the signature inline keeps working untouched. That is what made the change safe
+to deploy against 67,824 live books — and it is also why the saving was never
+realized. Production warmup on 2026-08-13 still reported
+`discarded_field_mb[book_sig_v1_and_mask] = 580` against `phase_mb[books] = 729`,
+exactly as designed: 80% of every byte the books warmup phase read was a
+signature discarded the instant it finished decoding.
+
+This op moves the data. It walks every `book:` row and, for any row still
+carrying an inline signature, writes the sidecar key and rewrites the row
+without it — **both in one Pebble batch**, so a row is never stripped without
+its sidecar. That pairing is the whole safety story: a book with all five
+fields nil is exactly the shape `booksig-recovery-audit` classifies as "never
+had a signature" rather than as damage, so a half-applied migration would be
+invisible to the very op written to detect signature loss, and dedup would
+simply stop matching those books. A conformance test asserts the pairing across
+a mixed library, and six mutation controls confirm the tests fail when each
+guard is removed.
+
+It is **dry-run by default** — this is the only irreversible step in the sidecar
+design — and reports `migrated / stripped-only / not-candidate / skipped-raced /
+errors` plus an expected-magnitude cross-check, so a detector matching every
+book (or none) is visible before anything is written. A `limit` parameter runs a
+small canary first, as a stable prefix that a later full run resumes from.
+
+Notes on two deliberate choices:
+
+- It does **not** go through `UpdateBook`, which would also have migrated a book
+  correctly. `UpdateBook` writes a `book_ver:` snapshot per call that
+  deliberately keeps the full inline signature, so 67,824 calls would have
+  written roughly 1.5 GB of fresh snapshot data in a migration whose purpose is
+  to stop paying for those bytes — and it would have bumped `UpdatedAt` on every
+  book, churning the search-index dirty set and the aggregate recompute.
+- Books written by another path mid-migration are **skipped and counted**, never
+  half-written. There is no per-book write lock in the store, so a naive
+  read-then-write would have reverted an entire concurrent update — title, path
+  and all — not merely the signature. Since every `UpdateBook` already strips the
+  row it writes, the library migrates organically anyway and this op only
+  accelerates it, which makes skipping always safe. Re-run to pick up the
+  skipped books.
+
+#### Maintenance op to repair author rows with a stranded ampersand
+
+`maintenance.author-conjunction-repair` cleans up the 46 author rows the
+Oxford-comma splitting bug created — `& Conrad Westmaas`, `& Lisa Bowerman`,
+`& India Fisher` and the rest. The forward fix stops new ones appearing but does
+nothing to existing rows, because nothing re-normalizes an author name after
+creation.
+
+The existing `maintenance.author-split-scan` cannot reach these rows:
+`SplitCompositeAuthorName("& Conrad Westmaas")` returns nil (three words, no
+delimiter), so the split scan skips them entirely.
+
+Two repair paths, chosen per row:
+
+- **Merge** when a correctly-named author already exists — 31 of the 46. Book
+  links move to the existing author and the stranded row is deleted.
+- **Rename in place** when no such author exists — the remaining 15. The row
+  keeps its id, so no book row is touched at all.
+
+Census, measured against prod on 2026-08-14: 48 author names begin with `&`, of
+which 46 match `^&\s+` and are repaired here. The other two are `&#169` and
+`&#169;2013 by HarperCollinsPublishers` — HTML-entity leftovers of a copyright
+notice, a separate defect the pattern deliberately does not match. The 46 carry
+145 books, and no book is linked to two of them, so no book is written twice.
+
+The link that gets rewritten is the book↔author **join slice**, not
+`Book.AuthorID`. Every stranded row sits at position 1+ of a credit list, which
+is why all 46 report `file_count: 0` while carrying 145 books between them; a merge
+that only rewrote the denormalized primary would report success and move
+nothing. The tests assert on `SetBookAuthors` for exactly this reason.
+
+Defaults to `dry_run=true`. Merging deletes author rows, so the per-row plan is
+meant to be read before anything is written.
+
+The op matches `&` only, deliberately narrower than the forward fix's pattern.
+Three rows begin with `and ` — `and Thanks for All the Fish`, `and the Farm Boy
+(DBY)`, `and Make Better Decisions` — and those are book *titles* that reached
+an artist tag, not stranded conjunctions. Renaming them would produce
+`Thanks for All the Fish`: still not an author, but no longer obviously broken.
+They are left visibly wrong on purpose, and filed for the fix that addresses the
+real defect (the comma branch cannot tell a person from a title clause).
+
+The loop is deliberately sequential rather than pooled: the merge path is a
+read-modify-write of a book's author slice, and two workers repairing two
+different rows that appear on the same book would lose one another's update.
+Partitioning by author does not make the work disjoint, because the unit
+actually mutated is the book.
+
+#### `skip_author_ids` on the stranded-ampersand repair
+
+`maintenance.author-conjunction-repair` now accepts `skip_author_ids`, excluding
+specific author rows from a run. Excluded rows stay in the matched total and are
+reported as `skip_explicitly_excluded`, so a partial run cannot be mistaken for a
+complete one.
+
+This exists because two dry runs of the same op against the same prod data
+returned different numbers. The first ran four seconds after a service restart,
+fell through to the Pebble junction scan, and reported `books_relinked=86`. The
+second ran against a warm memdb and reported `84`. Row counts were identical in
+both (`authors_matched=46`, 31 merge, 15 rename); the whole difference was author
+46627, `& Nicholas Courtney`, where Pebble holds two book links memdb does not.
+memdb had been freshly loaded, so its loader drops those links rather than
+lagging a write.
+
+That matters because the merge path relinks what it can see and then **deletes**
+the author row. Run through memdb it would relink zero books for 46627 and delete
+the author anyway, leaving two Pebble junction rows pointing at an author id that
+no longer exists — the orphaning hazard H8 documents on
+`maintenance.author-split-scan`.
+
+Excluding by id, rather than by a heuristic like "skip rows that report zero
+books", keeps the exclusion visible in the op's params and in its summary. The
+underlying divergence is filed separately; once it is understood the flag comes
+off and that row gets repaired with the rest.
+
+#### ABS implementation ground-truth status document
+
+`docs/reference/abs-implementation-status.md` classifies every route on the
+Audiobookshelf-compatible surface — 49 in production (45 unconditional + 4
+bookmark routes gated on a store the wiring asserts) — as value-conformant,
+handler-tested, referenced-only, untested, or stub, each with its evidence.
+Derived from the real `router.Routes()` table and a read of
+`Handler.Register`, never from grep or the stale 2026-08-11 audit.
+
+Findings recorded along the way: N-1 (socket.io) and N-2 (value comparison)
+are fixed; all 28 golden fixtures are referenced by tests (N-7 apparently
+closed); `absRouteList()` still under-reports by exactly the two OpenID
+routes (N-8, now precise: 47 listed vs 49 real); five fixtures do carry query
+parameters, narrowing the params-sweep fragment's premise; collections is the
+single remaining stub route and the only missing entity.
+
+- New `normalize-primary-flags` maintenance job (dry-run default): writes
+  explicit `is_primary_version=true` for ungrouped books whose flag is nil
+  (effective-true by the memdb convention) or incoherently false, so every
+  layer reads the flag the same way. Grouped books are counted but never
+  written — primary-ness inside a version group is elected, not guessed.
+
+- `fix-file-modes` maintenance job (dry-run default): restores 0664 on
+  service-owned book files left at exactly 0600 by the bug above.
+
+- The library grid view has its Sort control back: a "Sort by" select and
+  direction toggle in the search bar, driving the SERVER-side sort (applied
+  before pagination, so descending page 1 really holds the last items) and
+  surviving search. The table view's column-header sort is unchanged.
+
+- New `purge-unknown-author-duplicates` maintenance job (dry-run default):
+  soft-deletes "Unknown Author/" books whose EVERY file has a content-verified
+  twin outside that tree — identity measured on interior probes (25/50/75%),
+  never head/tail where tag blocks differ; the twin must exist on disk and
+  belong to a live real-author book. UA-only survivors and size-collisions
+  are kept, per the 2026-08-13 mass-reorganize audit's rules.
+
+- Metadata matcher: shift-click range selection on the field checkboxes, in
+  both the single-book and bulk dialogs — click one field, shift-click
+  another, and every visible field between them is selected (file-manager
+  semantics; shift never deselects).
+
+- `version_group_id` is now a real filter field on the audiobooks list
+  (`filters=[{"field":"version_group_id","value":"01…"}]`). Previously it was
+  not a filter at all: the bare-param guard 400'd it, and before that guard a
+  `?version_group_id=X` request silently listed the entire library. Unblocks
+  the clickable version-group link in the UI (G111).
+
+- `make test-fast` / `make test-fast-short`: run the backend suite with TMPDIR
+  on a RAM disk (auto-created at /Volumes/abo-test-ram on macOS, /dev/shm on
+  Linux). The per-test Pebble setup is write-bound — measured 532s → 33.7s for
+  internal/server, and 54.1s → 5.3s for internal/playlist on the day this
+  landed. Opt-in only; default `make test` unchanged.
+
+- **Centralized outbound rate limiting for every metadata provider**
+  (`internal/metadata/providerhttp`). Five of the six providers (Audible,
+  Audnexus, Google Books, OpenLibrary, Wikipedia) previously had no throttling at
+  all — just a 30s timeout — and there was no jitter, backoff, or 429/`Retry-After`
+  handling anywhere. Hardcover's limiter was a process-wide mutex + sleep that
+  serialized every caller instead of pacing them, which blocked any fan-out.
+
+  The limiter lives in the `http.RoundTripper`, so a request cannot bypass it by
+  forgetting to call `Wait()`. Includes 429/`Retry-After` handling (both
+  delta-seconds and HTTP-date forms), exponential backoff with jitter, and
+  context-aware waiting. Cover-art downloads are throttled too, wrapping rather
+  than replacing their SSRF-guard transport.
+
+- **Collections are implemented on the Audiobookshelf surface.** Creating one from
+  the app previously failed: `POST /api/collections` had no route and answered 404
+  (measured in production 2026-08-16, five attempts in two seconds), while the list
+  route was a stub returning a permanently empty page — so the tab showed "no
+  collections" rather than an error.
+
+  The surface now serves list, detail, create, update, delete, and single-book
+  add/remove. Collections are **server-wide**: every user sees every collection,
+  unlike playlists, which are per-user. Creating, editing and deleting requires the
+  new `collections.manage` permission; the admin role receives it automatically on
+  the next restart, and reading is open to any authenticated user.
+
+  Both **static** and **dynamic** collections are supported. A dynamic collection's
+  members come from a saved query, and the read path serves its last evaluation
+  rather than re-running the query, so an unevaluated collection renders empty
+  instead of failing the library tab.
+
+- **Native collection API** at `/api/v1/collections` (list, get, create, update,
+  delete, materialize). This is the only surface that can create a **dynamic**
+  (query-backed) collection: Audiobookshelf has no such concept, so everything
+  created through the app is static.
+
+  A dynamic collection is evaluated once at creation and refreshed whenever its
+  query changes, whenever it is read through this API, and whenever it is explicitly
+  materialized — reusing the same query engine as smart playlists. If the search
+  index is unavailable, creating one still succeeds and stores the query — an index
+  that happens to be closed does not discard what the user typed.
+
+  **"Dynamic" means *manually* refreshed in this first version.** Nothing
+  re-evaluates in the background, and the ABS read path deliberately never
+  evaluates — it serves the stored membership — so a dynamic collection created
+  here and then only ever viewed in the app shows its creation-time membership
+  until something refreshes it. Tracked in `todo.d`.
+
+  Every write requires the `collections.manage` permission. Reads are open to any
+  authenticated user, because collections are server-wide.
+
+- `make mutate PKG=<pkg>` / `make mutate-dry PKG=<pkg>` run
+  [gremlins](https://github.com/go-gremlins/gremlins) mutation testing on a single
+  package, to answer the question a green suite cannot: would these tests fail if
+  the code were wrong? Install the pinned binary with `bash scripts/setup-gremlins.sh`.
+
+  Both targets run through `scripts/run-mutation.sh`, which enforces a disk budget.
+  gremlins copies the entire module directory once per worker, and this module root
+  is ~34GB because `.worktrees/` lives inside it — an unguarded `--dry-run` filled a
+  926GB volume. The wrapper refuses to run from the primary checkout (the same copy
+  is 1.8GB from a worktree), projects peak usage before starting, and kills the run
+  if free space crosses a floor.
+
+- Every background operation must now declare how it reports its own progress,
+  and the system refuses to accept one that doesn't. Reporting progress had
+  always been the rule, but nothing enforced it, so an operation that was never
+  wired up to report looked identical to one that had genuinely frozen — both
+  went quiet, and both got cancelled after five minutes. That ambiguity is what
+  let a broken progress connection survive three months and get worked around
+  three times as if it were a slow operation. There are three permitted answers:
+  the operation reports automatically by processing a list of items, it reports
+  by hand, or it declares that it does not report at all — and the last one has
+  to say how long it may run in silence, and is listed in the startup log so the
+  set of unmonitored operations stays visible instead of growing unnoticed.
+
+- An operation that runs for more than a minute and finishes successfully without
+  ever reporting progress now logs an error. This catches the problem while the
+  operation still works — before it grows slow enough to start being cancelled —
+  which is the point at which the library-scan fault could have been caught in
+  May rather than August.
+
+- **Every rename is verified after it reports success.** A rename returning no
+  error says the syscall was accepted, not that the file arrived where anyone
+  wanted it — the distinction that let 38,895 files be misplaced by operations
+  that all reported success. `safeRename` now reads the filesystem back and
+  fails loudly if the destination is missing, is a different kind of object
+  than the source, has a different size, or if the source survived (meaning the
+  move silently became a copy).
+
+#### Audit: manual-mock inventory and remediation backlog
+
+Swept every Go test double in `internal/`, `cmd/`, and `pkg/` to find where a
+hand-written mock is used in place of a mockery-generated one, and wrote the
+result to `docs/audits/2026-08-16-manual-mock-inventory.md`. Documentation only —
+no code or config changed.
+
+The sweep found four things worth acting on.
+
+**Two live policies contradict each other.** `.standards/instructions/go.md:49`
+says "do not hand-write mocks"; `docs/CODING_STANDARDS.md:599-605` (added
+2026-06-23, TOOL-5) says to *prefer* narrow hand-written fakes for new
+interfaces. So a raw count of hand-written doubles is not a count of violations.
+The audit records the decision taken — adopt the threshold rule now, with the
+org-wide rule as the declared destination — and restates the destination rule in
+a form that can actually be satisfied (the current wording cannot be: it has no
+scope limit, so third-party interfaces like `tag.Metadata` and production Null
+Objects both read as violations, and it has no exemption mechanism).
+
+**CI cannot see any of this.** Both mock gates verify that *listed* mocks are
+fresh; neither can detect an interface that was never listed, so every
+hand-written double is green by construction. Separately, `check-mock-fresh` is
+inert: it runs `go generate ./internal/database/...` and diffs the output, but
+there are zero `//go:generate` directives in the repository, so the diff is
+always clean and the step can never fail. Its error message tells the reader to
+run `make generate`, a target that does not exist.
+
+**One interface is hand-mocked in 13 different files.**
+`internal/operations/registry.Reporter` (aliased as `pkg/plugin/sdk.Reporter`)
+has 13 hand-written implementations under 8 different names, and
+`internal/operations/registry` appears zero times in `.mockery.yaml`. One config
+entry retires all 13. This is distinct from the generated
+`MockProgressReporter`, which targets a *different* 3-method interface — that one
+has its own cluster of duplicates and zero references.
+
+**42% of the largest generated file is unused.** `.mockery.yaml` generates
+standalone mocks for all 45 `internal/database` interfaces; only 8 are ever
+referenced. The other 37 account for 22,001 of `mock_store.go`'s 52,384 lines.
+They go unused because production constructors take the whole `database.Store`
+god-interface rather than narrow ones, so nobody ever needs a `MockBookReader`.
+
+One methodological caveat is recorded prominently in the audit: the census was
+built from a naming-convention grep, and an orthogonal signature-based sweep
+proved that pattern misses roughly a third of the population (types like
+`recordingReporter`, `b3FaultStore`, `p2ProgReporter` match no naming
+convention). All counts in the audit are stated as lower bounds, and the
+recommended CI check detects doubles by signature rather than by name.
+
+- `docs/audits/2026-08-16-store-interface-decomposition.md` — arbitrated design review of
+  `database.Store` decomposition, consolidating two independent agent investigations (Go
+  architecture + adversarial code review). Measured at `8011a755`. Recommends an
+  authoring-time CI gate over a third interface-segregation sweep, with six one-line keystone
+  signature changes and a ~41,200-line dead-mock deletion. No code changes; proposal only.
+
+- **A "Strict review" switch in the metadata review dialog.** One toggle sets the
+  three filters that had to be re-applied by hand on every open — hide skipped, hide
+  multi-book, min confidence 190% — and the switch itself persists, so the dialog
+  reopens the way you left it. Turning it off restores the default 85% confidence but
+  leaves the hide-toggles alone, since flipping it off usually means "widen this a
+  little", not "reset everything".
+
+- **`maintenance.purge-empty-authors`** — deletes author rows attached to zero
+  books. On the live library that is 4,975 of 12,854 authors (38.7%): not people,
+  but track and chapter titles an importer parsed into the author field
+  ("- Edgedancer", "04 - Heir to the Jedi"). No existing maintenance op covered
+  this — the other author ops all operate on authors that have books.
+
+  Dry-run by default; pass `apply=true` to delete. By default it refuses any author
+  with a non-zero file count, since zero books plus files present is more likely a
+  book that lost its junction link than an empty author, and deleting the author
+  would make repairable damage permanent. `limit` caps a run so a first apply can be
+  inspected before committing to all of it.
+
+- **New `maintenance.missing-file-audit` operation** — finds the `book_file` rows
+  behind "file not found" download failures. It stats every row's path and reports
+  how many point at bytes that are no longer on disk, broken down per book
+  (fully broken / partially broken / intact) and by library tree.
+
+  Measured on the live library over a 120-book sample: 552 of 1,322 rows (41.8%)
+  were missing and 49 of the 120 books had at least one dead file, 5 of them with
+  no surviving file at all. Every missing path was under the organizer's own
+  destination tree; nothing under the iTunes tree was missing.
+
+  No existing operation could find these — `orphan-book-files-cleanup` matches rows
+  whose `book_id` dangles, and `dedupe-book-file-rows` matches rows sharing an
+  identical path, while these rows have a valid book and *different* paths.
+
+  The operation is **report-only** and requests read capability only, so it is safe
+  to run against a live library at any time, including during a scan.
+
+- **`registry.RunItems` can now checkpoint and resume under concurrency.** Adds
+  `ResumeFrom`, `CheckpointEvery` and `CheckpointStateFn` to `RunItemsOptions`.
+  Concurrent checkpointing was previously refused outright — the comment said
+  "parallel writes to reporter.Checkpoint would race on the shared state blob" —
+  which left every op that follows the mandated worker-pool pattern unable to
+  resume, and is why 100 of 140 op definitions were `ResumePolicy: drop`.
+
+  The mechanism is a contiguous-completion watermark: a completion *count* is not
+  a resume point when workers finish out of order (items 0,1,2,5 done is "4
+  completed", and resuming at 4 would silently skip 3 and 4), so the checkpoint
+  records only the unbroken completed prefix. A failed item never advances the
+  watermark, so a resume retries it instead of skipping it.
+
+  Behaviour is unchanged for callers that do not set the new fields.
+
+- **`library.scan` now genuinely resumes instead of starting over.** Its
+  definition previously carried the comment "⚠️ THIS RE-RUNS THE SCAN FROM THE
+  START, IT DOES NOT CONTINUE MID-SCAN" — accurate, because nothing in the scan
+  path called `Checkpoint()` and `libraryScanParams` had no fields for a resume
+  point to land in. A production scan on 2026-08-17 ran 3h50m+ against a
+  63,044-book library; a restart discarded all of it.
+
+  The scan now checkpoints `resume_folder_idx` / `resume_item_offset` after every
+  completed chunk of books and every completed folder. Completed folders are
+  skipped whole; the folder that was in flight resumes at the last completed
+  chunk boundary.
+
+  Granularity is deliberately per-chunk, not per-folder: one production folder
+  holds ~14,000 items, so a checkpoint that could only say "folder 3 of 5" would
+  still throw away hours. Books are sorted by path before chunking so an offset
+  means the same thing across runs — directory-walk order varies per run, and
+  resuming into a differently-ordered slice would skip an arbitrary set.
+
+  A chunk that fails is not checkpointed, so a resume retries it rather than
+  stepping over books that were never processed.
+
+- **`maintenance.missing-file-repair`** — deletes `book_file` rows whose bytes are
+  gone, so downloads stop 404ing on rows that point at nothing.
+
+  It deliberately does NOT repair everything. A row is only deleted when its book
+  keeps at least one surviving file. Measured on a 120-book sample, 5 books had
+  *every* row dead; deleting those would leave the book with no files at all,
+  turning a wrong index into a lost book. Those books are skipped and named in the
+  report for a human to look at.
+
+  A book with any path that cannot be stat'd is skipped entirely, including its
+  confirmed-missing siblings — "I could not tell" is not "it is gone", and one
+  unmounted share must not present a whole tree as deletable.
+
+  **Dry run by default.** `{"apply": true}` is required to delete anything, and
+  `max_deletes` caps the blast radius of a single run. Every deleted path is
+  logged before the delete so the change is reconstructible from the operation log.
+
+- **Plan: split the scan's AI-parsing phase out of the metadata pass**
+  (`docs/plans/2026-08-17-split-scan-ai-phase.md`). Measured on the running
+  production scan, AI parsing consumes **66.9% of scan wall-clock** while the
+  metadata pass consumes 33.1%; excluding AI time moves throughput from 0.92 to
+  2.78 books/s over the sampled window.
+
+  The AI phase is also the phase the checkpoint cannot see — it runs inside each
+  500-book chunk, before the chunk-end checkpoint, so ~12 minutes of work per
+  chunk is repeated on restart.
+
+  The plan records a hazard that keeps it a plan: AI results are merged into the
+  book *before* it is first saved, so splitting the phases means the AI pass must
+  update already-persisted rows — and a bare whole-row update is this repo's
+  dominant data-loss shape. A narrow field-level update lands first, alone.
+
+  One finding is separable and carries none of that risk: the batch loop sleeps
+  2s between batches as a rate-limit courtesy, but production's LLM backend is a
+  local Ollama with no quota, and a direct probe shows it serves concurrent
+  requests at 1.86×/2.43× (n=3/n=6) rather than serializing.
+
+- **Root-cause note for the orphan destination rows**
+  (`docs/audits/2026-08-17-orphan-destination-rows-root-cause.md`). Identifies the
+  code path that records a `book_file` row for bytes that were never written:
+  `resolveOrganizedFilePath` (`internal/organizer/service.go:1254`) prefers the
+  planned target if it exists, falls back to the source if that exists, and
+  **when neither exists returns the planned path anyway** — silently, with no
+  warning on that branch. The value goes straight into `CreateBookFile`.
+
+  Because a planned path is always built from `RootDir` plus the naming
+  patterns, every row created this way lands under the organizer's own tree and
+  none can land under iTunes — which matches the observed shape exactly.
+
+  🔴 **This may change the repair.** #2479 made the file-naming pattern decide
+  organized filenames, so a book organized before it has its bytes on disk under
+  the *old* name while the recomputed plan names a sibling that never existed.
+  If that is what production looks like, those rows should be **repointed, not
+  deleted** — the note carries a directory-listing test that discriminates the
+  two cases, and recommends running it before `missing-file-repair --apply`.
+
+### Changed
+
+#### "Browse by Tag" starts collapsed and previews the busiest tags
+
+On a library with hundreds of tags the tag cloud rendered every one of them,
+expanded by default, pushing the actual book grid below the fold. It now starts
+collapsed showing the **top 5 tags by count** plus a "Show all (N)" button, and
+remembers whether you opened it.
+
+Two details beyond the literal request. Tags are now **sorted in the component**
+rather than trusting the order they arrive in — only font size depended on
+`count` before, so an unsorted list was invisible, and slicing a preview off one
+would have silently shown "the first five" instead of "the busiest five". And
+any **selected** tag outside the preview is still shown while collapsed, because
+hiding an active filter leaves you looking at a filtered list with no visible
+way to clear it.
+
+- The dropped-event log line no longer hardcodes `(delete)` while reporting
+  `del=false`, which made every upsert drop read as a deletion. It now names
+  the operation correctly and carries a running `dropped_total`, so the
+  condition is visible without grepping the journal.
+
+#### Material UI upgraded from 5.14 to 6.5 (step 1 of the path to v9)
+
+This is the first of three version hops that bring the interface library up to
+date. Nothing about the app should look or behave differently — this step exists
+to move the foundation, not to change the UI.
+
+Two automated migrations were applied: one that rewrites conditional styling
+into the form version 6 expects (40 files), and one for the theme file, which
+turned out to need no changes at all. Nothing was migrated by hand.
+
+The upgrade was unusually quiet, and the reason is worth recording: an inventory
+taken on 2026-08-07 found this codebase uses none of the patterns that normally
+make these upgrades painful — no legacy styling engine, no custom theme type
+extensions, no deep imports into library internals, and none of the optional
+add-on packages that have to move in lockstep. The 1,726 inline style props
+throughout the app carry over untouched.
+
+Notes for the next step: the real cost in this migration is the grid layout
+rewrite, which lands in the 6→7 hop, not this one. Emotion remains the styling
+engine — the zero-runtime alternative is deliberately not being adopted.
+
+#### `make test-everything` replaces `scripts/run-all-tests.sh`
+
+The 123-line script is deleted. Its one capability that `make` could not already
+do — running backend, frontend and e2e in a single pass, *continuing past a
+failing surface*, and ending in a pass/fail matrix — is now a Makefile target.
+`make test-all` is `test web-test` (no e2e), and make is fail-fast, so
+`make test-all test-e2e` stopped at the first failing surface instead of
+reporting all three.
+
+Two latent defects in the script are fixed by construction rather than carried
+over:
+
+- It never cleared a stale server on `:8484`. Playwright's `reuseExistingServer`
+  is on outside CI, so it would silently attach to whatever was already
+  listening and the e2e verdict could describe a **different build** than the one
+  just compiled. The target now kills a stale listener first and says so.
+- It backgrounded `npx playwright show-report --port 9323 &` and never killed it,
+  leaving a server running after exit. The target does not serve a report.
+
+This resolves TOOL-8 from `docs/audits/2026-06-22-repo-optimization-security-sweep.md`,
+open since June and left undecided by the earlier correctness fix.
+
+- **Consolidated the `docs/` tree.** Archived 67 superseded documents via `git mv` —
+  56 completed fleet task/status pairs to `docs/archive/superpowers/fleet-done/`, plus 11
+  superseded singles including `technical_design.md` and `implementation-guide.md`. Merged
+  the two independently-written `slog-prod-verify.md` runbooks into the canonical
+  `docs/operations/` copy. No document was deleted.
+- **Rewrote `docs/agent-tasks/README.md`**, which listed 9 archived folders and only 1 of the
+  10 packages actually in that directory. All 10 are verified ACTIVE or PARTIAL against code
+  artifacts at HEAD — the archiving discipline had in fact been followed, so nothing there
+  was archivable.
+
+- Recorded two outstanding user-facing gaps in the backlog: listened/in-progress
+  status is not being carried over from iTunes or from the files themselves, and
+  the web interface still locks up. The second entry documents the measurements
+  showing the lock-up may now be backend starvation rather than the DOM-volume
+  problem the earlier fix targeted.
+
+- The activity log's `Query` and `GetDistinctSources` now require a cancellable
+  context; the context-free versions were removed rather than deprecated, so a
+  future caller cannot silently reintroduce the unstoppable-scan bug.
+
+- **The ABS conformance fixtures are now seeded from the oracle, so they cannot drift
+  from it.** The fake library's two books were built from constants invented in the test
+  file: six identical 1662-second tracks of 2049–2054 bytes against a real *Odyssey*
+  capture with six distinct durations and 11–21 MB files, and a single-file book of 4096
+  bytes against a real 120 MB m4b. That drift is why twelve assertions could not compare
+  values at all. Per-track durations, sizes, filenames, tags and chapter boundaries now
+  come out of the fixture itself.
+
+  File sizes conform via sparse files: `mapper.go:225` stats every track and lets the
+  on-disk size override the recorded one, so `metadata.size` can only match if the file
+  really is that long — about 200 MB per run written as holes, costing no disk. Safe for
+  the Range assertions because they compare a suffix range against the response's own
+  tail rather than against a byte pattern.
+
+- **Allowances are now bounded, and an allowance that never fires fails the test.** A
+  blanket exemption at `media.duration` accepts any duration there forever; the day we
+  report half a book's length, a suite full of such exemptions says nothing. A bounded
+  allowance states the widest gap its stated cause can produce — 0.5 s for a rounded
+  track, 3.0 s for a six-track aggregate — and anything wider still fails as a different
+  defect.
+
+  This is not theoretical. The bound immediately caught `sixChapters()` returning flat
+  1662.5-second spans where the oracle's first chapter ends at 1386.057: a **276-second**
+  gap that a blanket "chapter bounds may differ" would have absorbed as the known
+  sub-second truncation. Those chapters are now seeded from the oracle and match exactly,
+  so they need no allowance at all.
+
+- **The ABS conformance suite now checks values, not just shape.** All 22 golden-fixture
+  assertions ran with `conformance.Options{IgnoreExtra: true}` and no `CompareValues`,
+  which compared key presence and type and nothing else — a handler that returned every
+  correct key with entirely wrong data passed. The suite read as a conformance gate and
+  gated almost nothing.
+
+  Ten endpoints already met the oracle exactly and are now pinned to it: ping, status,
+  libraries, series, authors, narrators, paginated authors, and the three bookmark
+  routes.
+
+- **Strictness is now the default, and weakening it is what costs effort.** The previous
+  arrangement had this backwards: a newly added endpoint got the weak check for free and
+  turning it up required someone to remember. The twelve call sites that cannot meet the
+  oracle yet must now name themselves via `assertConformantPending` **and give a written
+  reason** — an empty reason fails the test. Those twelve are the remaining work, they
+  are enumerated in the source rather than in a tracking doc, and the count cannot drift
+  upward quietly.
+
+  Their failures are not one problem. Most are fixture drift: the fake library's
+  multi-file book is synthetic (six identical 1662 s tracks, 2049–2054 byte files,
+  `timeBase 1/1000`) where the oracle captured a real recording of *The Odyssey* (six
+  distinct durations summing to 9975.48, files of 11–21 MB, `timeBase 1/14112000`).
+  Four are identity divergences we may well intend to keep — `user.type`, `Source`,
+  `permissions.upload`, `permissions.createEreader`.
+
+  One is neither, and would have stayed invisible under shape-only checking: for an
+  audio track we send the embedded tag title where AudiobookShelf sends the **filename**
+  (`media.tracks[].title` is `odyssey_01_homer_butler_64kb.mp3` in the oracle, while
+  `metaTags.tagTitle` separately carries `The Odyssey: Book 01`). `trackTitle()` prefers
+  `BookFile.Title` and falls back to the basename; ABS appears to use the basename
+  unconditionally. That is live mapper behaviour rather than test data, and whether it
+  matters depends on whether any client renders that field.
+
+- **There is now one OpenAPI spec instead of two.** `docs/openapi.yaml` and
+  `docs/api/openapi.json` were both hand-maintained, neither was generated from code, and they
+  had drifted until each documented endpoints the other lacked. Union-merged onto
+  `docs/api/openapi.json` (288 paths): 24 YAML-only paths carried across — `/health`, the
+  `/auth/*` login and session endpoints, 10 `/itunes/*`, and the 7 `/ai/scans/*` — plus the 19
+  component schemas and 5 shared parameters the JSON had none of. The YAML is archived with a
+  banner explaining why it must not come back.
+
+- **Docs consolidation wave 2: 8 superseded documents archived** (7,455 lines) covering the
+  server-plugin-registry plan/handoff, the metadata-cached-matcher design/plan, the handler-
+  extraction phase-1 map, the series-embedded-positions plan, consumed Sonarr/Radarr research,
+  and `docs/itunes-flow-diagrams.md`. Nothing deleted; everything moved under `docs/archive/`.
+  This closes the four items the 2026-08-11 inventory deferred.
+
+- Aggregate-recomputation log lines now name the subsystem that triggered them. A
+  production sample counted 126,928 `RecomputeBookAggregates updated` lines across 5,595
+  books (worst book: 1,189 recomputes) with no way to tell which of thirteen possible
+  originators issued them. Each line now carries a `caller` field such as
+  `internal/merge.(*Service).mergeBooks:438`, which is the prerequisite for coalescing the
+  redundant work — and for measuring whether the coalescing helped.
+
+- Startup now reports how long each stage of building the in-memory index took,
+  instead of one combined number. The index takes about two minutes to build on
+  a production-sized library, during which the library is slow and — until the
+  fix earlier today — could return wrong results; the combined number said it
+  was slow but not which stage to blame. The time spent committing the index is
+  reported separately, because that would point at a different fix than the
+  scans would.
+
+- The ABS surface now reserves `/api/playlists/<id>` from the `/api/*` → `/api/v1/*`
+  compatibility redirect, **but only when `abs_api_enabled` is true**. The redirect
+  middleware is not gated on that flag, so reserving the path unconditionally would make a
+  working app route 404 on every ABS-disabled deployment — the defect that broke 46 live
+  app routes twice (#2332 → #2333 → #2335). The bare `/api/playlists` list is deliberately
+  NOT reserved and still reaches the app API; only the detail sub-tree is claimed. Both
+  directions are pinned by tests, and no engine-level routing was touched.
+
+#### Startup warmup now reports how many bytes it read, and how many it threw away
+
+The memdb warmup log gained two fields, `phase_mb` and `discarded_mb`, alongside
+the per-phase timings added earlier the same day.
+
+Timing alone had taken the investigation as far as it could go. It established
+that `book_files` is 89,357 ms of a 108,768 ms warmup — 82% — and that
+`txn.Commit` is 13 ms, killing the theory that a single write transaction held
+across all ten prefix scans was the cost. A production CPU profile then showed
+61% of the phase inside `pebble.(*Iterator).Next`, nearly all of it in
+`loadDataBlock`: Pebble is pulling a fresh sstable data block off disk for
+almost every row, which is what happens when a data block holds only one or two
+rows because the rows are enormous.
+
+That points at `BookFile.AcoustIDFingerprint` — a `[]byte` stored inline in the
+`book_file:` row, roughly 230 KB of raw chromaprint per two-hour file, which
+`encoding/json` renders as ~307 KB of base64. `stripBookFileForMemdb` nils it
+out the instant it has been decoded, so every one of those bytes is read,
+decompressed, JSON-parsed and base64-decoded in order to be discarded.
+
+Two very different fixes follow from that, and they are not compatible:
+
+- if the blob really is most of the bytes, remove it from the row, which shrinks
+  the work and pays out in five places at once (pread, cgo block decompression,
+  block allocation, JSON, base64);
+- if it is not, parallelize the scan, which divides the work without shrinking
+  it.
+
+The first is a large, data-loss-sensitive schema change. Rather than infer the
+premise from a call graph, the warmup now measures it: `warmIter` sums the
+length of every Pebble value it visits, and the `book_file:` callback charges
+the base64-encoded length of the fields the projection is about to discard.
+Cost is one integer add per key.
+
+Two details are load-bearing and are pinned by tests. Discarded bytes are
+counted in *encoded* length, because the scanned total counts raw JSON value
+bytes — charging a decoded length against an encoded total would understate the
+ratio by 4/3 and produce a number that looks precise and is wrong. And nonzero
+megabyte totals round *up*, so a phase that read half a megabyte never prints as
+`0` and becomes indistinguishable from a phase that read nothing.
+
+#### Warmup byte accounting now says WHICH field the discarded bytes belong to
+
+The aggregate shipped earlier the same day established the size of the problem:
+on production, **1,853 MB of the 2,436 MB** read in the `book_files` warmup
+phase — **76%** — is decoded and then thrown away by `stripBookFileForMemdb`.
+That phase is 113,778 ms of a 134,572 ms warmup.
+
+It does not say which field, and the candidates are not interchangeable.
+`AcoustIDFingerprint` is a `[]byte` inline in the row; moving it to a sidecar
+key means rewriting ~13 read sites and retiring the write-back preserve-guards
+in `pebble_store_bookfiles.go` that exist *because* a bare memdb round-trip once
+wiped fingerprints in production — the two writes would have to become one
+atomic batch. `IntroTranscription` and the diagnostic strings are `*string`
+fields with far fewer readers and no such guard. Recommending the expensive,
+data-loss-sensitive option on the strength of an aggregate that might be
+dominated by the cheap one would repeat exactly the error the aggregate caught:
+the call graph implied ~99% and the measurement said 76%.
+
+So the warmup log gains `discarded_field_mb`, splitting the total across six
+field groups, and the `books` phase — 729 MB across 67,824 rows, the
+second-largest and previously unmeasured — is now accounted too.
+
+One finding fell out of writing the tests. **`AcoustIDSeg0..6` cannot be seeded
+through `CreateBookFile` at all**: the write path deliberately omits them from
+the stored row and keeps them only in the `book_file_acoustid:` secondary index
+(already pinned by `TestCreateBookFile_StoredValueLacksSegs`). A row written by
+current code contributes exactly zero to that group. So a nonzero
+`acoustid_seg0_6` in production is **not** ongoing cost that a schema change
+would remove — it measures how much un-migrated legacy data is still in the
+keyspace, and the remedy is a backfill, not a redesign. That is recorded as its
+own test, seeding a legacy row as raw JSON because the supported API refuses to
+produce one.
+
+`BookSigV1` and `BookSigV1Mask` are charged their plain length, not
+`EncodedLen`: they are already base64 *strings* in the struct, so encoding them
+again would overstate the books phase against `book_files` by 4/3.
+
+- **Startup no longer reads 580 MB of book signature it throws away.** The five
+  `BookSig*` fields now live under their own `book_sig:<id>` key instead of
+  inline in the `book:<id>` row. Measured on production 2026-08-13: the `books`
+  warmup phase read 729 MB, of which 580 MB (80%) was a signature that the
+  in-memory projection nils out the instant it finishes decoding. The warmup
+  scan is bounded `["book:", "book;")` and `_` sorts above `;`, so the sidecar
+  falls outside the range and those bytes stop being read at all.
+
+  Every signature consumer sees exactly what it saw before — dedup's signature
+  scan and AcoustID-conflict veto, the dataset builder, the op-dependency field
+  predicate, the AcoustID backfill, and the book-signature recovery audit all
+  reach their books through `GetBookByID` or `GetAllBooksFullFrom`, and both
+  hydrate the sidecar. Books already on disk are untouched: when no sidecar key
+  exists the read falls back to the inline value, so the 67,824 existing
+  signatures keep working with nothing migrated.
+
+  This also closes a data-loss shape rather than only a performance one.
+  Previously the sole thing preventing a memdb-projection round-trip from wiping
+  every signature was a hand-maintained preserve-guard in `UpdateBook` — a guard
+  that exists because that wipe already happened once, and whose own comment asks
+  the next author to keep it in sync. A book that arrives carrying no signature
+  now writes no sidecar key and deletes nothing, so not-wiping is the default
+  behaviour instead of something someone has to remember.
+
+  Note this reduces what startup READS, not what the database stores: the
+  copy-on-write `book_ver:` snapshots deliberately keep the full inline
+  signature, because the recovery audit recovers from them.
+
+- Corrected the 2026-08-11 duplication audit. The `Unknown Author/` tree is not
+  14 TB of reclaimable space: ZFS block cloning is active and the duplicate
+  files already share blocks with their sources. A 50-file pilot — verified
+  byte-identical, reflink-replaced, snapshot destroyed so freed blocks could be
+  released — reclaimed nothing against a 36 MB/min noise floor. `du` and
+  `logicalused` both fail to show block sharing; `bclonesaved` (21.8 TB) is the
+  instrument that does. The version-group findings are unaffected.
+
+- **The soft-delete rule is now stated once.** 37 open-coded
+  `MarkedForDeletion != nil && *MarkedForDeletion` checks across eight files in
+  `internal/database` now call a shared predicate. That duplication was the
+  mechanism by which the two implementations drifted apart in the first place —
+  each open-coded the same three-token test independently and nothing noticed
+  when one stopped matching the other. `Book` and `BookCore` are separate
+  structs that each carry the flag, so both delegate to one
+  `markedForDeletionFlag`. `grep "MarkedForDeletion != nil"` over the package
+  now returns only the three reads of the caller-supplied *filter* struct.
+- **Orphan-file cleanup reports the denominator it actually used.** It logged
+  the live book count while deciding orphanhood against live + soft-deleted;
+  the field is now `owning_books` and carries the set that made the decision.
+
+- The tri-state deletion filter (exclude trashed / require trashed / require
+  live) is now stated once in `includeByDeletionState` instead of being written
+  out separately in the summaries path and in `GetAllBooksCore`. Passing a
+  non-boolean value for the `marked_for_deletion` filter key used to disable the
+  trash exclusion entirely and return both live and deleted rows; it is now
+  treated as no filter at all.
+
+- `Book.IsSoftDeleted()` is exported, so packages outside `internal/database`
+  have somewhere to call instead of restating the rule.
+
+- The soft-delete check is now a single shared predicate everywhere. Twenty-five
+  copies of `MarkedForDeletion != nil && *MarkedForDeletion`, spread across
+  seventeen files in dedup, iTunes, organizer, undo, maintenance and the
+  handlers, now call `Book.IsSoftDeleted()`. No behaviour changes — every copy
+  was correct — but a rule written out twenty-five times is how the two
+  implementations of the library scan drifted into disagreeing for months. One
+  site turned out to hold a different row type and needed a `BookCore` twin; the
+  compiler found it. `internal/scanner`'s remaining match is deliberately left
+  alone: it compares two rows' flags for merge purposes and is not the same
+  question.
+
+- Refreshed the 2026-08-14 task-board handoff: 29 PRs merged and deployed,
+  A03/E03/D112 verified, E01/E02 dry-runs measured, E06 applied, E07 resolved.
+
+- Session-close handoff for 2026-08-14 (30 merged PRs, verified redeploy,
+  E-wave outcomes, in-flight canary state) and August roundup update; filed
+  fragments for the bulk-write-back speed prerequisites, the 2 remaining
+  ambiguous PID groups, and the prometheus-script indentation bug.
+
+- Filed matcher follow-ups: skip-all/hide-multiples triage control, and the
+  false "signed out — no changes were made" report after long tag writes
+  (changes were made; the fix is background-op dispatch plus honest
+  connection-loss messaging).
+
+- Filed the activity-log auto-compaction todo: default 7-day retention,
+  user-configurable from the activity log screen, implemented via the
+  existing nightly cleanup job.
+
+- Filed the activity-log summary defects: slog attrs dropped by the
+  activity bridge ("cover art saved to" with no path), inconsistent
+  raw-text bridging, and metadata-apply rows that never name the book.
+
+- Corrected the matcher-blocking diagnosis: the metadata FETCH is the
+  serialized, foreground half (writes are already backgrounded). Filed the
+  fan-out-with-jitter background-op design todo.
+
+- Filed the stuck-pending legacy op rows defect: maintenance jobs' legacy
+  operation rows never receive terminal status, so the ops UI shows finished
+  work as running for hours (misled the operator twice today).
+
+- Task board v1.2.0: C111 and E01 closed on prod, E08 canary findings
+  (perms bug + stale-path residue), E09 done, CA12 wave-2 verdict, G110 and
+  walker-collapse merged; filed the A04 wrong-instrument fragment.
+
+- Orchestrator handoff for 2026-08-15: in-flight UA-purge census + held
+  deploy, the Unknown-Author root-cause chain, and the ranked outstanding
+  work with fragment pointers.
+
+- **Tag writes no longer copy and hash the audio file four times over.**
+  Every write-back wrapped a tag write in `fileops.WriteTagsSafe` and then called
+  a writer that wrapped it *again*. Each wrapper streams the whole file through
+  SHA-256 twice and copies it once, so one tag write cost four full-file SHA-256
+  passes and two full-file copies of the audio — and the inner pair was discarded
+  unread. On NAS-backed audiobooks that redundant I/O, not the tag encoding, was
+  the cost of write-back. Writers called from inside the wrapper now write in
+  place, and the hashes are computed only when there is a `book_file` row to
+  persist them against.
+
+- **Per-chapter titles are preserved.** Both multi-file write paths overwrote the
+  `title` tag of every file with a synthetic `"NN - Book Title"` on every run,
+  destroying real chapter titles. They are now kept unless they carry no
+  per-chapter information.
+
+- **The two write-back implementations are now one.** The fetch/apply path had its
+  own ~160-line near-duplicate that had drifted: it never embedded covers from an
+  already-downloaded local cover, never propagated to version-group siblings,
+  never redirected protected paths to the library copy, and never stamped
+  `LastWrittenAt` for multi-file books. It now shares the single implementation
+  and gains all of those.
+
+#### Write-back and batch-apply now use real worker pools instead of one book at a time
+
+Four metadata paths that touch every selected book were doing that work
+essentially one book at a time. On a library-sized selection that is the
+difference between an overnight run and a multi-day one.
+
+- **Bulk write-back** (`library.bulk-write-back`) had a hardcoded pool of 2
+  workers, but the pool was not the bottleneck: the *producer* goroutine did the
+  per-book database lookup, the protected-path check, the tag/policy read and —
+  worst of all — the entire file rename synchronously before handing the book to
+  a worker, through a channel buffered at only 4 slots. One slow rename stalled
+  both workers. All of that per-book work now runs inside the workers, the
+  channel carries bare IDs with a much deeper buffer, and the pool size is
+  configurable via `metadata_scoring.write_back_workers` (default 4, was a
+  hardcoded 2).
+
+- **Batch save to files** (`metadata.batch-save`) was a plain sequential loop
+  over every requested book, doing a tag write and an optional re-organize each.
+  It now runs through the shared work-item runner with an explicit worker pool.
+
+- **The two "apply candidates" endpoints** (Metadata Review's *Apply All*, and
+  batch-apply from a fetch operation) applied each book's candidate one after
+  another while the browser waited on the response. They now apply in parallel.
+  The response body is unchanged — same fields, same per-book skip reasons, same
+  ordering — so the Metadata Review screen behaves exactly as before, just
+  faster.
+
+Two correctness notes that came with the parallelism:
+
+- Concurrent write-back is now serialized **per destination file path** by a
+  keyed lock. Three separate situations can put two different book records on
+  one file on disk: version-group siblings, a book in a protected path being
+  redirected to its library copy, and — subtly — the copy-on-write backup name,
+  which is built from a timestamp with only one-second resolution, so two
+  writers touching one file inside the same second would generate the same
+  backup filename and overwrite each other's backup. The lock is per path, not
+  global, so books in different folders still run fully in parallel.
+
+- Cancellation is now checked per book inside each worker rather than only where
+  work is handed out. With a deep queue the hand-out loop finishes long before
+  the workers do, so previously a canceled bulk write-back could keep writing
+  files for the length of the remaining backlog.
+
+- **Applying metadata to a book returns immediately instead of waiting on a cover
+  download.** Measured on production: a single-book apply took **6.44s**, and ~4s
+  of that was a synchronous cover-art HTTP download sitting on the request path —
+  its code comment described it as a "fast network fetch". Everything else the
+  apply does (tag writes, rename, write-back) was already backgrounded. The
+  download now runs in the background file-IO pool, ahead of the cover embed so
+  the newly fetched image is the one embedded. The cover appears a moment after
+  the rest of the metadata.
+
+- **`internal/server` tests run 6x faster (585s -> 98s).** Test-constructed PebbleDB
+  stores now use an in-memory filesystem via the new
+  `database.NewPebbleStoreInMemory`. Every Pebble write in this package passes
+  `pebble.Sync`, so on a real filesystem each of the 60 migrations and every
+  op-definition upsert cost a genuine `fsync` — a CPU profile showed only 90ms of
+  CPU for a 1.6s test setup, with 94% of the time blocked in `os.(*File).Sync`.
+  `setupTestServer` was called 275 times and 237 of the package's 909 tests sat in
+  a single 1.50-1.75s band as a result. Production is unchanged: `NewPebbleStore`
+  still opens the real filesystem, and the new constructor is test-only.
+  Tests that need the database as real bytes on disk use `setupTestServerRealFS`.
+
+- **Applying metadata to many books no longer holds the HTTP request open.**
+  `POST /api/v1/audiobooks/metadata/batch-apply-cached` now enqueues a
+  `metadata.batch-apply-cached` operation and returns `202` with an `op_id`
+  immediately; the UI polls the operation for progress.
+
+  A 250-book apply measured **2m0s** inline on production. Go's HTTP server does
+  not kill a handler when the client disconnects, and `ApplyMetadataCandidate`
+  took no `context.Context`, so the browser timed out, the UI reported
+  "session expired — nothing was applied", and the server kept applying for
+  another minute. Every one of those requests returned HTTP 200 and the work
+  really happened; the message was wrong on both counts.
+
+  The apply was already parallel and already pushed file work to a pool — the
+  problem was never a missing worker pool, it was the request duration.
+
+- Metadata search now queries sources **concurrently** instead of one after
+  another. Previously every source in the priority chain was queried in series,
+  and with up to four search attempts per source plus a scoring pass, a single
+  book's search was measured at 13s on production.
+
+  Only the I/O half is parallel. The dedupe/scoring merge stays sequential and
+  in source order, because the source chain is priority-ordered and the dedupe is
+  first-wins — parallelizing the merge would make which source wins a duplicate
+  title+author nondeterministic between runs.
+
+  Width is controlled by `metadata_scoring.source_fanout_workers` (default 4).
+  This multiplies with `bulk_fetch_workers`: 4 books × 4 sources is 16 provider
+  requests in flight, each still gated by that provider's own token bucket in
+  `internal/metadata/providerhttp`.
+
+- A placeholder operation that has not been implemented yet now fails when run
+  instead of quietly reporting success. Reporting success for work that did not
+  happen is the more expensive failure: nothing looks wrong, so nobody looks.
+
+- `folder_naming_pattern` and `file_naming_pattern` defaults are now declared
+  once as `DefaultFolderNamingPattern` / `DefaultFileNamingPattern` instead of
+  being hand-copied into two places.
+
+- The server now refuses to start if any background operation failed to
+  register, instead of logging a warning and carrying on. An operation that
+  fails to register doesn't degrade — it ceases to exist, while everything else
+  reports healthy, so the failure only surfaces later as an unrecognised
+  operation on a server that looks fine. Refusing to start is the louder and
+  much cheaper failure.
+
+- Writing a log line no longer counts as reporting progress, and this is
+  deliberate: an operation stuck in a loop that logs is still stuck, and
+  treating chatter as a sign of life would blind the watchdog to the exact
+  problem it exists to catch.
+
+- Operations that are cancelled for inactivity now say **why** in two distinct
+  ways instead of one ambiguous one. Previously an operation that stalled and an
+  operation that was never connected to the progress system produced an identical
+  "stuck" message, which is how a broken connection went unnoticed for three
+  months and got worked around three separate times as if it were a slow
+  operation. Being cancelled after never once reporting is now recorded as
+  `never_reported` and logged as an error that names the likely cause, while a
+  genuine stall keeps the existing `stuck` label.
+
+- **Retired `GET /api/v1/operations`, `/operations/:id/status` and
+  `/operations/:id/logs`.** Replaced by `GET /operations/timeline` and
+  `GET /operations/v2/:id`. The list route had no caller at all.
+- `GET /api/v1/operations/v2/:id` now accepts **`?limit=`** (capped at 5000, default
+  50) so it covers the retired `?tail=`, and the diagnostics log provider is served
+  from v2 rather than the legacy handler.
+
+- **Retired the v1 operation trigger routes** `POST /api/v1/operations/{scan,
+  organize,transcode,optimize}`. All four were pure shims whose entire body forwarded
+  to the same `registry.EnqueueOp` that `POST /api/v1/operations/v2` calls, so they
+  contributed no behaviour and one wrong response shape. Callers now post
+  `{def_id, params}` to `/api/v1/operations/v2`.
+
+  One behaviour change worth knowing: `POST /operations/transcode` rejected a missing
+  `book_id` with a synchronous `400`. The generic trigger cannot validate per-op
+  params, so the same mistake now enqueues an operation that fails immediately with
+  `book_id is required`. The guard still exists — it reports asynchronously.
+
+- The scheduler no longer writes rows to the legacy `operations` table. All 20
+  remaining scheduled tasks and the maintenance window now enqueue a v2
+  operation and report its id, so the id the scheduler logs and `/tasks/:name/run`
+  returns is one that `GET /operations/v2/:id` can actually resolve.
+
+- `docs/audits/2026-08-16-store-interface-decomposition.md` v1.1.0 — adds the computed
+  AST/`go-types` baseline (**338** declarations across 35 packages) that the proposed gate keys
+  on, replacing the earlier "not computed" placeholder. The grep-based figure (286) undercounts
+  by 15%: it cannot see `internal/database`'s own 87 declarations, which spell the type `Store`
+  rather than `database.Store`. Rule 1's population is **7**, not 6 — both text scanners missed
+  `StoreUnwrapper.Unwrap` for the same reason.
+
+- `internal/maintenance/jobs` — 19 declarations beneath `MaintenanceJob.Run` (16 free helper
+  functions and 3 methods) now take narrow, explicitly-declared store slices instead of the full
+  `database.Store` (398 methods). Each uses 1-4 methods; the new slices in
+  `store_slices.go` declare exactly those, with `var _ Slice = (*database.PebbleStore)(nil)`
+  assertions so signature drift is a build error rather than a call-site surprise.
+
+  `MaintenanceJob.Run` itself is unchanged — an interface method's parameter type is fixed for
+  all **37** implementers (measured: 37 `Run` receivers, 37 files, 37 non-test
+  `maintenance.Register` calls, one each). Narrowing the layer beneath it captures the volume
+  without a 37-file atomic edit.
+
+  Narrowing a parameter is monotone (`Store` is composed purely of embedded sub-interfaces,
+  so anything satisfying `Store` satisfies every slice), so **the narrowing itself changed no
+  call site and no test**. The separate `deleteOldOperations` split in this PR does change
+  both, deliberately — see the entry below. Verified: `go build ./...`, full-tree
+  `go vet ./...`, and `go test ./internal/maintenance/...` all clean.
+
+  Rationale and the measured baseline: `docs/audits/2026-08-16-store-interface-decomposition.md`.
+
+- `internal/maintenance/jobs` — `deleteOldOperations` is split three ways as a worked example
+  of removing a store dependency rather than narrowing it (audit §7, Option C):
+
+  - `operationsOlderThan(ops []database.Operation, cutoff time.Time) []string` — **pure**. No
+    store, no context, no `dryRun`. It is the entire retention decision.
+  - `expiredOperationIDs(ctx, operationLister, cutoff)` — the read step. Keeps the
+    single-`ListOperations`-call guarantee and the assertions that pin it.
+  - `deleteOperations(ctx, operationDeleter, ids)` — the write step.
+
+  The `dryRun` flag no longer travels down the call stack; `Run` branches on it and either
+  reports `len(expired)` or calls `deleteOperations`. Neither the selection nor the deletion
+  has a mode it can get wrong.
+
+  `retentionOperationStore` (2 methods) is replaced by `operationLister` and
+  `operationDeleter`, one method each — once the decision is out, both I/O halves are
+  single-method.
+
+  Test effect, which is the point of the exercise: `TestRetentionBoundaryLogic` used to assert
+  `opTime.Before(cutoff) == want`, comparing `time.Before` against itself and never calling
+  production code — it could not, because the decision was welded to a store call. It is
+  replaced by `TestOperationsOlderThan`, a five-case table over slice literals with **no mock,
+  no fake, no store, no context**, including the boundary case (an operation stamped exactly at
+  the cutoff is retained, because `Before` is strict).
+
+  Two new tests keep an invariant that used to hold structurally: with one function returning
+  both the dry-run count and the real count, their agreement was free. Now
+  `TestDeleteOperations_CountMatchesInput` and `TestDeleteOperations_PartialCountOnError` pin
+  that the reported count never exceeds the deletions actually made.
+
+- `docs/audits/2026-08-16-store-interface-decomposition.md` — three owed evidence updates:
+
+  - **The "~35 narrowable helpers" is measured and promoted out of ⚠.** In
+    `internal/maintenance/...` + `internal/plugins/maintenance/...`, **81** declarations take a
+    `database.Store` parameter: **37** `Run` methods (interface-constrained, not narrowable),
+    **10** other methods, **34** free functions — of which 33 are narrowable helpers
+    (`maintenance.InjectStore` is the framework's injection setter). Corroborated independently:
+    `maintenance.Register(` appears exactly 37 times in non-test code (40 raw — three are test
+    probes in `internal/server`).
+
+  - **A circulated derivation is retracted.** The figure had been justified as *"55 functions
+    minus 20 `Run` implementations = 35."* Both operands are wrong — 81 and 37 — and the answer
+    only looked right because two errors roughly cancelled. Related: a single-line grep for
+    `Run` methods returns 35, missing two that declare parameters one-per-line; the AST count is
+    the correct one.
+
+  - **PR #2503's effect is measured A/B, not claimed.** It narrowed **19 declarations = 16 free
+    helpers + 3 methods** (not "19 of the 35 free helpers"), leaving **24**. The same
+    miscategorisation had listed a method among the "free helpers" still to do. Monotonicity
+    (§8) is now n=2: 19 narrowings at once, zero call-site and zero test edits.
+
+  - **§7 gains Options B/C/D/E/F.** The section previously presented narrow interfaces as the
+    only shape. **Option C — split the pure decision out of the I/O — is stronger where it
+    applies**, because it removes the dependency rather than narrowing it, and it produces
+    Option D as a by-product. Its cost is documented too: composition and any count-agreement
+    invariant move up into `Run`, which is the one function in the package that cannot be
+    narrowed. Worked example: `deleteOldOperations`.
+
+- `internal/plugins/maintenance` — 19 helpers now take narrow, explicitly-declared store
+  slices instead of the full `database.Store` (398 methods). The new
+  `store_slices.go` declares 15 interfaces of 1-11 methods each, with
+  `var _ Slice = (*database.PebbleStore)(nil)` assertions so a `database` signature change
+  breaks at the declaration rather than at whichever call site compiles first.
+
+  The declarations now state what each helper may do. `bookFileCoreScanner` (1 method, 3
+  users) cannot write; `bookFileBulkDeleter` (1 method) is the destructive half of the
+  missing-file repair and cannot touch a book row; `fsRegroupStore` is the widest at 11
+  methods because that path genuinely moves files between books and deletes rows — which is
+  now visible at a glance instead of hidden behind a 398-method parameter.
+
+  Narrowing a parameter is monotone, so **no call site and no test changed** — 19 signature
+  lines, 19 insertions, 19 deletions across 13 files. One `database` import became unused in
+  `missing_file_repair.go` and was removed. Verified: `go build ./...`, full-tree
+  `go vet ./...`, and `go test ./internal/plugins/maintenance/...` all clean.
+
+  Single-method slices are deliberate rather than an oversight. Option D from the audit (pass
+  the method value, no interface) would say the same thing with no type declaration, but it
+  rewrites every call site; a one-method interface keeps them untouched, which is what makes a
+  19-site sweep reviewable in one pass.
+
+- **`maintenance.chapters-backfill` now resumes where it stopped.** It carries the
+  longest timeout in the codebase (24 hours) over a whole-library enumeration, and
+  ran under `ResumePolicy=Drop` — so a restart mid-run threw away up to a day of
+  ffprobe work and began again at book zero.
+
+  It converts because of two properties it already had: each item probes and
+  persists entirely within itself, accumulating nothing a later phase consumes,
+  and it is explicitly idempotent — a book that already has stored chapters
+  short-circuits on a single key lookup. `maintenance.duration-backfill` has
+  neither (its first phase builds an in-memory fix list for its second phase to
+  apply), so that op deliberately stays on `Drop`.
+
+  Three details that are easy to get wrong, each pinned by a test that was
+  verified to fail without it:
+
+  - **The checkpoint carries every parameter, not just the position.** Checkpoint
+    state is *merged* into the resumed run's parameters, so any omitted field
+    returns as its zero value — dropping `apply` would silently downgrade a live
+    run to a dry run, and dropping `bookIds` would widen a bounded cohort run to
+    the whole library. Both failures look exactly like success.
+  - **`limit` now caps the operation, not the attempt.** A twice-restarted run
+    with `limit=100` could otherwise write 300 books while every individual
+    attempt honoured its cap.
+  - **Book IDs are sorted before the run.** A watermark counts positions, so it
+    means nothing without a stable order. Both stores enumerate in ID order
+    today, but resuming must not depend on two implementations continuing to
+    agree — that class of silent divergence is what #2399 was.
+
+### Removed
+
+- **`todo.d/20260812-abs-conformance-onefailure-unreproduced.md`**, which recorded a
+  `TestSearch_ConformsToOracle` failure that then would not reproduce in 27 runs. It is
+  explained, so it should not be filed as open work.
+
+  The failing run predated two allowance entries that were added *in response to it*. At
+  that moment `book[].libraryItem.media.duration` was declared `Within: 0.5` — which is why
+  the failure text says "EXCEEDS the 0.5 allowed", quoting the value that was really in the
+  file — and `book[].libraryItem.media.tracks[].startOffset` was not declared at all, which
+  is why its five findings were unallowed. Both were fixed in the next edit: the bound went
+  to 3.0 because `book[1]` is the six-track book whose total accumulates six roundings, and
+  the `startOffset` key was added. The 27 clean runs afterwards are the fix working, not a
+  heisenbug going quiet.
+
+  The note's *hypothesis* was a different matter and was correct — see above. It was a real
+  latent defect in the matcher, found by taking an unexplained observation seriously rather
+  than by anything the observation actually demonstrated.
+
+- Deleted the dead file-level M3U playlist path (`internal/playlist.generatePlaylistFile`
+  and its package-local `PlaylistItem`) — zero non-test callers since the fable5 T022
+  SQLite removal. The Store-backed playlist API and smart-playlist evaluator are untouched.
+
+#### The `path_format` and `segment_title_format` settings
+
+These drove the second, conflicting path builder. Both are gone from the
+settings UI, the API and the config file; the folder and file naming patterns
+are now the only things that decide where a book goes. The default file naming
+pattern is `{title} - {track:02d}`.
+
+**Existing libraries will see files move once** as books settle onto the single
+scheme. That is the intended one-time cost of ending the back-and-forth.
+
+- **41 of the 45 generated `internal/database` mocks — 24,613 lines, 46.7% of
+  `mock_store.go`.** Nothing referenced them. `mock_store.go` goes from 52,753 to 28,139
+  lines. Only their `.mockery.yaml` entries were edited; the file is regenerated, so this is
+  reversible by restoring the entries and running `make mocks`.
+
+  Kept, because they are referenced: `Store` (354 refs / 54 files), `OpsV2Store` (5/2),
+  `OperationStore` (2/1), `ImportPathStore` (6/2).
+
+  These were dead for a structural reason, not an accident: they mock `database`'s wide
+  sub-interfaces (`BookStore` alone is 51 methods), and no production signature is typed as
+  one — constructors take the whole `database.Store`. Generating a mock nobody can use is the
+  predictable result. Narrowing (#2503, #2521) is the other half of that story, but it does
+  not resurrect these: narrow slices are package-local interfaces, so these 41 stay dead
+  either way.
+
+  ⚠️ The usage census needed three passes to get right, and the record is worth keeping. A
+  bare-name grep said 9 were used — 8 of the 45 names are also declared in other packages. An
+  alias-qualified grep (the package is imported as `mocks`, `dbmocks` and `databasemocks`)
+  said 3 used across 13 files, impossible against 57 importers: it was blind to mockery's
+  `NewMockX` constructor form, which is how 54 of the 57 actually use it. And the
+  type-declaration pattern `^type Mock[A-Za-z]+ struct` silently skipped `MockOpsV2Store`
+  because the character class excludes the digit in `V2` — that one would have deleted a mock
+  with 5 live references, and it went unnoticed because the same blind spot removed it from
+  both the numerator and the population, so the ratio still looked right.
+
+- **`setupMockApiLegacy`** — deleted 1,003 lines of dead E2E mock helper from
+  `web/tests/e2e/utils/test-helpers.ts`. It had zero callers repo-wide.
+
+  It was worse than merely unused: it carried its own
+  `/api/v1/operations/{scan,organize,active}` handlers, so anyone auditing the
+  mocks for a stale endpoint found two copies and reasonably updated both. That
+  happened during the 2026-08-16 v2-endpoint repair, where the second copy was
+  identified as dead only after a grep.
+
+  Verified before deletion: one repo-wide match, its own definition. Verified
+  after: `tsc --noEmit` clean (0 errors, same as the pre-deletion baseline), and
+  `check-spec-discovery` still reports 38 spec files contributing 287 chromium
+  tests — every spec transitively imports this module, so a broken export would
+  have surfaced there.
+
+### Fixed
+
+#### Release notes are no longer empty ("No commits available")
+
+Every release and draft this repo produced listed its changes as
+`- No commits available`, and drafts silently stopped refreshing — the
+`v0.217.9` draft was stuck quoting `rc.61` while the repo was on `rc.87`, and
+three duplicate broken drafts accumulated against that tag.
+
+Root cause: `reusable-release.yml` checks out the ghcommon helper scripts at a
+ref taken from `.github/ghcommon-ref.txt`, falling back to a hardcoded SHA when
+that file is absent. This repo had no such file, so it ran the fallback
+`e04c222a` — a version of `release_workflow.py` predating the changelog fix. In
+that version the diff base is:
+
+    describe = _run_git(["describe", "--tags", "--abbrev=0"])
+    last_tag = describe.stdout.strip()
+
+`git describe --tags` returns the newest tag reachable from `HEAD`, and by the
+time the changelog step runs, that is *the tag the job just created*. So the
+range was always `vX.Y.Z..HEAD` against itself — empty by construction. That
+version also had no `PREVIOUS_VERSION` support, which is why passing
+`previous-version=v0.217.4` to `release-prod.yml` was accepted and silently
+ignored (confirmed in the v0.218.0 run log: the env var was set correctly, and
+the output still read "Commits since v0.218.0").
+
+Fixed by adding `.github/ghcommon-ref.txt` pinned to
+`d0c3326b96557c8ea9117c1c196b628e5e028186` — deliberately the *same* SHA
+`prerelease.yml` and `release-prod.yml` already pin `reusable-release.yml` to,
+so the workflow and the scripts it executes now come from one commit rather
+than drifting apart. That revision selects the previous stable tag correctly
+and honours the `previous-version` override.
+
+Note: the v0.218.0 release notes were generated before this fix and are
+therefore still empty; its contents are the month of work between v0.217.4 and
+v0.218.0.
+
+- **E2E content-drift refresh, wave 2** — the shared Playwright mock
+  (`web/tests/e2e/utils/test-helpers.ts`) now returns the `{ data: ... }`
+  response envelope the frontend api layer unwraps for `/auth/status`,
+  `/import-paths`, `/authors`, `/series`, `/audiobooks/soft-deleted`, the bare
+  `/audiobooks/:id` route, `/audiobooks/:id/versions` and every
+  `/filesystem/*` endpoint. Without it the mocked app could not initialize
+  auth, could not load a book detail page and could not browse the server
+  filesystem, which was failing 34 tests across four spec files. Assertions
+  that referenced renamed UI affordances were refreshed to match what the app
+  renders today. No product code changed.
+
+#### Data race on the dispatcher's write-set deferral map
+
+`Registry.writeSetDeferred` — the log-dedupe map added with the Gate 3b
+write-set conflict gate — was read, ranged, and deleted from at six sites in
+`internal/operations/registry/dispatcher.go` with no locking at all, while the
+`Registry` already carried an `mu sync.RWMutex` used for its sibling state
+(`pluginRunning`, `concurrencyKeys`, `running`). `-race` caught it as a
+concurrent map read at the prune in `dispatchCycle` against a `mapdelete` from
+a second `dispatchCycle` on the same `Registry`, failing
+`TestServerStartGracefulShutdown` and with it the Coverage Floor gate on an
+unrelated docs-only PR.
+
+The code carried an explicit comment asserting the map was safe:
+
+    // writeSetDeferred is only ever touched from the dispatcher goroutine
+    // (dispatchCycle is single-caller), so it needs no locking
+
+That is true within a single `Start()`, which spawns exactly one dispatcher
+goroutine — but `Start()` is deliberately restartable after `Shutdown()` (it
+clears `notifyStopped` for precisely that case) and neither waits for nor
+excludes a prior dispatcher still draining. During a restart two
+`dispatchCycle` calls therefore overlap on the same `Registry`, and the
+assumption breaks.
+
+All six accesses are now guarded by `r.mu`. The dedupe check-and-set in
+`logWriteSetDeferral` takes a single acquisition rather than two: splitting it
+would let two goroutines both miss the entry and emit the same line twice,
+which is the exact log spam the dedupe exists to suppress. No call site held
+`r.mu` already — the Gate 3b path releases it before logging — so no lock
+ordering changed and there is no deadlock risk.
+
+Verified with `go test -race`: `internal/server` (the failing test, 3
+consecutive runs) and `internal/operations/registry` both pass with zero race
+reports.
+
+#### The Library "In Progress" and "Finished" sidebar filters did nothing
+
+Clicking **In Progress** (or **Finished**) under Library left the highlight
+stuck on "All Books" and changed nothing on the page — no filter chip, no
+change in results. Two independent bugs produced that single symptom.
+
+**The highlight could never move.** `Sidebar.tsx` decided selection with
+`location.pathname === (item.matchPath ?? item.path)`. `pathname` never
+carries a query string, so "In Progress" — whose `path` is
+`/library?search=read_status:in_progress` — could not match, while "All Books"
+declared `matchPath: '/library'` and therefore matched *every* `/library` URL.
+Selection is now computed by `isSubItemSelected()`, which compares the parsed,
+decoded `search` param. That matters because `Library.tsx` settles the URL into
+`?search=read_status%3Ain_progress&page=1`; a raw string comparison against
+`item.path` would still fail on the percent-encoded colon and the appended
+`page`.
+
+**The click was discarded.** `Library.tsx` suppressed echoes of its own URL
+writes with a one-shot `isInternalUpdate` boolean, and that boolean got
+permanently stuck at `true`. The write effect lists `setSearchParams` in its
+dependencies, and react-router rebuilds that callback whenever
+`location.search` changes — so the effect re-fired on URL changes it had not
+caused, re-arming the flag each time. Once it wrote an identical query string
+the URL stopped changing, the sync effect stopped running, and nothing ever
+cleared the flag. Every later external navigation was then swallowed as a
+phantom "internal echo": the incoming `search` was dropped and the write effect
+rewrote the URL back to `page=1`.
+
+The tell was that "All Books" kept working from the same machinery — its
+`reset=1` branch is checked *before* the guard, while `search` is read *after*
+it.
+
+The flag is replaced by `lastWrittenSearch`, which records the query string
+actually written and compares it to the incoming one. That is idempotent, so
+repeated writes of the same URL are harmless and a genuinely different URL
+always gets through.
+
+The backend was never at fault: `buildFieldFilters` → the `filters` param →
+`PerUserFilters` was correct all along, but `parsedSearch` was never populated
+to feed it.
+
+Covered by `Sidebar.test.tsx` (11 cases), including the percent-encoded
+settled URL and an invariant that exactly one sub-item is selected for any
+given Library URL.
+
+#### The Library no longer claims to be empty when it simply cannot reach the server
+
+Restarting the backend made the Library announce **"No Audiobooks Found"** — to
+someone with a 44,000-book library. It was never true; the request had just
+failed.
+
+Two things combined to produce it. `useLibraryQuery` responded to a failed load
+by calling `setAudiobooks([])`, actively discarding whatever was on screen, and
+its `finally` block then set `loading` to false. `LibraryBookGrid` in turn chose
+its empty state with:
+
+    audiobooks.length === 0 && !loading && !searchQuery
+
+with no error branch anywhere — and the component was not even passed one; its
+props carried only `loading: boolean`, so it was structurally incapable of
+telling a failed fetch from an empty library. A failed request produced exactly
+the state that condition looks for.
+
+This is not an edge case. The backend is unreachable for roughly **40 seconds
+after every deploy** while memdb warms over the whole library (measured
+2026-08-08: `/api/v1/system/status` refused connections for ~40s after a
+restart, then answered normally). Every single deploy hit this window.
+
+Three changes:
+
+- **Failed loads no longer wipe the list.** The last known-good page stays on
+  screen, so a mid-session blip leaves the shelf intact instead of blanking it.
+- **The empty state is gated on a load that actually succeeded.** The decision
+  moved into a pure `libraryContentState()` helper whose branch order *is* the
+  fix: `reconnecting` is checked before `empty`, so only a request that resolved
+  with zero results may claim the library is empty.
+- **Failed loads retry automatically** with exponential backoff from 500ms,
+  capped at 5s — chosen well under the warmup window so the Library repopulates
+  within seconds of the backend answering. Retries continue indefinitely for
+  transient failures (network error, connection refused, 5xx) because those all
+  resolve on their own; a 4xx is a real client-side fault and is not retried. An
+  explicit cancel stops the retry loop, and the timer is cleared on unmount.
+
+While the library is unreachable the user now sees "Loading your library…" with
+a note that this is normal for up to a minute after an update, instead of being
+told their collection is gone.
+
+Also moves `isSubItemSelected` out of `Sidebar.tsx` into its own module,
+resolving a `react-refresh/only-export-components` warning introduced with the
+In Progress filter fix. Net lint warnings drop from 25 to 24.
+
+Covered by `libraryContentState.test.ts` (10 cases), including an exhaustive
+sweep asserting that `empty` is reachable **only** from a clean, settled,
+genuinely-zero result.
+
+- **Library: the "Deleted" state filter did nothing once the page had been
+  loaded.** Selecting Deleted in the filter sidebar left the full, unfiltered
+  library on screen — while the Filters button still showed a count, so the
+  filter looked applied. It only ever worked on a cold cache (a hard reload, or
+  the very first visit). Deleted is filtered on the client, so the query sends
+  no state to the server; that same empty value was also going into the results
+  cache key, which made "Deleted" and "no state filter" indistinguishable to
+  the cache. A cache hit returned the unfiltered list and skipped the
+  client-side filtering step entirely.
+
+- **Edit Metadata showed an empty Genre box even when the book had a genre.** The
+  dialog was being handed a copy of the book that never included the genre, so
+  the field always looked blank and there was no way to tell a book with no
+  genre from one whose genre simply wasn't being shown. Year and ISBN-13 have
+  the same problem and are tracked separately — fixing those safely needs a
+  related change to how the save path chooses between publication year and
+  audiobook release year.
+
+- **The Library asked the server for the same page of books twice every time you
+  opened it.** The search box re-parsed its (empty) contents on load and reported
+  a result that was identical to the one already held, which was enough to make
+  the page think its filters had changed and fetch everything a second time. On a
+  large library that is a full duplicate query on every visit. It now fetches
+  once.
+
+- `make coverage` and `make coverage-check` could die with
+  "panic: test timed out" on a slow or busy machine. Go's default test
+  timeout is 10 minutes per package and `internal/server` alone takes about
+  500 seconds; running packages in parallel makes them contend and tips it
+  over. The failure names whichever test happened to be running when the
+  clock expired, so it reads as a bug in an unrelated test. Both targets now
+  pass `-timeout 25m`, matching the three sibling targets that already did.
+
+- **The search index silently dropped updates and nothing ever repaired them.**
+  When the index worker's bounded queue filled up during bulk operations, the
+  update was discarded with only a log line — 56,537 dropped operations in the
+  seven days to 2026-08-10. Dropped events are now recorded in a durable
+  dirty-set and repaired by a reconciler that drains on a 30s ticker, so the
+  index converges back to the database instead of diverging permanently.
+
+  Three code comments claimed the drop was safe because "a startup reindex
+  will heal any gaps". It does not: `buildSearchIndexIfEmpty` returns early
+  unless the index has zero documents, so on a populated library it had never
+  run. All three comments are corrected in place rather than deleted, so the
+  false claim cannot be reintroduced by someone reading the old reasoning.
+
+#### Authors page hardened against a missing `aliases` field
+
+The Authors page read `aliases.length` without a guard in six places. Nothing
+was actually breaking — the only endpoint that feeds the page has coerced a
+missing value to an empty list since March — but a TypeScript type is a
+compile-time claim about data that arrives over the network, and it validates
+nothing at runtime. The reads are now guarded, so a future endpoint or API
+change cannot take the whole page down.
+
+This also corrects an earlier report that described the page as actively
+crashing. It was not.
+
+#### The library search box no longer queries on every keystroke
+
+Typing a ten-character title fired ten full searches of the library. A 300ms
+debounce was already in place, but the query path ignored it as soon as the
+search text parsed — which is immediately — and used the raw value instead.
+Both now move together on the same timer, so a search runs once you stop
+typing rather than once per letter.
+
+#### Searching no longer throws away your filters and sort order
+
+Typing in the library search box silently discarded every active filter and the
+chosen sort order. Filter to Organized, search for an author, and you would get
+matches from every state — while the Filters button still showed a count, so
+nothing looked wrong.
+
+The server had always supported searching and filtering together; the page was
+simply switching to a different request that left the filters out. Search now
+goes through the same request as everything else.
+
+#### Editing a book no longer overwrites its original publication year
+
+The Edit Metadata dialog has a single "Year" box, which means the audiobook's
+release year. Saving wrote that value into the *original publication year* as
+well — so editing a 1937 novel with a 2010 audiobook could replace 1937 with
+2010, silently. The dialog has no publication-year field, so nothing there
+should ever have changed it; that write is removed.
+
+The Year, ISBN-10 and ISBN-13 boxes also rendered empty whatever was stored,
+and now show the current values.
+
+#### Library filters no longer vanish from the URL right after you apply them
+
+Clicking a Library sidebar filter ("In Progress", "Finished") could throw the
+filter straight back out of the address bar. The URL went
+
+    ?page=1  ->  ?search=read_status:finished  ->  ?page=1  ->  ?search=…&page=1
+
+leaving a junk history entry, so Back landed on a URL that had never been
+shown, and anything reading the query string directly saw the filter blink out
+and return. Reproduced 5 times in 8 runs on WebKit.
+
+`Library.tsx` keeps two effects: one that reads the URL into component state,
+one that rebuilds the URL from that state. The writer builds its parameters
+from scratch, so it is only ever correct once state has caught up — and it was
+firing one render too early. `filters` comes from
+`useLibraryFilters({ searchParams, … })`, so it changes identity on the very
+render the URL changes, which fired the writer before the reader's `setState`
+had landed. It then published a URL derived from the *previous* state, and
+because it rebuilds from scratch, every key not in that stale state was
+dropped rather than merely stale.
+
+The writer now skips any render on which the query string changed underneath
+it and the change was not its own echo. The signal is effect **order**: a
+tracker effect declared after the writer advances the "last seen URL" ref, so
+within a commit the writer still observes the pre-navigation value. Stamping
+that ref from the reader does not work — the reader runs first, so the stamp
+lands before the writer checks it and the guard becomes a no-op.
+
+E2E coverage was added for both entry paths — in-app click and deep link — and
+the check itself was moved off animation-frame sampling onto history-API
+interception, so it observes every URL the app publishes instead of whatever
+happened to fall on a frame boundary.
+
+#### A closing dropdown could leave the page unclickable until reload
+
+Choosing an option from a dropdown — the library filter selects are the ones
+this was found on — could leave the menu stuck part-way through closing. When
+that happened, every subsequent click anywhere on the page did nothing, and the
+only way out was to reload.
+
+Nothing looked wrong when it happened, which is what made it hard to spot. The
+menu had already faded to fully transparent, so the screen looked normal. But
+MUI's modal layer is a full-viewport element that only stops capturing clicks
+once the close has *completely* finished, and in this case it never did. So an
+invisible sheet stayed over the whole page and swallowed everything.
+
+The fix closes menus immediately instead of animating them out. Opening is
+unchanged — only the closing animation was involved, and only the closing
+animation is removed.
+
+For the record, since this was mis-diagnosed twice before: the failure is a
+race, not a broken timer. Measured on a 48-core host, running 20 copies of the
+affected end-to-end test across 12 workers, the failure rate tracked the length
+of the close animation — 0 of 20 passed at the default ~280ms, 8 of 20 at
+250ms, and 20 of 20 with the animation removed. Why the animation fails to
+report completion is still unexplained; supplying an independent fallback timer
+did not help, which rules out the previously-assumed cause. Removing the window
+the race needs is what fixes it.
+
+This was not only a test-environment problem. It reproduced on an otherwise
+idle machine running a single worker, at roughly 1 occurrence per 282 tests.
+
+#### A closing side panel could leave the page unclickable until reload
+
+Same defect as the stuck dropdown fixed alongside this, on a different control:
+closing the filter side panel could leave it part-way shut, and every click
+afterwards did nothing until the page was reloaded.
+
+As before, nothing looked wrong. The panel had already slid away visually, but
+the dimming layer behind it stayed active and invisible over the whole page,
+absorbing every click.
+
+Side panels now close immediately rather than sliding out. Opening is
+unchanged.
+
+This is worth recording precisely, because it rules out the explanation this
+bug was originally given. The side panel already used fixed, explicit animation
+timings — the thing that was assumed to be missing from the dropdown case and
+assumed to be the cause. It stalls anyway: 17 of 20 runs of the affected
+end-to-end test failed with the dimming layer still present after 15 seconds.
+So the cause is not a missing fallback timer. Removing the closing animation
+removes the window the race needs, which is what actually fixes it.
+
+Why the animation fails to report completion is still unexplained, and is
+deliberately not guessed at in the code.
+
+#### `scripts/run-all-tests.sh` reported "All tests passed" no matter what failed
+
+All three steps in the script had the shape
+
+    if <test command> 2>&1 | tee <log>; then
+
+and a shell pipeline's exit status is that of its **last** command — `tee`,
+which essentially always succeeds. So `GO_TESTS_PASSED`, `FRONTEND_UNIT_PASSED`
+and `E2E_TESTS_PASSED` were unconditionally `true`, which made the script's
+careful three-way summary and its final `exit 0` / `exit 1` logic completely
+inert. `set -e` does not help — commands in an `if` condition are exempt from it
+by design.
+
+Measured on the real script with all three test commands stubbed to fail:
+
+| Variant | Summary | Exit |
+|---|---|---|
+| before | 🎉 All tests passed! | **0** |
+| after (`set -o pipefail`) | ❌ Go / Frontend / E2E: FAILED | **1** |
+
+The Go step also now passes `-timeout 25m`, matching the Makefile's `./...`
+targets. Go's default is 10 minutes **per package** and `internal/server` alone
+runs ~500s, so a contended run dies with `panic: test timed out` naming
+whichever test happened to be mid-flight — which reads as a failure in an
+unrelated test.
+
+The script is a manual runner, not wired into CI or the Makefile, so no CI
+result was ever affected. A repo-wide sweep found no other shell script using a
+pipe inside an `if`/`while` condition.
+
+#### Version groups no longer lose members (two "primary" copies of the same book)
+
+Grouping two copies of a book as versions of each other could leave the library
+showing **both** tiles as the primary edition, and pressing "set primary" on
+either one would not fix it. Found in production on *The Successors*: two books
+carried the same version-group ID, but asking for that group's members returned
+only one of them.
+
+Because the lookup returned a short list, everything built on top of it was
+quietly wrong. `set-primary` demotes "every other member of the group" — with a
+member missing from the list, it never demoted the stray, so two primaries
+survived. The same lookup backs `ApplyVersionGroup`, the safety net that keeps
+one primary per group when a regrouping hold is approved, so approving a hold
+could leave two primaries behind as well.
+
+Root cause, in two halves:
+
+**The read path treated "found something" as "found everything."**
+`GetBooksByVersionGroup` reads a `book:versiongroup:<gid>:<id>` index and falls
+back to a full scan only when the index yields *zero* rows:
+
+    if len(books) > 0 { sortVersions(books); return books, nil }
+
+A *partially* populated index returns its partial set and never reaches the
+fallback. The paradox this creates is worth stating plainly: deleting the
+**entire** index returns the **correct** answer, while deleting **one row**
+returns a wrong one. More data loss produced a better result, which is why the
+defect survived so long without ever surfacing an error.
+
+**The write path could not heal.** `UpdateBook` wrote a book's index row only
+when its `VersionGroupID` actually *changed*. A row missing for any reason — a
+book that acquired its group through a path that did not trip that comparison,
+or one written before the index existed — could never come back, because every
+later edit left the group unchanged and so skipped the write. Re-submitting the
+grouping did not repair it either: the group ID was already correct, so nothing
+changed and nothing was written.
+
+The fix is on the write side, where the incompleteness originates:
+
+- `UpdateBook` now writes the current group's index row unconditionally, so any
+  book touched by any write path repairs its own entry. Deleting the *old* row
+  is still gated on the group actually changing.
+- The one-time index backfill's sentinel moved from `v1` to `v2`, so every
+  existing deployment rebuilds the index once on next start. Installations
+  repair themselves — there is no manual step and no maintenance op to run.
+- All three writers of this index now store the book ID as the row value. The
+  index is a pointer index — the reader takes the ID from the key and looks up
+  the authoritative book row — so the full copy of the book that `CreateBook`
+  and `UpdateBook` used to store was never read, and rewriting it on every
+  update would have been pure write amplification.
+
+The zero-result fallback is deliberately **kept**. Gating it on the backfill
+sentinel was considered and rejected: a genuinely missing row would then return
+an empty group rather than the full scan's correct answer, trading a silent
+under-report for a silent zero on a path that also feeds version listings and
+metadata writeback.
+
+Regression tests damage exactly **one** index row rather than all of them, since
+wiping the whole index hits the fallback and passes even with the bug present.
+
+#### The version-group index backfill now logs, and no longer buffers the whole rebuild in memory
+
+This backfill is the production repair for a version-group index that could
+silently under-report. It could not be observed and could not finish
+economically on a large library.
+
+- **It logged only on success.** A sentinel-gated skip, a missed type assertion
+  in the caller, and a still-running scan were all silent and identical from
+  outside — so a deployment could not tell whether the repair had run. Deploying
+  to a 366,922-book library produced no log line at all for over twelve minutes.
+  Every exit path now logs: start, "already complete, skipping", periodic
+  progress, completion with counts and duration, and an explicit error on each
+  failure.
+- **The caller failed silently.** `server_lifecycle.go` asserted the store to an
+  interface and did nothing when the assertion missed — if the store is ever
+  wrapped or decorated, the index would never be rebuilt and nothing would say
+  so. It now logs a warning naming the concrete type.
+- **One unbounded batch held the entire rebuild.** Every index row for every
+  book accumulated in memory and was committed once at the very end, so an
+  interrupted run discarded all of its work. Writes are now committed in chunks;
+  the completion sentinel joins the final batch, so it can never become durable
+  without the rows it claims were written.
+- **A real read error was treated as "not yet run."** Only `ErrNotFound` now
+  means that; any other sentinel read failure aborts instead of silently
+  triggering a full rebuild on every boot.
+- The row filter is now structural (a primary `book:<id>` row has exactly one
+  colon) rather than a blacklist of index prefixes that listed one twice and
+  would have silently accepted any prefix added later.
+
+#### An import will no longer create hundreds of silently-empty playlists
+
+The Smart Criteria translator currently yields empty queries, because
+`ParseSmartCriteria` misreads the format and returns rules with no field,
+operator or operands *without* erroring. The op now always evaluates a dry run
+first and **refuses to apply** when playlists would be created with an empty
+query, naming how many. `allowEmptyQueries=true` overrides it — the raw criteria
+blob is stored on every imported row, so shells imported that way can be
+re-translated once the parser is fixed.
+
+- The version-group index backfill had **never run in production**. `Server.Start`
+  resolved it with a bare type assertion on `s.Store()`, but the store is wrapped
+  by the `indexedStore` search decorator, which embeds the `database.Store`
+  *interface* and so does not promote `BackfillVersionGroupIndex`. The assertion
+  missed on every boot where the Bleve index opened — which is every boot in
+  production. Caught 2026-08-10 23:07:40 by the warning added hours earlier in the
+  same area; before that it was completely silent. This is the likely origin of the
+  under-reporting version-group index, which was never built rather than corrupted.
+  Now resolved with `database.AsCapability`, which walks the `Unwrap` chain.
+
+- Multi-word searches containing a common word ("of", "the", "a", "in") returned
+  **no results**. The query parser treats whitespace as AND, so `shards of
+  oblivion` became a conjunction of three match queries — but the English
+  analyzer strips stopwords at index time, so `of` exists in no document's term
+  dictionary and made the whole conjunction unsatisfiable. Single-word searches
+  worked, which made this look like "search breaks when there are spaces". A
+  large share of book titles were unfindable by their own name. Stopword-only
+  conjuncts are now dropped, but only when a real term survives, so searching for
+  `of` alone keeps its previous behaviour instead of returning the whole library.
+
+- Dark-mode buttons on the library pages were nearly invisible against the
+  background. `primary.main` was hardcoded to `#1976d2` in **both** colour modes
+  — MUI's light-mode blue — which measures **3.89:1** against the dark
+  background, below the 4.5:1 WCAG AA floor. The library toolbar is built from
+  `variant="outlined"` buttons, which draw their label in `primary.main` and
+  their border at 50% alpha, so the border sat near 2:1. Dark mode now uses
+  MUI's dark-palette values (**9.94:1** primary, **8.77:1** secondary); light
+  mode keeps the original brand colours.
+
+#### The Activity Log page could keep an already-struggling server on the floor
+
+Prod was OOM-killed three times on the night of 2026-08-10, with a heap profile
+putting **8.86 GB (71.9% of heap)** in the activity query. The server-side query
+is being fixed separately. This is the other half: the client was re-triggering
+it forever, and hiding the fact that anything was wrong while it did.
+
+Four defects compounded.
+
+**Nothing anywhere cut a request off.** `apiFetch` set no timeout and no
+`AbortController` unless the caller passed one, and the activity fetches did
+not; the server's `WriteTimeout` is `0`. A query that never finished left the
+tab spinning forever while the server kept the work — and its memory — alive.
+`apiFetch` now accepts an opt-in `timeoutMs`. The default is still *no* timeout,
+deliberately: `/activity/compact`, scans and transcodes legitimately run for
+minutes and a blanket default would break them. The two activity reads set 15s —
+comfortably above any healthy response, and below the page's 30s idle refresh so
+one wedged request cannot silently disable auto-refresh for a whole cycle.
+
+**Polls did not wait for the previous poll.** The feed refreshed every 5s (with
+active operations) or 30s (idle) on a fixed schedule, regardless of whether the
+last request had returned, so requests stacked up. This is what turned a single
+open tab into an unbounded server-side memory leak. Background refreshes now
+drop their tick entirely while a request is outstanding; user-driven loads —
+mount, filter change, page change, Refresh — abort the older request and
+supersede it instead, since its answer is already stale. A monotonic sequence
+guard stops a superseded request that finishes late from clobbering the state of
+the request that replaced it. Both endpoints are covered, not just the feed:
+`/activity/sources` is polled on the same tick and aggregates over the same
+range.
+
+Measured with the guard removed, against a request that never returns: 1 fetch
+becomes **4** over 95 seconds, growing without limit. With it, 1.
+
+**Every mount fetched the expensive query twice.** Two `useEffect`s both loaded
+the feed on mount — one keyed on the filters, one on page/pageSize.
+Consolidated into a single effect; a filter change resets to page 1 and lets the
+re-run do the one fetch.
+
+**There was no error state at all.** The catch logged to the console and cleared
+the table, so a 500, a 401, a network failure and a genuinely empty log all
+rendered the identical **"No activity entries found."** — which invites the user
+to refresh a server that is falling over. The page now distinguishes four
+states: loading, error (with the reason and a Retry button), empty, and
+populated. A failed *background* refresh no longer wipes what you were reading;
+it keeps the last good page under a "showing the last successful result"
+warning. Failures from the sources endpoint get their own advisory banner
+instead of vanishing into the console.
+
+#### The Activity Log's Since/Until filters never worked
+
+Found while adding the error state, and a good illustration of why it was
+needed. The page sent the raw `datetime-local` input value
+(`YYYY-MM-DDTHH:mm`), but the handler parses with
+`time.Parse(time.RFC3339, ...)` and rejects anything else with a 400. Every date
+filter the page has ever sent was refused — and with no error state, that 400
+rendered as "No activity entries found.", so the filters looked like they worked
+and simply found nothing. Values are now converted to RFC3339 before sending.
+
+#### The Activity Log no longer asks for all of history by default
+
+With the date filters silently broken, the page sent no time bound at all: every
+load, and every poll tick, asked for the entire log. The feed is now bounded to
+the last 24 hours by default. This is a **visible** default, not a silent cap —
+it is filled into the "Since" field, labelled "Default: last 24h — clear for all
+history", freely editable, and the empty state offers a one-click "Search all
+history" so a quiet 24 hours can never be mistaken for an empty log.
+
+Covered by `ActivityLog.test.tsx` (8 cases) and `apiFetch.test.ts` (3). Each
+regression test was verified by reverting its fix and confirming the test fails:
+the error test falls back to the empty state, the mount test reads 2 fetches
+instead of 1, the poll test reads 4 instead of 1, and the timeout test hangs for
+the full 30s — the prod symptom, reproduced.
+
+#### Activity log queries no longer scan and decode the entire log (production OOM)
+
+`GET /api/v1/activity?limit=5` on production ran for 120 seconds and never
+returned. A heap profile put **8.86 GB — 71.9% of the process heap — inside
+`database.(*PebbleActivityStore).scanTierKVs`**, 8.02 GB of that in
+`encoding/json.Unmarshal`, split between `handlers.ListActivity` →
+`activity.Service.Query` (5.65 GB) and `activity.Service.GetDistinctSources`
+(3.21 GB) running concurrently. The server was OOM-killed repeatedly.
+
+`PebbleActivityStore.Query` had no index for its default case. It called
+`scanTier` for all seven tiers, JSON-decoded **every entry in the entire
+activity log** into one `[]ActivityEntry`, filtered it in Go, sorted the whole
+slice, and only then sliced out the requested page. The cost of a five-row page
+was the size of the whole log. `GetDistinctSources` did the same full scan
+again, from scratch, on every page load.
+
+Activity keys are time-ordered (`act:<tier>:<20-digit-unix-nano>:<ulid>`), so
+the store can be read directly in result order. `Query` now walks the tier key
+ranges newest-first as a k-way merge over reverse iterators and stops as soon as
+it has `offset + limit + 1` matching rows. The merge compares the timestamp
+embedded in the *key*, so only the rows actually taken are decoded — a
+`limit=5` page now decodes 6 entries instead of the entire log.
+
+Also in this change:
+
+- **A hard scan bound.** Even a filter that matches nothing stops after 20,000
+  examined rows rather than degrading back into a full scan. Hitting the bound
+  is logged at WARN with the examined/matched counts and the filter — never
+  silently truncated.
+- **`GetDistinctSources` is bounded and memoized** (45s TTL, keyed on every
+  filter field that can change the result), instead of full-scanning on every
+  page load.
+- **Undecodable rows are counted and reported.** `scanTierKVs` dropped entries
+  whose stored JSON failed to parse via a bare `continue`. Drops are now counted
+  on the store and logged once per scan in aggregate with the first failing key.
+
+**Behaviour change — `total` is now a lower bound when the query stops early.**
+It remains exact whenever the walk exhausts the matching rows (the common case:
+any page whose limit exceeds the remaining matches). When the walk stops at the
+probe, `total` is `offset + limit + 1` — enough for the caller to know another
+page exists, but not the true count. The activity log UI computes
+`Math.ceil(total / pageSize)`, so on a very large log the page count
+under-reports rather than showing the full history depth. This is the deliberate
+trade for not materializing the log; an exact count cannot be produced without
+decoding every row, which is the bug being fixed.
+
+Regression tests assert the *cost* of a query, not only its result, using a
+decode counter incremented at every entry-decode site in the store. Verified by
+negative control: with the bounded path reverted to the old full scan, the
+guard test reports `query decoded 400 of 400 seeded entries` and fails.
+
+- Every library organize spent 20-25 minutes on a pre-organize database backup
+  that then failed, so from the UI the operation appeared never to start. The
+  backup archived the **live** PebbleDB directory, so compaction deleted `.sst`
+  and `.log` files between the directory walk enumerating them and the archiver
+  reading them — measured twice on a 14 GB production database (20m28s and
+  24m31s, both ending in `lstat .../536537.sst: no such file or directory`).
+  Meanwhile the phase reported no progress at all, so the operations registry
+  logged `strike recorded ... kind=stuck` against an operation that was working.
+  The backup now uses PebbleDB's `Checkpoint` (flush + hard-link, consistent by
+  construction), announces itself through the progress channel, and is skipped
+  when a successful backup is already less than six hours old.
+- The system backup handler resolved `Checkpointable` with a bare type
+  assertion, which the search-index store decorator silently defeated — so the
+  manual "create backup" button had quietly been taking the same racy
+  live-directory archive. It now resolves the capability through the decorator
+  chain and logs loudly when it cannot.
+
+- The memdb warmup reported **Pebble key counts as book counts**. `warmIter`
+  returned the number of keys it visited under the `book:` prefix, but that
+  prefix is shared with roughly seven secondary-index families
+  (`book:path:`, `book:hash:`, `book:versiongroup:`, …) which the row callback
+  skips and yet were still counted. Production logged `books=366922` for a
+  library of roughly 49,000 books — about 7.5 keys per row. The same inflation
+  applied to `authors`, `book_files` and the other shared-prefix tables.
+  Warmup now reports rows actually inserted into memdb, and reports keys
+  scanned separately under its own name so the two cannot be confused.
+- **Retracts a bug that never existed.** Whole-library iterators were measured
+  against that inflated number and appeared to be returning 13.3% of the
+  library — first the version-group backfill (`scanned=48874`), then the
+  organizer (`Fetched 48896 total books`). Both scans were complete. Two
+  numerators agreeing said nothing, because they shared one unverified
+  denominator.
+
+- **The filter Drawer could stall mid-close and leave an invisible full-viewport
+  backdrop that swallowed every click until reload — and the 2026-08-10 "fix"
+  for it had only narrowed the race, not closed it.** `web/src/theme.ts` now
+  sets `MuiDrawer.defaultProps.slotProps.transition = { exit: false }`, which
+  makes react-transition-group take its synchronous branch in `performExit`
+  (`safeSetState({status: EXITED})` from inside `componentDidUpdate`) instead of
+  deferring completion to a `setTimeout`. Instrumented traces show the deferred
+  update is the thing that gets lost: the timer fires, RTG calls `setState` on a
+  mounted instance, and React never applies it — the same instance re-renders
+  4 ms later still reporting `exiting`, and is still reporting `exiting` 300 ms
+  later. `onExited` therefore never runs, MUI's `Modal` never unmounts, and its
+  `position: fixed; inset: 0` backdrop keeps eating clicks while looking
+  perfectly closed.
+
+  Measured on chromium at `workers=1`, n=10 per cell. Before, on the MUI 6.5.0
+  branch: an Escape with no preceding CDP round-trip stalled **10/10**. After:
+  **0/10**, and the real gate (`scan-import-organize.spec.ts` "complete
+  workflow") went from failing to **10/10 passing**.
+
+  The previously shipped `transitionDuration: { exit: 0 }` is retained for the
+  enter animation but is *not* the fix; on `main` (MUI 5.18.0), which already
+  carried it, the same defect still reproduced 9/10 when the Escape was preceded
+  by a round-trip. MUI v6 did not introduce this bug — it moved the timing
+  window onto the common path. The comment in `theme.ts` that credited `exit: 0`
+  has been corrected in place with the measurements that disprove it.
+
+  Still unexplained, and labelled as such in-code: why React silently drops a
+  `setState` issued from a `setTimeout` on a mounted class component inside a
+  portal. Duplicate React copies, StrictMode, `flushSync`/`startTransition`,
+  uncaught exceptions and unmounting are all ruled out.
+
+#### The library page no longer freezes the browser on load
+
+Opening `/library` could lock the browser for seconds before a single book card
+became clickable. It happened at the default page size, with no filters, on a
+first visit — nothing the user had configured made any difference.
+
+The cause was work the user could not see. `Library.tsx` called
+`loadSoftDeleted()` unconditionally on mount, which requested up to **10,000**
+soft-deleted books, and `LibrarySoftDeletedSection` rendered every one of those
+rows inside a MUI `<Collapse>`. `Collapse` animates height; it does **not**
+unmount its children. The panel is collapsed on every load, so all 10,000 rows
+were fetched, built, styled and inserted into the document on a page where
+nobody could ever look at them.
+
+Measured on chromium before any code changed, page size pinned at the default
+20, soft-deleted rows varying:
+
+| soft-deleted rows | DOM nodes | blocked main thread |
+|---|---|---|
+| 0 | 1,064 | 0ms |
+| 1,000 | 15,061 | 679ms |
+| 5,000 | 71,061 | 4,050ms |
+| 10,000 | 141,061 | 10,813ms |
+
+(Two independent runs on separate harnesses; node counts were identical in both
+and blocking times agreed within noise except the 10,000 case, which measured
+8,034ms and 10,813ms. Apple-silicon laptop, no CPU throttling — a slower
+machine is worse, not better.)
+
+That "collapsed does not mean unrendered" was confirmed rather than assumed:
+expanding the panel afterwards changed the document's node count by exactly
+**zero**.
+
+Three changes, in the order they matter:
+
+- **The mount fetch asks for the count only** (`limit=1` instead of
+  `limit=10000`). The server computes the total independently of the page
+  window, so the "N items" chip in the header is exactly as correct as before.
+  To be precise about which layer this fixes: the handler still reads up to
+  10,000 rows internally to compute that total, so the server-side read is
+  unchanged. What goes away is the multi-megabyte response, the client-side
+  parse, and the 140,017 DOM nodes — which is where the freeze was. The
+  server-side read, and the fact that the total silently saturates at 10,000,
+  are tracked separately in
+  `todo.d/20260811-soft-deleted-total-capped-at-10000.md`.
+- **The collapsed panel renders nothing** (`unmountOnExit`). Rows are fetched
+  when the panel is actually opened.
+- **An opened panel loads at most 500 rows, and says so on screen.** A user
+  with 3,000 soft-deleted books sees "Showing the first 500 of 3,000" rather
+  than a short list sitting under a large count, silently disagreeing with it.
+
+#### A wasted 1,000-row library query on every page load
+
+Separately, the initial page size was read from `?limit=` *or* `localStorage`
+as one fallback chain. A user who once picked 1,000 from the items-per-page
+dropdown therefore seeded state with 1,000 and fired a 1,000-book query on
+every subsequent visit — against a library of 366,922 books.
+
+This was reported as "1,000 cards render on every visit, forever". It does not,
+and the difference is worth recording. The URL-sync effect that runs on the
+first commit reads `searchParams.get('limit') || '20'` with no localStorage
+fallback of its own, so it overwrote the remembered value with 20 before
+anything painted. Traced 3/3 on unmodified code, the app requested limits
+`["1000", "20"]` and rendered 20 cards. The restore path had been dead for as
+long as that effect existed; its only surviving effect was the discarded query.
+
+The localStorage read is gone, which removes the wasted query and changes no
+rendered output. The 1,000 option is **not** removed: picking it writes
+`?limit=1000` and renders 1,000 cards, as before.
+
+#### `?limit=` is now clamped at both ends
+
+The URL-sync effect's limit parser had a lower bound but no upper one, so
+`?limit=50000` on a hand-edited or shared link walked straight past the ceiling
+the initial-state clamp exists to enforce — and it was reachable on load, not
+only on later navigation. Both parsers now share one `clampItemsPerPage`
+helper.
+
+All four behaviours are pinned by `web/tests/e2e/library-load-freeze.spec.ts`,
+whose assertions are structural (node counts, requested parameters, card
+counts) rather than wall-clock, so it can gate for years without becoming a
+flake. It was observed failing 4/5 against the unfixed build before it was
+believed: 42,017 nodes in the collapsed panel, requested limits
+`["1000", "20"]`, and 1,200 cards for `?limit=50000`. The wall-clock numbers
+above live in `web/tests/e2e/library-load-perf.spec.ts`, which is skipped
+unless `E2E_PERF=1`.
+
+#### Auto-organize after a scan failed on every multi-file book
+
+Organizing a book takes one of three routes, and picking the wrong one fails
+outright rather than degrading: a book already under the library root is
+re-organized in place, a book whose `file_path` is a *directory* goes through
+the multi-file path, and anything else goes through the single-file path.
+
+That three-way decision existed only inside the organize worker loop. The
+post-scan auto-organize hook — the pass that runs automatically at the end of
+a library scan — called the single-file organizer directly, for everything.
+Every multi-file book it touched therefore failed with
+
+> `cannot organize "…": file_path … is a directory but single-file organize was requested — use organizeDirectoryBook for multi-file books`
+
+Production logged **588 failures of exactly that shape in one post-scan run**
+on 2026-08-11. Multi-file books are most of the library, so in practice the
+automatic pass after a scan was organizing almost nothing.
+
+The decision now lives in one place, `Service.OrganizeOneBook`, and both call
+sites use it. A third caller cannot reintroduce the same omission by copying
+the wrong half.
+
+#### "Auto-organize complete: 0 organized" now says why it was zero
+
+The same hook reported a single number, so an operator seeing zero could not
+tell whether nothing needed organizing, everything failed, or the books were
+not in the database at all. It also collapsed a DB *lookup error* and a book
+that genuinely has no row into one bare `continue`, hiding both.
+
+The completion line now reports organized / failed / not-in-DB / lookup-error
+counts against the number scanned, and the first ten lookup errors are logged
+individually.
+
+Covered by four tests in `internal/organizer/organize_one_book_test.go`, which
+assert on which *path* was taken rather than on whether an artifact was
+produced. Two of them fail with the verbatim production error string when the
+directory branch is removed.
+
+#### Organize was cancelled mid-backup for "no progress", while working correctly
+
+The operations registry does not merely *log* an operation that stops reporting
+progress — it **cancels** it after five minutes. Organize's pre-work phases
+reported nothing at all, so on a large library the operation was killed while
+it was working:
+
+```
+06:31:29  library organize starting
+06:36:36  registry: strike recorded ... kind=stuck  no progress for 5m8s
+```
+
+Three phases ran silent, and each is long on a real library:
+
+- the pre-organize database backup (14 GB on production, 20–25 minutes),
+- the full-library fetch, which pages the whole book table 1,000 rows at a time,
+- the optional pre-organize metadata fetch, one sequential network call per book.
+
+All three now report. The backup names the phase it is in — snapshotting,
+archiving, or verifying — with a running file and byte count, so a backup that
+*does* go quiet tells you where it went quiet.
+
+**The stamps are driven by completed work, not by a timer.** This is the point
+of the change and it is deliberately the harder option. A goroutine ticking
+every fifteen seconds would also have kept the watchdog happy — and would have
+kept it happy for a backup that had genuinely wedged, turning a hang detector
+into a hang concealer. The backup now reports from inside the archive walk and
+the checksum pass, so the counters cannot advance unless bytes actually moved.
+A wedged backup still gets cancelled, which is correct.
+
+`TestBackupProgressReporter_IsNotATicker` pins that property: replacing the
+reporter with a timer makes it fail with 50 stamps recorded against zero
+reported work, while the other tests in the file continue to pass.
+
+#### Corrected a book count that was ~7.5× too high, and the decision it distorted
+
+A number had been circulating through this codebase for months — written
+variously as 392,962, 366,922, 366,916, "392K-book", "393K", "367K-book" — as
+the size of the production library. It was never a book count. It was the
+number of PebbleDB *keys* under the `book:` prefix, and that prefix is shared
+with roughly seven secondary-index families (`book:path:`, `book:hash:`,
+`book:versiongroup:`, `book:work:` and others), so it ran about 7.5 keys per
+actual row.
+
+The real figure is **~48,900 books**, from the organizer's own complete paging
+enumeration, and independently consistent with system-status readings of 46,221
+and 54,734.
+
+**Why this was worth chasing down rather than quietly editing.** One decision
+had already been made on the inflated number. The memory cost of the nine
+optional sort indexes was measured properly — 3,750 bytes per book, benchmarked
+at 100,000 books — and that measurement was and remains correct. But it was
+then multiplied by 366,916 instead of ~48,900:
+
+| | as recorded | corrected |
+|---|---|---|
+| all nine sort keys | +1,312 MB | **~+175 MB** |
+| per sort key | ~146 MB | **~19 MB** |
+
+"+1.3 GB on a server already holding 1.25 GB" reads as prohibitive. "+175 MB"
+does not. The indexes shipped switched off on the strength of the first
+reading; whether to turn some on is worth revisiting against the second. That
+is an owner decision, and it is flagged in the code rather than decided here.
+
+**How it spread, since the pattern is the point.** The error survived three
+chances to be caught. A design document noticed that 392K disagreed with the
+~44,888 books a person actually sees, correctly flagged the discrepancy, and
+then resolved it the wrong way — trusting the bigger number and inventing
+"non-primary versions" to account for the gap. A later pass "corrected" 392K to
+366,916, propagating the error while looking like a fix. And a backfill audit
+concluded the version-group scan covered only 13.3% of the library by dividing
+a genuine scan count by the inflated one.
+
+Every affected comment and document is now corrected or annotated in place —
+kept and struck through rather than deleted, so nobody re-derives the same
+conclusion from the same evidence. The per-row analysis in the May heap audit
+is unaffected: it comes from the Go struct layout, not from the population, so
+it needs re-multiplying, not re-deriving.
+
+Row counts for the other tables (`book_files`, `works`, `book_authors`,
+`series`, `authors`) came from the same counter but sit under different
+prefixes with different index families, so they are **not** assumed wrong and
+**not** assumed right. Re-verifying them is tracked as `ROWCOUNT-REVERIFY`.
+
+#### Four places where a failed recovery reported success
+
+Wave 1 of the silent-failure sweep: the sites where a discarded error could
+lose or corrupt a file without saying so.
+
+**A failed rollback now says it failed.** When copying a file into place fails
+partway, the code restores the original from its backup — but the restore's own
+error was thrown away. Since the target has already been partially overwritten
+by that point, a failed restore left a **truncated audiobook** on disk while the
+returned error read `failed to copy file`, which sounds like nothing happened.
+The caller moved on, and the only intact copy sat in the backup directory with
+nothing pointing at it. The error now names both the damaged file and where the
+good copy is.
+
+**The same fix after a checksum mismatch**, where it is worse: that branch is
+reached having *just proven* the target is corrupt. It attempted a restore,
+ignored whether the restore worked, and returned `operation failed integrity
+check` — which reads as "we refused to do it", not "there is a known-bad file on
+disk right now".
+
+**The iTunes library restore no longer claims something it didn't check.** After
+a failed atomic rename, the code restores the original `.itl` from its backup.
+The restore result was discarded while the returned error ended in `(restored
+original)` — a false statement in the error string itself. If that restore
+fails, the live iTunes library is not at its expected path at all; it is sitting
+under a `.bak-<timestamp>` name nothing looks for. The error now reports the
+restore honestly and tells you where the library actually is.
+
+**The iTunes conflict guard now fails closed.** It exists to refuse a write when
+the library may have changed underneath us. If it could not stat the file it
+returned "no conflict" — turning *cannot verify* into *verified safe*, the one
+answer it is not entitled to give. It now refuses.
+
+**Import checkpoints report failures.** Five resume-state writes discarded their
+errors. They are deliberately non-fatal — a checkpoint failure should not abort
+an otherwise-healthy import — but non-fatal is not the same as invisible. If
+they all fail, the import still reports success while its resume state points at
+an earlier phase, and a later crash silently redoes work.
+
+Covered by three tests that force the **rollback itself** to fail, which is the
+only way to exercise these branches; a test that merely makes the copy fail
+passes with or without the fix. With the discards restored, two of the three go
+red carrying the original misleading messages.
+
+#### The organizer wrote the literal word "narrator" into real filenames
+
+Books with no narrator were organized to paths like
+`.../Jerry Merritt/Time Pebbles/Time Pebbles/Time Pebbles - Jerry Merritt - read by narrator.mp3`.
+Measured on production 2026-08-11: of 3,194 books failing organize with
+`ErrTargetOccupied`, 2,611 (82%) had computed a path containing the literal
+string `read by narrator`.
+
+`internal/organizer/organizer.go` declared `defaultNarrator = "narrator"` and
+substituted it whenever `book.Narrator` was blank, so the value never reached
+the empty-placeholder handling that every other unset field goes through.
+
+Deleting that default is necessary but not sufficient. The default pattern is
+`{title} - {author} - read by {narrator}`, and the existing
+`removeEmptySegment` only knows four shapes — ` - {placeholder}`,
+`{placeholder} - `, `({placeholder}…)` and `(…{placeholder})`. Blanking the
+narrator alone left the connector words behind: `cleanupPattern` trims trailing
+` -/` characters but has no idea that "read by" is connective text. Measured
+with the default removed and nothing else changed:
+
+```
+{title} - {author} - read by {narrator}  ->  "Time Pebbles - Jerry Merritt - read by"
+```
+
+Mid-string it was worse than a cosmetic dangle. With the pattern
+`{title} - read by {narrator} - {author}`, the ` - {narrator}` rule consumed
+the *wrong* dash and glued the connector onto the next field, producing a
+filename that credits the author as the narrator:
+
+```
+{title} - read by {narrator} - {author}  ->  "Time Pebbles - read by Jerry Merritt"
+```
+
+The fix is a new `dropEmptyPatternSegments` pass that runs on the **raw**
+pattern, before any substitution, and removes each ` - `-delimited segment
+whose placeholders are *all* empty — connector words included. Three rules keep
+it from over-deleting:
+
+- A segment containing no placeholders is literal text the user asked for and
+  is always kept.
+- A segment where at least one placeholder has a value is kept, so
+  `{title} - {series} {series_number}` still renders `Title - Series Name`
+  for a book with a series but no series number.
+- A placeholder that is not a known field at all (a typo) is *not* treated as
+  empty, so it survives into the unresolved-placeholder check and a bad
+  pattern still errors loudly instead of silently swallowing its segment.
+
+Running before substitution is load-bearing: splitting on ` - ` after values
+are in would tear apart a book titled `Foundation - Part 1`. That case is
+pinned by a test.
+
+Because a pattern can now legitimately expand to nothing, `generateTargetPath`
+falls back to the book's own title (then `Unknown Title`) rather than emitting
+a bare `.m4b` dotfile that every narrator-less book would collide on.
+
+The config default is deliberately unchanged — deployed configs already contain
+`read by {narrator}`, so fixing the expansion engine is the only layer that
+helps them.
+
+**Scope, honestly:** this makes computed filenames correct. It does **not** by
+itself clear the 3,194 occupied-path organize failures, which are dominated by
+books with duplicated or swapped author+title metadata — roughly 250 distinct
+books compute one identical path. Note also that the next organize pass will
+*rename* previously-organized narrator-less files, since their computed target
+has changed. Known limitation: only ` - `-delimited and parenthesized segments
+are dropped, so a custom pattern using another connector (`{title} by
+{narrator}`) still leaves a dangling "by".
+
+#### Scan, Organize and Transcode were throwing away everything you told them
+
+Found while fixing the item below, and it is the more serious of the two.
+
+When you start a Scan, an Organize, or a Transcode from the UI, the server passes
+your settings along to the background job. It was passing them in a form that
+turned the whole settings object into an unreadable blob of text before it ever
+arrived. The job then couldn't read it, said nothing, and fell back to its
+defaults.
+
+So **every option you set on those three screens was silently discarded** — which
+books you picked, which folder, whether to fetch metadata first. And the default
+for "which books" is not "none", it's **all of them**. Asking to organize a
+handful of books ran an organize across the entire library instead. That is very
+likely why organizing has been touching far more than expected.
+
+Transcode was the tell: it was the one job strict enough to reject the unreadable
+settings outright, so it had simply been failing every time, while its two
+siblings quietly did the wrong thing. One line caused all three.
+
+#### Background jobs no longer run with settings they failed to read
+
+Wave 3 of the silent-failure sweep. Thirteen background operations — library scan,
+organize, folder auto-scan, both iTunes path jobs, both OpenLibrary jobs,
+diagnostics export, and five maintenance jobs — read their settings from the job
+record and **threw away any error from reading them**. If the settings could not
+be understood, every one silently reverted to its default and the job ran anyway.
+
+The default is not "do nothing". It is usually "do everything".
+
+The sharpest case is **Organize**. It takes a list of the books to organize. If
+that list arrived in a shape the server could not read, the error was discarded
+and the list came back empty — and an empty list does not mean "organize no
+books", it means "no selection given", which downstream means *organize the entire
+library*. A request to organize one book could become a full-library run that
+moves files on disk. Nothing in the log would say the settings were ever
+misread; the job would simply report that it organized far more than you asked
+for.
+
+Every one of these jobs now refuses to start and says which setting it could not
+read, instead of quietly substituting its own.
+
+Two jobs in the same files already did this correctly and were left alone — they
+are what the fix was modelled on.
+
+Two other fixes to the folder auto-scan while in that file: it now reports how
+many books **failed** to organize rather than only how many succeeded (a run where
+every book failed and a run where every book was already tidy both used to print
+the same "0 organized"), and it no longer routes multi-file audiobooks into the
+single-file organize path — the same defect fixed in the post-scan organizer,
+found in a third copy of the same loop.
+
+Covered by 21 tests that call the real registered jobs. With the fix reverted,
+the eight it changed accept unreadable settings and run; the two that were already
+correct keep refusing — so the tests distinguish the fix from the pre-existing
+behaviour rather than passing on both.
+
+#### Requests the server couldn't read no longer run as "do everything"
+
+Wave 2 of the silent-failure sweep. Seven endpoints threw away the error from
+parsing your request body. When a body failed to parse, every setting in it fell
+back to its default — and on these endpoints the defaults are the *wide*,
+*destructive* ones, not the safe ones.
+
+**Bulk merge** was the worst. Every field in its request narrows which duplicate
+candidates get merged. If the body couldn't be read, all of them were dropped,
+the defaults filled in "all pending book candidates", and the query ran with a
+limit of 100,000. A request to merge one narrow group could merge every pending
+duplicate in the library. Merges are the hardest thing here to undo.
+
+**A dry run could turn into a real run.** Maintenance jobs and the bulk metadata
+write both take a "preview only" flag. An unreadable body left that flag off —
+which means *do it for real*. The response looked identical either way, so
+someone asking for a preview got a mutation with no way to tell.
+
+**Bulk metadata write failed twice at once**: the preview flag fell off *and* the
+author/series filter fell off, so a request scoped to one author became a real,
+unfiltered write across the entire library.
+
+Also fixed: **backup retention** (an unreadable value silently used a different
+retention count, and rotation deletes), **author splitting** (explicit names you
+supplied were dropped and the server split the author its own way instead),
+**segment-scoped metadata writes** (losing the segment list is what *unlocks* the
+whole-book file rename), and **metadata search** (an unreadable search wrote into
+the shared cache under a key that looked like a legitimate empty query, so later
+real searches could read it back).
+
+An empty body is still fine everywhere it was before — that is a normal way to
+call several of these. The change is only that a body we *cannot read* is now
+refused instead of being treated as though you had asked for the maximum.
+
+Three similar-looking spots were deliberately left alone: there, the default is
+"preview only", so failing to parse already lands on the safe side. A test now
+records that as an intentional decision rather than an oversight.
+
+- **`docs/agent-tasks/ai-responses-migration/README.md` and `orchestration.md` were corrupt
+  at HEAD** — committed JSON-string-encoded, beginning with a literal `"` and containing
+  literal `\n` sequences with no line terminators. Decoded to real Markdown.
+- Repointed 9 live files whose links the archival broke, including an acceptance check in
+  `TASK-08-slog-prod-verify.md` that would have silently failed, and the front-door links in
+  `README.md` / `.github/README.md`.
+- Corrected stale `<!-- file: -->` header paths in `docs/BUILD.md`,
+  `docs/BUILD_TAGS_GUIDE.md`, `docs/CODING_STANDARDS.md`, `docs/MOCKERY_GUIDE.md`.
+
+- Organizing a book that was already in the right place no longer leaves it in
+  the "Needs Organizing" backlog forever. The organize stamp recorded *when* a
+  book was organized and *which operation* did it, but never updated the book's
+  library state — and that state is exactly what the dashboard counts. Because
+  already-correct books are diverted out of the organize path before reaching
+  the code that sets the state, re-running organize could never clear them. The
+  backlog was self-refilling and no amount of organizing would empty it.
+
+#### Newly added books were never discovered — nothing scanned automatically
+
+Copying audiobooks into a watched folder did nothing until somebody opened the
+UI and pressed **Scan**. This was not a broken feature; automatic discovery had
+simply never been wired up. Four separate gaps produced the one symptom.
+
+**The scheduled scan could not tick.** `library_scan` was a registered
+scheduler task, but its `GetInterval` returned a hard-coded `0`. The scheduler
+only starts a ticker when `IsEnabled() && GetInterval() > 0`, so no ticker was
+ever created for it. `IsEnabled` and `RunOnStart` both read `scan_on_startup`,
+which defaults off, so the task was inert on every axis. There is now a
+`scheduled.library_scan` config family (`enabled` / `interval` / `on_startup`)
+that ships **enabled with a 6-hour interval** — the only member of that family
+that defaults on, because it is the only unattended discovery path. The legacy
+`scan_on_startup` flag still enables the task and still triggers a startup
+scan, so nobody loses behaviour they had configured.
+
+**The maintenance-window toggle was dead config.** `maintenance.library_scan`
+existed in the settings UI and in the config struct, but the maintenance-window
+operation only ever iterates `MaintenanceOrder()`, and `library_scan` was
+missing from that list. Flipping the toggle did nothing at all. It is now in
+the list, placed **last**: the window operation stops running tasks the moment
+the window closes, so a full library walk at the front would have starved
+dedup, purge and optimize on the same night.
+
+**File watchers only ever saw the import paths that existed at boot.** The
+auto-scan watchers were started from a single startup snapshot of the import
+paths, so a folder added later got no watcher until the process was restarted.
+Watchers are now managed by a supervisor that re-reads the desired set every
+five minutes: a path added, enabled, disabled or removed at runtime is picked
+up without a restart, and the watcher for a removed path is stopped rather than
+leaked. (These watchers remain the low-latency path only — fsnotify does not
+see writes made by remote NFS/SMB clients and can exhaust the kernel watch
+limit on a large tree, so the timed scan is the guaranteed catch-all.)
+
+**A failed import-path read started zero watchers in silence.** The startup
+code was `if err == nil && len(importPaths) > 0 { ... }` — a database read
+failure fell straight through the condition with no log line, leaving auto-scan
+apparently enabled but completely blind. Enumeration failures are now logged
+and pushed to the activity log, and a transient failure leaves the existing
+watchers running instead of tearing them down.
+
+A repeated scan can no longer pile up: the scheduled task skips a tick while
+the previous scan it enqueued is still queued or running, which matters because
+the operation dispatcher serializes a duplicate rather than rejecting it.
+
+One deliberate limit, now recorded in the code rather than left as an accident:
+a default scan still does **not** walk the organized library root. That
+directory is the destination the organizer writes into, so folding it into a
+scan that now runs every six hours would feed already-organized books back
+through the organize path on a loop — and because the library root is an
+operator-set path that may sit above unrelated media or a hands-off iTunes
+tree, the timed path stays conservative. A folder dropped straight into the
+library root is
+therefore still not auto-discovered — add it as an import path, or run a scan
+with `force_update`. The scan log now says so out loud instead of staying
+quiet about it.
+
+- The request timeout helper no longer trips the memory-leak scanner. Its abort
+  listener was always cleaned up correctly, but sat nested deeply enough that the
+  scanner's look-ahead gave up before finding the cleanup and reported a leak
+  that did not exist. Flattened the nesting; behaviour is unchanged.
+
+- The Coverage Floor CI job no longer gets killed before it can say what went
+  wrong. Its 20-minute cap was shorter than the 25-minute timeout the tests
+  themselves use, so a hung test was always killed by the runner first — losing
+  the goroutine dump that names the stuck test, and reporting a bare "cancelled"
+  that looks like a failure on the pull request. The cap is now 35 minutes, so
+  the test timeout fires first and prints a diagnosis.
+
+#### Applying metadata from the Metadata Review screen now writes the tags into your audio files
+
+Approving a match on the Metadata Review screen updated the database and
+nothing else. The title, author, series and year all changed in the app; the
+files on disk kept their old tags, and no cover art was embedded. Anything
+reading the files directly — a car stereo, a phone, iTunes, a fresh scan — saw
+the old metadata. There was nothing in the logs to suggest a problem, because
+nothing had failed. The work was simply never started.
+
+Two apply paths exist and they had drifted apart. The single-book path
+(`POST /audiobooks/:id/apply-metadata`) schedules `ApplyMetadataFileIO` and
+`WriteBackMetadataForBook` on the file-I/O pool, defaulting on. Its sibling
+`BatchApplyFromCache` — the endpoint the review screen actually calls — did
+neither. It called `ApplyMetadataCandidate` (database only) and then enqueued
+`h.batcher`, which looks like a write-back but is the **iTunes** write-back
+batcher: it syncs the book to the iTunes library and never touches an audio
+tag. `WriteBackMetadataForBook` was unreachable from the review screen.
+Production logged zero successful audio-tag writes in seven days.
+
+The batch path now goes through the same file-I/O pool as its sibling, with an
+optional `write_back` flag that defaults to **true** — identical semantics to
+the single-book path. The work stays off the request thread: "Apply All" can
+carry hundreds of books and rewriting their tags inline would hold the HTTP
+request open for minutes. When no pool is wired the handler now logs a warning
+naming the book instead of skipping silently, because a silent skip is the
+exact shape of this defect.
+
+This also restores **cover-art embedding** on the review path, which lives
+inside the same `ApplyMetadataFileIO` call.
+
+For a multi-file book — a 40-part MP3 set — the write covers every part, not
+just the one shown in the dialog. Exactly what each part receives depends on
+whether the book has per-file records:
+
+- **With per-file records** (the normal case for a scanned multi-part book):
+  every part gets the book-level tags plus its own per-track title and `N/40`
+  track numbering.
+- **Without them** (a book whose path is a folder but which has no segment
+  rows): every audio file in the folder still gets the book-level tags, but
+  with no per-track title and no track numbering.
+
+Books whose files live under a protected path — the iTunes tree, import
+folders — are still skipped entirely, by design. Nothing is written for them
+on either branch.
+
+#### The review screen no longer reports books it skipped as applied
+
+Clicking APPLY reported success for every book requested, whether or not the
+server had applied it. Books whose cached candidate had expired were skipped
+server-side, counted as successes by the UI, marked applied, and vanished from
+the queue — only to reappear on the next load. Measured during one session:
+21 applied, 8 silently skipped, two of them clicked twice because nothing
+appeared to happen the first time.
+
+`BatchApplyFromCache` now returns `applied_ids`, `skipped` (with a reason per
+book) and `requested` alongside the existing `applied` count. The review dialog
+marks only the rows the server actually applied, reports the server's count
+rather than the number requested, and leaves skipped rows visible in the queue
+with a message saying how many were skipped and why.
+
+#### An expired login no longer looks like a successful save
+
+When a Cloudflare Access session expires, API calls never reach the server: the
+request is answered with a redirect to the login page, the browser follows it
+automatically, and the app receives an ordinary `200 OK` carrying HTML. Nothing
+about that response looks wrong, so a login page was indistinguishable from a
+successful save — one user sat clicking APPLY on a dead session, getting a
+success message every time, while nothing was written.
+
+The shared request wrapper now detects this and raises a distinct error, so it
+surfaces everywhere in the app rather than only on this screen. Two independent
+signals are used: a redirect that lands on a different host, and an HTML
+response on an `/api/` route. The review screen reports it as "Session expired,
+sign in again" and reverts every row, instead of showing a generic failure the
+user would retry against the same dead session.
+
+#### Successful tag writes for multi-file books are now logged
+
+The multi-file branch of the tag writer logged only failures while the
+single-file branch logged both, so a working multi-file write left no trace at
+all and the logs could not distinguish a healthy system from one that never ran.
+
+#### Merged-away books no longer haunt the library page for 24 hours
+
+Merging books worked correctly — the merge moved files, reassigned external
+IDs, and hard-deleted the losers — but the library page kept listing the
+deleted books for up to a full day. Measured on production on the UI's own
+default list key: the cached response returned 40,957 books where the
+identical cache-busted query returned 40,839, a drift of 118 rows. Three of
+the merged-away books were still being listed while returning HTTP 404 on
+fetch (`01KQAQEJ7HGX9YJC94WMYZG954`, `01KQAQEEWWQWXHGCB9KRR013H5`,
+`01KQAQEHG337RJ2HEHN9PAA61W`). Not every phantom row was a deleted book:
+when a merge elects a different winner the loser is demoted to
+`is_primary_version=false` rather than removed, and the default primary-only
+view kept showing it too.
+
+The write path was never at fault. The bug was entirely in the HTTP response
+cache, and it could not self-heal:
+
+- The list cache was keyed on the raw query string alone, and an exhaustive
+  search of non-test Go for `listCache.` turned up only `Get` and `Set` —
+  there was no `Invalidate` or `InvalidateAll` call for this cache anywhere
+  in the codebase. Three separate mutation handlers each invalidated some
+  *other* cache and missed this one.
+- `Get` moved an entry to the front of the LRU but did not extend its expiry,
+  so an entry lived a full 24 hours from its `Set`.
+- LRU capacity eviction never reached these entries, because library-page
+  keys are the *most* recently used in the cache and capacity eviction takes
+  the least recently used.
+- The list warmer skipped any query it found already cached, which made it
+  structurally incapable of refreshing a stale entry — it would find the
+  phantom-row response, conclude the query was warm, and skip it forever.
+
+Only a process restart cleared it.
+
+Fixed by keying the library-list caches on a monotonic generation counter
+that the store bumps on `CreateBook`, `UpdateBook` and `DeleteBook`. After a
+mutation every reader computes a new key, so pre-mutation entries become
+unreachable and age out on their own. This replaces the shape that had
+already failed — scattering `InvalidateAll()` calls across mutation handlers
+depends on every future handler author remembering, and three of them
+already had not.
+
+`UpdateBook` bumps the counter even though it only marks *targeted* quick
+queries dirty rather than calling `MarkAllQuickQueriesDirty`. That detail is
+load-bearing: `UpdateBook` is the path that demotes a merge loser, so hooking
+the counter to `MarkAllQuickQueriesDirty` alone would have left every demoted
+row on the page.
+
+Two caches were involved, not one. The HTTP handler's cached response is
+built from `GetAudiobooks`, which reads a *second* 24-hour cache inside the
+audiobook service whose invalidation is gated behind
+`CacheInvalidateOnBookUpdate` — off by default. Generation-keying only the
+HTTP cache would have left the deleted books to be served straight back out
+of the one underneath it. Both are now keyed on the same counter.
+
+Book-*file* mutations deliberately do not bump the counter. They run once per
+file during a scan, and bumping there would hold the list cache at a
+near-permanent miss for the duration of every scan.
+
+Both list cache TTLs drop from 24 hours to 10 minutes. With generation keying
+doing the real work, the TTL is now only a backstop for mutation paths that
+bypass the store's three book-level writes.
+
+- **Activity log queries now stop when you close the page.** Loading the activity
+  view used to start a scan that kept running even after you navigated away or
+  closed the tab. Enough abandoned scans piled up that the server ran out of
+  memory and had to be restarted — five times in one night. Requests now stop as
+  soon as the browser disconnects, so the memory is released immediately instead
+  of being held until a restart.
+
+- **Which conformance allowance applied to a field could vary between runs.** `allowedAt`
+  ranged over the allowance map and returned the first pattern that matched. Go randomizes
+  map iteration, so where two patterns could claim one path, the bound actually applied was
+  decided by run order.
+
+  Nothing in the suite as declared was ambiguous, so no bound was being mis-applied — but
+  the design's whole guarantee is that a bound states the widest gap its stated cause can
+  produce, and that guarantee does not survive "whichever pattern the map yielded first."
+  A run that picked a 3.0 s bound where 0.5 s was intended would accept a real divergence
+  and report green, which is worse than the divergence because it is invisible.
+
+  An exact key now wins outright, and an ambiguous path is reported as an **authoring
+  error** rather than resolved by a tie-break: two patterns claiming one field means the
+  author has not said what they meant, and guessing is the thing this design exists to
+  avoid. Three tests cover it, one looping 200 times because a single call could pass a
+  hundred times and fail the hundred-and-first — exactly the shape of bug that gets closed
+  as "could not reproduce".
+
+- **`mediaItemId`, `bookId`, `date` and `dayOfWeek` are treated as volatile in
+  conformance comparisons.** The first two are the same minted sync ids as
+  `libraryItemId`, reached under a different name from the progress and playback bodies;
+  the last two are when a captured listening session happened. Four permanent
+  "mismatches" that no run could ever satisfy.
+
+- **The four ABS write fixtures nothing was reading are now asserted, Content-Type
+  included.** `patch_api_me_progress_id`, `patch_api_me_progress_batch_update`,
+  `delete_api_me_progress_id` and `delete_api_me_item_id_bookmark_time` were captured
+  from the real server and then referenced by zero tests for as long as they existed.
+  Their routes were exercised — but those tests assert the status code and read the
+  value back out of the store; only one looked at the response body, and none looked at
+  the header.
+
+  All six plain-text routes answer `200 OK` as `text/plain`, and the header is the part
+  a client acts on first: gin takes Content-Type from the render call, so "improving"
+  `respondPlainOK` into `c.JSON` would flip it to `application/json` while leaving the
+  status at 200 and the body at `OK` — passing every test that existed and breaking
+  every client that picks its decoder from the header. Verified by making exactly that
+  change: all six sites fail, on the header alone, with the body untouched.
+
+  Each request is now driven from the fixture's own recorded request rather than a
+  hand-typed one, so the test cannot stop being the request that produced the recorded
+  response. The recorded ETag is deliberately not asserted, and the reason is in the
+  helper: all six captures carry the identical value because Express derives a weak
+  ETag from the body and every one of these bodies is the same two bytes. It identifies
+  the payload, not the resource, and nothing revalidates a response to a mutation.
+
+- **ABS surface: guard the `/api` → `/api/v1` redirect against endpoints we have not built
+  yet.** Every existing check on this surface derives from `absRouteList()` — from what we
+  *implement* — so an endpoint the real client requests but we have not written is absent
+  from that list and nothing checks it. If its sub-tree is not reserved, the call 301s into
+  the app API and answers `200` in the app's shape: implemented-looking and broken, the exact
+  failure mode that produced #2332, #2333 and #2335. The new guard derives instead from the
+  golden fixtures' recorded `request.path`, which is the only in-repo record of what the
+  client *asks for*, so a newly captured endpoint is covered the moment its fixture lands.
+  All 28 captured paths are reserved today; this is a ratchet, not a bug report. Confirmed
+  by removing a reserved prefix and watching it fail on the exact fixture and path.
+
+- The session-pagination arithmetic added in #2347 was untested: the ABS oracle
+  capture holds three sessions, so every fixture-derived assertion fit on one page
+  and neither slice clamp was ever reached. Added a table test that seeds twelve
+  sessions and asserts the page/`numPages`/`itemsPerPage` maths across five cases,
+  plus the property that pages 0 and 1 partition the set exactly — every session
+  once, none dropped, none repeated.
+
+- **`GET /api/me/sessions` reported `itemsPerPage` as the number of items on the page
+  rather than the page size, and did not paginate at all.** The oracle capture answers
+  `itemsPerPage=10` with `total=3`; we answered `3` for both, making a page size and an
+  item count indistinguishable — and answering `0` on an empty result, which is a divide
+  by zero for any client deriving a page count from it. The endpoint now honours
+  `?itemsPerPage=` and `?page=` with the same defaults and clamping as the sibling
+  handlers in `stats.go`, so the number it reports is one a client can act on. The
+  conformance allowance covering this is removed; the assertion was confirmed to catch the
+  old behaviour (`value_mismatch at itemsPerPage: want 10, got 3`) before being trusted.
+
+- The nightly AcoustID fingerprint backfill is now gated behind
+  `maintenance.acoustid_backfill`, **default off**. Its load phase pulls the entire
+  book table into memory before it can start — roughly 862 MB of live heap in
+  production, implicated in three OOM kills in one night. Both automatic triggers
+  respect the flag: the unconditional enqueue at server startup, and the
+  `acoustid-backfill` child of the `library.optimize` sweep. Enqueuing the op
+  directly through the ops API is unchanged, so the deliberate opt-in path still
+  works.
+
+#### Corrected a wrong attribution in `ci.yml` about which CI job kept getting cancelled
+
+`ci.yml` carried a comment claiming that raising `Coverage Floor (PR gate)` to
+`timeout-minutes: 35` fixed the repeated `conclusion=cancelled` failures seen in
+#2311 and #2315. It did not.
+
+Those cancellations were on `Minimal CI / Go Tests (short, race)`, which is not
+defined in this repository at all — the `Minimal CI /` prefix on a check name
+means the job comes from a called workflow, here
+`falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml`. That job
+capped at 20 minutes while running `go test -short -race -timeout 30m ./...`,
+so the runner killed it ten minutes before Go's own timeout could print the
+goroutine dump naming the stuck test.
+
+Measured on #2319: `Go Tests (short, race)` cancelled at 20m16s, while
+`Coverage Floor (PR gate)` — the job that had actually been raised — completed
+successfully in 13m21s in the very same run.
+
+The real fix is upstream in falkcorp/github-common#346; that workflow exposes no
+timeout input, so it could not have been fixed from this repo. The `35` here
+stays, because it is independently correct for this job (`make test-short` runs
+with `-timeout 25m`), but the comment now states the invariant without claiming
+credit for someone else's bug.
+
+- **Dependency Review blocked every `golang.org/x/*` bump on a licence that is not a
+  problem.** Those modules are BSD-3-Clause — already allowed — plus Go's standard
+  `PATENTS` file, an *additional* grant of patent rights that makes them strictly more
+  permissive than BSD-3-Clause alone. ScanCode reports the pair as the single compound
+  expression `BSD-3-Clause AND LicenseRef-scancode-google-patent-license-golang`, and
+  `allow-licenses` matches the whole expression rather than each term, so the compound
+  string failed the policy with both halves acceptable.
+
+  It surfaced on #2305, where `bytedance/sonic 1.15.1 → 1.15.2` pulled
+  `golang.org/x/arch`. Dependency Review only reviews *changed* dependencies, which is
+  why nine modules with this licence sat in `go.mod` for months without tripping it —
+  and why each of the other eight was one Dependabot PR away from an identical surprise.
+  All nine are listed, without versions.
+
+  Named as packages rather than widened in `allow-licenses`: adding the `LicenseRef-`
+  term there would not have fixed it (the compound expression still equals no single
+  allowed entry) and would have loosened the policy for every ecosystem at once.
+
+- **A socket.io handshake no longer gets served the React app.** `GET /socket.io/?EIO=4&transport=polling`
+  matched no route, fell through to the SPA catch-all, and answered `200 text/html` (embedded
+  build) or `302 → /` (non-embedded). Neither is a 404, so an Audiobookshelf client's success
+  guard passed and it then tried to parse `index.html` as an Engine.IO frame — turning "we don't
+  implement real-time" into "real-time is broken." `/socket.io/` now returns 404, which lets the
+  client give up on the websocket and degrade cleanly. This is the same defect as the
+  `/auth/openid` OIDC probe fixed earlier; the prefix list was one entry short.
+
+- **`TODO.md` claimed a production run that had in fact happened.** Two entries — the
+  CONS-10/INIT-2 T6 exact-backlog drain and error-correction T04 — recorded the 2026-07-18 prod
+  triage as never executed, while `docs/dedup/STATUS.md` and `docs/operations/pending-prod-actions.md`
+  recorded it as done. Settled against the production journal rather than either document:
+  the op ran with `apply=true`, `dismissed=7891`, `dismiss_errors=0`, `outcome=completed`.
+  `TODO.md` was the stale one and is corrected.
+- **A reported "purgeable count drift" was not one.** The 2026-08-11 docs audit flagged 7,878
+  vs 7,891 as an unexplained inconsistency. They are the **sandbox** (10,304 candidates) and
+  **production** (10,319) measurements of the same operation — both correct. Neither line said
+  which population it described; both now do.
+
+- **`run-sweep.sh` no longer reports success after doing nothing.** It discovers work with
+  `find -maxdepth 1 -name 'TASK-*.md'`, but four of the ten live agent-task packages keep their
+  work in `AWAIT-APPROVAL.md`, `HOLD-STATUS.md`, or an inline `TASKS.md` instead. For those it
+  created no worktrees, emitted no prompts, and still printed "Next steps (coordinator)" — a
+  silent no-op indistinguishable from "this workstream has nothing to do." It now exits 2 with a
+  diagnostic naming what the package contains and what the gate means. `set -euo pipefail` could
+  not catch this: iterating an empty list is not a command failure.
+
+- **Unimplemented Audiobookshelf endpoints redirected into the app API instead of 404ing.**
+  `/api/collections`, `/api/playlists`, `/api/authors`, `/api/series`, `/api/users` and
+  `/api/podcasts` were caught by the `/api/*` → `/api/v1/*` compatibility redirect, so an ABS
+  client probing them got a 301 into a completely different JSON shape (or a 401) rather than an
+  honest "not here". They now 404. The redirect still applies to app-API paths, which is pinned
+  by its own test. Same failure family as the `/socket.io/` and `/auth/openid` probes.
+- **The conformance harness treated four environment-dependent fields as conformance signal.**
+  `fullPath`, `loadedAt`, `ipAddress` and `userAgent` can never match a fixture captured on
+  another machine — `fullPath` in particular was a plain oversight, sitting next to `path` in the
+  same "host-dependent" group of `DefaultVolatileKeys`. Adding them removes a class of false
+  positives that would otherwise have to be explained away every time the value gate is
+  considered.
+
+- **Every path in the OpenAPI spec was double-prefixed.** All 266 paths began with `/api/v1`
+  while `servers[0].url` was *also* `/api/v1`, so a generated client would have called
+  `/api/v1/api/v1/audiobooks`. Prefix stripped from every path.
+- **The spec did not validate, and now does.** No path in the document declared its path
+  parameters, failing OpenAPI 3.0.3 validation on 129 operations; 115 declarations were added at
+  path-item level. Two operations sharing `operationId: "unknown"` were removed as generator
+  artifacts — `/compare` is a group-relative fragment of `/ai/scans/compare`, and `/path` was
+  scraped out of a **code comment**.
+- **`.claude/skills/api-doc` pointed at the retired file.** It was the repo's only instruction
+  for keeping the spec current, so leaving it aimed at `docs/openapi.yaml` would have re-created
+  the divergence at the next endpoint change. Repointed, and taught the group-prefix, path-param
+  and no-phantom-endpoint rules that the old spec's defects came from.
+
+- **`/api/authors`, `/api/series` and `/api/playlists` 404'd instead of reaching the app
+  API.** The previous change (#2332) added six unimplemented Audiobookshelf namespaces to
+  the list of paths excluded from the `/api/*` → `/api/v1/*` compatibility redirect, so
+  they would answer an honest 404 to ABS clients instead of redirecting them into a
+  foreign JSON shape. Three of those six — authors, series and playlists — are namespaces
+  the **app API really serves** under `/api/v1` (19, 18 and 9 routes). For those the
+  redirect was not a lie, and excluding them 404'd 46 working routes' unversioned form.
+  Because the redirect middleware is not gated on `ABS_API_ENABLED`, this happened on
+  every deployment, including ones with the ABS surface switched off. The three colliding
+  namespaces now keep their redirect; `collections`, `users` and `podcasts` — which have
+  no `/api/v1` twin — still 404 honestly. No unversioned traffic to any of the six was
+  observed in 30 days of production logs, so no client is known to have been affected.
+
+- **`docs/system/storage.md` documented a database schema production never used.** It asserted
+  ULID ids and `a:`/`b:` key prefixes; production uses integer ids and `book:`/`author:`
+  (`internal/database/memdb_warmup.go:69,86`). The table had been copied from
+  `docs/database-pebble-schema.md` **without** that document's correction note, laundering a
+  known-abandoned design back into circulation as fact. Corrected inline.
+- **`docs/itunes-flow-diagrams.md` indexed a codebase that no longer exists** — all six files it
+  anchored on are absent at HEAD and it claimed `server.go` was "~9000+ lines" against an actual
+  1,091. It also contained a leaked agent transcript in its body (the authoring agent explaining
+  it could not write files). Archived rather than repaired.
+
+- **`TestServerStartGracefulShutdown` failed CI while the server was shutting down
+  correctly.** The test allowed 5 seconds for shutdown, but the shutdown path's ops-registry
+  step alone is granted 10 seconds (`server_lifecycle.go:580`), with a hardcoded 2-second
+  goroutine drain inside it that the failing log showed firing twice. 4 of the 5 seconds went
+  to deliberate waiting before any real work, so a correct shutdown lost a race with its own
+  assertion on a contended runner — the log showed `Server exited` had already been printed.
+  Raised to 60s with the arithmetic recorded in-code; a genuinely hung shutdown still fails.
+
+- **`/api/users` 404'd instead of reaching its seven live app-API routes.** A second
+  instance of the `#2332` namespace-collision regression that `#2333` was supposed to
+  close. `/api/users` was left in `absUnimplementedNamespaces`, so the `/api/*` →
+  `/api/v1/*` compatibility redirect skipped it and `NoRoute` answered 404 — on every
+  deployment, including ones with the ABS surface disabled, since the middleware is not
+  gated on `ABSAPIEnabled`. The seven routes behind it include
+  `POST /api/v1/users/:id/reset-password`. Moved to `absAppAPICollisions`.
+
+  `#2333` missed it because it prescribed grepping the source for `/api/v1` twins, and
+  grep cannot answer that question: gin composes a route's path from its `RouterGroup` at
+  registration time, so a grouped route (`protected.Group("/users")` → `users.GET("", …)`)
+  has its final path written nowhere in the source. Six prefixed groups register that way.
+
+#### Saved settings quietly erased every shipped default
+
+Configuration is stored as a single saved snapshot. On startup that snapshot was applied
+by replacing the entire configuration with it — so any setting the snapshot did not
+mention was not left at its shipped default, it was reset to empty or zero.
+
+Because the snapshot is written once and re-read on every start, this made the erasure
+permanent: every setting added after that snapshot was saved stayed at zero forever, and
+no later change to a default could ever reach the installation.
+
+That is why nothing was scanning for newly added audiobooks. Automatic library scanning
+ships switched on with a six-hour interval, but the saved snapshot predated it, so on
+every startup it came back switched off with an interval of zero. The feature was
+present and working; the saved settings were erasing it before it ever ran.
+
+Saved settings are now applied on top of the defaults rather than in place of them, so a
+setting the snapshot does not mention keeps the value it shipped with. Anything
+deliberately turned off stays off — those choices are recorded in the snapshot and still
+take precedence.
+
+Because this means some settings will pick up their intended defaults for the first
+time, startup now lists exactly which ones did, so the change is visible rather than
+something to discover later.
+
+#### `EmbeddingStore.Close()` could deadlock against in-flight operations
+
+Closing an `EmbeddingStore` that owns its PebbleDB while operations were still running
+could hang forever: writers already inside `db.Set` blocked on Pebble's commit-pipeline
+mutex and never woke. Pebble documents that calling `Close` concurrently with any other DB
+method is unsafe; the store now provides the guarantee Pebble does not.
+
+Every operation that touches the database holds a read lock for its whole duration and
+`Close` takes the write lock, so `Close` cannot begin until the last in-flight operation
+has returned.
+
+This was reached only by tests — the production constructor `NewEmbeddingStore` sets
+`owned: false`, so `Close()` returns immediately and never shuts the DB down. Its cost was
+paid in CI, where `TestChaos_MixedReadWriteDuringClose` hung for the full job timeout and
+reported only an unexplained "cancelled".
+
+The pre-existing `closed` flag could not have prevented this and was never going to: it is
+a check-then-act, and an operation already inside `db.Set` is past the check.
+
+Also bounded the three chaos tests' worker waits. A deadlock is not a panic, so the
+`recover()` in each of them could never catch this, and a bare `wg.Wait()` turned a
+regression into a silent 30-minute hang with no test named. A regression now fails in 30
+seconds and says which invariant broke.
+
+#### Organize reported success when every book failed, and could not be cancelled
+
+Three defects on the same path, all of which made an organize run describe itself as
+something other than what happened.
+
+**It always reported success.** `PerformOrganize` ended in an unconditional `return nil`.
+Every book could fail and the caller still saw success, so the operation was recorded as
+succeeded and nothing upstream had any way to learn otherwise. A run now returns an error
+when it was cancelled, or when it failed for every book it attempted. A partial failure
+stays a success on purpose — one failure in three thousand books should not fail the whole
+operation — with the count carried by the summary instead.
+
+**The summary hid failures.** The logged summary listed organized, re-organized,
+already-correct and skipped, but not failed. The failure count existed only in the
+`organize_summary` operation-change row, which nobody reads. A run in which every book
+failed therefore printed `Organize complete: 0 organized, 0 re-organized, 0 already
+correct (stamped), 0 skipped` — indistinguishable from a run that had nothing to do. The
+summary now always states the failure count and the total attempted, and a cancelled run
+says `CANCELED` rather than `complete`.
+
+**Cancellation only half worked.** `organizeBooks` accepted a `context.Context` and never
+read it; cancellation was checked solely in the job feeder. Stopping a run therefore
+stopped new work being queued but let the eight workers drain everything already buffered,
+and context cancellation — an HTTP client disconnecting, or server shutdown — did nothing
+at all. Both the feeder and the worker loop now check `ctx` as well as the operation's own
+cancel flag.
+
+The outcome rule and the summary text are now separate functions with tests, so the policy
+is stated and pinned rather than implied by the last line of a long method.
+
+#### A cancelled scan kept going, and filed books whose details were never read
+
+Two faults on the scan path, found while measuring why a full scan takes over four hours.
+
+**Cancelling a scan did not stop it.** The scan checked its own stop button but never
+the request's cancellation signal. When that signal fired, the scan carried on into
+every remaining folder — 2,406 of them in a single production run — failing to read
+details for each one and then reporting overall success.
+
+**Books were filed even when their details could not be read.** When reading a folder's
+audiobook details failed, the failure was written to the log and then the books were
+organized anyway. A book whose title and author were never read has no title and no
+author, so the naming pattern produced the same placeholder name for all of them and
+they were all filed to the same destination — where every one after the first failed as
+"already occupied". The same run recorded 7,561 refusals to overwrite an existing
+destination and 3,481 duplicate candidates, with 848 books aimed at one placeholder path.
+
+A cancelled scan now stops and says it was cancelled, and a folder whose details could
+not be read is no longer organized or counted as successful.
+
+#### The scheduler dropped enabled tasks without a word — and nothing had been scanning
+
+A task only got a timer when it was both enabled and had a non-zero interval. When it
+was enabled but its interval resolved to zero, it got no timer, no log line, and no
+other trace. From the outside that is indistinguishable from a task somebody turned off
+on purpose.
+
+That is how automatic library scanning stayed off without anyone noticing. The periodic
+scan ships enabled with a six-hour interval, but a stored zero was overriding that
+default, so the one job responsible for noticing newly added books was never scheduled —
+and the only symptom was a log line that was not there. Four unrelated jobs were
+scheduled normally, so the scheduler looked healthy.
+
+The scheduler now says which task it dropped and why, and names the setting to change.
+Correctly configured tasks log as before, and tasks that are off on purpose stay quiet —
+so "off deliberately" and "on but broken" no longer look the same.
+
+The underlying cause, where stored zero values permanently shadow shipped defaults, is
+written up with the measurements and the options for fixing it properly.
+
+#### Search past page 1 returned nothing, and the result count was the page length
+
+Searching with any filter active returned rows on page 1 and an empty page for every
+page after it. The library UI always sends `is_primary_version=true`, so this was every
+user-facing search, not an edge case.
+
+Bleve was asked for one page of `limit` rows, the `is_primary_version` /
+`exclude_quarantined` / tag post-filters then deleted most of that already-cut page with
+nothing left to refill it, and `paginateFilteredBooks` re-sliced the remainder by the
+ORIGINAL offset — out of range for a `<=limit` slice, so it returned zero rows. Measured
+on production before the fix, `search=honour&is_primary_version=true&limit=5` gave
+1 / 0 / 0 / 0 rows at offsets 0 / 5 / 10 / 20, while the identical query with no filter
+paged correctly at 5 / 5 / 5.
+
+The search branch now over-fetches a window of matches when post-filters will run,
+filters the whole set, and paginates last. A guard for the same defect already existed
+one branch away (`didPushdown`), which is where the shape of the fix came from.
+
+Separately, the reported `count` was `len(page)` rather than the number of matches, so it
+tracked the requested limit: the same query reported `count=5` at `limit=5`, `count=3` at
+`limit=3` and `count=21` at `limit=250`. A caller could never learn how many matches
+existed, so "page 2 of N" was fiction. `GetAudiobooksWithTotal` now returns a real match
+total (Bleve's own hit count when it paginates, or the filtered-set size when post-filters
+run), and `-1` when no true total is available so the caller keeps its previous behaviour.
+
+Not claimed: the over-fetch window is 10,000 matches. Beyond that the count is an
+explicitly-logged lower bound rather than exact, and the warning names the query.
+
+- Filtered library queries no longer return almost the entire library when the
+  in-memory index is unavailable. During the ~2 minute startup warmup (and
+  permanently when the in-memory index is disabled or has been abandoned after a
+  write-buffer overflow), searching or filtering the library fell back to a path
+  that applied only two of its eight filters — so a title search returned every
+  book, with a matching total to go with it. The fallback now applies every
+  filter, and the total is computed by the same code that selects the rows, so
+  the two cannot disagree. As a side effect the fallback no longer loads the
+  whole library into memory before filtering; it only builds the rows that match.
+
+#### Chapter backfill op could not run in production — the store is wrapped
+
+`maintenance.chapters-backfill` shipped hours earlier and refused on its very
+first production run:
+
+```
+cannot run: store is *server.indexedStore, which does not persist chapters
+```
+
+`deps.Store()` returns `Server.store`, which is **replaced** by the
+`*server.indexedStore` decorator at `server_lifecycle.go:290` once the search
+index opens. That decorator embeds `database.Store`, so only methods on *that*
+interface are promoted — and the chapter methods are not on it. The op's bare
+`store.(chapterPersister)` therefore failed against every real server while
+passing every test, because the tests handed it a raw `*PebbleStore` that
+production never uses.
+
+Resolution now goes through `database.AsCapability`, which walks the decorator
+chain. This is the **third** recorded instance of this exact bug: `AsPebbleStore`
+already documents two prod jobs silently degraded for weeks by the same wrapper.
+Those failed silently because they had non-Pebble fallbacks; this one refused
+loudly, which is the only reason it surfaced in a single run.
+
+The test helper now wraps every case in a production-shaped decorator, so the
+undecorated path is no longer reachable from the suite, plus an explicit
+double-wrapped case proving the chain is walked rather than unwrapped once.
+Verified by restoring the bare assertion: all 7 tests go red.
+
+- The iTunes streaming library parser read zero tracks from a normally
+  formatted `Library.xml` and reported success. Apple writes the opening tag of
+  a section on the line after its key, and the parser looked for that tag in the
+  very next piece of the file rather than the next tag — so it found a line
+  break, gave up, and returned an empty library with no error. The track-PID
+  backfill built on it therefore did nothing on every run, and then recorded
+  itself as complete, so it would never try again. The parser now reads such
+  files correctly, and a file with no track section at all is reported as an
+  error instead of an empty success.
+
+- **Operation progress labels reported state from before their own item ran.**
+  `registry.RunItems` rendered each item's label *before* invoking the work
+  function and reused that same string for the post-completion
+  `UpdateProgress`. Because labels typically close over running tallies and all
+  `Concurrency` workers snapshot their label at dispatch — before any of them
+  finishes — the reported counts lagged by up to one full worker pool. Measured
+  on `maintenance.chapters-backfill`: a 12-book apply run that persisted all 12
+  printed `persist=0` on ten of its twelve lines and never rose above 2. On a
+  whole-library run this reads as hours of total failure. The label is now
+  re-rendered after the work function; `SetCurrentItem` still receives the
+  pre-work label, which correctly names the item being started.
+- **`maintenance.chapters-backfill` progress counted only persisted books**, so
+  a dry run — which never increments that counter — sat at zero for its entire
+  duration and was indistinguishable from a run that found nothing. The first
+  production cohort pass printed `persist=0 markers=0` throughout while
+  identifying 33 eligible books and 1,247 chapters. The label now reports
+  `eligible` (persisted + would-persist), which advances in both modes.
+
+- **`maintenance.chapters-backfill` discarded ~16,000 recoverable books because its
+  path fallback tested for an EMPTY path instead of a MISSING one.** Resolution fell
+  back to `Book.FilePath` only when the `BookFile` row's path was the empty string. The
+  common real failure is different: a move/organize updates `Book.FilePath` and leaves
+  the `BookFile` row pointing at the old location, so the path is *populated and wrong*.
+  Such a path sailed past the emptiness check and died 300ms later inside `ffprobe`,
+  where it was tallied as a **probe failure** rather than the **resolution failure** it
+  was — pointing at the audio files as the culprit instead of the database.
+
+  Measured on the whole library: `probe-failed=16130`, 33.7% of single-file books. An
+  independent `test -e` sweep over a 400-book random sample agreed (88 of 295 = 29.8%
+  missing), ruling out `ffprobe` concurrency exhaustion. Of those 88, **86 (97.7%) had a
+  `Book.FilePath` that was a regular file on disk** — recoverable, and being thrown away.
+  Only 2 were genuinely gone.
+
+  The fallback now fires when the `BookFile` path does not *resolve*, not only when it is
+  *empty*. The `BookFile` row still wins whenever it resolves — it is the more specific
+  source, and preferring the fallback unconditionally would reroute every book in the
+  library rather than the broken ones. Non-regular files (a multi-file book's
+  `Book.FilePath` is its *folder*) are rejected, since handing `ffprobe` a directory
+  produces a confusing decode error instead of a clean skip.
+
+  Books resolved through the fallback are counted and reported separately as
+  `recovered-via-book-path=N`, never folded into the persisted total: those rows are
+  written from a secondary path source, and if that source is ever wrong there has to be
+  a way to identify the affected books after the fact.
+
+  Checked before shipping: across all 63,870 book rows, 1,264 `Book.FilePath` values are
+  shared by more than one book (4,353 rows) — but **0 of the 88 recoverable rows** were
+  among them, so the fallback cannot currently write one book's chapters onto another.
+
+- **Every series reported an empty book list and zero duration — 14,625 of 14,625.**
+  `LibrarySeries` hardcoded `"books": []any{}` and `"totalDuration": 0` on every row,
+  while `numBooks` was populated correctly (14,295 of 14,625 non-zero). The app therefore
+  showed a series insisting it held no books while displaying a count next to it. The
+  series list now carries its own books, in sequence order, with `totalDuration` summed
+  over the books actually served — as an int, never a float, since Dart throws on
+  `42.0 as int?` during widget build and red-screens the series tile.
+
+  The book lists are built from ONE pass over the visible set, cached for 5 minutes, and
+  scoped by the same filter `/items` uses. Per-series lookups would have been 14,625 calls
+  through a getter that falls back to a full Pebble scan when memdb is cold — a
+  library-freezing bug rather than a slow endpoint. Using a narrower filter than `/items`
+  would have made the Series tab disagree with the Library tab about what the library
+  contains, which is how ~28,000 unorganized rows once leaked into the Authors tab.
+
+- **Opening a playlist showed nothing.** The playlist LIST route shipped without the
+  DETAIL route, so `GET /api/playlists/:id` fell through into a 301 to
+  `/api/v1/playlists/:id` — the app-API twin — which answers `{"book_ids":[...]}` instead
+  of ABS's `{"items":[{"libraryItem":…}]}`. The client followed the redirect, received
+  HTTP 200 and valid JSON in the wrong shape, and rendered an empty playlist. Nothing
+  logged an error, because nothing errored.
+
+  The detail route is now served natively. Ownership is enforced in the handler and
+  answers 404 rather than 403, because the underlying store getter resolves any playlist
+  by id **without scoping to the owner** — without that check any authenticated user could
+  read another user's playlist and its contents by guessing an id, and a 403 would confirm
+  which ids exist.
+
+- Asking the library to filter by a field name used directly in the web address
+  — for example `?title=Skills` — silently listed the entire library instead,
+  complete with a matching total, because field filters have to be sent in the
+  `filters` parameter and anything else was ignored. Such a request is now
+  answered with an error explaining the correct form, rather than with every
+  book in the library. The web interface already used the correct form and was
+  unaffected; this misled people querying the API by hand, including one
+  investigation that recorded the wrong root cause because of it.
+
+#### Library search could not see books a cancelled index build never reached
+
+Searching the web Library page for a book returned unrelated results while the
+same search in the AudiobookShelf app returned the right ones. Measured on
+production 2026-08-13: books created in April were 97% searchable (38 found, 1
+missing in a sample), books created in August were 2% (1 found, 50 missing).
+
+Root cause: `buildSearchIndexIfEmpty` is the only bulk build of the Bleve index
+and it returns early unless the index has **zero** documents — encoding
+"non-empty means complete". The build honours the shutdown context, so a
+restart part-way through leaves a populated-but-incomplete index that the next
+boot then declines to touch, permanently. Because it walks books in ULID order
+and ULIDs are time-ordered, the rows lost are always the newest ones.
+
+The dirty-set reconciler added earlier does not cover this: books are marked
+dirty only when a queue-full drop discards an index event, so a book the
+backfill never reached was never enqueued, is never dirty, and is never
+repaired.
+
+On boot the server now compares indexed documents against book count and, when
+the index is short, marks the books dirty so the existing reconciler re-indexes
+them. Seeding the durable dirty set rather than re-running the build means a
+cancellation mid-sweep costs nothing — the marks survive the restart.
+
+#### Search no longer degrades to substring matching without saying so
+
+Three paths silently fell back from the full-text index to
+`store.SearchBooks`, a whole-query substring match over title/author/narrator
+only: a nil search index, a query-parser error, and a translation error. None
+logged anything, so a multi-word query could quietly stop matching and nothing
+in the logs would indicate which matcher had answered. All three now log a
+warning naming the query and the reason.
+
+- **Books imported from iTunes since April were invisible in the web UI.** The
+  importer minted a fresh version group for each newly-created book and then
+  marked that book non-primary. Because the group was brand new the book was its
+  only member, so the group elected no primary at all — and the web Library page
+  filters `is_primary_version=true` by default, so those books could never
+  appear. The same books were always visible to API clients (including the
+  mobile app), which is why this surfaced as "search works in the app but not in
+  the browser" rather than as missing data. 479 version groups holding 724 books
+  reached production in this state.
+
+#### An occupied organize target now says WHICH kind of occupied, and a whole class of failures reaches the change log
+
+Two defects in how a failed organize reports itself. Neither loses data; both
+make a production log impossible to count.
+
+**`ErrTargetOccupied` collapsed two opposite problems.** When the computed
+target path is already taken, there are two real cases and they take opposite
+remedies: another *book row* owns the path (two rows expand to one name — a
+dedup candidate), or a *file with no book row* sits there (residue of a partial
+organize — delete or quarantine it). Both produced a byte-identical error
+string, so a survey of **19,519** occupied-target lines on production could say
+only that they happened.
+
+They are now distinguished by `ErrTargetOccupiedByBook` and
+`ErrTargetOccupiedByOrphan`, and the by-book message names the occupying book's
+ID so a dedup candidate can actually be built. Both still wrap
+`ErrTargetOccupied`, so existing `errors.Is` callers are unaffected.
+
+A third case, `ErrTargetOccupantUnknown`, exists to keep the other two
+trustworthy. "Orphan" is a *positive* finding — the database was asked and
+answered that nobody owns the path. A lookup that never ran, because no store is
+wired or the query itself failed, also yields a nil occupant. Folding the two
+together would manufacture orphans out of database errors and aim file deletion
+at paths a book may well own. A test drives a failing lookup specifically to
+hold that line.
+
+**A failure branch incremented the counter without recording the change.** When
+`CreateOrganizedVersion` fails, `PerformOrganize` bumped `stats.Failed` and
+jumped straight to the progress label, writing no `organize_failed`
+`OperationChange` — while the other failure branch wrote one. The visible
+consequence is not a missing log line (`CreateOrganizedVersion` logs its own
+error) but that the operation's **summary** and the operation's **change log**
+disagree with nothing saying so: reconciling "the op reports N failed" against
+the change rows silently returns fewer than N, and the gap reads as books that
+were fine. This is one concrete mechanism behind an earlier production survey
+being unable to reproduce its own headline figure of 3,194 failures.
+
+`MockStore.CreateOperationChange` was a hard-coded `return nil` with no hook, so
+no test could observe an operation's change log at all. It now takes a
+`CreateOperationChangeFunc` like its neighbours.
+
+- **AudiobookShelf API: the `filter` query parameter was read by nothing.** Every
+  filtered request — opening a series, a genre, a narrator — returned the entire
+  library, unfiltered and in default order, which is why the app appeared to show
+  "random books" for every series. `GET /api/libraries/:id/items` now honours the
+  `filter=<group>.<base64 value>` form ABS clients send: `series.<id>` returns that
+  series' books in sequence order, and any group we do not implement yet returns an
+  empty page (and logs the group name) instead of silently falling through to the
+  whole library.
+
+- **AudiobookShelf API: the series list ignored `page`, `limit` and `sort`.**
+  Confirmed against production: `?limit=100` and `?limit=500` both returned all
+  14,625 series, and the app's own `?limit=50&page=2&sort=name` got page 0,
+  unsorted, every time. `GET /api/libraries/:id/series` now sorts deterministically
+  (name-ignoring-prefix, id as tie-break) and honours `page`/`limit`, reporting the
+  full series count as `total` so the client can tell more pages exist. An absent
+  limit or `limit=0` still returns everything, so non-app callers are unchanged.
+  This also keeps the newly-populated `books` array from turning the unpaginated
+  response into a ~10.8 MB payload.
+
+- **Organizing a book into a version group that already had a primary elected a
+  second one.** This happens routinely — the scanner hash-matches a newly
+  downloaded copy of a book you already own into the existing book's version
+  group, and organize then runs against the new row. `CreateOrganizedVersion`
+  marked every organized copy primary but demoted only its own source row, so
+  the group's existing primary survived alongside the new one. Production held
+  10,780 groups with surplus primaries. The newly organized copy now yields to
+  the incumbent, which is the copy that has already been through metadata
+  enrichment and sits under a real author directory.
+
+- **The ABS playlist-detail reservation was wider than what ABS actually serves,
+  and it 404'd six working app routes.** Claiming the playlist detail route for the
+  AudiobookShelf API reserved the whole `/api/playlists/` subtree, while ABS answers
+  exactly one route in it (`GET /api/playlists/:id`). On an ABS-enabled deployment
+  the unversioned forms of `PUT`/`DELETE /api/playlists/:id`,
+  `POST /api/playlists/:id/books`, `DELETE /api/playlists/:id/books/:bookID`,
+  `POST /api/playlists/:id/reorder` and `POST /api/playlists/:id/materialize`
+  stopped redirecting to their `/api/v1` twins and started returning 404. The
+  reservation now matches on method plus exactly one path segment, so anything
+  deeper or with a different verb keeps its redirect.
+
+- **Search: a trailing `*` no longer returns nothing.** Prefix and wildcard queries were
+  built from the raw term, and those Bleve query types bypass the field analyser — so
+  they were compared against already-lowercased index terms without being lowercased
+  themselves. Any capitalised term matched zero documents: on production `Hyperion*`
+  returned 0 while `hyperion*` returned 21, and `Dragon*` returned 0 while `dragon*`
+  returned 1757. The web UI appends `*` to what was typed, so this fired on ordinary
+  capitalised typing.
+- **Search: a bare quoted phrase is now an actual phrase.** The free-text scanner split
+  on whitespace before looking for quotes, so `"All Jobs"` became two tokens, `"All` and
+  `Jobs"`, with the quote characters still attached; the analyser discarded them as
+  punctuation and `Quoted` was never set, leaving the `MatchPhraseQuery` branch in the
+  translator unreachable for bare free text. `"Side Jobs"` no longer matches
+  *Jobs on the Side*. The field-scoped form (`title:"a b"`) was never affected.
+
+  Known limitation, filed separately: a phrase whose distinguishing word is an English
+  stopword still over-matches, because the analyser drops the stopword before matching —
+  `"All Jobs"` reduces to `jobs`. Fixing that needs an analyser change and a full
+  re-index.
+
+- **Deleted books were still being processed by every full-library operation.**
+  `GetAllBooksCore` and `CountAllBooks` each have two implementations — a Pebble
+  keyspace scan and a memdb index walk — and only the Pebble one filtered
+  soft-deleted rows. Since memdb is the production default, all ~35 full-library
+  callers (organize, dedup, every backfill, the reconcile passes, the ABS library
+  count) silently operated on books that were in the trash. Measured on
+  production: 63,869 live books were being scanned as 67,824, the extra 3,953
+  being the losers of the July dedup drain, still processed four weeks after
+  deletion. The soft-delete rule now lives in a single shared predicate, and a
+  conformance test holds both implementations to the same answer on the same
+  fixture.
+- **`AssignOrphanVGs` could resurrect deleted books** by force-setting
+  `library_state=organized` on soft-deleted rows it should never have seen;
+  `MergeNoVGDuplicates` could pick a soft-deleted book as the keeper and
+  soft-delete the live one instead. Both are consequences of the leak above and
+  are fixed by it.
+- **Orphan-file cleanup now explicitly protects restorable books.** A
+  soft-deleted book still owns its `book_files`, and `findOrphanBookFiles` is a
+  set-difference whose output is fed to `DeleteBookFilesByIDs`. Those rows were
+  previously protected only *by* the leak, so the scan now unions the
+  soft-deleted set in deliberately and fails closed if it cannot read it.
+- **Deluge discovery no longer re-offers trashed books** as unimported
+  torrents, for the same reason and with the same previously-accidental
+  protection made explicit.
+
+- **Search: quoted phrases containing common words are now exact.** `"All Jobs"` returned
+  300 rows on production — a set byte-identical to the unquoted query, topped by *Side
+  Jobs* and *The Icarus Job*, neither of which contains the phrase. The free-text fields
+  were indexed with Bleve's stock English analyser, whose stopword filter deletes tokens
+  **without renumbering the positions of the survivors**, and `MatchPhraseQuery`
+  reconstructs the phrase from those positions. So `"All Jobs"` analysed to the single
+  token `jobs` at position 2 and became a one-term phrase — that is, a plain term query
+  with no adjacency constraint at all. Interior stopwords degraded differently but from
+  the same cause: `"Lord of the Rings"` became a four-slot phrase with slots 2 and 3
+  empty, which Bleve treats as wildcards, matching *Lord of All Rings* just as happily.
+
+  The text fields now use a stopword-preserving analyser (unicode tokenizer, possessive
+  stripper, lowercase, Porter stemmer). Ordinary unquoted search is deliberately
+  unchanged: stopwords are still dropped from unquoted conjunctions, so
+  `shards of oblivion` keeps working exactly as before.
+
+- **Search: the index is rebuilt automatically when its mapping changes.** Bleve stores
+  the index mapping inside the index and reuses the stored copy on open, so an analyser
+  change would otherwise have no effect on an existing index — silently, and
+  indefinitely. The index now records the mapping version that built it and is recreated
+  when that no longer matches.
+
+  On recreate the server skips the bulk backfill and seeds the durable dirty set instead.
+  That distinction matters: the bulk backfill is not resumable and stops on shutdown,
+  which is what left the index missing 24.7% of the library earlier the same day. The
+  dirty-set marks are written to disk, so an interrupted rebuild resumes rather than
+  leaving a permanent gap.
+
+  **Operational note:** the first start after this change rebuilds the whole search
+  index. Search results are incomplete until the reconciler drains — roughly 25 minutes
+  for a 68,000-book library. Reverting this change triggers a second rebuild for the same
+  reason.
+
+- Made the `maintenance.booksig-sidecar-migrate` prod procedure's pre-apply
+  instrument check compare against an explicit expected candidate count
+  (~27,000, from 580 MB ÷ ~22 KB) instead of "low tens of thousands", and
+  recorded that a full apply may need more than one pass because memdb's
+  `ListBookIDs` skips soft-deleted books. The completion signal is
+  "candidates ≈ 0 on re-run", not "the apply reported no errors".
+
+- Six scheduled tasks reported themselves as enabled while being unable to ever run. Four
+  of them — auto-organize, orphaned temp-file cleanup, trash cleanup, and the archive sweep
+  — asked to run in the nightly maintenance window but had been left out of the list that
+  window actually iterates, so they had never run at all. Between them they clear leftover
+  files from interrupted conversions, trashed book versions past their 14-day expiry, and
+  deleted books past their 30-day retention. All four are now wired in, and a new test
+  fails the build if any future task is added without a way to run.
+- The startup warning that reports a task will never run no longer fires for the healthy
+  tasks that run nightly rather than on a timer. It had been warning about 13 of 18 tasks,
+  which buried the 6 real ones.
+
+- A filter with an empty value silently matched every book instead of narrowing anything.
+  Filtering the library by, say, title with the box left empty returned the entire library
+  rather than an error or an empty result — and the same filters are used to pick which
+  books a background metadata operation runs against, so an empty value could quietly point
+  a targeted job at the whole collection. Empty filter values are now rejected with a clear
+  message explaining that omitting the filter is how you ask for everything.
+
+#### Author names no longer keep a stranded "&" from Oxford-comma credit lists
+
+46 author rows in the library were named `& Conrad Westmaas`, `& Lisa Bowerman`,
+`& India Fisher` and so on — a leading ampersand glued to an otherwise correct
+name. They showed up as separate authors on author pages and in dedup
+candidates, splitting a real person's books across two rows.
+
+Root cause is an ordering bug in `dedup.SplitCompositeAuthorName`. The source
+metadata is an Oxford-comma credit list; the real `album_artist` tag on
+*The Creed of the Kromon* reads:
+
+    Paul McGann, India Fisher, & Conrad Westmaas
+
+The comma branch of the splitter runs at line 173, the `" & "` branch at line
+220. The comma branch fires first, splits on `,`, and validates each candidate
+part with a single test — `strings.Contains(p, " ")`. `"& Conrad Westmaas"`
+contains spaces, so it passes, and `NormalizeAuthorName` trimmed whitespace and
+expanded initials but never touched leading punctuation. The `" & "` branch that
+would have handled this input correctly was unreachable for exactly the inputs
+it was written for.
+
+The same hole existed in the slash, semicolon and bracket branches — each
+validated a part only by asking whether it contained a space. The fix is applied
+at `NormalizeAuthorName`, the chokepoint every branch already funnels through,
+so one edit closes all four rather than four patches that can drift apart.
+
+The strip pattern requires whitespace after the conjunction
+(`(?i)^(?:&|and)\s+`). That is deliberate and load-bearing:
+
+- `&#169` and `&#169;2013 by HarperCollinsPublishers` are also real author rows —
+  decapitated HTML entities for `©` from a copyright string that leaked into an
+  artist tag. They are a **separate** defect, and a bare `^&` strip would rewrite
+  the first to `#169`, which is worse than leaving it alone.
+- Requiring whitespace also stops `and` from eating the first syllable of real
+  names such as *Anders Bergman* or *Andrea Cremer*.
+
+Note on scope: no new `& Name` rows had appeared recently, but that is absence of
+a triggering import rather than evidence of a fix — the affected ids cluster at
+46411–46764, a single Big Finish import run. Any re-import of comma-and-ampersand
+credits would have recreated them.
+
+- The iTunes writeback preview no longer offers books that are in the trash.
+  A soft-deleted book keeps its iTunes persistent ID (deletion is restorable),
+  and both the mapping listing and the preview returned it, so metadata for a
+  deleted book was eligible to be written back into the iTunes library. Fixed on
+  both routes into the preview — the listing and the explicit `book_ids` request,
+  which reads through a different store method and needed its own check.
+
+- Two database methods ignored the `UseMemDB` flag and dispatched to the
+  in-memory query layer on publication alone, `ListBooksByITunesPID` and
+  `ListSoftDeletedBooks`. Their Pebble fallbacks were therefore unreachable in
+  any store with memdb up, including one that had explicitly turned memdb off.
+  `ListSoftDeletedBooks` is the method the orphan-file cleanup fails closed on,
+  so its fallback is worth having reachable and now has a conformance test.
+
+- Thirteen fields the library search bar offers returned "no books found" for
+  every query. `year`, `series_number`, `isbn10`, `isbn13`, `work_id`,
+  `channels`, `bit_depth`, `created_at`, `updated_at`, `duration`, `file_size`,
+  `bitrate` and `sample_rate` all parsed correctly in the UI, travelled to the
+  server as well-formed filters, and fell through the backend's unknown-field
+  branch, which matches nothing. The last four are the same columns the backend
+  did implement, under unit-suffixed names the search bar never sends —
+  measured on production, `duration:1` answered 0 while `duration_seconds:1`
+  answered 25,090 over the same rows. Both spellings are now accepted.
+
+- `marked_for_deletion` works as a filter. It previously answered `count: 0`
+  against a library holding 3,953 soft-deleted books, for two stacked reasons:
+  the field was not implemented at all, and the rows are excluded before any
+  filter runs, so asking for them inside an already-live-only set could only
+  ever return zero. The filter now sets the store's tri-state so the rows reach
+  it. `year` matches either the print year or the audiobook release year, since
+  a book carries both and they routinely differ.
+
+- A filter naming a field the list cannot filter on is now rejected with a 400
+  that names the field and lists the valid ones, instead of being answered with
+  `count: 0` — an answer indistinguishable from a truthful "no books match".
+
+#### Author repairs are visible on the author list immediately
+
+`maintenance.author-conjunction-repair` now invalidates the cached author list
+(and the author-duplicates dedup cache) after a run that wrote.
+
+Without it the repair was invisible on the one page anyone would check. The
+2026-08-14 apply landed correctly — 30 authors merged, 15 renamed, and all 145
+affected book records verified to carry the corrected links — while
+`/api/v1/authors` kept returning the pre-repair names. That cache holds a
+**24-hour TTL** and was invalidated only by the interactive entities API, so a
+maintenance op that renamed or deleted authors left the list stale for up to a
+day. Reading it straight after the apply showed 48 stranded rows still present
+and nothing deleted, which reads exactly like a repair that silently did
+nothing.
+
+`ServerDeps` gains `InvalidateAuthorsCache()` alongside the existing
+`InvalidateDedupCache()`, so any maintenance op that mutates authors can now say
+so.
+
+A dry run deliberately does **not** invalidate: it changed nothing, and dropping
+a warm cache costs real work for no reason. Nor does a run that matched rows but
+wrote none. Both cases are covered by tests, and both guards were
+mutation-tested — removing the invalidation reds the apply case, and widening it
+to fire unconditionally reds the dry-run case.
+
+- **Author book-lookups disagreed between the two stores, and a merge could orphan
+  junction rows.** `GetBooksByAuthorIDWithRoleCore` is what every merge and delete
+  path calls to find the books it must relink before removing an author. Its memdb
+  implementation silently dropped co-author credits on non-primary versions, so a
+  merge could delete an author while `book_authors` rows still pointed at it. Its
+  sibling `GetBooksByAuthorIDCore` diverged in the opposite direction — the Pebble
+  implementation never opened the junction table at all, so a co-author's books were
+  invisible to listings served during the ~132 s memdb warmup. Two opposite-signed
+  errors kept aggregate counts plausible; only a co-author on a non-primary version
+  exposed either. Detected when the same repair op reported 86 books relinked
+  seconds after a restart and 84 warm against identical data.
+
+  Both methods now agree across both stores: `...WithRoleCore` returns the complete
+  set (junction + legacy, non-primary included), `...Core` returns the listing view
+  (junction + legacy, non-primary excluded). Both exclude soft-deleted books. A new
+  conformance suite holds each method's two implementations to the same answer on
+  one fixture, in the pattern established for the soft-delete contract.
+
+- Repaired the `internal/server` integration test that still asserted the old
+  behaviour for an unrecognised search filter. It expected a 200 with an empty
+  list; that answer was the bug, and rejecting the request with a 400 is the
+  fix. The expectation is inverted rather than deleted — a well-formed request
+  still has to be answered, just answered honestly.
+
+- **A series listing served during startup showed duplicate versions in arbitrary
+  order.** `GetBooksBySeriesIDCore` has two backing implementations and they
+  disagreed on two axes at once: the memdb walk excluded non-primary versions and
+  sorted by series sequence, while the Pebble scan kept every alternate rip and did
+  not sort at all. During the roughly two minutes it takes memdb to warm up after a
+  restart, a series therefore came back with its duplicates included and its books
+  in storage order rather than reading order. Both paths now apply the same filters
+  and share one ordering helper.
+
+  Found by sweeping the other 25 dual-implementation store methods for the defect
+  shape fixed in the author getters. Of those, this was the only remaining method
+  where one store filtered non-primary versions and the other did not;
+  `GetFolderDuplicatesCore` and `GetDuplicateBooksByMetadataCore` were checked and
+  already agree.
+
+  The shared ordering helper also drops a comparator that indexed a precomputed
+  slice of lowercased titles from inside the sort. Sorting permutes only the slice
+  handed to it, so that parallel slice kept its original order and the tiebreaker
+  could read a title belonging to a different book. It was not observed producing a
+  wrong order, and it is corrected rather than carried forward.
+
+- **A maintenance op that merged or deleted series left the series list showing
+  the pre-op data for up to 24 hours.** The cached series list carries a 24-hour
+  TTL and is warmed at startup, and until now only the interactive entities API
+  invalidated it. Measured on production 2026-08-14: a `maintenance.series-prune`
+  run reported *"17 duplicates merged, 326 orphans deleted, 0 errors"* and
+  `/api/v1/series` kept returning all 14,629 rows with the same 329 zero-book
+  entries — a completed repair that is indistinguishable from one that silently
+  did nothing. `series-prune`, `series-normalize` and `series-denumber` now drop
+  the cached list when, and only when, they actually changed rows; a run that
+  cleaned nothing keeps the warm cache rather than forcing a full recount. Same
+  defect and same fix shape as the authors-cache invalidation.
+
+- **Series and import-path counts included books in the trash during startup.**
+  `GetAllSeriesBookCounts`, `GetAllSeriesFileCounts` and `CountBooksByPathPrefix`
+  each have two backing implementations, and the memdb ones excluded soft-deleted
+  books while the Pebble ones counted them. For the roughly two minutes it takes
+  memdb to warm up after a restart, a series therefore reported more books and
+  files than it has, and an import path reported more books than it holds.
+
+  This is the same defect class as the soft-deleted rows that leaked into
+  `GetAllBooksCore`, but leaking from the other store — which is the argument for
+  testing the two implementations against each other rather than auditing either
+  one: whichever path a reviewer reads, the bug is in the one they did not.
+
+- **`CountBooksByPathPrefix` could never reach its own Pebble path.** It chose an
+  implementation based on whether memdb was published, ignoring the flag that is
+  supposed to select between them. Besides making the fallback dead code whenever
+  memdb was up, this quietly reduces any conformance test to comparing memdb
+  against itself. Repairing the selector is what allowed the count bug above to be
+  observed at all.
+
+- **Deleting a series from the UI could strand its books.** Both series delete
+  endpoints — `DELETE /series/:id` and `POST /series/bulk-delete` — decided
+  whether a series was empty using the counter that fills in the badge next to a
+  series, which deliberately skips books in the trash and non-primary (duplicate)
+  versions. Those books still hold the `series_id`, so a series whose books were
+  all trashed, or all alternate versions, counted as zero and was deleted out
+  from under them, leaving books pointing at a series that no longer exists and a
+  name that cannot be recovered. This is the same defect fixed in the weekly
+  prune; the interactive path still had it. Both endpoints now count references
+  in every book state, and refuse to delete at all if that count is unavailable
+  rather than falling back to the filtered one.
+
+- **The store-consistency guard that protects merges could never fire in any merge
+  test.** Invariant (a) — no book is both a live primary version and marked for
+  deletion — exists to catch a merge that half-applied. The shared helper enumerated
+  books through a listing that excludes soft-deleted rows, so the contradictory book
+  was never even looked at: the assertion ran, passed, and examined nothing. A
+  white-box version of the check does work, but it is reachable only from tests
+  inside the database package, which perform no merges, while every merge, combine
+  and regroup test in the tree uses the shared helper. The guard was live only where
+  nothing could violate it and blind everywhere the hazard actually is.
+
+  The helper now enumerates the live and soft-deleted listings together. Both are
+  public, so no white-box access was needed — the original reasoning stopped one
+  exported method short of the fix. A new test constructs the contradictory state
+  and asserts the invariant reports it, and was confirmed to fail when the union is
+  removed.
+
+- **Scheduled maintenance operations recorded no undo history.** Eight operations
+  — including the nightly purge of soft-deleted books, the series prune, temp-file
+  cleanup and metadata write-back — record what they changed so the change can be
+  reviewed later and, where supported, reverted. Each looks up the ID of the
+  operation it is running under, and skips recording when that ID is missing. The
+  code that supplies the ID existed but was never connected to anything, so the
+  ID was always missing and every one of those operations skipped recording, with
+  no error and a successful-looking result. A series prune on 2026-08-14 deleted
+  326 rows and recorded zero changes. The ID is now attached to every operation
+  run, so the history is written again. This also means an empty change list can
+  once more be read as "this operation changed nothing" rather than "the recording
+  was disabled" — during the investigation above, the two were indistinguishable.
+
+- **`?year=2001` and 16 other filters silently returned the entire library.**
+  Field filters travel inside the `filters` JSON parameter; passed bare, gin
+  ignores them and the request lists every book while looking exactly like a
+  narrowed query — matching count and all. Measured on production 2026-08-14,
+  against an unfiltered baseline so the reading is not merely plausible:
+
+      ?year=2001                 -> count=63869
+      ?work_id=abc               -> count=63869
+      ?marked_for_deletion=true  -> count=63869
+      (no filter, baseline)      -> count=63869
+
+  A guard added the previous day
+  rejected 26 such names, but it was a hand-written third copy of a field list
+  that already had a single source of truth, and it had drifted: `year`,
+  `work_id`, `isbn10`, `isbn13`, `series_number`, `created_at`, `updated_at`,
+  `marked_for_deletion`, `duration`, `bitrate`, `bitrate_kbps`, `file_size`,
+  `file_size_bytes`, `sample_rate`, `sample_rate_hz`, `channels` and `bit_depth`
+  were all missing.
+
+  The guard is now derived from `audiobooks.KnownFilterFields()` — the list
+  already pinned to the matcher — minus an explicit two-name allow-list, so the
+  third copy no longer exists and a field added to the canonical list is
+  guarded the same day.
+
+  `library_state` stays allow-listed: it is genuinely both a filter field and a
+  bare parameter of this endpoint. A global collision survey turns up five
+  such names, but four (`title`, `author`, `duration`, `format`) have their
+  accessors on *other* endpoints — metadata search, audio sample, dedup export —
+  and the guard reads only its own request's query string.
+
+  Not fixed here: `?version_group_id=X` still lists the whole library. It is not
+  a filter field at all, so the derivation cannot reach it; making it one needs
+  new matcher work.
+
+- Maintenance jobs no longer run for real when you asked for a preview. Most
+  maintenance jobs (18 of 34) are meant to preview their changes by default, and
+  the settings screen showed them that way — but the server ignored that and
+  applied the changes for real whenever the preview setting wasn't spelled out in
+  the request. The two now agree, and a job you explicitly set to apply still
+  applies.
+- A preview that was interrupted by a server restart no longer comes back as a
+  real change. The server kept no record of whether a running job was a preview,
+  so when it restarted and picked the job back up it treated every one of them as
+  a real change — including the job that deletes empty folders from disk. Your
+  choice is now saved with the job and restored on restart.
+
+#### The retention sweep re-scanned every operation once per page, and could report deleting more than it did
+
+The maintenance job that deletes operation records older than the retention
+window collected them by walking the operation listing in 500-row pages. The
+method it paged over, `PebbleStore.ListOperations`, reads the *entire*
+`operation:` keyspace into memory, unmarshals every row and sorts the whole set,
+and only then slices out the requested page. Paging over a method shaped like
+that pays for a full scan on every page.
+
+Production held 10,163 operations when this was found, so a single retention run
+did 21 complete scans — roughly 213,000 unmarshals to gather a set that one pass
+yields. The cost grows quadratically with the number of operations, so it gets
+worse exactly as retention becomes more necessary.
+
+Paging also made the job's own count untrustworthy. The listing is newest-first,
+so an operation created by anything else while the scan was running pushed every
+existing row to a higher index; reading a fixed, increasing sequence of offsets
+across a shifting list re-read rows it had already seen and put the same ID in
+the delete list twice. Nothing was lost — deleting an already-deleted record does
+nothing — but the job counted the repeat, so the number it reported was larger
+than the number of operations it actually removed.
+
+Phase one now takes the whole listing in a single call, which is what the
+function's comment had claimed all along while the code did otherwise.
+`ListOperations` gained the "no limit" sentinel this needs: a limit of zero or
+less returns everything from the offset onward, matching `SearchBooks`, which
+already documents the same convention. Previously a limit of zero computed an
+empty page and returned no rows — a trap set for precisely the caller that wants
+them all.
+
+That sentinel is covered by a test against the real store rather than against a
+test double. The retention job is exercised entirely through a fake, so removing
+the sentinel from the real implementation left every test in that package green;
+had it shipped that way, retention would have collected nothing, deleted nothing
+and reported success. The new test fails with "should have 1200 item(s), but has
+0" when the sentinel is reverted.
+
+- Log-injection sanitizers (`logging.Sanitize`, `logger.sanitizeLogLine`) had a
+  clean-string fast-path that returned before the `strings.ReplaceAll` barrier,
+  so CodeQL's path-sensitive analysis saw taint bypassing the sanitizer and
+  321 of 322 go/log-injection alerts survived the CA12 wave-1 conduit fix.
+  Every path now flows through `ReplaceAll` (which is already allocation-free
+  on clean strings); output behavior is unchanged on all inputs.
+
+#### Book-ID enumeration no longer includes trashed books on the Pebble path
+
+`ListBookIDs` is how roughly twenty full-library maintenance operations enumerate
+the library — chapter backfill, intro transcription, aggregate recomputation,
+sidecar migration, and others. `MemStore` filtered soft-deleted books out of the
+listing; the Pebble scan did not, because it read keys only and never decoded a
+book at all. That is precisely why the filter was missing there. The fix decodes
+just the deletion flag rather than the whole record, keeping the scan close to
+its original key-only cost.
+
+`computeLibraryStats` dispatched on memdb *publication* alone rather than on
+`UseMemDB`, so its Pebble scan was unreachable whenever memdb was up — including
+in a store with the flag explicitly off — which left it untestable. Both of its
+implementations already agreed about soft-deleted books, so no numbers change;
+the gate is corrected so the Pebble scan can be exercised by a test, since that
+scan is what serves the dashboard during cold start.
+
+`CountBooksByPathPrefix` gains a key-shape guard. Its scan had no check at all
+and relied on secondary-index values happening to fail JSON decoding, unlike
+every sibling scan in the package, which check the key explicitly.
+
+memdb is the production default, so all of this was confined to the cold-start
+window before warmup publishes the in-memory index, and to deployments running
+with `UseMemDB=false`. No caller treats absence from these results as licence to
+delete anything — that was checked across all twenty-odd call sites before
+changing the Pebble behaviour to match memdb.
+
+Two new cross-backend conformance tests run one fixture through both
+implementations with `UseMemDB` flipped. Every change was mutation-verified,
+including mutations that revert the dispatch gate: with the old gate the test
+passes while the defect is present, which is what makes a gate fix a
+prerequisite for its test rather than a tidy-up alongside it.
+
+- `opstate:<id>` / `opstate:<id>:params` keys leaked forever: only 2 of the 34
+  maintenance jobs cleared their persisted resume state on completion. The
+  `retention-and-hygiene` job now sweeps the `opstate:` prefix, deleting state
+  whose owning operation is gone or terminal (completed/failed/canceled) while
+  keeping state for running, queued, interrupted, or unrecognized statuses so
+  restart-resume is never broken.
+
+#### `absRouteList()` now includes the two OpenID routes
+
+The hand-maintained ABS route list was missing `GET /auth/openid` and
+`GET /auth/openid/callback` from their introduction (the N-8 audit finding,
+made precise by the 2026-08-14 `router.Routes()` dump: 47 listed vs 49 real).
+The list feeds the startup route log and the reserved-path guard tests, so the
+OpenID surface was invisible to both. A membership test now pins the entries.
+
+- `POST /api/v1/itunes/pid-repair` read `dry_run` only from the query string;
+  a JSON body `{"dry_run":true}` was silently ignored and the request took the
+  apply path (fired on prod 2026-08-14 — harmless only because the repair plan
+  had nothing to clear). The endpoint now honors dry_run from either transport,
+  failing toward preview.
+
+#### Fuzzy search (`~`) is case-insensitive again
+
+`FuzzyQuery` bypasses the field analyser exactly as the wildcard/prefix
+queries fixed on 2026-08-13 do, so a capitalised fuzzy term could never come
+within edit distance of the lowercased index terms — `HYPERION~` found
+nothing while `hyperion~` matched. Both construction sites (fielded and
+free-text; the fragment named only one) now route through `patternTerm`.
+Each site is pinned by its own mutation-verified subtest.
+
+#### Author, series, import-path and trash listings no longer change order during startup
+
+Five listings have two backing implementations, and they disagreed about order.
+`MemStore` sorted; the `PebbleStore` scan did not sort at all. Pebble iterates
+`<kind>:<id>` keys, and because those keys are strings the raw order is neither
+alphabetical nor numeric — `author:10` comes before `author:2` — so what the
+Pebble path returned was not a defensible order in its own right.
+
+The affected listings are all authors, all series, all import paths, all author
+aliases, and the soft-deleted (trash) listing. memdb is the production default,
+so the wrong order appeared during the cold-start window after a restart and
+before the in-memory index publishes, and in any deployment running with
+`UseMemDB=false`. The author and series screens would come up jumbled and then
+silently reshuffle into alphabetical order once warmup finished.
+
+The trash listing was the worst of the five, because it is paginated and the
+Pebble path applied limit/offset *during* iteration — a page was cut before the
+full matching set existed, so it could not have sorted even in principle. A
+caller paging through the trash while warmup completed would see the ordering
+change underneath it and skip or repeat rows. That path now collects the
+matching set, orders it, and paginates, which is affordable because the
+soft-deleted set is tiny relative to the library.
+
+Rather than copy each comparator into the second implementation, the comparators
+now live in one place (`listing_ordering.go`) and both implementations call
+them, following the pattern `series_ordering.go` established. Two copies of a
+sort rule is what produced this bug.
+
+The new conformance tests assert the **sequence** rather than the set. The
+pre-existing conformance test for the trash listing used `ElementsMatch`, which
+is order-insensitive by construction, and so stayed green through the entire
+drift — it could only ever prove the two paths returned the same books, which
+was never in question. Every fixture is built so that insertion order, ID order
+and sorted order all differ, with more than ten rows so the string-key ordering
+actually shows up, and each fix is mutation-verified by removing the sort from
+the Pebble side alone and confirming its test fails on the `useMemDB=false` arm.
+
+#### The soft-deleted total is exact, and a failed count is an error
+
+`GET /audiobooks/soft-deleted` computed its `total` by fetching up to 10,000
+rows and taking `len()` — silently wrong above 10,000, a 10,000-row read per
+call, and a discarded error that reported `total: 0`, indistinguishable from
+an empty trash. A new `CountSoftDeletedBooks` store capability (memdb index
+walk / Pebble scan, conformance-tested on both dispatch paths with a
+non-vacuous `olderThan` fixture) feeds the handler, which now surfaces count
+errors as 500s. The service falls back to paging the listing to exhaustion
+for stores without the capability, so no caller can reintroduce a cap.
+
+#### `DeleteBookFilesForBook` no longer leaves stale memdb rows
+
+The method deleted the Pebble rows and their indexes but never told memdb, so
+memdb-backed reads (`total_file_count` among them) kept serving the deleted
+files until a restart — invisible whenever the aggregate recompute happened to
+resync the book as a side effect, and biting exactly when aggregates were
+unchanged (the early-return path the 2026-08-03 canary hit). It now mirrors
+`DeleteBookFilesByIDs`' derived-state pass: memdb delete + quick-query dirty
+mark. The regression test reads through the memdb-dispatched getter with a
+zero-aggregate fixture — both choices mutation-forced: the obvious
+instrument (`GetBookFiles`) and a non-zero fixture each let the unfixed code
+pass.
+
+- Tag write-back replaced audio files with mode 0600 copies: `WriteTagsSafe`'s
+  temp file is created 0600 and `OpenFile`'s mode argument applies only at
+  creation, so the "preserve permissions" copy never did. Every rewritten
+  file lost group/other access and its POSIX-ACL mask (found when the E08
+  canary made 100 books' files share-unreadable). The copy now chmods the
+  temp file to the original's mode before the atomic rename.
+
+- Collapsed the 7 remaining whole-library offset-pagination walkers to single
+  limit-0 snapshot reads (quarantine auto-scan, junk-title repair, title
+  backfill/repair, duration backfill, and PebbleStore's folder-dup and
+  metadata-dup scans). Offset pages over the async memdb can silently skip or
+  repeat rows when the snapshot swaps between calls, and the Pebble pagers
+  additionally paid a full prefix scan per page.
+
+- The memory-leak scanner no longer reports a false `addEventListener without
+  removeEventListener` when the add is nested deeper than the cleanup (the
+  2026-08-11 apiFetch.ts false positive). Named handlers now pair by handler
+  identity anywhere in the file; anonymous handlers keep the original
+  look-ahead. Regression tests added (`scripts/test_check_memory_leaks.py`).
+
+- Library page: a 400 from the list endpoint's filter guards (empty filter
+  value, unknown filter field, bare filter param) now surfaces the server's
+  field-naming message as a toast instead of dying in the console as a silent,
+  non-retrying dead page. Traced all UI paths (G118): none can currently send
+  an empty filter value — dropdowns are truthiness-guarded, the search DSL
+  parser drops empty values, and saved presets flow through the same guards;
+  prod stored state verified clean (0 presets, 1 playlist, no empty criteria).
+
+- The CodeQL sanitizer model pack still referenced the pre-rename module path
+  (`github.com/jdfalk/...`), so all 16 path-sanitizer model rows were silently
+  inert since the module became `github.com/falkcorp/...` — path-injection
+  alerts the models exist to suppress had reopened. All references updated.
+
+- Artist tags no longer mint garbage author rows: HTML-entity semicolons are
+  protected from the author-separator split (an "&#169;2013 by ..." tag had
+  sheared into an "&#169" author), and creation now rejects obviously-dirty
+  names (leading "©"/"&#", leading 4-digit year, existing publisher rules) so
+  copyright lines become authorless books instead of repair jobs.
+
+- The boot-time search-index coverage gate now compares ID SETS instead of
+  counts: live books missing from the index are marked for re-index (as
+  before), and stale documents whose book is gone — hard- or soft-deleted —
+  are removed. The old `len(books) <= DocCount()` gate reported "coverage OK"
+  on a production index padded with 3,953 soft-deleted books, and padding
+  could equally hide genuinely missing live books. Adds
+  `BleveIndex.AllDocIDs()` (one sequential low-level doc-ID pass).
+
+- Organize no longer bakes "Unknown Author" into library paths: the bulk
+  organize loop defers books whose author is unresolved (counted + logged),
+  single-book in-place renames return a typed "resolve metadata first" error,
+  and the Review Organize preview replaces the rename/copy steps with an
+  explicit warning instead of proposing a placeholder path. This closes the
+  ordering hole behind the 2026-08-11 mass-reorganize (23,622 entries filed
+  under one placeholder directory).
+
+- Author splitting no longer manufactures authors from book titles: comma and
+  "and"/"&" clauses must be person-shaped (2-4 words, no leading/interior
+  function words — name particles like "de"/"van" stay allowed, no subtitle
+  punctuation, no trailing parenthetical), and the space-concatenation
+  fallback refuses comma-bearing names whose clauses already failed that
+  gate. Refused splits stay visibly broken instead of laundering a title
+  fragment into a plausible name.
+
+- The organizer's database store was wired in exactly ONE of its five entry
+  points (auto-organize), so the AuthorID/SeriesID fallback in path templates
+  was dead code everywhere else: any book whose Author struct was not
+  populated organized into "Unknown Author/" with its AuthorID sitting right
+  there — the mechanism behind the 2026-08-11 mass-reorganize. The store is
+  now a narrow OrganizerStore interface wired by the bulk service, preview,
+  and rename paths too. Also updates two organize-filter tests whose
+  authorless fixtures now (correctly) trip the #2457 author gate.
+
+- Book-row copy paths no longer propagate dangling series references (C610):
+  the organizer's organized-copy, reconcile's metadata merge, and dedup-books'
+  keeper fill now validate the copied `SeriesID` against the series table and
+  drop refs whose series is gone (logged, fail-open on store errors). No new
+  phantom IDs are minted since `resolveSeriesID` creates-by-name; these copy
+  paths were how the existing ~12K dangling refs kept spreading.
+
+- E2E runs are now isolated per worktree (H113): the port and /tmp scratch
+  dirs derive from the worktree path (E2E_PORT overrides), global-setup
+  asserts the reused server serves THIS worktree's bundle (hashed asset
+  identity, not just freshness), and a server whose main listener fails to
+  bind now exits non-zero instead of idling as a healthy-looking zombie.
+  Together these close the 2026-08-11 false-green generator where one
+  worktree's suite silently tested a sibling worktree's build.
+
+- The four whole-library offset-pagination loops in `internal/reconcile`
+  (AssignOrphanVGs, ElectMissingPrimaries, version-group fetch, book-load) now
+  enumerate with ONE store call reading a single consistent snapshot. Offset
+  pages over the async memdb snapshot could silently skip or repeat rows when
+  the reconciler swapped snapshots between pages (~13 swap windows per prod
+  run) — and report success. Five more walkers filed for the same treatment;
+  the original CI flake re-diagnosed as a separate warmup-publish race.
+
+- **Series prune no longer strands books.** `executeSeriesPrune` (behind both
+  `dedup.series-prune`, which the scheduler runs nightly, and
+  `maintenance.series-prune`) decided a series was an orphan using
+  `GetBooksBySeriesIDCore`, which skips trashed and non-primary books. A series
+  whose books were all in the trash, or all secondary versions, counted 0 and
+  was deleted while those books kept its `series_id`. On production 2026-08-14
+  this had already produced **6,893 series IDs referenced by 13,322 live books
+  (plus 702 trashed) with no series row** — those books render with no series at
+  all. Orphan detection now uses a new unfiltered reference count
+  (`GetAllSeriesBookRefCounts`) that counts every book naming a series whatever
+  its deletion or primary-version state, computed once per run rather than per
+  series. If the store cannot answer the unfiltered question the op now fails
+  loudly instead of falling back to the filtered counter.
+
+- **Write-back no longer rewrites every multi-file book on every run.**
+  `FilterUnchangedTags` had no mapping for the `track` tag, while the multi-file
+  write path always emits one (`"n/total"`). Track therefore fell through to the
+  "unknown key — always write" branch, which made the skip condition
+  `len(tagMap) == 0` unreachable for every multi-file book: each rewrote all of
+  its audio files on every write-back run, indefinitely. Since a single tag write
+  costs several full-file copies and SHA-256 passes over the audio, this was the
+  dominant cost of write-back on large libraries.
+
+- Handoff doc now states the native-taglib verification status accurately: the
+  production CGO build compiles and links with the write-back changes, and the
+  de-nesting pattern is runtime-verified through the WASM writer; what remains
+  unexecuted is the CGO binding itself.
+
+- **Applying metadata no longer blanks the cover art.** `ApplyMetadataToBook`
+  writes the candidate's remote cover URL into `cover_url`, and the UI serves
+  covers through `/api/v1/covers/proxy`, which rejects hosts outside its
+  allow-list (production returned `400 URL not from an allowed cover source` for
+  `m.media-amazon.com`). That was invisible while the download ran inline and
+  replaced the value microseconds later; once the download moved to the
+  background it became observable and the cover rendered blank until a refresh.
+  The previous cover is now kept until the new image is actually on disk.
+
+- **The metadata review listing no longer takes 20–35 seconds.** It is requested
+  with `limit=0` ("return all rows"), and it did two sequential `GetBookByID`
+  point reads per entry — once to compute status counts and again to build each
+  row — plus a serial `GetCachedCandidates` per entry, over the entire pending
+  set. Production served it in 21.7s and 35.2s, which was timing the UI out.
+  Books are now fetched in one batch call (`GetBooksByIDs`, which preserves input
+  order) and reused across both passes, and the cached-candidate reads run
+  concurrently with the response order preserved.
+
+#### Books stopped being dragged back and forth between two different locations
+
+The app computed a book's destination path in **three** different places, and
+they disagreed. `organize` used the folder + file naming patterns; the
+metadata-apply rename used a separate `path_format` setting that produced a path
+two directory levels shallower; and the multi-file organize path expanded the
+folder pattern but then kept whatever filename the file already had.
+
+Because the rename is a real move, each of these dragged files toward its own
+answer. Run organize, and the next metadata apply moved the book back. Run the
+apply, and the next organize moved it again. There was no state at which both
+were satisfied, so a book could be moved indefinitely.
+
+All three now go through one builder (`BuildRelPath`) driven by the same two
+patterns, so they cannot arrive at different answers. A conformance test asserts
+all three agree on the same fixture, including the multi-file case, which is the
+leg nothing had ever compared.
+
+Along the way this fixed a real bug in the surviving builder: `{series_prefix}`
+had its intentional trailing `" - "` trimmed away, so every book in a series was
+being named `MySeries -Book` rather than `MySeries - Book`.
+
+#### Multi-file books are now named by the file naming pattern, not their old filenames
+
+Organizing a multi-file (directory) book put it in the right folder but left
+every file inside under whatever name it arrived with. Only single-file books
+ever had the file naming pattern applied. Files of a multi-file book are now
+named by the pattern and numbered by their track number.
+
+A guard comes with it: a file naming pattern containing no `{track}` placeholder
+gives every file of a multi-file book the same name. Now that organize writes to
+these paths, that would have merged a 40-part book into a single file. When the
+pattern does not distinguish the files, a zero-padded track number is appended
+and the situation is logged.
+
+#### Organized book records no longer point at files that were never created
+
+When organize created the "organized" copy of a multi-file book, the per-file
+database rows were filled in by *assuming* each file kept its original name in
+the new folder. That assumption is no longer true, and it was never verified
+against the disk. The rows now come from the same planner that did the copying,
+and each is checked against what is actually on disk before being written — a
+file that organize skipped keeps a row pointing at where it really is.
+
+Routing all three through one planner is not on its own enough: the plan is a
+pure function of its arguments, so the paths agree only if they pass the same
+rows, and they did not. `OrganizeDirectoryBook` pre-filtered `book_file` rows
+with an empty `FilePath`; `CreateOrganizedVersion` and the metafetch apply paths
+passed `GetBookFiles` straight through. One such row changes the file count and,
+because `""` sorts first, shifts every position-derived track number by one — so
+organize writes `… - 07.mp3` while the row writer plans `… - 08.mp3`, finds
+nothing there, and falls back to the un-organized source path. The row set is
+now normalized inside the planner, where no caller can opt out of it.
+
+- Write-back and organize warnings now name what they could not write. Every
+  warning on the metadata-apply path used to report a bare count or an opaque
+  `"value"` key, so a production log could tell you that something failed but
+  never which tag, which file, or which book:
+  - `write-back: unmapped tag key` now carries the tag key, its value, the file
+    path, and the file's current title/album, plus a hint that an unmapped key
+    forces a rewrite of the file on every run.
+  - `files skipped during rename` now names the book and lists the missing
+    source paths (capped at 20, with a `truncated` flag) instead of logging only
+    `count`.
+  - `write-back failed for file` now carries the book id/title, the book-file
+    id, the file's position in the book (`3 of 12`), and the tag keys that were
+    being written.
+  - `organizeFile skipping unsafe destination` logged only an error with no path
+    at all; it now names the book, the source, the computed destination, and the
+    target directory.
+  - `organizeFile skipping missing source file`, `tag writing failed for book`,
+    `cover art embedding failed`, and the two "protected book has no library
+    copy" warnings all gained book title and path context.
+
+- The background operation can now be **cancelled**, and reports progress per
+  book so the registry stuck-op watchdog can tell a slow run from a wedged one.
+  `PerItemTimeout` is set below the watchdog's 5-minute progress timeout so one
+  wedged book fails its own item instead of killing the whole batch.
+
+- **Series now appear in ABS apps.** The series list returned book entries in an
+  ad-hoc shape — six fields, with no `media`, `mediaType` or cover — instead of
+  the `LibraryItem` objects the ABS API defines. Clients decode a series' books
+  as a single typed list, so one undecodable entry discarded the whole response
+  and the Series tab showed "No Series Found" even though 23 of the 50 series on
+  the first page had real books. Series books are now built by the same
+  serializer the (working) playlists route uses.
+
+- **A series no longer reports a book count it cannot list.** 9 of 50 series on
+  production reported one or more books while returning an empty list, because
+  books without a resolvable sync id are dropped after the count is taken.
+  `numBooks` now counts the books actually served — the rule `totalDuration`
+  already followed — and a mismatch is logged rather than silently served.
+
+- **`/api/collections` no longer 404s the routes the native API serves.** The ABS
+  compatibility layer reserved the whole `/api/collections` subtree, which was
+  correct for exactly one commit — the commit that added the native
+  `/api/v1/collections` twin turned that reservation into the playlists defect
+  (#2332 → #2333 → #2335): `GET /api/collections`, `PUT /api/collections/:id` and
+  `POST /api/collections/:id/materialize` are served only by the native API, and
+  the wide reservation converted their redirects into 404s on every deployment.
+
+  Collections now uses the mechanism built for this case — a method-aware route
+  list gated on `ABSAPIEnabled` — so with the ABS surface off the namespace
+  redirects exactly as before, and with it on ABS claims precisely the six routes
+  it registers. The matcher was generalized from "exactly one trailing segment" to
+  a gin-style pattern match, since ABS serves `/api/collections/:id/book/:bookId`.
+
+- **Reading a dynamic collection no longer writes to the database.** Its
+  re-evaluated membership was persisted unconditionally, so every `GET` was an
+  fsync and a version bump, and the `updatedAt` it moved is what the ABS DTO
+  exposes as `lastUpdate` — a client caching on it would re-fetch an untouched
+  collection forever. It now persists only when membership actually changed.
+
+- **A path separator in `file_naming_pattern` no longer manufactures a directory.**
+  `BuildRelPath` expanded the file pattern through `BuildPath`, which splits on
+  `/` and sanitizes each half independently, and nothing then constrained the
+  result to a single component. A separator in the file pattern therefore became
+  a real directory on disk, and the two-phase rename parked its payload inside as
+  `<n>.<ext>.tmp-rename` and failed. The stem is now collapsed to one component,
+  which yields exactly the name the file should have had rather than failing the
+  organize outright.
+
+  This is distinct from the `scrubVar` guard, which sanitizes variable *values*
+  before substitution and does not see separators that arrive in the *template*.
+  The two produce identical wreckage on disk and were conflated for months.
+
+- Three iTunes operations — **Sync**, **Path Reconcile** and **Path Repair** —
+  have been reporting success without doing anything since 2026-07-17. A
+  half-finished refactor left placeholder versions of them in the iTunes plugin,
+  and because plugins load before the rest of the server, the placeholders took
+  over from the working versions. Running any of the three produced a green
+  "completed" row and no work. All three now run their real implementations
+  again. A fourth, **Position Sync**, had no working version to fall back on and
+  now reports an honest failure instead of a false success.
+
+- Operations: a v2 operation that ended in `interrupted_quiesced` or
+  `interrupted_restart` left its legacy operations row stuck at `pending`
+  forever. The status mapper enumerated only three of the interrupted variants
+  while `interruptedStatus` mints `interrupted_quiesced` for every resume policy
+  except `ResumeDrop` — three of the four legal policies. Unmapped statuses
+  returned early without writing or logging anything, which looked exactly like
+  an operation that had no legacy row at all. It now matches on the `interrupted`
+  prefix, so a new variant maps correctly without a code change here.
+
+- **A naming pattern that silently strands files is now rejected at the point
+  it is set.** Two shapes are refused: a path separator in
+  `file_naming_pattern` (it names one file, not a directory path), and a file
+  pattern with no `{track}` / `{track:02d}` / `{track_title}` placeholder. The
+  second looks entirely reasonable — `"{title} - {author} - read by {narrator}"`
+  was once a shipped default — and is catastrophic for multi-file books,
+  because every track expands to the same name and all but the first are left
+  behind as `.tmp-rename`.
+
+- **Path components are normalized to NFC.** macOS produces NFD and Linux
+  produces NFC, so the same title arrived as two different byte strings and
+  created two directories that render identically. Korean is the sharp case:
+  NFD decomposes a Hangul syllable into jamo, so `해리` is 6 bytes composed and
+  12 decomposed with no visual difference.
+
+- **Component truncation is rune-aware.** The 200-byte cap was a byte slice, so
+  any Japanese, Korean or Chinese title over ~67 characters was cut mid-rune
+  and the result was not valid UTF-8. The filesystem rejects that outright with
+  `EILSEQ`, meaning such a book could not be organized at all.
+
+- **Invisible and filesystem-hostile characters are stripped or escaped:** C1
+  controls, zero-width space, BOM, bidi overrides and line/paragraph
+  separators; Windows reserved device names (`NUL`, `COM1`, and `NUL.m4b` too)
+  and trailing dots/spaces, which NTFS silently strips. Zero-width
+  joiners/non-joiners are deliberately preserved — they are meaningful in
+  Devanagari conjuncts and bind emoji sequences.
+
+- Long-running operations no longer get cancelled after five minutes while they
+  are working normally. `LoggerFromReporter` — the adapter between an operation's
+  work and the operations registry — discarded the progress reporter it was
+  given and returned a logger whose progress method did nothing, so every
+  progress update from a library scan, import, organize, iTunes sync, reconcile
+  or folder autoscan was thrown away. The registry's stall detector, seeing an
+  operation that had never once reported progress, cancelled it at the
+  five-minute mark no matter how healthy it was; the operation's real time limit
+  (four hours for a library scan) never applied. Progress now reaches the
+  registry, so these operations run to completion and report live progress in the
+  UI instead of stopping partway with a "stuck" error.
+
+- The nightly maintenance window is no longer cancelled part-way through for
+  being "stuck" while it is simply waiting. It runs each maintenance task in
+  turn and waits for it to finish, and a single task routinely takes longer than
+  the five minutes of silence the watchdog allows — so a perfectly healthy run
+  looked identical to a frozen one. It was 28 of the 44 operations cancelled for
+  inactivity in the preceding month. It now reports the running task's own
+  progress while it waits, so a real freeze is still caught: the task it is
+  waiting on is watched independently.
+
+- Library scans no longer die at the AI-parsing stage. After walking every file
+  the scan hands filenames to the AI for cleanup, in batches — and that stage
+  never reported progress, so a scan that had already done all its real work got
+  cancelled for inactivity five minutes in and threw the whole walk away. It now
+  reports per batch. Separately, when the AI provider returns something that
+  cannot resolve on its own — no credits, a revoked key — the scan stops asking
+  instead of working through every remaining batch against the same answer, and
+  says so in the log. Those books keep the metadata derived from their
+  filenames. A scan of a 3,917-file library was failing this way on 2026-08-16
+  because the OpenAI account had run out of credits.
+
+- **Operation status and logs no longer read a table that never says "done".** The
+  legacy `operations` table does not transition rows out of `pending` — read against
+  production on 2026-08-16 it reported **183 of 200 rows pending**, some six days
+  old, while the v2 record for the same window showed 179 completed, 13
+  interrupted_dropped, 6 canceled, 1 failed. `GET /operations/:id/status` and
+  `/operations/:id/logs` tried v2 first and *fell back* to that table, so anything
+  that fell through got a confidently wrong answer. Both now read v2 only.
+
+- **Starting a scan reported failure while the scan was running.** The legacy
+  trigger routes answered `202 {"op_id":..., "id":...}` unwrapped, while the web
+  client read `.data.id`. `.data` was `undefined` on that shape, so `op.id` threw a
+  `TypeError`, the caller's `catch` swallowed it, and the UI showed "Failed to start
+  scan" — for a scan that had started. Same for organize, transcode and optimize.
+
+- **Library scans no longer get killed while they are still working.** The
+  directory-discovery and directory-scanning phases of a scan reported no
+  progress at all, so on a large import folder the scan looked identical to a
+  hung process and the stuck-operation watchdog killed it after five minutes.
+  The 2026-08-16 rescan died this way mid-walk of a folder holding 17,469
+  books. Both phases now check in every 20 directories.
+
+- **The scanner honors the configured LLM backend.** It previously built the
+  cloud OpenAI parser whenever AI parsing was enabled, ignoring
+  `ai_backend.llm_mode` entirely — so a deployment configured for a local
+  Ollama endpoint, or for no LLM at all, still sent every scan batch to
+  `api.openai.com`. Local, OpenAI, and disabled modes are now all respected,
+  matching the `llmparser` service registration.
+
+- **Scheduled tasks left one permanently-`pending` operation row per tick.** Five
+  tasks (`scan`, `organize`, `library-size-refresh`, `acoustid-online-lookup`,
+  `ai-dedup-batch`) created a legacy `operations` row under one ULID and then
+  enqueued the *real* v2 operation under a **different** ULID. Nothing linked the
+  two and nothing ever updated the legacy row, so it sat at `pending` forever.
+
+  Measured against production on 2026-08-16, `GET /api/v1/operations` reported
+  **183 of 200 rows pending**, some six days old, while the v2 record for the same
+  window showed 179 completed, 13 interrupted_dropped, 6 canceled and 1 failed.
+
+  The same bug also made the scheduler's "started operation" log line — and the
+  `POST /tasks/:name/run` response — report an id that **no endpoint could resolve**,
+  because the operation that actually exists carries the other id. Both now report
+  the v2 id, which resolves via `GET /operations/v2/:id`.
+
+- Scheduler: `isTaskRunning` covered 14 of the 24 tasks that enqueue an
+  operation. The other 10 had no entry in its lookup table, and a missing entry
+  is indistinguishable from "not running" — so the maintenance window would
+  start a task that was already going, and the tasks page rendered it as
+  stopped. Both guards now read the v2 record, and a test asserts the lookup
+  against what each task actually enqueues, in both directions.
+
+- Activity-log entries from scheduled maintenance ops were tagged with the id of
+  a legacy row rather than the operation itself. They now carry the v2 operation
+  id, which can be looked up.
+
+#### Batch metadata apply no longer reports success when the files never moved
+
+`POST /api/v1/metadata/cached/apply` counted a book as applied whether or not
+its audio files were actually renamed. The rename happens inside
+`ApplyMetadataFileIO`, which had **no return value** — a failure from the apply
+pipeline was swallowed into a `slog.Warn` and was unreachable to all six of its
+callers. `applyCachedCandidateForBook` therefore returned `Applied: true`
+regardless of what happened on disk, and the batch op's `write_failed` counter
+could never be incremented by a rename failure.
+
+`ApplyMetadataFileIO` now returns an `error`, and the outcome the API reports
+distinguishes the two cases:
+
+- **`Applied` stays true.** The database change is real and durable, and a
+  failed rename does not undo it. Reporting the book as unapplied would send
+  someone re-applying work that already succeeded.
+- **`WriteBackFailed` is now set** when the file work did not fully land, so the
+  batch op counts it separately and logs it naming the book.
+
+A non-nil error means "the file work did not fully land", **not** "nothing
+happened": `runApplyPipeline` deliberately persists the `book_file` rows for
+every rename that *did* succeed before returning the failure, so a partial
+rename is already recorded.
+
+The four callers that run in a background pool or a restart-recovery handler
+cannot reach an HTTP response — by the time they run, the request has been
+answered — so they log the failure with the book named instead. Tag write-back
+still runs after a file-I/O failure exactly as it did before; only the error
+that gets reported changed, with the file-I/O error taking precedence because
+"rename failed" localises the fault better than the write-back error it tends to
+cause.
+
+Follows the target-path builder unification, which is what surfaced this: that
+change made the rename correct, and this one makes its failure visible.
+
+#### A multi-file organize that copied nothing no longer reports success
+
+`OrganizeBookDirectory` creates its target directory with `MkdirAll` *before*
+copying anything, and skips any source file that has vanished from disk. When
+every source was gone it therefore returned an empty directory, an empty
+`pathMap`, and a **nil error** — indistinguishable from a clean organize.
+
+This was reachable without any `book_file` row being flagged `Missing`: rows that
+look present but whose files have since disappeared all skip silently. The
+"every row is flagged missing" case was already rejected; this was the one that
+looked like success.
+
+Of the function's three callers, only `OrganizeDirectoryBook` checked for the
+empty `pathMap`. The other two took the returned directory at face value:
+
+- `ensureLibraryCopy` (`internal/metafetch/service_apply.go`) created a
+  version-linked book record pointing at the empty directory.
+- `organizeMultiFileBook` (`internal/itunes/service/importer.go`) assigned it to
+  `book.FilePath`.
+
+Both left a book in the library pointing at a directory containing no audio.
+
+The check now lives **inside** `OrganizeBookDirectory`, which returns an error
+naming the book and no target directory, so no caller can opt out of it. The
+duplicated check in `OrganizeDirectoryBook` is removed; its separate
+stat-the-destinations check is kept, because that verifies something different —
+`pathMap` records what organize believed it wrote, and the stat confirms the
+files are still there.
+
+Filed as F6 in `todo.d/2026-08-15-organize-rename-silent-failures.md`.
+
+#### Activity-log rows no longer drop the data they are about
+
+The activity log showed entries that had lost the only information that made
+them worth recording — "cover art saved to" (to *where*?), "ISBN enrichment
+succeeded for" (for *what*?). These are `slog` calls whose sentence is the
+**message** and whose content is in the **attributes**, and the log-line bridge
+kept only the message.
+
+A neighbouring row showed the opposite symptom: a raw slog line with its quotes
+pasted into the summary, e.g.
+
+```
+ISBN enrichment found" isbn="9780553293357" title="Foundation
+```
+
+Both come from **one** defect. The message was located with
+`strings.LastIndexByte(rest, '"')`, which finds the last quote in the whole
+remaining line rather than the message's own closing quote. When nothing after
+`msg=` was quoted it landed on the right character by luck; when any attribute
+was quoted, the "message" swallowed the rest of the line, stray quote included.
+That is why it looked like two inconsistent bridges rather than one bug.
+
+The line is now scanned once into structured `key=value` attributes, honouring
+quoted values that contain spaces, `=` or escaped quotes. Attributes are
+rendered into the summary and also stored in `details` so they stay queryable
+rather than existing only as a substring:
+
+- A message ending in a preposition or a colon is a sentence fragment, so its
+  first attribute is appended bare — *"cover art saved to /lib/Asimov/cover.jpg"*.
+- Any other message gets `key=value` appended — *"tag writing failed book_id=b7
+  error=disk full"*.
+- `op_id`, `component` and the other structural keys keep being lifted into
+  their own fields and are not repeated in the summary.
+
+#### Finished maintenance jobs no longer show as still running
+
+Jobs dispatched through `maintenance.job` and the scheduler create a **v1**
+`operations` row and then enqueue a **v2** registry op carrying that row's id in
+its params. Nothing ever wrote the v1 row again — its status was effectively
+write-only after creation.
+
+The operations UI reads v1. So on 2026-08-14 every maintenance-job row of the
+day sat at `"pending"`, including `fix-file-modes` and
+`normalize-primary-flags`, both of which had completed with journalled
+summaries. A composer scan showed 0% three hours into real work, and a chapters
+dry-run showed as an active 1.5-hour task after finishing at 17:57.
+
+A handful of ops already mirrored the status by hand at their own call sites
+(`itunes_ops.go`, `diagnostics_ops.go`, `folder_autoscan_op.go`). Everything the
+scheduler dispatched did not.
+
+The terminal status is now mirrored centrally in `publishOpTerminal`, which
+every terminal path in the registry already funnels through — so a new terminal
+path cannot forget it. `completed`, `failed` and `canceled` pass through;
+`interrupted_ask` and `interrupted_dropped` collapse to the single
+`interrupted` that the v1 vocabulary uses.
+
+Existing progress counters are preserved rather than overwritten with zeros: a
+completed job rendering at 0% would trade "stuck at pending" for "finished at
+zero", which is no more honest. A completed row that never carried counters is
+reported as fully done.
+
+Note that this also unblocks the C510 opstate sweep, which treats unknown
+statuses as KEEP — permanently-pending rows pinned their opstate blobs forever.
+
+**Not included:** a backfill repairing rows already stuck from before this
+change. Those remain stuck until repaired separately.
+
+- `docs/audits/2026-08-16-manual-mock-inventory.md` — corrected the generated-mock usage
+  census. The original count used a bare `mocks.MockX` grep, which collides with the ten
+  other mock packages in the repo and misses the three import aliases (`mocks`, `dbmocks`,
+  `databasemocks`) under which `internal/database/mocks` is imported. Referenced mocks:
+  **3, not 8**. Unused: **42, not 37**. Dead lines in `mock_store.go`: **40,569 (76%), not
+  22,001 (42%)**. The remediation is unchanged; its payoff is roughly 2× larger.
+
+#### `PUT /tasks/:name` no longer reports success for settings it drops
+
+Turning a scheduled task off through the Maintenance settings page could do
+nothing at all while reporting that it had worked. The endpoint answered
+`200 {"message":"task config updated"}` for every field it was sent, including
+fields the named task had no wiring for.
+
+Measured against production on 2026-08-16: `PUT /tasks/purge_deleted
+{"enabled":false}` returned 200, and the task still read back `enabled=true`
+on the very next request. The purge kept running.
+
+Two separate defects were behind it:
+
+- **Five tasks silently ignored settings that do exist.** `library_scan` accepted
+  and dropped `enabled`, `interval_minutes` and `run_on_startup` even though the
+  scheduler reads all three from `scheduled.library_scan.*`; `reconcile_scan`
+  dropped `interval_minutes` and `run_on_startup` the same way. Those settings
+  now apply.
+- **Fields that genuinely have no switch were acknowledged anyway.** For
+  `purge_deleted` and `purge_old_logs` the on/off control is a different setting
+  entirely (`purge_soft_deleted_after_days` and `log_retention_days`), and for
+  `tombstone_cleanup` and `library_organize` the schedule is fixed in code.
+  These now return an error naming the setting to change instead of a false
+  confirmation, and the Maintenance page surfaces it.
+
+The cause was that "which settings does this task accept" and "where does each
+setting get written" were written as two separate things, so a task could accept
+a setting it never wrote. They are now one table, and a test asserts for every
+task and setting that a success response really did change the value it names.
+
+A failure to save the change to the database also used to be logged as a warning
+under a `200`; it now reports an error, since a setting that will not survive a
+restart has not been updated.
+
+#### Cancelled and interrupted operations no longer show as running forever
+
+Cancelling a long-running operation left the progress bar spinning and the
+status stuck on "running" for as long as the page stayed open. The operation had
+actually stopped — only the display was wrong — but there was no way to tell
+that from the screen, and the only fix was a page reload.
+
+The frontend waited for the operation to report the status `cancelled`, spelled
+with two Ls. The backend has always written `canceled` with one. The two
+spellings never met, so the check that was supposed to end the poll never
+matched and the page polled every second indefinitely.
+
+The same page also failed to notice operations that were stopped by a restart or
+shutdown. Those end in one of several `interrupted_*` statuses, and the list the
+frontend checked against was missing `interrupted_quiesced` — the one produced
+in the most common case.
+
+Both are now decided by a single shared check that recognises any interrupted
+variant by shape rather than by an enumerated list, so a status added on the
+server can no longer strand the display. The affected screens were the
+deduplication tabs, the Library organize progress, and Diagnostics; Diagnostics
+now also shows the real final status rather than a fixed label.
+
+- **E2E mocks now speak the v2 operations API.** Retiring the v1 operation
+  triggers and reads (`2c8e3b3c`, `1ce1de7d`, `542a6929`) moved every start and
+  poll onto `POST /operations/v2` and `GET /operations/v2/:id`, but the test
+  doubles still implemented only the retired URLs. Every spec that started a
+  scan, organize or transcode and then waited for a spinner, progress bar or
+  toast failed at the first step, because the start call went unhandled and no
+  operation was ever created — 23 failures across six specs. The shared mock
+  and the four specs that stub operations themselves now use the v2 routes and
+  envelopes, serving from the same fixture store as before so no fixture
+  changed.
+
+- **Corrected the recorded scope of the scan-error restore.** The TODO entry for
+  "import-path scan no longer surfaces per-file scan errors" described the fix as
+  frontend wiring — poll the operation, feed failures into `ScanStatus.errors`.
+  That assumed the backend already collects per-file failures. It does not: nothing
+  in `internal/scanner/` accumulates them, and the ones that are logged are free
+  text at Debug/Warn with the path interpolated into the message rather than in
+  structured `attrs`. The entry now describes both layers of work so the task is
+  not picked up as a small one.
+
+- **Documented a silent data-loss hazard: applying metadata during a scan is
+  reverted.** Nothing guards a metadata apply against an in-flight `library.scan`.
+  For books the scan has not yet processed, `applyScannerFields` overwrites `Title`,
+  `AuthorID`, `SeriesID`, `Narrator`, `Publisher`, `Language` and the provider IDs
+  (`ASIN`, `OpenLibraryID`, `HardcoverID`, `GoogleBooksID`, `WorkID`) with
+  scanner-derived values — and `Title` is effectively always overwritten because the
+  scanner falls back to path extraction when tags are empty. The user sees no error.
+  `preserveExistingFields`, which reads like the guard against exactly this, has a
+  single call site confined to the moved-file branch. Filed with the mechanism and
+  three candidate fixes; no behaviour change in this PR.
+
+- **The metadata review dialog could be frozen permanently by its own page-size
+  setting.** Choosing "250 per page" locked the dialog up, and because the stored
+  preference was only checked for membership in the options list — where 250 was a
+  legal member — every reopen restored 250 and froze it again. The size control
+  lives inside the dialog, so there was no way back: the only escape was clearing
+  `localStorage` by hand. A stored size is now clamped to 50 on read and the
+  correction is written back, so existing stuck users recover on next open. The
+  selector no longer offers 250 or 500.
+
+- **Applying metadata no longer holds the review dialog hostage.** The apply already
+  ran as a background operation server-side, but the dialog then sat on
+  `pollOperationV2` until every book finished, which cancelled out the benefit. It
+  now dispatches, toasts "Metadata apply queued for N book(s) — watch the bell for
+  progress", and returns. The bell already tracks every background op, so progress is
+  not lost. The Apply buttons re-enable immediately instead of after the batch, and
+  further applies queue server-side rather than being locked out.
+- **A blank `llm_mode` no longer silently means OpenAI.** `EffectiveLLMMode()` fell
+  through to OpenAI whenever an API key happened to be set, so an empty config field
+  chose a paid external service with nothing logged — on 2026-08-16 that ran a whole
+  library scan against OpenAI until the account hit `credit_balance_exhausted`, at
+  which point 77 consecutive batches failed and the watchdog killed the scan. A blank
+  mode now prefers the local backend whenever one is configured.
+
+- **Documented that compound narrator names are never split into individual
+  narrators.** A book credited to "Michael Kramer & Kate Reading" is stored as one
+  narrator record whose name is the whole string, so narrator filtering and
+  faceting miss every multi-narrator book. The `BookNarrator` join table already
+  supports many-to-many — the rows just never get created, because nothing splits
+  on the ingest path. The only splitter in the repo lives inside
+  `OptimizeDatabase`, runs only when invoked, and matches `" & "` and nothing else,
+  so comma-separated credits stay compound.
+
+- **Interrupted operations now actually resume.** Two stacked bugs meant a job
+  killed by a restart never came back. `GetInterruptedOperations` matched only
+  `running`/`queued`/`interrupted`, while the registry mints `interrupted_quiesced`
+  (every ResumePolicy except ResumeDrop), `interrupted_dropped`,
+  `interrupted_restart` and `interrupted_ask` — so the startup sweep was blind to
+  the very rows it exists to resume. And even when a row was found, `ResumeRestart`
+  only set it to `"queued"` without enqueueing it, so nothing ever ran it. Status
+  matching is now a prefix test, and `ResumeRestart` re-enqueues for real.
+- **Compound narrator and author names are split into individual people.** The
+  splitter was `strings.Split(name, " & ")` and nothing else, duplicated verbatim in
+  two packages, and gated behind `strings.Contains(name, " & ")` so it never even ran
+  for comma-separated credits. "Kate Reading, Michael Kramer" was therefore one
+  narrator. There is now a single implementation in `internal/util` handling `&`,
+  `and`, `;`, `,`, `with`, `+` and `/`, de-duplicating results, and deliberately
+  refusing to split surname-first names like "Le Guin, Ursula".
+
+- **Tapping an author or a narrator in the mobile app now shows their books.** Both
+  drill-downs answered "No Books Found" for every contributor in the library. The
+  `?filter=` handler implemented exactly one group, `series`; `authors` and
+  `narrators` fell through to the branch that deliberately serves an empty page
+  rather than the whole library, and were never implemented behind it. Reproduced on
+  production and confirmed by the server's own warning log, which had been recording
+  both groups by name.
+- **Compound narrator credits are split into individual people in the Narrators
+  tab.** A single stored string like "Jeff Hays, Annie Ellicott" was its own entry
+  reading "1 book" — the library had entries naming eight narrators — and every book
+  behind one was missing from the real narrators' counts. The tab now lists each
+  person once with a correct count. This changes the presentation only: the stored
+  narrator rows still hold the compound string, and the web UI still shows it.
+- Author and narrator counts on the tab and the number of books behind the tap are
+  now computed from one map, so they cannot drift apart.
+
+- **Narrators no longer appear twice, once with a stray comma.** A credit written
+  with an Oxford comma — "Lance Parkin, Stephen Cole, Alan Barnes, & Jonathan
+  Morris" — was split on `" & "` before `", "`, which stranded a comma at the end
+  of the preceding name. "Alan Barnes," was then listed as a separate narrator from
+  "Alan Barnes", splitting one reader's books across two entries (14 books and 1).
+  Split pieces now have leading and trailing separator punctuation trimmed.
+  Measured against the live narrator list: 11 names cleaned, 8 of them merging into
+  an entry for the same person that already existed, and no narrator lost.
+  Punctuation that belongs to a name — "Sammy Davis Jr.", "Alex Hill-Knight" — is
+  deliberately left alone.
+
+- **"File not found" download failures are now diagnosable.** Five different
+  conditions in the file-serving path all returned an identical 404 with an
+  identical body and **none of them logged anything**, so a report of "it says it
+  can't find the file" could not be traced to a cause without probing production
+  directly. The client-visible answer is unchanged — it is the protocol contract —
+  but the server now records which of the five it was: `no_ino`, `no_syncfile`,
+  `no_bookfile_row`, `abs_path_failed`, or `bytes_missing`, along with the path it
+  tried to serve.
+
+  Diagnosing the live reports took four separate production probes precisely
+  because 1,036 of these 404s had been recorded without recording their kind.
+
+- Two counts corrected in place. `internal/maintenance/jobs/store_slices.go` said 31 job types
+  implement `MaintenanceJob.Run`; it is 37. The `todo.d` fragment said 24 store-parameter
+  declarations remain; re-measured it is 54 — the earlier figure undercounted free functions
+  by 3 and counted only the maintenance packages.
+
+- **`HEAD` now works on the ABS byte-serving routes** — `/api/items/:id/file/:ino`,
+  `.../download`, and `/api/items/:id/cover`. gin registers one method per call,
+  so a GET-only route answered `HEAD` with **404, not 405**, which is
+  indistinguishable from "this file does not exist".
+
+  That silently destroyed a real measurement. A probe built to find `book_file`
+  rows with no bytes behind them reported **100% of 1,786 files missing** and
+  passed its own sanity check, because a fabricated file id returned the same 404
+  as every real one. A uniformly-dead instrument agrees with any hypothesis.
+
+  No handler changed. These routes already end in `http.ServeContent`, which
+  omits the body for `HEAD` while still sending `Content-Length`, `Content-Type`,
+  `ETag` and `Accept-Ranges`, and the ABS auth middleware already accepted
+  `?token=` on `MethodHead`. Only the routing table was missing.
+
+### Security
+
+- Log-injection sweep wave 1 (CA12): new `logging.Sanitize`/`SanitizeErr`
+  escape CR/LF in user-controlled strings; the shared logging conduits
+  (`logging.Info/Warn/Error/Debug`, `httputil.InternalError`, the http-request
+  error logger) now sanitize messages and string attribute values for every
+  caller at once. Also restored the machine-recognizable `strings.ReplaceAll`
+  barrier in `internal/logger`'s sanitizer — a comment claimed it existed but
+  a refactor had replaced it with a builder loop CodeQL cannot model, leaving
+  322 downstream alerts open.
+
+### Internal
+
+- Recorded an intermittent hang in the `internal/database` short-test suite that fails the
+  coverage gate with `panic: test timed out after 25m0s`. Same commit passed on re-run, and
+  the package passes locally and on `main`, so it is a stall rather than a regression — but
+  the ceiling raised in #2270 (10m → 25m) has now been hit at both heights, so the timeout is
+  not the fix. Filed with the evidence and next steps in `todo.d/`.
+
+### Known gaps
+
+- **Collections remain unimplemented and that is honest, not a regression.** There is no
+  `Collection` model, store or route anywhere in the codebase, so the empty response has
+  nothing behind it to serve — unlike the playlist route, whose empty response was hiding
+  a fully populated model. Building it is a new entity end to end and is costed
+  separately rather than silently attempted.
+
+### Documentation
+
+- **Retracted finding N-3 of the ABS coverage audit — it was wrong.** It claimed `Update: true` /
+  `Delete: true` in `defaultPermissions()` advertise writes we cannot perform. It had scoped only
+  library-item writes and missed the nine `/api/me/*` write routes (progress PATCH/DELETE,
+  bookmark POST/PATCH/DELETE, session DELETE). Acting on it would have advertised
+  `update: false` and broken progress sync and bookmarks in both target clients.
+
+#### The 2026-06-22 security sweep has a verified status column
+
+All 41 finding IDs verified against HEAD: 14 fixed, 8 partial, 13 open,
+5 unverified, 1 obsolete — each row with its 2026-08-14 evidence. The still-
+open items are filed as TODO fragments (including one live re-discovery:
+the iTunes search handler still calls `SearchBooks(search, 0, 0)`, PERF-4).
+
+- Filed the C716 investigation results: the reported 3,954-book API-vs-store gap
+  decomposed into 3,953 (soft-deleted books counted by the pre-#2408 leaky
+  `ListBookIDs`) + 2 quarantined books + 0 unexplained. Two new bugs filed:
+  `show_quarantined=true` silently drops the 22,552 nil-`is_primary_version`
+  books, and the Bleve search index holds ~3,953 docs for soft-deleted books.
+
+- Filed the B06 chapters end-to-end verification: multi-file synthesis, stored-
+  chapter serving (21/29 sampled single-file items already have stored chapters),
+  and graceful absence all verified against the live ABS surface on production.
+  The E02 backfill is a residue job, not a whole-library one.
+
+- Filed the F110 playlist-PID coverage measurement: 88.5% of XML tracks resolve
+  via the ExternalIDMapping backfill (post-#2367); the album-level PID field
+  resolves only 14% and must not be used for playlist import. F111 is GO.
+
+- Filed the C111 nil-`is_primary_version` census: the nil population is 5,702
+  books (all ungrouped), not the long-quoted 22,552 (which was the explicit-
+  false set). The index path provably counts nil as true; recommended
+  unification is nil=true with an explicit-value backfill.
+
+- Added the 2026-08-14 task-board snapshot (`docs/handoffs/2026-08-14-task-board.md`):
+  the 113-task breakdown with end-of-day statuses — 22 PRs merged, the D-0…D-10
+  decision outcomes, and the production actions executed (review-apply enabled +
+  canary-verified, scheduled intervals repaired, fast required checks live).
+
+### Notes
+
+Audit findings, no code changed. Headline: we serve 48 of 223 routes, but endpoint coverage
+for the target clients is good — the defects are in what those routes say. `GET /socket.io/`
+answers `200 text/html` instead of 404, and the conformance harness has both strictness gates
+switched off, so all 25 always-hardcoded fields and all 9 stubs pass it.
+
+### Performance
+
+- `UpsertBookToMemDB` no longer holds go-memdb's single global writer mutex
+  across three Pebble reads (authors, narrators, and the full book-file prefix
+  scan). The reads are hoisted to enqueue time — same snapshot contract as the
+  existing struct copy. Benchmarked with realistic 30KB fingerprints: parallel
+  UpdateBook 1.35–1.83 ms/op before → 1.21–1.25 ms/op after, with far lower
+  variance. This was the system-wide ceiling that made worker pools on
+  book-level ops buy less than NumCPU×.
 
 <a id='changelog-v0.218.0'></a>
 ## v0.218.0 — 2026-08-08
