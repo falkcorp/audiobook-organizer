@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.92.0
+// version: 1.93.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 package config
 
@@ -1669,7 +1669,14 @@ func InitConfig() {
 	viper.SetDefault("embedding.model", "text-embedding-3-large")
 	viper.SetDefault("embedding.dimensions", 3072)
 	viper.SetDefault("embedding.base_url", "")
-	viper.SetDefault("embedding.vector_backend", "chromem")
+	// "hnsw" (coder/hnsw graph, sub-linear) is the default: "chromem" is a
+	// brute-force O(n·d) cosine scan whose per-query cost grows linearly with
+	// the corpus. Measured at 1024 dims with the is_primary_version filter:
+	// 10K vectors 9.18ms vs 0.51ms (18x), 50K vectors 111.9ms vs 0.53ms (210x).
+	// At ~61K books and roughly one query per book, dedup.full-scan is the
+	// difference between ~32s and ~1.9 CPU-hours. chromem stays selectable as
+	// the simple fallback; it is no longer the silent default.
+	viper.SetDefault("embedding.vector_backend", "hnsw")
 	viper.BindEnv("embedding.enabled", "EMBEDDING_ENABLED")           //nolint:errcheck
 	viper.BindEnv("embedding.model", "EMBEDDING_MODEL")               //nolint:errcheck
 	viper.BindEnv("embedding.dimensions", "EMBEDDING_DIMENSIONS")     //nolint:errcheck
@@ -2370,6 +2377,26 @@ func (c *Config) Validate() error {
 		errs = append(errs, "database_type must be 'pebble' or 'sqlite'")
 	}
 
+	// embedding.vector_backend is enum-like and was previously never validated:
+	// internal/server/registry_wire.go selects HNSW only on an exact "hnsw"
+	// match and silently falls through to the brute-force chromem scan for
+	// every other value, so a typo cost two orders of magnitude with no error
+	// and no log line. Normalize-then-reject, the same shape as DatabaseType.
+	//
+	// The empty-string normalization is load-bearing, not cosmetic: an upgraded
+	// install whose stored config_blob predates the field gets "" from
+	// migrateEmbeddingBlob (persistence.go), and viper.SetDefault never sees
+	// that path. Without this line those installs would stay on chromem
+	// forever — or, once the enum check exists, fail to start outright.
+	if c.Embedding.VectorBackend == "" {
+		c.Embedding.VectorBackend = "hnsw"
+	}
+	switch c.Embedding.VectorBackend {
+	case "hnsw", "chromem":
+	default:
+		errs = append(errs, "embedding.vector_backend must be 'hnsw' or 'chromem'")
+	}
+
 	// Backup compression is validated HERE, at startup and on PUT /config,
 	// rather than at backup time.
 	//
@@ -2559,7 +2586,7 @@ func ResetToDefaults() {
 				Model:         "text-embedding-3-large",
 				Dimensions:    3072,
 				BaseURL:       "",
-				VectorBackend: "chromem",
+				VectorBackend: "hnsw",
 			},
 
 			// Dedup thresholds + behaviour (nested sub-struct)

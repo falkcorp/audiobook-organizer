@@ -1,6 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.23.0
-// last-edited: 2026-08-23
+// version: 1.24.0
+// last-edited: 2026-08-30
 
 package server
 
@@ -32,6 +32,53 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
 	"github.com/falkcorp/audiobook-organizer/internal/work"
 )
+
+// resolveVectorBackend maps a configured embedding.vector_backend value onto
+// the backend that will actually be built, and makes the slow choice audible.
+//
+// WHY this exists rather than a bare `== "hnsw"` comparison: chromem is a
+// brute-force O(n·d) cosine scan, not an approximate index, so its per-query
+// cost grows linearly with the corpus. Measured on this repo at 1024 dims with
+// the is_primary_version filter: 10K vectors 9.18ms/op vs HNSW 0.51ms/op
+// (18x); 50K vectors 111.9ms/op vs 0.53ms/op (210x). dedup.full-scan issues
+// roughly one query per book, so across a ~61K-book library that is ~32
+// seconds on HNSW against ~1.9 CPU-hours on chromem. It never errors and it
+// never logged anything unusual — the whole cost was silent.
+//
+// chromem remains a deliberately selectable fallback (coder/hnsw had a SIGSEGV
+// crash loop in June 2026 and chromem is the simple escape hatch), but a
+// fallback nobody can tell they are running is a trap rather than a fallback,
+// so selecting it now emits a WARN naming the backend and its scaling.
+//
+// The vector count is deliberately NOT included: the store is constructed
+// empty here and hydrated later (server.go / server_lifecycle.go), so there is
+// no count to read at this point that would not require doing real work.
+//
+// An empty value resolves to the default rather than falling through to
+// chromem: an upgraded install whose stored config_blob predates the field
+// carries "" forward out of migrateEmbeddingBlob, and viper.SetDefault never
+// runs on that path. Config.Validate() normalizes the same case; this is the
+// belt-and-braces at the one site that actually picks an implementation.
+func resolveVectorBackend(backend string) string {
+	switch backend {
+	case "hnsw":
+		return "hnsw"
+	case "":
+		return "hnsw"
+	case "chromem":
+		slog.Warn("dedup vector index: using the chromem backend, which is a BRUTE-FORCE cosine scan, not an approximate index",
+			"backend", "chromem",
+			"scaling", "query cost grows linearly with the number of indexed vectors",
+			"alternative", "set embedding.vector_backend=hnsw (or VECTOR_INDEX_BACKEND=hnsw) for sub-linear search")
+		return "chromem"
+	default:
+		slog.Warn("dedup vector index: unknown embedding.vector_backend, falling back to the default",
+			"configured", backend,
+			"using", "hnsw",
+			"valid", "hnsw, chromem")
+		return "hnsw"
+	}
+}
 
 // init registers services that can't live in their domain packages due
 // to import cycles or because they need package-private symbols from
@@ -72,8 +119,9 @@ func init() {
 	})
 
 	// chromemstore — in-memory ANN vector store for dedup Layer 2. The backend
-	// is config-selectable (config.VectorIndexBackend): "chromem" (default,
-	// brute-force cosine scan) or "hnsw" (coder/hnsw graph, sub-linear search).
+	// is config-selectable (config.VectorIndexBackend): "hnsw" (default,
+	// coder/hnsw graph, sub-linear search) or "chromem" (brute-force cosine
+	// scan — see resolveVectorBackend for why picking it is now audible).
 	// Both satisfy database.VectorANNStore. Optional; on disabled/error the Build
 	// returns an UNTYPED nil so TryGet[database.VectorANNStore] yields ok=false
 	// (returning a typed-nil pointer would assert non-nil to the interface and
@@ -99,7 +147,7 @@ func init() {
 			if dims <= 0 {
 				dims = 3072
 			}
-			if cfg.Embedding.VectorBackend == "hnsw" {
+			if resolveVectorBackend(cfg.Embedding.VectorBackend) == "hnsw" {
 				return database.NewHNSWEmbeddingStore(dims), nil
 			}
 			store, err := database.NewChromemEmbeddingStore(dir, dims)
