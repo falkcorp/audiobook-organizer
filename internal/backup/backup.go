@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-08-29
 
@@ -279,6 +279,27 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 		return nil, fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
+	// Resolve the codec FIRST -- before retention, which DELETES.
+	//
+	// This used to sit just above os.Create, justified as "failing here leaves
+	// nothing behind". That was wrong: enforceRetention runs before it and has
+	// already pruned archives by then. A single typo in backup_compression
+	// therefore destroyed backup history on every attempt and never wrote a
+	// replacement -- with the byte bound and production-sized archives, the
+	// first attempt alone strips history to the one-archive floor, and the
+	// organizer logs the result as a warning and carries on unprotected.
+	// enforceRetention's own comment warns about exactly this ("If that new
+	// write then fails"); a bad codec name made the failure certain.
+	//
+	// Nothing below this point may introduce a configuration error.
+	codec, err := ResolveCodec(config.Compression)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateLevel(codec, config.CompressionLevel); err != nil {
+		return nil, err
+	}
+
 	// Retention runs BEFORE the write, not only after it.
 	//
 	// It used to run only on success (at the end of this function). That is
@@ -297,15 +318,6 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 
 	// Refuse rather than filling the filesystem the live database writes to.
 	if err := ensureSpaceForBackup(config.BackupDir, databasePath); err != nil {
-		return nil, err
-	}
-
-	// Resolve the codec BEFORE creating the file. An unknown compression name
-	// is a configuration error, and failing here leaves nothing behind; failing
-	// after os.Create would leave a zero-byte archive that ListBackups would
-	// then report as a real backup.
-	codec, err := ResolveCodec(config.Compression)
-	if err != nil {
 		return nil, err
 	}
 
@@ -391,6 +403,18 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 // named after the source DB (e.g. "audiobooks.pebble/") rather than the random
 // checkpoint temp-dir name ("pebble-checkpoint-XYZ/").
 func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType string, config BackupConfig) (*BackupInfo, error) {
+	// Same rule as CreateBackup: a configuration error must be detected before
+	// anything destructive or expensive happens. This path prunes archives AND
+	// hard-links the entire database before it ever delegates, so discovering a
+	// bad codec name at the end would waste both.
+	codec, cerr := ResolveCodec(config.Compression)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if cerr := ValidateLevel(codec, config.CompressionLevel); cerr != nil {
+		return nil, cerr
+	}
+
 	if err := os.MkdirAll(config.BackupDir, 0775); err != nil {
 		return nil, fmt.Errorf("create backup dir: %w", err)
 	}
@@ -502,6 +526,7 @@ func RestoreBackup(backupPath, targetPath string, verify bool) error {
 
 	// Create tar reader
 	tarReader := tar.NewReader(compReader)
+	extracted := 0
 
 	// Extract files
 	for {
@@ -562,6 +587,26 @@ func RestoreBackup(backupPath, targetPath string, verify bool) error {
 		default:
 			slog.Warn("backup unsupported file type", "type", header.Typeflag, "name", header.Name)
 		}
+		extracted++
+	}
+
+	// Extracting nothing is a FAILED restore, not a successful empty one.
+	//
+	// Without this, a 0-byte or truncated archive restores "successfully" and
+	// the caller is told its database was recovered. SniffCodec falls back to
+	// the uncompressed codec for any bytes lacking gzip or zstd magic, so an
+	// empty file yields a valid empty tar and the loop exits on the first
+	// Next(). Before compression was configurable, gzip.NewReader rejected such
+	// a file outright; that accidental guard is gone, so the check has to be
+	// explicit.
+	//
+	// Truncated archives are an ordinary event here, not a hypothesis: only the
+	// codec-writer error path removes a partial file, so a failure in
+	// addToArchive, either Close, Stat or the checksum leaves one behind under a
+	// real archive name.
+	if extracted == 0 {
+		return fmt.Errorf("backup %s contained no entries: it is empty or truncated, "+
+			"and nothing was restored", filepath.Base(backupPath))
 	}
 
 	return nil

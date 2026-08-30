@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.91.0
+// version: 1.92.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-29
 
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/spf13/viper"
 )
@@ -2367,6 +2368,26 @@ func (c *Config) Validate() error {
 	case "pebble", "sqlite":
 	default:
 		errs = append(errs, "database_type must be 'pebble' or 'sqlite'")
+	}
+
+	// Backup compression is validated HERE, at startup and on PUT /config,
+	// rather than at backup time.
+	//
+	// This is not tidiness. CreateBackup prunes old archives before it writes,
+	// so a name it cannot resolve means the prune has already happened and no
+	// replacement archive is written -- one bad character in this field
+	// destroyed backup history on every attempt and reported it as a warning.
+	// Rejecting the value at the point it is set keeps that failure impossible
+	// instead of merely unlikely.
+	//
+	// ResolveCodec is the authority rather than a list literal here, so this
+	// can never drift from what the backup package actually accepts (it also
+	// takes the aliases "gz", "zst", "store" and "uncompressed", which a
+	// hand-written list would wrongly reject).
+	if codec, cerr := backup.ResolveCodec(c.BackupCompression); cerr != nil {
+		errs = append(errs, cerr.Error())
+	} else if lerr := backup.ValidateLevel(codec, c.BackupCompressionLevel); lerr != nil {
+		errs = append(errs, lerr.Error())
 	}
 
 	if err := validateParentDirExists(c.DatabasePath, "database_path"); err != nil {

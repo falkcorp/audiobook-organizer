@@ -1,5 +1,5 @@
 // file: internal/backup/codec.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7c41d8-6e52-4a19-9f03-c8d5a2e71b64
 // last-edited: 2026-08-29
 
@@ -227,13 +227,44 @@ func SniffCodec(r io.ReadSeeker) (Codec, error) {
 	}
 }
 
-// hasArchiveExtension reports whether name looks like a backup archive in any
-// supported format.
+// archiveNamePrefix is the prefix CreateBackup gives every archive it writes.
+const archiveNamePrefix = "audiobooks_"
+
+// hasArchiveExtension reports whether name is an archive THIS PROGRAM wrote.
+//
+// Both halves matter. The suffix alone is not enough: backup_dir is an
+// operator-settable absolute path that may be a shared directory, and ".tar" is
+// one of the most common suffixes there is. ListBackups feeds enforceRetention,
+// which DELETES, and the organizer's freshness check, which SUPPRESSES backups
+// -- so a loose predicate has two distinct harms. A stray "nightly-etc.tar"
+// would become a deletion target, and merely being recent would make
+// newestBackupAge report the library as freshly backed up and skip the real
+// backup, logging a healthy-looking line while protection quietly stopped.
+//
+// Requiring the prefix keeps the rule to files this code is responsible for.
 func hasArchiveExtension(name string) bool {
+	if !strings.HasPrefix(name, archiveNamePrefix) {
+		return false
+	}
 	for _, ext := range archiveExtensions() {
 		if strings.HasSuffix(name, ext) {
 			return true
 		}
 	}
 	return false
+}
+
+// ValidateLevel rejects a level the codec cannot use.
+//
+// Called before anything destructive runs, so a bad value is a refusal rather
+// than a pruned backup directory with no replacement archive.
+func ValidateLevel(c Codec, level int) error {
+	if level == LevelDefault {
+		return nil
+	}
+	if c.Name() == CompressionGzip && (level < gzip.HuffmanOnly || level > gzip.BestCompression) {
+		return fmt.Errorf("backup_compression_level %d is out of range for gzip (%d..%d)",
+			level, gzip.HuffmanOnly, gzip.BestCompression)
+	}
+	return nil
 }
