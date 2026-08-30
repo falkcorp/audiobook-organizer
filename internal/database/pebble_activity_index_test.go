@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2a91c4-6b3d-4a52-9c18-2d0e5b7a4e31
 // last-edited: 2026-08-29
 
@@ -172,6 +172,10 @@ func TestPebbleActivityStore_WipeAllActivityWipesIndexes(t *testing.T) {
 	opKeys, bookKeys := countIndexKeys(t, s)
 	assert.Equal(t, 0, opKeys, "WipeAllActivity must leave no act:op: entries")
 	assert.Equal(t, 0, bookKeys, "WipeAllActivity must leave no act:bk: entries")
+	assert.Equal(t, 0, countKeysWithPrefix(t, s, "act:change:"),
+		"WipeAllActivity must leave no primary rows either, including the one whose JSON will not decode")
+	assert.Equal(t, 0, countKeysWithPrefix(t, s, "act:"),
+		"nothing under the act: prefix may survive a wipe")
 }
 
 // ── the repair: orphans that already exist must have a route to deletion ─────

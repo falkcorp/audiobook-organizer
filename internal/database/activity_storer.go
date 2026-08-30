@@ -1,5 +1,5 @@
 // file: internal/database/activity_storer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
 // last-edited: 2026-08-29
 
@@ -34,6 +34,14 @@ type ActivityRetention interface {
 	// untouched, so the store is left in a state a plain retry can finish —
 	// there is no partial-tier bookkeeping to resume, the retry just rescans
 	// and deletes whatever remains.
+	//
+	// The count is a LOWER BOUND on keys removed, not an exact one: a backend
+	// may additionally sweep rows it could not enumerate individually (the
+	// Pebble implementation range-deletes the whole activity prefix on a
+	// completed run, which also removes rows whose stored JSON will not decode
+	// and index entries whose row was already gone). Under-reporting is the
+	// deliberate direction — a caller may rely on the number never claiming
+	// more than it can name.
 	WipeAllActivity(ctx context.Context) (int64, error)
 	CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error)
 	RecompactDigests(ctx context.Context) (RecompactResult, error)

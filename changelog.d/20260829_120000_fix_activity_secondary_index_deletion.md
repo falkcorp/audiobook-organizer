@@ -30,8 +30,11 @@ Both halves are fixed:
   round-tripped `Timestamp`, because a Pebble delete of a key that does not
   exist succeeds silently and one nanosecond of drift would have produced a fix
   that deleted nothing and reported no error. `WipeAllActivity` additionally
-  removes both index prefixes wholesale, which is what makes its name true even
-  for rows whose stored JSON will not decode.
+  range-deletes the entire `act:` prefix once its row pass completes, which is
+  what makes its name true for the rows that pass cannot reach: an index entry
+  orphaned before this fix, and — caught by test, not assumed — a PRIMARY row
+  whose stored JSON will not decode, which `scanTierKVs` drops and which was
+  therefore surviving a "wipe all" too.
 - **The existing orphans have a route out.** A new repair pass finds index
   entries whose primary row no longer exists and deletes them, and it now runs
   as the last step of the nightly `maintenance.cleanup-activity-log` job, which
@@ -39,3 +42,12 @@ Both halves are fixed:
   nothing costs one scan and says zero. Index entries carrying a reference that
   cannot be turned back into a primary key at all are deleted too, and counted
   separately — no reader could follow them either.
+
+Note on what "removed" means here: the repair reports **index keys removed**,
+which is the number to quote. It is not a disk-space figure. A Pebble delete
+writes a tombstone; bytes come back only at a later compaction, which is a
+separate operation with its own cost on this deployment. The 0.783 GiB above
+works out to roughly 6M index entries if it is a logical key+value byte sum and
+roughly 24M if it is compressed disk usage (measured: 35.30 compressed bytes per
+synthetic `act:op:` entry over a 200,000-entry sample); which of the two the
+production figure was is not established.

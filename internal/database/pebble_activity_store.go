@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-29
 
@@ -286,8 +286,8 @@ func pactIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool) {
 // intact together, no new orphan is manufactured from a row whose ids we cannot
 // read, and the drop is counted and reported in aggregate by pactDecodeTally —
 // it is never silent. The one contract that cannot live with that is
-// WipeAllActivity, which therefore deletes both index prefixes wholesale
-// instead of row-by-row; see its doc comment.
+// WipeAllActivity, which therefore range-deletes the entire "act:" prefix after
+// its row-by-row pass rather than relying on it; see its doc comment.
 func pactDeleteEntry(batch *pebble.Batch, kv pactKV) error {
 	if err := batch.Delete(kv.key, nil); err != nil {
 		return err
@@ -721,21 +721,31 @@ func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
 // no partial-tier bookkeeping to resume: a retry just calls WipeAllActivity
 // again, which rescans every tier and deletes whatever remains.
 //
-// After the tier scan, the act:op: and act:bk: index families are removed
-// wholesale with DeleteRange. This method's contract is its name, and a
-// row-by-row index delete could not honour it: an entry whose stored JSON does
-// not decode is dropped by scanTierKVs, so its ids are unreadable and its index
-// entries would survive a "wipe all"; the same is true of every index row
-// orphaned before this leak was closed. A range delete needs neither the ids
-// nor a decode. It is safe because these two prefixes are not tiers — actTiers
-// holds none of them — and the only other key the activity subsystem owns is
-// the backfill sentinel "system:backfill:activity_pebble_v1_done", which is
-// outside "act:" entirely.
+// After the tier scan, the WHOLE "act:" prefix is removed with one DeleteRange.
+// This method's contract is its name, and the row-by-row path cannot honour it
+// on its own — in two directions, both of which were verified by test rather
+// than assumed:
 //
-// The returned count stays PRIMARY ROWS ONLY, because that is what the
-// ActivityRetention doc promises callers ("rows actually deleted"); counting
-// index keys would silently inflate the number the wipe endpoint shows a user.
-// The index side is reported in the log line instead.
+//   - A row whose stored JSON will not decode is dropped by scanTierKVs, so it
+//     is never staged for deletion at all. Sweeping only the two index families
+//     would leave that PRIMARY row sitting in the log after a "wipe all"; the
+//     test seeds exactly such a row and asserts nothing under "act:" survives.
+//   - An index row orphaned before this leak was closed has no primary left to
+//     drive its deletion, and its ids are only recoverable from the key itself.
+//
+// A range delete needs neither a decode nor the ids, and one range tombstone is
+// cheaper than millions of point tombstones. It is safe because "act:" is the
+// activity subsystem's entire keyspace: the only other key it owns is the
+// backfill sentinel "system:backfill:activity_pebble_v1_done", which is outside
+// "act:" — and ';' is one above ':' in ASCII, so ["act:", "act;") is exactly
+// that prefix and nothing beyond it.
+//
+// The returned count stays PRIMARY ROWS ONLY and is therefore a LOWER BOUND: it
+// counts the rows deleted individually above, so a row the scan could not decode
+// is swept but not counted (pactDecodeTally counts and logs those separately),
+// and index keys are never counted at all. That is deliberate — the
+// ActivityRetention doc promises "rows actually deleted", and counting index
+// keys would silently inflate the number the wipe endpoint shows a user.
 func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 	var total int64
 	for _, tier := range actTiers {
@@ -770,26 +780,27 @@ func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error
 		}
 	}
 
-	// Sweep both index families wholesale. See the doc comment: this is what
-	// makes "wipe all" true for index rows whose primary is undecodable or was
-	// already gone, neither of which the per-row path above can reach.
+	// Sweep the whole act: keyspace. See the doc comment: this is what makes
+	// "wipe all" true for the rows the per-row path above cannot reach — a
+	// primary row whose JSON will not decode, and an index row whose primary
+	// was already gone. The ctx check keeps the cancellation contract: a
+	// cancelled wipe leaves the rows it has not reached alone rather than
+	// destroying the whole log on its way out.
 	if err := ctx.Err(); err != nil {
 		return total, err
 	}
-	idxBatch := s.db.NewBatch()
-	defer idxBatch.Close()
-	for _, prefix := range pactIndexFamilyPrefixes {
-		lower := []byte(prefix)
-		upper := []byte(prefix[:len(prefix)-1] + ";") // ';' is one above ':'
-		if err := idxBatch.DeleteRange(lower, upper, nil); err != nil {
-			return total, fmt.Errorf("pebble_activity_store: wipe index range %s: %w", prefix, err)
-		}
+	sweep := s.db.NewBatch()
+	defer sweep.Close()
+	// ';' is one above ':' in ASCII, so ["act:", "act;") is every activity key:
+	// all tier rows and both index families, and nothing else.
+	if err := sweep.DeleteRange([]byte("act:"), []byte("act;"), nil); err != nil {
+		return total, fmt.Errorf("pebble_activity_store: wipe activity range: %w", err)
 	}
-	if err := idxBatch.Commit(pebble.Sync); err != nil {
-		return total, fmt.Errorf("pebble_activity_store: wipe index commit: %w", err)
+	if err := sweep.Commit(pebble.Sync); err != nil {
+		return total, fmt.Errorf("pebble_activity_store: wipe activity range commit: %w", err)
 	}
-	slog.Info("[activity] wipe removed all secondary index entries",
-		"prefixes", pactIndexFamilyPrefixes, "primary_rows_deleted", total)
+	slog.Info("[activity] wipe swept the entire act: keyspace",
+		"range", "act: .. act;", "primary_rows_counted", total)
 
 	return total, nil
 }
