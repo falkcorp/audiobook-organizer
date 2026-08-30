@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-08-29
+// last-edited: 2026-08-30
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -310,8 +310,41 @@ func pactDeleteEntry(batch *pebble.Batch, kv pactKV) error {
 
 // ── ActivityStorer implementation ─────────────────────────────────────────────
 
-// Record inserts an ActivityEntry and returns a synthetic int64 ID.
-func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
+// pactPreparedEntry is one activity row normalized, marshalled and keyed, ready
+// to be staged into a pebble.Batch.
+//
+// Preparing is split from staging because preparation is the ONLY step that can
+// fail for a reason attributable to a single entry (a row whose Details map will
+// not marshal to JSON). Once an entry is prepared, staging it is an in-memory
+// append into the batch, and the failures left — a commit error — doom every row
+// in the batch equally. RecordBatch's error semantics rest entirely on that
+// split; see its doc comment.
+type pactPreparedEntry struct {
+	id      int64
+	primary []byte
+	value   []byte
+	idxKeys [][]byte
+	idxRef  []byte
+}
+
+// prepareEntry applies the field defaults and the synthetic ID that Record has
+// always applied, marshals the row, and derives its primary and secondary index
+// keys.
+//
+// This is the ONE place the activity write path builds keys or marshals a row:
+// Record and RecordBatch both go through it, so a second writer cannot drift
+// from the first. That matters more than ordinary de-duplication here, because
+// Pebble's Delete of a key that does not exist succeeds SILENTLY — an index key
+// written in even a slightly different format would be undeletable forever and
+// nothing would report an error. That is the exact defect pactDeleteEntry was
+// added to repair (~0.783 GiB of orphaned act:op: rows on production), so a new
+// write path must not be able to recreate it.
+//
+// The index keys deliberately come from pactIndexKeysFor — the SAME derivation
+// pactDeleteEntry uses to remove them — rather than from a private fmt.Sprintf.
+// Writer and deleter now share one definition of the key format, so "what this
+// wrote is what Prune deletes" is true by construction, not by inspection.
+func (s *PebbleActivityStore) prepareEntry(e ActivityEntry) (pactPreparedEntry, error) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
 	}
@@ -330,39 +363,179 @@ func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
 
 	b, err := json.Marshal(e)
 	if err != nil {
-		return 0, fmt.Errorf("pebble_activity_store: marshal: %w", err)
+		return pactPreparedEntry{}, fmt.Errorf("pebble_activity_store: marshal: %w", err)
+	}
+
+	idxKeys, ok := pactIndexKeysFor(primaryKey, e)
+	if !ok {
+		// Unreachable for a key pactPrimaryKey just built, but a silent skip
+		// here would write a primary row with no indexes, so it is an error.
+		return pactPreparedEntry{}, fmt.Errorf("pebble_activity_store: derive index keys for %q", primaryKey)
+	}
+
+	return pactPreparedEntry{
+		id:      id,
+		primary: primaryKey,
+		value:   b,
+		idxKeys: idxKeys,
+		idxRef:  pactIndexRef(e.Tier, e.Timestamp, entryID),
+	}, nil
+}
+
+// pactStagePrepared stages a prepared row's primary key and every secondary
+// index key into batch. Mirror image of pactDeleteEntry.
+func pactStagePrepared(batch *pebble.Batch, p pactPreparedEntry) error {
+	if err := batch.Set(p.primary, p.value, nil); err != nil {
+		return fmt.Errorf("pebble_activity_store: set primary: %w", err)
+	}
+	for _, k := range p.idxKeys {
+		if err := batch.Set(k, p.idxRef, nil); err != nil {
+			return fmt.Errorf("pebble_activity_store: set index %q: %w", k, err)
+		}
+	}
+	return nil
+}
+
+// Record inserts an ActivityEntry and returns a synthetic int64 ID.
+//
+// One entry, one fsync. Callers with many entries to write should use
+// RecordBatch instead — see its doc comment for the measured cost of not doing
+// so.
+func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
+	p, err := s.prepareEntry(e)
+	if err != nil {
+		return 0, err
 	}
 
 	batch := s.db.NewBatch()
 	defer batch.Close()
 
-	if err := batch.Set(primaryKey, b, nil); err != nil {
-		return 0, fmt.Errorf("pebble_activity_store: set primary: %w", err)
+	if err := pactStagePrepared(batch, p); err != nil {
+		return 0, err
 	}
-
-	// Secondary index: op_id → primary ref
-	if e.OperationID != "" {
-		opKey := []byte(fmt.Sprintf("act:op:%s:%020d:%s", e.OperationID, e.Timestamp.UnixNano(), entryID))
-		ref := pactIndexRef(e.Tier, e.Timestamp, entryID)
-		if err := batch.Set(opKey, ref, nil); err != nil {
-			return 0, fmt.Errorf("pebble_activity_store: set op index: %w", err)
-		}
-	}
-
-	// Secondary index: book_id → primary ref
-	if e.BookID != "" {
-		bkKey := []byte(fmt.Sprintf("act:bk:%s:%020d:%s", e.BookID, e.Timestamp.UnixNano(), entryID))
-		ref := pactIndexRef(e.Tier, e.Timestamp, entryID)
-		if err := batch.Set(bkKey, ref, nil); err != nil {
-			return 0, fmt.Errorf("pebble_activity_store: set book index: %w", err)
-		}
-	}
-
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return 0, fmt.Errorf("pebble_activity_store: commit: %w", err)
 	}
 
-	return id, nil
+	return p.id, nil
+}
+
+// activityRecordBatchCap caps how many entries RecordBatch stages into ONE
+// pebble.Batch before committing it and starting a fresh one.
+//
+// WHY a cap at all: a Pebble batch holds every staged key and value in memory
+// until it commits, so one unbounded commit over an unbounded flush is a heap
+// risk — and this service has already OOMed once on an activity path (a single
+// unbounded activity Query held 8.86 GB, 71.9% of the process). A cap converts
+// "as much memory as the caller happened to hand us" into a fixed ceiling.
+//
+// WHY 500: it matches ActivityBatcher's own early-flush threshold, so the
+// normal flush is exactly one commit and the split path is reserved for the
+// unusual oversized drain. At a generous 2 KB per serialized activity row that
+// is ~1 MB of staged keys and values in flight — three orders of magnitude
+// under Pebble's 64 MB memtable, and small enough that the amortization is
+// already saturated: the per-fsync cost is paid once per 500 rows instead of
+// once per row, and raising the cap further buys nothing measurable.
+//
+// A var, not a const, following activityQueryScanBudget above, so tests can
+// shrink it and exercise the split without seeding hundreds of entries.
+var activityRecordBatchCap = 500
+
+// pactRecordBatchCommits counts the durable commits RecordBatch has made.
+//
+// It exists because a commit leaves NO trace in the keyspace: 11 entries look
+// identical on disk whether they went down in one commit or three, so a test
+// for the cap that only counted stored keys would pass against a cap that had
+// stopped working — the whole point of the cap is the number of commits, and
+// that number is otherwise unobservable. Pebble exposes no per-commit counter
+// (LogWriterMetrics carries throughput and queue-length gauges only), so the
+// instrument has to live here. One atomic add per commit — that is once per
+// activityRecordBatchCap rows, not once per row.
+var pactRecordBatchCommits atomic.Int64
+
+// RecordBatch writes every entry in entries, committing at most
+// activityRecordBatchCap of them per durable commit. It returns the number of
+// entries actually committed.
+//
+// WHY: ActivityBatcher and Writer.drain both exist to amortize activity writes,
+// and before this method neither did. Writer.writeBatch received a batch and
+// then called Record once per entry, and Record commits with pebble.Sync — so a
+// "batch" of 100 rows was 100 separate fsyncs. Measured on this repo, 5,000
+// rows at the same durability level and 5 repetitions: a median of 101 rows/sec
+// per-row versus 29,530 rows/sec batched (BenchmarkActivityRecordPerEntry and
+// BenchmarkActivityRecordBatch). The fsync, not the row, was the unit of cost,
+// and the multiplier tracks how many entries share one commit.
+//
+// ERROR SEMANTICS — deliberate, and different from the per-entry loop it
+// replaces:
+//
+//   - A PREPARE failure is attributable to one entry (its JSON will not
+//     marshal). That entry is dropped, the rest of the batch still commits, and
+//     the returned error names how many were dropped. This preserves the old
+//     loop's isolation for the only failure the old loop could actually isolate.
+//
+//   - A COMMIT failure is NOT attributable to any entry — it is the engine or
+//     the disk — and it loses every row staged in that commit. The batch fails.
+//     It deliberately does NOT fall back to writing those rows one at a time:
+//     the realistic causes (a full or failing disk, a closed DB) fail the
+//     retries too, and retrying per-entry would issue up to 500 further fsyncs
+//     against a disk that just failed one — turning a logged loss into an I/O
+//     storm. The count of rows lost is in the error, and Writer.writeBatch
+//     reports it; losing activity rows is acceptable, losing them silently is
+//     not.
+//
+// The count returned is always the number of rows actually durable, so a caller
+// can report the loss as len(entries) - written without trusting the error text.
+func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (int, error) {
+	if len(entries) == 0 {
+		return 0, nil
+	}
+
+	written := 0
+	var prepareErrs []error
+
+	for start := 0; start < len(entries); start += activityRecordBatchCap {
+		end := min(start+activityRecordBatchCap, len(entries))
+
+		batch := s.db.NewBatch()
+		staged := 0
+		for _, e := range entries[start:end] {
+			p, err := s.prepareEntry(e)
+			if err != nil {
+				prepareErrs = append(prepareErrs, err)
+				continue
+			}
+			if err := pactStagePrepared(batch, p); err != nil {
+				batch.Close()
+				// Join whatever was already dropped by prepare: abandoning the
+				// batch must not also abandon the report of the earlier losses.
+				return written, errors.Join(
+					fmt.Errorf("pebble_activity_store: record batch staging lost %d entries: %w", staged+1, err),
+					errors.Join(prepareErrs...))
+			}
+			staged++
+		}
+
+		if staged == 0 {
+			batch.Close()
+			continue
+		}
+		if err := batch.Commit(pebble.Sync); err != nil {
+			batch.Close()
+			return written, errors.Join(
+				fmt.Errorf("pebble_activity_store: record batch commit lost %d entries: %w", staged, err),
+				errors.Join(prepareErrs...))
+		}
+		batch.Close()
+		pactRecordBatchCommits.Add(1)
+		written += staged
+	}
+
+	if len(prepareErrs) > 0 {
+		return written, fmt.Errorf("pebble_activity_store: record batch dropped %d of %d entries: %w",
+			len(prepareErrs), len(entries), errors.Join(prepareErrs...))
+	}
+	return written, nil
 }
 
 // Query returns entries matching f, newest-first, plus the total matching
