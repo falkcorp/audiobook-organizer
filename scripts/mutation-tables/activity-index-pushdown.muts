@@ -79,10 +79,31 @@ M15 admit pre-epoch timestamps into the keyspace | internal/database/pebble_acti
 # enough to satisfy the "did it apply" guard, compiled, and passed. The entry
 # below is unchanged; the harness was fixed and grew guard 5 (a one-byte sentinel
 # preflight) so a zero-width pattern is rejected instead of scored.
+#
+# 2026-08-30 (later the same day) M16 WAS RE-ANCHORED. The gate was rewritten
+# from a deny-list of undecidable fields into an allow-list walk over
+# ActivityFilter, which deleted the exact `if f.Type != ""` line M16 quoted. Left
+# alone, M16 would have reported NOT-APPLIED — and this table's own history is
+# that a mutation which stops running is indistinguishable from one that
+# survives. It now quotes the refusal inside the field walk, which is the same
+# claim ("an undecidable predicate must not be pushed down") against the new
+# shape. M19 and M20 guard the two ways the new shape can silently fail open.
 
-M16 push down a filter the index cannot decide | internal/database/pebble_activity_store.go | s/\tif f\.Type != "" \x7c\x7c f\.Level != "" \x7c\x7c f\.Source != "" \x7c\x7c f\.Search != "" \{\n\t\treturn false\n\t\}/\t\n/
+M16 push down a filter the index cannot decide | internal/database/pebble_activity_store.go | s/\t\tif pactFilterFieldCarriesPredicate\(v\.Field\(i\)\) \{\n\t\t\treturn false\n\t\t\}/\t\t_ = v.Field(i)/
 M17 push down on an unknown index family | internal/database/pebble_activity_store.go | s/\t\t\/\/ An unknown index family: neither id predicate can be justified by\n\t\t\/\/ construction, so refuse rather than guess\.\n\t\treturn false/\t\treturn true/
 
+
+# ── the allow-list's two silent fail-open modes ──────────────────────────
+# M19 is the nil-vs-empty slice trap. reflect.Value.IsZero on a slice is IsNil,
+# so swapping len() for it makes a non-nil EMPTY slice (`"tags": []`) read as a
+# live predicate. Nothing returns a wrong ANSWER — the fast path is just quietly
+# lost for those callers, which is why only a test that asserts eligibility for
+# an empty slice can see it.
+M19 treat a non-nil empty slice as a live predicate | internal/database/pebble_activity_store.go | s/\t\treturn v\.Len\(\) > 0/\t\treturn !v.IsNil()/
+# M20 bypasses the allow-list entirely, which is the fail-OPEN behaviour of the
+# deny-list this gate replaced: every field counts as decidable and every filter
+# is pushed down.
+M20 treat every filter field as decidable | internal/database/pebble_activity_store.go | s/\t\tif pactPushdownDecidable\[t\.Field\(i\)\.Name\] \{/\t\tif true {/
 
 # ── known equivalent mutant, listed so nobody rediscovers it ─────────────
 M18 drop the merge iterator advance (EQUIVALENT - expect SURVIVED) | internal/database/pebble_activity_store.go | s/\t\t\t\tpit\.Next\(\)\n//
