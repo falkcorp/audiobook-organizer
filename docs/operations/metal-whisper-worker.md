@@ -1,5 +1,5 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
 <!-- last-edited: 2026-08-31 -->
 
@@ -106,6 +106,19 @@ MLX reported `Device(gpu, 0)` at import, which is the device evidence.
 **The 0.5 s figure is elapsed time and is not by itself proof of Metal
 utilization** — a longer, more representative batch should be measured before
 sizing this worker's concurrency in production.
+
+## Running it persistently
+
+`deploy/launchd/com.jdfalk.whisper-mlx.plist` is a launchd agent. It ships
+**loopback-only** and restarts the worker on failure with a 30 s throttle, at
+background priority so it does not compete with the desktop.
+
+```bash
+cp deploy/launchd/com.jdfalk.whisper-mlx.plist ~/Library/LaunchAgents/
+# edit REPO_PATH and USERNAME in the copy first
+launchctl load ~/Library/LaunchAgents/com.jdfalk.whisper-mlx.plist
+curl -s http://127.0.0.1:19848/health
+```
 
 ## Exposing it to the LAN — a separate, deliberate decision
 
