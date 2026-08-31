@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- file: deploy/launchd/com.jdfalk.whisper-mlx.plist -->
+<!-- version: 1.0.0 -->
+<!-- guid: 5d9c47b1-2e8a-4f36-b0c7-8a1e3d92f504 -->
+<!-- last-edited: 2026-08-31 -->
+<!--
+  launchd agent for the Metal Whisper worker (scripts/whisper_mlx_server.py).
+
+  SHIPPED LOOPBACK-ONLY ON PURPOSE. WHISPER_BIND is 127.0.0.1 below. Production
+  cannot reach a loopback worker, so exposing it to the LAN is a SEPARATE,
+  DELIBERATE edit of this file plus a firewall rule restricted to the prod host.
+  There is NO authentication on this endpoint — anything that can reach the
+  port can spend the Mac's GPU. See docs/operations/metal-whisper-worker.md.
+
+  Install:
+    cp deploy/launchd/com.jdfalk.whisper-mlx.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.jdfalk.whisper-mlx.plist
+    curl -s http://127.0.0.1:19848/health
+
+  Manage:
+    launchctl unload ~/Library/LaunchAgents/com.jdfalk.whisper-mlx.plist
+    tail -f ~/Library/Logs/whisper-mlx.log
+
+  Edit REPO_PATH below to this checkout. uv resolves the script's inline
+  dependency metadata, so there is no venv to create or keep in sync.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jdfalk.whisper-mlx</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/uv</string>
+        <string>run</string>
+        <string>scripts/whisper_mlx_server.py</string>
+    </array>
+
+    <!-- REPO_PATH: the audiobook-organizer checkout holding scripts/. -->
+    <key>WorkingDirectory</key>
+    <string>REPO_PATH</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>WHISPER_BIND</key>
+        <string>127.0.0.1</string>
+        <key>WHISPER_PORT</key>
+        <string>19848</string>
+        <key>WHISPER_MLX_MODEL</key>
+        <string>mlx-community/whisper-small.en-mlx</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it dies, but back off: a crash-looping worker that cannot
+         load its model should not respawn continuously and heat the machine. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Background priority: this is opportunistic capacity on a desktop the
+         user is also using. It must not compete with the foreground UI. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/whisper-mlx.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/whisper-mlx.err</string>
+</dict>
+</plist>
