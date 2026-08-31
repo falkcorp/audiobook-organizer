@@ -1,5 +1,5 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
 <!-- last-edited: 2026-08-31 -->
 
@@ -149,3 +149,41 @@ Stop the worker and leave it loopback-only. Remove its entry from
 treats an unavailable endpoint as absent capacity, **not** as permission to
 fall back to an in-process worker — so removing it slows transcription down
 rather than changing any result.
+
+## Refusing a worker that is not actually on a GPU
+
+A Whisper worker on the wrong silicon does not fail. `ctranslate2` (what
+faster-whisper runs on) has CUDA and CPU backends and nothing else, so on a
+machine with an AMD card — or an Apple machine running the *non*-MLX server —
+it loads happily on CPU and serves healthy 200s about ten times slower than
+expected. Nothing in the library surfaces that; it reads as "transcription is
+slow lately."
+
+Set `require_gpu` on the endpoint to refuse it instead:
+
+```json
+[
+  {"url": "http://gpu-box:19847", "priority": 1,  "concurrency": 4, "require_gpu": true},
+  {"url": "http://mac:19848",     "priority": 50, "concurrency": 1, "require_gpu": true}
+]
+```
+
+The gate reads the `device` field from `/health` and accepts only an explicit
+allow-list: `cuda`, `metal`, `mps`, `rocm`, `hip`. It is **fail-closed** — an
+endpoint is refused when
+
+- `/health` cannot be read at all,
+- `/health` reports no `device` (a `whisper_server.py` older than 2.9.0 — upgrade
+  the worker, or leave `require_gpu` off for it), or
+- the device is anything not on the list, including `cpu` and `auto`.
+
+Refusals are logged per endpoint. If *every* endpoint is refused, transcription
+returns a transport error naming each one and its reason, which is deliberately
+distinct from the "no whisper endpoints configured" error — the fix for one is a
+config typo, and for the other it is the hardware.
+
+> **AMD note.** There is no setting that makes `whisper_server.py` use an AMD GPU;
+> ctranslate2 has no ROCm backend. Using AMD silicon needs a different engine
+> (e.g. whisper.cpp + Vulkan) behind the same three-endpoint shim this document
+> describes for MLX. `rocm`/`hip` are on the allow-list so such a worker is not
+> refused once it exists — not as a claim that faster-whisper supports AMD.

@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.93.0
+// version: 1.94.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-30
+// last-edited: 2026-08-31
 
 package config
 
@@ -1208,6 +1208,17 @@ type WhisperEndpoint struct {
 	Priority int `json:"priority" mapstructure:"priority"`
 	// Kind is informational only ("gpu", "cpu", or "").
 	Kind string `json:"kind" mapstructure:"kind"`
+	// RequireGPU refuses to send work to this endpoint unless its /health
+	// reports a GPU device. It exists because a Whisper server on the wrong
+	// silicon does not fail -- it serves healthy 200s from a CPU backend at
+	// roughly a tenth of the speed, which looks like a slow library rather
+	// than a misconfiguration.
+	//
+	// Fail-closed: an endpoint whose /health cannot be reached, or which is
+	// too old to report a device at all, is refused rather than assumed
+	// healthy. A pre-2.9.0 whisper_server.py omits the field and so is
+	// refused -- upgrade the worker or leave require_gpu off for it.
+	RequireGPU bool `json:"require_gpu" mapstructure:"require_gpu"`
 }
 
 // ParseWhisperEndpoints decodes the WHISPER_ENDPOINTS JSON array string.

@@ -1,7 +1,7 @@
 # file: scripts/whisper_server.py
-# version: 2.8.0
+# version: 2.9.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-08-29
+# last-edited: 2026-08-31
 #
 # /// script
 # requires-python = ">=3.11"
@@ -126,7 +126,46 @@ except (ImportError, Exception) as e:
     batched_model = None
     log.warning(f"BatchedInferencePipeline unavailable ({e}), falling back to standard model")
 
-log.info(f"Ready — model={model_name} device={device} compute={compute_type}")
+# The device/compute_type above are what we ASKED ctranslate2 for. What it
+# actually loaded can differ, and the difference is the whole point of the
+# require_gpu gate downstream: WHISPER_DEVICE is returned verbatim by
+# _resolve_device, so a host still carrying an old "WHISPER_DEVICE=cuda"
+# launch script advertises cuda regardless of what silicon it has. Reading the
+# values back off the loaded model turns /health from an echo of this
+# process's configuration into a measurement of what is running. Reported
+# separately from the requested values so a mismatch is diagnosable rather
+# than merely corrected.
+def _read_loaded(attr: str) -> str | None:
+    """Read an attribute off the loaded ctranslate2 model, or None.
+
+    None means "this ctranslate2 build does not expose it", which is a
+    different fact from "it says cpu" and must stay distinguishable: the
+    caller falls back to the requested value but records that it did so, so a
+    consumer can tell a measurement from an assumption.
+    """
+    inner = getattr(model, "model", None)
+    value = getattr(inner, attr, None)
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
+    return None
+
+
+_loaded_device = _read_loaded("device")
+_loaded_compute_type = _read_loaded("compute_type")
+resolved_device = _loaded_device if _loaded_device is not None else device
+resolved_compute_type = _loaded_compute_type if _loaded_compute_type is not None else compute_type
+resolved_device_source = "model" if _loaded_device is not None else "requested"
+
+if resolved_device != device:
+    log.warning(
+        f"requested device={device} but ctranslate2 loaded device={resolved_device} — "
+        "reporting the loaded device to /health"
+    )
+
+log.info(
+    f"Ready — model={model_name} device={resolved_device} compute={resolved_compute_type} "
+    f"(requested device={device} compute={compute_type})"
+)
 
 # VAD parameters tuned for audiobook intros: lower threshold so music/quiet speech
 # isn't stripped; shorter silence gap so publisher jingles don't eat the whole clip.
@@ -202,16 +241,26 @@ async def health():
     therefore starts on CPU and stays pinned there for the life of the process,
     serving healthy 200s roughly ten times slower than expected. Surfacing the
     resolved device makes that visible to a health check instead of leaving it
-    in a log line. Adding fields is backward compatible -- the Go client decodes
-    into a struct with only batch_pipeline and ignores unknown fields.
+    in a log line. Adding fields is backward compatible -- the Go client
+    ignores unknown fields. It no longer decodes ONLY batch_pipeline: since
+    the require_gpu gate landed it also reads device, and a require_gpu
+    endpoint that omits device is refused rather than assumed healthy.
     """
     batch_available = batched_model is not None
     return {
         "status": "ok",
         "model": model_name,
         "batch_pipeline": batch_available,
-        "device": device,
-        "compute_type": compute_type,
+        # device is the RESOLVED device read back off the loaded ctranslate2
+        # model, not the requested one -- the Go require_gpu gate refuses an
+        # endpoint whose device is not in its GPU allow-list, and gating on a
+        # requested value would make the gate inert on exactly the host it
+        # exists to catch.
+        "device": resolved_device,
+        "compute_type": resolved_compute_type,
+        "requested_device": device,
+        "requested_compute_type": compute_type,
+        "device_source": resolved_device_source,
     }
 
 
