@@ -1,5 +1,5 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
 <!-- last-edited: 2026-08-31 -->
 
@@ -149,6 +149,61 @@ Stop the worker and leave it loopback-only. Remove its entry from
 treats an unavailable endpoint as absent capacity, **not** as permission to
 fall back to an in-process worker — so removing it slows transcription down
 rather than changing any result.
+
+## Routing work by capability ("tier routing")
+
+Each endpoint has a set of capability **labels**. Work goes only to endpoints
+whose set contains **every** label in `WHISPER_REQUIRES`. Surviving endpoints are
+then ordered by `priority` exactly as before — so labels *filter* the candidates
+and priority *orders* them. A "tier" is a required-label set; there is no routing
+table.
+
+```jsonc
+// WHISPER_ENDPOINTS
+[
+  {"url": "http://gpu-box:19847", "priority": 1,  "concurrency": 4, "require_gpu": true},
+  {"url": "http://mac:19848",     "priority": 50, "concurrency": 1,
+   "capabilities": ["local", "quiet-hours"]}
+]
+```
+
+```sh
+WHISPER_REQUIRES=gpu          # any GPU box
+WHISPER_REQUIRES=gpu,local    # only a GPU box that is also declared local
+WHISPER_REQUIRES=             # empty = any endpoint (the default)
+```
+
+### Labels come from two places, and they are not interchangeable
+
+**Measured** labels are derived from `/health` and cannot be declared by an
+operator: `gpu`, `cpu`, `batch`, and the specific backend (`cuda`, `metal`,
+`mps`, `rocm`, `hip`). Both the family and the backend are derived, so a
+requirement can be as broad as `gpu` or as narrow as `metal`.
+
+**Declared** labels are whatever an operator puts in `capabilities` for things no
+probe can see — `local`, `unmetered`, `quiet-hours`, `fast`.
+
+A declared label that collides with the measured namespace is **dropped and
+logged**, never trusted. This is deliberate: the previous `kind: "gpu"` field let
+an operator assert an endpoint was a GPU box and be believed, which is why it
+never controlled anything and has now been removed. If you want an endpoint
+treated as a GPU, it has to *prove* it on `/health`.
+
+> **`kind` is gone.** It was informational only — written into config, read by
+> nothing. An existing `"kind": "gpu"` in `WHISPER_ENDPOINTS` is now an ignored
+> key, not an error; delete it and use `require_gpu` or `capabilities`.
+
+### Failure behaviour
+
+Matching is **conjunctive and fail-closed**:
+
+- An empty requirement set means *any endpoint* — the historical behaviour.
+- An endpoint whose `/health` cannot be read satisfies **nothing**, so it is
+  refused whenever any label is required (distinct from cooldown, which means
+  "this failed, retry later").
+- If no endpoint qualifies, transcription returns a transport error naming the
+  required set, each refused endpoint, what it was missing, and what it offered —
+  so a typo'd label reads differently from a genuinely unqualified box.
 
 ## Refusing a worker that is not actually on a GPU
 

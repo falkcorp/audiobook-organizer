@@ -61,12 +61,12 @@ func TestPoolOneEndpointDownSurvivorCompletes(t *testing.T) {
 	defer up.Close()
 
 	endpoints := []Endpoint{
-		{URL: downURL, Concurrency: 1, Label: "gpu-dead", Priority: 1, Kind: "gpu"},
-		{URL: up.URL, Concurrency: 1, Label: "cpu-alive", Priority: 100, Kind: "cpu"},
+		{URL: downURL, Concurrency: 1, Label: "gpu-dead", Priority: 1},
+		{URL: up.URL, Concurrency: 1, Label: "cpu-alive", Priority: 100},
 	}
 	jobs := tempWAVJobs(t, 5)
 
-	results, err := transcribePool(context.Background(), endpoints, jobs, nil)
+	results, err := transcribePool(context.Background(), endpoints, nil, jobs, nil)
 	if err != nil {
 		t.Fatalf("expected nil error when a survivor remains, got: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestPoolAllEndpointsDownTransportError(t *testing.T) {
 	}
 	jobs := tempWAVJobs(t, 3)
 
-	results, err := transcribePool(context.Background(), endpoints, jobs, nil)
+	results, err := transcribePool(context.Background(), endpoints, nil, jobs, nil)
 	if err == nil {
 		t.Fatalf("expected error with all endpoints down, got results: %v", results)
 	}
