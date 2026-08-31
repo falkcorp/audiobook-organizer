@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_pushdown_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2e9eb1e1-29af-4a5d-8cd9-2be21b5aad0c
 // last-edited: 2026-08-30
 
@@ -376,8 +376,14 @@ func TestIndexPushdownEligibilityRefusesUndecidableFilters(t *testing.T) {
 		"limit_zero": {OperationID: "op-x", Limit: 0},
 		// Since/Until are ignored by BOTH paths (matchesFilter never reads them
 		// and neither path applies a time bound), so allowing them changes
-		// nothing. Pinned here so a later "helpful" time-bounding of the reverse
-		// scan has to confront this test.
+		// nothing.
+		//
+		// This assertion is NOT the control for that. It used to claim a later
+		// "helpful" time-bounding of the reverse scan "has to confront this
+		// test", which was false: eligibility is a boolean about the FILTER, and
+		// teaching either path to apply a time bound does not change it. This
+		// would have stayed green while the two paths diverged on `total`.
+		// TestIndexPushdownTimeBoundsDoNotDivergeBetweenPaths is the real control.
 		"since_until": {OperationID: "op-x", Limit: 10, Since: timePtr(time.Now()), Until: timePtr(time.Now())},
 	}
 	for name, f := range accepted {
@@ -396,6 +402,40 @@ func TestIndexPushdownEligibilityRefusesUndecidableFilters(t *testing.T) {
 	t.Run("refused/unknown_family", func(t *testing.T) {
 		assert.False(t, pactIndexPushdownEligible("act:zz:thing:", ActivityFilter{Limit: 10}))
 	})
+}
+
+// TestIndexPushdownTimeBoundsDoNotDivergeBetweenPaths is the control standing
+// behind the Since/Until entries in pactPushdownDecidable.
+//
+// Those entries are justified by one claim: neither implementation honours time
+// bounds, so pushing a filter that carries them down changes no answer. Until
+// this test, the only thing behind that claim was an eligibility assertion —
+// which cannot see it — and a comment. A documented hazard is not a control.
+//
+// This is deliberately AGNOSTIC about whether the bounds are honoured. It does
+// not require `since` to filter anything; it requires only that the two
+// implementations do the SAME thing with it. So it passes today (both ignore
+// the bounds) and fails the moment one path learns to honour them without the
+// other — which is exactly the silent `total` divergence the allow-list entry
+// is betting against, and is why fixing the `since` defect must also remove
+// Since/Until from pactPushdownDecidable.
+func TestIndexPushdownTimeBoundsDoNotDivergeBetweenPaths(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	const opID = "op-time-bounds"
+	seedOpEntries(t, s, opID, 40)
+	prefix := "act:op:" + opID + ":"
+
+	now := time.Now()
+	for name, f := range map[string]ActivityFilter{
+		"since well before the rows": {OperationID: opID, Limit: 10, Since: timePtr(now.Add(-24 * time.Hour))},
+		"since after every row":      {OperationID: opID, Limit: 10, Since: timePtr(now.Add(24 * time.Hour))},
+		"until before every row":     {OperationID: opID, Limit: 10, Until: timePtr(now.Add(-24 * time.Hour))},
+		"both bounds, mid-page":      {OperationID: opID, Limit: 5, Offset: 10, Since: timePtr(now.Add(-time.Hour)), Until: timePtr(now.Add(time.Hour))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertPathsAgree(t, s, prefix, f)
+		})
+	}
 }
 
 // TestIndexPushdownIneligibleFiltersStillCorrectThroughQuery proves the refusal

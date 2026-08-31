@@ -985,6 +985,19 @@ func (s *NutsActivityStore) findExistingDigest(dateKey string) (DigestDetails, [
 
 // matchesFilter returns true if entry e satisfies all non-time fields in f.
 // Time filtering is handled by scanTier's range scan.
+//
+// THAT SECOND SENTENCE IS ONLY TRUE OF THE TIER SCAN. The two secondary-index
+// callers in pebble_activity_store.go (queryByIndexPrefixFull and
+// queryByIndexPrefixPaged) apply NO time bounds at all, so
+// GET /api/v1/activity?operation_id=X&since=... silently ignores `since`. That
+// is a known unfixed defect, and this is the function a fixer reaches for.
+//
+// Before adding Since/Until handling HERE, read pactPushdownDecidable in
+// pebble_activity_store.go: Since and Until sit on its allow-list only because
+// this function ignores them. Teaching it to honour them fixes the full path
+// and leaves the PAGED path's `total` wrong — that count is computed before
+// this function runs, and only rows inside the page window are ever decoded.
+// Remove Since/Until from that allow-list in the same change.
 func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 	if f.Tier != "" && e.Tier != f.Tier {
 		return false

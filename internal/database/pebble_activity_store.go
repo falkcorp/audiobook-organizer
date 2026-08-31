@@ -2016,11 +2016,19 @@ var pactPushdownDecidable = map[string]bool{
 // those callers the fast path, with no error and no failing test. The
 // deny-list this replaced asked len(f.Tags) > 0, so using len() here is what
 // makes the rewrite behaviour-IDENTICAL rather than merely behaviour-similar.
+//
+// Maps are handled alongside slices for the same reason, PRE-EMPTIVELY:
+// ActivityFilter has no map field today, but IsZero on a map is also IsNil, so
+// the first one added would land straight in the bug above. Every other kind
+// falls through to IsZero, which is the right question for a string, a number
+// or a pointer.
 func pactFilterFieldCarriesPredicate(v reflect.Value) bool {
-	if v.Kind() == reflect.Slice {
+	switch v.Kind() {
+	case reflect.Slice, reflect.Map:
 		return v.Len() > 0
+	default:
+		return !v.IsZero()
 	}
-	return !v.IsZero()
 }
 
 // pactIndexPushdownEligible reports whether f can be served by the pushdown
