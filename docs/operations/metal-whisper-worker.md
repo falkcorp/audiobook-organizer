@@ -1,7 +1,7 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
 <!-- version: 1.1.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
-<!-- last-edited: 2026-08-30 -->
+<!-- last-edited: 2026-08-31 -->
 
 # Metal Whisper worker (Mac)
 
