@@ -1,5 +1,5 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
 <!-- last-edited: 2026-08-31 -->
 
@@ -149,6 +149,60 @@ Stop the worker and leave it loopback-only. Remove its entry from
 treats an unavailable endpoint as absent capacity, **not** as permission to
 fall back to an in-process worker — so removing it slows transcription down
 rather than changing any result.
+
+## Reaching the worker from the server
+
+The worker binds `127.0.0.1` and is published to the server over a reverse SSH
+tunnel, so the server reaches it at `http://127.0.0.1:19848` and **nothing is
+exposed on the LAN**. Access is authenticated by the existing SSH key, and the
+server's sshd binds the forwarded port to loopback only (`GatewayPorts` defaults
+to `no`).
+
+Two launchd agents, both in `deploy/launchd/`:
+
+| Agent | Does |
+|---|---|
+| `com.jdfalk.whisper-mlx.plist` | Runs the worker, bound to `127.0.0.1:19848` |
+| `com.jdfalk.whisper-tunnel.plist` | Holds `ssh -N -R 19848:127.0.0.1:19848` to the server |
+
+Install (replace the placeholders — the templates carry no host or username):
+
+```sh
+LA=~/Library/LaunchAgents
+sed -e "s#REPO_PATH#$PWD#g" -e "s#USERNAME#$USER#g" \
+    deploy/launchd/com.jdfalk.whisper-mlx.plist    > $LA/com.jdfalk.whisper-mlx.plist
+sed -e "s#USERNAME#$USER#g" -e "s#PROD_HOST#<server>#g" \
+    deploy/launchd/com.jdfalk.whisper-tunnel.plist > $LA/com.jdfalk.whisper-tunnel.plist
+launchctl load -w $LA/com.jdfalk.whisper-mlx.plist
+launchctl load -w $LA/com.jdfalk.whisper-tunnel.plist
+```
+
+### The tunnel must own its SSH connection
+
+`com.jdfalk.whisper-tunnel.plist` passes `ControlMaster=no` and
+`ControlPath=none`, and this is load-bearing. With a `ControlMaster auto` entry
+in `~/.ssh/config` — which is a common setup — `ssh -R` attaches to a shared
+multiplexed connection belonging to whatever interactive session opened it,
+registers the forward there, and **exits 0**. The tunnel then works perfectly,
+and dies when that unrelated session's `ControlPersist` window closes. launchd
+sees the clean exit and, with `KeepAlive`, respawns straight back into the same
+borrowed socket. A tunnel whose lifetime is not its own looks identical to a
+healthy one right up until it disappears.
+
+Verify the agent owns its connection, and that `KeepAlive` actually restores it:
+
+```sh
+pgrep -fl "ssh -N -o ControlMaster=no"     # must match; a bare `ssh -N -R` does not
+kill -9 $(pgrep -f "ssh -N -o ControlMaster=no")
+sleep 35 && pgrep -fl "ssh -N -o ControlMaster=no"   # a DIFFERENT pid
+```
+
+From the server, the worker should answer on loopback:
+
+```sh
+curl -s http://127.0.0.1:19848/health
+# {"status":"ok","device":"metal","batch_pipeline":true,...}
+```
 
 ## Routing work by capability ("tier routing")
 

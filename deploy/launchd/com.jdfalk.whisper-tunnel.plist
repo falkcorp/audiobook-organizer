@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    file: deploy/launchd/com.jdfalk.whisper-tunnel.plist
+    version: 1.0.0
+    guid: 9c2f6b18-4d7a-4e35-a081-52b3e7d94c6a
+    last-edited: 2026-08-31
+
+    Reverse SSH tunnel publishing this Mac's loopback-only Whisper worker to
+    the audiobook-organizer server, which then reaches it at 127.0.0.1:19848.
+
+    Why a tunnel rather than binding the worker to the LAN: the worker stays
+    bound to 127.0.0.1, so nothing on the network can reach it. Access is
+    authenticated by the existing SSH key, and prod's sshd binds the forwarded
+    port to loopback only (GatewayPorts defaults to no).
+
+    ControlMaster is explicitly disabled. Without that, ssh attaches to a
+    shared multiplexed connection from some interactive session, registers the
+    forward there, and EXITS 0 — leaving a tunnel that works perfectly until
+    that unrelated session ends. launchd would see a clean exit and, with
+    KeepAlive, respawn into the same borrowed socket. The agent must own its
+    connection or its lifetime is not its own.
+
+    Replace USERNAME and PROD_HOST before installing; see
+    docs/operations/metal-whisper-worker.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jdfalk.whisper-tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-N</string>
+        <!-- Own the connection; never ride a shared master. -->
+        <string>-o</string><string>ControlMaster=no</string>
+        <string>-o</string><string>ControlPath=none</string>
+        <!-- Fail loudly if the remote port is taken, so KeepAlive retries
+             instead of leaving a live ssh with no forward behind it. -->
+        <string>-o</string><string>ExitOnForwardFailure=yes</string>
+        <string>-o</string><string>ServerAliveInterval=30</string>
+        <string>-o</string><string>ServerAliveCountMax=3</string>
+        <string>-o</string><string>BatchMode=yes</string>
+        <string>-o</string><string>StrictHostKeyChecking=accept-new</string>
+        <string>-R</string><string>19848:127.0.0.1:19848</string>
+        <string>USERNAME@PROD_HOST</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/whisper-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/whisper-tunnel.log</string>
+</dict>
+</plist>
