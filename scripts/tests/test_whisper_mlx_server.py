@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-08-30
 #
@@ -235,4 +235,12 @@ class FfmpegPreflightTest(unittest.TestCase):
             _shutil.which = real_which
 
     def test_present_ffmpeg_returns_its_path(self):
+        # Skipped rather than asserted when the host genuinely lacks ffmpeg:
+        # CI runners may not have it, and this test is about the happy path,
+        # not about the runner's package list. The refusal case above is the
+        # one that must run everywhere.
+        import shutil as _shutil
+
+        if _shutil.which("ffmpeg") is None:
+            self.skipTest("ffmpeg not installed on this host")
         self.assertTrue(_load_module()._require_ffmpeg())

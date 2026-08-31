@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-08-30
 #
@@ -110,8 +110,6 @@ def _require_ffmpeg() -> str:
     raise SystemExit(1)
 
 
-FFMPEG_PATH = _require_ffmpeg()
-
 app = FastAPI()
 
 
@@ -207,15 +205,22 @@ async def health():
         "device": "metal",
         "backend": "mlx",
         # Reported because "can this worker decode audio" is a different
-        # question from "is the model loaded", and only the first one was
-        # ever wrong. The process refuses to start without it, so this is
-        # documentation of a guarantee rather than a live check.
-        "ffmpeg": FFMPEG_PATH,
+        # question from "is the model loaded", and only the first was ever
+        # wrong. Looked up LIVE rather than frozen at import: the startup
+        # preflight proves ffmpeg was present when we booted, not that it
+        # still is.
+        "ffmpeg": shutil.which("ffmpeg"),
     }
 
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Enforced here, not at import: a worker that cannot decode audio must not
+    # serve, but the module must stay importable so the contract tests can load
+    # it on a machine without ffmpeg. Enforcing at import made every test ERROR
+    # on a CI runner that has no ffmpeg -- fail-closed in the wrong place.
+    _require_ffmpeg()
 
     bind = os.environ.get("WHISPER_BIND", "127.0.0.1")
     port = int(os.environ.get("WHISPER_PORT", "19848"))
