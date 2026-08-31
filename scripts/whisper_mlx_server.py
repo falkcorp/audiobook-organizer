@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-08-30
 #
@@ -50,6 +50,7 @@
 
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -78,6 +79,38 @@ MODEL_REPO = (
 # unusable. The Go client's batch path already sends files in one request and
 # expects sequential server-side processing, so this costs no throughput.
 _inference_lock = threading.Lock()
+
+def _require_ffmpeg() -> str:
+    """Refuse to start without ffmpeg. Returns its resolved path.
+
+    mlx_whisper shells out to `ffmpeg` to decode audio. Without it EVERY
+    transcription fails -- but it fails *inside* a 200 response, as
+    {"text": "", "error": "[Errno 2] ... 'ffmpeg'"}, because the batch protocol
+    carries per-file errors in the body. /health stays "ok", the transport looks
+    perfectly healthy, and the caller records a whisper_error per book.
+
+    That is exactly what happened on 2026-08-31: 2,472 batch requests, all 200,
+    21,443 books marked whisper_error, zero transcripts. Under launchd the PATH
+    is the minimal default (no /opt/homebrew/bin), so a worker that worked when
+    started from a shell failed as an agent.
+
+    Exiting here is deliberate and fail-closed: no process means no /health,
+    which means the dispatcher's capability gate refuses this endpoint and
+    defers the page, instead of burning through the library writing errors.
+    """
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    log.error(
+        "ffmpeg not found on PATH (%s) — mlx_whisper cannot decode audio and every "
+        "transcription would fail inside a 200 response. Refusing to start. "
+        "Add ffmpeg's directory to PATH; under launchd set it in EnvironmentVariables.",
+        os.environ.get("PATH", ""),
+    )
+    raise SystemExit(1)
+
+
+FFMPEG_PATH = _require_ffmpeg()
 
 app = FastAPI()
 
@@ -173,6 +206,11 @@ async def health():
         "batch_pipeline": True,
         "device": "metal",
         "backend": "mlx",
+        # Reported because "can this worker decode audio" is a different
+        # question from "is the model loaded", and only the first one was
+        # ever wrong. The process refuses to start without it, so this is
+        # documentation of a guarantee rather than a live check.
+        "ffmpeg": FFMPEG_PATH,
     }
 
 
