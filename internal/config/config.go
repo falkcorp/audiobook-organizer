@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.94.0
+// version: 1.95.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-31
 
@@ -825,6 +825,20 @@ type Config struct {
 	// `[{"url":"http://whisper-1.local:8000","concurrency":2,"priority":1,"kind":"gpu","label":"gpu-box"}]`).
 	WhisperEndpoints []WhisperEndpoint `json:"whisper_endpoints" mapstructure:"whisper_endpoints"`
 
+	// WhisperRequires is the capability label set every transcription
+	// endpoint must satisfy to receive work — the "tier" in tier routing. An
+	// endpoint qualifies when its capability set contains EVERY label here;
+	// the surviving endpoints are then ordered by Priority as before, so this
+	// filters candidates rather than replacing the spill model.
+	//
+	// EMPTY MEANS ANY ENDPOINT. That is the historical behaviour and must
+	// stay explicit: the pool must not begin refusing everything the moment
+	// nobody has configured a label.
+	//
+	// Environment-authoritative (WHISPER_REQUIRES, comma-separated, e.g.
+	// "gpu" or "gpu,local"). Labels are matched case-insensitively.
+	WhisperRequires []string `json:"whisper_requires" mapstructure:"whisper_requires"`
+
 	// Performance
 	ConcurrentScans int `json:"concurrent_scans"`
 
@@ -1206,8 +1220,6 @@ type WhisperEndpoint struct {
 	Label       string `json:"label"       mapstructure:"label"`
 	// Priority: lower = preferred (GPU box 1, CPU box 100).
 	Priority int `json:"priority" mapstructure:"priority"`
-	// Kind is informational only ("gpu", "cpu", or "").
-	Kind string `json:"kind" mapstructure:"kind"`
 	// RequireGPU refuses to send work to this endpoint unless its /health
 	// reports a GPU device. It exists because a Whisper server on the wrong
 	// silicon does not fail -- it serves healthy 200s from a CPU backend at
@@ -1219,6 +1231,31 @@ type WhisperEndpoint struct {
 	// healthy. A pre-2.9.0 whisper_server.py omits the field and so is
 	// refused -- upgrade the worker or leave require_gpu off for it.
 	RequireGPU bool `json:"require_gpu" mapstructure:"require_gpu"`
+	// Capabilities are labels an operator DECLARES about this endpoint, for
+	// properties no probe can see ("local", "unmetered", "fast"). Work is
+	// routed to endpoints whose capability set contains every label in
+	// WhisperRequires.
+	//
+	// Labels that are MEASURED from /health -- gpu, cpu, batch, cuda, metal,
+	// mps, rocm, hip -- are ignored if declared here and derived from the
+	// probe instead. Kind failed as a control precisely because an operator
+	// could assert "gpu" on a CPU box and be believed.
+	Capabilities []string `json:"capabilities" mapstructure:"capabilities"`
+}
+
+// ParseLabelList splits a comma-separated capability label list, trimming and
+// lowercasing each entry and dropping empties. Returns nil for an empty or
+// all-blank input so that "no requirement" is a nil slice rather than a
+// one-element slice containing "" — which would be a requirement no endpoint
+// could ever satisfy, taking the whole pool down.
+func ParseLabelList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if l := strings.ToLower(strings.TrimSpace(part)); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // ParseWhisperEndpoints decodes the WHISPER_ENDPOINTS JSON array string.
@@ -1482,6 +1519,7 @@ func InitConfig() {
 	// whisper_remote_url when non-empty).
 	viper.SetDefault("whisper_endpoints", "")
 	viper.BindEnv("whisper_endpoints", "WHISPER_ENDPOINTS") //nolint:errcheck
+	viper.BindEnv("whisper_requires", "WHISPER_REQUIRES")   //nolint:errcheck
 
 	// Set memory management defaults
 	viper.SetDefault("memory_limit_type", "items")
@@ -1912,6 +1950,7 @@ func InitConfig() {
 			CFAccessAUD:             viper.GetString("cf_access_aud"),
 			WhisperRemoteURL:        viper.GetString("whisper_remote_url"),
 			WhisperEndpoints:        ParseWhisperEndpoints(viper.GetString("whisper_endpoints")),
+			WhisperRequires:         ParseLabelList(viper.GetString("whisper_requires")),
 
 			// Audiobookshelf sync API (feature-flagged OFF by default).
 			ABSAPIEnabled:       viper.GetBool("abs_api_enabled"),

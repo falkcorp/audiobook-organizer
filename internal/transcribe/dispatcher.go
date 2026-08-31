@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-08-31
 
@@ -16,12 +16,20 @@ import (
 
 // Endpoint describes one Whisper server in the dispatch pool.
 //
-// Allocation is priority-ordered, not tier-routed: lower Priority numbers are
-// filled first (a GPU box gets 1, a CPU box gets 100), each up to its
-// Concurrency worth of batch-sized chunks, with the remainder spilling to
-// lower-priority endpoints. Deadline-less bulk work (tier 3) is expected to
-// land on low-priority CPU endpoints through this spill mechanism rather than
-// through any explicit tier routing table.
+// Dispatch is a filter followed by priority-ordered spill, in that order:
+//
+//  1. Capability labels FILTER the candidate set. An endpoint qualifies only
+//     if its capabilities contain every label the pool requires (see
+//     capabilities.go). This is what "tier routing" means here — a tier is a
+//     required-label set, not an entry in a routing table.
+//  2. Priority ORDERS the survivors. Lower numbers are filled first (a GPU box
+//     gets 1, a CPU box gets 100), each up to its Concurrency worth of
+//     batch-sized chunks, with the remainder spilling to lower-priority
+//     endpoints.
+//
+// So deadline-less bulk work lands on low-priority endpoints through spill,
+// while work that genuinely CANNOT run somewhere (it needs a GPU, or must stay
+// local) is excluded by step 1 rather than merely deprioritised in step 2.
 type Endpoint struct {
 	// URL is the base URL of the faster-whisper server,
 	// e.g. "http://whisper-1.local:8000".
@@ -36,13 +44,16 @@ type Endpoint struct {
 	// filled in ascending Priority order; jobs spill to higher numbers only
 	// when lower-numbered endpoints are saturated or unhealthy.
 	Priority int
-	// Kind is informational only ("gpu", "cpu", or ""). It is what an
-	// operator DECLARED; RequireGPU is what the endpoint is MEASURED to be.
-	// Nothing routes on Kind.
-	Kind string
-	// RequireGPU refuses this endpoint unless its /health reports a device in
-	// gpuDevices. See gpu.go for why this is fail-closed.
+	// RequireGPU refuses this endpoint unless it proves the "gpu" capability.
+	// Sugar for adding "gpu" to this endpoint's required set; see
+	// capabilities.go for why this is fail-closed.
 	RequireGPU bool
+	// Capabilities are labels an operator DECLARES about this endpoint, for
+	// properties no probe can see ("local", "unmetered", "fast"). Labels that
+	// are measured from /health instead (gpu, cpu, cuda, metal, batch, ...)
+	// are ignored here and derived from the probe -- declaring them would
+	// recreate the Kind illusion this replaces.
+	Capabilities []string
 }
 
 // Cooldown policy: an endpoint that fails a batch is benched for
@@ -108,7 +119,7 @@ func endpointInCooldown(url string) bool {
 // ONLY when jobs remain and no healthy endpoint is left — per the locked
 // decision in PLAN.md, that error carries no per-file meaning and callers
 // must write nothing.
-func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	if len(jobs) == 0 {
 		return nil, nil
 	}
@@ -122,17 +133,17 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]s
 	// quietly serving from a CPU backend -- because that shape never reaches
 	// the loop. gateEndpoints also performs the /health probe that the batch
 	// decision needs, so this adds no requests.
-	gated, refused := gateEndpoints(ctx, endpoints)
+	gated, refused := gateEndpoints(ctx, endpoints, requires)
 	for _, r := range refused {
-		slog.Warn("transcribe: endpoint refused by require_gpu", "url", r.URL, "label", r.Label, "reason", r.Reason)
+		slog.Warn("transcribe: endpoint refused by capability requirements", "url", r.URL, "label", r.Label, "reason", r.Reason)
 	}
 	if len(gated) == 0 {
 		// Distinct from "no whisper endpoints configured": that sends an
 		// operator hunting a config typo, when the real answer is that the
 		// box they configured is not on a GPU.
 		return nil, classifyTransport(endpointURLs(endpoints), fmt.Errorf(
-			"all %d whisper endpoint(s) refused by require_gpu: %s",
-			len(endpoints), describeRefusals(refused)))
+			"all %d whisper endpoint(s) refused by capability requirements %v: %s",
+			len(endpoints), requires, describeRefusals(refused)))
 	}
 
 	// Health is keyed by URL so allocateJobs keeps operating on []Endpoint

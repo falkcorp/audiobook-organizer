@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-31
 
@@ -53,7 +53,7 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 	// the historical direct path); else the local uv path below.
 	snap := config.Snapshot()
 	if endpoints := poolEndpoints(snap.WhisperEndpoints, snap.WhisperRemoteURL); len(endpoints) > 0 {
-		results, err := transcribePool(ctx, endpoints, jobs, onProgress)
+		results, err := transcribePool(ctx, endpoints, snap.WhisperRequires, jobs, onProgress)
 		if err != nil {
 			// Do NOT fall back to the local uv path when remote endpoints are
 			// configured. The local subprocess loads the full Whisper model into
@@ -181,12 +181,12 @@ func poolEndpoints(cfgEndpoints []config.WhisperEndpoint, singleURL string) []En
 				continue
 			}
 			endpoints = append(endpoints, Endpoint{
-				URL:         e.URL,
-				Concurrency: e.Concurrency,
-				Label:       e.Label,
-				Priority:    e.Priority,
-				Kind:        e.Kind,
-				RequireGPU:  e.RequireGPU,
+				URL:          e.URL,
+				Concurrency:  e.Concurrency,
+				Label:        e.Label,
+				Priority:     e.Priority,
+				RequireGPU:   e.RequireGPU,
+				Capabilities: e.Capabilities,
 			})
 		}
 		if len(endpoints) > 0 {
