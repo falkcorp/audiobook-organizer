@@ -1,8 +1,8 @@
 <!-- file: TODO.md -->
-<!-- version: 10.45.1 -->
+<!-- version: 10.45.2 -->
 <!-- version: 10.44.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-30 -->
+<!-- last-edited: 2026-08-31 -->
 
 # Project TODO — live items only
 
@@ -14,6 +14,352 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **SERIES-PHANTOM-REPAIR** Repair the series IDs that are ALREADY phantom.
+      #2908 closed the two paths it was filed against (`dedup.MergeSeries` and
+      phase 1 of `executeSeriesPrune` now consult the unfiltered
+      `database.SeriesRefCounts` before deleting). It did NOT close all of them —
+      two more are filed below — but preventing
+      corruption is not repairing it: the 6,893 phantom series IDs held by
+      13,322 live books (+702 trashed) measured on production 2026-08-14 have no
+      route back. Those books render with no series and nothing revisits them.
+      Needs a report-first op that lists `books.series_id` values with no
+      matching series row, grouped by how many books hold each, before deciding
+      whether to null them out or recreate the missing series from the books'
+      own metadata. Do NOT write a delete-first repair — see
+      `docs/` and `internal/database/series_bookref.go` for why the filtered
+      count is never the right existence test.
+
+- [ ] **SERIES-NORMALIZE-TRASHED-GAP** `mergeSeriesGroupHelper`
+      (`internal/server/duplicates_helpers.go`, used by the series-normalize op)
+      is the third merge path and still has NO unfiltered reference guard. It is
+      fail-CLOSED on everything it can see — an unhydratable row or a failed
+      `UpdateBook` returns an error before `DeleteSeries` — so it cannot strand a
+      row it was handed. What it cannot see is a TRASHED row: both series getters
+      skip soft-deleted books, so a series whose books are all trashed enumerates
+      empty and the row is deleted with those books still holding it. Left out of
+      #2908 deliberately: the function returns a bare `error`, so surfacing a
+      per-series refusal means either aborting the whole normalize run or changing
+      the signature and every caller — a design call with its own blast radius,
+      tests and mutation runs. Follow the `csMergeSeriesGroup` `(merged, refused,
+      err)` shape when it is done.
+
+- [ ] **SERIES-DENUMBER-TRASHED-GAP** `internal/plugins/maintenance/series_denumber_op.go`
+      (~L328, op `maintenance.series-denumber`) is the FOURTH series-delete path
+      and has the same trashed-row hole #2908 closed elsewhere. It enumerates
+      with `GetBooksBySeriesIDAllVersions` and gates the delete on a `movedAll`
+      flag that **starts true and is only ever set false inside the loop** — so a
+      series whose books are all trashed enumerates empty, the loop body never
+      runs, `movedAll` stays true, and `DeleteSeries(pl.FromID)` fires with those
+      trashed rows still holding it. The file's own comment already documents
+      that `movedAll` starts true; it closed the non-primary half by switching to
+      `AllVersions` and left the trashed half. Not fixed in #2908 for a real
+      reason, not an oversight: this op reaches its store through
+      `p.deps.OpsStore()` (a `pkg/plugin/sdk` interface) and the package does not
+      import `internal/database`, so calling `database.SeriesRefCounts` crosses a
+      layering boundary — either widen the SDK surface or move the guard behind
+      it. Found by review of #2983.
+
+## testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)
+
+The pilot converted six tests across three packages (`internal/realtime`,
+`internal/backup`, `internal/itunes/service`), removing ~35s of wall-clock
+sleeping. This is the triaged backlog for the rest of the 84 files that contain
+`time.Sleep` / `time.After` / `time.NewTicker` in `*_test.go`.
+
+**The discriminator, stated once:** a synctest bubble's fake clock only advances
+when EVERY goroutine in the bubble is *durably* blocked. Parking in netpoll, in a
+signal wait, or in a subprocess wait is explicitly NOT durable, so those bubbles
+freeze and the test hangs rather than failing. A syscall that *returns* (a file
+write, a hash, an `os.Rename`) is fine. Classify by "does a goroutine park
+somewhere only the outside world can wake it", not by "does this touch the disk".
+
+### Tier 1 — highest value, do next
+
+- [ ] **`internal/operations/registry` (24 test files, ~80 waits, ~5.7s of
+      `time.Sleep`).** The single biggest remaining block. Every one of these
+      tests drives the registry against `newFakeStore()`
+      (`teststore_test.go:52`), a pure map-backed in-memory store — no Pebble, no
+      netpoll, no subprocess. The shapes are textbook synctest: watchdog tickers,
+      shutdown-drain timeouts, dispatcher dependency gates, abandoned-op sweeps.
+      The 25 `time.After(5 * time.Second)` guards would become exact rather than
+      generous. **Known obstacle:** `registry.Start(ctx)` spawns worker and
+      sweeper goroutines, and `synctest.Test` panics if any bubbled goroutine is
+      still alive when the function returns — every converted test must reach a
+      clean `Shutdown` inside the bubble. Do this package as its own PR, one file
+      at a time, not as a sweep.
+      Exceptions inside the package: `promote_realstore_test.go` and
+      `registry_pebble_race_test.go` use a real Pebble store — leave both alone.
+
+- [ ] **`internal/realtime/events_test.go` — the remaining 25 waits.** The 26s
+      heartbeat is already converted. The rest are 50–100ms handoffs and three
+      tests that wait out a 100/200/300ms `context.WithTimeout`. Same package,
+      already proven bubbleable, ~1s of wall clock plus a real determinism win.
+      **Landmine to design around first:** `HandleSSE` builds its client ID from
+      `time.Now().UnixNano()` (`events.go:225`). Inside a bubble that is a
+      CONSTANT, so two clients registered in the same bubble collide on ID and
+      the second silently displaces the first in `hub.clients`. Any multi-client
+      test must either register clients at different fake instants or the ID
+      derivation must change. This is a real, currently-latent aliasing bug that
+      only a bubble exposes.
+
+- [ ] **`internal/activity/batcher_test.go` (4 waits, 2.2s package).** Flush-timer
+      and item-count-threshold tests against an in-memory batcher. Small, clean,
+      high-confidence.
+
+### Tier 2 — worth doing, needs a per-test read
+
+- [ ] `internal/metadata/circuitbreaker_test.go` — open/half-open/closed state
+      transitions are pure timer logic. Ideal shape.
+- [ ] `internal/scheduler/periodic_library_scan_test.go`, `full_sweep_test.go` —
+      interval scheduling; check for a real store first.
+- [ ] `internal/metrics/metrics_test.go`, `internal/plugin/events_test.go`,
+      `internal/cache/cache_test.go`, `internal/tools/embed_queue_test.go` —
+      small, in-memory, debounce/TTL shapes.
+- [ ] `internal/scanner/process_file_timeout_test.go` — timeout logic; confirm it
+      does not actually shell out to ffprobe in the timing window.
+
+### Tier 3 — DETERMINISM ONLY, not seconds
+
+Roughly 60 of the 143 `time.Sleep` calls are 5–20ms "let the other goroutine
+run" handoffs. The correct fix for those is **`synctest.Wait()`**, not the fake
+clock: it buys milliseconds but removes a real class of CI flake. File these as
+flake-removal, and do NOT count them as runtime savings.
+
+### Do NOT convert — with the reason
+
+- [ ] `internal/server/server_more_test.go` :: `TestServerStartGracefulShutdown`.
+      **Measured against go1.26.0 on 2026-08-30, two independent fatal
+      mechanisms.** (1) `signal.Notify` deadlocks a bubble outright — its enable
+      path blocks on runtime sigqueue, which nothing in the bubble can service:
+      `panic: deadlock: all goroutines in bubble are blocked`, raised at the
+      Notify call before any signal is sent. (2) `httpServer.ListenAndServe`
+      leaves an accept goroutine in netpoll, so the fake clock never advances and
+      the 6s sleep never returns — observed as `[sleep (durable), synctest bubble
+      1]` beside `[IO wait, synctest bubble 1]`, killed by timeout. Converting
+      only the shutdown-path waits fails the same way. The full rationale is now
+      in the test's own doc comment.
+- [ ] `internal/watcher/*`, `internal/itunes/library_watcher_test.go` — fsnotify
+      delivers events from an OS-level watcher outside any bubble.
+- [ ] `internal/plugins/webhook`, `internal/mtls`, `internal/metadata/audnexus_test.go`
+      — real `httptest.NewServer` listeners: netpoll, same freeze as above.
+- [ ] `internal/transcode/transcode_coverage_test.go` — spawns ffmpeg/ffprobe.
+- [ ] Everything using a real Pebble/NutsDB store in the wait window
+      (`internal/database/*`, `internal/undo`, `internal/merge`,
+      `internal/dedup/book_dedup_concurrent_test.go`,
+      `internal/server/maintenance_*_test.go`, `internal/server/*_undo_test.go`).
+      A fake clock does not make an fsync faster.
+
+### Separate item — the `t.Parallel()` prohibition in package `server`
+
+`TestServerStartGracefulShutdown` sends a process-wide SIGTERM, which forbids
+`t.Parallel()` in **all 41 test files** of package `server`. synctest does NOT
+lift this — see mechanism (1) above: a bubble cannot contain a process-wide
+signal, it cannot even subscribe to one. Lifting it needs a different mechanism:
+re-exec the test binary as a subprocess behind an env guard so the SIGTERM is
+contained, or drive the shutdown path directly instead of through a real signal.
+Given `internal/server` is the slowest package in the suite (~275s), unlocking
+`t.Parallel()` there is worth more than every synctest conversion above combined.
+
+### Docs
+
+- [ ] **Decide the fate of `docs/CODING_STANDARDS.md` — it is an unreferenced stale
+      copy with a false "managed centrally" banner.** Four measured facts, then a
+      recommendation; this needs an owner decision, not a silent cleanup.
+
+  1. **Nothing operational references it.** Grepping `CODING_STANDARDS` across the
+     whole worktree returns hits only in `CHANGELOG.md`, `changelog.d/`,
+     `docs/archive/` and `docs/audits/` — all prose *about* the file. `CLAUDE.md`,
+     `AGENTS.md` and `.github/copilot-instructions.md` do not mention it. The Quick
+     Start points at `.github/copilot-instructions.md`, `.github/instructions/` and
+     `AGENTS.md` instead.
+
+  2. **The banner is false.** The file carries, three times, `DO NOT EDIT: This file
+     is managed centrally in ghcommon repository`. No assembler exists: grepping
+     `CODING_STANDARDS` across every file type in `falkcorp/github-common` returns
+     zero hits, and this repo's workflows reference ghcommon only for reusable
+     workflows (`uses: falkcorp/github-common/.github/workflows/...`), never docs.
+     Its 7-commit history is entirely hand-edits. It is a one-time manual paste.
+
+  3. **39% of it is duplicated.** Lines 1918-3168 are a verbatim second copy of
+     649-1899 (`typescript.instructions.md` included twice); only 18 lines differ,
+     being the second copy's own header. ~1,251 wasted lines.
+
+  4. **It is not purely dead — deleting it would silently drop one real rule.**
+     Lines 599-605 (TOOL-5, commit `761f5c1b`, 2026-06-23) say *prefer a narrow
+     hand-written fake over a generated mock* for small new interfaces. That
+     **contradicts** the org rule in `.standards/instructions/go.md` (*"do not
+     hand-write mocks"*). `docs/audits/2026-08-16-manual-mock-inventory.md:426`
+     already scheduled retiring TOOL-5 as "phase 2 only" — so the conflict is known
+     and deliberately unresolved, not an oversight.
+
+  **Recommendation:** archive the file rather than maintain it. Its Go half is now
+  superseded upstream (falkcorp/.github#4, merged — `instructions/go.md` v1.1.0 has
+  the 1.26 idioms, synctest, the globals rule and `omitzero`), and `.standards/` is
+  what CLAUDE.md actually names canonical. Before archiving, TOOL-5 needs somewhere
+  to live — either move those 7 lines into the audit's phase-2 track, or raise the
+  upstream proposal the audit says is required. **Do not just delete it**; that
+  drops a deliberate local exemption with no record.
+
+  Cost if instead kept and repaired: delete 1,251 duplicated lines, re-sync the Go
+  half against the new upstream, and correct the banner to say what is true.
+
+### Concurrency
+
+- [ ] **`internal/scanner/scanner.go` spawns one goroutine per directory and per
+      book before any of them can be admitted — the semaphore bounds the work,
+      not the fan-out.** Both loops have this shape:
+
+  ```go
+  semaphore := make(chan struct{}, workers)
+  for _, dir := range dirs {           // and again: for idx := range books
+      wg.Go(func() {
+          semaphore <- struct{}{}      // ACQUIRE INSIDE the goroutine
+          defer func() { <-semaphore }()
+          ...
+      })
+  }
+  ```
+
+  `scanner.go:965` (per directory) and `scanner.go:1166` (per book). Every
+  iteration creates a goroutine immediately; each then blocks on the channel.
+  So `workers` caps how many run at once but nothing caps how many *exist*.
+
+  This is the exact shape `CLAUDE.md`'s concurrency rule names: *"Never fan out
+  unbounded goroutines over an unbounded collection."* The library is ~61,000
+  books, and a goroutine's minimum stack is 8 KB, so a full scan can park on the
+  order of hundreds of MB in goroutines that are doing nothing but waiting for a
+  slot — plus the scheduler cost of tracking them all.
+
+  **Fix — acquire before spawning**, so the loop itself blocks:
+
+  ```go
+  for _, dir := range dirs {
+      semaphore <- struct{}{}          // acquire BEFORE the spawn
+      wg.Go(func() {
+          defer func() { <-semaphore }()
+          ...
+      })
+  }
+  ```
+
+  or replace the pair with `errgroup.Group` + `SetLimit(workers)`, which has
+  this behaviour built in and is what the standards now recommend.
+
+  **Care required at `scanner.go:1166`** — its deferred release also does
+  `progressCh <- books[idx].FilePath`, and `close(progressCh)` happens after
+  `wg.Wait()`. Moving the acquire must not change that ordering, or the send
+  races the close and panics. Verify, don't assume.
+
+  Found while converting `Add(1)`/`Done()` pairs to `wg.Go` (PR #2991). The
+  conversion neither introduced nor changed this — it is pre-existing, and the
+  `wg.Go` above is already the converted form.
+
+### Tooling / CI
+
+- [ ] **~44 repos still pin `.standards` at a stale commit; none of them is at
+      current.** Surveyed 2026-08-30 across every repo carrying the
+      `falkcorp/.github` submodule. audiobook-organizer was fixed in #2996; the
+      rest were not touched.
+
+  | pin | dated | repos |
+  | --- | --- | --- |
+  | `664ae68` | 2026-06-12 | ~35 |
+  | `5a59803` | 2026-08-10 | 8 (incl. this repo, now bumped) |
+  | `7bdfd13` | 2026-08-30 | 0 |
+
+  A submodule is a pinned commit, not a live link, and **there is no sync
+  automation anywhere in the org** — the pin has only ever moved when someone
+  remembered. Between 2026-08-10 and 2026-08-30 nobody did, while
+  `instructions/go.md` gained 266 lines (Go version policy and the 1.26
+  minimum, the `io/ioutil` ban, the `wg.Go` rule, the testing-isolation table,
+  `omitempty` vs `omitzero`). Every repo whose CLAUDE.md calls `.standards/`
+  authoritative was serving v1.0.0 rules.
+
+  The fix per repo is the same two-line change #2996 made: bump the pin, and
+  add a `gitsubmodule` ecosystem to `.github/dependabot.yml`.
+
+- [ ] **Decide the sweep's real scope before running it — it is not free after
+      it lands.** Adding `gitsubmodule` to ~45 repos means ~45 recurring PRs
+      every week, forever. A large share of those repos (`gha-release-go`,
+      `gha-detect-languages`, `release-strategy-action`, and the other
+      single-purpose action repos) plausibly do not consume Go or TypeScript
+      standards at all, so the pin being stale there costs nothing and the
+      weekly PR costs review attention.
+
+  Worth pricing an alternative first: fix `project-template` so new repos start
+  current, plus a one-time bump for the handful of repos that people actually
+  develop in (audiobook-organizer, subtitle-manager, gcommon, transcoderr,
+  ubuntu-autoinstall-agent, overnight-burndown, magnet-handler,
+  apt-cacher-go). That covers the repos where a stale standard misleads someone
+  without signing up for a permanent PR stream across the action fleet.
+
+- [ ] **`falkcorp/magnet-handler` `main` has a `toolchain` directive below its
+      `go` directive** — `go 1.26.0` with `toolchain go1.24.2`. Per
+      `.standards/instructions/go.md` v1.3.0 this is ours and a bug, not a
+      blocker to wait on.
+
+  It is currently latent, not breaking: its CodeQL `Analyze (go)` passes only
+  because the repo has no root build script, so autobuild fell through to
+  `go get ./...`, which self-healed (`go: downloading go1.26.0`, `go: removed
+  toolchain go1.24.2`). A repo *with* a Makefile gets `make build` under
+  `GOTOOLCHAIN=local` and fails outright — that is exactly how
+  overnight-burndown #76 broke. **So the green check means only that nothing
+  invoked the pinned toolchain.**
+
+  Not fixed at the time of writing because magnet-handler's CI is already red
+  for unrelated pre-existing reasons and a PR there would land on a red base.
+  Recording it so the inconsistency with the standard is not silently dropped.
+  Note its test suite writes `/usr/local/bin/magnet-handler-wrapper.sh` to the
+  developer's machine — do not run `go test ./...` there casually.
+
+### Testing
+
+- [ ] **Five goroutine bodies converted to `wg.Go` in #2992 have ZERO test
+      coverage, and two of them are maintenance job entry points.** Measured at
+      block level from the raw coverage profile (not enclosing-function
+      percentage), execution count 0:
+
+  | site | function |
+  | --- | --- |
+  | `internal/plugins/acoustid/fingerprint_rescan.go:175` | `runFingerprintRescan` |
+  | `internal/plugins/maintenance/extract_wav_clips.go:109` | `runExtractWAVClips` |
+  | `internal/maintenance/jobs/repair_missing_files.go:176` | `(*repairMissingFilesJob).Run` |
+  | `internal/maintenance/jobs/scan_composer_tags.go:160` | `(*scanComposerTagsJob).Run` |
+  | `internal/metafetch/openlibrary.go:131` | `(*OpenLibraryService).Import` |
+
+  There is no middle group — every block in a non-zero-coverage function did
+  execute. The gap predates the conversion.
+
+  **The two `Run` methods are the ones to care about.** They are maintenance job
+  *entry points* that are entirely untested while their own helpers are partly
+  covered (`rmfr_buildFilenameIndex` 92.9%, `rmfr_repairOne` 48.0%). Testing the
+  helpers and not the entry point means nothing exercises the wiring that decides
+  whether those helpers are called at all — the shape that let
+  `FilterBooksNeedingOrganization` return a confident success while organizing
+  zero books.
+
+- [ ] **The `wg.Go` parameter-capture sites rest on review, not on tests.**
+      Mutation-testing #2992 ran three mutants; two were killed, and the survivor
+      is the one that attacks the only semantics the PR actually changed: moving
+      the hoisted locals *out* of the loop so every goroutine shares them (the
+      pre-Go-1.22 aliasing bug). **The suite stayed green and `-race` did not
+      fire.**
+
+  Reviewed by hand and the conversions are correct — at
+  `extract_wav_clips.go` the captured `bookID` is a per-iteration range variable
+  and `src`/`cacheKey`/`bookFileID`/`dest` are all declared with `:=` inside the
+  loop body, so each iteration has its own; `intro_transcribe.go` and
+  `dispatcher.go` hoist explicitly.
+
+  **But note what that correctness depends on: `go 1.26` in `go.mod`.**
+  Per-iteration loop variables are Go 1.22+ semantics. Under an older directive
+  the same source is a data race. A test that pins this would fail loudly if the
+  directive were ever lowered; today nothing would notice.
+
+  Cheapest fix: one table test per shape that starts N goroutines over a loop and
+  asserts every distinct input was observed exactly once. That kills the aliasing
+  mutant and documents the dependency.
 
 - [ ] **DEDUP-ORPHAN-BOOK-EMB** Act on `HydrateChromem`'s new `books_orphaned`
       counter. The hydrate now reports, per restart, how many `emb:v:book:*`
