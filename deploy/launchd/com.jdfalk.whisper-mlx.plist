@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- file: deploy/launchd/com.jdfalk.whisper-mlx.plist -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5d9c47b1-2e8a-4f36-b0c7-8a1e3d92f504 -->
 <!-- last-edited: 2026-08-31 -->
 <!--
@@ -49,6 +49,15 @@
         <string>19848</string>
         <key>WHISPER_MLX_MODEL</key>
         <string>mlx-community/whisper-small.en-mlx</string>
+        <!-- launchd gives an agent the minimal default PATH, which does NOT
+             include Homebrew. mlx_whisper shells out to ffmpeg, and without it
+             every transcription fails INSIDE a 200 response while /health stays
+             "ok" - so the worker looks healthy and writes an error per book.
+             Measured 2026-08-31: 2,472 batch requests, all 200, 21,443 books
+             marked whisper_error, zero transcripts. The server now refuses to
+             start without ffmpeg; this is what keeps it startable. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
     <key>RunAtLoad</key>

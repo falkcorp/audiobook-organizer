@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-08-30
 #
@@ -209,3 +209,30 @@ def test_inference_is_serialized(srv):
     thread pool without reading why."""
     mod, _ = srv
     assert isinstance(mod._inference_lock, type(__import__("threading").Lock()))
+
+
+class FfmpegPreflightTest(unittest.TestCase):
+    """The worker must refuse to start without ffmpeg.
+
+    Without this the failure is invisible in the worst possible way: mlx_whisper
+    raises per file, _do_transcribe catches it and returns
+    {"text": "", "error": "... 'ffmpeg'"}, and the batch endpoint answers 200.
+    The transport is healthy, /health says ok, and the caller writes one
+    whisper_error per book. Fail-closed at startup instead.
+    """
+
+    def test_missing_ffmpeg_exits_rather_than_serving(self):
+        import shutil as _shutil
+
+        mod = _load_module()
+        real_which = _shutil.which
+        _shutil.which = lambda name, *a, **k: None if name == "ffmpeg" else real_which(name, *a, **k)
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                mod._require_ffmpeg()
+            self.assertEqual(ctx.exception.code, 1)
+        finally:
+            _shutil.which = real_which
+
+    def test_present_ffmpeg_returns_its_path(self):
+        self.assertTrue(_load_module()._require_ffmpeg())
