@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-08-30
 #
@@ -222,4 +222,10 @@ if __name__ == "__main__":
     log.info(f"Ready — model={MODEL_REPO} backend=mlx bind={bind}:{port}")
     if bind != "127.0.0.1":
         log.warning(f"binding {bind} — this exposes the worker beyond loopback")
-    uvicorn.run(app, host=bind, port=port, log_level="info")
+        # log_config=None is required, not cosmetic. uvicorn.run() otherwise
+        # applies its own dictConfig with disable_existing_loggers=True, which
+        # silences the module logger created above -- so uvicorn's access lines
+        # appear while every log.info/log.error from this file vanishes. That is
+        # how an ffmpeg failure on every single request left no trace here on
+        # 2026-08-31: 2,472 requests logged as "200 OK" and not one error line.
+    uvicorn.run(app, host=bind, port=port, log_level="info", log_config=None)

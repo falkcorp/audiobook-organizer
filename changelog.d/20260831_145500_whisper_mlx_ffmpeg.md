@@ -14,3 +14,10 @@
   `/health`, so the dispatcher's capability gate refuses the endpoint and defers
   the page instead of writing errors across the library. `/health` also reports
   the resolved `ffmpeg` path.
+
+- **Both Whisper servers logged nothing of their own.** `uvicorn.run()` applies a
+  logging config with `disable_existing_loggers: True`, which silenced the module
+  logger created at import — so uvicorn's access lines appeared while every
+  `log.info`/`log.error` in the file vanished. That is how a failure on every
+  single request left no trace on the worker: 2,472 requests logged as `200 OK`
+  and not one error line. Both servers now pass `log_config=None`.

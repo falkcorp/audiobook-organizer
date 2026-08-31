@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 2.9.0
+# version: 2.10.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-08-31
 #
@@ -267,4 +267,10 @@ async def health():
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("WHISPER_PORT", "19847"))
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+        # log_config=None is required, not cosmetic. uvicorn.run() otherwise
+        # applies its own dictConfig with disable_existing_loggers=True, which
+        # silences the module logger created above -- so uvicorn's access lines
+        # appear while every log.info/log.error from this file vanishes. That is
+        # how an ffmpeg failure on every single request left no trace here on
+        # 2026-08-31: 2,472 requests logged as "200 OK" and not one error line.
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=None)
