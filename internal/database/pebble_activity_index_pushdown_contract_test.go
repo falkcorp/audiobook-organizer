@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
 // last-edited: 2026-08-30
 
@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -493,15 +494,17 @@ func TestIndexPushdownPrunedRowDoesNotConsumeAPageSlot(t *testing.T) {
 // pactIndexPushdownEligible.
 //
 // WHY a pin and not just a review habit: the gate is an ALLOW-LIST
-// (pactPushdownDecidable), so a field added later is REFUSED by construction —
-// it silently costs the fast path rather than silently returning a wrong total.
+// (pactPushdownDecidable), so a field added later is REFUSED as soon as it
+// carries a value — it silently costs the fast path rather than silently
+// returning a wrong total.
 // That is the safe failure, but it is still a silent one, and nobody profiling
 // a slow endpoint would trace it back to an unclassified filter field. This pin
 // is what turns that quiet loss into a build failure that names the cause.
 //
-// The pin therefore no longer guards CORRECTNESS — the allow-list does that —
-// it forces a conscious classification. Do not weaken it on the grounds that
-// the gate now fails closed.
+// The pin's PRIMARY job is therefore no longer correctness — the allow-list
+// refuses an unclassified field on its own. It still carries exactly one
+// correctness duty, and it is the Since/Until dependency spelled out below. Do
+// not weaken this test on the grounds that the gate now fails closed.
 //
 // THE LOADED CASE, and it is not hypothetical. Since and Until are accepted
 // today, and that is only correct because NEITHER path honours them: matchesFilter
@@ -541,21 +544,43 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 		"Tags", "Search", "Source", // refused: not in the index key
 		"ExcludeSources", "ExcludeTiers", "ExcludeTags", // refused: not in the index key
 	}, names, "ActivityFilter's fields changed; re-read pactIndexPushdownEligible")
+
+	// The gate's ALLOW-LIST is pinned too, symmetric with the field list above.
+	// Pinning ActivityFilter alone does not catch the sequence that silently
+	// widens the pushdown, because every step of it looks reasonable: add a field
+	// to ActivityFilter, add it to pactPushdownDecidable, add it to the
+	// stillEligible map in the field-by-field test, bump the count here. Four
+	// coordinated edits by one author in one sitting, and without this assertion
+	// nothing objects. Requiring the list to be restated HERE, under a doc comment
+	// that says what an entry costs, is the point.
+	var decidable []string
+	for name := range pactPushdownDecidable {
+		decidable = append(decidable, name)
+	}
+	sort.Strings(decidable)
+	assert.Equal(t, []string{"BookID", "Limit", "Offset", "OperationID", "Since", "Until"}, decidable,
+		"pactPushdownDecidable changed. Every entry is a predicate the pushdown claims it can "+
+			"evaluate from the INDEX KEY ALONE; a wrong entry returns a wrong `total` with no "+
+			"error anywhere. Since and Until must be REMOVED from it when the `since` defect is "+
+			"fixed — see this test's doc comment.")
 }
 
-// TestIndexPushdownEligibleRefusesEveryUndecidableFieldIndividually sets EVERY
-// field of ActivityFilter in turn and asserts the gate's answer, one field at a
-// time, so a gate that stopped checking one of them cannot hide behind the
-// others.
+// TestIndexPushdownEligibilityIsDecidedFieldByField sets EVERY field of
+// ActivityFilter in turn and asserts the gate's answer, one field at a time, so
+// a gate that stopped checking one of them cannot hide behind the others. It
+// asserts ACCEPTANCE as well as refusal, which is why it is not named for
+// refusal alone.
 //
 // It walks the struct REFLECTIVELY on purpose. The hand-written table this
 // replaced listed the ten undecidable fields by name, which meant a field added
 // to ActivityFilter later was never exercised by it at all — the test kept
 // passing while saying nothing about the new field. Driving the loop off
 // reflect.TypeOf means a new field is covered the moment it exists, and the
-// expectation below is the same allow-list the gate uses, restated
-// independently rather than imported from it.
-func TestIndexPushdownEligibleRefusesEveryUndecidableFieldIndividually(t *testing.T) {
+// expectation below is a deliberately NARROWER restatement of the gate's
+// allow-list — see the note on BookID — written out by hand rather than
+// imported from pactPushdownDecidable, so that editing the map cannot move the
+// test's expectation with it.
+func TestIndexPushdownEligibilityIsDecidedFieldByField(t *testing.T) {
 	const prefix = "act:op:X:"
 	base := ActivityFilter{OperationID: "X", Limit: 10}
 	require.True(t, pactIndexPushdownEligible(prefix, base), "the base filter must be eligible")
@@ -574,7 +599,10 @@ func TestIndexPushdownEligibleRefusesEveryUndecidableFieldIndividually(t *testin
 			val := nonZeroFilterValue(field.Type)
 			require.True(t, val.IsValid(),
 				"ActivityFilter.%s has kind %s, which nonZeroFilterValue cannot build. "+
-					"Teach it that kind — otherwise this field is silently untested.",
+					"Teach it that kind — otherwise this field is silently untested. If the "+
+					"kind has a nil-vs-empty distinction (map, slice), ALSO classify it in "+
+					"pactFilterFieldCarriesPredicate: IsZero on those is IsNil, so an empty "+
+					"non-nil value would read as a live predicate. See M19.",
 				field.Name, field.Type.Kind())
 
 			f := base
@@ -638,16 +666,28 @@ func nonZeroFilterValue(t reflect.Type) reflect.Value {
 // This is the only test that can see the difference.
 func TestIndexPushdownEligibleAcceptsNonNilEmptySlices(t *testing.T) {
 	const prefix = "act:op:X:"
-	f := ActivityFilter{
-		OperationID:    "X",
-		Limit:          10,
-		Tags:           []string{},
-		ExcludeSources: []string{},
-		ExcludeTiers:   []string{},
-		ExcludeTags:    []string{},
+
+	// Driven off reflect for the same reason the field-by-field test is: a
+	// hand-written list of today's four slice fields would give a slice field
+	// added later len-1 coverage from that test and NO empty-slice coverage at
+	// all — reintroducing, in this file, the exact hand-enumeration hole this
+	// pair of tests exists to close.
+	f := ActivityFilter{OperationID: "X", Limit: 10}
+	fv := reflect.ValueOf(&f).Elem()
+	ft := fv.Type()
+	var covered []string
+	for i := 0; i < ft.NumField(); i++ {
+		if ft.Field(i).Type.Kind() != reflect.Slice {
+			continue
+		}
+		fv.Field(i).Set(reflect.MakeSlice(ft.Field(i).Type, 0, 0))
+		covered = append(covered, ft.Field(i).Name)
 	}
+	require.NotEmpty(t, covered, "no slice fields found — this test would assert nothing")
+
 	assert.True(t, pactIndexPushdownEligible(prefix, f),
-		"a non-nil EMPTY slice carries no predicate and must not cost the pushdown")
+		"a non-nil EMPTY slice carries no predicate and must not cost the pushdown (set: %v)",
+		covered)
 }
 
 // ── randomized differential sweeps ───────────────────────────────────────────
