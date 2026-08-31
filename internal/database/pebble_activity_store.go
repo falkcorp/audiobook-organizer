@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-30
 
@@ -2060,8 +2060,8 @@ func pactFilterFieldCarriesPredicate(v reflect.Value) bool {
 // enumeration: the loop below walks every field of ActivityFilter and refuses
 // the pushdown for any field carrying a predicate that is not named in
 // pactPushdownDecidable. A field added to ActivityFilter later is therefore
-// refused by default — the fast path is lost until somebody classifies it,
-// which is the safe direction to fail. The previous shape was a deny-list, and
+// refused as soon as it carries a value — the fast path is lost until somebody
+// classifies it, which is the safe direction to fail. The previous shape was a deny-list, and
 // a deny-list accepts an unrecognised field by OMISSION.
 //
 // What that rule refuses today, and why:

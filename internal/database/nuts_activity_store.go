@@ -1,5 +1,5 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
 // last-edited: 2026-08-29
 
