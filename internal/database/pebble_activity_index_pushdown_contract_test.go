@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
 // last-edited: 2026-08-30
 
@@ -492,11 +492,16 @@ func TestIndexPushdownPrunedRowDoesNotConsumeAPageSlot(t *testing.T) {
 // ActivityFilter, so that nobody can add one without classifying it against
 // pactIndexPushdownEligible.
 //
-// WHY a pin and not just a review habit: the gate is a DENY-LIST. It refuses the
-// fields it knows are undecidable from the index, and anything it does not
-// recognise falls through to `return f.BookID == ""`. A field added later is
-// therefore accepted by OMISSION — the pushdown is taken, total may be wrong,
-// and nothing anywhere raises an error. Failing this test is the only signal.
+// WHY a pin and not just a review habit: the gate is an ALLOW-LIST
+// (pactPushdownDecidable), so a field added later is REFUSED by construction —
+// it silently costs the fast path rather than silently returning a wrong total.
+// That is the safe failure, but it is still a silent one, and nobody profiling
+// a slow endpoint would trace it back to an unclassified filter field. This pin
+// is what turns that quiet loss into a build failure that names the cause.
+//
+// The pin therefore no longer guards CORRECTNESS — the allow-list does that —
+// it forces a conscious classification. Do not weaken it on the grounds that
+// the gate now fails closed.
 //
 // THE LOADED CASE, and it is not hypothetical. Since and Until are accepted
 // today, and that is only correct because NEITHER path honours them: matchesFilter
@@ -515,11 +520,12 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 	const classified = 15
 	got := reflect.TypeOf(ActivityFilter{}).NumField()
 	require.Equal(t, classified, got,
-		"ActivityFilter gained or lost a field. pactIndexPushdownEligible is a DENY-LIST: "+
-			"an unclassified field is accepted by omission and silently enables the pushdown. "+
-			"Classify the new field there (refuse it unless it is decidable from the index key "+
-			"ALONE, without decoding the row), then update this count. Read this test's doc "+
-			"comment before touching Since/Until.")
+		"ActivityFilter gained or lost a field. pactIndexPushdownEligible is an ALLOW-LIST "+
+			"(pactPushdownDecidable): an unclassified field REFUSES the pushdown, so this is a "+
+			"silent loss of the fast path, not a wrong answer. Decide whether the new field is "+
+			"decidable from the index key ALONE (without decoding the row) — add it to the map "+
+			"if so, leave it out if not — then update this count. Read this test's doc comment "+
+			"before touching Since/Until.")
 
 	// The classification itself, so a RENAMED field cannot keep the count at 15
 	// while quietly changing what is decided.
@@ -531,46 +537,117 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 		"Limit", "Offset", // pagination, handled explicitly (negatives refuse)
 		"Type", "Tier", "Level", // refused: not in the index key
 		"OperationID", "BookID", // the id predicates — the ONLY ones pushed down
-		"Since", "Until", // accepted ONLY because both paths ignore them; see above
+		"Since", "Until", // in pactPushdownDecidable ONLY because both paths ignore them
 		"Tags", "Search", "Source", // refused: not in the index key
 		"ExcludeSources", "ExcludeTiers", "ExcludeTags", // refused: not in the index key
 	}, names, "ActivityFilter's fields changed; re-read pactIndexPushdownEligible")
 }
 
-// TestIndexPushdownEligibleRefusesEveryUndecidableFieldIndividually walks the
-// deny-list one field at a time, so a gate that stopped checking one of them
-// cannot hide behind the others.
+// TestIndexPushdownEligibleRefusesEveryUndecidableFieldIndividually sets EVERY
+// field of ActivityFilter in turn and asserts the gate's answer, one field at a
+// time, so a gate that stopped checking one of them cannot hide behind the
+// others.
+//
+// It walks the struct REFLECTIVELY on purpose. The hand-written table this
+// replaced listed the ten undecidable fields by name, which meant a field added
+// to ActivityFilter later was never exercised by it at all — the test kept
+// passing while saying nothing about the new field. Driving the loop off
+// reflect.TypeOf means a new field is covered the moment it exists, and the
+// expectation below is the same allow-list the gate uses, restated
+// independently rather than imported from it.
 func TestIndexPushdownEligibleRefusesEveryUndecidableFieldIndividually(t *testing.T) {
 	const prefix = "act:op:X:"
 	base := ActivityFilter{OperationID: "X", Limit: 10}
 	require.True(t, pactIndexPushdownEligible(prefix, base), "the base filter must be eligible")
 
-	for name, mutate := range map[string]func(*ActivityFilter){
-		"Type":           func(f *ActivityFilter) { f.Type = "x" },
-		"Tier":           func(f *ActivityFilter) { f.Tier = "change" },
-		"Level":          func(f *ActivityFilter) { f.Level = "warn" },
-		"BookID":         func(f *ActivityFilter) { f.BookID = "b" },
-		"Tags":           func(f *ActivityFilter) { f.Tags = []string{"t"} },
-		"Search":         func(f *ActivityFilter) { f.Search = "q" },
-		"Source":         func(f *ActivityFilter) { f.Source = "s" },
-		"ExcludeSources": func(f *ActivityFilter) { f.ExcludeSources = []string{"s"} },
-		"ExcludeTiers":   func(f *ActivityFilter) { f.ExcludeTiers = []string{"debug"} },
-		"ExcludeTags":    func(f *ActivityFilter) { f.ExcludeTags = []string{"t"} },
-		"negative Limit": func(f *ActivityFilter) { f.Limit = -1 },
-		"negative Offset": func(f *ActivityFilter) {
-			f.Offset = -1
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
+	// Restated independently of pactPushdownDecidable: on the OP index family a
+	// set BookID is the "other id" and must refuse, even though BookID IS in the
+	// gate's map (the family switch, not the field walk, is what refuses it).
+	stillEligible := map[string]bool{
+		"Limit": true, "Offset": true, "OperationID": true, "Since": true, "Until": true,
+	}
+
+	ft := reflect.TypeOf(ActivityFilter{})
+	for i := 0; i < ft.NumField(); i++ {
+		field := ft.Field(i)
+		t.Run(field.Name, func(t *testing.T) {
+			val := nonZeroFilterValue(field.Type)
+			require.True(t, val.IsValid(),
+				"ActivityFilter.%s has kind %s, which nonZeroFilterValue cannot build. "+
+					"Teach it that kind — otherwise this field is silently untested.",
+				field.Name, field.Type.Kind())
+
 			f := base
-			mutate(&f)
-			assert.False(t, pactIndexPushdownEligible(prefix, f),
-				"%s is not decidable from the index key and must refuse the pushdown", name)
+			reflect.ValueOf(&f).Elem().Field(i).Set(val)
+
+			assert.Equal(t, stillEligible[field.Name], pactIndexPushdownEligible(prefix, f),
+				"%s: a field is eligible only if it is decidable from the index key alone",
+				field.Name)
 		})
 	}
 
 	// An unknown index family refuses outright rather than guessing.
 	assert.False(t, pactIndexPushdownEligible("act:zz:X:", base))
+
+	// Negative pagination refuses even though Limit/Offset are decidable:
+	// queryByIndexPrefixFull ends in all[start:end], which PANICS when end < start.
+	for name, mutate := range map[string]func(*ActivityFilter){
+		"negative Limit":  func(f *ActivityFilter) { f.Limit = -1 },
+		"negative Offset": func(f *ActivityFilter) { f.Offset = -1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := base
+			mutate(&f)
+			assert.False(t, pactIndexPushdownEligible(prefix, f))
+		})
+	}
+}
+
+// nonZeroFilterValue builds a value that a filter field would recognise as "set".
+// It returns an invalid Value for a kind it does not handle, which the caller
+// turns into a failure rather than a silent skip.
+func nonZeroFilterValue(t reflect.Type) reflect.Value {
+	switch t.Kind() {
+	case reflect.String:
+		return reflect.ValueOf("x").Convert(t)
+	case reflect.Int:
+		return reflect.ValueOf(1).Convert(t)
+	case reflect.Slice:
+		s := reflect.MakeSlice(t, 1, 1)
+		elem := nonZeroFilterValue(t.Elem())
+		if !elem.IsValid() {
+			return reflect.Value{}
+		}
+		s.Index(0).Set(elem)
+		return s
+	case reflect.Pointer:
+		return reflect.New(t.Elem())
+	default:
+		return reflect.Value{}
+	}
+}
+
+// TestIndexPushdownEligibleAcceptsNonNilEmptySlices pins the one behaviour that
+// a careless rewrite of the field walk silently breaks.
+//
+// The gate asks len(slice) > 0, NOT reflect.Value.IsZero. IsZero on a slice is
+// defined as IsNil, so a non-nil EMPTY slice would read as a live predicate and
+// refuse the pushdown. `"tags": []` in a JSON body unmarshals to exactly that.
+// The result would be a correct answer served by the slow path — no error, no
+// failing differential test, just the fast path quietly gone for those callers.
+// This is the only test that can see the difference.
+func TestIndexPushdownEligibleAcceptsNonNilEmptySlices(t *testing.T) {
+	const prefix = "act:op:X:"
+	f := ActivityFilter{
+		OperationID:    "X",
+		Limit:          10,
+		Tags:           []string{},
+		ExcludeSources: []string{},
+		ExcludeTiers:   []string{},
+		ExcludeTags:    []string{},
+	}
+	assert.True(t, pactIndexPushdownEligible(prefix, f),
+		"a non-nil EMPTY slice carries no predicate and must not cost the pushdown")
 }
 
 // ── randomized differential sweeps ───────────────────────────────────────────

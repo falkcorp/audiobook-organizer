@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-08-30
 
@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"runtime"
 	"slices"
 	"sort"
@@ -1981,6 +1982,47 @@ func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix str
 	return s.queryByIndexPrefixFull(ctx, prefix, f)
 }
 
+// pactPushdownDecidable is the ALLOW-LIST at the centre of the eligibility
+// gate: it names every ActivityFilter field that has actually been classified
+// as answerable from the index key alone.
+//
+// The direction is the point. The deny-list this replaced enumerated the
+// UNDECIDABLE fields, so a field added to ActivityFilter later was accepted by
+// OMISSION — its predicate silently pushed down, `total` possibly wrong, no
+// error anywhere. This map inverts that: an unclassified field refuses the
+// pushdown until somebody comes here and classifies it. A RENAMED field misses
+// the lookup and likewise refuses, so the fail-closed direction survives a
+// rename too. Losing the fast path is a cost; returning a wrong page count is a
+// defect, so refusing is always the safe way to be wrong here.
+//
+// Since and Until are listed ONLY because neither path honours them — see this
+// gate's doc comment below. Whoever fixes THAT defect deletes these two
+// entries, and TestActivityFilterFieldCountIsPinned says so as well.
+var pactPushdownDecidable = map[string]bool{
+	"Limit":       true, // pagination; negative values refused separately
+	"Offset":      true, // pagination; negative values refused separately
+	"OperationID": true, // decided by the index-family switch
+	"BookID":      true, // decided by the index-family switch
+	"Since":       true, // accepted only because BOTH paths ignore it
+	"Until":       true, // accepted only because BOTH paths ignore it
+}
+
+// pactFilterFieldCarriesPredicate reports whether a filter field is actually
+// asking for something.
+//
+// Slices use len() rather than reflect.Value.IsZero deliberately: IsZero on a
+// slice is IsNil, which counts a non-nil EMPTY slice — what a request body's
+// `"tags": []` unmarshals to — as a live predicate. That would quietly cost
+// those callers the fast path, with no error and no failing test. The
+// deny-list this replaced asked len(f.Tags) > 0, so using len() here is what
+// makes the rewrite behaviour-IDENTICAL rather than merely behaviour-similar.
+func pactFilterFieldCarriesPredicate(v reflect.Value) bool {
+	if v.Kind() == reflect.Slice {
+		return v.Len() > 0
+	}
+	return !v.IsZero()
+}
+
 // pactIndexPushdownEligible reports whether f can be served by the pushdown
 // without changing EITHER the returned page or the returned total.
 //
@@ -2006,7 +2048,15 @@ func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix str
 //     it belongs in its own change with its own test, and "fixing" it inside a
 //     performance PR would silently change results for that endpoint.
 //
-// NOT decidable, therefore refused:
+// Everything else is refused, and refused BY CONSTRUCTION rather than by
+// enumeration: the loop below walks every field of ActivityFilter and refuses
+// the pushdown for any field carrying a predicate that is not named in
+// pactPushdownDecidable. A field added to ActivityFilter later is therefore
+// refused by default — the fast path is lost until somebody classifies it,
+// which is the safe direction to fail. The previous shape was a deny-list, and
+// a deny-list accepts an unrecognised field by OMISSION.
+//
+// What that rule refuses today, and why:
 //
 //   - Type, Level, Source, Search, Tags, ExcludeSources, ExcludeTags — none of
 //     these fields exist anywhere in the index key or its ref value.
@@ -2031,14 +2081,15 @@ func pactIndexPushdownEligible(prefix string, f ActivityFilter) bool {
 	if f.Limit < 0 || f.Offset < 0 {
 		return false
 	}
-	if f.Type != "" || f.Level != "" || f.Source != "" || f.Search != "" {
-		return false
-	}
-	if f.Tier != "" || len(f.ExcludeTiers) > 0 {
-		return false
-	}
-	if len(f.Tags) > 0 || len(f.ExcludeSources) > 0 || len(f.ExcludeTags) > 0 {
-		return false
+	v := reflect.ValueOf(f)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if pactPushdownDecidable[t.Field(i).Name] {
+			continue
+		}
+		if pactFilterFieldCarriesPredicate(v.Field(i)) {
+			return false
+		}
 	}
 	switch {
 	case strings.HasPrefix(prefix, "act:op:"):
