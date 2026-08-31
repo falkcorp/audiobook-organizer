@@ -1,5 +1,5 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
 <!-- last-edited: 2026-08-30 -->
 
@@ -89,6 +89,23 @@ Confirm the Go client contract is untouched:
 ```bash
 GOTOOLCHAIN=go1.26.7 GOEXPERIMENT=jsonv2 go test ./internal/transcribe -count=1
 ```
+
+## Measured on an M1 Max (32 GB), 2026-08-30
+
+Validated end-to-end on loopback with `mlx-community/whisper-small.en-mlx`.
+
+| | |
+|---|---|
+| Cold `/transcribe` (includes model download) | 16.9 s |
+| Warm `/transcribe-batch`, 2 files, ~10.7 s of audio | **0.5 s** |
+| Transcript accuracy | verbatim on both clips |
+| Batch keys | echoed verbatim, including an em-dash and a comma |
+| Thermal state after the run | no thermal or performance warning recorded (`pmset -g therm`) |
+
+MLX reported `Device(gpu, 0)` at import, which is the device evidence.
+**The 0.5 s figure is elapsed time and is not by itself proof of Metal
+utilization** — a longer, more representative batch should be measured before
+sizing this worker's concurrency in production.
 
 ## Exposing it to the LAN — a separate, deliberate decision
 
