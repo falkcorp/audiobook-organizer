@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-08-07
+// last-edited: 2026-08-31
 
 package transcribe
 
@@ -186,6 +186,7 @@ func poolEndpoints(cfgEndpoints []config.WhisperEndpoint, singleURL string) []En
 				Label:       e.Label,
 				Priority:    e.Priority,
 				Kind:        e.Kind,
+				RequireGPU:  e.RequireGPU,
 			})
 		}
 		if len(endpoints) > 0 {

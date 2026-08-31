@@ -1,13 +1,14 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-08-30
+// last-edited: 2026-08-31
 
 package transcribe
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -35,9 +36,13 @@ type Endpoint struct {
 	// filled in ascending Priority order; jobs spill to higher numbers only
 	// when lower-numbered endpoints are saturated or unhealthy.
 	Priority int
-	// Kind is informational only ("gpu", "cpu", or ""). A future /health
-	// auto-probe may fill it; nothing routes on it today.
+	// Kind is informational only ("gpu", "cpu", or ""). It is what an
+	// operator DECLARED; RequireGPU is what the endpoint is MEASURED to be.
+	// Nothing routes on Kind.
 	Kind string
+	// RequireGPU refuses this endpoint unless its /health reports a device in
+	// gpuDevices. See gpu.go for why this is fail-closed.
+	RequireGPU bool
 }
 
 // Cooldown policy: an endpoint that fails a batch is benched for
@@ -110,17 +115,47 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]s
 	if len(endpoints) == 0 {
 		return nil, classifyTransport(nil, fmt.Errorf("no whisper endpoints configured"))
 	}
+
+	// The require_gpu gate runs BEFORE the single-endpoint fast path below.
+	// Putting it inside the pool loop instead would miss the one shape that
+	// actually occurs in production today -- a single configured endpoint
+	// quietly serving from a CPU backend -- because that shape never reaches
+	// the loop. gateEndpoints also performs the /health probe that the batch
+	// decision needs, so this adds no requests.
+	gated, refused := gateEndpoints(ctx, endpoints)
+	for _, r := range refused {
+		slog.Warn("transcribe: endpoint refused by require_gpu", "url", r.URL, "label", r.Label, "reason", r.Reason)
+	}
+	if len(gated) == 0 {
+		// Distinct from "no whisper endpoints configured": that sends an
+		// operator hunting a config typo, when the real answer is that the
+		// box they configured is not on a GPU.
+		return nil, classifyTransport(endpointURLs(endpoints), fmt.Errorf(
+			"all %d whisper endpoint(s) refused by require_gpu: %s",
+			len(endpoints), describeRefusals(refused)))
+	}
+
+	// Health is keyed by URL so allocateJobs keeps operating on []Endpoint
+	// and its index-based contract with the assignment slices is untouched.
+	probeByURL := make(map[string]gatedEndpoint, len(gated))
+	eligible := make([]Endpoint, 0, len(gated))
+	for _, g := range gated {
+		probeByURL[g.Endpoint.URL] = g
+		eligible = append(eligible, g.Endpoint)
+	}
+
 	// One endpoint: byte-for-byte the historical single-URL behaviour.
-	if len(endpoints) == 1 {
-		results, err := transcribeRemote(ctx, endpoints[0].URL, jobs, onProgress)
+	if len(eligible) == 1 {
+		g := probeByURL[eligible[0].URL]
+		results, err := transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, jobs, onProgress)
 		if err != nil {
-			return nil, classifyTransport([]string{endpoints[0].URL}, err)
+			return nil, classifyTransport([]string{g.Endpoint.URL}, err)
 		}
 		return results, nil
 	}
 
-	ordered := make([]Endpoint, len(endpoints))
-	copy(ordered, endpoints)
+	ordered := make([]Endpoint, len(eligible))
+	copy(ordered, eligible)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Priority < ordered[j].Priority })
 
 	remaining := make(map[string]string, len(jobs))
@@ -182,7 +217,8 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]s
 			}
 			ep := healthy[idx]
 			wg.Go(func() {
-				r, err := transcribeRemote(ctx, ep.URL, sub, progressFor())
+				g := probeByURL[ep.URL]
+				r, err := transcribeRemoteWithHealth(ctx, ep.URL, g.Health, g.Probed, sub, progressFor())
 				resCh <- epResult{idx: idx, res: r, err: err}
 			})
 		}

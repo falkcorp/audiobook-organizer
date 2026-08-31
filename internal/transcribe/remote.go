@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-08-30
+// last-edited: 2026-08-31
 
 package transcribe
 
@@ -40,39 +40,77 @@ const whisperBatchSize = 16
 // concurrency is needed at the Go layer.
 const remoteWorkers = 4
 
-// transcribeRemote sends WAV jobs to the remote faster-whisper server.
-// It probes for /transcribe-batch support first (faster-whisper >=1.0.0 server)
-// and falls back to the original per-file worker pool on 404 or probe failure.
-func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
-	if supportsRemoteBatch(ctx, remoteURL) {
-		return transcribeRemoteBatched(ctx, remoteURL, jobs, onProgress)
+// remoteHealth is the decoded /health body. One probe answers two independent
+// questions -- does this server batch, and is it on a GPU -- deliberately:
+// asking twice would let a server restart between the calls and hand back a
+// batch answer and a device answer describing different processes.
+type remoteHealth struct {
+	// BatchPipeline is a pointer because its ABSENCE is the signal: a
+	// pre-1.0.0 server omits the key entirely. Present (even false) means a
+	// v2 server. See supportsBatch.
+	BatchPipeline *bool `json:"batch_pipeline"`
+	// Device is the RESOLVED inference device the server loaded ("cuda",
+	// "metal", "cpu", ...), not the one it was configured with. Empty when
+	// the server is too old to report it, which requireGPU treats as
+	// unproven rather than as CPU.
+	Device string `json:"device"`
+	// ComputeType is informational: it is logged with a refusal so "cpu"
+	// plus "int8" reads as a coherent story rather than a bare rejection.
+	ComputeType string `json:"compute_type"`
+}
+
+// supportsBatch reports whether the server exposes /transcribe-batch.
+// Present in v2 server; absent means old server.
+func (h remoteHealth) supportsBatch() bool { return h.BatchPipeline != nil }
+
+// probeRemoteHealth performs the single /health GET. ok=false means the probe
+// itself did not complete (connection error, non-JSON body); callers must not
+// read the returned struct in that case. A failed probe is NOT an error
+// return: the batch decision degrades to the per-file path on failure, which
+// is the historical behaviour and must be preserved.
+func probeRemoteHealth(ctx context.Context, remoteURL string) (remoteHealth, bool) {
+	hctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var h remoteHealth
+	req, err := http.NewRequestWithContext(hctx, http.MethodGet, remoteURL+"/health", nil)
+	if err != nil {
+		return h, false
 	}
-	return transcribeRemotePerFile(ctx, remoteURL, jobs, onProgress)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return h, false
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
+		return h, false
+	}
+	return h, true
 }
 
 // supportsRemoteBatch checks whether the server exposes /transcribe-batch by
 // hitting /health and looking for "batch_pipeline" in the response. A plain
 // connection error is treated as unsupported (server may be older version).
 func supportsRemoteBatch(ctx context.Context, remoteURL string) bool {
-	hctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(hctx, http.MethodGet, remoteURL+"/health", nil)
-	if err != nil {
-		return false
+	h, ok := probeRemoteHealth(ctx, remoteURL)
+	return ok && h.supportsBatch()
+}
+
+// transcribeRemote sends WAV jobs to the remote faster-whisper server.
+// It probes for /transcribe-batch support first (faster-whisper >=1.0.0 server)
+// and falls back to the original per-file worker pool on 404 or probe failure.
+func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+	h, ok := probeRemoteHealth(ctx, remoteURL)
+	return transcribeRemoteWithHealth(ctx, remoteURL, h, ok, jobs, onProgress)
+}
+
+// transcribeRemoteWithHealth is transcribeRemote for a caller that has ALREADY
+// probed /health -- the pool gate does, to decide require_gpu -- so the batch
+// decision reuses that same response instead of issuing a second one.
+func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteHealth, probed bool, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+	if probed && h.supportsBatch() {
+		return transcribeRemoteBatched(ctx, remoteURL, jobs, onProgress)
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	var h struct {
-		BatchPipeline *bool `json:"batch_pipeline"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
-		return false
-	}
-	// Present in v2 server; absent or false means old server.
-	return h.BatchPipeline != nil
+	return transcribeRemotePerFile(ctx, remoteURL, jobs, onProgress)
 }
 
 // transcribeRemoteBatched sends jobs in sub-batches of whisperBatchSize to
