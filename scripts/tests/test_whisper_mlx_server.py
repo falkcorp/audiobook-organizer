@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-08-30
 #
@@ -23,9 +23,25 @@
 import importlib.util
 import pathlib
 import sys
+import unittest
 
-import pytest
-from fastapi.testclient import TestClient
+# ci.yml's Repo Guards job runs `python3 -m unittest discover -s scripts`, and
+# every OTHER test under scripts/ is stdlib-only. This one needs fastapi and
+# httpx to exercise a real HTTP surface, so under bare unittest its import
+# would be an ERROR and fail that job. Raising SkipTest at import time makes
+# unittest report it as SKIPPED -- visible, not silently dropped -- while the
+# uv-driven step in ci.yml (and the command in this file's header) runs it for
+# real with the dependencies present. Do not "fix" this by deleting the guard;
+# fix it by making sure the uv step still runs.
+try:
+    import pytest
+    from fastapi.testclient import TestClient
+except ImportError as exc:  # pragma: no cover - dependency-gated
+    raise unittest.SkipTest(
+        f"whisper_mlx_server contract tests need fastapi+httpx+pytest ({exc}); "
+        "run: uv run --with fastapi --with httpx --with pytest --with python-multipart "
+        "pytest scripts/tests/test_whisper_mlx_server.py"
+    )
 
 _SERVER = pathlib.Path(__file__).resolve().parents[1] / "whisper_mlx_server.py"
 

@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.9.1
+# version: 3.10.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-08-27
 
@@ -242,6 +242,18 @@ jobs:
         run: |
           python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py' -v
           python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+      # The Metal Whisper worker's contract tests need fastapi+httpx to drive a
+      # real HTTP surface, so the stdlib unittest discovery above SKIPS them.
+      # Run them for real here: they are the only thing standing between a
+      # protocol change in internal/transcribe/remote.go and a Mac worker that
+      # answers 200 with keys nobody reads -- a failure that surfaces as
+      # "transcripts silently never land", not as an error. Deps are installed
+      # directly rather than via a new action so nothing new needs SHA-pinning.
+      - name: Whisper MLX worker contract tests
+        run: |
+          python3 -m pip install --quiet fastapi httpx pytest python-multipart
+          python3 -m pytest scripts/tests/test_whisper_mlx_server.py -v
 
   # Project-specific: verify mockery mocks are not stale
   mocks-check:
