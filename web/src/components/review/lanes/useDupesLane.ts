@@ -1,9 +1,17 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-09-01
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import * as api from '../../../services/api';
 import type { DedupBand, DedupCandidate, DedupStats } from '../../../services/api';
 import type { DupesAction } from '../reviewActions';
@@ -15,6 +23,18 @@ import { PAGE_SIZE_OPTIONS } from './useMetadataLane';
 export { PAGE_SIZE_OPTIONS };
 
 const DEFAULT_PAGE_SIZE = 50;
+
+/**
+ * How many rows mount in the first, synchronous pass.
+ *
+ * Chosen by measurement, not by feel: the load task is ~18 ms of fixed cost
+ * plus ~1.4 ms per row, so this many rows is what fits in the first pass while
+ * staying under the 50 ms that the longtask API calls a long task -- which is
+ * also roughly the point a user starts to feel a freeze. Raising it puts the
+ * first paint back over that line; lowering it buys nothing, because the
+ * remainder is already off the critical path.
+ */
+export const FIRST_PAINT_ROWS = 20;
 
 /**
  * Why "merge everything matching this filter" is refused while the
@@ -339,7 +359,7 @@ export function useDupesLane(
    */
   const deferredSearch = useDeferredValue(filters.search);
 
-  const visible = useMemo(() => {
+  const filtered = useMemo(() => {
     const decided = (rows: DedupCandidate[]) =>
       decidedIds.size === 0 ? rows : rows.filter((c) => !decidedIds.has(c.id));
     const q = deferredSearch.trim().toLowerCase();
@@ -362,6 +382,71 @@ export function useDupesLane(
     const searched = candidates.filter((c) => hay(c).includes(q));
     return decided(searched);
   }, [candidates, deferredSearch, decidedIds]);
+
+  /**
+   * Progressive mount: the first FIRST_PAINT_ROWS rows commit synchronously,
+   * the rest arrive in a transition.
+   *
+   * MEASURED, like the `useDeferredValue` above it. Loading a 100-row page
+   * rendered every row in ONE synchronous task, because the fetch resolving is
+   * a plain setState outside any transition:
+   *
+   *   blocked main-thread time  106 ms
+   *   longest single task       156 ms
+   *
+   * against a noise floor that produces no long task at all. The cost is close
+   * to linear in the row count -- N=50 measured 87 ms and N=100 156 ms, i.e.
+   * ~18 ms of fixed route/mount cost plus ~1.4 ms per row -- so it is the rows,
+   * not the shell, and it grows with the page-size option the user picks.
+   *
+   * The proof that a transition is enough lives one interaction over: the
+   * client-side search re-renders ~99 rows through `deferredSearch` and
+   * measures ZERO tasks over 50 ms at N=100, because React yields between rows
+   * in a transition instead of running the pass to completion.
+   *
+   * WHY A SYNCHRONOUS FIRST SLICE, rather than deferring the whole list. A bare
+   * `useDeferredValue(filtered)` would return the PREVIOUS value -- the empty
+   * array -- for the urgent render that follows the fetch, and `loading` is
+   * already false by then. The spine renders `emptyMessage` when it gets no
+   * rows, so that pass would COMMIT a frame reading "No duplicate candidates"
+   * before the rows appeared. Mounting a first slice synchronously means the
+   * reviewer never sees an empty state that is not true.
+   *
+   * SAFETY, and it is the same argument the `deferredSearch` note above makes.
+   * `selectAllVisible` must never reach past what the reviewer can see, because
+   * a merge cannot be undone. It reads `visible` -- and `visible` is what the
+   * rows are rendered from, in the same pass. Capping it here therefore keeps
+   * that invariant verbatim rather than reinterpreting it: during the mount
+   * window "everything on screen" is the first slice, and select-all selects
+   * exactly that. The shift-click anchor is an INDEX into `visible`, and the
+   * cap only ever extends a PREFIX, so an index taken before the cap lifted
+   * still points at the same row afterwards.
+   */
+  const [mountCap, setMountCap] = useState(FIRST_PAINT_ROWS);
+  // Reset the cap during render rather than in an effect. An effect runs after
+  // the render that used the stale cap, so a filter change would commit one
+  // full-length pass -- exactly the task this is here to prevent -- before the
+  // reset landed. This is React's documented "adjust state when a prop changes"
+  // pattern: the extra render is discarded, never committed.
+  const [capList, setCapList] = useState(filtered);
+  if (capList !== filtered) {
+    setCapList(filtered);
+    setMountCap(FIRST_PAINT_ROWS);
+  }
+
+  useEffect(() => {
+    if (mountCap >= filtered.length) return;
+    // One transition to the full length, NOT a chunk-at-a-time loop. React
+    // yields between rows inside a transition on its own, and every extra step
+    // would be another `visible` identity -- which `toggleSelect` depends on,
+    // so each one re-renders every already-mounted row.
+    startTransition(() => setMountCap(filtered.length));
+  }, [mountCap, filtered]);
+
+  const visible = useMemo(
+    () => (mountCap >= filtered.length ? filtered : filtered.slice(0, mountCap)),
+    [filtered, mountCap]
+  );
 
   /**
    * The focus pointer, clamped to what is actually on screen.
