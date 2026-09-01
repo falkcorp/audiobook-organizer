@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.5.1
+// version: 1.6.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-08-22
+// last-edited: 2026-09-01
 //
 // The unified review workspace: one screen for dedup, metadata apply, and the
 // review queue.
@@ -33,7 +33,7 @@
 // this project exists to remove. The safety net is git until Phase 7 deletes the
 // old surfaces, which is gated on docs/port-inventory.md.
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -165,6 +165,20 @@ export function ReviewWorkspace() {
   // Expansion is a view concern and the two lanes key it on different id types,
   // so it is not shared state.
   const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);
+
+  // useCallback, not an inline arrow in the JSX below.
+  //
+  // This is load-bearing rather than tidy. DupesSpine memoizes its rows and
+  // derives their stable `handlers` object from the individual callbacks in the
+  // ctx it is handed. An inline arrow here gets a new identity on every render
+  // of this component -- and a dupes checkbox tick re-renders this component,
+  // because useDupesLane's state lives here -- so `handlers` would change on
+  // every tick and every memoized row would re-render anyway. The memo would be
+  // present, correct, and completely inert.
+  const toggleDupesExpanded = useCallback(
+    (id: number) => setDupesExpandedId((cur) => (cur === id ? null : id)),
+    []
+  );
   // Rescore-with-apply asks first. See the command pair below.
   const [rescoreConfirmOpen, setRescoreConfirmOpen] = useState(false);
   const [confirmRefetchStale, setConfirmRefetchStale] = useState(false);
@@ -440,7 +454,7 @@ export function ReviewWorkspace() {
           dupes={dupes}
           viewMode={viewMode}
           expandedId={dupesExpandedId}
-          onToggleExpand={(id) => setDupesExpandedId((cur) => (cur === id ? null : id))}
+          onToggleExpand={toggleDupesExpanded}
         />
       ) : unported ? (
         <Box sx={{ p: 3 }} data-testid={`lane-unported-${lane}`}>

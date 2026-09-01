@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -219,6 +219,20 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
             </Alert>
           )}
 
+          {/*
+            `ctx` is an object literal on purpose, and it is safe to leave it
+            one: DupesSpine does not compare `ctx`, it lifts the four CALLBACKS
+            out of it into a useMemo and resolves the per-row values itself. So
+            what has to hold still is each callback, not this object.
+
+            Which means: do NOT replace any of the four with an inline arrow.
+            `onToggleSelect`, `onAction` and `onOpenCompare` come straight from
+            useDupesLane (a useCallback and a setState setter), and
+            `onToggleExpand` is a useCallback in ReviewWorkspace. An arrow in
+            any of those four positions leaves the row memo present and inert.
+            `isSelected` is exempt -- it is CALLED during DupesSpine's render
+            and never held.
+          */}
           <DupesSpine
             candidates={dupes.candidates}
             viewMode={viewMode}
