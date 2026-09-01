@@ -3160,7 +3160,13 @@ func (p *placeholderAuthors) is(authorID int) bool {
 	result := false
 	if store := getStore(); store != nil {
 		if author, err := store.GetAuthorByID(authorID); err == nil && author != nil {
-			result = authorname.IsPlaceholder(author.Name)
+			// Edition-stripped like the other three IsPlaceholder call sites
+			// (scanner.go extractInfoFromPath, metadata.go twice). This one was
+			// missed when those were fixed. It matters more than they do: this
+			// gate decides whether AI parsing is POINTLESS, so a decorated
+			// placeholder reading as a real author does not merely record a bad
+			// value, it permanently skips the book that most needs nominating.
+			result = authorname.IsPlaceholder(personname.StripEditionSuffix(author.Name))
 		}
 	}
 
