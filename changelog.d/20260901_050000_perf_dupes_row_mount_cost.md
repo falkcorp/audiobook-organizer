@@ -5,8 +5,11 @@
 Typing in the dupes lane's "Search this page" box re-filters the loaded page, and
 at the 100-row page size that meant unmounting ~99 rows and mounting ~99 more in
 one uninterruptible chunk of work. Measured on a production build, that was a
-single **215 ms** freeze of the whole page — long enough to feel — while the
-metadata and regroup lanes at the same row counts froze for 0 ms.
+single **216 ms** freeze of the whole page — long enough to feel — while the
+metadata and regroup lanes at the same row counts froze for 0 ms. Memoizing the
+rows had already been tried and did not help, for a good reason: memoization
+skips re-renders, and nothing here was re-rendering. Every row was being built
+from scratch.
 
 Two independent causes, both found by ablation rather than guessed at:
 
@@ -26,24 +29,25 @@ its chip is actually clicked, and the path-abbreviation setting is now read once
 per page instead of once per path — it was 200 separate reads at the 100-row cap,
 each triggering its own re-render when it arrived.
 
-Measured before and after on the same harness and machine (the "after" run was
-taken under a *higher* system load, 18.1 vs 12.1, so it is not flattered):
+Measured before and after on the same harness, machine and session:
 
 | at 100 rows | before | after |
 |---|---|---|
-| filter — blocked main-thread time | 770 ms | **0 ms** |
-| filter — longest single freeze | 215 ms | **0 ms** |
-| loading the lane — blocked time | 174 ms | 106 ms |
-| loading the lane — longest freeze | 224 ms | 156 ms |
+| filter — blocked main-thread time | 755 ms | **0 ms** |
+| filter — longest single freeze | 216 ms | **0 ms** |
+| loading the lane — blocked time | 170 ms | 104 ms |
+| loading the lane — longest freeze | 220 ms | 154 ms |
 
-At 50 rows, filtering also went from 269 ms blocked / 116 ms longest freeze to
-zero. "0 ms" means no single task crossed the 50 ms threshold the browser counts
-as a freeze — not that no work happens.
+At 50 rows, filtering also went from 260 ms blocked / 111 ms longest freeze to
+zero. On a deliberately slowed machine (a 6x CPU handicap, standing in for older
+hardware) the same filter went from 6,174 ms blocked / 1,314 ms longest freeze to
+0 ms / 50 ms. "0 ms" means no single task crossed the 50 ms threshold the browser
+counts as a freeze — not that no work happens.
 
-Two honest caveats. **Loading the lane fresh still stalls ~156 ms at 100 rows**;
+Two honest caveats. **Loading the lane fresh still stalls ~154 ms at 100 rows**;
 deferring the filter does nothing for the first render, and only the per-row
 reductions moved that number. And a filter now takes slightly longer in total
-wall-clock (43 ms → 75 ms at 100 rows) because the work is spread across more
+wall-clock (40 ms → 44 ms at 100 rows) because the work is spread across more
 frames rather than done in one — that is the trade, and it is the right way
 round: nothing blocks long enough to be felt.
 
