@@ -173,6 +173,27 @@ func StripEditionSuffix(s string) string {
 }
 
 // isMultiNameCredit reports whether s lists two or more names.
+//
+// The every-clause loop below looks redundant -- LooksLikeAuthorCredit has
+// already applied the same rule before either side reaches here -- and it is
+// not. A string can be a credit via the BARE-NAME path instead, and then have
+// two clauses that are not themselves names: "Smith, John" is one person in
+// last-first form, and the loop is what stops it counting as two.
+//
+// A mutation that weakens this loop to "any clause" SURVIVES the suite, and
+// deliberately so. The only input that distinguishes the two versions is
+// "Smith, John - Good Omens", where the weakened version answers
+// "Smith, John" -- which is the CORRECT author -- and this version falls to the
+// tie and answers "Good Omens". Killing that mutant would mean pinning
+// "Good Omens" as the author of that filename, so the mutant is left alive
+// rather than a wrong answer written into a test to tidy up a count.
+//
+// The underlying gap is that a last-first name is not used as a discriminator
+// at all: a person may be written "Last, First" and a title may not, so that is
+// evidence this function currently throws away. It is pre-existing -- origin/main
+// answers "Anansi Boys" for "Gaiman, Neil - Anansi Boys" too -- and is filed at
+// todo.d/20260901_last_first_author_not_a_discriminator.md rather than fixed
+// here.
 func isMultiNameCredit(s string) bool {
 	clauses := creditSeparatorRe.Split(StripEditionSuffix(s), -1)
 	if len(clauses) < 2 {

@@ -110,6 +110,26 @@ func TestChooseAuthorSideTiePolicy(t *testing.T) {
 	}
 }
 
+// TestMultiNameCreditRequiresEveryClause pins that the multi-name
+// discriminator uses EVERY clause, not any. With "any", "Neil Gaiman and
+// Volume Two" counts as a list of names and beats a genuine title on the other
+// side -- the discriminator would then be actively harmful rather than merely
+// weaker.
+func TestMultiNameCreditRequiresEveryClause(t *testing.T) {
+	// "Volume Two" is a structural marker, not a name, so the left side is NOT
+	// a multi-name credit and must not win on that basis. The pair falls
+	// through to the tie, which prefers the right.
+	_, author, ok := ChooseAuthorSide("Neil Gaiman and Volume Two", "Good Omens", PreferRightOnTie)
+	if !ok || author != "Good Omens" {
+		t.Errorf("author = %q, ok = %v; want Good Omens (left is not a credit list)", author, ok)
+	}
+	// Sanity: with every clause a real name, the left side DOES win.
+	_, author, ok = ChooseAuthorSide("Neil Gaiman and Terry Pratchett", "Good Omens", PreferRightOnTie)
+	if !ok || author != "Neil Gaiman and Terry Pratchett" {
+		t.Errorf("author = %q, ok = %v; want the credit list", author, ok)
+	}
+}
+
 // TestChooseAuthorSideDecoratedSideStillWins is the round-4 inversion stated at
 // the level of the shared function rather than through a caller.
 func TestChooseAuthorSideDecoratedSideStillWins(t *testing.T) {

@@ -445,3 +445,12 @@ Re-measured over the same 1,232 filenames: correct rises from 928 to **1,000**
 and wrong falls from 156 to **132**, with scanner still at **0** correct→wrong and
 **0** empty→wrong against `origin/main`. On the 448 inputs whose author is a
 credit list, correct answers go from 216 (main) to 336.
+
+Re-run after those tests were written: **twelve of thirteen mutants killed.** The
+survivor is recorded as an accepted one rather than tidied away. Weakening
+`isMultiNameCredit` from "every clause is a name" to "any clause is" changes the
+answer for exactly one shape, `"Smith, John - Good Omens"`, and the *weakened*
+version answers it correctly. Killing that mutant would mean writing
+`"Good Omens"` into a test as the author of that file. The mutant is left alive
+and the real gap it points at — a last-first name is not used as a discriminator,
+which `origin/main` gets wrong too — is filed rather than fixed here.
