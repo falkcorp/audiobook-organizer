@@ -7,12 +7,28 @@
   splits into two or more name-shaped parts — but titles do that too, and
   `"Norse Mythology and Anansi Boys"` splits exactly like
   `"Neil Gaiman and Terry Pratchett"`. It is replaced by a much narrower test
-  that only looks at `&` and `+`, and that runs after the stronger signals (a
-  leading "The"/"A", and initials) rather than before them.
+  that only looks at `&` and `+`, that runs after the stronger signals (a
+  leading "The"/"A", and initials) rather than before them, and that only
+  applies when the other half of the filename is a single undivided name.
+
+  That last condition was missing at first and had to be added in review. An
+  ampersand tells you a phrase *is* a list of authors; it tells you nothing
+  about whether the other half is. Without the condition, a title like
+  `Magic Tides & Magic Claims` beat a genuine two-author credit sitting right
+  next to it.
 
   Measured on 68,793 real library paths, split into 40,261 used to choose the
   rule and a held-out 28,532 used only to check it: zero paths where the previous
   behaviour produced a correct or absent author and this produces a wrong one.
+
+  There is a deliberate trade, stated here because it is a real loss and not
+  only an improvement. A credit joined by "and" or a comma is no longer
+  recognised when it comes *first* in the filename, so
+  `Neil Gaiman and Terry Pratchett - Good Omens.mp3` now records the wrong
+  author. Recognising that shape is exactly what was filing omnibus titles as
+  authors, and nothing in the text separates the two. The loss falls on the
+  rarer ordering: this library measures 57 files named "Title - Author" against
+  9 named "Author - Title".
 
 - **An audiobook named with underscores no longer has "Unknown Author" recorded
   as a real author.** `Mort_Unknown Author.mp3` was stored with the author
