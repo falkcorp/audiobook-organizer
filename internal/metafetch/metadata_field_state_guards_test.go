@@ -8,6 +8,8 @@ package metafetch
 import (
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -63,17 +65,17 @@ func TestMetadataFieldStateGuardsConform(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := encodeMetadataValue(tc.value)
+			raw, err := metastate.Encode(tc.value)
 			if err != nil {
-				t.Fatalf("encodeMetadataValue(%#v): %v", tc.value, err)
+				t.Fatalf("metastate.Encode(%#v): %v", tc.value, err)
 			}
 
 			// The database view holds the stored *string verbatim.
 			dbRow := database.MetadataFieldState{OverrideValue: raw, FetchedValue: raw}
 			// The metafetch view holds it decoded, exactly as loadMetadataState builds it.
 			mfRow := MetadataFieldState{
-				OverrideValue: decodeMetadataValue(raw),
-				FetchedValue:  decodeMetadataValue(raw),
+				OverrideValue: metastate.Decode(raw),
+				FetchedValue:  metastate.Decode(raw),
 			}
 
 			for _, g := range []struct {

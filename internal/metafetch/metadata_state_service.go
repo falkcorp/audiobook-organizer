@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_state_service.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-18
+// last-edited: 2026-09-01
 
 package metafetch
 
@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -53,8 +55,8 @@ func (mss *MetadataStateService) LoadMetadataState(bookID string) (map[string]me
 
 	for _, entry := range stored {
 		state[entry.Field] = metadataFieldState{
-			FetchedValue:   decodeMetadataValue(entry.FetchedValue),
-			OverrideValue:  decodeMetadataValue(entry.OverrideValue),
+			FetchedValue:   metastate.Decode(entry.FetchedValue),
+			OverrideValue:  metastate.Decode(entry.OverrideValue),
 			OverrideLocked: entry.OverrideLocked,
 			UpdatedAt:      entry.UpdatedAt,
 		}
@@ -100,11 +102,11 @@ func (mss *MetadataStateService) SaveMetadataState(bookID string, state map[stri
 
 	now := time.Now()
 	for field, entry := range state {
-		fetched, err := encodeMetadataValue(entry.FetchedValue)
+		fetched, err := metastate.Encode(entry.FetchedValue)
 		if err != nil {
 			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
 		}
-		override, err := encodeMetadataValue(entry.OverrideValue)
+		override, err := metastate.Encode(entry.OverrideValue)
 		if err != nil {
 			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
 		}
@@ -143,8 +145,8 @@ func (mss *MetadataStateService) recordChange(bookID, field, changeType, source 
 	if mss.db == nil {
 		return
 	}
-	prev, _ := encodeMetadataValue(previousValue)
-	next, _ := encodeMetadataValue(newValue)
+	prev, _ := metastate.Encode(previousValue)
+	next, _ := metastate.Encode(newValue)
 	record := &database.MetadataChangeRecord{
 		BookID:        bookID,
 		Field:         field,
@@ -261,7 +263,7 @@ func (mss *MetadataStateService) GetEffectiveValue(bookID string, field string) 
 func (mss *MetadataStateService) loadLegacyMetadataState(bookID string) (map[string]metadataFieldState, error) {
 	state := map[string]metadataFieldState{}
 
-	pref, err := mss.db.GetUserPreference(metadataStateKey(bookID))
+	pref, err := mss.db.GetUserPreference(metastate.Key(bookID))
 	if err != nil {
 		return state, err
 	}

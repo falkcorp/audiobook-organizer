@@ -1,7 +1,7 @@
 // file: internal/server/server_metadata.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 588350bc-83db-47ed-9590-2b6513aadcda
-// last-edited: 2026-05-13
+// last-edited: 2026-09-01
 
 package server
 
@@ -13,37 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
-
-func metadataStateKey(bookID string) string {
-	return fmt.Sprintf("metadata_state_%s", bookID)
-}
-
-func decodeMetadataValue(raw *string) any {
-	if raw == nil || *raw == "" {
-		return nil
-	}
-	var value any
-	if err := json.Unmarshal([]byte(*raw), &value); err != nil {
-		return *raw
-	}
-	return value
-}
-
-func encodeMetadataValue(value any) (*string, error) {
-	if value == nil {
-		return nil, nil
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	encoded := string(data)
-	return &encoded, nil
-}
 
 // These helpers are now methods on *Server so they use the server's
 // resolved store (SERVER-GLOBAL-STORE-AUDIT phase 3b). Callers in this
@@ -56,7 +31,7 @@ func (s *Server) loadLegacyMetadataState(bookID string) (map[string]metafetch.Me
 		return state, fmt.Errorf("database not initialized")
 	}
 
-	pref, err := store.GetUserPreference(metadataStateKey(bookID))
+	pref, err := store.GetUserPreference(metastate.Key(bookID))
 	if err != nil {
 		return state, err
 	}
@@ -83,8 +58,8 @@ func (s *Server) loadMetadataState(bookID string) (map[string]metafetch.Metadata
 	}
 	for _, entry := range stored {
 		state[entry.Field] = metafetch.MetadataFieldState{
-			FetchedValue:   decodeMetadataValue(entry.FetchedValue),
-			OverrideValue:  decodeMetadataValue(entry.OverrideValue),
+			FetchedValue:   metastate.Decode(entry.FetchedValue),
+			OverrideValue:  metastate.Decode(entry.OverrideValue),
 			OverrideLocked: entry.OverrideLocked,
 			UpdatedAt:      entry.UpdatedAt,
 		}
@@ -124,11 +99,11 @@ func (s *Server) saveMetadataState(bookID string, state map[string]metafetch.Met
 
 	now := time.Now()
 	for field, entry := range state {
-		fetched, err := encodeMetadataValue(entry.FetchedValue)
+		fetched, err := metastate.Encode(entry.FetchedValue)
 		if err != nil {
 			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
 		}
-		override, err := encodeMetadataValue(entry.OverrideValue)
+		override, err := metastate.Encode(entry.OverrideValue)
 		if err != nil {
 			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
 		}

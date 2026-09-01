@@ -9,16 +9,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
-	"log/slog"
-	"sort"
-	"strings"
-	"time"
 )
 
 // defaultSourceFanout is the fallback for how many metadata sources are queried

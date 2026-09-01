@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-08-18
+// last-edited: 2026-09-01
 //
 // Private utilities needed by the audiobooks service package. These mirror
 // equivalent helpers from internal/server/ but are standalone so that the
@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -49,33 +51,6 @@ type metadataFieldState struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-func metadataStateKey(bookID string) string {
-	return fmt.Sprintf("metadata_state_%s", bookID)
-}
-
-func decodeMetadataValue(raw *string) any {
-	if raw == nil || *raw == "" {
-		return nil
-	}
-	var value any
-	if err := json.Unmarshal([]byte(*raw), &value); err != nil {
-		return *raw
-	}
-	return value
-}
-
-func encodeMetadataValue(value any) (*string, error) {
-	if value == nil {
-		return nil, nil
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	encoded := string(data)
-	return &encoded, nil
-}
-
 func decodeRawValue(raw json.RawMessage) any {
 	if raw == nil {
 		return nil
@@ -98,7 +73,7 @@ func (svc *AudiobookService) loadLegacyMetadataState(bookID string) (map[string]
 	if svc == nil || svc.store == nil {
 		return state, nil
 	}
-	pref, err := svc.store.GetUserPreference(metadataStateKey(bookID))
+	pref, err := svc.store.GetUserPreference(metastate.Key(bookID))
 	if err != nil {
 		return state, err
 	}
@@ -122,8 +97,8 @@ func (svc *AudiobookService) loadMetadataState(bookID string) (map[string]metada
 	}
 	for _, entry := range stored {
 		state[entry.Field] = metadataFieldState{
-			FetchedValue:   decodeMetadataValue(entry.FetchedValue),
-			OverrideValue:  decodeMetadataValue(entry.OverrideValue),
+			FetchedValue:   metastate.Decode(entry.FetchedValue),
+			OverrideValue:  metastate.Decode(entry.OverrideValue),
 			OverrideLocked: entry.OverrideLocked,
 			UpdatedAt:      entry.UpdatedAt,
 		}
@@ -158,11 +133,11 @@ func (svc *AudiobookService) saveMetadataState(bookID string, state map[string]m
 	}
 	now := time.Now()
 	for field, entry := range state {
-		fetched, err := encodeMetadataValue(entry.FetchedValue)
+		fetched, err := metastate.Encode(entry.FetchedValue)
 		if err != nil {
 			return fmt.Errorf("failed to encode fetched metadata for %s: %w", field, err)
 		}
-		override, err := encodeMetadataValue(entry.OverrideValue)
+		override, err := metastate.Encode(entry.OverrideValue)
 		if err != nil {
 			return fmt.Errorf("failed to encode override metadata for %s: %w", field, err)
 		}
@@ -216,8 +191,8 @@ func (mss *metadataStateSvc) recordChange(bookID, field, changeType, source stri
 	if mss.db == nil {
 		return
 	}
-	prev, _ := encodeMetadataValue(previousValue)
-	next, _ := encodeMetadataValue(newValue)
+	prev, _ := metastate.Encode(previousValue)
+	next, _ := metastate.Encode(newValue)
 	record := &database.MetadataChangeRecord{
 		BookID:        bookID,
 		Field:         field,

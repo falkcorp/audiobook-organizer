@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
@@ -441,7 +443,7 @@ func TestUpdateAudiobookOverridesPersist(t *testing.T) {
 	assert.True(t, state.OverrideLocked)
 	assert.NotNil(t, state.OverrideValue)
 	assert.NotZero(t, state.UpdatedAt)
-	assert.Equal(t, "New Title", decodeMetadataValue(state.OverrideValue))
+	assert.Equal(t, "New Title", metastate.Decode(state.OverrideValue))
 }
 
 // TestDeleteAudiobook tests deleting an audiobook

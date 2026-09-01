@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -121,16 +123,16 @@ func TestUpdateAudiobook_CreatesAuthorSeries_AndUpdatesOverrideState(t *testing.
 	require.True(t, ok, "title state not found")
 	assert.True(t, stTitle.OverrideLocked)
 	require.NotNil(t, stTitle.OverrideValue)
-	assert.Equal(t, "Override Title", decodeMetadataValue(stTitle.OverrideValue))
+	assert.Equal(t, "Override Title", metastate.Decode(stTitle.OverrideValue))
 	require.NotNil(t, stTitle.FetchedValue)
-	assert.Equal(t, "Fetched Title", decodeMetadataValue(stTitle.FetchedValue))
+	assert.Equal(t, "Fetched Title", metastate.Decode(stTitle.FetchedValue))
 
 	// Auto-created from raw payload for fields with no explicit override.
 	stIsbn13, ok := stateByField["isbn13"]
 	require.True(t, ok, "isbn13 state not found")
 	assert.True(t, stIsbn13.OverrideLocked, "isbn13 OverrideLocked should be true")
 	require.NotNil(t, stIsbn13.OverrideValue)
-	assert.Equal(t, "9999999999999", decodeMetadataValue(stIsbn13.OverrideValue))
+	assert.Equal(t, "9999999999999", metastate.Decode(stIsbn13.OverrideValue))
 
 	// Publisher should be unlocked via UnlockOverrides.
 	stPublisher, ok := stateByField["publisher"]
