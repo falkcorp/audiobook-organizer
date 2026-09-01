@@ -1,5 +1,5 @@
 // file: internal/personname/author_credit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c1d3f97-1705-4519-a344-cc8eb9f0d038
 // last-edited: 2026-09-01
 
@@ -207,5 +207,71 @@ func TestAmpersandCreditIsWeakEvidenceNotALaw(t *testing.T) {
 		t.Fatalf("author = %q; this test PINS a known-wrong answer -- if it now "+
 			"returns \"Ilona Andrews\" the predicate got better and this test "+
 			"and its comment should be updated, not deleted", author)
+	}
+}
+
+// TestAmpersandCreditOnlyBreaksATieAgainstAnUndividedName pins the second half
+// of the ampersand rule's guard, which is the half that was missing and had to
+// be added in review.
+//
+// An ampersand is evidence that a side IS a credit. It is not evidence that the
+// other side is NOT. Without the undivided-name condition the rule fired
+// whenever the opposing side was itself a multi-name credit -- which is not a
+// rare coincidence, it is what happens whenever the opposing side is the real
+// author -- and an ampersand-joined TITLE beat it in the dominant
+// "Title - Author" order.
+func TestAmpersandCreditOnlyBreaksATieAgainstAnUndividedName(t *testing.T) {
+	cases := []struct{ left, right, wantAuthor, why string }{
+		{"Magic Tides & Magic Claims", "Ilona Andrews and Gordon Andrews", "Ilona Andrews and Gordon Andrews",
+			"an ampersand TITLE must not beat a real and-joined credit"},
+		{"Dark Matter + Blood Music", "Blake Crouch and Greg Bear", "Blake Crouch and Greg Bear",
+			"same for '+'"},
+		{"Magic Tides & Magic Claims", "Ilona Andrews, Gordon Andrews", "Ilona Andrews, Gordon Andrews",
+			"same for a comma-joined credit"},
+
+		// The converse: against a side carrying NO credit separator at all, the
+		// ampersand still gets to answer. This is the case the rule exists for,
+		// so these must not be lost to the guard above.
+		{"Elora Bishop & Bridget Essex", "Under Her Spell", "Elora Bishop & Bridget Essex",
+			"the guard must not disable the rule's whole purpose"},
+		{"David Weber & John Ringo", "March Upcountry", "David Weber & John Ringo",
+			"second real example"},
+	}
+	for _, tc := range cases {
+		_, author, ok := ChooseAuthorSide(tc.left, tc.right, PreferRightOnTie)
+		if !ok || author != tc.wantAuthor {
+			t.Errorf("ChooseAuthorSide(%q, %q) author = %q, ok = %v; want %q (%s)",
+				tc.left, tc.right, author, ok, tc.wantAuthor, tc.why)
+		}
+	}
+}
+
+// TestChooseAuthorSideAcceptsALossInTheAuthorFirstOrder pins a KNOWN-WRONG
+// answer, deliberately, so that the trade this package makes is visible in the
+// suite rather than only in a comment.
+//
+// An "and"- or comma-joined credit in the AUTHOR-first order is no longer
+// recognised. Recognising it is exactly what filed omnibus titles as authors:
+// "Norse Mythology and Anansi Boys" is built like "Neil Gaiman and Terry
+// Pratchett" and nothing in the text separates them. The library is measured at
+// 57 "Title - AUTHOR" against 9 "AUTHOR - Title", so the loss falls on the
+// rarer order and the gain on the common one.
+//
+// If this test starts failing, the predicate got BETTER: something now
+// distinguishes the two shapes. Update this test and the comment in
+// ChooseAuthorSide -- do not delete it.
+func TestChooseAuthorSideAcceptsALossInTheAuthorFirstOrder(t *testing.T) {
+	for _, credit := range []string{
+		"Neil Gaiman and Terry Pratchett",
+		"Ilona Andrews, Gordon Andrews",
+		"Larry Correia and John Ringo",
+	} {
+		_, author, _ := ChooseAuthorSide(credit, "Good Omens", PreferRightOnTie)
+		if author != "Good Omens" {
+			t.Fatalf("ChooseAuthorSide(%q, \"Good Omens\") author = %q; this test PINS the "+
+				"accepted wrong answer -- if it is now %q the predicate improved and this "+
+				"test plus the comment in ChooseAuthorSide should be updated, not deleted",
+				credit, author, credit)
+		}
 	}
 }

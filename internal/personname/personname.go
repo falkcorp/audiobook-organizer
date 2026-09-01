@@ -279,9 +279,23 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 	// Crown". The rule is nevertheless safe HERE because of where it sits: it
 	// only ever runs when BOTH sides already parse as credits, so a title
 	// false-positive changes the answer only when the opposing side is
-	// credit-shaped too. Measured end to end on 68,793 real library paths, in
-	// both packages: 0 rows where main produced a correct-or-absent author and
-	// this produces a wrong one, against 11 rows recovered. Do not promote this
+	// credit-shaped too. Measured end to end on 68,793 real library paths
+	// (40,261 used to choose the rule, 28,532 held out to check it), in both
+	// packages: 0 rows where main produced a correct-or-absent author and this
+	// produces a wrong one, against 11 recovered.
+	//
+	// That is a property OF THAT CORPUS, not a general one, and it is not a
+	// claim that the change never loses. It does lose, deliberately, on a shape
+	// the corpus does not contain in this orientation:
+	//
+	//   "Neil Gaiman and Terry Pratchett - Good Omens" -> author "Good Omens"
+	//
+	// An "and"- or comma-joined credit in the AUTHOR-first order is no longer
+	// recognised, because recognising it is precisely what filed omnibus titles
+	// as authors. Nothing structural separates the two, and the library measures
+	// 57 "Title - AUTHOR" against 9 "AUTHOR - Title", so the loss falls on the
+	// rarer order. Pinned by
+	// TestChooseAuthorSideAcceptsALossInTheAuthorFirstOrder. Do not promote this
 	// predicate to a general "is this a co-author credit" test on the strength
 	// of that number -- it is not one, and the 33/323 above is the reason.
 	//
@@ -316,10 +330,37 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 	// ampersand and must get to answer first.
 	leftAmp, rightAmp := looksLikeAmpersandCredit(left), looksLikeAmpersandCredit(right)
 	if leftAmp != rightAmp {
-		if leftAmp {
-			return right, left, true
+		// ...and only when the OTHER side is a single undivided name.
+		//
+		// Without this second condition the rule is actively harmful, because
+		// the case it fires on is the COMMON one rather than a rare
+		// coincidence. An earlier version of this comment argued the predicate
+		// was contained because "it only runs when both sides already parse as
+		// credits" -- but the opposing side being credit-shaped is not a
+		// coincidence, it is what happens whenever the opposing side is the
+		// real author. That was the TRIGGER condition written up as if it were
+		// a CONTAINMENT condition, and it let an ampersand-joined TITLE beat a
+		// genuine co-author credit in the dominant "Title - Author" order:
+		//
+		//   "Magic Tides & Magic Claims - Ilona Andrews and Gordon Andrews"
+		//       -> author "Magic Tides & Magic Claims"
+		//
+		// An ampersand is evidence that a side IS a credit. It is NOT evidence
+		// that the other side is not. So it may only break a tie against a side
+		// carrying no credit separator at all -- "Under Her Spell", not
+		// "Ilona Andrews and Gordon Andrews". Against another multi-clause
+		// string it abstains and the tie policy answers, which is what main did
+		// here by accident: its wider rule fired on both sides and cancelled.
+		other := right
+		if rightAmp {
+			other = left
 		}
-		return left, right, true
+		if len(creditSeparatorRe.Split(StripEditionSuffix(other), -1)) == 1 {
+			if leftAmp {
+				return right, left, true
+			}
+			return left, right, true
+		}
 	}
 
 	// Genuinely ambiguous -- a two-to-four-word capitalised phrase with no
