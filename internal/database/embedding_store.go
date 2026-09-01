@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.13.0
-// last-edited: 2026-08-29
+// version: 2.14.0
+// last-edited: 2026-09-01
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -12,6 +12,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -183,8 +184,32 @@ type CandidateFilter struct {
 	// in-handler (like both_unmatched), because the id lives on the candidate
 	// itself, so pagination totals stay accurate.
 	EntityID string
-	Limit    int
-	Offset   int
+
+	// Search is a case-insensitive substring matched against the fields that
+	// live ON the candidate row itself: Layer, Band, and either entity ID.
+	// Empty means no text search.
+	//
+	// The book-derived fields the UI also searches (title, author, file path)
+	// are NOT on this row -- they are joined in by the handler via
+	// GetBookByID. Those are matched by pre-resolving the needle to a set of
+	// book IDs and passing it as SearchEntityIDs; see the union rule below.
+	Search string
+
+	// SearchEntityIDs is the set of entity IDs whose JOINED book data matched
+	// Search, resolved by the caller before the scan starts. A candidate
+	// matches when EITHER side of the pair is in this set.
+	//
+	// Search and SearchEntityIDs are OR'd, not AND'd: a candidate is kept when
+	// the needle hits the candidate row OR the joined book. Both halves are
+	// applied at scan level -- BEFORE paginateCandidates -- so `total` counts
+	// every match in the library rather than the ones that survived on the
+	// current page. This is deliberately unlike both_unmatched, which filters
+	// in the handler after pagination and therefore reports a total that does
+	// not match what it returns.
+	SearchEntityIDs map[string]struct{}
+
+	Limit  int
+	Offset int
 }
 
 // CandidateStat holds a count for one grouping.
@@ -889,6 +914,12 @@ func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, in
 		return nil, 0, err
 	}
 
+	// Normalize the needle ONCE, here, rather than per-candidate inside the
+	// scan (40k+ ToLower calls) or at each call site (where forgetting it
+	// returns zero rows with no error to explain them). f is a value copy, so
+	// this reaches both read paths below and nothing outside this call.
+	f.Search = strings.ToLower(strings.TrimSpace(f.Search))
+
 	// isCandidateStatusIndexBuiltLocked, not the exported method: we already
 	// hold closeMu.RLock, and recursive RLock deadlocks (see that method's doc).
 	if f.Status != "" && s.isCandidateStatusIndexBuiltLocked() {
@@ -1016,7 +1047,39 @@ func matchesCandidateFilter(c DedupCandidate, f CandidateFilter, checkStatus boo
 	if f.EntityID != "" && c.EntityAID != f.EntityID && c.EntityBID != f.EntityID {
 		return false
 	}
+	// Text search is the ONLY clause here that is a union rather than another
+	// AND: the needle may land on the candidate row (layer/band/id) or on the
+	// book joined to either side. Everything above still AND's, so search
+	// narrows within the other filters rather than escaping them.
+	if f.Search != "" && !candidateMatchesSearch(c, f) {
+		return false
+	}
 	return true
+}
+
+// candidateMatchesSearch reports whether c matches f.Search, on either the
+// candidate row's own fields or -- via the pre-resolved f.SearchEntityIDs set
+// -- the book joined to either side of the pair.
+//
+// f.Search is already lower-cased and trimmed by ListCandidates, which does it
+// once per request rather than once per candidate.
+func candidateMatchesSearch(c DedupCandidate, f CandidateFilter) bool {
+	if _, ok := f.SearchEntityIDs[c.EntityAID]; ok {
+		return true
+	}
+	if _, ok := f.SearchEntityIDs[c.EntityBID]; ok {
+		return true
+	}
+	// Row-local fields. Layer and Band are the two the UI exposes as its own
+	// dropdowns, but they are searchable as free text too -- dropping them
+	// here would silently stop matching what the old client-side filter
+	// matched, with no error surface.
+	for _, field := range []string{c.Layer, c.Band, c.EntityAID, c.EntityBID} {
+		if field != "" && strings.Contains(strings.ToLower(field), f.Search) {
+			return true
+		}
+	}
+	return false
 }
 
 // paginateCandidates sorts by similarity descending (mirrors SQL ORDER BY
