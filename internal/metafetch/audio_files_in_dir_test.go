@@ -1,5 +1,5 @@
 // file: internal/metafetch/audio_files_in_dir_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: aead375c-cb1f-492f-893a-1fbd5d6ae32a
 // last-edited: 2026-09-01
 
@@ -115,5 +115,39 @@ func TestAudioFilesInDirNarrowsWithTheConfig(t *testing.T) {
 	got := baseNames(AudioFilesInDir(dir))
 	if len(got) != 1 || got[0] != "Book.mp3" {
 		t.Fatalf("expected only the configured .mp3, got %v", got)
+	}
+}
+
+// The rewrite from filepath.Glob to os.ReadDir CHANGED the result order, and
+// nothing in the old code ever pinned it. The old implementation called Glob
+// once per pattern and appended, so results came out grouped by the private
+// pattern list's order — "Book.m4b" ahead of "01.mp3" purely because .m4b was
+// listed first. That was an artifact, never a contract, but three call sites
+// build book_file rows from this slice, so the order is worth stating: it is
+// now lexical by full path, and this test is what holds it there.
+//
+// (No caller derives a track or disc number from slice position — verified
+// across all four: service_writeback.go, fix_version_groups.go x2 via
+// vgCreateBookFiles, and backfill_book_files.go. Neither row builder sets
+// TrackNumber. If one ever does, it inherits THIS order, not the glob's.)
+func TestAudioFilesInDirReturnsLexicalOrder(t *testing.T) {
+	prev := config.Snapshot()
+	config.Mutate(func(c *config.Config) { c.SupportedExtensions = nil })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+
+	dir := t.TempDir()
+	// Written in an order that is neither lexical nor extension-grouped, and
+	// chosen so the two orders DISAGREE: the old glob put Book.m4b first.
+	writeFiles(t, dir, "03.mp3", "Book.m4b", "01.mp3", "02.mp3")
+
+	got := baseNames(AudioFilesInDir(dir))
+	want := []string{"01.mp3", "02.mp3", "03.mp3", "Book.m4b"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v — AudioFilesInDir must return lexical order", got, want)
+		}
 	}
 }

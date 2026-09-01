@@ -37,7 +37,12 @@ Three further defects fell out of the consolidation:
   in production and visible on a developer's case-insensitive Mac; and a folder
   whose name contains a glob metacharacter — `The Hobbit [Unabridged]` — made
   every pattern match nothing, so the book appeared to have no audio at all. It
-  now reads the directory and tests the extension.
+  now reads the directory and tests the extension. Its result order changed as
+  a side effect: the old code called `Glob` once per pattern and appended, so
+  results came out grouped by that private pattern list; they are now lexical by
+  full path. No caller derives a track or disc number from slice position — all
+  four were checked, and neither `book_file` row builder sets `TrackNumber` —
+  but the order is now pinned by a test rather than left as an artifact.
 * **`reconcile.FindUntrackedFiles` read `config.AppConfig` without the lock.** It
   goes through the locked accessor now.
 
