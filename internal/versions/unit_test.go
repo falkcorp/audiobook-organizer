@@ -1,5 +1,6 @@
 // file: internal/versions/unit_test.go
-// version: 1.2.0
+// version: 1.3.0
+// guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
 // last-edited: 2026-09-01
 
 package versions
@@ -112,8 +113,12 @@ func TestCreateIngestVersion_FirstVersionIsActive_Mock(t *testing.T) {
 		ID: "v-1", BookID: "book-1", Status: database.BookVersionStatusActive,
 	}, nil)
 
-	// Hashing will fail on nonexistent path — that's fine, it's a warning path.
-	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil).Maybe()
+	// Hashing fails on this nonexistent path, and the file lookup must happen
+	// ANYWAY: the version-to-file linkage is not conditional on the hash. This
+	// was .Maybe() while the linkage lived inside the hash check's else branch,
+	// which let the mock pass whether or not the orphaned-version bug was
+	// present. Required now, so it cannot go back.
+	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 
 	ver, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:   "book-1",
@@ -139,6 +144,10 @@ func TestCreateIngestVersion_SecondVersionIsAlt_Mock(t *testing.T) {
 	})).Return(&database.BookVersion{
 		ID: "v-2", BookID: "book-1", Status: database.BookVersionStatusAlt,
 	}, nil)
+
+	// See the note in the sibling test: the hash fails here, and the file
+	// lookup must still run so the version gets linked.
+	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 
 	ver, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:   "book-1",

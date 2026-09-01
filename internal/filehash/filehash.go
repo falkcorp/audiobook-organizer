@@ -1,5 +1,5 @@
 // file: internal/filehash/filehash.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 6b4c9e21-7f0a-4d63-9c18-2a5e8b7d0f41
 // last-edited: 2026-09-01
 
@@ -57,6 +57,14 @@ const (
 	// Threshold. It is a constant so that every make([]byte, ChunkSize) in this
 	// package carries a compile-time allocation bound (CodeQL verifies this
 	// statically; a runtime-configurable size would reopen that finding).
+	//
+	// This constant IS the control that closed SEC-AUDIT-7c (uncontrolled
+	// allocation, PR #768). That control used to be spelled
+	// scanner.MaxScanBufferBytes, defined next to the only buffer it bounded.
+	// When the algorithm moved here the buffer came with it, so the name went
+	// too rather than being left behind pointing at a make() that no longer
+	// exists — a named bound with no allocation under it reads as a live
+	// control while guarding nothing.
 	ChunkSize = 10 * 1024 * 1024 // 10 MB
 )
 
@@ -91,11 +99,24 @@ func BookFileHash(path string) (string, error) {
 // BookFileHashFromFile is BookFileHash over an already-open handle whose size
 // the caller has determined, for callers that must not pay a second open.
 //
-// It seeks, so f must be seekable and the caller must not assume any
-// particular offset afterwards. Hashing starts from f's CURRENT offset, so a
-// caller that has already read from f must seek to the start first.
+// It seeks f to the start itself and seeks while hashing, so f must be
+// seekable and the caller must not assume any particular offset afterwards.
+// It does NOT hash from f's current offset: an earlier draft did, which made a
+// caller that had already read a tag header get a silent partial digest with no
+// error. The offset is the caller's business right up until it decides the
+// contents of an identity column.
+//
+// size is trusted for the digest but not for locating the tail window — the
+// tail is read at size-ChunkSize from the START, not backwards from the current
+// end. Those differ if the file is appended to between the caller's stat and
+// this call, and taking the tail from SeekEnd would pair a window from the new
+// file with the size of the old one.
 func BookFileHashFromFile(f *os.File, size int64) (string, error) {
 	h := sha256.New()
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
 
 	if size <= Threshold {
 		if _, err := io.Copy(h, f); err != nil {
@@ -107,10 +128,10 @@ func BookFileHashFromFile(f *os.File, size int64) (string, error) {
 	if err := writeChunk(h, f); err != nil {
 		return "", err
 	}
-	if size > ChunkSize {
+	{
 		// A discarded Seek error would hash the wrong window and poison dedup
 		// (audit 2026-07-17 DL-4).
-		if _, err := f.Seek(-ChunkSize, io.SeekEnd); err != nil {
+		if _, err := f.Seek(size-ChunkSize, io.SeekStart); err != nil {
 			return "", err
 		}
 		if err := writeChunk(h, f); err != nil {
@@ -125,14 +146,41 @@ func BookFileHashFromFile(f *os.File, size int64) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// writeChunk reads up to ChunkSize bytes from f and folds them into h.
-// A short read is not an error — only however many bytes exist are hashed.
+// writeChunk reads exactly ChunkSize bytes from f and folds them into h.
+//
+// A short read here is an ERROR, not a tolerance, and the reasoning matters
+// because the obvious reading is the opposite. writeChunk is reached only from
+// the size > Threshold branch, and Threshold (100 MB) is an order of magnitude
+// larger than ChunkSize (10 MB) — so whenever it runs, both windows are fully
+// backed by bytes on disk. A short read therefore never means "that is all the
+// bytes there are". It means the read was truncated: a signal arrived
+// mid-transfer, or the file lives on NFS/SMB/FUSE, which is what a NAS-backed
+// library is.
+//
+// Folding a truncated window into the digest yields a well-formed 64-hex string
+// that is both wrong and NOT REPRODUCIBLE — hash the same unchanged file twice
+// and get two values, in the column internal/dedup/collectors_exact.go reads at
+// Confidence 1.0. An earlier draft of this package tolerated the short read on
+// the grounds of staying byte-compatible with hashes already in production.
+// That reasoning was wrong twice over: a filling read agrees with a single
+// Read on every file whose digest is reproducible at all, so nothing
+// legitimate changes; and where they disagree, the stored value is an artifact
+// of one run's read boundary, which is the defect rather than the baseline.
+//
+// The size-consistency argument settles it independently: if a short read here
+// somehow DID mean the file ended early, then size — already baked into the
+// digest by the caller — describes a file that no longer exists, and the digest
+// is wrong no matter how many bytes were hashed. Refusing is the only answer
+// that cannot be silently wrong.
 func writeChunk(h hash.Hash, f *os.File) error {
 	buf := make([]byte, ChunkSize)
-	n, err := f.Read(buf)
-	if err != nil && err != io.EOF {
+	if _, err := io.ReadFull(f, buf); err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return fmt.Errorf("filehash: short read of a %d-byte window on a file "+
+				"large enough to back it; the file shrank or the read was truncated: %w", ChunkSize, err)
+		}
 		return err
 	}
-	h.Write(buf[:n])
+	h.Write(buf)
 	return nil
 }

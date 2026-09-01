@@ -1,7 +1,7 @@
 // file: internal/itunes/service/status.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a4f1e3c-9b2d-4e8f-a0c1-5d7e9f3b6a2c
-// last-edited: 2026-07-17
+// last-edited: 2026-09-01
 
 package itunesservice
 
@@ -31,7 +31,13 @@ type itunesImportStatus struct {
 	MappingErrors      int
 	AuthorSetErrors    int
 	MalformedLocations int
-	Errors             []string
+	// FileHashErrors counts tracks whose identity digest could not be computed,
+	// so the book_files row was written with an empty file_hash. That row is
+	// invisible to exact-file dedup until a backfill fills it, and an empty
+	// hash cannot be told apart from "never attempted" — so the attempt has to
+	// be counted here or the loss leaves no trace at all.
+	FileHashErrors int
+	Errors         []string
 }
 
 // importStatusMap is a concurrent map from opID → *itunesImportStatus,
@@ -65,6 +71,7 @@ func (sm *importStatusMap) snapshot(opID string) *itunesImportStatus {
 		MappingErrors:      s.MappingErrors,
 		AuthorSetErrors:    s.AuthorSetErrors,
 		MalformedLocations: s.MalformedLocations,
+		FileHashErrors:     s.FileHashErrors,
 		Errors:             append([]string(nil), s.Errors...),
 	}
 }
@@ -110,6 +117,14 @@ func incImportMappingError(s *itunesImportStatus) {
 func incImportAuthorSetError(s *itunesImportStatus) {
 	s.mu.Lock()
 	s.AuthorSetErrors++
+	s.mu.Unlock()
+}
+
+// incImportFileHashError counts a track whose canonical identity digest could
+// not be computed, leaving book_files.file_hash empty.
+func incImportFileHashError(s *itunesImportStatus) {
+	s.mu.Lock()
+	s.FileHashErrors++
 	s.mu.Unlock()
 }
 

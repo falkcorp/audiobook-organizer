@@ -1,5 +1,5 @@
 // file: internal/database/file_provenance.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c1f4a92-3d6b-4e08-9a5c-1b2e8f0d4a37
 // last-edited: 2026-09-01
 
@@ -53,9 +53,24 @@ const (
 // recording: it is cheap, it is true, and it narrows a later search.
 type FileDigest struct {
 	// SHA256Full is a SHA-256 over the entire file, matching
-	// fileops.ComputeFileHashAndSize. This is the field the codebase was missing:
-	// original_file_hash holds one, but only for files that happened to go
-	// through a tag write, and each write overwrote the previous value.
+	// fileops.ComputeFileHashAndSize.
+	//
+	// Do NOT read original_file_hash as this field. It was described that way
+	// until 2026-09-01, and the description was false: original_file_hash has
+	// TWO writers with two algorithms, exactly the disease filehash was created
+	// to cure in file_hash. fileops.WriteTagsSafe writes a whole-file digest to
+	// it (write_tags_safe.go), while SetBookFileHash back-fills it with the
+	// CHUNKED digest when empty (pebble_store_bookfiles.go). Which one a given
+	// row holds depends on which writer reached it first, and the two are
+	// indistinguishable — both are 64 hex characters.
+	//
+	// That matters because the column is consumed as identity:
+	// GetDuplicateFilesByHash groups book_files by it, and there is a
+	// book_file_orig_hash: secondary index over it. So the same silent
+	// non-match this ledger exists to make visible is live in that column
+	// today. Repair is tracked as TODO-ORIGHASH-SPLIT; until it lands, treat
+	// original_file_hash as "one of two digests, unknown which" and populate
+	// SHA256Full here by hashing the file rather than by copying that column.
 	SHA256Full string `json:"sha256_full,omitempty"`
 	// SHA256Chunk is the cheap identity variant — for files over 100MB,
 	// SHA-256(first 10MB ‖ last 10MB ‖ size); a full-file digest below that

@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-01
 
@@ -467,6 +467,26 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 
 		if len(group.tracks) > 1 {
 			totalTracks := len(group.tracks)
+
+			// Decode every location first, then hash the decoded paths in
+			// parallel, then create the rows sequentially.
+			//
+			// The hashing is split out and bounded because of CLAUDE.md's
+			// concurrency mandate: this is a whole-library loop doing real
+			// per-item I/O. canonicalTrackFileHash reads up to Threshold bytes
+			// where the old (wrong) segment hash read a flat 1 MB, so a
+			// sequential version of this loop would read on the order of
+			// terabytes on one core for a large library. Row creation stays
+			// sequential — the parallel part is pure computation over distinct
+			// paths, with no shared mutable state beyond its own result slice.
+			type trackRow struct {
+				track   *itunes.Track
+				path    string
+				format  string
+				hash    string
+				hashErr error
+			}
+			rows := make([]trackRow, 0, totalTracks)
 			for _, track := range group.tracks {
 				trackLoc := importOpts.RemapPath(track.Location)
 				trackPath, decErr := itunes.DecodeLocation(trackLoc)
@@ -477,23 +497,51 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 					log.Warn("Skipping book file for track %d of '%s': undecodable iTunes location: %v", track.TrackNumber, book.Title, decErr)
 					continue
 				}
-				trackFormat := strings.TrimPrefix(strings.ToLower(filepath.Ext(trackPath)), ".")
+				rows = append(rows, trackRow{
+					track:  track,
+					path:   trackPath,
+					format: strings.TrimPrefix(strings.ToLower(filepath.Ext(trackPath)), "."),
+				})
+			}
+
+			hashSem := make(chan struct{}, runtime.NumCPU())
+			var hashWG sync.WaitGroup
+			for i := range rows {
+				hashWG.Add(1)
+				go func(r *trackRow) {
+					defer hashWG.Done()
+					hashSem <- struct{}{}
+					defer func() { <-hashSem }()
+					r.hash, r.hashErr = canonicalTrackFileHash(r.path)
+				}(&rows[i])
+			}
+			hashWG.Wait()
+
+			for _, r := range rows {
 				bf := &database.BookFile{
 					ID:                 ulid.Make().String(),
 					BookID:             created.ID,
-					FilePath:           trackPath,
-					ITunesPersistentID: track.PersistentID,
-					Format:             trackFormat,
-					FileSize:           track.Size,
-					Duration:           trackDurationSeconds(track),
-					TrackNumber:        track.TrackNumber,
+					FilePath:           r.path,
+					ITunesPersistentID: r.track.PersistentID,
+					Format:             r.format,
+					FileSize:           r.track.Size,
+					Duration:           trackDurationSeconds(r.track),
+					TrackNumber:        r.track.TrackNumber,
 					TrackCount:         totalTracks,
 				}
-				if trackHash, hashErr := canonicalTrackFileHash(trackPath); hashErr == nil {
-					bf.FileHash = trackHash
+				if r.hashErr != nil {
+					// Counted, not swallowed. Every other per-track drop in
+					// this loop is counted; this one used to be the exception,
+					// and an empty file_hash is indistinguishable from "never
+					// attempted" (see database.ScanState), so the backfill job
+					// would retry this file forever with no record of why.
+					incImportFileHashError(status)
+					log.Warn("Failed to hash track %d of '%s' (%s): %v; book_files.file_hash left empty", r.track.TrackNumber, book.Title, r.path, r.hashErr)
+				} else {
+					bf.FileHash = r.hash
 				}
 				if createErr := imp.store.CreateBookFile(bf); createErr != nil {
-					log.Warn("Failed to create book file for track %d of '%s': %v", track.TrackNumber, book.Title, createErr)
+					log.Warn("Failed to create book file for track %d of '%s': %v", r.track.TrackNumber, book.Title, createErr)
 				}
 			}
 		}

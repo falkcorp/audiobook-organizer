@@ -1,5 +1,5 @@
 // file: internal/scanner/process_file.go
-// version: 1.7.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-01
 
@@ -11,7 +11,6 @@ package scanner
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -27,12 +26,6 @@ import (
 )
 
 const (
-	// MaxScanBufferBytes is the named compile-time bound on per-operation buffer
-	// allocations. It equals filehash.ChunkSize — the size of each end-chunk the
-	// canonical identity digest reads — so CodeQL can statically verify that
-	// every make([]byte, MaxScanBufferBytes) call is bounded.
-	MaxScanBufferBytes = filehash.ChunkSize // 10 MB
-
 	// chapterProbeTimeout bounds each ffprobe subprocess call made while
 	// extracting/synthesizing chapters. Matches mediainfo's
 	// ffprobeDurationTimeout value — ffprobe only reads container/stream
@@ -166,7 +159,18 @@ func ProcessFile(filePath string) (*metadata.Metadata, *mediainfo.MediaInfo, str
 	}
 	defer f.Close()
 
-	fileSize := fi.Size()
+	// Size the OPEN DESCRIPTOR, not the path stat'd above. The two differ
+	// whenever the file is replaced between the stat and the open — which is a
+	// live condition here, not a theoretical one: fileops.WriteTagsSafe finishes
+	// with an atomic os.Rename over this path, and internal/organizer renames
+	// files under RootDir. Using fi.Size() there pairs the NEW file's bytes with
+	// the OLD file's size, and since the size is folded into the identity digest
+	// the result is a well-formed hash that describes no file that ever existed.
+	dfi, err := f.Stat()
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("ProcessFile: stat open handle for %q: %w", filePath, err)
+	}
+	fileSize := dfi.Size()
 
 	// Read tags — on failure we still need to hash, so don't abort yet
 	tagMeta, tagErr := tag.ReadFrom(f)
@@ -187,12 +191,9 @@ func ProcessFile(filePath string) (*metadata.Metadata, *mediainfo.MediaInfo, str
 		mi = mediainfo.BuildFromTag(tagMeta, filePath, fileSize)
 	}
 
-	// Seek back to start for hashing
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return &meta, mi, "", fmt.Errorf("ProcessFile: seek to start for hashing %q: %w", filePath, err)
-	}
-
-	// Compute hash (matches ComputeFileHash logic exactly)
+	// No seek needed: BookFileHashFromFile positions the handle itself. Kept as
+	// a comment rather than a call because an explicit Seek here would read as
+	// the thing that makes the hash correct, and it is not.
 	hash, err := computeHashFromReader(f, fileSize)
 	if err != nil {
 		return &meta, mi, "", fmt.Errorf("ProcessFile: hash %q: %w", filePath, err)
