@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.6.0
+// version: 5.7.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
 // last-edited: 2026-09-01
 //
@@ -23,8 +23,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -776,8 +774,10 @@ const itlBackupRetention = 5
 // the per-run batcher's debounce makes that effectively
 // impossible, but documenting the assumption.
 func writeITLBackup(itlPath string) (string, error) {
-	stamp := time.Now().Format("20060102-150405")
-	backupPath := fmt.Sprintf("%s.bak-%s", itlPath, stamp)
+	// itunes.BackupName, not a local time.Now().Format: this writer's compact
+	// LOCAL-time stamp was one of three formats sharing the directory, and the
+	// lexical rotators could not order them against each other.
+	backupPath := itunes.BackupName(itlPath, time.Now())
 	// fileops.CopyFile: the old local helper slurped the whole ITL into RAM
 	// via os.ReadFile/os.WriteFile, wrote it at a hardcoded 0644 regardless
 	// of the library's own mode, and never fsynced.
@@ -788,40 +788,15 @@ func writeITLBackup(itlPath string) (string, error) {
 }
 
 // pruneITLBackups deletes rotating backups beyond the keep limit.
-// Sorts siblings by name (lexicographic on the timestamp suffix,
-// which is monotonic) and removes the oldest excess.
+//
+// It delegates to itunes.RotateBackups, which orders by PARSED timestamp. The
+// local implementation this replaces sorted lexicographically "on the
+// timestamp suffix, which is monotonic" — monotonic within this writer's own
+// format, but it saw and deleted the other two writers' backups too, and
+// across formats the order is not chronological at all. See
+// internal/itunes/backupname.go.
 func pruneITLBackups(itlPath string, keep int) error {
-	if keep <= 0 {
-		return nil
-	}
-	dir := filepath.Dir(itlPath)
-	base := filepath.Base(itlPath) + ".bak-"
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	var backups []string
-	for _, ent := range entries {
-		if ent.IsDir() {
-			continue
-		}
-		name := ent.Name()
-		if !strings.HasPrefix(name, base) {
-			continue
-		}
-		backups = append(backups, filepath.Join(dir, name))
-	}
-	if len(backups) <= keep {
-		return nil
-	}
-	sort.Strings(backups) // oldest first (lex sort on timestamp)
-	toRemove := backups[:len(backups)-keep]
-	for _, p := range toRemove {
-		if err := os.Remove(p); err != nil {
-			slog.Warn("iTunes write-back prune", "p", p, "err", err)
-		}
-	}
-	return nil
+	return itunes.RotateBackups(itlPath, keep)
 }
 
 // renameFile is a helper for os.Rename.

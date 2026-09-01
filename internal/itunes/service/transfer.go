@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -161,38 +160,35 @@ func (t *TransferService) HandleBackupList(c *gin.Context) {
 		return
 	}
 
-	dir := filepath.Dir(itlPath)
-	base := filepath.Base(itlPath)
-
-	entries, err := os.ReadDir(dir)
+	// itunes.ListBackups, not a local ReadDir sorted by ModTime: the
+	// safe-write path creates its backup by RENAMING the live library, so that
+	// file's ModTime is the LIBRARY's mtime, not the moment the backup was
+	// taken. Sorting by it showed the hardened backups as far older than they
+	// were. The stamp in the name is the only field that means "when this
+	// backup was made"; ModTime is the fallback for a name that predates any
+	// known layout.
+	backupFiles, err := itunes.ListBackups(itlPath)
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("cannot read directory: %v", err))
 		return
 	}
 
-	var backups []ITLBackupEntry
-	for _, e := range entries {
-		if e.IsDir() {
+	backups := make([]ITLBackupEntry, 0, len(backupFiles))
+	for _, b := range backupFiles {
+		info, statErr := os.Stat(b.Path)
+		if statErr != nil {
 			continue
 		}
-		name := e.Name()
-		if !strings.HasPrefix(name, base+".bak-") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
+		ts := b.Time
+		if !b.Dated {
+			ts = info.ModTime()
 		}
 		backups = append(backups, ITLBackupEntry{
-			Name:      name,
+			Name:      b.Name,
 			Size:      info.Size(),
-			Timestamp: info.ModTime(),
+			Timestamp: ts,
 		})
 	}
-
-	sort.Slice(backups, func(i, j int) bool {
-		return backups[i].Timestamp.After(backups[j].Timestamp)
-	})
 
 	httputil.RespondWithOK(c, gin.H{
 		"backups": backups,
@@ -267,11 +263,13 @@ func backupITLFile(itlPath string) error {
 		return nil
 	}
 
-	ts := time.Now().UTC().Format("20060102T150405Z")
-	backupPath := itlPath + ".bak-" + ts
+	// itunes.BackupName: this path's own "20060102T150405Z" was one of three
+	// formats sharing the directory, and the lexical rotators could not order
+	// them against each other. See internal/itunes/backupname.go.
+	backupPath := itunes.BackupName(itlPath, time.Now())
 	// CopyFileAtomic keeps the temp-then-rename this path always had, so a
 	// half-written backup is never visible under a .bak- name that
-	// HandleBackupList and pruneITLBackups both match on. What it fixes is the
+	// HandleBackupList and RotateBackups both match on. What it fixes is the
 	// mode and the fsync: the old local copy used os.CreateTemp (0600) and
 	// renamed that into place, so every backup it ever wrote was owner-only,
 	// and it never fsynced — a backup still in page cache when the library is
