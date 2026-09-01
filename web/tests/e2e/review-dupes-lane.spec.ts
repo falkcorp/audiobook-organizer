@@ -270,7 +270,18 @@ test.describe('the dupes lane of /review', () => {
     await expect(page.locator('[data-testid="evidence-confidence"]')).toBeVisible();
     // No share bar, on any lane: a product does not decompose into shares.
     await expect(page.locator('[data-testid="evidence-stacked-bar"]')).toHaveCount(0);
-    await expect(page.locator('text=Exact file hash')).toBeVisible();
+    // Scoped to the panel. An unscoped `text=Exact file hash` matched exactly
+    // one element only while the row chip and the panel disagreed about what to
+    // call this signal ("exact file" vs "Exact file hash"). Consolidating the
+    // three label maps on 2026-09-01 made both say the same thing, so the bare
+    // locator now resolves to two elements and fails strict mode.
+    await expect(
+      page.locator('[data-testid="evidence-confidence"]').getByText('Exact file hash')
+    ).toBeVisible();
+    // The same label reaches the row chip, from the same map.
+    await expect(page.locator('[data-testid="signal-chip-exact_file"]')).toHaveText(
+      'Exact file hash'
+    );
     // The calibrated confidence, not the raw measurement -- the mock sends
     // raw 1.0 / confidence 0.99, so a mapping that read `raw` would show 100%.
     await expect(page.locator('[data-testid="signal-confidence-exact_file"]')).toHaveText('99%');
