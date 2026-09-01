@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-09-01
 
@@ -7,6 +7,7 @@ package dedup
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"log/slog"
 	"math"
 	"regexp"
@@ -15,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -215,48 +215,6 @@ func IsDirtyAuthorName(name string) bool {
 // are caught but "Agent 47" style names (year not leading) are not.
 var leadingYearRe = regexp.MustCompile(`^\d{4}\b`)
 
-// looksLikePersonName is the comma-branch gate (C414): 2–4 words, does not
-// open with a lowercase word (title clauses read "and …", "the …"; person
-// names capitalize), and carries no title-ish punctuation or trailing
-// parenthetical ("… (DBY)"). Deliberately conservative — a refused split
-// keeps the composite row visibly broken instead of laundering a book-title
-// fragment into a plausible-looking author.
-// nameParticles are lowercase words that legitimately appear inside personal
-// names and must not be mistaken for title-clause function words.
-var nameParticles = map[string]bool{
-	"de": true, "la": true, "le": true, "van": true, "von": true,
-	"del": true, "della": true, "di": true, "da": true, "dos": true,
-	"du": true, "den": true, "ter": true, "bin": true, "ibn": true,
-	"al": true, "el": true, "st.": true, "mac": true,
-}
-
-func looksLikePersonName(part string) bool {
-	fields := strings.Fields(part)
-	if len(fields) < 2 || len(fields) > 4 {
-		return false
-	}
-	first := []rune(fields[0])
-	if len(first) == 0 || unicode.IsLower(first[0]) {
-		return false
-	}
-	// Interior lowercase FUNCTION words mark title clauses ("A Game of
-	// Thrones"); lowercase name PARTICLES ("Simone de Beauvoir", "Ludwig van
-	// Beethoven") are legitimate and stay allowed.
-	for _, w := range fields[1:] {
-		r := []rune(w)
-		if len(r) > 0 && unicode.IsLower(r[0]) && !nameParticles[strings.ToLower(w)] {
-			return false
-		}
-	}
-	if strings.ContainsAny(part, ":!?") {
-		return false
-	}
-	if strings.HasSuffix(strings.TrimSpace(part), ")") {
-		return false
-	}
-	return true
-}
-
 // SplitCompositeAuthorName splits "Author1 / Author2" or "Author1, Author2" into parts.
 // Returns nil or single-element slice if the name doesn't look composite.
 func SplitCompositeAuthorName(name string) []string {
@@ -309,7 +267,7 @@ func SplitCompositeAuthorName(name string) []string {
 			// "…, and Conrad Westmaas" and the normalizer strips that leading
 			// conjunction; a title clause's remainder still fails the shape.
 			normalized := NormalizeAuthorName(p)
-			if !looksLikePersonName(normalized) {
+			if !personname.LooksLikePersonName(normalized) {
 				allLookLikeNames = false
 				break
 			}
@@ -365,7 +323,7 @@ func SplitCompositeAuthorName(name string) []string {
 					// "So Long, and Thanks for All the Fish" reaches THIS
 					// branch via its " and ", and a title clause here is just
 					// as capable of minting a fake author.
-					if norm := NormalizeAuthorName(p); len(p) > 2 && looksLikePersonName(norm) {
+					if norm := NormalizeAuthorName(p); len(p) > 2 && personname.LooksLikePersonName(norm) {
 						result = append(result, norm)
 					} else if len(p) > 2 {
 						return nil // one non-name clause poisons the whole split
@@ -373,7 +331,7 @@ func SplitCompositeAuthorName(name string) []string {
 					break
 				}
 				p := strings.TrimSpace(remaining[:idx])
-				if norm := NormalizeAuthorName(p); len(p) > 2 && looksLikePersonName(norm) {
+				if norm := NormalizeAuthorName(p); len(p) > 2 && personname.LooksLikePersonName(norm) {
 					result = append(result, norm)
 				} else if len(p) > 2 {
 					return nil // one non-name clause poisons the whole split

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-09-01
 
@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,8 +182,17 @@ func TestLooksLikePersonNameEdgeCases(t *testing.T) {
 		{"lowercase name", "john smith", false},
 		{"three word name", "John Quincy Adams", true},
 		{"four word name", "Mary Anne Ella Smith", true},
-		{"five word name", "Too Many Words Here Name", true}, // Actually valid - has proper capitalization
-		{"single initial", "J.", false},                      // Single initial alone doesn't have enough uppercase letters
+		// BEHAVIOUR CHANGE (2026-09-01, unification into internal/personname).
+		// This asserted `true` because scanner's copy ended in a fallback that
+		// returned true for ANY string whose first two words start with ASCII
+		// capitals -- bypassing the 2..4 word limit the same function declares.
+		// The old comment ("Actually valid - has proper capitalization") was
+		// derived from the implementation, not from a decision about names.
+		// That fallback is why scanner also answered true for "The Lord of the
+		// Rings" and "A Game of Thrones", so splitAuthorTitle filed TITLES as
+		// authors. See TestDifferentialAgainstAllThreeLegacyCopies.
+		{"five word name", "Too Many Words Here Name", false},
+		{"single initial", "J.", false}, // Single initial alone doesn't have enough uppercase letters
 		{"double initial with space", "J. K.", true},
 		{"double initial no space", "J.K.", false}, // Needs at least 2 uppercase with periods
 		{"triple initial", "J. R. R.", true},
@@ -201,9 +211,9 @@ func TestLooksLikePersonNameEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := looksLikePersonName(tt.input)
+			got := personname.LooksLikePersonName(tt.input)
 			if got != tt.expected {
-				t.Errorf("looksLikePersonName(%q) = %v, want %v", tt.input, got, tt.expected)
+				t.Errorf("personname.LooksLikePersonName(%q) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -542,7 +552,7 @@ func TestProcessBooksParallelContextTimeout(t *testing.T) {
 
 // TestIsValidAuthorNumericString tests numeric validation
 func TestIsValidAuthorNumericString(t *testing.T) {
-	if isValidAuthor("12345") {
+	if personname.IsValidAuthor("12345") {
 		t.Error("purely numeric string should not be valid author")
 	}
 }

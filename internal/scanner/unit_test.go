@@ -1,13 +1,14 @@
 // file: internal/scanner/unit_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-08-25
+// last-edited: 2026-09-01
 
 package scanner
 
 import (
 	"context"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"os"
 	"path/filepath"
 	"testing"
@@ -171,7 +172,7 @@ func TestIsValidAuthorEdgeCases(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isValidAuthor(tt.input))
+			assert.Equal(t, tt.want, personname.IsValidAuthor(tt.input))
 		})
 	}
 }
@@ -2026,7 +2027,7 @@ func TestIsValidAuthorExtraEdgeCases(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isValidAuthor(tt.input))
+			assert.Equal(t, tt.want, personname.IsValidAuthor(tt.input))
 		})
 	}
 }

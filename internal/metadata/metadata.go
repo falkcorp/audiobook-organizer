@@ -1,12 +1,14 @@
 // file: internal/metadata/metadata.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
+// last-edited: 2026-09-01
 
 package metadata
 
 import (
 	"crypto/sha256"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -740,11 +742,11 @@ func extractFromFilename(filePath string) Metadata {
 		if len(parts) == 2 {
 			left := strings.TrimSpace(parts[0])
 			right := strings.TrimSpace(parts[1])
-			if looksLikePersonName(right) && !looksLikePersonName(left) {
+			if personname.LooksLikePersonName(right) && !personname.LooksLikePersonName(left) {
 				metadata.Title = left
 				metadata.Artist = right
 				return metadata
-			} else if looksLikePersonName(left) && !looksLikePersonName(right) {
+			} else if personname.LooksLikePersonName(left) && !personname.LooksLikePersonName(right) {
 				metadata.Title = right
 				metadata.Artist = left
 				return metadata
@@ -830,47 +832,21 @@ func extractAuthorFromDirectory(filePath string) string {
 		parts := strings.SplitN(dirName, " - ", 2)
 		if len(parts) > 0 {
 			author := strings.TrimSpace(parts[0])
-			if looksLikePersonName(author) {
+			if personname.LooksLikePersonName(author) {
 				return author
 			}
 		}
 	}
 
 	// Use directory name if it's valid
-	if looksLikePersonName(dirName) {
+	if personname.LooksLikePersonName(dirName) {
 		return dirName
 	}
 
 	return ""
 }
 
-// isValidAuthor checks if extracted author string is valid
-func isValidAuthor(author string) bool {
-	if author == "" {
-		return false
-	}
-
-	author = strings.ToLower(author)
-
-	// Skip invalid patterns
-	if strings.HasPrefix(author, "book") || strings.HasPrefix(author, "chapter") ||
-		strings.HasPrefix(author, "part") || strings.HasPrefix(author, "vol") ||
-		strings.HasPrefix(author, "volume") || strings.HasPrefix(author, "disc") {
-		return false
-	}
-
-	// Skip purely numeric (like "01", "02")
-	if _, err := strconv.Atoi(author); err == nil {
-		return false
-	}
-
-	// Skip chapter patterns
-	if strings.HasPrefix(author, "chapter ") {
-		return false
-	}
-
-	return true
-} // parseFilenameForAuthor attempts to intelligently parse title and author from filename
+// parseFilenameForAuthor attempts to intelligently parse title and author from filename
 // Handles patterns like "Title - Author" or "Author - Title"
 // Returns (title, author) where author is empty string if pattern not detected
 func parseFilenameForAuthor(filename string) (string, string) {
@@ -883,8 +859,8 @@ func parseFilenameForAuthor(filename string) (string, string) {
 	right := strings.TrimSpace(parts[1])
 
 	// Heuristic: check if right side looks like an author name
-	rightIsName := looksLikePersonName(right)
-	leftIsName := looksLikePersonName(left)
+	rightIsName := personname.LooksLikePersonName(right)
+	leftIsName := personname.LooksLikePersonName(left)
 
 	if rightIsName && !leftIsName {
 		// Pattern: "Title - Author"
@@ -910,40 +886,6 @@ func parseFilenameForAuthor(filename string) (string, string) {
 
 	// Couldn't determine, return empty author
 	return "", ""
-}
-
-// looksLikePersonName checks if a string looks like a person's name
-// Looks for patterns like "John Smith", "J. Smith", "J. K. Rowling"
-func looksLikePersonName(s string) bool {
-	if !isValidAuthor(s) {
-		return false
-	}
-
-	// Check for initials like "J. K. Rowling" or "J.K. Rowling"
-	if strings.Contains(s, ".") {
-		// Count uppercase letters and periods
-		uppers := 0
-		for _, r := range s {
-			if r >= 'A' && r <= 'Z' {
-				uppers++
-			}
-		}
-		if uppers >= 2 {
-			return true
-		}
-	}
-
-	// Check for multi-word names with proper capitalization
-	words := strings.Fields(s)
-	if len(words) < 2 || len(words) > 4 {
-		return false
-	}
-	for _, word := range words {
-		if len(word) == 0 || (word[0] < 'A' || word[0] > 'Z') {
-			return false
-		}
-	}
-	return true
 }
 
 // isTitleCaseCandidate reports whether a string starts with an uppercase letter.
