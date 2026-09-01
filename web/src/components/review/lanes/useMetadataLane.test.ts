@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-01
 //
@@ -14,7 +14,7 @@ import * as api from '../../../services/api';
 import {
   loadReviewPageSize,
   useMetadataLane,
-  MAX_REVIEW_PAGE_SIZE,
+  PAGE_SIZE_FALLBACK,
   STRICT_PRESET,
   DEFAULT_CONFIDENCE,
 } from './useMetadataLane';
@@ -245,16 +245,36 @@ describe('persisted page size', () => {
     // inside the dialog, and a stored 250 froze the dialog before you could
     // reach it. Clamping on read is what makes it self-healing.
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, '250');
-    expect(loadReviewPageSize()).toBe(MAX_REVIEW_PAGE_SIZE);
+    expect(loadReviewPageSize()).toBe(PAGE_SIZE_FALLBACK);
     // Rewritten, so the bad value is gone for good rather than re-clamped.
     expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE)).toBe(
-      String(MAX_REVIEW_PAGE_SIZE)
+      String(PAGE_SIZE_FALLBACK)
     );
   });
 
   it('accepts an offered size unchanged', () => {
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, '50');
     expect(loadReviewPageSize()).toBe(50);
+  });
+
+  it('restores a stored 100 as 100', () => {
+    // 🔴 THE CASE 50 CANNOT TEST. 50 is both an offered option and the
+    // correction value, so the test above passes whether the loader accepts
+    // offered sizes or caps everything at 50 -- and the constant was named
+    // MAX_REVIEW_PAGE_SIZE and documented as "largest size a stored preference
+    // may restore", which is the second reading. 100 is the only offered size
+    // that separates them, and it is the size the responsiveness goal names.
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, '100');
+    expect(loadReviewPageSize()).toBe(100);
+    // And not silently rewritten on the way through.
+    expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE)).toBe('100');
+  });
+
+  it('corrects an unrecognised size UPWARD too, not only down', () => {
+    // A stored 30 is not an offered option, so it is replaced -- by 50, which
+    // is larger. "Clamp" describes only half of what this loader does.
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, '30');
+    expect(loadReviewPageSize()).toBe(PAGE_SIZE_FALLBACK);
   });
 
   it('falls back to 25 for junk', () => {
@@ -1018,9 +1038,7 @@ describe('a failed load is surfaced rather than swallowed', () => {
     const { result } = renderHook(() => useMetadataLane(toast, true));
     await waitFor(() => expect(result.current.error).toBe('boom'));
 
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('b1')])
-    );
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('b1')]));
     act(() => result.current.refresh());
 
     // Wait for the retry to SETTLE, not merely to start -- `error` is cleared
@@ -1043,9 +1061,7 @@ describe('a failed load is surfaced rather than swallowed', () => {
     const { result } = renderHook(() => useMetadataLane(toast, true));
 
     // Supersede it with a fetch that succeeds.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('b1')])
-    );
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('b1')]));
     act(() => result.current.refresh());
     await waitFor(() => expect(result.current.results).toHaveLength(1));
 
