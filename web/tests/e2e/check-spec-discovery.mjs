@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // file: web/tests/e2e/check-spec-discovery.mjs
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b1c93a7-6e42-4d08-9f31-2a7c8e05b4d6
-// last-edited: 2026-08-11
+// last-edited: 2026-09-01
 
 /**
  * Fails if any e2e spec file on disk contributes no runnable test.
@@ -118,6 +118,14 @@ const GATE_EXEMPT = new Set([
   //   E2E_PERF=1 npx playwright test --config=tests/e2e/playwright.config.ts \
   //     --project=benchmark
   'benchmark-library-load.spec.ts',
+  // Same claim, different screen: wall-clock responsiveness of the three
+  // /review lanes at the page sizes the UI actually offers (50 and 100), plus a
+  // CPU-throttled control. Asserting on time in CI would be a flake factory —
+  // and a threshold loose enough not to flake would pass while the page is
+  // slow — so it reports a table instead of a boolean and runs on demand:
+  //   E2E_PERF=1 npx playwright test --config=tests/e2e/playwright.config.ts \
+  //     --project=benchmark --workers=1
+  'benchmark-review-lanes.spec.ts',
 ]);
 
 function specFilesOnDisk(dir) {
