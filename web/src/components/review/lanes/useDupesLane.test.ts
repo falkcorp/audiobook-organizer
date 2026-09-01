@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
 // last-edited: 2026-09-01
 //
@@ -18,7 +18,10 @@ vi.mock('../../../services/api');
 
 const toast = vi.fn();
 
-function makeCandidate(id: number, overrides: Partial<api.DedupCandidate> = {}): api.DedupCandidate {
+function makeCandidate(
+  id: number,
+  overrides: Partial<api.DedupCandidate> = {}
+): api.DedupCandidate {
   return {
     id,
     entity_type: 'book',
@@ -38,6 +41,26 @@ function makeCandidate(id: number, overrides: Partial<api.DedupCandidate> = {}):
 function mockList(candidates: api.DedupCandidate[], total = candidates.length) {
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates, total });
 }
+
+/**
+ * A mock that answers `q` the way the server does, so a test can exercise the
+ * lane's real contract: the SERVER decides which rows exist. `match` stands in
+ * for the server's predicate, which is deliberately wider than anything the
+ * client can compute -- that asymmetry is the point of several tests below.
+ */
+function mockSearchableList(
+  all: api.DedupCandidate[],
+  match: (c: api.DedupCandidate, q: string) => boolean
+) {
+  vi.mocked(api.getDedupCandidates).mockImplementation(async (params) => {
+    const q = params?.q?.trim().toLowerCase() ?? '';
+    const rows = q ? all.filter((c) => match(c, q)) : all;
+    return { candidates: rows, total: rows.length };
+  });
+}
+
+/** The lane debounces before searching; give the timer room to fire. */
+const DEBOUNCE_WAIT = { timeout: 2000 };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -68,7 +91,9 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     // merge cannot be undone from this screen.
     const { result } = await renderLane();
     act(() => result.current.setFilters({ bothUnmatched: true }));
-    await waitFor(() => expect(result.current.mergeAllFilteredDisabledReason).toBe(MERGE_ALL_BLOCKED_REASON));
+    await waitFor(() =>
+      expect(result.current.mergeAllFilteredDisabledReason).toBe(MERGE_ALL_BLOCKED_REASON)
+    );
 
     act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' }));
 
@@ -174,14 +199,20 @@ describe('pagination is server-side', () => {
     expect(result.current.page).toBe(1);
   });
 
-  it('does not reset the page for the client-side search', async () => {
-    // Search narrows the LOADED page, so it cannot invalidate the page number.
+  it('resets the page once the search term settles, but not on every keystroke', async () => {
+    // Search round-trips now, so page 2 of the old result set is not page 2 of
+    // the new one and the page number IS invalidated. It is keyed on the
+    // settled term rather than the raw one: resetting per keystroke would also
+    // clear the selection per keystroke, which fights the typist.
     const { result } = await renderLane();
     act(() => result.current.setPage(2));
     await waitFor(() => expect(result.current.page).toBe(2));
 
     act(() => result.current.setFilters({ search: 'foo' }));
+    // Still on page 2 in the same tick: the debounce has not fired.
     expect(result.current.page).toBe(2);
+
+    await waitFor(() => expect(result.current.page).toBe(1), DEBOUNCE_WAIT);
   });
 });
 
@@ -275,10 +306,13 @@ describe('keyboard shortcuts', () => {
     // The label used to promise "the current page" while the code selected the
     // search-narrowed set. Selecting less than promised is the safe direction,
     // but `merge-selected` is irreversible, so the two must agree exactly.
+    mockSearchableList([makeCandidate(1), makeCandidate(2)], (c, q) =>
+      (c.book_a?.title ?? '').toLowerCase().includes(q)
+    );
     const { result } = await renderLane();
 
     act(() => result.current.setFilters({ search: 'A1' }));
-    await waitFor(() => expect(result.current.candidates).toHaveLength(1));
+    await waitFor(() => expect(result.current.candidates).toHaveLength(1), DEBOUNCE_WAIT);
 
     act(() => result.current.selectAllVisible());
     expect([...result.current.selectedIds]).toEqual([1]);
@@ -346,19 +380,103 @@ describe('an inactive lane', () => {
   });
 });
 
-describe('client-side search', () => {
-  it('narrows the loaded page without refetching', async () => {
-    mockList([
-      makeCandidate(1, { book_a: { id: 'a1', title: 'Dune' } } as Partial<api.DedupCandidate>),
-      makeCandidate(2, { book_a: { id: 'a2', title: 'Neuromancer' } } as Partial<api.DedupCandidate>),
-    ]);
+describe('search', () => {
+  const dune = makeCandidate(1, {
+    book_a: { id: 'a1', title: 'Dune' },
+  } as Partial<api.DedupCandidate>);
+  const neuro = makeCandidate(2, {
+    book_a: { id: 'a2', title: 'Neuromancer' },
+  } as Partial<api.DedupCandidate>);
+
+  it('narrows locally while the request is still in flight', async () => {
+    // The local pass covers exactly one window: from the moment the debounce
+    // fires until the server's answer lands. That window is invisible against
+    // an instantly-resolving mock, so the response is held open here -- with an
+    // immediate mock this test would pass whether or not the local pass exists.
+    let release: (v: api.DedupCandidatesResponse) => void = () => {};
+    const held = new Promise<api.DedupCandidatesResponse>((res) => {
+      release = res;
+    });
+    let call = 0;
+    vi.mocked(api.getDedupCandidates).mockImplementation(async () => {
+      call += 1;
+      // First call is the lane's initial load; the search request is the one
+      // that gets held.
+      return call === 1 ? { candidates: [dune, neuro], total: 2 } : held;
+    });
+
     const { result } = await renderLane();
-    const callsBefore = vi.mocked(api.getDedupCandidates).mock.calls.length;
+    expect(result.current.candidates).toHaveLength(2);
 
     act(() => result.current.setFilters({ search: 'neuro' }));
 
-    expect(result.current.candidates).toHaveLength(1);
-    expect(vi.mocked(api.getDedupCandidates).mock.calls.length).toBe(callsBefore);
+    // Narrowed by the LOCAL pass: the server has not answered yet.
+    await waitFor(() => expect(result.current.candidates).toHaveLength(1), DEBOUNCE_WAIT);
+    expect(result.current.candidates[0].id).toBe(2);
+
+    await act(async () => {
+      release({ candidates: [neuro], total: 1 });
+      await held;
+    });
+    await waitFor(() => expect(result.current.total).toBe(1));
+  });
+
+  it('sends the settled term to the server', async () => {
+    mockSearchableList([dune, neuro], (c, q) => (c.book_a?.title ?? '').toLowerCase().includes(q));
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ search: 'neuro' }));
+
+    await waitFor(() => {
+      const calls = vi.mocked(api.getDedupCandidates).mock.calls;
+      expect(calls.at(-1)?.[0]?.q).toBe('neuro');
+    }, DEBOUNCE_WAIT);
+  });
+
+  it('issues ONE request for a burst of keystrokes', async () => {
+    mockSearchableList([dune, neuro], () => true);
+    const { result } = await renderLane();
+    const before = vi.mocked(api.getDedupCandidates).mock.calls.length;
+
+    for (const term of ['n', 'ne', 'neu', 'neur', 'neuro']) {
+      act(() => result.current.setFilters({ search: term }));
+    }
+    await waitFor(() => {
+      expect(vi.mocked(api.getDedupCandidates).mock.calls.at(-1)?.[0]?.q).toBe('neuro');
+    }, DEBOUNCE_WAIT);
+    // One request for the burst, not one per character.
+    expect(vi.mocked(api.getDedupCandidates).mock.calls.length).toBe(before + 1);
+  });
+
+  it('STANDS DOWN once the server has answered, so a server-only match is not hidden', async () => {
+    // The guard this test exists for. The server matches author names, which it
+    // resolves through the author table; the rows rendered here carry no
+    // author_name key at all. So the server legitimately returns a row that the
+    // local haystack cannot match. If the local pass kept running it would
+    // throw that row away -- total says 1, the list shows 0, and the row stays
+    // unfindable, which is the defect server-side search was added to fix.
+    mockSearchableList([dune, neuro], (c, q) =>
+      // Stands in for an author-name match: matches `dune` on a term that
+      // appears NOWHERE in any field the client can see.
+      q === 'herbert' ? c.id === 1 : (c.book_a?.title ?? '').toLowerCase().includes(q)
+    );
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ search: 'herbert' }));
+
+    await waitFor(() => {
+      expect(result.current.candidates).toHaveLength(1);
+      expect(result.current.candidates[0].id).toBe(1);
+    }, DEBOUNCE_WAIT);
+    expect(result.current.total).toBe(1);
+  });
+
+  it('reports the server total, not the page length', async () => {
+    vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [dune], total: 37 });
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ search: 'dune' }));
+    await waitFor(() => expect(result.current.total).toBe(37), DEBOUNCE_WAIT);
   });
 });
 

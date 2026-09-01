@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-09-01
 //
@@ -92,9 +92,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               size="small"
               label="Status"
               value={dupes.filters.status}
-              onChange={(e) =>
-                dupes.setFilters({ status: e.target.value as DedupStatusFilter })
-              }
+              onChange={(e) => dupes.setFilters({ status: e.target.value as DedupStatusFilter })}
             >
               {STATUSES.map((s) => (
                 <MenuItem key={s.value} value={s.value}>
@@ -144,10 +142,13 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
 
             <TextField
               size="small"
-              // Says what it does. Every other filter in this rail round-trips to
-              // the server and produces an honest total; this one narrows the
-              // rows already loaded, so "no results" means "none on this page".
-              label="Search this page"
+              // No longer "Search this page". The term round-trips to the
+              // server like every other filter in this rail, so an empty
+              // result means the queue holds no match -- not that the match
+              // was on a page the reviewer had not reached. The old label was
+              // accurate when written and became a lie the moment `q` landed.
+              label="Search"
+              placeholder="Title, author, path…"
               value={dupes.filters.search}
               onChange={(e) => dupes.setFilters({ search: e.target.value })}
             />
@@ -272,9 +273,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
           variant="contained"
           data-testid="merge-selected"
           disabled={selectedIds.length === 0 || dupes.busy}
-          onClick={() =>
-            dupes.dispatch({ lane: 'dupes', type: 'mergeSelected', ids: selectedIds })
-          }
+          onClick={() => dupes.dispatch({ lane: 'dupes', type: 'mergeSelected', ids: selectedIds })}
         >
           {dupes.verbs.mergeSelected} ({selectedIds.length})
         </Button>
@@ -327,7 +326,12 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
         <DialogContent>
           <Stack spacing={1} sx={{ minWidth: 280 }}>
             {DEDUP_SHORTCUTS.map((s) => (
-              <Stack key={s.keys} direction="row" spacing={2} sx={{ justifyContent: 'space-between' }}>
+              <Stack
+                key={s.keys}
+                direction="row"
+                spacing={2}
+                sx={{ justifyContent: 'space-between' }}
+              >
                 <Chip label={s.keys} size="small" variant="outlined" />
                 <Typography variant="body2">{s.action}</Typography>
               </Stack>

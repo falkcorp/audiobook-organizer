@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.75.0
+// version: 2.76.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-01
 
@@ -586,7 +586,11 @@ export async function getOperationV2(id: string): Promise<OperationV2> {
 
 // SSE event types emitted by the operations EventHub (UOS-06).
 export type OperationSSEEventName =
-  'op.created' | 'op.updated' | 'op.log' | 'op.terminal' | 'op.current_item';
+  | 'op.created'
+  | 'op.updated'
+  | 'op.log'
+  | 'op.terminal'
+  | 'op.current_item';
 
 export interface OperationSSEHandler {
   onEvent: (name: OperationSSEEventName, payload: unknown) => void;
@@ -1282,7 +1286,9 @@ export async function rescanBookFiles(bookId: string): Promise<RescanBookResult>
 // Flags ONE book for a full re-read by the next scan. Precise: unchanged
 // siblings in the same directory are still skipped, unlike a folder scan with
 // force_update, which re-reads everything in scope.
-export async function forceRescanBook(bookId: string): Promise<{ book_id: string; needs_rescan: boolean }> {
+export async function forceRescanBook(
+  bookId: string
+): Promise<{ book_id: string; needs_rescan: boolean }> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/force-rescan`, {
     method: 'POST',
   });
@@ -4508,7 +4514,13 @@ export async function applyAIAuthorReview(
 export interface AIScan {
   id: number;
   status:
-    'pending' | 'scanning' | 'enriching' | 'cross_validating' | 'complete' | 'failed' | 'canceled';
+    | 'pending'
+    | 'scanning'
+    | 'enriching'
+    | 'cross_validating'
+    | 'complete'
+    | 'failed'
+    | 'canceled';
   mode: 'batch' | 'realtime';
   models: { groups: string; full: string };
   author_count: number;
@@ -5261,6 +5273,11 @@ export async function getDedupCandidates(
     // server-side at scan level, so `total` covers the whole matching set and
     // the result can be paginated like any other filter.
     entity_id?: string;
+    // Free-text search, applied server-side at scan level so `total` counts
+    // every match rather than the ones that fit on the page. Matches the
+    // candidate's own layer/band/entity IDs, plus the title, author and file
+    // path of the books on either side.
+    q?: string;
   },
   opts?: { signal?: AbortSignal }
 ): Promise<DedupCandidatesResponse> {
@@ -5273,6 +5290,7 @@ export async function getDedupCandidates(
   if (params?.include_breakdown) qs.set('include_breakdown', 'true');
   if (params?.include_books) qs.set('include_books', 'true');
   if (params?.both_unmatched) qs.set('both_unmatched', 'true');
+  if (params?.q?.trim()) qs.set('q', params.q.trim());
   if (params?.entity_id) qs.set('entity_id', params.entity_id);
   if (params?.limit != null) qs.set('limit', String(params.limit));
   if (params?.offset != null) qs.set('offset', String(params.offset));
