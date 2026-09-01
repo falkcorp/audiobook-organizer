@@ -35,6 +35,12 @@ memoized renderers only re-render when something about *that row* changed.
 `SpineContext`'s public shape is unchanged, so `useMetadataLane` and the spine's
 existing tests were not touched.
 
+The stable-handlers `useMemo` sits deliberately ABOVE the spine's loading and
+errored early returns, which landed separately. A hook placed after a
+conditional return is skipped on a loading render and called on a populated one,
+and React throws on that transition; the existing loading test renders a single
+static frame and cannot see it, so two transition tests now pin the ordering.
+
 #### No request on the review route had a timeout
 
 None of the route's four data calls passed `timeoutMs`, so a server that

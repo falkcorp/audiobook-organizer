@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.memo.test.tsx
-// version: 1.0.0
+// version: 1.2.0
 // guid: 3f6c8b25-7d41-4e93-a052-9c1b7e4a0d68
 // last-edited: 2026-09-01
 //
@@ -38,7 +38,20 @@ vi.mock('../../common/PathLinks', async () => {
     '../../common/PathLinks'
   );
   const NO_ALIASES: never[] = [];
-  return { ...actual, usePathAliases: () => NO_ALIASES };
+  // Must stay a REAL hook. The production `usePathAliases` holds a useState,
+  // and the hook-ordering tests below depend on CompareSpine calling at least
+  // one hook before its early returns -- a plain `() => NO_ALIASES` mock keeps
+  // the return value stable but drops the hook, so the loading render calls
+  // ZERO hooks and React never notices the count changing on the transition.
+  // That silently disabled those tests until a mutation exposed it.
+  const { useState } = await import('react');
+  return {
+    ...actual,
+    usePathAliases: () => {
+      const [aliases] = useState(NO_ALIASES);
+      return aliases;
+    },
+  };
 });
 
 const getRowSxSpy = vi.spyOn(rowStateModule, 'getRowSx');
@@ -148,5 +161,52 @@ describe('CompareSpine row memoization', () => {
 
     await user.click(boxes[3]);
     expect(getRowSxSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CompareSpine hook ordering', () => {
+  // `handlers` is a useMemo, and the loading / errored branches beneath it are
+  // early RETURNS. If that hook ever drifts below them, React sees a different
+  // hook count on the loading -> populated transition and throws "Rendered more
+  // hooks than during the previous render".
+  //
+  // The existing loading test renders `loading` ONCE and asserts on that single
+  // paint, which cannot observe this: a loading-only render is internally
+  // consistent. Only the transition is, so this rerenders instead.
+  const STATIC_CTX: SpineContext = {
+    rowState: () => undefined,
+    isSelected: () => false,
+    onToggleSelect: () => {},
+    onPreviewCover: () => {},
+    onAction: () => {},
+    expandedId: null,
+    onToggleExpand: () => {},
+  };
+
+  it('survives the loading -> populated transition', () => {
+    getRowSxSpy.mockClear();
+
+    const { rerender } = render(
+      <CompareSpine rows={[]} viewMode="compact" ctx={STATIC_CTX} loading />
+    );
+    expect(screen.getByTestId('spine-loading')).toBeInTheDocument();
+    expect(getRowSxSpy).toHaveBeenCalledTimes(0);
+
+    rerender(<CompareSpine rows={ROWS} viewMode="compact" ctx={STATIC_CTX} />);
+
+    expect(screen.queryByTestId('spine-loading')).not.toBeInTheDocument();
+    expect(getRowSxSpy).toHaveBeenCalledTimes(ROW_COUNT);
+  });
+
+  it('survives the errored -> populated transition', () => {
+    getRowSxSpy.mockClear();
+
+    const { rerender } = render(
+      <CompareSpine rows={[]} viewMode="compact" ctx={STATIC_CTX} errored />
+    );
+    expect(getRowSxSpy).toHaveBeenCalledTimes(0);
+
+    rerender(<CompareSpine rows={ROWS} viewMode="compact" ctx={STATIC_CTX} />);
+    expect(getRowSxSpy).toHaveBeenCalledTimes(ROW_COUNT);
   });
 });
