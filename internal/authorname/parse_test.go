@@ -1,5 +1,5 @@
 // file: internal/authorname/parse_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
 // last-edited: 2026-09-01
 
@@ -41,7 +41,9 @@ func TestExtractAuthorFromDirectoryCorpus(t *testing.T) {
 		{"audiobooks", "", "container dir"},
 		{"bt", "", "container dir"},
 
-		// The placeholder: the ONLY skipDirs entry that changes an answer.
+		// The placeholder: the only skipDirs entry that changes THIS FUNCTION'S
+		// return value. It does not follow that it changes a consumer's outcome --
+		// it does not; see parse.go. These rows are the only instrument that sees it.
 		{Placeholder, "", "the organizer's own placeholder is not an author"},
 		{"unknown author", "", "placeholder, case-insensitive"},
 		{Placeholder + " (Unabridged)", "", "decorated placeholder; refused by the trailing-paren rule"},
@@ -107,7 +109,12 @@ func TestExtractAuthorFromDirectoryPathEdges(t *testing.T) {
 // The map LOOKS load-bearing. It is not: LooksLikePersonName requires 2-4 words,
 // so every single-word entry is refused by the shape gate whether or not the map
 // catches it first. "Unknown Author" is the only multi-word entry, hence the only
-// one that can change an answer.
+// one that can change what this function RETURNS.
+//
+// Even that entry changes no consumer's outcome -- both internal/metadata and
+// internal/scanner clear the placeholder again downstream, so deleting it leaves
+// both suites green and only this file catches it. That is why this test exists
+// here and not there.
 //
 // This is written as an assertion about the ENTRIES, so it fails if someone adds
 // a multi-word entry without noticing they have just made the map load-bearing in
@@ -161,8 +168,29 @@ func TestParseFilenameForAuthor(t *testing.T) {
 	}{
 		{"The Stand - Stephen King", "The Stand", "Stephen King"},
 		{"No Author Here", "", ""},
-		{"a - b - c", "", ""},
 		{"", "", ""},
+
+		// THE THREE-PART GUARD. `len(parts) != 2` was untested in all three
+		// packages: mutating it to `< 2` left every suite green.
+		//
+		// "a - b - c" cannot observe it -- neither side is a person name, so
+		// ChooseAuthorSide refuses and the mutant returns ("","") too. The row
+		// has to have a real name and a real title in the first two segments,
+		// or it pins nothing. Under the mutant this one yields
+		// author="Norse Mythology": a TITLE filed as the author, which is the
+		// wrong-author-beats-absent-author failure this file calls structural.
+		{"Neil Gaiman - Norse Mythology - 01", "", ""},
+		{"Stephen King - The Stand - Part 1", "", ""},
+		{"a - b - c", "", ""},
+
+		// THE TIE. personname calls the tie policy "the ONE place the four call
+		// sites legitimately differ", and this function is what passes it --
+		// yet flipping PreferRightOnTie was caught only by pre-existing tests in
+		// internal/metadata, reached through the shim alias. A load-bearing
+		// argument with no coverage where the argument lives.
+		//
+		// Both sides are person-shaped, so the policy alone decides: right wins.
+		{"Stephen King - John Doe", "Stephen King", "John Doe"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.filename, func(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.79.0
+// version: 1.80.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -1706,9 +1706,20 @@ func extractInfoFromPath(book *Book) {
 	// marker -- "Mort - Unknown Author (Unabridged)" -- and personname's credit
 	// predicate now accepts that decorated form BY DESIGN, so without the strip
 	// the placeholder walks straight past a guard written to catch it and closes
-	// the AI nomination gate. authorname stays standard-library-only on purpose
-	// (any package must be able to import it), so the strip happens here rather
-	// than inside IsPlaceholder.
+	// the AI nomination gate.
+	//
+	// The strip happens HERE rather than inside IsPlaceholder. The reason used to
+	// be "authorname stays standard-library-only on purpose", and that stopped
+	// being true in this same change: internal/authorname now imports
+	// internal/personname, so IsPlaceholder COULD strip for itself with no cycle.
+	// Left at the call sites deliberately, not by inertia -- IsPlaceholder is also
+	// asked about values that are not filename parses, where silently stripping a
+	// trailing parenthetical would be a surprise. But the four sites that do strip
+	// (here, :3024, metadata.go:733 and :745) are now a consolidation that is
+	// UNBLOCKED rather than impossible, and :3024's own comment records that it
+	// "was missed when those were fixed" -- so this pattern has already produced
+	// one omission. Tracked in
+	// todo.d/20260901-stripeditionsuffix-placeholder-guard-repeated-four-times.md.
 	defer func() {
 		if authorname.IsPlaceholder(personname.StripEditionSuffix(book.Author)) {
 			book.Author = ""

@@ -1,5 +1,5 @@
 // file: internal/authorname/parse.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f4c2a71-58d3-4e60-b19a-6c0e7d35f8b2
 // last-edited: 2026-09-01
 
@@ -30,8 +30,21 @@ import (
 // so every single-word directory name -- "import", "imports", "organized",
 // "books", "audiobooks", "downloads", "bt", "data", all of them -- returns ""
 // at the shape gate whether or not the map catches it first. "Unknown Author" is
-// the map's only two-word entry, which is precisely why it is the only entry
-// that can change an answer.
+// the map's only two-word entry, which is why it is the only entry that can
+// change THIS FUNCTION'S RETURN VALUE.
+//
+// It does not follow that it changes any CONSUMER's outcome, and mutation
+// testing showed it does not: delete the placeholder entry and both
+// internal/metadata and internal/scanner stay green, because each clears the
+// placeholder again downstream (metadata.go:733/:745, scanner.go:1713) via
+// IsPlaceholder(StripEditionSuffix(...)). Only this package's own unit tests
+// catch it.
+//
+// So the entry is defence in depth, not the load-bearing guard, and the honest
+// statement of its value is: it stops the placeholder at the earliest point, and
+// it is the guard that survives if a consumer's own clear is ever moved or
+// missed -- which has already happened once, at scanner.go:3024. Keep it; do not
+// cite it as the thing preventing the bug.
 //
 // The map is kept anyway, as the union of both copies. It is a statement about
 // what these directories MEAN ("container, never an author") and it stops being
@@ -92,6 +105,25 @@ func ExtractAuthorFromDirectory(filePath string) string {
 		return ""
 	}
 
+	// SUBSUMED ON REALISTIC INPUT, and kept deliberately. Mutation testing
+	// deleted this whole branch and every test in all three packages stayed
+	// green. The reason is structural: the regex anchors at ^ and its capture is
+	// [^-]+, so it can only match when the FIRST hyphen in dirName is the credit
+	// separator -- and in exactly that case the trimmed capture equals
+	// SplitN(dirName, " - ", 2)[0] trimmed, which the branch below returns
+	// anyway. A 632-case structured probe and a 400,000-case fuzz found zero
+	// differences on canonically-spaced input.
+	//
+	// It is NOT an equivalent branch, so it is not deleted: 12 differences exist,
+	// all requiring degenerate spacing, and in those the branch gives the BETTER
+	// answer. "Terry Pratchett-translator-Mort - translator - X" yields
+	// "Terry Pratchett" here and "Terry Pratchett-translator-Mort" without it.
+	//
+	// What this does mean: this branch's corpus rows, and the eight in each of
+	// metadata's and scanner's gates tests, pin a path that cannot change an
+	// answer on input anyone will actually have. Do not read their passing as
+	// evidence about the credit-parsing behaviour they are named for.
+	//
 	// Handle "Author - translator - Title" patterns, and "Author, Co-Author -
 	// translator - Title" for TWO authors only. The shape gate gives
 	// LooksLikePersonName the whole credit, and that caps it at four words, so
@@ -128,12 +160,15 @@ func ExtractAuthorFromDirectory(filePath string) string {
 	// each yield the series name as the author when it is ungated, so the claim
 	// that only bare directory names carry junk here is false.
 	if strings.Contains(dirName, " - ") {
-		parts := strings.SplitN(dirName, " - ", 2)
-		if len(parts) > 0 {
-			author := strings.TrimSpace(parts[0])
-			if personname.LooksLikePersonName(author) {
-				return author
-			}
+		// No `len(parts) > 0` guard. Both copies carried one; it is
+		// unreachable-false, because strings.SplitN never returns an empty slice
+		// for a non-empty separator. personname.go:457 refuses to write exactly
+		// this shape of guard, by name, on the grounds that no test can kill it
+		// -- so carrying it across would have imported into this package the
+		// pattern its sibling rejects.
+		author := strings.TrimSpace(strings.SplitN(dirName, " - ", 2)[0])
+		if personname.LooksLikePersonName(author) {
+			return author
 		}
 	}
 

@@ -1,5 +1,5 @@
 <!-- file: PLAN.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f8f51548-8481-466d-b8e8-bc96a250ee51 -->
 <!-- last-edited: 2026-09-01 -->
 
@@ -126,3 +126,55 @@ of this key reach the gate?" needs the key title-cased first.
 `TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` fails with a
 chapter-duration float mismatch. Verified byte-identical on unmodified `main`
 (`9975.827` vs `9975.431111`) — an ffprobe/environment issue, unrelated.
+
+---
+
+## What review found that the plan and I both missed
+
+Three review passes ran on the diff while CI was pending. Their two headline
+findings were both in lines this change did not touch, and both were **false
+claims I had written**.
+
+**4. There is a THIRD path→author parser, and I wrote "nothing remains".**
+`internal/metadata/folder_parser.go` — in the same package as one of the two
+collapsed here — has its own container-skip map and its own shape predicate. Its
+map carried no placeholder entry, so it read the organizer's own
+`Unknown Author` directory back as a real author at **ConfidenceHigh**. Measured:
+
+```
+/books/Unknown Author/(Discworld 04) Mort/Mort - read by Nigel Planer
+    -> Authors=[Unknown Author]  AuthorConf=3
+```
+
+Nothing downstream caught it, for a reason worth naming: `scanner.go`'s recovery
+guard is `if Author == ""`. A **non-empty** placeholder *skips* the guard whose
+defer would have cleared it — being wrong in a specific way let it evade the
+check for being wrong. `resolveAuthorID` then mints or attaches a real
+`Unknown Author` row. Fixed here and mutation-verified. The predicate divergence
+is NOT fixed; it changes real answers and is tracked in `todo.d`.
+
+**5. My consumer test's docstring claimed more than the test delivers.** It said
+it would fail if a future change "drops the skipDirs entry". Mutation testing
+showed it does not — the downstream clear catches the value anyway. Of the three
+triggers it named, **the one this change introduced is the one it cannot see**:
+the #3029 pattern, inside a comment written to warn about the #3029 pattern.
+Corrected, and the honest scope of the test stated instead.
+
+**6. Two mutants survived, both real gaps, both now killed.**
+`len(parts) != 2` → `< 2` left every suite green; the exposing row needs a real
+name AND a real title in the first two segments (`"a - b - c"` cannot see it,
+because `ChooseAuthorSide` refuses both sides anyway). Under the mutant,
+`"Neil Gaiman - Norse Mythology - 01"` files the **title** as the author. The tie
+policy was likewise only caught in `internal/metadata`, through the shim — no
+coverage where the argument for it lives.
+
+**7. The translator branch is subsumed on realistic input.** Deleting it left all
+three packages green; a 632-case probe and a 400,000-case fuzz found zero
+differences on canonically-spaced input. Kept — 12 differences exist under
+degenerate spacing and the branch gives the better answer there — but its rows no
+longer count as evidence about credit parsing, and the code now says so.
+
+**8. An unreachable guard was carried across.** `if len(parts) > 0` after
+`SplitN` can never be false. `personname.go:457` refuses to write exactly that
+shape, by name, because no test can kill it — so copying it here would have
+imported the pattern its sibling package rejects. Removed.

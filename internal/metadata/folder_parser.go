@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 
 package metadata
@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 )
 
 // FieldConfidence describes how confident we are about a parsed field.
@@ -135,6 +137,21 @@ func splitPathSegments(path string) []string {
 
 	// Filter noise
 	skipSegments := map[string]bool{
+		// The organizer's own placeholder directory. Without this entry the
+		// layout the organizer ITSELF writes -- <root>/Unknown Author/<title>/
+		// -- reads the placeholder back as a real author, and this parser hands
+		// it out at ConfidenceHigh. Nothing downstream catches it: scanner.go
+		// assigns bm.PrimaryAuthor() to book.Author, whose recovery guard is
+		// `Author == ""`, so a non-empty placeholder SKIPS the guard whose
+		// defer would have cleared it, and resolveAuthorID then creates or
+		// attaches a real "Unknown Author" row.
+		//
+		// This parser was missed when the same guard was added to the two
+		// parsers now in internal/authorname -- three copies, not two. Measured
+		// 2026-09-01 by driving ExtractMetadataFromFolder over organizer-layout
+		// paths; see folder_parser_placeholder_test.go.
+		strings.ToLower(authorname.Placeholder): true,
+
 		"":                    true,
 		".":                   true,
 		"audiobooks":          true,
