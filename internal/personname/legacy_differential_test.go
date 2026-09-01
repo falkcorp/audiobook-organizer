@@ -1,5 +1,5 @@
 // file: internal/personname/legacy_differential_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e2c7b48-5a13-4f80-b6d9-3c0e8a1f7452
 // last-edited: 2026-09-01
 
@@ -243,28 +243,27 @@ func TestDifferentialAgainstAllThreeLegacyCopies(t *testing.T) {
 	}
 }
 
-// TestDedupConsumersOnlyBecomeMoreRestrictive pins the safety property that makes
-// this unification safe to ship, and it is specifically about DIRECTION, which the
-// compiler cannot check.
+// TestPredicateOnlyBecomesMoreRestrictive checks ONE thing, at the predicate
+// level: LooksLikePersonName is a subset of legacy dedup's copy over the corpus.
 //
-// Of the three legacy copies, dedup's is the only one whose consumers reach WRITES:
-// all three of its call sites are inside SplitCompositeAuthorName, which is called
-// by internal/plugins/maintenance/author.go, internal/scheduler/extra_ops.go,
-// internal/itunes/service/importer.go and internal/server/handlers/entities. A
-// `true` there keeps a split, and a split mints author rows. scanner's and
-// metadata's call sites are read-side filename/dirname parsing that produces a
-// candidate author for the book being scanned.
+// It is deliberately named for what it measures. The earlier name promised a
+// property about dedup's CONSUMERS and then compared two booleans, and that gap
+// hid a real bug: a newly-false predicate does not stop SplitCompositeAuthorName,
+// it changes WHICH BRANCH WINS. The comma branch `break`s on refusal and falls
+// through to weaker gates, so a refusal could mint the whole composite as one
+// author -- 886 such strings, measured. Subset-ness here is necessary and NOT
+// sufficient; the sufficient check is
+// TestSplitCompositeNeverMintsANonPersonPart in internal/dedup, which runs the
+// real consumer.
 //
-// So the two directions have very different blast radii, and they must be checked
-// separately -- the lesson from #3023, where a shared helper fed both a ratio
-// consumer (safe to raise) and three absolute gates (where the same change ADMITTED
-// pairs), and "it only ever raises X" was written as a safety claim for both.
+// (Correcting a second claim that stood here: scanner's and metadata's call sites
+// are NOT read-side. scanner.go:1738 assigns book.Author = right, which reaches
+// saveBook -> resolveAuthorID -> CreateBook. All three copies reach writes.)
 //
-// The property: for every corpus input, unified may DISAGREE with legacy dedup only
-// by going true -> false. If it ever goes false -> true, this change can mint an
-// author that the deployed code would not have, and that needs its own analysis
-// before shipping.
-func TestDedupConsumersOnlyBecomeMoreRestrictive(t *testing.T) {
+// The lesson from #3023 still applies -- a shared helper feeding consumers that
+// move in opposite directions -- but the lesson one level down is that you must
+// measure the consumer, not the helper.
+func TestPredicateOnlyBecomesMoreRestrictive(t *testing.T) {
 	newlyAdmitted := 0
 	newlyRefused := 0
 	for _, c := range differentialCorpus {
@@ -274,8 +273,8 @@ func TestDedupConsumersOnlyBecomeMoreRestrictive(t *testing.T) {
 		case !legacy && unified:
 			newlyAdmitted++
 			t.Errorf("NEWLY ADMITTED %q: legacy dedup said false, unified says true. "+
-				"SplitCompositeAuthorName reaches author-creating writes, so this "+
-				"can mint an author the deployed code would not have.", c.in)
+				"Subset-ness is the precondition for the consumer test; if it "+
+				"breaks, re-run the consumer differential before shipping.", c.in)
 		case legacy && !unified:
 			newlyRefused++
 			t.Logf("newly refused (safe direction) %q", c.in)
@@ -286,6 +285,6 @@ func TestDedupConsumersOnlyBecomeMoreRestrictive(t *testing.T) {
 			"structural guard that dedup's copy was missing (Book 3, Chapter 1, " +
 			"Pratchett 036, ...), so this test is no longer proving anything")
 	}
-	t.Logf("dedup direction: %d newly refused, %d newly admitted (must be 0)",
+	t.Logf("predicate direction: %d newly refused, %d newly admitted (must be 0)",
 		newlyRefused, newlyAdmitted)
 }

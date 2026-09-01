@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-09-01
 
@@ -279,23 +279,35 @@ func SplitCompositeAuthorName(name string) []string {
 	}
 
 	// Try parentheses or brackets: "Author (Author 2)" or "Author [Author 2]"
+	//
+	// C414 (cont.): the comma branch above refuses the WHOLE split when any part
+	// fails the shape check, but it `break`s rather than returning -- so a refusal
+	// falls through to here and to the semicolon branch below. Those two branches
+	// used to ask only `len(p) > 2 && strings.Contains(p, " ")`, which is exactly
+	// the "contains a space" test C414 removed from the comma branch for minting
+	// "and the Farm Boy (DBY)". Measured 2026-09-01: they still minted
+	// "Ann Petry (DBY), Ida Wells", "the quick brown, Ida Wells" and
+	// "So Long, and Thanks for All the Fish" as author names. All four branches now
+	// gate on the SAME personname.LooksLikePersonName, so the comment above is a
+	// control and not just a description.
 	if m := authorBracketSplitRe.FindStringSubmatch(name); len(m) == 3 {
 		outer := strings.TrimSpace(m[1])
 		inner := strings.TrimSpace(m[2])
-		// Both parts must look like author names (contain a space for first+last)
-		if len(outer) > 2 && len(inner) > 2 && strings.Contains(outer, " ") && strings.Contains(inner, " ") {
-			return []string{NormalizeAuthorName(outer), NormalizeAuthorName(inner)}
+		if no, ni := NormalizeAuthorName(outer), NormalizeAuthorName(inner); personname.LooksLikePersonName(no) && personname.LooksLikePersonName(ni) {
+			return []string{no, ni}
 		}
 	}
 
-	// Try semicolon: "Author1; Author2"
+	// Try semicolon: "Author1; Author2" -- shape-gated like the comma branch.
+	// Note this still admits "Smith, John; Doe, Jane": each semicolon part is
+	// normalized first, and a last-first part is person-shaped after normalization.
 	if strings.Contains(name, ";") {
 		parts := strings.Split(name, ";")
 		var result []string
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
-			if len(p) > 2 && strings.Contains(p, " ") {
-				result = append(result, NormalizeAuthorName(p))
+			if n := NormalizeAuthorName(p); personname.LooksLikePersonName(n) {
+				result = append(result, n)
 			}
 		}
 		if len(result) > 1 {
