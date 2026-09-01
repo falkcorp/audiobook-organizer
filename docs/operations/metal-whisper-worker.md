@@ -1,5 +1,5 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
 <!-- last-edited: 2026-08-31 -->
 
@@ -296,3 +296,29 @@ config typo, and for the other it is the hardware.
 > (e.g. whisper.cpp + Vulkan) behind the same three-endpoint shim this document
 > describes for MLX. `rocm`/`hip` are on the allow-list so such a worker is not
 > refused once it exists — not as a claim that faster-whisper supports AMD.
+
+## Throttling: three knobs, in the order you should reach for them
+
+| Setting | Scope | Default | What it means |
+|---|---|---|---|
+| endpoint `concurrency` | one server | 1 | Max **simultaneous requests** to that server. Since 2026-08-31 this is a real cap, enforced at the request; before that it was only an allocation weight and did not limit anything. |
+| `whisper_max_in_flight` | whole pool | 0 (unlimited) | Ceiling on total simultaneous requests across **every** endpoint. Not the sum of the per-endpoint caps — use it when you have capacity but don't want it all in use. |
+| `whisper_batch_size` | request shape | 16 | Files per `/transcribe-batch` call. **Smaller spreads work across the pool**; larger cuts HTTP overhead on servers that batch for real. |
+
+`whisper_batch_sleep_ms` still exists but is a blind timer from the CUDA era. Prefer the
+caps above; it is set to 0 in production.
+
+## Do NOT demote the worker process
+
+The launchd agent must not set `ProcessType=Background` or `Nice`. On Apple Silicon,
+background QoS confines the worker to the **efficiency cores** (2 of 10 on an M1 Max).
+Measured on one machine, same 90s clip, same model, same minute:
+
+| | Median |
+|---|---|
+| normal QoS | **4.92 s** |
+| `ProcessType=Background` | **>240 s** (timed out) |
+
+It also inverts with scale: four background-QoS workers contend for the same two E-cores
+and delivered *less* aggregate throughput than a single worker. To keep the machine
+responsive under load, send fewer jobs (the caps above) rather than demoting the process.

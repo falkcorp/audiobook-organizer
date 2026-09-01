@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-08-31
 
@@ -158,7 +158,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 	// One endpoint: byte-for-byte the historical single-URL behaviour.
 	if len(eligible) == 1 {
 		g := probeByURL[eligible[0].URL]
-		results, err := transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, jobs, onProgress)
+		results, err := transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, g.Endpoint.Concurrency, jobs, onProgress)
 		if err != nil {
 			return nil, classifyTransport([]string{g.Endpoint.URL}, err)
 		}
@@ -229,7 +229,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 			ep := healthy[idx]
 			wg.Go(func() {
 				g := probeByURL[ep.URL]
-				r, err := transcribeRemoteWithHealth(ctx, ep.URL, g.Health, g.Probed, sub, progressFor())
+				r, err := transcribeRemoteWithHealth(ctx, ep.URL, g.Health, g.Probed, ep.Concurrency, sub, progressFor())
 				resCh <- epResult{idx: idx, res: r, err: err}
 			})
 		}
@@ -281,7 +281,7 @@ func allocateJobs(healthy []Endpoint, remaining map[string]string) []map[string]
 			if c < 1 {
 				c = 1
 			}
-			take := c * whisperBatchSize
+			take := c * whisperBatchSize()
 			for n := 0; n < take && pos < len(ids); n++ {
 				if assignments[i] == nil {
 					assignments[i] = make(map[string]string)

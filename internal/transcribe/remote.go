@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-08-31
 
@@ -33,7 +33,21 @@ type wavJob struct {
 // onProgress ticks; larger ones reduce HTTP overhead further.
 // 16 is chosen so that even at ~15s/file on large-v2 the batch finishes in ~240s,
 // safely below the 600s HTTP client timeout (was 32 files → 480s > 300s → deadline exceeded).
-const whisperBatchSize = 16
+const defaultWhisperBatchSize = 16
+
+// whisperBatchSize reads the configured sub-batch size, falling back to
+// defaultWhisperBatchSize. It is a function rather than a const because the
+// right value is a property of the SERVER, not of this code: a worker that
+// serialises inference behind one lock wants SMALL batches so work spreads
+// across the pool instead of queueing at one box, while a server doing real
+// batched inference wants large ones. An operator must be able to tune that
+// without a rebuild.
+func whisperBatchSize() int {
+	if n := config.AppConfig.WhisperBatchSize; n > 0 {
+		return n
+	}
+	return defaultWhisperBatchSize
+}
 
 // remoteWorkers is only used on the legacy single-file path (/transcribe).
 // The batch path (/transcribe-batch) sends all files in one request so no
@@ -98,26 +112,26 @@ func supportsRemoteBatch(ctx context.Context, remoteURL string) bool {
 // transcribeRemote sends WAV jobs to the remote faster-whisper server.
 // It probes for /transcribe-batch support first (faster-whisper >=1.0.0 server)
 // and falls back to the original per-file worker pool on 404 or probe failure.
-func transcribeRemote(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+func transcribeRemote(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	h, ok := probeRemoteHealth(ctx, remoteURL)
-	return transcribeRemoteWithHealth(ctx, remoteURL, h, ok, jobs, onProgress)
+	return transcribeRemoteWithHealth(ctx, remoteURL, h, ok, limit, jobs, onProgress)
 }
 
 // transcribeRemoteWithHealth is transcribeRemote for a caller that has ALREADY
 // probed /health -- the pool gate does, to decide require_gpu -- so the batch
 // decision reuses that same response instead of issuing a second one.
-func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteHealth, probed bool, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteHealth, probed bool, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	if probed && h.supportsBatch() {
-		return transcribeRemoteBatched(ctx, remoteURL, jobs, onProgress)
+		return transcribeRemoteBatched(ctx, remoteURL, limit, jobs, onProgress)
 	}
-	return transcribeRemotePerFile(ctx, remoteURL, jobs, onProgress)
+	return transcribeRemotePerFile(ctx, remoteURL, limit, jobs, onProgress)
 }
 
 // transcribeRemoteBatched sends jobs in sub-batches of whisperBatchSize to
 // /transcribe-batch. Processing is sequential inside each sub-batch (the GPU
 // handles one file at a time), but reduced HTTP round-trips and
 // BatchedInferencePipeline on the server give 2-3x throughput vs per-file mode.
-func transcribeRemoteBatched(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	// Stable order so progress reporting is deterministic.
 	ordered := make([]wavJob, 0, len(jobs))
 	for id, path := range jobs {
@@ -137,14 +151,24 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, jobs map[str
 	// GPU can shed heat. Defaults to 8000ms (8s). Set to 0 to disable.
 	batchSleep := time.Duration(config.AppConfig.WhisperBatchSleepMS) * time.Millisecond
 
-	for start := 0; start < len(ordered); start += whisperBatchSize {
-		end := start + whisperBatchSize
+	size := whisperBatchSize()
+	for start := 0; start < len(ordered); start += size {
+		end := start + size
 		if end > len(ordered) {
 			end = len(ordered)
 		}
 		chunk := ordered[start:end]
 
+		// Hold an endpoint slot for the request only. Acquiring around the
+		// whole loop instead would serialise a caller's entire job list behind
+		// one slot, which starves the other endpoints this dispatch is also
+		// feeding.
+		release, err := acquireInFlight(ctx, remoteURL, limit)
+		if err != nil {
+			return nil, err
+		}
 		batchResults, err := sendBatch(ctx, client, remoteURL, chunk)
+		release()
 		if err != nil {
 			return nil, fmt.Errorf("transcribe-batch chunk %d-%d: %w", start, end, err)
 		}
@@ -238,7 +262,7 @@ func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk
 
 // transcribeRemotePerFile is the original per-file worker-pool path, kept as
 // fallback for servers that don't expose /transcribe-batch.
-func transcribeRemotePerFile(ctx context.Context, remoteURL string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
 
 	batchCtx, cancel := context.WithCancel(ctx)
@@ -265,7 +289,16 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, jobs map[str
 	for range remoteWorkers {
 		wg.Go(func() {
 			for j := range jobCh {
+				// Same registry as the batch path: an endpoint's cap is a
+				// property of the server, not of the code path reaching it.
+				release, aerr := acquireInFlight(batchCtx, remoteURL, limit)
+				if aerr != nil {
+					resultCh <- resultItem{id: j.id, err: aerr}
+					cancel()
+					return
+				}
 				r, err := transcribeOneRemote(batchCtx, client, remoteURL, j.wavPath)
+				release()
 				resultCh <- resultItem{id: j.id, result: r, err: err}
 				if err != nil {
 					cancel()
