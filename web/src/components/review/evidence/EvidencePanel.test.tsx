@@ -35,6 +35,11 @@ const confidence: ConfidenceEvidence = {
       confidence: 0.99,
       raw: 1,
       detail: 'identical hash',
+      // Set explicitly rather than left off: `dedupEvidence` always populates
+      // `primary`, so a fixture omitting it exercises a shape production never
+      // produces -- and would leave the primary=true path through the panel
+      // (no "(supporting)" suffix) untested.
+      primary: true,
     },
     {
       id: 'duration',
