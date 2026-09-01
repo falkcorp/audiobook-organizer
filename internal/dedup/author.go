@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-09-01
 
@@ -7,7 +7,6 @@ package dedup
 
 import (
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"log/slog"
 	"math"
 	"regexp"
@@ -16,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 // AuthorDedupGroup represents a group of potentially duplicate authors.
@@ -85,7 +86,13 @@ var leadingConjunctionRe = regexp.MustCompile(`(?i)^(?:&|and)\s+`)
 // whole-library candidate set. leadingConjunctionRe below was already
 // package-level; these two were missed.
 var (
-	authorSpaceRe    = regexp.MustCompile(`\s+`)
+	// \s in Go's regexp is ASCII-only ([\t\n\f\r ]), so it does NOT match U+00A0
+	// or any other Unicode space separator. \p{Zs} adds them. Without it,
+	// "John\u00a0Smith" survives normalization intact and is stored as an author
+	// that can never compare equal to "John Smith" in any index -- and it now
+	// REACHES that point, because LooksLikePersonName uses strings.Fields, which
+	// does split on U+00A0, where main's `strings.Contains(outer, " ")` did not.
+	authorSpaceRe    = regexp.MustCompile(`[\s\p{Zs}]+`)
 	authorInitialsRe = regexp.MustCompile(`([A-Z]\.)([A-Z])`)
 	// extractBaseAuthor's: called twice per author-name comparison
 	// (authorNamesEquivalent, below) and once per author when the prefilter
@@ -229,14 +236,28 @@ func SplitCompositeAuthorName(name string) []string {
 		return nil
 	}
 
-	// Try slash first: "Author1 / Author2"
+	// Try slash first: "Author1 / Author2" -- shape-gated like every other branch.
+	//
+	// This is the FIRST branch tried, and until 2026-09-01 its only test was
+	// `len(p) > 2` -- weaker even than the "contains a space" test C414 removed
+	// from the comma branch, since it does not require a space at all. It minted
+	// exactly the strings this file claims to refuse:
+	//
+	//   "Book 3 / Ida Wells"          -> ["Book 3" "Ida Wells"]
+	//   "the quick brown / Ida Wells" -> ["the quick brown" "Ida Wells"]
+	//   "Ann Petry (DBY) / Ida Wells" -> ["Ann Petry (DBY)" "Ida Wells"]
+	//   "Unabridged / Ida Wells"      -> ["Unabridged" "Ida Wells"]
+	//
+	// It was missed when the comma, bracket, semicolon and and/& branches were
+	// gated, because it was found by READING the branches rather than by running
+	// them: the consumer test's separator list had no "/" in it, so no input
+	// reached this branch at all.
 	if strings.Contains(name, "/") {
 		parts := strings.Split(name, "/")
 		var result []string
 		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if len(p) > 2 {
-				result = append(result, NormalizeAuthorName(p))
+			if n := NormalizeAuthorName(strings.TrimSpace(p)); personname.LooksLikePersonName(n) {
+				result = append(result, n)
 			}
 		}
 		if len(result) > 1 {
@@ -287,9 +308,15 @@ func SplitCompositeAuthorName(name string) []string {
 	// the "contains a space" test C414 removed from the comma branch for minting
 	// "and the Farm Boy (DBY)". Measured 2026-09-01: they still minted
 	// "Ann Petry (DBY), Ida Wells", "the quick brown, Ida Wells" and
-	// "So Long, and Thanks for All the Fish" as author names. All four branches now
+	// "So Long, and Thanks for All the Fish" as author names. All five branches now
 	// gate on the SAME personname.LooksLikePersonName, so the comment above is a
 	// control and not just a description.
+	//
+	// "All four" was wrong when first written: there are FIVE split branches, and
+	// the slash branch above -- the first one tried -- was still ungated. The
+	// claim was made from reading the branches rather than running them. It now
+	// holds for all five, and TestSplitCompositeNeverMintsANonPersonPart carries
+	// "/" in its separator list so that a future ungating is observable.
 	if m := authorBracketSplitRe.FindStringSubmatch(name); len(m) == 3 {
 		outer := strings.TrimSpace(m[1])
 		inner := strings.TrimSpace(m[2])
@@ -456,12 +483,49 @@ func looksLikeAuthorName(s string) bool {
 	if !personname.LooksLikePersonName(s) {
 		return false
 	}
-	// Last part (surname) must be a real name, not an initial: "A." and "B" are
-	// initials. This is what keeps "R.A. Mejia Charles Dean" splitting at the
-	// right boundary instead of stranding "R.A." as a surname.
+	// The ORIGINAL carried TWO constraints past the ASCII test, and composing it
+	// from LooksLikePersonName preserved only the length one. The dropped
+	// constraint was "the last word must start with an uppercase letter", and
+	// losing it is not cosmetic: LooksLikePersonName deliberately PERMITS
+	// interior lowercase name particles, so every particle of >=3 runes (van,
+	// von, del, della, dos, den, ter, bin, ibn, mac) began qualifying as a
+	// SURNAME. That admits "Ludwig van" as a name, which unlocks the 3-way split
+	// below and -- through scoreAuthorSplit -- makes it OUTSCORE the right answer:
+	//
+	//   "Ludwig van Beethoven Wolfgang Amadeus Mozart"
+	//     was  ["Ludwig van Beethoven" "Wolfgang Amadeus Mozart"]   (score 22)
+	//     became ["Ludwig van" "Beethoven Wolfgang" "Amadeus Mozart"] (score 36)
+	//
+	// The <=2-rune particles (de, di, du, da, la, le, al, el) were shielded by the
+	// length rule, which is why "Simone de Beauvoir Jean Paul Sartre" survived and
+	// hid this. Restored below in the unicode-correct form -- "must not be
+	// LOWERCASE", never "must be uppercase", since unicode.IsUpper is false for
+	// every caseless script.
 	parts := strings.Fields(s)
-	last := strings.TrimRight(parts[len(parts)-1], ".")
-	return len([]rune(last)) >= 3
+	lastWord := parts[len(parts)-1]
+	// A name particle is never a surname. BOTH tests are needed and each catches
+	// what the other misses: the lowercase test catches "Ludwig van", and the
+	// particle test catches "Volker Le" -- capitalized, so IsLower is false, yet
+	// still a particle. Dropping the particle half reproduced the exact bug one
+	// character down: "Volker Le Guin Wolfgang Amadeus Mozart" split as
+	// ["Volker Le" "Guin Wolfgang" "Amadeus Mozart"].
+	if unicode.IsLower([]rune(lastWord)[0]) || personname.IsNameParticle(lastWord) {
+		return false
+	}
+	// And it must not be a bare INITIAL: "A." and "B" are initials. This is what
+	// keeps "R.A. Mejia Charles Dean" splitting at the right boundary instead of
+	// stranding "R.A." as a surname.
+	//
+	// Expressed as "is it one character?", which is what an initial actually is.
+	// The original said `len(lastTrimmed) < 3` -- a BYTE count used as a proxy,
+	// and the proxy is wrong in both directions once non-ASCII is admitted:
+	//   - as bytes it is meaningless for CJK ("春樹" is 6 bytes, so it passed by
+	//     accident, and only the ASCII test above was rejecting it);
+	//   - rewritten as a RUNE count it becomes actively wrong, rejecting "村上 春樹"
+	//     -- a two-character Japanese surname -- from the one package extracted to
+	//     stop dropping Japanese authors.
+	// It also excluded real two-letter surnames in any script: Ng, Wu, Li, Ho.
+	return len([]rune(strings.TrimRight(lastWord, "."))) >= 2
 }
 
 // scoreAuthorSplit scores a split of names. Higher = more likely correct.

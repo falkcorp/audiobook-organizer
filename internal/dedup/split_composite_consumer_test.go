@@ -1,5 +1,5 @@
 // file: internal/dedup/split_composite_consumer_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 3f7c1a94-8d02-4e6b-b5a1-2c9e07f4d813
 // last-edited: 2026-09-01
 
@@ -31,7 +31,10 @@ func TestSplitCompositeNeverMintsANonPersonPart(t *testing.T) {
 		"Partridge", "Bookbinder", "Discworld", "Jane", "Ida", "Ursula",
 	}
 	lasts := []string{"Kutscher", "Wells", "Smith", "Chatterjee", "Le Guin", "Jones"}
-	seps := []string{", ", "; ", " & ", " and ", ", and ", " ("}
+	// "/" is in this list because leaving it out is exactly how the slash branch
+	// -- the FIRST branch SplitCompositeAuthorName tries -- stayed ungated while
+	// a comment two files away claimed every branch was gated.
+	seps := []string{", ", "; ", " & ", " and ", ", and ", " (", " / "}
 
 	var corpus []string
 	for _, f1 := range firsts {
@@ -67,6 +70,17 @@ func TestSplitCompositeNeverMintsANonPersonPart(t *testing.T) {
 		"One Two Three Four Five (Bob Jones)",
 		"Do Androids Dream? (Bob Jones)",
 		"So Long and Thanks (for All the Fish)",
+		// Slash branch. Its only gate was `len(p) > 2` -- no space required.
+		"Book 3 / Ida Wells",
+		"Chapter 1 / Chapter 2",
+		"the quick brown / Ida Wells",
+		"Ann Petry (DBY) / Ida Wells",
+		"Unabridged / Ida Wells",
+		// Particle-as-surname: admitting "Ludwig van" unlocks a 3-way split that
+		// outscores the correct 2-way one.
+		"Ludwig van Beethoven Wolfgang Amadeus Mozart",
+		"Vincent van Gogh Pablo Diego Picasso",
+		"Simone de Beauvoir Jean Paul Sartre",
 	)
 
 	bad := 0
@@ -106,6 +120,10 @@ func TestSplitCompositeRefusesRatherThanLaunders(t *testing.T) {
 		"One Two Three Four Five (Bob Jones)",
 		"Do Androids Dream? (Bob Jones)",
 		"So Long and Thanks (for All the Fish)",
+		"Book 3 / Ida Wells",
+		"the quick brown / Ida Wells",
+		"Ann Petry (DBY) / Ida Wells",
+		"Unabridged / Ida Wells",
 	} {
 		if got := SplitCompositeAuthorName(in); got != nil {
 			t.Errorf("SplitCompositeAuthorName(%q) = %q; want nil (refuse, do not launder)", in, got)
@@ -129,6 +147,25 @@ func TestSplitCompositeStillSplitsLegitimateComposites(t *testing.T) {
 		// Last-first with semicolons: the case that rules out simply turning the
 		// comma branch's `break` into `return nil`.
 		{"Smith, John; Doe, Jane", "Smith, John|Doe, Jane"},
+		{"Jane Smith / Bob Jones", "Jane Smith|Bob Jones"},
+		// Regression: a >=3-rune name particle must never count as a surname, or
+		// this splits into ["Ludwig van" "Beethoven Wolfgang" "Amadeus Mozart"].
+		{"Ludwig van Beethoven Wolfgang Amadeus Mozart", "Ludwig van Beethoven|Wolfgang Amadeus Mozart"},
+		{"Vincent van Gogh Pablo Diego Picasso", "Vincent van Gogh|Pablo Diego Picasso"},
+		{"Simone de Beauvoir Jean Paul Sartre", "Simone de Beauvoir|Jean Paul Sartre"},
+		// A CAPITALIZED particle. unicode.IsLower is false for "Le", so the
+		// lowercase test alone misses it and this splits as
+		// ["Volker Le" "Guin Wolfgang" "Amadeus Mozart"].
+		{"Volker Le Guin Wolfgang Amadeus Mozart", "Volker Le Guin|Wolfgang Amadeus Mozart"},
+		{"Ursula Le Guin Wolfgang Amadeus Mozart", "Ursula Le Guin|Wolfgang Amadeus Mozart"},
+		// Non-ASCII authors. origin/main refused BOTH of these outright -- the
+		// concatenated splitter's ASCII byte test meant a two-author string was
+		// never split if either name started with a non-ASCII letter.
+		{"Émile Zola Wolfgang Amadeus Mozart", "Émile Zola|Wolfgang Amadeus Mozart"},
+		{"村上 春樹 Wolfgang Amadeus Mozart", "村上 春樹|Wolfgang Amadeus Mozart"},
+		// A two-rune CJK surname: the rune-count rule must reject INITIALS, not
+		// short names, or this package drops the very authors it exists to keep.
+		{"R.A. Mejia Charles Dean", "R. A. Mejia|Charles Dean"},
 	} {
 		got := strings.Join(SplitCompositeAuthorName(tc.in), "|")
 		if got != tc.want {

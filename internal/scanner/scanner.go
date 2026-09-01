@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.74.0
+// version: 1.75.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"io"
 	"io/fs"
 	"math"
@@ -36,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/oklog/ulid/v2"
 )
@@ -1845,14 +1845,39 @@ func extractAuthorFromDirectory(filePath string) string {
 		parts := strings.SplitN(dirName, " - ", 2)
 		if len(parts) > 0 {
 			author := strings.TrimSpace(parts[0])
-			if personname.IsValidAuthor(author) {
+			if personname.LooksLikePersonName(author) {
 				return author
 			}
 		}
 	}
 
-	// Use directory name if valid
-	if personname.IsValidAuthor(dirName) {
+	// Use directory name if it is person-SHAPED, not merely non-empty.
+	//
+	// This called the bare IsValidAuthor until 2026-09-01 while metadata.go's
+	// byte-identical twin called LooksLikePersonName -- a divergence that
+	// predates the personname unification and survived it, because the refactor
+	// faithfully preserved each call site's own predicate. Every other
+	// personname call in this file already uses LooksLikePersonName; these two
+	// were the outliers.
+	//
+	// It has to change here because IsValidAuthor has NO shape check, and the
+	// result is assigned straight to book.Author. Once the structural-word test
+	// stopped being a bare prefix match, that admitted "Discworld", "Bookends",
+	// "Chapterhouse" and "Discography" as authors -- names main rejected only
+	// because they happen to start with "disc"/"book"/"chapter".
+	//
+	// HONEST LIMIT: this does not restore main's behaviour, and nothing can.
+	// Main also rejected "Bookclub Picks", "Partition Wall", "Part-Time Job",
+	// "Partners In Crime" and "Bookkeeping Basics" -- by the SAME accident that
+	// rejected Booker T. Washington, Volker Kutscher and Partha Chatterjee. Those
+	// strings are person-SHAPED; no shape predicate can separate them, and
+	// keeping the accident means keeping the bug. They still pass here.
+	//
+	// COST: single-word directory authors ("Tolkien", "Shakespeare", "Homer") are
+	// now refused at this call site, because LooksLikePersonName requires 2-4
+	// words. metadata.go's twin has always refused them, so this makes the two
+	// agree rather than introducing a new rule.
+	if personname.LooksLikePersonName(dirName) {
 		return dirName
 	}
 
