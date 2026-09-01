@@ -1,5 +1,5 @@
 // file: tools/cmd/reconcile-paths/main.go
-// version: 1.4.0
+// version: 1.5.0
 // last-edited: 2026-09-01
 //
 // reconcile-paths is a READ-ONLY dry-run CLI tool that identifies audiobooks
@@ -47,7 +47,15 @@ import (
 // the value before main() runs, and still yield exactly audioext.Default() —
 // a misleading dependency that buys nothing. If this tool ever grows real
 // config loading, resolve inside main() via audioext.Resolve, not here.
-var audioExt = audioext.Default()
+//
+// SORTED, not declaration order, and that is load-bearing: the single-file
+// variant probe below is first-match-wins — it returns the first "<title><ext>"
+// that exists on disk — so the order of this slice decides which candidate a
+// book with more than one single-file variant reports. Sorted is what the
+// previous Resolve(...).Sorted() produced; keeping it means this change cannot
+// alter a single row of the CSV. The other two consumers are membership counts
+// and are order-insensitive.
+var audioExt = audioext.DefaultSet().Sorted()
 
 // sshBatchSize controls how many paths are checked in a single ssh invocation.
 const sshBatchSize = 50

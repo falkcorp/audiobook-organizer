@@ -1,5 +1,5 @@
 // file: internal/audioext/audioext.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a53bbfc-4b40-45a6-9c37-135163864a11
 // last-edited: 2026-09-01
 
@@ -9,8 +9,8 @@
 // # Why this package exists
 //
 // `supported_extensions` is a user-configurable setting. Before this package
-// existed, roughly twenty downstream code paths ignored it and hardcoded their
-// own narrower list instead: the filesystem watcher knew 8 extensions, the
+// existed, fifteen downstream code paths ignored it and hardcoded their own
+// narrower list instead: the filesystem watcher knew 8 extensions, the
 // iTunes plist filter knew 7, the relink/repair maintenance jobs knew 6 each.
 // A user who adds an extension gets those files scanned and imported — the
 // ingest path does read the config — and then never watched, never relinked,

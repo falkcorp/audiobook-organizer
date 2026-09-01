@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-01-the-setting-nothing-read-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4c2f81ad-6e3b-4d90-9a17-2b8e05f7c341 -->
 <!-- last-edited: 2026-09-01 -->
 
@@ -11,8 +11,8 @@
 
 - The app has a setting listing which audio file types belong to your library. Fifteen
   types ship enabled by default. The part of the app that finds and imports books reads
-  that setting. Almost nothing else did — roughly a dozen other places each carried their
-  own shorter, hand-written list instead.
+  that setting. Almost nothing else did — fifteen other places each carried their own
+  shorter, hand-written list instead.
 - The result was a library that was half-served rather than broken. Books in the seven
   formats the shorter lists had never heard of got imported normally, and were then never
   watched for changes, never given their file records, never reconnected to iTunes when
