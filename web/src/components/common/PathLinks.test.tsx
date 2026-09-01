@@ -1,5 +1,5 @@
 // file: web/src/components/common/PathLinks.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 19ec3b3a-a184-4122-953f-32ebd321116c
 // last-edited: 2026-09-01
 
@@ -84,6 +84,19 @@ describe('PathLinks', () => {
     const posixText = await screen.findByText(/\$\(books\)/);
     expect(posixText).not.toHaveTextContent(P);
     expect(posixText).toHaveAttribute('title', P);
+  });
+
+  it('keeps a hover hint on the copy button now that the MUI Tooltip is gone', () => {
+    // The <Tooltip> that wrapped this button was replaced by a native `title`
+    // (see the measurement note in PathLinks.tsx). Every OTHER query in this
+    // file finds the button by role+name, which resolves from `aria-label` and
+    // passes identically whether the `title` landed or not -- so without this
+    // assertion the hover hint could vanish with all 323 tests still green.
+    render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="macOS" />);
+    expect(screen.getByRole('button', { name: 'Copy Linux path' })).toHaveAttribute(
+      'title',
+      'Copy Linux path',
+    );
   });
 
   it('gives every rendering its own copy button', () => {

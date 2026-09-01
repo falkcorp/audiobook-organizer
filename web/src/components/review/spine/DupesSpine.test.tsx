@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
 // last-edited: 2026-09-01
 //
@@ -235,5 +235,37 @@ describe('dual-path display on a dupes row', () => {
 
     expect(screen.getByTestId('dupes-spine')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /copy/i })).not.toBeInTheDocument();
+  });
+});
+
+// The three MUI <Tooltip>s that this perf change converted to native `title`
+// attributes have no other coverage: the Recommended chip is found elsewhere by
+// data-testid and the Files chip has no test file at all, so a dropped `title`
+// (e.g. if a future MUI major stopped spreading unknown props onto the Chip
+// root) would take the hover hint away with every other test still green.
+describe('hover hints that replaced MUI Tooltips', () => {
+  it('keeps a title on the Recommended chip', () => {
+    // book_a carries an asin, so metadataQuality scores it above book_b and
+    // recommendedKeepSide returns A -- on a tie the chip renders nothing and
+    // this test would pass vacuously.
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', asin: 'B00TEST' },
+        book_b: { id: 'b1', title: 'Book B' },
+      } as unknown as Partial<DedupCandidate>),
+    ]);
+
+    expect(screen.getByTestId('recommended-keep')).toHaveAttribute(
+      'title',
+      'Richer metadata, so this side is recommended to keep'
+    );
+  });
+
+  it('keeps a title on the Files chip', () => {
+    renderSpine([candidate()]);
+
+    // One per side of the pair.
+    const chips = screen.getAllByTitle('Show files in this book');
+    expect(chips).toHaveLength(2);
   });
 });
