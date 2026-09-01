@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-31
 
@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -176,13 +177,31 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 func poolEndpoints(cfgEndpoints []config.WhisperEndpoint, singleURL string) []Endpoint {
 	if len(cfgEndpoints) > 0 {
 		endpoints := make([]Endpoint, 0, len(cfgEndpoints))
+		// One URL must occupy at most ONE pool slot. Two entries for the same
+		// server would each get their own allocation AND present conflicting
+		// in-flight limits for a single shared cap -- see acquireInFlight.
+		seen := make(map[string]bool, len(cfgEndpoints))
 		for _, e := range cfgEndpoints {
 			if e.URL == "" {
 				continue
 			}
+			if seen[e.URL] {
+				slog.Warn("transcribe: duplicate whisper endpoint URL ignored", "url", e.URL, "label", e.Label)
+				continue
+			}
+			seen[e.URL] = true
+			// An omitted/zero concurrency means ONE in-flight request, not
+			// "unlimited". That differs from whisper_max_in_flight, where 0
+			// does mean unlimited -- so resolve it here, explicitly, rather
+			// than leaving a bare 0 to be interpreted by a clamp three layers
+			// down where nobody reading the config would find it.
+			conc := e.Concurrency
+			if conc < 1 {
+				conc = 1
+			}
 			endpoints = append(endpoints, Endpoint{
 				URL:          e.URL,
-				Concurrency:  e.Concurrency,
+				Concurrency:  conc,
 				Label:        e.Label,
 				Priority:     e.Priority,
 				RequireGPU:   e.RequireGPU,

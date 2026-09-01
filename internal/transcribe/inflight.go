@@ -1,5 +1,5 @@
 // file: internal/transcribe/inflight.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 55d73cef-7ffe-4cc4-bc48-434789153386
 // last-edited: 2026-08-31
 
@@ -7,10 +7,18 @@ package transcribe
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
+
+// ErrSlotWait marks a failure to ACQUIRE a slot, as distinct from a failure of
+// the endpoint itself. Nothing was sent, so callers must not treat it as
+// evidence the server is unhealthy -- see the dispatcher's cooldown handling.
+var ErrSlotWait = errors.New("in-flight slot not acquired")
 
 // Endpoint.Concurrency is enforced HERE, not in allocateJobs.
 //
@@ -54,8 +62,13 @@ func acquirePoolWide(ctx context.Context, limit int) (func(), error) {
 	}
 
 	poolWideMu.Lock()
-	if poolWide == nil || poolWide.limit != limit {
+	if poolWide == nil {
 		poolWide = &slotPool{limit: limit, ch: make(chan struct{}, limit)}
+	} else if poolWide.limit != limit {
+		// Same reasoning as the per-endpoint pool: replacing it installs an
+		// empty channel and silently removes the cap. Takes effect at restart.
+		slog.Warn("transcribe: whisper_max_in_flight changed; keeping the established cap until restart",
+			"established", poolWide.limit, "requested", limit)
 	}
 	pool := poolWide
 	poolWideMu.Unlock()
@@ -81,36 +94,49 @@ func acquireInFlight(ctx context.Context, url string, limit int) (func(), error)
 		limit = 1
 	}
 
-	// ALWAYS pool-wide first, then per-endpoint. Two counting semaphores taken
-	// in a fixed global order cannot deadlock; taking them in caller-dependent
-	// order could. This is why both live behind one function.
-	releasePool, err := acquirePoolWide(ctx, config.AppConfig.WhisperMaxInFlight)
-	if err != nil {
-		return nil, err
-	}
-
 	inflightMu.Lock()
 	pool, ok := inflightPools[url]
-	if !ok || pool.limit != limit {
+	if !ok {
 		pool = &slotPool{limit: limit, ch: make(chan struct{}, limit)}
 		inflightPools[url] = pool
+	} else if pool.limit != limit {
+		// NEVER replace the pool on a differing limit. Replacing installs a
+		// fresh EMPTY channel, so if two callers disagree about the limit for
+		// one URL -- the same box listed twice, or a config edit racing an
+		// in-flight dispatch -- every acquire re-creates the pool and admits
+		// immediately. The cap silently disappears while every signal still
+		// says it is working. Changing an endpoint's concurrency therefore
+		// takes effect at restart.
+		slog.Warn("transcribe: conflicting in-flight limits for one endpoint; keeping the established one",
+			"url", url, "established", pool.limit, "requested", limit)
 	}
 	inflightMu.Unlock()
 
+	// Per-endpoint slot FIRST, pool-wide second. The pool-wide cap is the
+	// scarce SHARED resource; holding it while parking on a busy endpoint's
+	// queue starves every other endpoint, which is the precise inverse of what
+	// it is for. Blocking while holding the local slot only ever delays the
+	// endpoint we are already queued on. (Either order is deadlock-free, so
+	// deadlock is not what decides this.)
 	select {
 	case pool.ch <- struct{}{}:
-		var once sync.Once
-		return func() {
-			once.Do(func() {
-				<-pool.ch
-				releasePool()
-			})
-		}, nil
 	case <-ctx.Done():
-		// Do not strand the pool-wide slot we already hold.
-		releasePool()
-		return nil, ctx.Err()
+		return nil, fmt.Errorf("%w for %s: %w", ErrSlotWait, url, ctx.Err())
 	}
+
+	releasePool, err := acquirePoolWide(ctx, config.AppConfig.WhisperMaxInFlight)
+	if err != nil {
+		<-pool.ch // or the endpoint slot leaks for the life of the process
+		return nil, fmt.Errorf("%w for %s: %w", ErrSlotWait, url, err)
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-pool.ch
+			releasePool()
+		})
+	}, nil
 }
 
 // inFlightDepth reports how many slots are currently held for url. Test and

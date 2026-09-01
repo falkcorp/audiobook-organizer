@@ -7,6 +7,7 @@ package transcribe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -241,7 +242,16 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 			if r.err != nil {
 				// Bench the endpoint; its jobs stay in remaining and are
 				// re-queued to a surviving endpoint on the next round.
-				markEndpointFailure(ep.URL)
+				//
+				// ErrSlotWait is NOT endpoint evidence: the request was never
+				// sent, we only failed to get a slot (usually because the op
+				// was cancelled). poolHealth is process-global and its cooldown
+				// OUTLIVES the op, so benching here would make the next run
+				// report "all N endpoints in cooldown" about servers that were
+				// never contacted.
+				if !errors.Is(r.err, ErrSlotWait) {
+					markEndpointFailure(ep.URL)
+				}
 				lastErr = fmt.Errorf("%s: %w", ep.URL, r.err)
 				continue
 			}

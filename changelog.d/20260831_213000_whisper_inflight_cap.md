@@ -21,3 +21,15 @@
 - `whisper_max_in_flight` (env `WHISPER_MAX_IN_FLIGHT`, default 0 = unlimited) — a
   pool-wide ceiling on total simultaneous requests across every endpoint, independent of
   what the individual endpoints would accept.
+
+### Notes
+
+- A per-endpoint `concurrency` that is omitted or `0` means **1**, not unlimited. This
+  deliberately differs from `whisper_max_in_flight`, where `0` does mean unlimited: a
+  per-endpoint cap defaulting to unlimited would silently reinstate the unbounded fan-out
+  the cap exists to prevent.
+- Changing an endpoint's `concurrency` (or `whisper_max_in_flight`) takes effect at
+  **restart**. A live change is logged and the established cap is kept, because replacing
+  a live semaphore installs an empty one and removes the cap entirely.
+- Duplicate endpoint URLs are now ignored with a warning; one server must occupy at most
+  one pool slot.
