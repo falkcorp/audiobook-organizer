@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package reconcile
 
@@ -561,17 +561,10 @@ func FindUntrackedFiles(store Store, knownPaths map[string]bool) ([]string, erro
 		return nil, nil
 	}
 
-	// Build set of supported extensions
-	extSet := make(map[string]bool)
-	for _, ext := range config.AppConfig.SupportedExtensions {
-		extSet[strings.ToLower(ext)] = true
-	}
-	// Fallback if no extensions configured
-	if len(extSet) == 0 {
-		for _, ext := range []string{".m4b", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wma", ".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc"} {
-			extSet[ext] = true
-		}
-	}
+	// Configured extensions with the compiled-in fallback. This block used to
+	// spell out that fallback inline — it is the precedent the rest of this
+	// change generalises — and it read config.AppConfig without the lock.
+	extSet := config.SupportedExtensionSet()
 
 	var untracked []string
 	seen := make(map[string]bool)

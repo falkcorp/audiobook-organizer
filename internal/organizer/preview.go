@@ -1,7 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-08-18
+// last-edited: 2026-09-01
 
 package organizer
 
@@ -251,13 +251,12 @@ func isDirectoryPath(path string) bool {
 	if path == "" {
 		return false
 	}
-	audioExts := map[string]bool{
-		".m4b": true, ".m4a": true, ".mp3": true, ".flac": true,
-		".ogg": true, ".opus": true, ".wma": true, ".aac": true,
-		".wav": true,
-	}
-	ext := strings.ToLower(filepath.Ext(path))
-	if audioExts[ext] {
+	// Follows supported_extensions: a path ending in a library audio extension
+	// is a file, so no stat is needed. With a private list, a .aax or .aiff
+	// book fell through to the os.Stat branch — and when the file was missing
+	// (the whole point of the repair paths that call this) the stat failed and
+	// the book was reported as a directory.
+	if config.SupportedExtensionSet().MatchPath(path) {
 		return false
 	}
 	// No audio extension — confirm via stat if path exists
@@ -265,5 +264,5 @@ func isDirectoryPath(path string) bool {
 		return info.IsDir()
 	}
 	// Path doesn't exist yet (unlikely in preview) — treat no-ext paths as dirs
-	return ext == ""
+	return filepath.Ext(path) == ""
 }

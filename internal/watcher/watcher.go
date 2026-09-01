@@ -1,7 +1,7 @@
 // file: internal/watcher/watcher.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-08-29
+// last-edited: 2026-09-01
 
 package watcher
 
@@ -9,27 +9,15 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
-
-// audioExtensions are the file extensions we care about.
-var audioExtensions = map[string]bool{
-	".mp3":  true,
-	".m4a":  true,
-	".m4b":  true,
-	".flac": true,
-	".ogg":  true,
-	".opus": true,
-	".wma":  true,
-	".aac":  true,
-}
 
 // DefaultDebounce is the default debounce period.
 const DefaultDebounce = 5 * time.Second
@@ -244,8 +232,13 @@ func (w *Watcher) scheduleScan() {
 	})
 }
 
-// IsAudioFile reports whether name has a recognized audio extension.
+// IsAudioFile reports whether name has a library audio extension.
+//
+// This follows supported_extensions. It used to hold a private 8-entry list,
+// which meant a library configured for .aax/.aaxc/.aiff/.aif/.mka/.oga/.wav
+// was scanned once at import and then never watched again: adding such a file
+// produced no fsnotify-triggered rescan, and the watcher logged nothing
+// because from its point of view nothing audio-shaped had happened.
 func IsAudioFile(name string) bool {
-	ext := strings.ToLower(filepath.Ext(name))
-	return audioExtensions[ext]
+	return config.SupportedExtensionSet().MatchPath(name)
 }

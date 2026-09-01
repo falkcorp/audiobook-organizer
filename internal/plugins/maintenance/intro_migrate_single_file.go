@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-08-19
+// last-edited: 2026-09-01
 
 package maintenance
 
@@ -281,7 +281,7 @@ func (p *Plugin) migrateOneBook(store bookFileRelinker, log interface {
 func classifyMigrateCandidate(b database.Book, files []database.BookFile, overwrite bool) (string, *database.BookFile) {
 	var audio []database.BookFile
 	for _, f := range files {
-		if f.FilePath != "" && audioExtSet[strings.ToLower(filepath.Ext(f.FilePath))] {
+		if f.FilePath != "" && transcribableExtSet[strings.ToLower(filepath.Ext(f.FilePath))] {
 			audio = append(audio, f)
 		}
 	}

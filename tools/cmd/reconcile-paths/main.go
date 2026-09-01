@@ -1,6 +1,6 @@
 // file: tools/cmd/reconcile-paths/main.go
-// version: 1.2.0
-// last-edited: 2026-05-24
+// version: 1.3.0
+// last-edited: 2026-09-01
 //
 // reconcile-paths is a READ-ONLY dry-run CLI tool that identifies audiobooks
 // whose FilePath no longer exists on disk and finds their candidate location
@@ -34,10 +34,16 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audioext"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
-// audioExt lists extensions to check for single-file books.
-var audioExt = []string{".m4b", ".mp3", ".m4a", ".ogg", ".flac", ".aac", ".opus"}
+// audioExt lists extensions to check for single-file books. Follows
+// supported_extensions via internal/audioext; this tool runs standalone and
+// never calls InitConfig, so audioext.Resolve(nil) hands back the compiled-in
+// default rather than an empty list that would match no file at all.
+var audioExt = audioext.Resolve(config.AppConfig.SupportedExtensions).Sorted()
 
 // sshBatchSize controls how many paths are checked in a single ssh invocation.
 const sshBatchSize = 50

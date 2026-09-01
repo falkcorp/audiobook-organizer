@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-05-11
+// last-edited: 2026-09-01
 //
 // Tests for the four-tier discovery matching helpers in internal/deluge/discovery.go.
 
@@ -196,10 +196,16 @@ func TestIsContentHashTracked_MissingDir(t *testing.T) {
 // AudioExtensions
 // ---------------------------------------------------------------------------
 
+// This test binary never calls config.InitConfig, so AppConfig.SupportedExtensions
+// is nil here — which is exactly the fail-open case audioext.Resolve exists for.
+// If the fallback ever regressed to "empty set", this test would go red rather
+// than the discovery walk silently classifying every torrent as untracked.
 func TestAudioExtensions_ContainsExpectedFormats(t *testing.T) {
-	expected := []string{".m4b", ".m4a", ".mp3", ".flac", ".aax", ".aac", ".ogg", ".opus", ".wav"}
+	expected := []string{".m4b", ".m4a", ".mp3", ".flac", ".aax", ".aac", ".ogg", ".opus", ".wav",
+		// Previously absent from the private list this set replaced.
+		".aaxc", ".aiff", ".aif", ".mka", ".oga", ".wma"}
+	got := AudioExtensions()
 	for _, ext := range expected {
-		_, ok := AudioExtensions[ext]
-		assert.True(t, ok, "AudioExtensions should contain %q", ext)
+		assert.True(t, got.Has(ext), "AudioExtensions should contain %q", ext)
 	}
 }

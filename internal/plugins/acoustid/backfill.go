@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-08-19
+// last-edited: 2026-09-01
 
 package acoustid
 
@@ -185,8 +185,14 @@ const (
 // fingerprintThrottle is the sleep between successful fingerprint operations.
 const fingerprintThrottle = 10 * time.Millisecond
 
-// audioExtensions maps audio file extensions to true (from internal/server/acoustid_backfill.go pattern).
-var audioExtensions = map[string]bool{
+// fpcalcDecodableExtensions are the containers fpcalc can decode. This is a
+// CAPABILITY list, not the library's supported_extensions, and the two
+// deliberately disagree in both directions: it carries .alac/.ape/.wv, which
+// are not library extensions, and it omits .aax/.aaxc, which are — those are
+// DRM-encrypted and this application cannot decode them (internal/audioutil
+// .DetectDRM). Routing this through config would both drop three formats and
+// queue every Audible file for a fingerprint that can only fail.
+var fpcalcDecodableExtensions = map[string]bool{
 	".aac":  true,
 	".aiff": true,
 	".alac": true,
@@ -224,7 +230,7 @@ func fingerprintEligibility(f database.BookFile, force bool) (fingerprintFileOut
 	if f.Missing {
 		return fingerprintOutcomeIneligible, "marked_missing", true
 	}
-	if _, ok := audioExtensions[strings.ToLower(filepath.Ext(f.FilePath))]; !ok {
+	if _, ok := fpcalcDecodableExtensions[strings.ToLower(filepath.Ext(f.FilePath))]; !ok {
 		return fingerprintOutcomeIneligible, "non_audio_ext:" + strings.ToLower(filepath.Ext(f.FilePath)), true
 	}
 	if _, err := os.Stat(f.FilePath); err != nil {

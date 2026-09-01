@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-13
+// last-edited: 2026-09-01
 //
 // Four-tier matching to decide if a labeled Deluge torrent is already in
 // the library — run in order, stop on first hit:
@@ -33,6 +33,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audioext"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
@@ -203,12 +205,13 @@ func IsContentFingerprintTracked(store ContentFingerprintStore, contentPath stri
 	}
 
 	// Find the first audio file under contentPath to fingerprint.
+	audioExts := AudioExtensions()
 	var firstAudio string
 	_ = filepath.Walk(contentPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || firstAudio != "" {
 			return nil
 		}
-		if _, ok := AudioExtensions[strings.ToLower(filepath.Ext(path))]; ok {
+		if audioExts.MatchPath(path) {
 			firstAudio = path
 		}
 		return nil
@@ -268,21 +271,23 @@ func IsTitleTracked(torrentName string, titles map[string]struct{}) bool {
 	return false
 }
 
-// AudioExtensions is the set of file extensions we hash for content matching.
-var AudioExtensions = map[string]struct{}{
-	".m4b": {}, ".m4a": {}, ".mp3": {}, ".flac": {}, ".aax": {},
-	".aac": {}, ".ogg": {}, ".opus": {}, ".wav": {},
-}
+// AudioExtensions returns the set of file extensions we hash for content
+// matching. This asks "is this file one the library would track?" — it reads
+// raw bytes and decodes nothing — so it follows supported_extensions rather
+// than a private list. A torrent whose payload is .aiff/.mka/.oga/.wma used to
+// be reported as untracked no matter how many times it had been imported.
+func AudioExtensions() audioext.Set { return config.SupportedExtensionSet() }
 
 // IsContentHashTracked walks contentPath, SHA256s each audio file, and calls
 // lookup for each hash. Returns true as soon as any hash is found in the DB.
 func IsContentHashTracked(contentPath string, lookup func(string) bool) bool {
+	audioExts := AudioExtensions()
 	found := false
 	_ = filepath.Walk(contentPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || found {
 			return nil
 		}
-		if _, ok := AudioExtensions[strings.ToLower(filepath.Ext(path))]; !ok {
+		if !audioExts.MatchPath(path) {
 			return nil
 		}
 		hash, hashErr := SHA256File(path)

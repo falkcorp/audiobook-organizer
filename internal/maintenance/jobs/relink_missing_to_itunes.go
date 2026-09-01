@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-08-17
+// last-edited: 2026-09-01
 
 package jobs
 
@@ -60,7 +60,9 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 
 	reporter.SetTotal(len(allBooks))
 
-	audioExts := map[string]bool{".mp3": true, ".m4b": true, ".m4a": true, ".flac": true, ".opus": true, ".ogg": true}
+	// Filename-only test; follows supported_extensions. A private list here
+	// meant a .aax or .wav book could never be relinked to its iTunes track.
+	audioExts := config.SupportedExtensionSet()
 
 	relinked, unresolved, ambiguous, skipped := 0, 0, 0, 0
 

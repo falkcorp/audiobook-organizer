@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_report.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1000022-0000-0000-0000-000000000022
-// last-edited: 2026-08-17
+// last-edited: 2026-09-01
 
 package jobs
 
@@ -120,12 +120,13 @@ func (j *relinkReportJob) Run(ctx context.Context, store maintenance.JobStore, r
 	return nil
 }
 
-var rrAudioExts = map[string]bool{
-	".mp3": true, ".m4b": true, ".m4a": true,
-	".flac": true, ".opus": true, ".ogg": true,
-}
-
 func rrFindInITunes(iTunesRoot, authorName, title string) []string {
+	// Filename-only test; follows supported_extensions. Resolved once per call
+	// rather than per file, and deliberately NOT a package var: the setting is
+	// user-editable at runtime and a package var would freeze the value that
+	// happened to be configured at process init.
+	rrAudioExts := config.SupportedExtensionSet()
+
 	titlePrefix := title
 	if len(titlePrefix) > 25 {
 		titlePrefix = titlePrefix[:25]

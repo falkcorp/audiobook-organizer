@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.23.0
+// version: 3.24.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package maintenance
 
@@ -865,8 +865,11 @@ func truncateDetail(s string) string {
 	return s
 }
 
-// audioExtSet is the set of extensions treated as playable audio by firstAudioFile.
-var audioExtSet = map[string]bool{
+// transcribableExtSet is the set of containers the whisper worker can decode.
+// A CAPABILITY list, not supported_extensions: it carries .mp4 (which the
+// library does not ingest) and omits DRM-encrypted .aax/.aaxc (which the
+// library does ingest but nothing here can decode).
+var transcribableExtSet = map[string]bool{
 	".m4b": true, ".mp3": true, ".m4a": true, ".mp4": true,
 	".flac": true, ".aac": true, ".ogg": true, ".wma": true,
 }
@@ -891,7 +894,7 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheK
 
 	var audio []database.BookFile
 	for _, f := range files {
-		if audioExtSet[strings.ToLower(filepath.Ext(f.FilePath))] && f.FilePath != "" {
+		if transcribableExtSet[strings.ToLower(filepath.Ext(f.FilePath))] && f.FilePath != "" {
 			audio = append(audio, f)
 		}
 	}
@@ -902,7 +905,7 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheK
 		}
 		// No BookFile rows — fall back to Book.FilePath for single-file imports.
 		fp := book.FilePath
-		if fp != "" && audioExtSet[strings.ToLower(filepath.Ext(fp))] {
+		if fp != "" && transcribableExtSet[strings.ToLower(filepath.Ext(fp))] {
 			h := sha256.Sum256([]byte(fp))
 			return fp, "path:" + hex.EncodeToString(h[:]), "", nil
 		}

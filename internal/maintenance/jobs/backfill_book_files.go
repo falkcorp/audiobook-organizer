@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_book_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1000005-0000-0000-0000-000000000005
-// last-edited: 2026-08-27
+// last-edited: 2026-09-01
 
 package jobs
 
@@ -11,11 +11,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"log/slog"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -107,13 +107,13 @@ func backfillBookFilePaths(path string) []string {
 	return []string{path}
 }
 
+// isBackfillableAudioFile asks only "is this a library audio file?" — it reads
+// no bytes and decodes nothing, so it resolves against the configured
+// supported_extensions rather than a private list. The private list it used to
+// hold knew 8 extensions and so skipped .aax/.aaxc/.aiff/.aif/.mka/.oga/.wav
+// books entirely: they got no book_file rows backfilled, silently.
 func isBackfillableAudioFile(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".m4b", ".m4a", ".mp3", ".flac", ".ogg", ".opus", ".wma", ".aac":
-		return true
-	default:
-		return false
-	}
+	return config.SupportedExtensionSet().MatchPath(path)
 }
 
 func saveBackfillBookFilesResult(ctx context.Context, store maintenance.JobStore, result backfillBookFilesResult) error {
