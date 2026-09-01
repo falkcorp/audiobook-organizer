@@ -1,5 +1,5 @@
 // file: internal/personname/personname.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
 // last-edited: 2026-09-01
 
@@ -56,25 +56,48 @@ var nameParticles = map[string]bool{
 	"al": true, "el": true, "st.": true, "mac": true,
 }
 
-// structuralPrefixes mark a volume/part token rather than a person. Without
-// this guard "Book 3" and "Chapter 1" parse as two capitalised words and are
+// structuralWords mark a volume/part token rather than a person. Without this
+// guard "Book 3" and "Chapter 1" parse as two capitalised words and are
 // indistinguishable from a name -- which is exactly what the dedup copy did.
-var structuralPrefixes = []string{"book", "chapter", "part", "vol", "volume", "disc"}
+//
+// These are matched as WHOLE FIRST WORDS, never as bare prefixes. A
+// strings.HasPrefix test here rejects real authors whose names merely begin with
+// the same letters -- Booker T. Washington, Volker Kutscher, Volney Beckner,
+// Volodymyr Zelensky, Voltaire, Partha Chatterjee, Partridge -- and the damage
+// does not stop at a refusal. SplitCompositeAuthorName's comma branch falls
+// THROUGH on refusal (internal/dedup/author.go:270) to a weaker semicolon gate
+// with no shape check, so refusing "Volker Kutscher, Niall Sellar" does not
+// merely drop a split, it can mint the whole composite as one author name.
+// Measured against the real splitter: 886 distinct author strings that a bare
+// prefix test would newly mint, and 33,580 of 195,245 realistic composites
+// silently losing their split.
+//
+// Plurals are listed explicitly so widening the match does not also start
+// admitting "Parts Unknown", which the prefix test caught by accident.
+var structuralWords = map[string]bool{
+	"book": true, "books": true,
+	"chapter": true, "chapters": true,
+	"part": true, "parts": true,
+	"vol": true, "vols": true,
+	"volume": true, "volumes": true,
+	"disc": true, "discs": true,
+}
 
 // IsValidAuthor rejects strings that cannot be an author at all: empty, purely
-// numeric, or beginning with a structural marker.
+// numeric, or led by a structural marker word.
 func IsValidAuthor(author string) bool {
 	if author == "" {
 		return false
 	}
-	lower := strings.ToLower(author)
-	for _, p := range structuralPrefixes {
-		if strings.HasPrefix(lower, p) {
-			return false
-		}
-	}
 	// Purely numeric ("01", "1984") is a disc or a year, not a person.
 	if _, err := strconv.Atoi(author); err == nil {
+		return false
+	}
+	// Test the first WORD, not a prefix. Trailing punctuation and digits are
+	// stripped so the label forms that actually occur -- "Vol. 2", "Book3",
+	// "Disc 1" -- still match, while "Volker" and "Booker" do not.
+	fields := strings.Fields(strings.ToLower(author))
+	if len(fields) > 0 && structuralWords[strings.TrimRight(fields[0], ".,-_0123456789")] {
 		return false
 	}
 	return true
@@ -103,10 +126,9 @@ func LooksLikePersonName(s string) bool {
 	}
 
 	for i, w := range fields {
+		// strings.Fields never yields an empty field, so r[0] is always safe here
+		// and a len(r)==0 guard would be unreachable code that no test can kill.
 		r := []rune(w)
-		if len(r) == 0 {
-			return false
-		}
 		// Every word must START WITH A LETTER. Checking only "is not lowercase"
 		// is not enough: digits and punctuation are neither upper nor lower, so
 		// "Pratchett 036" would pass as a name and get filed as a real author.

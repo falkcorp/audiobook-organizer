@@ -1,5 +1,5 @@
 // file: internal/personname/personname_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b8d1f36-7c05-4e29-a930-2f9c3a7e5d61
 // last-edited: 2026-09-01
 
@@ -42,6 +42,16 @@ func TestLooksLikePersonName(t *testing.T) {
 		{"Ludwig van Beethoven", true, "lowercase name particle"},
 
 		// --- dedup got these WRONG (no validity guard at all) ---
+		// M4b: isolates the `i == 0` clause -- the ONLY thing that keeps a name
+		// particle from being accepted as a FIRST word. Mutate it to `i < 0` and
+		// the suite stays green without these four.
+		{"de la Cruz", false, "particle as FIRST word is a title fragment, not a name"},
+		{"van Gogh Vincent", false, "same, with a real surname following"},
+		{"Simone de Beauvoir", true, "particle in INTERIOR position is legitimate"},
+		{"Ludwig van Beethoven", true, "same"},
+		// M9: isolates the trailing-")" guard. "Ann Petry (DBY)" also trips the
+		// 2-4 word count, so only an UNBALANCED trailing paren tests it alone.
+		{"Ann Petry DBY)", false, "trailing parenthesis marks an edition, not a name"},
 		{"Book 3", false, "structural marker, not a person"},
 		{"Chapter 1", false, "structural marker"},
 		{"Volume 2", false, "structural marker"},
@@ -79,7 +89,26 @@ func TestIsValidAuthor(t *testing.T) {
 		{"", false}, {"Isaac Asimov", true}, {"12345", false},
 		{"Book 3", false}, {"Chapter 1", false}, {"Volume 2", false},
 		{"Disc 1", false}, {"Part 1", false}, {"Vol 2", false},
-		{"Bookbinder Jones", false}, // known prefix-match limitation, pinned deliberately
+		// "Bookbinder Jones" was pinned false here as a "known prefix-match
+		// limitation". That was not a limitation, it was the bug: a bare
+		// strings.HasPrefix rejects every real name starting with a structural
+		// word. Review measured 886 author strings that SplitCompositeAuthorName
+		// newly minted because of it, and 33,580 of 195,245 composites silently
+		// losing their split. Structural words are now matched as whole first
+		// words, so real surnames are admitted and the labels still are not.
+		{"Bookbinder Jones", true},
+		{"Booker T. Washington", true},
+		{"Volker Kutscher", true},
+		{"Volney Beckner", true},
+		{"Volodymyr Zelensky", true},
+		{"Voltaire Smith", true},
+		{"Partha Chatterjee", true},
+		{"Partridge Family", true},
+		{"Discworld Author", true},
+		// Label forms that must STILL be refused, including the punctuated and
+		// glued variants the word-boundary match has to keep catching.
+		{"Vol. 2", false}, {"Book3", false}, {"Disc1", false},
+		{"Books 1-3", false}, {"Parts Unknown", false}, {"Volumes 4", false},
 	} {
 		if got := IsValidAuthor(c.in); got != c.want {
 			t.Errorf("IsValidAuthor(%q) = %v, want %v", c.in, got, c.want)
