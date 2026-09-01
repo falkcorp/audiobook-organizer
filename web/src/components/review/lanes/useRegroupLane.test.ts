@@ -391,6 +391,108 @@ describe('the kind filter is pushed to the server', () => {
     expect(lastFilter().kind).toBe('regroup.multidisc');
   });
 
+  it('pushes the search term to the server, debounced, not per keystroke', async () => {
+    // 🔴 THE WHOLE POINT OF THE SERVER-SIDE SEARCH. Before this, the box
+    // searched the 500 rows that had loaded. Measured on production
+    // 2026-09-01, regroup.ambiguous alone held 714 pending holds, so 214 of
+    // them could not be found by typing -- and the kind dropdown did not help,
+    // because they were all the same kind.
+    mockItems([makeItem('a1', 'regroup.ambiguous')]);
+    const { result } = await renderLane();
+    const beforeTyping = vi.mocked(api.getReviewItems).mock.calls.length;
+
+    // Three keystrokes inside one debounce window.
+    await act(async () => result.current.setFilters({ search: 'z' }));
+    await act(async () => result.current.setFilters({ search: 'ze' }));
+    await act(async () => result.current.setFilters({ search: 'zep' }));
+
+    // Still no request: the term feeds a fetch, so it rides the debounce.
+    expect(vi.mocked(api.getReviewItems).mock.calls.length).toBe(beforeTyping);
+
+    await waitFor(() => expect(lastFilter().search).toBe('zep'));
+    // Exactly ONE request for three keystrokes. Without a count this passes
+    // even if every keystroke fired its own fetch, since the last one carries
+    // the same term.
+    expect(vi.mocked(api.getReviewItems).mock.calls.length).toBe(beforeTyping + 1);
+  });
+
+  it('sends the search alongside the kind, not instead of it', async () => {
+    // The two filters compose server-side. A fetch that dropped the kind when a
+    // search was present would silently widen the queue back to every kind
+    // while the reviewer believed they were working one.
+    mockItems([makeItem('a1', 'regroup.ambiguous')]);
+    const { result } = await renderLane();
+
+    await act(async () => result.current.setFilters({ kind: 'regroup.ambiguous' }));
+    await waitFor(() => expect(lastFilter().kind).toBe('regroup.ambiguous'));
+
+    await act(async () => result.current.setFilters({ search: 'hold a1' }));
+    await waitFor(() => expect(lastFilter().search).toBe('hold a1'));
+    expect(lastFilter().kind).toBe('regroup.ambiguous');
+    expect(lastFilter().limit).toBe(500);
+  });
+
+  it('carries the search on the reload that follows an item action', async () => {
+    // 🔴 THE SECOND CALL SITE AGAIN. reload() runs after every decision. A
+    // reload that dropped the term would repopulate the lane with the unsearched
+    // queue the moment a reviewer approved one of their search results.
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    // The term must MATCH the fixture. makeItem's summary is `Hold a1`, and the
+    // client-side predicate still runs over the loaded rows, so a term the row
+    // does not contain leaves `buckets` empty and there is nothing to approve.
+    // The first draft of this test used "mistborn" and died on that.
+    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+    const { result } = await renderLane();
+
+    await act(async () => result.current.setFilters({ search: 'hold a1' }));
+    await waitFor(() => expect(lastFilter().search).toBe('hold a1'));
+    const beforeAction = vi.mocked(api.getReviewItems).mock.calls.length;
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(vi.mocked(api.getReviewItems).mock.calls.length).toBe(beforeAction + 1);
+    expect(lastFilter().search).toBe('hold a1');
+  });
+
+  it('omits the search param entirely when the box is empty or whitespace', async () => {
+    // An empty `q` would be a filter for the empty string rather than for no
+    // filter -- the same trap the kind param documents. Whitespace-only is the
+    // same thing wearing a disguise, and it is what a reviewer leaves behind
+    // when they select-all-and-space instead of deleting.
+    mockItems([makeItem('a1', 'regroup.ambiguous')]);
+    const { result } = await renderLane();
+    expect(lastFilter().search).toBeUndefined();
+
+    await act(async () => result.current.setFilters({ search: '   ' }));
+    await waitFor(() => expect(result.current.filters.search).toBe('   '));
+    // The term never becomes a request at all: trimmed to empty, it leaves
+    // fetchPage's identity unchanged, so no refetch is triggered.
+    expect(lastFilter().search).toBeUndefined();
+  });
+
+  it('does not blank the loaded rows while a search request is in flight', async () => {
+    // 🔴 THE REGRESSION THE FIRST DRAFT SHIPPED. Generalising the kind-change
+    // clear to "any server-side filter changed" made "Clear filters" empty the
+    // list for a quarter of a second while re-fetching rows the reviewer was
+    // already looking at. Clearing a search asks for a SUPERSET of what is on
+    // screen, and narrowing it is already handled on the keystroke by the
+    // client-side predicate -- so neither direction wants a blank.
+    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('a2', 'regroup.ambiguous')]);
+    const { result } = await renderLane();
+
+    await act(async () => result.current.setFilters({ search: 'a1' }));
+    // Narrowed instantly by the CLIENT predicate, long before the debounce.
+    await waitFor(() => expect(result.current.visible).toBe(1));
+    expect(result.current.loaded).toBe(2);
+
+    await act(async () => result.current.clearFilters());
+    // No blank frame: the rows never left.
+    expect(result.current.visible).toBe(2);
+    expect(result.current.loaded).toBe(2);
+  });
+
   it('does not let an EARLIER reload overwrite a later one of the same kind', async () => {
     // 🔴 THE HALF A KIND COMPARISON CANNOT SEE, and the reason the guard is a
     // sequence token rather than a kind check. Row busy state is per item, so
