@@ -73,12 +73,22 @@
     <key>ThrottleInterval</key>
     <integer>30</integer>
 
-    <!-- Background priority: this is opportunistic capacity on a desktop the
-         user is also using. It must not compete with the foreground UI. -->
-    <key>ProcessType</key>
-    <string>Background</string>
-    <key>Nice</key>
-    <integer>5</integer>
+    <!-- DO NOT set ProcessType=Background or Nice here. It was set once, to keep
+         this from competing with the foreground UI on a desktop machine, and the
+         intent was reasonable but the mechanism is far too blunt: on Apple
+         Silicon, background QoS confines the process to the EFFICIENCY cores
+         (2 of 10 on an M1 Max) and starves its Metal work.
+
+         Measured 2026-08-31, same 90s clip, same model, same minute, two workers
+         side by side on one machine:
+             normal QoS      4.92 s
+             ProcessType=Background   > 240 s  (request timed out)
+
+         It also inverts when you add workers: four Background-QoS workers all
+         contend for those two E-cores and delivered LESS aggregate throughput
+         than a single worker did. If this machine needs to stay responsive under
+         transcription load, throttle by sending fewer jobs (whisper_max_in_flight
+         and the per-endpoint concurrency cap), not by demoting the process. -->
 
     <key>StandardOutPath</key>
     <string>/Users/USERNAME/Library/Logs/whisper-mlx.log</string>

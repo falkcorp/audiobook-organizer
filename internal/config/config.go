@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.95.0
+// version: 1.96.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-31
 
@@ -764,6 +764,19 @@ type Config struct {
 	// so the GPU can shed heat. 0 disables the pause.
 	WhisperBatchSleepMS int `json:"whisper_batch_sleep_ms" mapstructure:"whisper_batch_sleep_ms"`
 
+	// WhisperBatchSize is how many WAV files go in one /transcribe-batch
+	// request. 0 means use the built-in default (16). Small values spread work
+	// across the pool instead of queueing it at one server, which is what you
+	// want when the workers serialise inference internally; large values cut
+	// HTTP overhead on servers that batch for real.
+	WhisperBatchSize int `json:"whisper_batch_size" mapstructure:"whisper_batch_size"`
+
+	// WhisperMaxInFlight caps TOTAL simultaneous transcription requests across
+	// every endpoint. 0 means unlimited. This is deliberately NOT the sum of
+	// the per-endpoint caps: an operator may have plenty of server capacity and
+	// still want fewer requests outstanding at once.
+	WhisperMaxInFlight int `json:"whisper_max_in_flight" mapstructure:"whisper_max_in_flight"`
+
 	// OpenAIBaseURL overrides the OpenAI API base URL for every OpenAI cloud
 	// API caller app-wide: the OpenAI parser (internal/ai/openai_parser.go),
 	// the embedding client (internal/ai/embedding_client.go), the dedup-bench
@@ -1427,6 +1440,8 @@ func InitConfig() {
 	viper.SetDefault("fp_parallel_workers", 4)
 	viper.SetDefault("whisper_clip_cache_dir", "")
 	viper.SetDefault("whisper_batch_sleep_ms", 8000)
+	viper.SetDefault("whisper_batch_size", 16)
+	viper.SetDefault("whisper_max_in_flight", 0)
 	viper.SetDefault("openai_base_url", "")
 	viper.SetDefault("abs_auth_probe_enabled", false)
 	viper.SetDefault("abs_itunes_position_backfill_user_id", "")
@@ -1444,6 +1459,8 @@ func InitConfig() {
 	viper.BindEnv("fp_parallel_workers", "FP_PARALLEL_WORKERS")                                   //nolint:errcheck
 	viper.BindEnv("whisper_clip_cache_dir", "WHISPER_CLIP_CACHE_DIR")                             //nolint:errcheck
 	viper.BindEnv("whisper_batch_sleep_ms", "WHISPER_BATCH_SLEEP_MS")                             //nolint:errcheck
+	viper.BindEnv("whisper_batch_size", "WHISPER_BATCH_SIZE")                                     //nolint:errcheck
+	viper.BindEnv("whisper_max_in_flight", "WHISPER_MAX_IN_FLIGHT")                               //nolint:errcheck
 	viper.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                           //nolint:errcheck
 	viper.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
 	viper.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
@@ -1902,6 +1919,8 @@ func InitConfig() {
 			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
 			WhisperClipCacheDir:                  viper.GetString("whisper_clip_cache_dir"),
 			WhisperBatchSleepMS:                  viper.GetInt("whisper_batch_sleep_ms"),
+			WhisperBatchSize:                     viper.GetInt("whisper_batch_size"),
+			WhisperMaxInFlight:                   viper.GetInt("whisper_max_in_flight"),
 			OpenAIBaseURL:                        viper.GetString("openai_base_url"),
 			ABSAuthProbeEnabled:                  viper.GetBool("abs_auth_probe_enabled"),
 			ABSItunesPositionBackfillUserID:      viper.GetString("abs_itunes_position_backfill_user_id"),
