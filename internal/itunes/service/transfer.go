@@ -1,5 +1,5 @@
 // file: internal/itunes/service/transfer.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 //
@@ -269,9 +269,13 @@ func backupITLFile(itlPath string) error {
 
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	backupPath := itlPath + ".bak-" + ts
-	// fileops.CopyFile, not a hand-rolled temp+rename: this path used
-	// os.CreateTemp (mode 0600) and renamed it into place, so every backup
-	// it ever wrote was owner-only, and it never fsynced — a backup still
-	// in page cache when the library is rewritten is not a backup.
-	return fileops.CopyFile(itlPath, backupPath)
+	// CopyFileAtomic keeps the temp-then-rename this path always had, so a
+	// half-written backup is never visible under a .bak- name that
+	// HandleBackupList and pruneITLBackups both match on. What it fixes is the
+	// mode and the fsync: the old local copy used os.CreateTemp (0600) and
+	// renamed that into place, so every backup it ever wrote was owner-only,
+	// and it never fsynced — a backup still in page cache when the library is
+	// rewritten is not a backup. backupPath does not exist, so the mode comes
+	// from the library itself.
+	return fileops.CopyFileAtomic(itlPath, backupPath)
 }

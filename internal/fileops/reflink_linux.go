@@ -1,5 +1,5 @@
 // file: internal/fileops/reflink_linux.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: decc2c9f-e678-427f-ab6c-3eff213b2ba8
 // last-edited: 2026-09-01
 
@@ -21,6 +21,17 @@ import (
 // O_EXCL — an existing destination is refused, never truncated. A failed clone
 // removes the empty file it just created so a caller's fallback has a clear
 // path to write to.
+//
+// dst is created at LibraryFileMode under the umask, matching
+// CopyFileIngestExclusive (the fallback for this function) — reflink is an
+// INGEST primitive and must not adopt an external source's permission bits.
+// A brief revision of this file chmodded dst to the source's mode "so the three
+// code paths agree"; the paths did then agree, on the wrong answer. Note that
+// darwin's clonefile(2) creates dst itself and copies the source's mode, so
+// macOS genuinely differs here. That is a real inconsistency and it is written
+// down rather than papered over: Linux is the production target, and forcing
+// the darwin clone to match would mean reading the process umask, which is not
+// safely readable from a multi-goroutine program.
 func reflinkPlatform(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -28,28 +39,12 @@ func reflinkPlatform(src, dst string) error {
 	}
 	defer in.Close()
 
-	info, err := in.Stat()
-	if err != nil {
-		return fmt.Errorf("stat source %s: %w", src, err)
-	}
-	perm := info.Mode().Perm()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, LibraryFileMode)
 	if err != nil {
 		if os.IsExist(err) {
 			return err
 		}
 		return fmt.Errorf("create destination %s: %w", dst, err)
-	}
-
-	// Chmod because OpenFile's perm argument is masked by umask, and because
-	// darwin's clonefile(2) copies the source's mode on its own: without this
-	// the destination's permissions would silently reveal which of the three
-	// code paths (linux clone, darwin clone, byte-copy fallback) produced it.
-	if err := out.Chmod(perm); err != nil {
-		out.Close()
-		os.Remove(dst)
-		return fmt.Errorf("chmod destination %s to %v: %w", dst, perm, err)
 	}
 
 	if cloneErr := unix.IoctlFileClone(int(out.Fd()), int(in.Fd())); cloneErr != nil {

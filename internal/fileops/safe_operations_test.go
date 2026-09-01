@@ -1,5 +1,5 @@
 // file: internal/fileops/safe_operations_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -689,6 +689,18 @@ func TestFileOperation_Execute_SameSourceAndTarget(t *testing.T) {
 	// File should still exist (not removed because src == dst)
 	if _, err := os.Stat(sameFile); os.IsNotExist(err) {
 		t.Error("File should not be removed when source equals target")
+	}
+
+	// ...and still hold its CONTENT. Asserting existence alone is what let this
+	// pass while Execute truncated the file to zero: os.Create emptied it,
+	// io.Copy then read nothing from it and reported success. A stat cannot
+	// tell an intact file from an empty one.
+	got, err := os.ReadFile(sameFile)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("content = %q, want %q — a copy onto itself must not empty the file", got, content)
 	}
 }
 

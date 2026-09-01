@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-01
 
@@ -530,11 +530,17 @@ func stringOrEmpty(s *string) string {
 
 // copyFile copies src to dst without ever replacing an existing dst.
 //
-// The bytes go through fileops.CopyFile (the package's single copy
-// implementation: source mode preserved, fsynced, partial destination removed
-// on failure); the temp-then-safeRename dance stays here because the temp name
-// is this package's own — cleanupTempFiles sweeps `*.tmp-organizer` under
-// RootDir and must be able to recognise what it wrote.
+// The bytes go through fileops.CopyFileIngest — INGEST, not CopyFile: src is a
+// file from outside the library (a download client's output, a watch folder),
+// and adopting its permission bits would let that client's umask decide the
+// library's. A torrent client on umask 077 produces an 0600 .m4b, and an
+// organized library of 0600 files stops being served over the share while every
+// copy still reports success. The os.Create this replaced was umask-floored and
+// safe for that reason; CopyFileIngest keeps the property deliberately.
+//
+// The temp-then-safeRename dance stays here because the temp name is this
+// package's own — cleanupTempFiles sweeps `*.tmp-organizer` under RootDir and
+// must be able to recognise what it wrote.
 //
 // safeRename rather than a bare os.Rename: os.Rename silently REPLACES a
 // destination that appeared between the caller's exists-check and now
@@ -545,7 +551,7 @@ func (o *Organizer) copyFile(src, dst string) error {
 	tempPath := dst + tempFileSuffix
 	_ = os.Remove(tempPath)
 
-	if err := fileops.CopyFile(src, tempPath); err != nil {
+	if err := fileops.CopyFileIngest(src, tempPath); err != nil {
 		_ = os.Remove(tempPath)
 		return err
 	}
