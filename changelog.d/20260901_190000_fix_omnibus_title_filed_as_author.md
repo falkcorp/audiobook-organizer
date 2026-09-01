@@ -30,6 +30,12 @@
   rarer ordering: this library measures 57 files named "Title - Author" against
   9 named "Author - Title".
 
+  The same trade is sharper on underscore-named files, where declining to answer
+  costs the title as well as the author. Every alternative was measured and each
+  costs more than it saves — the numbers are recorded in
+  `todo.d/20260901_underscore_refusal_falls_through_to_a_worse_answer.md` so they
+  are not re-proposed. Neither shape occurs in the 40,261-file production sample.
+
 - **An audiobook named with underscores no longer has "Unknown Author" recorded
   as a real author.** `Mort_Unknown Author.mp3` was stored with the author
   literally set to the placeholder, which then made the book look like it already
