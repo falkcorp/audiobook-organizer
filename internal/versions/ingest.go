@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-09-01
 //
@@ -19,6 +19,8 @@ package versions
 import (
 	"fmt"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
@@ -97,7 +99,9 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 	hash, hashErr := filehash.BookFileHash(params.FilePath)
 	if hashErr != nil {
 		slog.Warn("versions.CreateIngestVersion: identity hash failed; version linkage still written, file_hash left empty for backfill",
-			"book_id", params.BookID, "file_path", params.FilePath, "version_id", ver.ID, "err", hashErr)
+			"book_id", logger.SanitizeLogValue(params.BookID),
+			"file_path", logger.SanitizeLogValue(params.FilePath),
+			"version_id", ver.ID, "err", hashErr)
 	}
 
 	files, filesErr := store.GetBookFiles(params.BookID)
@@ -105,7 +109,7 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		// Previously discarded, which made a store failure look identical to
 		// "this book has no files" — with no log line either way.
 		slog.Warn("versions.CreateIngestVersion: cannot load book files; version created but NOT linked to any file row",
-			"book_id", params.BookID, "version_id", ver.ID, "err", filesErr)
+			"book_id", logger.SanitizeLogValue(params.BookID), "version_id", ver.ID, "err", filesErr)
 		return ver, nil
 	}
 
@@ -118,7 +122,7 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 			f.VersionID = ver.ID
 			if updateErr := store.UpdateBookFile(f.ID, &f); updateErr != nil {
 				slog.Warn("versions.CreateIngestVersion: book file update failed; version created but NOT linked",
-					"book_id", params.BookID, "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
+					"book_id", logger.SanitizeLogValue(params.BookID), "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
 			} else {
 				linked = true
 			}
@@ -130,8 +134,9 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		// its caller cannot tell. Paths drift (organize renames under RootDir),
 		// so the ingest path may no longer match any row by the time we look.
 		slog.Warn("versions.CreateIngestVersion: no book_file row matched the ingest path; version is orphaned",
-			"book_id", params.BookID, "file_path", params.FilePath, "version_id", ver.ID,
-			"candidate_files", len(files))
+			"book_id", logger.SanitizeLogValue(params.BookID),
+			"file_path", logger.SanitizeLogValue(params.FilePath),
+			"version_id", ver.ID, "candidate_files", len(files))
 	}
 
 	return ver, nil
