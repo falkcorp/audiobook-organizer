@@ -1,5 +1,5 @@
 // file: tools/cmd/reconcile-paths/main.go
-// version: 1.3.0
+// version: 1.4.0
 // last-edited: 2026-09-01
 //
 // reconcile-paths is a READ-ONLY dry-run CLI tool that identifies audiobooks
@@ -36,14 +36,18 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
-// audioExt lists extensions to check for single-file books. Follows
-// supported_extensions via internal/audioext; this tool runs standalone and
-// never calls InitConfig, so audioext.Resolve(nil) hands back the compiled-in
-// default rather than an empty list that would match no file at all.
-var audioExt = audioext.Resolve(config.AppConfig.SupportedExtensions).Sorted()
+// audioExt lists extensions to check for single-file books.
+//
+// Deliberately the compiled-in canonical list and NOT config-derived. This is
+// a standalone read-only CLI: it never calls config.InitConfig and never reads
+// a config file, so config.AppConfig.SupportedExtensions is nil for its whole
+// lifetime. Resolving that at package-var init would look config-aware, freeze
+// the value before main() runs, and still yield exactly audioext.Default() —
+// a misleading dependency that buys nothing. If this tool ever grows real
+// config loading, resolve inside main() via audioext.Resolve, not here.
+var audioExt = audioext.Default()
 
 // sshBatchSize controls how many paths are checked in a single ssh invocation.
 const sshBatchSize = 50
