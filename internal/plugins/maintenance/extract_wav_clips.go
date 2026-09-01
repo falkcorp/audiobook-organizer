@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
 // last-edited: 2026-09-01
 
@@ -86,7 +86,7 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 	// extraction can succeed while the identity write fails, and a summary that
 	// folds those together reports "0 failed" for a run that wrote no hashes.
 	var extracted, skipped, failed int
-	var hashFailed, hashMismatched int
+	var hashFailed, hashMismatched, clipLinkFailed int
 
 	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
 		sem := make(chan struct{}, introTranscribeFFWorkers)
@@ -154,9 +154,19 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 				// digest and why the write-back is when-missing only.
 				srcHash, herr := persistCanonicalFileHash(store, cacheDir, ref, dest)
 				if herr != nil {
-					log.Warn("extract-wav-clips: source hash/persist failed",
-						"book_id", bookID, "file", src, "err", herr)
-					hashFailed++
+					if errors.Is(herr, errClipLinkFailed) {
+						// Degraded cache, not a lost hash: the identity
+						// write-back already ran. Counted separately so a
+						// filesystem that refuses hardlinks does not read as
+						// data loss.
+						log.Warn("extract-wav-clips: clip hardlink failed; cache not warmed, identity hash unaffected",
+							"book_id", bookID, "file", src, "err", herr)
+						clipLinkFailed++
+					} else {
+						log.Warn("extract-wav-clips: source hash/persist failed",
+							"book_id", bookID, "file", src, "err", herr)
+						hashFailed++
+					}
 				}
 
 				// Free census for TODO-FILEHASH-REPAIR. This op recomputes the
@@ -183,8 +193,8 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 		wg.Wait()
 
 		_ = reporter.UpdateProgress(extracted+skipped, total,
-			fmt.Sprintf("WAV clips: %d extracted, %d skipped (cached), %d failed, %d hash failed, %d hash mismatched",
-				extracted, skipped, failed, hashFailed, hashMismatched))
+			fmt.Sprintf("WAV clips: %d extracted, %d skipped (cached), %d failed, %d hash failed, %d hash mismatched, %d link failed",
+				extracted, skipped, failed, hashFailed, hashMismatched, clipLinkFailed))
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency:   1,
@@ -199,10 +209,11 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 
 	log.Info("extract-wav-clips: complete",
 		"extracted", extracted, "skipped", skipped, "failed", failed,
-		"hash_failed", hashFailed, "hash_mismatched", hashMismatched, "total", total)
+		"hash_failed", hashFailed, "hash_mismatched", hashMismatched,
+		"clip_link_failed", clipLinkFailed, "total", total)
 	_ = reporter.UpdateProgress(1, 1,
-		fmt.Sprintf("Done — %d extracted, %d already cached, %d failed, %d hash failed, %d hash mismatched",
-			extracted, skipped, failed, hashFailed, hashMismatched))
+		fmt.Sprintf("Done — %d extracted, %d already cached, %d failed, %d hash failed, %d hash mismatched, %d link failed",
+			extracted, skipped, failed, hashFailed, hashMismatched, clipLinkFailed))
 	return nil
 }
 
@@ -212,6 +223,12 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 type fileHashSetter interface {
 	SetBookFileHash(id, hash string) error
 }
+
+// errClipLinkFailed marks a failure to hardlink the extracted clip under its
+// content-addressed name. It is deliberately distinguishable from an identity
+// write failure: a missing link only costs a future ffmpeg re-run, while a
+// missing file_hash makes the book invisible to exact-file dedup.
+var errClipLinkFailed = errors.New("clip hardlink failed")
 
 // persistCanonicalFileHash computes ref.Path's identity digest, hardlinks the
 // just-extracted clip under that content-addressed name, and writes the digest
@@ -249,6 +266,19 @@ func persistCanonicalFileHash(store fileHashSetter, cacheDir string, ref audioFi
 		return "", fmt.Errorf("filehash returned an empty digest for %s", ref.Path)
 	}
 
+	// ORDER MATTERS: the identity write-back goes FIRST, the cache hardlink
+	// second. An earlier draft had them the other way round and returned on a
+	// link error — which meant that on any filesystem refusing hardlinks (EPERM
+	// on SMB/FUSE, EXDEV across devices) every book took the early return and
+	// SetBookFileHash was NEVER reached. An optimisation had become a gate on
+	// the data-integrity write, and on exactly the filesystem class that
+	// motivated surfacing link errors in the first place.
+	if ref.BookFileID != "" && ref.StoredHash == "" {
+		if err := store.SetBookFileHash(ref.BookFileID, srcHash); err != nil {
+			return srcHash, fmt.Errorf("persist file hash for %s: %w", ref.BookFileID, err)
+		}
+	}
+
 	// Hardlink the clip under its content-addressed name — zero extra disk
 	// space, and it survives an organize rename because the name comes from
 	// content, not location. Done even when the row already carries a DIFFERENT
@@ -262,21 +292,19 @@ func persistCanonicalFileHash(store fileHashSetter, cacheDir string, ref audioFi
 			// stat error (EACCES, EIO, ELOOP) made IsNotExist false, so a
 			// broken cache directory looked exactly like a warm cache. ErrExist
 			// is the one error that means "another worker got here first";
-			// anything else (EXDEV, EPERM on an SMB/FUSE mount that refuses
-			// hardlinks, ENOSPC) means the content-addressed cache is not
-			// working and every future run re-runs ffmpeg for this book.
+			// anything else (EXDEV, EPERM on a mount that refuses hardlinks,
+			// ENOSPC) means the content-addressed cache is not working and
+			// every future run re-runs ffmpeg for this book.
+			//
+			// Wrapped in errClipLinkFailed so the caller can tell a degraded
+			// cache (cosmetic, costs CPU later) from a failed identity write
+			// (data integrity). Both are surfaced; only one is alarming.
 			if lerr := os.Link(clipPath, contentDest); lerr != nil && !errors.Is(lerr, fs.ErrExist) {
-				return srcHash, fmt.Errorf("hardlink clip %s -> %s: %w", clipPath, contentDest, lerr)
+				return srcHash, fmt.Errorf("%w: %s -> %s: %w", errClipLinkFailed, clipPath, contentDest, lerr)
 			}
 		}
 	}
 
-	if ref.BookFileID == "" || ref.StoredHash != "" {
-		return srcHash, nil
-	}
-	if err := store.SetBookFileHash(ref.BookFileID, srcHash); err != nil {
-		return srcHash, fmt.Errorf("persist file hash for %s: %w", ref.BookFileID, err)
-	}
 	return srcHash, nil
 }
 

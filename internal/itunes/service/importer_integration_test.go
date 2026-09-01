@@ -1,18 +1,22 @@
 // file: internal/itunes/service/importer_integration_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f2e4a1b-7c3d-4f9b-a0e5-3d6c2f8b5a7e
-// last-edited: 2026-06-19
+// last-edited: 2026-09-01
 
 package itunesservice
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -370,4 +374,84 @@ func TestITunesImport_PlaylistTagExtraction(t *testing.T) {
 
 	tags300 := itunes.ExtractPlaylistTags(300, library.Playlists)
 	assert.Empty(t, tags300)
+}
+
+// TestCreateTrackBookFiles_WritesTheCanonicalHashToEveryRow closes two gaps at
+// once, both proven to exist with mutation probes.
+//
+// M7: nothing asserted that canonicalTrackFileHash's result is ever assigned to
+// bf.FileHash. Delete the assignment and the whole iTunes suite stayed green.
+//
+// M12: a panic() placed inside the bounded hash pool never fired — no test
+// reached the multi-track branch at all, so `-race` passing said nothing about
+// the concurrency there.
+//
+// The fixtures are sparse files ABOVE filehash.Threshold on purpose. Below 1 MB
+// the canonical digest, a whole-file SHA-256 and the old first-1 MB segment hash
+// are all the same string, so a small fixture cannot tell a correct
+// implementation from either wrong one.
+func TestCreateTrackBookFiles_WritesTheCanonicalHashToEveryRow(t *testing.T) {
+	env, cleanup := testutil.SetupIntegration(t)
+	defer cleanup()
+
+	library, err := itunes.ParseLibrary(testLibraryPath(t))
+	require.NoError(t, err)
+
+	imp := newIntegrationImporter()
+	groups := imp.groupTracksByAlbum(library)
+
+	var mobyGroup *albumGroup
+	for i, g := range groups {
+		if g.key == "album:moby dick" {
+			mobyGroup = &groups[i]
+			break
+		}
+	}
+	require.NotNil(t, mobyGroup, "Moby Dick group should exist")
+	require.Greater(t, len(mobyGroup.tracks), 1, "fixture must be multi-track or the branch is not reached")
+
+	tempDir := filepath.Join(env.TempDir, "audiobooks")
+	opts := itunes.ImportOptions{
+		PathMappings: []itunes.PathMapping{
+			{From: "file://localhost/Users/testuser/Music/iTunes", To: "file://localhost" + tempDir},
+		},
+	}
+
+	wantHash := map[string]string{}
+	for _, track := range mobyGroup.tracks {
+		decoded, derr := itunes.DecodeLocation(opts.RemapPath(track.Location))
+		require.NoError(t, derr)
+		require.NoError(t, os.MkdirAll(filepath.Dir(decoded), 0o755))
+		writeSparseTrack(t, decoded, filehash.Threshold+(1<<20))
+
+		canonical, herr := filehash.BookFileHash(decoded)
+		require.NoError(t, herr)
+		wantHash[decoded] = canonical
+
+		// Guard the fixture: if these agreed, the assertions below would pass
+		// for a wrong implementation too.
+		seg, serr := scanner.ComputeSegmentFileHash(decoded)
+		require.NoError(t, serr)
+		require.NotEqual(t, canonical, seg, "degenerate fixture: segment hash equals the canonical digest")
+	}
+
+	book, err := imp.buildBookFromAlbumGroup(*mobyGroup, testLibraryPath(t), opts)
+	require.NoError(t, err)
+	created, err := database.GetGlobalStore().CreateBook(book)
+	require.NoError(t, err)
+
+	status := &itunesImportStatus{}
+	imp.createTrackBookFiles(context.Background(), created.ID, book.Title, *mobyGroup, opts, status, logger.New("itunes-filehash-test"))
+
+	files, err := database.GetGlobalStore().GetBookFiles(created.ID)
+	require.NoError(t, err)
+	require.Len(t, files, len(mobyGroup.tracks))
+
+	for _, bf := range files {
+		want, ok := wantHash[bf.FilePath]
+		require.True(t, ok, "unexpected book file path %q", bf.FilePath)
+		assert.Equal(t, want, bf.FileHash,
+			"book_files.file_hash must be the canonical chunked digest for %s", bf.FilePath)
+	}
+	assert.Zero(t, status.FileHashErrors, "no track should have failed to hash")
 }

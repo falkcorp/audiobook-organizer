@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips_hash_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c8a1d5f3-2e94-4b07-a6d1-5f83b20c9e7a
 // last-edited: 2026-09-01
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -337,5 +338,62 @@ func TestPersistCanonicalFileHash_LinksWhenTheKeyMerelySTARTSWithTheHash(t *test
 	if _, err := os.Stat(linked); err != nil {
 		t.Fatalf("a CacheKey that only starts with the canonical hash is a different "+
 			"filename, so the clip must still be linked under the bare hash; stat %s: %v", linked, err)
+	}
+}
+
+// TestPersistCanonicalFileHash_LinkFailureStillWritesTheHash is the regression
+// test for an optimisation that became a gate on a data-integrity write.
+//
+// A draft of this function attempted the content-addressed hardlink BEFORE the
+// identity write-back and returned on link failure. On any filesystem that
+// refuses hardlinks — EPERM on SMB/FUSE, EXDEV across devices, both ordinary
+// for a NAS-backed library — every book took that early return, so
+// SetBookFileHash was never reached and book_files.file_hash was never written.
+// The op silently became a no-op for identity on exactly the filesystems that
+// motivated surfacing link errors in the first place.
+//
+// A t.TempDir() cannot observe this: os.Link succeeds there. The cache
+// directory is made read-only here so the link genuinely fails.
+func TestPersistCanonicalFileHash_LinkFailureStillWritesTheHash(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a read-only directory does not deny link()")
+	}
+	fx := newClipFixture(t)
+	store := &fakeHashSetter{}
+
+	// Deny new entries in the cache directory so os.Link fails with EACCES —
+	// a stand-in for the EPERM/EXDEV a hardlink-refusing mount returns.
+	if err := os.Chmod(fx.cacheDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(fx.cacheDir, 0o755) })
+
+	ref := audioFileRef{
+		Path:       fx.src,
+		CacheKey:   "path:existing-key",
+		BookFileID: "bf-1",
+		// StoredHash empty: the row needs its identity hash written.
+	}
+
+	got, err := persistCanonicalFileHash(store, fx.cacheDir, ref, fx.clip)
+
+	// The link failure must be reported...
+	if err == nil {
+		t.Error("a failed hardlink was not surfaced at all")
+	} else if !errors.Is(err, errClipLinkFailed) {
+		t.Errorf("link failure must be distinguishable from an identity write failure; got %v", err)
+	}
+	if got != fx.chunked {
+		t.Errorf("digest = %q, want %q", got, fx.chunked)
+	}
+
+	// ...but it must NOT have prevented the identity write.
+	if len(store.calls) != 1 {
+		t.Fatalf("SetBookFileHash called %d times, want 1: a hardlink failure suppressed the "+
+			"identity write, so this op writes no file_hash at all on a filesystem without hardlinks",
+			len(store.calls))
+	}
+	if store.calls[0].hash != fx.chunked {
+		t.Errorf("stored hash = %q, want the canonical digest %q", store.calls[0].hash, fx.chunked)
 	}
 }
