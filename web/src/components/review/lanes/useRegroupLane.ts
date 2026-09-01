@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-09-01
 
@@ -622,7 +622,10 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
       }),
       loadCount(),
     ]);
-  }, [loadCount, kindFilter, fetchPage, applyPage]);
+  // No `kindFilter` here: this body no longer reads it. `fetchPage` is keyed on
+  // it, so reload is still rebuilt on a kind change -- carrying it twice only
+  // tells a reader the body reads something it does not.
+  }, [loadCount, fetchPage, applyPage]);
 
   const runItemAction = useCallback(
     async (item: ReviewItem, action: 'approve' | 'reject') => {
