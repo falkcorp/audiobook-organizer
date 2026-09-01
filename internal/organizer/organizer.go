@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-29
+// last-edited: 2026-09-01
 
 package organizer
 
@@ -904,7 +904,11 @@ func (o *Organizer) organizeFile(src, dst string) (string, error) {
 	}
 }
 
-// reflinkFile creates a copy-on-write reflink (platform-specific)
+// reflinkFile creates a copy-on-write reflink.
+//
+// Delegates to fileops.Reflink, the single implementation for the codebase.
+// The exists-error is returned un-wrapped so the callers above can recover
+// with os.IsExist, mirroring the hardlink fallback.
 func (o *Organizer) reflinkFile(src, dst string) error {
-	return o.reflinkFilePlatform(src, dst)
+	return fileops.Reflink(src, dst)
 }

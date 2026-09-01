@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-19
+// last-edited: 2026-09-01
 
 package deluge
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -130,13 +131,15 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 			return nil // non-fatal
 		}
 
-		if err := reflinkCopy(srcPath, dest); err != nil {
-			if err := ioCopy(srcPath, dest); err != nil {
-				errCount.Add(1)
-				checkpoint.LastError = fmt.Sprintf("copy %s: %v", srcPath, err)
-				reporter.Logger().Error("copy failed", "src", srcPath, "dest", dest, "error", err)
-				return nil // non-fatal
-			}
+		// Clone into the central library. This used to call a local
+		// reflinkCopy that was a permanent stub returning an error, so every
+		// file this op ever centralized was byte-copied in full even though
+		// the pool supports cloning.
+		if err := fileops.ReflinkOrCopy(srcPath, dest); err != nil {
+			errCount.Add(1)
+			checkpoint.LastError = fmt.Sprintf("copy %s: %v", srcPath, err)
+			reporter.Logger().Error("copy failed", "src", srcPath, "dest", dest, "error", err)
+			return nil // non-fatal
 		}
 
 		// Hydrate the full row before writing back — bf is the Core (memdb-slim)
@@ -193,62 +196,4 @@ func (p *Plugin) runCentralization(ctx context.Context, params json.RawMessage, 
 // Helper functions copied from deluge_import.go
 func isParentTraversal(rel string) bool {
 	return rel == ".." || len(rel) >= 3 && rel[:3] == "../"
-}
-
-// reflinkCopy attempts a reflink (copy-on-write) copy.
-// Falls back to normal copy on error.
-func reflinkCopy(src, dest string) error {
-	// This would use platform-specific system calls.
-	// For now, this is a placeholder that returns an error to force fallback.
-	return fmt.Errorf("reflink not available")
-}
-
-// ioCopy copies a file using standard I/O.
-func ioCopy(src, dest string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open src: %w", err)
-	}
-	defer srcFile.Close()
-
-	destFile, err := os.Create(dest)
-	if err != nil {
-		return fmt.Errorf("create dest: %w", err)
-	}
-	defer destFile.Close()
-
-	_, err = ioCopyWithBuffer(destFile, srcFile)
-	return err
-}
-
-// ioCopyWithBuffer copies from src to dst with a buffer.
-func ioCopyWithBuffer(dst, src *os.File) (written int64, err error) {
-	buf := make([]byte, 32*1024)
-	return ioCopyBuffer(dst, src, buf)
-}
-
-// ioCopyBuffer copies with a provided buffer.
-func ioCopyBuffer(dst, src *os.File, buf []byte) (written int64, err error) {
-	for {
-		nr, err := src.Read(buf)
-		if nr > 0 {
-			nw, err := dst.Write(buf[0:nr])
-			if nw < 0 || nr < nw {
-				nw = 0
-			}
-			written += int64(nw)
-			if err != nil {
-				return written, err
-			}
-			if nr != nw {
-				return written, fmt.Errorf("short write")
-			}
-		}
-		if err != nil {
-			if err.Error() == "EOF" {
-				return written, nil
-			}
-			return written, err
-		}
-	}
 }

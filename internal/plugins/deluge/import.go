@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/import.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: f1e2d3c4-b5a6-7890-cdef-0123456789ab
-// last-edited: 2026-07-12
+// last-edited: 2026-09-01
 
 package deluge
 
@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 )
 
@@ -35,7 +35,7 @@ func (p *Plugin) importToLibrary(ctx context.Context, torrentHash, srcPath, dstP
 	}
 
 	// 3. Reflink (best-effort) or copy
-	if err := delugeclient.ReflinkOrCopy(srcPath, dstPath); err != nil {
+	if err := fileops.ReflinkOrCopy(srcPath, dstPath); err != nil {
 		return fmt.Errorf("reflink/copy: %w", err)
 	}
 
