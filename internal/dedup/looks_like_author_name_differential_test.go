@@ -1,5 +1,5 @@
 // file: internal/dedup/looks_like_author_name_differential_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b4e0d27-51a8-4c93-8f16-e0a7c25b39d4
 // last-edited: 2026-09-01
 
@@ -8,8 +8,6 @@ package dedup
 import (
 	"strings"
 	"testing"
-
-	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 // legacyAuthorName is internal/dedup's looksLikeAuthorName EXACTLY as it stood on
@@ -73,6 +71,15 @@ func TestLooksLikeAuthorNameDifferential(t *testing.T) {
 		"Александр Пушкин", "村上 春樹", "Ödipus Rex", "Über Wolken",
 		// Initials as trailing words -- must stay refused (the surname rule).
 		"Charles D.", "Mejia R.A.", "Jane S", "Bob X.",
+		// TWO-RUNE LATIN last words. The surname threshold moved between 3 and 2,
+		// and the corpus tested only 1 and >=3 -- a boundary change tested only
+		// AWAY from the boundary. These are the shapes that exposed it: St, Zu, Ph
+		// are real particles/abbreviations absent from the closed particle list,
+		// and at a flat >=2 they qualified as surnames.
+		"Jane St", "Klaus Zu", "Jane Ph", "Louis IX", "Mies Der", "Ana Op",
+		// Two-rune NON-Latin last words, which must still be ACCEPTED -- this is
+		// the whole reason the threshold is script-conditional rather than 3.
+		"村上 春樹", "김 민준",
 		// Structural and title fragments.
 		"Book 3", "Chapter 1", "the quick brown", "Do Androids Dream?",
 		"Ann Petry (DBY)", "One Two Three Four Five", "So Long and Thanks",
@@ -87,11 +94,24 @@ func TestLooksLikeAuthorNameDifferential(t *testing.T) {
 		switch {
 		case !legacy && unified:
 			newlyAdmitted++
-			// Legitimate only when legacy's ASCII byte test is the sole reason.
+			// Legitimate ONLY when legacy's ASCII byte tests are the sole reason.
+			//
+			// Legacy had THREE rejection reasons -- first-word ASCII, last-word
+			// ASCII, and a byte-length test -- and an earlier version of this
+			// guard modelled only the first, waving through anything newly
+			// admitted for the other two so long as the FIRST word was non-ASCII
+			// ("Ödipus IX" passed as intended). All three are modelled now.
+			//
+			// It also carried `&& personname.LooksLikePersonName(in)`, which is
+			// dead inside this branch: `unified` is true here, and that is the
+			// first thing looksLikeAuthorName checks. A conjunct that can never
+			// change the result reads like a check and is not one.
 			fields := strings.Fields(in)
+			lastTrimmed := strings.TrimRight(fields[len(fields)-1], ".")
 			asciiOnlyReason := len(fields) >= 2 &&
-				!isASCIIUpper([]rune(fields[0])[0]) &&
-				personname.LooksLikePersonName(in)
+				(!isASCIIUpper([]rune(fields[0])[0]) ||
+					!isASCIIUpper([]rune(fields[len(fields)-1])[0])) &&
+				len(lastTrimmed) >= 3
 			if !asciiOnlyReason {
 				t.Errorf("NEWLY ADMITTED %q for a reason OTHER than the ASCII byte test. "+
 					"looksLikeAuthorName gates trySplitConcatenatedAuthors, where an extra "+
@@ -116,9 +136,14 @@ func isASCIIUpper(r rune) bool { return r >= 'A' && r <= 'Z' }
 
 // TestLooksLikeAuthorNameRejectsParticleSurnames is the narrow regression pin.
 func TestLooksLikeAuthorNameRejectsParticleSurnames(t *testing.T) {
+	// Both casings. The lowercase forms alone cannot distinguish the guard from
+	// its former `unicode.IsLower(...) ||` half -- which was dead code, since
+	// LooksLikePersonName already rejects a non-particle lowercase word before
+	// this point. The CAPITALIZED forms are what actually pin IsNameParticle.
 	for _, in := range []string{
 		"Ludwig van", "Vincent van", "Jose del", "Ana della", "Carlos dos",
 		"Piet den", "Jan ter", "Omar bin", "Ali ibn", "Ian mac",
+		"Volker Le", "Ursula La", "Jean De", "Klaus Von", "Pieter Van",
 	} {
 		if looksLikeAuthorName(in) {
 			t.Errorf("looksLikeAuthorName(%q) = true; want false. A name particle is "+
