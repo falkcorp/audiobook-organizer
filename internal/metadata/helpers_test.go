@@ -450,26 +450,6 @@ func TestLooksLikePersonName(t *testing.T) {
 	}
 }
 
-func TestIsTitleCaseCandidate(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		{name: "TitleCase", input: "Title", expected: true},
-		{name: "Lowercase", input: "title", expected: false},
-		{name: "Whitespace", input: "  ", expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isTitleCaseCandidate(tt.input); got != tt.expected {
-				t.Errorf("Expected %v for %q, got %v", tt.expected, tt.input, got)
-			}
-		})
-	}
-}
-
 func TestExtractFromFilename(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -490,10 +470,22 @@ func TestExtractFromFilename(t *testing.T) {
 			expectedAuth:  "John Smith",
 		},
 		{
+			// Both halves here are single words, and a single word is not a
+			// person-shaped name (the shared predicate requires two to four).
+			// This used to pass only via metadata's isTitleCaseCandidate
+			// fallback, which accepted ANY two strings starting with an ASCII
+			// capital as "Title - Author" -- the same [A-Z] byte test this change
+			// exists to delete, and the reason metadata alone accepted things
+			// scanner refused. That fallback is gone, so the pair is now refused.
+			//
+			// The real cost is mononym authors on this path ("Dune - Homer"),
+			// which is the same trade the rest of this change makes: refusing
+			// leaves the field empty for AI nomination to fill, while a confident
+			// wrong answer is never revisited.
 			name:          "DashSeparator",
 			filePath:      "/path/Title - Author.m4b",
-			expectedTitle: "Title",
-			expectedAuth:  "Author",
+			expectedTitle: "Author",
+			expectedAuth:  "",
 		},
 		{
 			name:          "LeadingTrackNumber",

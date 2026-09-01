@@ -346,3 +346,69 @@ edition-marker pattern, and flipping each of the two orientation branches.
 **Nine killed, none survived.** One of the nine had to be re-run: its first
 anchor matched two places in the file, so it changed the wrong one and tested
 nothing — an ambiguous mutant is as empty as a no-op mutant.
+
+#### The same decision existed four times, and fixing two of them proved it
+
+A fifth review round found that the orientation fix above reached the `" - "`
+filename path in both packages and **not** the `"_"` path in either — which still
+carried the identical inversion, unchanged:
+
+```
+"Good Omens_Neil Gaiman (Unabridged)"   Author = "Good Omens"
+```
+
+That is the whole argument of this change, arriving as a bug inside the change
+itself. "Which half of this filename is the author?" was written out **four**
+times — the `" - "` and `"_"` paths of `internal/scanner` and
+`internal/metadata` — and the copies had already drifted: only scanner's `"_"`
+path had the leading-article tiebreak, only metadata's `" - "` path had the
+initials tiebreak, and metadata's `"_"` path had no tiebreak at all. Fixing two
+copies and leaving two is how the four got out of step in the first place.
+
+All four now call one function, `personname.ChooseAuthorSide`, which carries the
+union: the credit predicate on **both** sides, then the article tiebreak, then the
+initials tiebreak. Two helpers became dead and were deleted with their tests —
+and one of them, metadata's `isTitleCaseCandidate`, was still doing
+`trimmed[0] >= 'A' && trimmed[0] <= 'Z'`: the ASCII byte test this entire change
+exists to delete, alive in the tree until now, and the reason metadata alone
+accepted pairs scanner refused.
+
+Where the four legitimately differed, that difference is now a named argument
+rather than an accident. A tie — both sides plausible, neither tiebreak firing —
+resolves to author-on-the-right for `" - "`, because that is the dominant
+convention and what all four copies' comments claimed to do; and refuses for
+`"_"`, because the old scanner code refused there, and turning that into a
+default would mint an author where the previous code deliberately minted none.
+
+Measured over 1,232 filenames covering both separators, both orientations, four
+decorations, and credit lists joined by `/`, `and`, `&` and `,`:
+
+| | correct | wrong | empty |
+|---|---|---|---|
+| `origin/main` scanner | 576 | 496 | 160 |
+| `origin/main` metadata | 476 | 412 | 344 |
+| after, **both** | **928** | **156** | 148 |
+
+Scanner: **0** correct→wrong and **0** empty→wrong. Wrong answers fall by 69%.
+The two packages now return byte-identical answers on every one of the 1,232
+inputs, where before they disagreed on hundreds.
+
+Metadata gives up 24 correct answers, plus 12 where it previously declined. All
+36 are the ambiguous tie, and all 12 of the declines are non-ASCII authors — main
+was not "declining" those, it simply could not see the author at all through its
+`A`–`Z` test, so fixing the Unicode bug is what exposes them to the tie rule.
+
+Two more from the same round. `/` was missing from the credit separators while
+`internal/dedup` treats it as an author separator *and tries it first* — one repo
+with two answers to "is `A / B` an author credit?", which is exactly what this
+package exists to abolish, reintroduced one package over. And the edition-marker
+strip took only one trailing group, so `"Neil Gaiman (Unabridged) (2019)"` was not
+a credit. Both fixed.
+
+Finally, the placeholder guard. `authorname.IsPlaceholder` compares against the
+bare literal, but the credit predicate now accepts `"Unknown Author (Unabridged)"`
+**by design** — so the decorated placeholder walked straight past a guard written
+to catch it and closed the AI-nomination gate, the exact failure that guard
+exists to prevent, in a shape it was not written for. The comparison is now made
+against the edition-stripped form. `authorname` stays standard-library-only, as
+its own doc comment promises, so the strip happens at the call sites.
