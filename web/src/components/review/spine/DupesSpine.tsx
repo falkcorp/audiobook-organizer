@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -16,8 +16,16 @@
 // two would have to be instantiated with a union of everything either side
 // touches, which is how a generic ends up harder to read than the two concrete
 // renderers it replaced.
+//
+// MEMOIZATION (2026-09-01). `perf(review): memoize spine rows so one checkbox
+// re-renders one row` (d01f15a87) did CompareSpine and RegroupSpine and skipped
+// this file, and benchmark-review-lanes.spec.ts then measured the consequence:
+// at N=100 a dupes checkbox tick cost 61 ms against a 13 ms N=5 noise floor,
+// while the memoized metadata lane's cost 26 ms. This file now follows the same
+// shape as CompareSpine -- a stable `handlers` object, per-row VALUES resolved
+// by the spine, and memo()-wrapped row renderers.
 
-import type { MouseEvent } from 'react';
+import { memo, useMemo, type MouseEvent } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
@@ -52,6 +60,29 @@ export interface DupesSpineContext {
   onOpenCompare: (id: number) => void;
 }
 
+/**
+ * The CALLBACK half of DupesSpineContext, split out so CandidateRow can be
+ * memoized. Mirrors CompareSpine's SpineHandlers, for the same reason.
+ *
+ * DupesPanel builds `ctx` as an object literal in its JSX, so `ctx` has a new
+ * identity on EVERY render of the panel -- and a checkbox tick re-renders the
+ * panel, because useDupesLane's `selectedIds` lives in ReviewWorkspace above
+ * it. Handing the whole `ctx` to each row therefore gave all N rows a changed
+ * prop in order to repaint one, which at the 100-row page cap is 99 wasted row
+ * renders per click.
+ *
+ * The callbacks INSIDE `ctx` do hold still across a selection change:
+ * `toggleSelect` is `useCallback(..., [visible])` and `visible` does not move
+ * when a checkbox is ticked; `dispatch`'s deps do not include `selectedIds`;
+ * `setDrawerCandidateId` is a setState setter; and `onToggleExpand` is a
+ * `useCallback` in ReviewWorkspace as of this change -- it was an inline arrow,
+ * which alone would have made every memo below inert.
+ */
+export type DupesSpineHandlers = Pick<
+  DupesSpineContext,
+  'onToggleSelect' | 'onAction' | 'onToggleExpand' | 'onOpenCompare'
+>;
+
 export interface DupesSpineProps {
   candidates: DedupCandidate[];
   viewMode: SpineViewMode;
@@ -72,6 +103,49 @@ const BAND_COLOR: Record<string, 'success' | 'info' | 'warning' | 'default'> = {
   REVIEW: 'default',
 };
 
+// Hoisted because they are constant. An `sx` object literal written inside the
+// component body is a fresh object on every row render, which emotion then has
+// to re-serialize before it can hit its cache. These have no dependency on any
+// prop, so there is nothing to recompute.
+const SX_SIDE_ROOT = { alignItems: 'stretch', minWidth: 0, flex: 1 } as const;
+const SX_COVER = {
+  width: 56,
+  flexShrink: 0,
+  borderRadius: 0.5,
+  overflow: 'hidden',
+  alignSelf: 'stretch',
+  minHeight: 68,
+  bgcolor: 'action.selected',
+} as const;
+const SX_COVER_IMG = { width: 56, height: '100%', objectFit: 'cover', display: 'block' } as const;
+const SX_SIDE_BODY = { minWidth: 0, flex: 1 } as const;
+const SX_SIDE_TITLE_ROW = { alignItems: 'center', flexWrap: 'wrap' } as const;
+const SX_MISSING = { color: 'error.main', fontStyle: 'italic' } as const;
+const SX_AUTHOR = { color: 'text.secondary' } as const;
+// Two variants rather than one object with two ternaries inside it, so the
+// common (non-garbage) case reuses one stable object.
+const SX_TITLE_LINK = {
+  fontWeight: 600,
+  fontSize: '1rem',
+  textAlign: 'left',
+  wordBreak: 'break-word',
+  color: 'primary.main',
+  fontStyle: 'normal',
+} as const;
+const SX_TITLE_LINK_GARBAGE = {
+  ...SX_TITLE_LINK,
+  color: 'warning.main',
+  fontStyle: 'italic',
+} as const;
+const SX_ROW_HEADER = { alignItems: 'center', mb: 1, flexWrap: 'wrap' } as const;
+const SX_PUSH_RIGHT = { ml: 'auto' } as const;
+const SX_SIDES = { alignItems: 'flex-start', minWidth: 0 } as const;
+const SIDES_DIRECTION = { xs: 'column', md: 'row' } as const;
+const SX_ACTIONS = { mt: 1.5, flexWrap: 'wrap' } as const;
+const SX_EVIDENCE = { mt: 2 } as const;
+
+const stopPropagation = (e: MouseEvent) => e.stopPropagation();
+
 function QualityChip({ book }: { book: Book | null | undefined }) {
   const band = qualityBand(metadataQuality(book));
   if (band === 'rich') {
@@ -87,8 +161,15 @@ function QualityChip({ book }: { book: Book | null | undefined }) {
  * One side of a pair. Ported from UnifiedDedupTab's renderBookCard, which was a
  * function returning JSX rather than a component -- fine there, but it meant the
  * cover image re-mounted on every parent render.
+ *
+ * memo()-wrapped on top of that. When a row DOES legitimately re-render -- its
+ * own checkbox was ticked, or the keyboard focus ring arrived -- neither side's
+ * props have changed, so both sides and the two FolderFilesChip/PathLinks
+ * subtrees under them skip entirely. `pathAliases` is a useState value from
+ * usePathAliases and `book` is a slice of the candidate object, so both hold
+ * still; if either started churning this memo would go inert rather than wrong.
  */
-function BookSide({
+const BookSide = memo(function BookSide({
   book,
   id,
   recommended,
@@ -109,33 +190,17 @@ function BookSide({
     !title || title.toUpperCase() === 'TITLE' || /^[0-9A-Z]{26}$/.test(title.trim());
 
   return (
-    <Stack direction="row" spacing={1.5} sx={{ alignItems: 'stretch', minWidth: 0, flex: 1 }}>
-      <Box
-        sx={{
-          width: 56,
-          flexShrink: 0,
-          borderRadius: 0.5,
-          overflow: 'hidden',
-          alignSelf: 'stretch',
-          minHeight: 68,
-          bgcolor: 'action.selected',
-        }}
-      >
+    <Stack direction="row" spacing={1.5} sx={SX_SIDE_ROOT}>
+      <Box sx={SX_COVER}>
         {book?.cover_url && (
-          <Box
-            component="img"
-            src={book.cover_url}
-            alt=""
-            loading="lazy"
-            sx={{ width: 56, height: '100%', objectFit: 'cover', display: 'block' }}
-          />
+          <Box component="img" src={book.cover_url} alt="" loading="lazy" sx={SX_COVER_IMG} />
         )}
       </Box>
 
-      <Stack spacing={0.4} sx={{ minWidth: 0, flex: 1 }}>
-        <Stack direction="row" spacing={0.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+      <Stack spacing={0.4} sx={SX_SIDE_BODY}>
+        <Stack direction="row" spacing={0.5} useFlexGap sx={SX_SIDE_TITLE_ROW}>
           {missing ? (
-            <Typography variant="body1" sx={{ color: 'error.main', fontStyle: 'italic' }}>
+            <Typography variant="body1" sx={SX_MISSING}>
               (missing book — {id.slice(-8)})
             </Typography>
           ) : (
@@ -143,15 +208,8 @@ function BookSide({
               component={RouterLink}
               to={`/library/${id}`}
               underline="hover"
-              onClick={(e: MouseEvent) => e.stopPropagation()}
-              sx={{
-                fontWeight: 600,
-                fontSize: '1rem',
-                textAlign: 'left',
-                wordBreak: 'break-word',
-                color: isGarbageTitle ? 'warning.main' : 'primary.main',
-                fontStyle: isGarbageTitle ? 'italic' : 'normal',
-              }}
+              onClick={stopPropagation}
+              sx={isGarbageTitle ? SX_TITLE_LINK_GARBAGE : SX_TITLE_LINK}
             >
               {isGarbageTitle ? title || '(no title)' : title}
             </Link>
@@ -172,7 +230,7 @@ function BookSide({
         </Stack>
 
         {book?.author_name && (
-          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+          <Typography variant="caption" sx={SX_AUTHOR}>
             {book.author_name}
           </Typography>
         )}
@@ -187,25 +245,38 @@ function BookSide({
       </Stack>
     </Stack>
   );
-}
+});
 
-function CandidateRow({
-  candidate,
-  ctx,
-  twoColumn,
-  index,
-  pathAliases,
-}: {
+/**
+ * What one row needs. The three per-row STATE bits are resolved by the spine
+ * and passed as plain booleans rather than looked up through the context, so a
+ * row's props change only when that row's own state does -- which is what makes
+ * the memo below able to skip.
+ */
+export interface CandidateRowProps {
   candidate: DedupCandidate;
-  ctx: DupesSpineContext;
+  handlers: DupesSpineHandlers;
+  selected: boolean;
+  focused: boolean;
+  /** Compact mode only; the two-column view always shows the evidence panel. */
+  expanded: boolean;
   twoColumn: boolean;
   index: number;
   pathAliases: PathAlias[];
-}) {
+}
+
+const CandidateRow = memo(function CandidateRow({
+  candidate,
+  handlers,
+  selected,
+  focused,
+  expanded,
+  twoColumn,
+  index,
+  pathAliases,
+}: CandidateRowProps) {
   const rec = recommendedKeepSide(candidate);
   const decided = candidate.status !== 'pending';
-  const focused = ctx.focusedId === candidate.id;
-  const expanded = ctx.expandedId === candidate.id;
 
   return (
     <Box
@@ -224,12 +295,12 @@ function CandidateRow({
         opacity: decided ? 0.55 : 1,
       }}
     >
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1, flexWrap: 'wrap' }}>
+      <Stack direction="row" spacing={1} sx={SX_ROW_HEADER}>
         <Checkbox
           size="small"
-          checked={ctx.isSelected(candidate.id)}
+          checked={selected}
           onChange={(e) =>
-            ctx.onToggleSelect(
+            handlers.onToggleSelect(
               candidate.id,
               index,
               // The React MouseEvent type is imported above and shadows the DOM
@@ -271,23 +342,19 @@ function CandidateRow({
         ))}
         {decided && <Chip label={candidate.status} size="small" />}
 
-        <Box sx={{ ml: 'auto' }}>
-          <Button size="small" onClick={() => ctx.onOpenCompare(candidate.id)}>
+        <Box sx={SX_PUSH_RIGHT}>
+          <Button size="small" onClick={() => handlers.onOpenCompare(candidate.id)}>
             Compare
           </Button>
           {!twoColumn && (
-            <Button size="small" onClick={() => ctx.onToggleExpand(candidate.id)}>
+            <Button size="small" onClick={() => handlers.onToggleExpand(candidate.id)}>
               {expanded ? 'Hide reasoning' : 'Why?'}
             </Button>
           )}
         </Box>
       </Stack>
 
-      <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        spacing={2}
-        sx={{ alignItems: 'flex-start', minWidth: 0 }}
-      >
+      <Stack direction={SIDES_DIRECTION} spacing={2} sx={SX_SIDES}>
         <BookSide
           book={candidate.book_a}
           id={candidate.entity_a_id}
@@ -303,12 +370,12 @@ function CandidateRow({
       </Stack>
 
       {!decided && (
-        <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap' }} useFlexGap>
+        <Stack direction="row" spacing={1} sx={SX_ACTIONS} useFlexGap>
           <Button
             size="small"
             variant="outlined"
             onClick={() =>
-              ctx.onAction({
+              handlers.onAction({
                 lane: 'dupes',
                 type: 'merge',
                 id: candidate.id,
@@ -322,7 +389,7 @@ function CandidateRow({
             size="small"
             variant="outlined"
             onClick={() =>
-              ctx.onAction({
+              handlers.onAction({
                 lane: 'dupes',
                 type: 'merge',
                 id: candidate.id,
@@ -335,7 +402,7 @@ function CandidateRow({
           <Button
             size="small"
             color="inherit"
-            onClick={() => ctx.onAction({ lane: 'dupes', type: 'dismiss', id: candidate.id })}
+            onClick={() => handlers.onAction({ lane: 'dupes', type: 'dismiss', id: candidate.id })}
           >
             Not a duplicate
           </Button>
@@ -343,7 +410,7 @@ function CandidateRow({
       )}
 
       {(twoColumn || expanded) && (
-        <Box sx={{ mt: 2 }} data-testid="evidence-section">
+        <Box sx={SX_EVIDENCE} data-testid="evidence-section">
           <Typography variant="subtitle2" gutterBottom>
             How this score was reached
           </Typography>
@@ -352,7 +419,7 @@ function CandidateRow({
       )}
     </Box>
   );
-}
+});
 
 export function DupesSpine({
   candidates,
@@ -366,6 +433,26 @@ export function DupesSpine({
   // CompareSpine/RegroupSpine -- the render-only CandidateRow/BookSide pair
   // stays pure and doesn't each re-fetch config on its own.
   const pathAliases = usePathAliases();
+
+  // The stable half of `ctx`. Keyed on the individual callbacks, NOT on `ctx`
+  // itself: DupesPanel writes `ctx` as an object literal, so it has a new
+  // identity on every panel render, while the callbacks inside it do not move.
+  // This is what lets the memoized rows below actually skip.
+  //
+  // This MUST stay ABOVE the early return below. That return is conditional, so
+  // a hook placed after it is skipped on the empty render and called on a
+  // populated one -- React counts hooks by call order and throws "Rendered more
+  // hooks than during the previous render" on the transition. tsc cannot see
+  // this; only the order protects it, and DupesSpine.memo.test.tsx pins it.
+  const handlers: DupesSpineHandlers = useMemo(
+    () => ({
+      onToggleSelect: ctx.onToggleSelect,
+      onAction: ctx.onAction,
+      onToggleExpand: ctx.onToggleExpand,
+      onOpenCompare: ctx.onOpenCompare,
+    }),
+    [ctx.onToggleSelect, ctx.onAction, ctx.onToggleExpand, ctx.onOpenCompare]
+  );
 
   if (candidates.length === 0) {
     return (
@@ -386,10 +473,15 @@ export function DupesSpine({
   return (
     <Box data-testid="dupes-spine" data-view-mode={viewMode} sx={{ p: 1 }}>
       {candidates.map((c, i) => (
+        // Resolved HERE, once per row, so each row receives plain values it can
+        // be compared on rather than the whole churning context.
         <CandidateRow
           key={c.id}
           candidate={c}
-          ctx={ctx}
+          handlers={handlers}
+          selected={ctx.isSelected(c.id)}
+          focused={ctx.focusedId === c.id}
+          expanded={ctx.expandedId === c.id}
           twoColumn={twoColumn}
           index={i}
           pathAliases={pathAliases}
