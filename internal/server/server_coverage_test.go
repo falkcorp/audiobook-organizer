@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1327,41 +1329,41 @@ func TestCoverageHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("metadataStateKey", func(t *testing.T) {
-		key := metadataStateKey("abc123")
+		key := metastate.Key("abc123")
 		assert.Equal(t, "metadata_state_abc123", key)
 	})
 
 	t.Run("decodeMetadataValue nil", func(t *testing.T) {
-		result := decodeMetadataValue(nil)
+		result := metastate.Decode(nil)
 		assert.Nil(t, result)
 	})
 
 	t.Run("decodeMetadataValue empty string", func(t *testing.T) {
 		empty := ""
-		result := decodeMetadataValue(&empty)
+		result := metastate.Decode(&empty)
 		assert.Nil(t, result)
 	})
 
 	t.Run("decodeMetadataValue valid JSON", func(t *testing.T) {
 		val := `"hello"`
-		result := decodeMetadataValue(&val)
+		result := metastate.Decode(&val)
 		assert.Equal(t, "hello", result)
 	})
 
 	t.Run("decodeMetadataValue plain string", func(t *testing.T) {
 		val := "not json"
-		result := decodeMetadataValue(&val)
+		result := metastate.Decode(&val)
 		assert.Equal(t, "not json", result)
 	})
 
 	t.Run("encodeMetadataValue nil", func(t *testing.T) {
-		result, err := encodeMetadataValue(nil)
+		result, err := metastate.Encode(nil)
 		assert.NoError(t, err)
 		assert.Nil(t, result)
 	})
 
 	t.Run("encodeMetadataValue string", func(t *testing.T) {
-		result, err := encodeMetadataValue("hello")
+		result, err := metastate.Encode("hello")
 		assert.NoError(t, err)
 		require.NotNil(t, result)
 		assert.Equal(t, `"hello"`, *result)

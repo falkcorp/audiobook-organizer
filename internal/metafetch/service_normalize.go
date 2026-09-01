@@ -7,10 +7,11 @@ package metafetch
 
 import (
 	"encoding/json"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 func derefString(p *string) string {

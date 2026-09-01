@@ -6,7 +6,7 @@ package handlersmocks
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
-	"github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	mock "github.com/stretchr/testify/mock"
 )
 

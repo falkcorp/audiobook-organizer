@@ -9,13 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 // queueISBNEnrichment starts a background goroutine to enrich ISBN/ASIN for a book
