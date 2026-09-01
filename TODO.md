@@ -1,8 +1,8 @@
 <!-- file: TODO.md -->
-<!-- version: 10.45.2 -->
+<!-- version: 10.45.3 -->
 <!-- version: 10.44.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-31 -->
+<!-- last-edited: 2026-09-01 -->
 
 # Project TODO — live items only
 
@@ -14,6 +14,89 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-REVIEW-PUSHDOWN** Push the metadata review lane's filters down to
+      the server so the lane can stop fetching its whole result set. Today
+      `useMetadataLane.ts:492` calls `getCachedReviewResults(0, 0)` — `limit=0`,
+      i.e. every reviewable row (5,774 on production) — and paginates
+      client-side at `useMetadataLane.ts:752`. That is currently CORRECT and
+      must not be "fixed" by simply passing a real limit/offset: the eight
+      filter switches, the provider filter, the title regex and the threshold
+      all run client-side over the full set, `staleIds`
+      (`useMetadataLane.ts:1110`) is documented as spanning the library
+      precisely because no page can show it, and candidate grouping spans the
+      set too. `GET /audiobooks/metadata/cache/review`
+      (`internal/server/handlers/metadata_cache.go:271`) accepts only
+      `limit`/`offset` with no filter parameters, so paginating the client today
+      would silently confine every filter to one page. The real work is
+      server-side: accept the filter/threshold/provider parameters, apply them
+      before pagination, and return the stale-id set and group keys as
+      whole-set summaries alongside the page. Backend change first, then the
+      client. Also worth doing in the same pass:
+      `metadata_cache.go:271-284` resolves `GetCachedCandidates` for every
+      prepared row on every request, which is only tolerable because
+      `limit=0` makes the page the whole set anyway.
+
+- [ ] **TODO-ORIGHASH-SPLIT** `book_files.original_file_hash` has the same
+      two-algorithms-one-column disease that `fix/file-hash-column-algorithm` fixed for
+      `file_hash`, and it is still live. `fileops.WriteTagsSafe` writes a **whole-file**
+      SHA-256 to it (`internal/fileops/write_tags_safe.go`, via `UpdateBookFileHashes`);
+      `SetBookFileHash` back-fills it with the **chunked** `filehash.BookFileHash` when
+      empty (`internal/database/pebble_store_bookfiles.go`). Both are 64 hex chars, so a
+      row gives no clue which it holds. The column is consumed as identity —
+      `GetDuplicateFilesByHash` groups `book_files` by it and a `book_file_orig_hash:`
+      secondary index exists over it — so duplicates silently fail to group, the same
+      failure mode as the `file_hash` split. Decide what the column MEANS first: it is
+      named "original", so a tag-independent digest (`AudioMD5`) may be the right answer
+      rather than either SHA. Do not unify the writers before answering that.
+
+## Re-calibrate the absolute title-distance gates for non-Latin scripts
+
+`levenshteinDistance` became rune-based (fix/levenshtein-rune-unify). That fixed
+the similarity *ratio*, but the same function also feeds three **absolute**
+distance gates, where a smaller distance ADMITS more pairs:
+
+- `internal/dedup/engine.go:1458` — `if dist >= 3 { continue }`, and a pair that
+  passes is filed by `upsertExactCandidate(..., "exact", 1.0)`
+- `internal/dedup/engine.go:1619`, `:1646` — `titleDist <= durationLevenshteinMax` (6)
+- `internal/dedup/collectors_metadata.go:224`, `:258` — same via `cfg.LevenshteinMax`
+
+The threshold "within 2 edits" was calibrated against 25-character ASCII titles,
+where 2 edits is noise. On a 6-rune CJK title, 1 edit is a different word:
+
+    銀河鉄道の夜 / 銀河鉄道の父   byte d=3 (rejected)  rune d=1 (accepted)
+    吾輩は猫である / 吾輩は猫でない  byte d=3 (rejected)  rune d=2 (accepted)
+
+The byte count was accidentally supplying length-scaling; rune distance is
+correct but exposes that the gate itself is ASCII-shaped. The two downstream
+guards are ASCII-shaped too: `extractSeriesNumberFromTitle` (`engine.go:2111`)
+and `titlesDifferOnlyInDigits` (`engine.go:2119`) key on ASCII digits and
+`book`/`bk`/`vol`, so CJK volume markers (`巻`, `上/中/下`, `一二三`) pass unguarded.
+
+Bounds: same-author pairs only; `hasUsableTitle` needs >2 runes; no auto-merge
+results (`autoResolvePrimaryKinds` has no title-based kind, `handleFileHashMatch`
+merges on file hash only). Ceiling is review-queue pollution labelled
+"exact"/1.0, not data loss.
+
+Decide whether these gates should become length-relative. Needs calibration data
+— a naive relative bound also changes behaviour for SHORT ASCII titles ("Dune"
+vs "Rune" is 1 edit), which is the population that currently works. Measure
+before picking a constant.
+
+- [ ] **TODO-FILEHASH-REPAIR** Repair `book_files.file_hash` rows written by the three
+      pre-fix writers. `fix/file-hash-column-algorithm` unified the writers on
+      `filehash.BookFileHash` but deliberately shipped no repair. A stored full-file
+      SHA-256 and a stored chunked digest are both 64 hex chars and indistinguishable by
+      inspection, so repair must recompute. Three populations, three costs:
+      (a) whole-file writers (`plugins/maintenance/extract_wav_clips.go`,
+      `versions/ingest.go`) — wrong only above the 100 MB threshold, requires a full
+      recompute per candidate row to identify;
+      (b) the iTunes segment writer (`itunes/service/importer.go`, multi-track groups
+      only) — wrong at every size above 1 MB, but **cheaply** detectable: hash the first
+      1 MB and compare to the stored value, a match identifies a corrupted row without
+      reading the whole file;
+      (c) rows never touched by any of the three — correct, leave alone.
+      Size the population first with a read-only counting pass before writing anything.
 
 - [ ] **SERIES-PHANTOM-REPAIR** Repair the series IDs that are ALREADY phantom.
       #2908 closed the two paths it was filed against (`dedup.MergeSeries` and
