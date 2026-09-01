@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.6.1
+// version: 1.7.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-09-01
 
@@ -34,10 +34,26 @@
  * items across kinds spends its whole budget on a mixture. Asking the server for
  * one kind spends all 500 on the kind the reviewer is actually working.
  *
- * `search` and `sortBy` are CLIENT-side, because the endpoint offers neither.
- * That makes them narrower than they look, and the UI has to say so: they act on
- * the loaded page, not on the queue. `truncated` below is what keeps that
- * honest.
+ * `search` is pushed down TOO, and also runs on the client. That is not
+ * redundancy -- the two layers cover different failures:
+ *
+ *   - The SERVER decides which rows exist. Before this, the box searched the 500
+ *     rows that happened to load: on production 2026-09-01, regroup.ambiguous
+ *     held 714 pending holds, so 214 of them could not be found by typing, and
+ *     setting the kind dropdown did not help because they were all one kind.
+ *   - The CLIENT decides which loaded rows are shown, on the keystroke. The
+ *     server round-trip is behind a 250 ms debounce; without the local pass the
+ *     list would sit unchanged for a quarter of a second after every character.
+ *
+ * They are not identical predicates and are not meant to be. The client also
+ * matches labelForKind(kind), which the server has no counterpart for (see
+ * reviewSearchMatches in review_store.go for why that table is deliberately not
+ * duplicated into Go). The client is therefore a view over a set the server has
+ * already chosen, which is exactly what `visible` vs `total` below expresses.
+ *
+ * `sortBy` is still CLIENT-side, because the endpoint offers only newest-first.
+ * That makes it narrower than it looks: it orders the loaded page, not the
+ * queue. `truncated` below is what keeps that honest.
  *
  * ---------------------------------------------------------------------------
  * THREE COUNTS, THREE MEANINGS — DO NOT COLLAPSE THEM
@@ -347,7 +363,8 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   // Which kind the rows on screen were fetched for. Changing the kind must not
   // leave the previous kind's rows sitting there looking like an answer while
   // the new request is in flight — that is the "a failed, an empty and a hung
-  // request all render identically" failure in its stale-data form.
+  // request all render identically" failure in its stale-data form. Search is
+  // NOT in this key; the effect below says why.
   const fetchedKindRef = useRef<string | null>(null);
   /**
    * Monotonic ordering for the two writers of `items`.
@@ -389,6 +406,9 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   }, [filters.search, debouncedSearch]);
 
   const kindFilter = filters.kind;
+  // The DEBOUNCED term, never filters.search: this feeds a network request, so
+  // it must change once per pause in typing and not once per keystroke.
+  const searchFilter = debouncedSearch.trim();
 
   /**
    * The ONE request this lane makes for rows, and the ONE way a response is
@@ -418,10 +438,16 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           // a truthy kind, and sending `kind=` would be a filter for the empty
           // kind rather than for no filter.
           ...(kindFilter ? { kind: kindFilter } : {}),
+          // Pushed down for a stronger reason than kind: without it the search
+          // box searches the 500 rows that LOADED, not the queue. Measured on
+          // production 2026-09-01, regroup.ambiguous alone held 714 pending
+          // holds, so 214 of them could not be found by typing -- and setting
+          // the kind dropdown did not help, because they were all one kind.
+          ...(searchFilter ? { search: searchFilter } : {}),
         },
         { ...(signal ? { signal } : {}), timeoutMs: REGROUP_FETCH_TIMEOUT_MS }
       ),
-    [kindFilter]
+    [kindFilter, searchFilter]
   );
 
   const applyPage = useCallback((page: ReviewItemsPage) => {
@@ -435,9 +461,22 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
+    // KIND ONLY, deliberately -- search is pushed to the server now too, but it
+    // must NOT clear the rows, for two reasons that point the same way:
+    //
+    //   - Narrowing needs no clear. The client-side predicate below still runs,
+    //     and it hides every non-matching loaded row on the KEYSTROKE, a quarter
+    //     of a second before this request is even issued. There is no window in
+    //     which a row is shown under a term it does not match.
+    //   - Widening must not clear. Clearing the search box, or "Clear filters",
+    //     asks for a SUPERSET of what is already on screen. Blanking the list to
+    //     re-fetch rows the reviewer is already looking at is a visible flash
+    //     that says "gone" about rows that never went anywhere.
+    //
+    // Kind has neither property: there is no client-side kind predicate, so
+    // without this clear the previous kind's holds sit under the new kind's
+    // heading looking like an answer until the response lands.
     if (fetchedKindRef.current !== null && fetchedKindRef.current !== kindFilter) {
-      // Drop the previous kind's rows rather than showing them under the new
-      // kind's heading while this request runs.
       setItems([]);
       setTotal(0);
     }
@@ -464,7 +503,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
       });
 
     return () => ctrl.abort();
-  }, [active, reloadToken, kindFilter, fetchPage, applyPage]);
+  }, [active, reloadToken, kindFilter, searchFilter, fetchPage, applyPage]);
 
   // Keep the shared count fresh when the lane opens, so per-kind totals are not
   // stale on first paint while waiting for the next poll tick.

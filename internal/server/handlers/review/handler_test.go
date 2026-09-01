@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
-// last-edited: 2026-08-06
+// last-edited: 2026-09-01
 
 // Tests for the universal review-queue handlers. The store is exercised through
 // a REAL pebble-backed *database.PebbleStore (which implements the ReviewStore
@@ -144,6 +144,50 @@ func TestListReviewItems(t *testing.T) {
 	items := body["items"].([]any)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+}
+
+// TestListReviewItems_SearchParam covers `q` reaching the store filter.
+//
+// The seeded rows differ ONLY in dedup key -- seedPayload gives every hold the
+// same Summary ("s") and derives FolderRef from the key -- so the needle has to
+// travel through the query string into ReviewFilter.Search and be matched by the
+// store for any of these to pass. A handler that ignored `q` would return every
+// row and fail on the count, not merely on the ordering.
+func TestListReviewItems_SearchParam(t *testing.T) {
+	s := newTestStore(t)
+	seed(t, s, "regroup.multidisc", "alpha")
+	seed(t, s, "regroup.multidisc", "beta")
+	seed(t, s, "regroup.anthology", "alphabet")
+	h := reviewhandler.New(s, func() bool { return true })
+
+	countFor := func(t *testing.T, url string) (float64, int) {
+		t.Helper()
+		w := doReq(t, h.ListReviewItems, http.MethodGet, url, nil, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", url, w.Code, w.Body.String())
+		}
+		body := decodeBody(t, w)
+		return body["count"].(float64), len(body["items"].([]any))
+	}
+
+	// "alpha" is a substring of both "alpha" and "alphabet", so this also pins
+	// that the match is a substring and not an equality.
+	if count, n := countFor(t, "/review/items?q=alpha"); count != 2 || n != 2 {
+		t.Fatalf("q=alpha: want 2 matches, got count=%v len=%d", count, n)
+	}
+	// Composes with kind rather than replacing it.
+	if count, n := countFor(t, "/review/items?q=alpha&kind=regroup.anthology"); count != 1 || n != 1 {
+		t.Fatalf("q=alpha&kind=anthology: want 1, got count=%v len=%d", count, n)
+	}
+	// An absent q is the pre-existing behaviour exactly: no narrowing.
+	if count, _ := countFor(t, "/review/items"); count != 3 {
+		t.Fatalf("no q: want the whole queue (3), got %v", count)
+	}
+	// A q matching nothing is an empty list, NOT an unfiltered one -- the failure
+	// mode where a dropped param silently means "everything".
+	if count, n := countFor(t, "/review/items?q=nothingmatchesthis"); count != 0 || n != 0 {
+		t.Fatalf("q=miss: want 0, got count=%v len=%d", count, n)
 	}
 }
 

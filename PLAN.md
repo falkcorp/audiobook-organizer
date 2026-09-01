@@ -1,62 +1,133 @@
 <!-- file: PLAN.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2f8b6d41-9c07-4e35-a1d8-5b3e7c0a94f2 -->
-<!-- last-edited: 2026-08-29 -->
+<!-- guid: 4c9e2b71-8a35-4d60-9f12-6e0a7b3d5c84 -->
+<!-- last-edited: 2026-09-01 -->
 
-# Bulk CoW snapshot prune
+# Plan — push the regroup review search down to the server
 
-## Goal
-Prune `book_ver:` copy-on-write snapshots across the whole library. Today the only
-control is `POST /api/v1/audiobooks/:id/cow-versions/prune`, one book at a time;
-prod has 59,086 books holding ~7.5M snapshots (~7.65 GB).
+Branch `feat/review-items-server-search`, worktree `.worktrees/review-search`.
 
-Measured 2026-08-29 (40-book sample): min 42, median 91, mean 127.5, max 697
-snapshots per book. keep_count=10 deletes 92.2%.
+Written while the user is AFK, on "fix everything you can". No approval gate was
+available; the plan is recorded here so the reasoning is reviewable after the fact.
+
+## The defect, stated precisely
+
+`GET /api/v1/review/items` supports exactly four filters:
+
+```go
+type ReviewFilter struct {
+    Status string
+    Kind   string
+    Limit  int
+    Offset int
+}
+```
+
+The regroup lane fetches `limit=REGROUP_FETCH_LIMIT` (500) and then filters
+**client-side** with `searchTextFor`. So on a queue larger than 500 the search box
+answers a question nobody asked: not "which holds match?" but "which of the 500
+holds that happened to load match?".
+
+The lane is already honest about this — it derives a `truncated` flag and warns —
+but honesty about a wrong answer is not a right answer. This is the same class as
+the `sort` that was silently unordered: a 200, the right shape, arbitrary content.
+
+## Why this is nearly free on the Go side
+
+`ListReviewItems` already loads **every** matching item into memory, applies `Kind`
+in Go, sorts, and only then slices the page:
+
+```go
+all, err = p.listReviewItemsByStatusIndex(f.Status)   // ALL of them
+if f.Kind != "" { /* filter in Go */ }
+sort.Slice(all, ...)
+return all[start:end], total, nil
+```
+
+A search term is one more pass in exactly the place `Kind` already occupies, before
+the sort and before the page is cut. `total` then means "matches", which is what the
+UI has always claimed it means.
+
+## The parity problem, and the decision taken
+
+The client builds its haystack from `summary, folder_ref, dedup_key, id,
+labelForKind(kind), kind, payload.folder, payload.survivorTitle,
+payload.derived_title, payload.title, payload.files[]`.
+
+The server has all of those EXCEPT `labelForKind`, which is a frontend display map
+(`REVIEW_KIND_LABELS`) with no Go counterpart:
+
+| kind | label |
+|---|---|
+| `regroup.multidisc` | Multi-disc groups |
+| `regroup.version-group` | Abridged / Unabridged editions |
+| `regroup.anthology` | Anthologies / collections |
+| `regroup.ambiguous` | Ambiguous folders |
+
+Three of the four labels share a word with their kind, so a free-text search for
+them keeps working. `regroup.version-group` does not: today "abridged" matches it,
+after this change it will not.
+
+**Decision: do not port the label map to Go.** Copying a display string table into
+the backend to preserve one substring match creates precisely the two-copies-that-
+diverge defect this codebase has spent five PRs deleting. The kind dropdown already
+selects that bucket directly, and it is a *better* control for it than free text.
+The loss is stated in the PR rather than hidden.
+
+**Decision: the server becomes the single source of truth for `q`.** The client-side
+search predicate is DELETED, not kept as a second narrowing pass. Two predicates
+over one query is the "one string, two meanings" failure: the row count and the
+`total` beside it would disagree and neither would be wrong.
 
 ## Files to change
 
-1. `internal/database/pebble_store.go`
-   - Rewrite `PruneBookSnapshots` to iterate KEYS ONLY.
-     It currently calls `GetBookSnapshots(id, 0)`, which copies every snapshot's
-     value (`dataCopy := make(...); copy(...)`) just to read a timestamp that is
-     already in the key. A library-wide prune would therefore read and copy all
-     7.65 GB of snapshot payloads to discover keys it already had.
-   - Add `CountBookSnapshots(id) (int, error)` — keys-only, for a cheap dry run.
-2. `internal/database/iface_book.go` — declare `CountBookSnapshots`.
-3. `internal/maintenance/job.go` — add `PruneBookSnapshots` to `jobBookWriter`,
-   `CountBookSnapshots` to `jobBookReader`. (`ListBookIDs` already present.)
-4. `internal/maintenance/jobs/prune_book_snapshots.go` — NEW job.
-5. Regenerate mocks (`make mocks`).
-6. Tests + changelog fragment.
+1. `internal/database/review_store.go` — `ReviewFilter.Search`; one filter pass in
+   `ListReviewItems` beside the `Kind` pass; a `reviewSearchHaystack` helper.
+2. `internal/database/review_store_test.go` — cover match, non-match, case
+   folding, combined with Kind, and that `total` reflects the search.
+3. `internal/server/handlers/review/handler.go` — read `q`; document it.
+4. `internal/server/handlers/review/*_test.go` — the param reaches the filter.
+5. `web/src/services/api.ts` — `search` on the filter type → `q` param.
+6. `web/src/components/review/lanes/useRegroupLane.ts` — send the debounced query;
+   delete the client-side predicate; rewrite the counts doc block, which currently
+   documents `visible <= loaded` as a client narrowing.
+7. `web/src/components/review/lanes/useRegroupLane.test.ts` — the query is sent,
+   debounced, and a stale response cannot overwrite a newer one (the request-token
+   guard now has a third writer to order).
+8. `changelog.d/` fragment — headerless.
 
-## Job design
+## Ordered steps
 
-- ID `prune-book-snapshots`, category `cleanup`.
-- Params: `keep_count int` (default 10), `dry_run bool`.
-- **Refuses keep_count < 1.** 0 would delete every snapshot including the newest;
-  this is irreversible prod data, so the destructive extreme is not reachable by
-  omitting a field.
-- Bounded worker pool: `errgroup` + `SetLimit(runtime.NumCPU())`, per CLAUDE.md's
-  concurrency mandate (59k books x a DB write each).
-- **Partitioning is inherent, not assumed:** the unit of work is ONE book ID and
-  every `book_ver:` key is prefixed by that ID, so two workers can never touch the
-  same key. No shared mutable state except counters (atomic).
-- Honours `ctx` cancellation between books; reports progress per book so the
-  registry watchdog does not flag it as wedged.
-- Dry run counts via `CountBookSnapshots` and writes nothing.
+1. Go store + tests. `go build ./... && go test ./internal/database/ -run Review`.
+2. Handler + tests.
+3. Verify against prod READ-ONLY: `GET /review/items?q=...` returns a `total` that
+   changes with the term. No writes, no scan.
+4. Frontend: api.ts, then the lane, then its tests.
+5. `npx tsc --noEmit`, `npx vitest run`, `npm run lint`.
+6. Mutation-check the new Go filter (invert the match, drop the case fold) and the
+   new lane tests (drop the debounce, drop the token bump) at final HEAD.
 
 ## Test strategy
-- Store: prune keeps the newest N and deletes the rest; count matches; malformed
-  keys are left alone (preserves current behaviour); keep_count >= len is a no-op.
-- Job: dry run deletes NOTHING but reports the real number; keep_count is honoured;
-  cancellation stops early; keep_count < 1 is refused.
-- Mutation-test each new test before trusting it.
+
+- The Go filter gets a table test whose fixture contains a row that matches ONLY in
+  the payload and a row that matches ONLY in the summary — a fixture where every row
+  matches everywhere cannot observe a dropped field.
+- `total` is asserted separately from `len(items)`, since the whole point is that
+  the count now describes matches rather than the page.
+- Mutation, not coverage: each new assertion is checked by breaking what it covers.
 
 ## Rollback
-The job is additive and opt-in — nothing schedules it. Reverting the commit
-removes it. The store change is behaviour-preserving (same keys deleted); its
-tests pin that.
 
-## NOT in scope
-Deleting anything on prod. This ships the capability; running it is a separate,
-explicit decision, and dry-run comes first.
+Additive on the wire — an absent `q` is the current behaviour exactly. Revert the
+merge; no migration, no config, no flag.
+
+## Explicitly NOT in scope
+
+- Porting `REVIEW_KIND_LABELS` to Go (see above).
+- The metadata lane. It fetches its whole set with `getCachedReviewResults(0, 0)`
+  and filters in memory, so its filters are already whole-set correct; measured at
+  23 ms for the 11-filter chain over 2,000 rows. Nothing to push down.
+- The dupes lane, which already has four server-side filters.
+- Sorting. The endpoint sorts newest-first only, and the lane's sort control is
+  client-side over the page — the same defect shape as search, but a separate
+  change with its own index question.

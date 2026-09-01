@@ -1,7 +1,7 @@
 // file: internal/database/review_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
-// last-edited: 2026-08-06
+// last-edited: 2026-09-01
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -93,6 +94,11 @@ type ReviewItem struct {
 type ReviewFilter struct {
 	Status string
 	Kind   string
+	// Search is a case-insensitive substring narrowing applied BEFORE the total
+	// is taken and before the page is cut, so `total` means "matches" and not
+	// "matches on the page the caller happened to ask for". Empty means no
+	// narrowing. See reviewSearchMatches for what it looks at and why.
+	Search string
 	Limit  int
 	Offset int
 }
@@ -313,6 +319,19 @@ func (p *PebbleStore) ListReviewItems(f ReviewFilter) ([]ReviewItem, int, error)
 		all = filtered
 	}
 
+	// Apply Search in the same place, for the same reason: both must narrow the
+	// set BEFORE `total` is taken, or the caller gets a count that describes a
+	// different set than the rows beside it.
+	if needle := strings.ToLower(strings.TrimSpace(f.Search)); needle != "" {
+		filtered := all[:0:0]
+		for _, it := range all {
+			if reviewSearchMatches(it, needle) {
+				filtered = append(filtered, it)
+			}
+		}
+		all = filtered
+	}
+
 	sort.Slice(all, func(i, j int) bool {
 		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
 			return all[i].CreatedAt.After(all[j].CreatedAt)
@@ -337,6 +356,83 @@ func (p *PebbleStore) ListReviewItems(f ReviewFilter) ([]ReviewItem, int, error)
 		end = total
 	}
 	return all[start:end], total, nil
+}
+
+// reviewSearchMatches reports whether one hold matches an already-lowercased,
+// already-trimmed search needle.
+//
+// It matches the same things the reviewer can actually SEE: the hold's own
+// columns, and the string VALUES inside its payload -- never the payload's JSON
+// keys. Matching the raw payload text would be cheaper and is a superset, but it
+// makes every hold match "folder", "title" and "files", because those are key
+// names present in every payload. A search box that returns the whole queue for
+// a word the reviewer can see on screen is worse than one that is slightly slow.
+//
+// 🔴 THE KIND LABEL IS DELIBERATELY ABSENT. The UI's searchTextFor also folds in
+// labelForKind(kind) -- "Abridged / Unabridged editions" for regroup.version-group
+// -- from REVIEW_KIND_LABELS, a frontend display map with no Go counterpart.
+// Porting that table here to preserve one substring match would create exactly the
+// two-copies-that-diverge defect this codebase has spent five refactors deleting,
+// and a display string is the worst possible thing to duplicate into a backend: it
+// changes for reasons that have nothing to do with the data. The kind DROPDOWN
+// selects that bucket directly and is the better control for it. Three of the four
+// known labels share a word with their kind and keep working regardless.
+func reviewSearchMatches(it ReviewItem, needle string) bool {
+	// Ordered cheapest first: a hold that matches on its summary never pays for
+	// the payload decode below.
+	for _, field := range []string{it.Summary, it.FolderRef, it.Kind, it.DedupKey, it.ID} {
+		if field == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(field), needle) {
+			return true
+		}
+	}
+	return reviewPayloadValuesContain(it.Payload, needle)
+}
+
+// reviewPayloadValuesContain matches a needle against the string values of a
+// hold's payload JSON.
+//
+// An UNPARSEABLE payload falls back to a raw substring match rather than being
+// skipped. A hold whose payload will not decode still renders in the list -- the
+// frontend's parsePayload returns null and the row shows its summary -- so
+// skipping it here would make a visible row unfindable, which is the one outcome
+// a search box must never produce. The frontend's searchTextFor makes the same
+// choice for the same reason.
+func reviewPayloadValuesContain(payload, needle string) bool {
+	if payload == "" {
+		return false
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		return strings.Contains(strings.ToLower(payload), needle)
+	}
+	return jsonStringValuesContain(decoded, needle)
+}
+
+// jsonStringValuesContain walks a decoded JSON value and reports whether any
+// STRING leaf contains the needle. Numbers and booleans are not matched, which
+// mirrors the frontend: searching "3" must not return every hold that happens to
+// carry a disc number 3.
+func jsonStringValuesContain(v any, needle string) bool {
+	switch t := v.(type) {
+	case string:
+		return strings.Contains(strings.ToLower(t), needle)
+	case map[string]any:
+		for _, item := range t {
+			if jsonStringValuesContain(item, needle) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range t {
+			if jsonStringValuesContain(item, needle) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (p *PebbleStore) listAllReviewItems() ([]ReviewItem, error) {

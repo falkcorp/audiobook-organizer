@@ -1,7 +1,7 @@
 // file: internal/database/review_store_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
-// last-edited: 2026-08-06
+// last-edited: 2026-09-01
 
 package database
 
@@ -406,5 +406,212 @@ func TestUpsertReviewItem_RequiresDedupKeyAndKind(t *testing.T) {
 	}
 	if _, err := s.UpsertReviewItem(ReviewItem{DedupKey: "dk"}); err == nil {
 		t.Fatal("expected error for empty Kind")
+	}
+}
+
+// TestListReviewItems_Search covers the Search narrowing.
+//
+// THE FIXTURE IS THE TEST. Each row is built so the needle "zephyr" appears in
+// EXACTLY ONE place, and in a DIFFERENT place per row -- one per field the
+// matcher walks, and one per branch of the payload recursion (plain string,
+// array element, nested object). A fixture whose rows all say "zephyr"
+// everywhere would pass with any subset of those wired up, including none of the
+// ones the caller cares about, so it could not observe a dropped field.
+//
+// Dropping any single field or recursion branch drops exactly one row from the
+// expected set. The array row is not decoration: `files[]` holds the member
+// FILENAMES, which is the thing a reviewer is most likely to type, and an
+// earlier draft of this fixture let a "don't recurse into arrays" mutant survive.
+func TestListReviewItems_Search(t *testing.T) {
+	s := newReviewTestStore(t)
+
+	const (
+		totalRows    = 8
+		totalMatches = 7
+	)
+
+	// Dedup keys, folders and summaries are deliberately needle-free except where
+	// the row's name says otherwise.
+	seed := []struct{ name, kind, dk, folder, summary, payload string }{
+		{"match-in-summary", "regroup.multidisc", "dk-1", "/lib/aaa", "Zephyr and the sea", `{"folder":"/lib/aaa"}`},
+		{"match-in-folder-ref", "regroup.multidisc", "dk-2", "/lib/zephyr-hall", "plain summary", `{"folder":"/lib/bbb"}`},
+		{"match-in-dedup-key", "regroup.multidisc", "zephyr-dk", "/lib/ccc", "plain summary", `{"folder":"/lib/ccc"}`},
+		{"match-in-payload-string", "regroup.multidisc", "dk-4", "/lib/ddd", "plain summary", `{"title":"The Zephyr Variations"}`},
+		{"match-in-payload-array", "regroup.multidisc", "dk-5", "/lib/eee", "plain summary", `{"folder":"/lib/eee","files":["01 - intro.mp3","02 - zephyr rising.mp3"]}`},
+		{"match-in-payload-nested", "regroup.multidisc", "dk-6", "/lib/fff", "plain summary", `{"folder":"/lib/fff","recommendationEvidence":{"note":"matches the Zephyr series stem"}}`},
+		{"match-nowhere", "regroup.multidisc", "dk-7", "/lib/ggg", "plain summary", `{"title":"Something else","files":["01 - a.mp3"]}`},
+		{"match-in-summary-other-kind", "regroup.anthology", "dk-8", "/lib/hhh", "zephyr collection", `{}`},
+	}
+	for _, sd := range seed {
+		if _, err := s.UpsertReviewItem(mkReviewItem(sd.kind, sd.dk, sd.folder, sd.summary, sd.payload)); err != nil {
+			t.Fatalf("seed %s: %v", sd.name, err)
+		}
+	}
+
+	byDedup := func(items []ReviewItem) map[string]bool {
+		got := map[string]bool{}
+		for _, it := range items {
+			got[it.DedupKey] = true
+		}
+		return got
+	}
+
+	t.Run("matches every field and every payload branch", func(t *testing.T) {
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr", Limit: totalRows})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != totalMatches {
+			t.Fatalf("total: want %d matches, got %d", totalMatches, total)
+		}
+		if len(items) != totalMatches {
+			t.Fatalf("items: want %d, got %d", totalMatches, len(items))
+		}
+		got := byDedup(items)
+		// Named individually so a failure says WHICH lookup path broke.
+		for key, where := range map[string]string{
+			"dk-1":      "summary",
+			"dk-2":      "folder_ref",
+			"zephyr-dk": "dedup_key",
+			"dk-4":      "a payload string value",
+			"dk-5":      "a payload ARRAY element (files[])",
+			"dk-6":      "a NESTED payload object value",
+			"dk-8":      "summary, on a different kind",
+		} {
+			if !got[key] {
+				t.Errorf("row %q matches only in %s and was not returned -- that lookup path is broken", key, where)
+			}
+		}
+		if got["dk-7"] {
+			t.Errorf("row dk-7 matches the needle nowhere and must not be returned")
+		}
+	})
+
+	t.Run("matching is case-insensitive in both directions", func(t *testing.T) {
+		// Needle upper, haystack mixed: the fixture stores "Zephyr", never "ZEPHYR".
+		_, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "ZEPHYR"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != totalMatches {
+			t.Fatalf("upper-case needle: want %d, got %d", totalMatches, total)
+		}
+		// Needle lower, haystack upper-initial: dk-1's summary is "Zephyr and the sea".
+		items, _, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr and"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(items) != 1 || items[0].DedupKey != "dk-1" {
+			t.Fatalf("lower-case needle against a capitalised summary: want just dk-1, got %d rows", len(items))
+		}
+	})
+
+	t.Run("composes with the kind filter rather than replacing it", func(t *testing.T) {
+		items, total, err := s.ListReviewItems(ReviewFilter{
+			Status: ReviewStatusPending,
+			Kind:   "regroup.anthology",
+			Search: "zephyr",
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		// dk-8 is the only anthology and it matches. The six multidisc matches must
+		// be EXCLUDED by Kind, not merely ranked below it.
+		if total != 1 || len(items) != 1 || items[0].DedupKey != "dk-8" {
+			t.Fatalf("kind+search: want just dk-8, got total=%d len=%d", total, len(items))
+		}
+	})
+
+	t.Run("total counts matches, not the page", func(t *testing.T) {
+		// THE POINT OF THE WHOLE CHANGE. Limit is BELOW the match count on purpose:
+		// a Limit at or above it cannot tell a correct total from a total that is
+		// silently len(items).
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr", Limit: 2})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("page: want 2 rows, got %d", len(items))
+		}
+		if total != totalMatches {
+			t.Fatalf("total must describe MATCHES (%d), not the page (2); got %d", totalMatches, total)
+		}
+	})
+
+	t.Run("a JSON KEY name is not a match", func(t *testing.T) {
+		// Every payload in the fixture carries the key "folder", "title" or "files",
+		// so a matcher that searched the raw payload TEXT would return most of the
+		// queue here. This is the test that separates value-matching from
+		// text-matching, and it is the reason the store decodes at all.
+		for _, key := range []string{"folder", "title", "files", "recommendationEvidence"} {
+			items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: key})
+			if err != nil {
+				t.Fatalf("list %q: %v", key, err)
+			}
+			// No VALUE anywhere in the fixture contains any of these words, so the
+			// honest answer for every one of them is zero.
+			if total != 0 || len(items) != 0 {
+				t.Fatalf("key name %q matched %d row(s) -- the matcher is reading JSON keys, not values", key, total)
+			}
+		}
+	})
+
+	t.Run("an empty or blank search narrows nothing", func(t *testing.T) {
+		for _, needle := range []string{"", "   ", "\t\n"} {
+			_, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: needle})
+			if err != nil {
+				t.Fatalf("list %q: %v", needle, err)
+			}
+			if total != totalRows {
+				t.Fatalf("blank search %q must return the whole queue (%d), got %d", needle, totalRows, total)
+			}
+		}
+	})
+
+	t.Run("a needle matching nothing returns an empty set and a zero total", func(t *testing.T) {
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "no-such-string"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != 0 || len(items) != 0 {
+			t.Fatalf("want an empty result, got total=%d len=%d", total, len(items))
+		}
+	})
+}
+
+// TestListReviewItems_SearchUndecodablePayload is a SEPARATE test with its own
+// store on purpose. It seeds a row, and the sub-tests of
+// TestListReviewItems_Search assert on exact totals over a shared store -- a seed
+// there would change their expected counts, which is how the first draft of this
+// test failed. Fixture coupling between sub-tests is a real defect, not a nuisance.
+func TestListReviewItems_SearchUndecodablePayload(t *testing.T) {
+	s := newReviewTestStore(t)
+	if _, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-ok", "/lib/ok", "plain summary", `{"title":"Zephyr Variations"}`)); err != nil {
+		t.Fatalf("seed ok: %v", err)
+	}
+	// Deliberately not valid JSON. A hold like this still RENDERS in the queue --
+	// the frontend's parsePayload returns null and the row shows its summary -- so
+	// it must stay findable. Skipping it would make a visible row unreachable,
+	// which is the one outcome a search box must never produce.
+	if _, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-broken", "/lib/broken", "plain summary", `{not json at all: zephyr`)); err != nil {
+		t.Fatalf("seed broken: %v", err)
+	}
+
+	items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("want both the decodable and the broken hold, got total=%d len=%d", total, len(items))
+	}
+	got := map[string]bool{}
+	for _, it := range items {
+		got[it.DedupKey] = true
+	}
+	if !got["dk-broken"] {
+		t.Error("a hold whose payload will not decode must still match on its raw text")
+	}
+	if !got["dk-ok"] {
+		t.Error("a hold with a decodable payload must still match on its values")
 	}
 }

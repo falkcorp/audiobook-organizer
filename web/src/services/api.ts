@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.74.0
+// version: 2.75.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-01
 
@@ -6359,6 +6359,19 @@ export interface ReviewItemsPage {
 export interface ReviewItemsFilter {
   status?: string;
   kind?: string;
+  /**
+   * Case-insensitive substring narrowing, sent as `q`.
+   *
+   * The server applies it BEFORE taking the total, so `total` on the response
+   * means "matches" and not "matches within the page you asked for". That is the
+   * whole reason it exists: the regroup lane caps its fetch at 500 rows, and on
+   * the production queue measured 2026-09-01 the largest single kind held 714
+   * pending items, so 214 of them could not be found by typing.
+   *
+   * The server matches the hold's own columns and the STRING VALUES inside its
+   * payload -- not the payload's JSON keys, so `q=folder` is not a match-all.
+   */
+  search?: string;
   limit?: number;
   offset?: number;
 }
@@ -6425,6 +6438,9 @@ export async function getReviewItems(
   const params = new URLSearchParams();
   params.set('status', filter.status ?? 'pending');
   if (filter.kind) params.set('kind', filter.kind);
+  // Trimmed here as well as server-side: a query of pure whitespace is a filter
+  // for nothing, and sending it would spend a round-trip to be told so.
+  if (filter.search?.trim()) params.set('q', filter.search.trim());
   if (filter.limit !== undefined) params.set('limit', String(filter.limit));
   if (filter.offset !== undefined) params.set('offset', String(filter.offset));
   const response = await apiFetch(`${API_BASE}/review/items?${params.toString()}`, {

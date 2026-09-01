@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-08-06
+// last-edited: 2026-09-01
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -254,7 +254,14 @@ func (h *Handler) GetReviewCount(c *gin.Context) {
 
 // ListReviewItems handles GET /api/v1/review/items.
 //
-// Query params: status (default "pending"), kind, limit (default 50), offset.
+// Query params: status (default "pending"), kind, q, limit (default 50), offset.
+//
+// `q` is a case-insensitive substring narrowing, applied by the store BEFORE the
+// total is taken. That is the whole point of it: the regroup lane caps its fetch
+// at 500 rows and used to search only what it had loaded, so on the production
+// queue measured 2026-09-01 -- 714 pending regroup.ambiguous holds -- 214 of them
+// could not be found by typing, with or without the kind filter set. An absent or
+// blank `q` is exactly the previous behaviour.
 func (h *Handler) ListReviewItems(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithServiceUnavailable(c, "review store not available")
@@ -268,6 +275,7 @@ func (h *Handler) ListReviewItems(c *gin.Context) {
 	filter := database.ReviewFilter{
 		Status: status,
 		Kind:   c.Query("kind"),
+		Search: c.Query("q"),
 		Limit:  atoiDefault(c.Query("limit"), 50),
 		Offset: atoiDefault(c.Query("offset"), 0),
 	}
