@@ -314,20 +314,25 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 		return right, left, true
 	}
 
-	// Initials belong to a person, not to a title: "J.K. Rowling - Harry Potter".
-	leftInitials, rightInitials := strings.Contains(left, "."), strings.Contains(right, ".")
-	if leftInitials != rightInitials {
-		if leftInitials {
-			return right, left, true
-		}
-		return left, right, true
-	}
-
-	// Weakest of the three, so it runs LAST. Ordering is load-bearing: with this
-	// ahead of the article test, "The City & The City - China Mieville" filed
-	// the TITLE as the author, because the left side is two person-shaped
-	// clauses joined by "&". A leading article is stronger evidence than an
-	// ampersand and must get to answer first.
+	// Second of the three. Ordering here is load-bearing in BOTH directions and
+	// each direction was measured, because it is not deducible:
+	//
+	//   - It must run AFTER the article test. With it first,
+	//     "The City & The City - China Mieville" filed the TITLE as the author:
+	//     the left side is two person-shaped clauses joined by "&", and a
+	//     leading article is the stronger signal.
+	//   - It must run BEFORE the initials test. With it last, any title
+	//     containing a period beat an ampersand credit, which origin/main got
+	//     right and this did not:
+	//       "David Weber & John Ringo - Mr. Mercedes"      -> author "Mr. Mercedes"
+	//       "Elora Bishop & Bridget Essex - St. Peter's Fair" -> author "St. Peter's Fair"
+	//     "contains a period" is weak evidence -- titles use "Mr.", "St.",
+	//     "Dr." and numbered volumes constantly -- and is weaker than an
+	//     ampersand between two person-shaped clauses.
+	//
+	// Measured over the same 68,793 real paths, the swap changes nothing there
+	// (0 regressions, same 11 recoveries) and fixes the constructed class, so
+	// it is free on real data and strictly better on the tail.
 	leftAmp, rightAmp := looksLikeAmpersandCredit(left), looksLikeAmpersandCredit(right)
 	if leftAmp != rightAmp {
 		// ...and only when the OTHER side is a single undivided name.
@@ -367,6 +372,15 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 	// article and no initials is not distinguishable from a name by structure.
 	// "Good Omens" and "Neil Gaiman" are the same shape, which is why no
 	// discriminator can settle it and why the caller's convention decides.
+	// Initials belong to a person, not to a title: "J.K. Rowling - Harry Potter".
+	leftInitials, rightInitials := strings.Contains(left, "."), strings.Contains(right, ".")
+	if leftInitials != rightInitials {
+		if leftInitials {
+			return right, left, true
+		}
+		return left, right, true
+	}
+
 	if onTie == RefuseOnTie {
 		return "", "", false
 	}

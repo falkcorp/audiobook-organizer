@@ -1,5 +1,5 @@
 // file: internal/personname/author_credit_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c1d3f97-1705-4519-a344-cc8eb9f0d038
 // last-edited: 2026-09-01
 
@@ -273,5 +273,76 @@ func TestChooseAuthorSideAcceptsALossInTheAuthorFirstOrder(t *testing.T) {
 				"test plus the comment in ChooseAuthorSide should be updated, not deleted",
 				credit, author, credit)
 		}
+	}
+}
+
+// TestAmpersandBeatsInitials pins the second half of the ordering. The
+// ampersand test must run BEFORE the initials test: "contains a period" is weak
+// evidence, because titles use "Mr.", "St.", "Dr." and numbered volumes
+// constantly. With the ampersand test last, every one of these was answered
+// with the TITLE, and origin/main answered them correctly.
+func TestAmpersandBeatsInitials(t *testing.T) {
+	cases := []struct{ left, right, wantAuthor string }{
+		{"David Weber & John Ringo", "Mr. Mercedes", "David Weber & John Ringo"},
+		{"Mr. Mercedes", "David Weber & John Ringo", "David Weber & John Ringo"},
+		{"Elora Bishop & Bridget Essex", "St. Peter's Fair", "Elora Bishop & Bridget Essex"},
+	}
+	for _, tc := range cases {
+		for _, p := range []TiePolicy{PreferRightOnTie, RefuseOnTie} {
+			_, author, ok := ChooseAuthorSide(tc.left, tc.right, p)
+			if !ok || author != tc.wantAuthor {
+				t.Errorf("ChooseAuthorSide(%q, %q, policy %v) author = %q, ok = %v; want %q",
+					tc.left, tc.right, p, author, ok, tc.wantAuthor)
+			}
+		}
+	}
+}
+
+// TestAmpersandCreditUnderRefuseOnTie exercises the discriminator on the "_"
+// path, which is the ONLY path where it converts a refusal into an answer --
+// and so the path the recovery claim leans on hardest. Every other ampersand
+// test uses PreferRightOnTie, where the tie already lands on the right and a
+// deleted discriminator can go unnoticed.
+func TestAmpersandCreditUnderRefuseOnTie(t *testing.T) {
+	_, author, ok := ChooseAuthorSide("Elora Bishop & Bridget Essex", "Under Her Spell", RefuseOnTie)
+	if !ok || author != "Elora Bishop & Bridget Essex" {
+		t.Errorf("author = %q, ok = %v; want the credit -- without the ampersand rule this "+
+			"refuses, and on the underscore path a refusal is not neutral", author, ok)
+	}
+}
+
+// TestAmpersandCreditRequiresEveryClauseAndHandlesPlus covers three pieces of
+// looksLikeAmpersandCredit that no other test reaches. Each corresponds to a
+// mutant that survived the whole suite.
+func TestAmpersandCreditRequiresEveryClauseAndHandlesPlus(t *testing.T) {
+	// "+" is in the separator class, and the only other "+" case in the suite
+	// passes with "+" deleted from the regex -- it asserts the tie's answer,
+	// which happens to match. This one requires the "+" side to WIN.
+	if _, author, ok := ChooseAuthorSide("Elora Bishop + Bridget Essex", "Under Her Spell", PreferRightOnTie); !ok ||
+		author != "Elora Bishop + Bridget Essex" {
+		t.Errorf("plus: author = %q, ok = %v; want the credit", author, ok)
+	}
+
+	// EVERY clause must be person-shaped, not merely one of them. The middle
+	// clause here is five fields and is not a name, so this is not an ampersand
+	// credit and the tie policy must answer instead.
+	if _, author, _ := ChooseAuthorSide("Neil Gaiman and Terry Pratchett & Ilona Andrews", "Good Omens", PreferRightOnTie); author != "Good Omens" {
+		t.Errorf("every-clause: author = %q; want the tie policy's answer -- an any-clause "+
+			"rule would return the left side here", author)
+	}
+
+	// The edition suffix must be stripped INSIDE the predicate: without it
+	// "Bridget Essex (Unabridged)" fails LooksLikePersonName on the trailing
+	// bracket, the side stops being a credit, and the title wins -- the round-4
+	// decoration inversion, reintroduced.
+	if _, author, ok := ChooseAuthorSide("Elora Bishop & Bridget Essex (Unabridged)", "Under Her Spell", PreferRightOnTie); !ok ||
+		author != "Elora Bishop & Bridget Essex (Unabridged)" {
+		t.Errorf("decorated credit: author = %q, ok = %v; want the credit", author, ok)
+	}
+
+	// And the strip inside the GUARD, on the opposing side.
+	if _, author, ok := ChooseAuthorSide("Elora Bishop & Bridget Essex", "Under Her Spell (Unabridged, 2019)", PreferRightOnTie); !ok ||
+		author != "Elora Bishop & Bridget Essex" {
+		t.Errorf("decorated opposing side: author = %q, ok = %v; want the credit", author, ok)
 	}
 }
