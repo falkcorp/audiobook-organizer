@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-09-01
 
@@ -63,7 +63,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../../../services/api';
-import type { ReviewBulkSkip, ReviewItem } from '../../../services/api';
+import type { ReviewBulkSkip, ReviewItem, ReviewItemsPage } from '../../../services/api';
 import { useReviewStore } from '../../../stores/useReviewStore';
 import { labelForKind } from '../../../lib/reviewKinds';
 import { defaultActionFor, parsePayload } from '../../../lib/reviewPayload';
@@ -285,7 +285,10 @@ export function searchTextFor(item: ReviewItem, parsed?: ReviewPayload | null): 
       if (typeof f === 'string') parts.push(f);
     }
   }
-  return parts.filter((p): p is string => typeof p === 'string' && p.length > 0).join('\n').toLowerCase();
+  return parts
+    .filter((p): p is string => typeof p === 'string' && p.length > 0)
+    .join('\n')
+    .toLowerCase();
 }
 
 /**
@@ -366,6 +369,45 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
 
   const kindFilter = filters.kind;
 
+  /**
+   * The ONE request this lane makes for rows, and the ONE way a response is
+   * applied.
+   *
+   * Both call sites -- the mount/refresh effect below and reload() after an
+   * approve, reject or bulk action -- used to build these params separately,
+   * and reload's copy carried a comment asserting it sent "the SAME filter as
+   * the mount fetch". Nothing enforced that. A comment is not a control: a
+   * param added to one and not the other silently changes which holds come back
+   * after a reviewer decides one, and the lane would look fine while showing
+   * the wrong set.
+   *
+   * The differences that ARE deliberate stay at the call sites, where they can
+   * be read next to the reason for them: the effect passes an abort signal and
+   * surfaces errors, reload passes none and swallows them because the ACTION
+   * succeeded and stale rows are not a failed action.
+   */
+  const fetchPage = useCallback(
+    (signal?: AbortSignal) =>
+      api.getReviewItems(
+        {
+          status: 'pending',
+          limit: REGROUP_FETCH_LIMIT,
+          // Pushed down so the fetch budget is spent on the kind being worked.
+          // Omitted entirely when empty: getReviewItems only sets the param for
+          // a truthy kind, and sending `kind=` would be a filter for the empty
+          // kind rather than for no filter.
+          ...(kindFilter ? { kind: kindFilter } : {}),
+        },
+        { ...(signal ? { signal } : {}), timeoutMs: REGROUP_FETCH_TIMEOUT_MS }
+      ),
+    [kindFilter]
+  );
+
+  const applyPage = useCallback((page: ReviewItemsPage) => {
+    setItems(page.items ?? []);
+    setTotal(page.total ?? 0);
+  }, []);
+
   useEffect(() => {
     if (!active) return;
     abortRef.current?.abort();
@@ -383,23 +425,10 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     setLoading(true);
     setError(null);
 
-    api
-      .getReviewItems(
-        {
-          status: 'pending',
-          limit: REGROUP_FETCH_LIMIT,
-          // Pushed down so the fetch budget is spent on the kind being worked.
-          // Omitted entirely when empty: getReviewItems only sets the param for
-          // a truthy kind, and sending `kind=` would be a filter for the empty
-          // kind rather than for no filter.
-          ...(kindFilter ? { kind: kindFilter } : {}),
-        },
-        { signal: ctrl.signal, timeoutMs: REGROUP_FETCH_TIMEOUT_MS }
-      )
+    fetchPage(ctrl.signal)
       .then((page) => {
         if (ctrl.signal.aborted) return;
-        setItems(page.items ?? []);
-        setTotal(page.total ?? 0);
+        applyPage(page);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -412,7 +441,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
       });
 
     return () => ctrl.abort();
-  }, [active, reloadToken, kindFilter]);
+  }, [active, reloadToken, kindFilter, fetchPage, applyPage]);
 
   // Keep the shared count fresh when the lane opens, so per-kind totals are not
   // stale on first paint while waiting for the next poll tick.
@@ -455,7 +484,8 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   // change, NOT when the query changes — the query is compared against it.
   const searchIndex = useMemo(() => {
     const index = new Map<string, string>();
-    for (const item of items) index.set(item.id, searchTextFor(item, payloadIndex.get(item.id) ?? null));
+    for (const item of items)
+      index.set(item.id, searchTextFor(item, payloadIndex.get(item.id) ?? null));
     return index;
   }, [items, payloadIndex]);
 
@@ -504,10 +534,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     });
   }, [items, byKind, query, searchIndex, filters.sortBy]);
 
-  const visible = useMemo(
-    () => buckets.reduce((n, b) => n + b.items.length, 0),
-    [buckets]
-  );
+  const visible = useMemo(() => buckets.reduce((n, b) => n + b.items.length, 0), [buckets]);
 
   // Every kind the SERVER holds, unioned with the kinds actually loaded. The
   // polled map is the primary source on purpose: a kind pushed off the end of a
@@ -550,22 +577,18 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
 
   const reload = useCallback(async () => {
     await Promise.all([
-      api
-        .getReviewItems(
-          {
-            status: 'pending',
-            limit: REGROUP_FETCH_LIMIT,
-            // 🔴 The SAME filter as the mount fetch. Reload runs after every
-            // approve, reject and bulk action; sending an unfiltered request
-            // here would silently repopulate the lane with every kind the
-            // moment a reviewer decided one hold.
-            ...(kindFilter ? { kind: kindFilter } : {}),
-          },
-          { timeoutMs: REGROUP_FETCH_TIMEOUT_MS }
-        )
+      fetchPage()
         .then((page) => {
-          setItems(page.items ?? []);
-          setTotal(page.total ?? 0);
+          // 🔴 This response is for the kind that was showing when the action
+          // was taken. Reload carries no abort signal on purpose -- it must
+          // finish so the decided hold actually leaves the list -- so nothing
+          // else cancels it, and a reviewer who switches kind while it is in
+          // flight would otherwise get the OLD kind's holds painted under the
+          // NEW kind's heading, with no error and no way to tell.
+          //
+          // fetchedKindRef is what the effect below is currently showing.
+          if (fetchedKindRef.current !== kindFilter) return;
+          applyPage(page);
         })
         .catch(() => {
           // A failed refresh after a SUCCESSFUL action must not report the
@@ -573,7 +596,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         }),
       loadCount(),
     ]);
-  }, [loadCount, kindFilter]);
+  }, [loadCount, kindFilter, fetchPage, applyPage]);
 
   const runItemAction = useCallback(
     async (item: ReviewItem, action: 'approve' | 'reject') => {
