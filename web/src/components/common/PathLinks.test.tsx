@@ -1,20 +1,25 @@
 // file: web/src/components/common/PathLinks.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 19ec3b3a-a184-4122-953f-32ebd321116c
-// last-edited: 2026-08-22
+// last-edited: 2026-09-01
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PathLinks, usePathAliases, __resetPathAliasesCacheForTests } from './PathLinks';
-import { __resetPathVarsCacheForTests } from '../../utils/formatPath';
+import { __resetPathVarsCacheForTests, derivePathVars } from '../../utils/formatPath';
 import { getConfig, type Config, type PathAlias } from '../../services/api';
 
-// A real root_dir so usePathVars (via the shared config fetch) abbreviates
-// the posix display to $(books)/... -- without this, display and copyText
-// are identical strings and the "copies the literal path, not the
-// abbreviated display" test below cannot fail even if the component copies
-// the wrong field.
+// A real root_dir so the abbreviation vars below turn the posix display into
+// $(books)/... -- without this, display and copyText are identical strings and
+// the "copies the literal path, not the abbreviated display" test below cannot
+// fail even if the component copies the wrong field.
+//
+// The vars now arrive as a PROP (they used to come from a usePathVars() call
+// inside PathLinks; see the vars prop's own comment for why that moved). That
+// makes these tests synchronous, but it also means they no longer prove the
+// vars reach a row from a real spine -- DupesSpine.test.tsx owns that wiring
+// assertion.
 vi.mock('../../services/api', () => ({
   getConfig: vi.fn().mockResolvedValue({ root_dir: '/library/books/audiobooks' }),
 }));
@@ -33,6 +38,7 @@ const ALIASES: PathAlias[] = [
   { root: '/library/books', windows: 'W:', unc: '\\\\host\\books', smb_url: 'smb://host/books' },
 ];
 const P = '/library/books/Author/Title/x.m4b';
+const VARS = derivePathVars('/library/books/audiobooks');
 
 beforeEach(() => {
   // First, before any mock setup: drop the module-scope config-fetch promises
@@ -47,7 +53,7 @@ beforeEach(() => {
 
 describe('PathLinks', () => {
   it('renders an anchor for the posix line on a handler platform', () => {
-    render(<PathLinks path={P} aliases={ALIASES} platform="macOS" />);
+    render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="macOS" />);
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
       'smb://host/books/Author/Title/x.m4b',
@@ -55,13 +61,13 @@ describe('PathLinks', () => {
   });
 
   it('renders no anchor at all on Windows', () => {
-    render(<PathLinks path={P} aliases={ALIASES} platform="Win32" />);
+    render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="Win32" />);
     expect(screen.queryByRole('link')).toBeNull();
     expect(screen.getByText(/W:\\Author\\Title\\x\.m4b/)).toBeInTheDocument();
   });
 
   it('copies the literal path, not the abbreviated display', async () => {
-    render(<PathLinks path={P} aliases={ALIASES} platform="macOS" />);
+    render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="macOS" />);
     // Wait for the mocked config fetch to resolve so the posix display has
     // actually abbreviated to $(books)/... -- otherwise display === copyText
     // before hydration and a component that copies `display` would pass too.
@@ -74,19 +80,19 @@ describe('PathLinks', () => {
     // Forces display !== copyText via the mocked root_dir above -- otherwise
     // this assertion would pass vacuously even if `title` were wired to
     // `display` instead of `copyText`.
-    render(<PathLinks path={P} aliases={ALIASES} platform="macOS" />);
+    render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="macOS" />);
     const posixText = await screen.findByText(/\$\(books\)/);
     expect(posixText).not.toHaveTextContent(P);
     expect(posixText).toHaveAttribute('title', P);
   });
 
   it('gives every rendering its own copy button', () => {
-    render(<PathLinks path={P} aliases={ALIASES} platform="macOS" />);
+    render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="macOS" />);
     expect(screen.getAllByRole('button', { name: /copy/i })).toHaveLength(3);
   });
 
   it('renders a single line when no alias matches', () => {
-    render(<PathLinks path="/elsewhere/x.m4b" aliases={ALIASES} platform="macOS" />);
+    render(<PathLinks path="/elsewhere/x.m4b" aliases={ALIASES} vars={VARS} platform="macOS" />);
     expect(screen.getAllByRole('button', { name: /copy/i })).toHaveLength(1);
     expect(screen.queryByRole('link')).toBeNull();
   });
@@ -95,7 +101,7 @@ describe('PathLinks', () => {
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
     });
-    render(<PathLinks path={P} aliases={ALIASES} platform="macOS" />);
+    render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="macOS" />);
     await userEvent.click(screen.getByRole('button', { name: /copy linux path/i }));
     // onClick is fire-and-forget (`() => void handleCopy(r)`), so the
     // rejection settles after the click resolves -- wait rather than assert

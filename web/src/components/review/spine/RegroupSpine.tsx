@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-09-01
 
@@ -61,6 +61,7 @@ import { EvidencePanel } from '../evidence/EvidencePanel';
 import { regroupEvidence } from '../evidence/adapters';
 import { formatBytes, formatDuration } from '../../../utils/mediaFormat';
 import { PathLinks, usePathAliases } from '../../common/PathLinks';
+import { usePathVars, type PathVar } from '../../../utils/formatPath';
 import type { RegroupBucket, RegroupLane } from '../lanes/useRegroupLane';
 import { regroupLane } from '../lanes/regroup';
 
@@ -91,10 +92,13 @@ export function MemberRow({
   entry,
   book,
   pathAliases,
+  pathVars,
 }: {
   entry: MemberEntry;
   book: Book | undefined;
   pathAliases: PathAlias[];
+  /** Threaded, not re-derived per row -- see the vars prop on PathLinksProps. */
+  pathVars: PathVar[];
 }) {
   const title = book?.title || entry.filePath.split('/').pop() || '(unknown)';
   const size = book?.file_size;
@@ -180,7 +184,7 @@ export function MemberRow({
         </Stack>
         {entry.filePath && (
           <Box sx={{ mt: 0.5 }}>
-            <PathLinks path={entry.filePath} aliases={pathAliases} />
+            <PathLinks path={entry.filePath} aliases={pathAliases} vars={pathVars} />
           </Box>
         )}
       </Box>
@@ -417,6 +421,7 @@ export function ItemActions({
 // getBook calls up front.
 export function MemberFilesDetail({ item }: { item: ReviewItem }) {
   const pathAliases = usePathAliases();
+  const pathVars = usePathVars();
   const payload = useMemo(() => parsePayload(item.payload), [item.payload]);
   const folder = payload?.folder ?? item.folder_ref;
   const title = payload?.survivorTitle ?? payload?.derived_title ?? payload?.title;
@@ -488,6 +493,7 @@ export function MemberFilesDetail({ item }: { item: ReviewItem }) {
               entry={e}
               book={e.bookId ? books.get(e.bookId) : undefined}
               pathAliases={pathAliases}
+              pathVars={pathVars}
             />
           ))}
         </Stack>

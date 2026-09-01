@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.memo.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f6c8b25-7d41-4e93-a052-9c1b7e4a0d68
 // last-edited: 2026-09-01
 //
@@ -50,6 +50,28 @@ vi.mock('../../common/PathLinks', async () => {
     usePathAliases: () => {
       const [aliases] = useState(NO_ALIASES);
       return aliases;
+    },
+  };
+});
+
+// `usePathVars` needs the identical treatment, and for the identical reason.
+// It used to be called inside PathLinks (below the memo boundary, so it could
+// not move a row's props); it is now hoisted into CompareSpine and threaded
+// down as `pathVars`, which puts it squarely ON the boundary. Unmocked, its
+// real config fetch resolves mid-test and hands all 20 rows a new array, so
+// "one checkbox re-renders one row" fails 21/1 for a reason that exists only
+// in the test.
+vi.mock('../../../utils/formatPath', async () => {
+  const actual = await vi.importActual<typeof import('../../../utils/formatPath')>(
+    '../../../utils/formatPath'
+  );
+  const NO_VARS: never[] = [];
+  const { useState } = await import('react');
+  return {
+    ...actual,
+    usePathVars: () => {
+      const [vars] = useState(NO_VARS);
+      return vars;
     },
   };
 });

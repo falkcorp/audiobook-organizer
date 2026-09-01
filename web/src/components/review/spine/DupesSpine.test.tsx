@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
 // last-edited: 2026-09-01
 //
@@ -30,6 +30,8 @@ import { DupesSpine, type DupesSpineContext } from './DupesSpine';
 import { appTheme } from '../../../theme';
 import * as api from '../../../services/api';
 import type { Config, DedupCandidate, PathAlias } from '../../../services/api';
+import { __resetPathVarsCacheForTests } from '../../../utils/formatPath';
+import { __resetPathAliasesCacheForTests } from '../../common/PathLinks';
 
 vi.mock('../../../services/api');
 
@@ -38,6 +40,12 @@ const ALIASES: PathAlias[] = [
 ];
 
 beforeEach(() => {
+  // Both usePathAliases and usePathVars memoize their config fetch at module
+  // scope, so without these resets the first test in this file seeds the
+  // answer for every later one -- and the pathVars test below deliberately
+  // uses a DIFFERENT root_dir from this default.
+  __resetPathAliasesCacheForTests();
+  __resetPathVarsCacheForTests();
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '', path_aliases: ALIASES } as Config);
 });
 
@@ -186,6 +194,32 @@ describe('dual-path display on a dupes row', () => {
 
     expect(await screen.findByRole('button', { name: 'Copy Windows path' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy UNC path' })).toBeInTheDocument();
+  });
+
+  it('threads pathVars through so the POSIX row renders the ABBREVIATED path', async () => {
+    // The twin of the aliases test above, for the other half of PathLinks's
+    // inputs. usePathVars() used to be called inside PathLinks itself; it is
+    // now hoisted to DupesSpine and threaded down as `vars`, which means a
+    // wiring mistake -- threading [] , or forgetting the prop on one of the two
+    // BookSides -- is INVISIBLE to every other test in this file: an
+    // unabbreviated path still renders, still has a copy button, and still
+    // matches every existing assertion. Only the $(libroot) token proves the
+    // vars actually arrived.
+    vi.mocked(api.getConfig).mockResolvedValue({
+      root_dir: '/library/books',
+      path_aliases: ALIASES,
+    } as Config);
+
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', file_path: '/library/books/Author/Title/x.m4b' },
+        book_b: { id: 'b1', title: 'Book B', file_path: '/library/books/Other/Title/y.m4b' },
+      } as unknown as Partial<DedupCandidate>),
+    ]);
+
+    // Both sides, so dropping the prop from one BookSide is caught too.
+    expect(await screen.findByText('$(libroot)/Author/Title/x.m4b')).toBeInTheDocument();
+    expect(screen.getByText('$(libroot)/Other/Title/y.m4b')).toBeInTheDocument();
   });
 
   it('renders no path row, and does not crash, when the book is missing', () => {

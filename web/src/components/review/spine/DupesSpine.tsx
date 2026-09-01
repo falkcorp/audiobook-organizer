@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
 // last-edited: 2026-09-01
 //
@@ -34,11 +34,12 @@ import {
   Chip,
   Link,
   Stack,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import StarIcon from '@mui/icons-material/Star';
 import type { Book, DedupCandidate, PathAlias } from '../../../services/api';
+import type { PathVar } from '../../../utils/formatPath';
+import { usePathVars } from '../../../utils/formatPath';
 import type { DupesAction } from '../reviewActions';
 import { dedupEvidence } from '../evidence/adapters';
 import { primarySignals } from '../evidence/signalLabels';
@@ -165,20 +166,26 @@ function QualityChip({ book }: { book: Book | null | undefined }) {
  * memo()-wrapped on top of that. When a row DOES legitimately re-render -- its
  * own checkbox was ticked, or the keyboard focus ring arrived -- neither side's
  * props have changed, so both sides and the two FolderFilesChip/PathLinks
- * subtrees under them skip entirely. `pathAliases` is a useState value from
- * usePathAliases and `book` is a slice of the candidate object, so both hold
- * still; if either started churning this memo would go inert rather than wrong.
+ * subtrees under them skip entirely. `pathAliases` and `pathVars` are useState
+ * values from usePathAliases/usePathVars and `book` is a slice of the candidate
+ * object, so all three hold still; if any started churning this memo would go
+ * inert rather than wrong. That is the whole reason usePathVars() is hoisted to
+ * the spine (see the note at its call site) rather than called per row: called
+ * here it would be 200 independent useState/useEffect pairs at the 100-row cap,
+ * each resolving on its own tick.
  */
 const BookSide = memo(function BookSide({
   book,
   id,
   recommended,
   pathAliases,
+  pathVars,
 }: {
   book: Book | null | undefined;
   id: string;
   recommended: boolean;
   pathAliases: PathAlias[];
+  pathVars: PathVar[];
 }) {
   const missing = !book;
   const path = book?.file_path ?? '';
@@ -216,16 +223,15 @@ const BookSide = memo(function BookSide({
           )}
           <QualityChip book={book} />
           {recommended && (
-            <Tooltip title="Richer metadata, so this side is recommended to keep">
-              <Chip
-                icon={<StarIcon />}
-                label="Recommended"
-                size="small"
-                color="primary"
-                variant="outlined"
-                data-testid="recommended-keep"
-              />
-            </Tooltip>
+            <Chip
+              icon={<StarIcon />}
+              label="Recommended"
+              title="Richer metadata, so this side is recommended to keep"
+              size="small"
+              color="primary"
+              variant="outlined"
+              data-testid="recommended-keep"
+            />
           )}
         </Stack>
 
@@ -235,7 +241,7 @@ const BookSide = memo(function BookSide({
           </Typography>
         )}
 
-        {path && <PathLinks path={path} aliases={pathAliases} />}
+        {path && <PathLinks path={path} aliases={pathAliases} vars={pathVars} />}
 
         {!missing && (
           <Box>
@@ -263,6 +269,7 @@ export interface CandidateRowProps {
   twoColumn: boolean;
   index: number;
   pathAliases: PathAlias[];
+  pathVars: PathVar[];
 }
 
 const CandidateRow = memo(function CandidateRow({
@@ -274,6 +281,7 @@ const CandidateRow = memo(function CandidateRow({
   twoColumn,
   index,
   pathAliases,
+  pathVars,
 }: CandidateRowProps) {
   const rec = recommendedKeepSide(candidate);
   const decided = candidate.status !== 'pending';
@@ -360,12 +368,14 @@ const CandidateRow = memo(function CandidateRow({
           id={candidate.entity_a_id}
           recommended={rec?.label === 'A'}
           pathAliases={pathAliases}
+          pathVars={pathVars}
         />
         <BookSide
           book={candidate.book_b}
           id={candidate.entity_b_id}
           recommended={rec?.label === 'B'}
           pathAliases={pathAliases}
+          pathVars={pathVars}
         />
       </Stack>
 
@@ -433,6 +443,12 @@ export function DupesSpine({
   // CompareSpine/RegroupSpine -- the render-only CandidateRow/BookSide pair
   // stays pure and doesn't each re-fetch config on its own.
   const pathAliases = usePathAliases();
+  // usePathVars() belongs here for the same reason usePathAliases() does, and
+  // until 2026-09-01 it did not: PathLinks called it internally, so every one
+  // of the 200 PathLinks instances at the 100-row page cap held its own
+  // useState+useEffect over the shared config promise and re-rendered when it
+  // resolved. Measured at 117 ms of 763 ms of blocked main-thread time.
+  const pathVars = usePathVars();
 
   // The stable half of `ctx`. Keyed on the individual callbacks, NOT on `ctx`
   // itself: DupesPanel writes `ctx` as an object literal, so it has a new
@@ -485,6 +501,7 @@ export function DupesSpine({
           twoColumn={twoColumn}
           index={i}
           pathAliases={pathAliases}
+          pathVars={pathVars}
         />
       ))}
     </Box>
