@@ -91,7 +91,7 @@ describe('PathLinks', () => {
     // (see the measurement note in PathLinks.tsx). Every OTHER query in this
     // file finds the button by role+name, which resolves from `aria-label` and
     // passes identically whether the `title` landed or not -- so without this
-    // assertion the hover hint could vanish with all 323 tests still green.
+    // assertion the hover hint could vanish with every other test still green.
     render(<PathLinks path={P} aliases={ALIASES} vars={VARS} platform="macOS" />);
     expect(screen.getByRole('button', { name: 'Copy Linux path' })).toHaveAttribute(
       'title',
