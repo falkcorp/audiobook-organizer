@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-07-13
+// last-edited: 2026-09-01
 
 package dedup
 
@@ -657,6 +657,17 @@ func TestLevenshteinDistance(t *testing.T) {
 		{"book", "back", 2},
 		{"flaw", "lawn", 2},
 		{"a", "b", 1},
+		// Non-ASCII. These are the rows this table never had: the previous
+		// implementation indexed BYTES, so every multi-byte rune counted as
+		// several edits and the dedup fuzzy signal understated similarity for
+		// any accented, Cyrillic or CJK name. internal/matcher's twin table
+		// has asserted these same answers all along.
+		{"José Saramago", "Jose Saramago", 1}, // one accented rune substituted
+		{"Böll", "Boll", 1},
+		{"Émile Zola", "Emile Zola", 1},
+		{"Достоевский", "Достоевскiй", 1},
+		{"村上春樹", "村上春树", 1}, // traditional vs simplified: one rune
+		{"東京", "東京都", 1},     // one CJK rune inserted
 	}
 
 	for _, tc := range tests {

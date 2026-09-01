@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package dedup
 
@@ -79,6 +79,16 @@ func IsProductionCompany(name string) bool {
 //     real names like "Anders Bergman" or "Andrea Cremer".
 var leadingConjunctionRe = regexp.MustCompile(`(?i)^(?:&|and)\s+`)
 
+// Compiled once, not per call. NormalizeAuthorName runs twice for every
+// candidate pair inside the pairwise metadata-fuzzy scan, so a
+// regexp.MustCompile in its body is two compilations per comparison over a
+// whole-library candidate set. leadingConjunctionRe below was already
+// package-level; these two were missed.
+var (
+	authorSpaceRe    = regexp.MustCompile(`\s+`)
+	authorInitialsRe = regexp.MustCompile(`([A-Z]\.)([A-Z])`)
+)
+
 // NormalizeAuthorName normalizes whitespace around initials and trims.
 // "James S. A. Corey" and "James S.A. Corey" both become "James S. A. Corey"
 //
@@ -98,8 +108,7 @@ func NormalizeAuthorName(name string) string {
 	}
 
 	// Normalize multiple spaces to single
-	spaceRe := regexp.MustCompile(`\s+`)
-	name = spaceRe.ReplaceAllString(name, " ")
+	name = authorSpaceRe.ReplaceAllString(name, " ")
 
 	// Strip a stranded leading conjunction, but never turn a name into nothing:
 	// a bare "&" or "and" with no remainder is left as-is for the caller's
@@ -109,9 +118,8 @@ func NormalizeAuthorName(name string) string {
 	}
 
 	// Expand collapsed initials: "S.A." → "S. A."
-	initialsRe := regexp.MustCompile(`([A-Z]\.)([A-Z])`)
-	for initialsRe.MatchString(name) {
-		name = initialsRe.ReplaceAllString(name, "$1 $2")
+	for authorInitialsRe.MatchString(name) {
+		name = authorInitialsRe.ReplaceAllString(name, "$1 $2")
 	}
 
 	return strings.TrimSpace(name)

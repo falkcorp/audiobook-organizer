@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-08-22
+// last-edited: 2026-09-01
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -317,6 +317,22 @@ func metaFuzzyConfidence(levSim float64, cfg MetaFuzzyConfig) float64 {
 // two strings: 1 - (levenshteinDistance / max(len(a), len(b))).
 // Returns 1.0 for two equal strings and 0.0 when the strings are maximally
 // different.  Two empty strings return 1.0.
+//
+// BOTH terms are measured in RUNES. That agreement is the whole correctness
+// argument here, and it was absent until 2026-09-01: the denominator counted
+// runes while levenshteinDistance counted BYTES, so a multi-byte character cost
+// 2-3 edits instead of 1. "東京" vs "東京都" -- one inserted character -- scored
+// 3/3, i.e. similarity 0.0, MAXIMALLY DIFFERENT. Since MinLevSimilarity gates
+// the signal away below 0.50, non-Latin titles and authors were systematically
+// under-scored and, when both fields were non-Latin, dropped outright.
+//
+// There is deliberately NO `if sim < 0` clamp. One used to sit here and it was
+// the bug's camouflage -- the only way this can go negative is the units
+// disagreeing again, and silently flooring that to 0 turns a detectable defect
+// into a plausible-looking score. Rune edit distance cannot exceed the longer
+// rune length, so sim stays in [0,1] by construction;
+// TestLevenshteinDistanceIsMeasuredInRunes enforces exactly that and is
+// verified to fail if the units diverge.
 func normalizedLevenshteinSimilarity(a, b string) float64 {
 	if a == b {
 		return 1.0
@@ -330,12 +346,7 @@ func normalizedLevenshteinSimilarity(a, b string) float64 {
 	if maxLen == 0 {
 		return 1.0
 	}
-	dist := levenshteinDistance(a, b) // reuses engine.go's function
-	sim := 1.0 - float64(dist)/float64(maxLen)
-	if sim < 0 {
-		sim = 0
-	}
-	return sim
+	return 1.0 - float64(levenshteinDistance(a, b))/float64(maxLen)
 }
 
 // metaTitleAuthorSimilarity computes a combined title+author similarity score
