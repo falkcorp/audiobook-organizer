@@ -96,3 +96,63 @@ never a person.
 Turning the `break` into a `return` was the other candidate fix and was rejected on
 measurement, not taste: it also destroys legitimate last-first composites such as
 `Smith, John; Doe, Jane`.
+
+#### A sixth and seventh copy, and a regression the first fix introduced
+
+Review of the fix above found that it shipped its own regression, for a reason
+worth recording alongside the first one. The claim was that
+`looksLikeAuthorName` had been "composed rather than replaced" — kept intact by
+adding the shared predicate to the one rule it carried that the predicate lacks.
+It carried **two** rules, and only one was preserved. The lost rule was "the last
+word must start with an uppercase letter", and because the shared predicate
+deliberately *permits* interior lowercase name particles, every particle of three
+or more characters — `van`, `von`, `del`, `della`, `dos` — began qualifying as a
+**surname**. Through the split scorer that does not merely add a candidate, it
+makes a wrong answer beat the right one:
+
+```
+"Ludwig van Beethoven Wolfgang Amadeus Mozart"
+   before  ["Ludwig van Beethoven"  "Wolfgang Amadeus Mozart"]
+   after   ["Ludwig van"  "Beethoven Wolfgang"  "Amadeus Mozart"]
+```
+
+Fixing that exposed the same bug one character down: `Le` is a *capitalized*
+particle, so a lowercase test does not catch it, and `Ursula Le Guin` split as
+`["Ursula Le", "Guin …"]`. Both tests are needed, and the particle list is now
+shared rather than copied a second time.
+
+Four further things came out of the same review:
+
+- **The slash branch was never gated**, and it is the first one tried. Its only
+  check was that a part be longer than two characters — it did not even require a
+  space. It was minting `Book 3`, `the quick brown`, `Ann Petry (DBY)` and
+  `Unabridged` as authors. It was missed because the branches were found by
+  reading rather than by running: the test's separator list contained no `/`, so
+  nothing ever reached it.
+- **The scanner and metadata copies called different predicates** at the same
+  logical place — a divergence that predates this work and survived it, because
+  the refactor faithfully preserved each call site's own predicate. They now
+  agree. Recorded honestly at the call site: this does **not** restore the old
+  behaviour and nothing can. The old code also rejected `Partners In Crime` and
+  `Part-Time Job`, by the very same accident that rejected Booker T. Washington
+  and Partha Chatterjee. Those strings are person-*shaped*; keeping the accident
+  means keeping the bug.
+- **Non-breaking spaces** were never normalized, because Go's `\s` is ASCII-only —
+  so `John Smith` was being stored as an author that can never match
+  `John Smith` in any index. Fixed by normalizing the space rather than refusing
+  the name.
+- **The "is this an initial?" rule was a byte count standing in for the question.**
+  As bytes it was meaningless for CJK; rewritten as a character count it became
+  actively wrong and rejected 村上 春樹 — a two-character Japanese surname — from
+  the very change made to stop dropping Japanese authors. It now asks what it
+  means, and as a side effect stops rejecting real two-letter surnames (Ng, Wu,
+  Li, Ho) in any script.
+
+Re-measured over 51,744 composites on a corpus built to include what the previous
+one could not see — non-ASCII names, trailing particles, slashes, non-breaking
+spaces and separator-free concatenations — the splitter now mints **392** distinct
+author strings where the old code minted **637**. Of the 224 composites it stops
+splitting, every one used the word "with", where the old code was producing
+authors like `Volker Kutscher with Bob`; and it now correctly splits 440 strings
+the old code could not split at all, because either name began with a non-ASCII
+letter.
