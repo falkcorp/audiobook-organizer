@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 /**
  * Tests for the regroup lane's data layer.
@@ -14,7 +14,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import { useReviewStore } from '../../../stores/useReviewStore';
-import { useRegroupLane } from './useRegroupLane';
+import { REGROUP_SEARCH_DEBOUNCE_MS, useRegroupLane } from './useRegroupLane';
 
 vi.mock('../../../services/api');
 
@@ -268,5 +268,325 @@ describe('the lane only fetches while it is showing', () => {
 
     rerender({ on: false });
     expect(captured?.aborted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The kind filter: the only one of the three that leaves the browser
+// ---------------------------------------------------------------------------
+
+/** makeItem with an explicit created_at, for the ordering tests. */
+function makeItemAt(id: string, kind: string, createdAt: string): api.ReviewItem {
+  return { ...makeItem(id, kind), created_at: createdAt };
+}
+
+/** The filter object of the Nth getReviewItems call (0-based). */
+function filterOfCall(n: number): api.ReviewItemsFilter {
+  return vi.mocked(api.getReviewItems).mock.calls[n][0] as api.ReviewItemsFilter;
+}
+
+function lastFilter(): api.ReviewItemsFilter {
+  const calls = vi.mocked(api.getReviewItems).mock.calls;
+  return calls[calls.length - 1][0] as api.ReviewItemsFilter;
+}
+
+describe('the kind filter is pushed to the server', () => {
+  it('sends no kind at all until one is chosen', async () => {
+    await renderLane();
+    // Not `kind: ''`. getReviewItems only sets the param for a truthy kind, but
+    // asserting the ABSENCE here is what stops a future refactor from sending an
+    // empty kind and quietly filtering for the empty-string kind.
+    expect(filterOfCall(0).kind).toBeUndefined();
+    expect(filterOfCall(0)).toMatchObject({ status: 'pending', limit: 500 });
+  });
+
+  it('refetches with the chosen kind rather than filtering the loaded page', async () => {
+    // 🔴 The whole point of item 1. Loading 500 mixed rows and hiding the
+    // unwanted ones spends the page budget on rows nobody asked for; on the live
+    // queue that is ~484 of the worked kind instead of 500.
+    const { result } = await renderLane();
+    expect(api.getReviewItems).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      result.current.setFilters({ kind: 'regroup.multidisc' });
+    });
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(2));
+
+    expect(filterOfCall(1)).toMatchObject({
+      status: 'pending',
+      limit: 500,
+      kind: 'regroup.multidisc',
+    });
+  });
+
+  it('keeps the kind on the reload that follows an item action', async () => {
+    // 🔴 THE SECOND CALL SITE. reload() runs after every approve, reject and
+    // bulk action. An unfiltered reload here would silently repopulate the lane
+    // with every kind the moment a reviewer decided one hold -- and a test that
+    // only checked the mount fetch would pass while it happened.
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    mockItems([makeItem('m1', 'regroup.multidisc', { recommendedAction: 'combine' })]);
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.setFilters({ kind: 'regroup.multidisc' });
+    });
+    await waitFor(() => expect(lastFilter().kind).toBe('regroup.multidisc'));
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(api.approveReviewItem).toHaveBeenCalled();
+    expect(lastFilter().kind).toBe('regroup.multidisc');
+  });
+
+  it('drops the previous kind rows while the new request is in flight', async () => {
+    // A lane that is fetching must not look like a lane that has answered. The
+    // spine only spins when it has NOTHING, so leaving the old kind's rows up
+    // would render the previous answer under the new heading.
+    const { result } = await renderLane();
+    expect(result.current.buckets.length).toBeGreaterThan(0);
+
+    vi.mocked(api.getReviewItems).mockImplementation(() => new Promise(() => {}));
+    await act(async () => {
+      result.current.setFilters({ kind: 'regroup.multidisc' });
+    });
+
+    await waitFor(() => expect(result.current.buckets).toHaveLength(0));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loaded).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Four counts, four meanings
+// ---------------------------------------------------------------------------
+
+describe('the counts stay distinct under a filter', () => {
+  it('reads the all-kinds total from the polled count once a kind is selected', async () => {
+    // 🔴 The server applies `kind` BEFORE taking the length, so the fetched
+    // `total` under a filter is that KIND's count. Rendering it as "N pending"
+    // beside the selector would understate the queue by every other kind.
+    setByKind({ 'regroup.ambiguous': 714, 'regroup.multidisc': 16 });
+    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('m1', 'regroup.multidisc')], 730);
+    const { result } = await renderLane();
+    // Unfiltered, the fetched total IS the queue and is preferred: it is the
+    // fresher of the two, having just been read.
+    expect(result.current.queueTotal).toBe(730);
+
+    mockItems([makeItem('m1', 'regroup.multidisc')], 16);
+    await act(async () => {
+      result.current.setFilters({ kind: 'regroup.multidisc' });
+    });
+    await waitFor(() => expect(result.current.total).toBe(16));
+
+    // The fetch total is the KIND's; the queue total is still the queue's.
+    expect(result.current.total).toBe(16);
+    expect(result.current.queueTotal).toBe(730);
+  });
+
+  it('a search narrows `visible` without touching `loaded` or `truncated`', async () => {
+    // 🔴 THE INTERACTION THAT WOULD SHIP BROKEN. Truncation means the lane
+    // failed to load rows that exist; a search hiding rows is the reviewer
+    // asking for that. Derive one from the other and every keystroke raises a
+    // "your view is partial" warning, which makes the real one unreadable.
+    setByKind({ 'regroup.ambiguous': 2 });
+    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('a2', 'regroup.ambiguous')], 2);
+    const { result } = await renderLane();
+    expect(result.current.buckets[0].truncated).toBe(false);
+
+    await act(async () => {
+      result.current.setFilters({ search: 'a1' });
+    });
+    await waitFor(() => expect(result.current.visible).toBe(1));
+
+    const bucket = result.current.buckets[0];
+    expect(result.current.loaded).toBe(2);
+    expect(bucket.loadedForKind).toBe(2);
+    expect(bucket.items).toHaveLength(1);
+    expect(bucket.hiddenBySearch).toBe(1);
+    // The load-bearing assertion.
+    expect(bucket.truncated).toBe(false);
+  });
+
+  it('offers every kind the SERVER holds, not merely the loaded ones', async () => {
+    // A kind pushed off the end of a truncated page would otherwise be missing
+    // from the one control that could bring it back.
+    setByKind({ 'regroup.ambiguous': 714, 'regroup.anthology': 3 });
+    mockItems([makeItem('a1', 'regroup.ambiguous')], 717);
+    const { result } = await renderLane();
+
+    expect(result.current.kindOptions.map((k) => k.kind)).toContain('regroup.anthology');
+    expect(result.current.kindOptions.find((k) => k.kind === 'regroup.anthology')?.count).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Search: what it matches, and that it waits
+// ---------------------------------------------------------------------------
+
+describe('search over the loaded holds', () => {
+  it('matches the summary, the folder path, the proposed title and a member file', async () => {
+    mockItems([
+      makeItem('a1', 'regroup.ambiguous', { survivorTitle: 'The Silmarillion' }),
+      makeItem('a2', 'regroup.ambiguous', { files: ['/mnt/media/tolkien/silm-01.m4b'] }),
+      makeItem('a3', 'regroup.ambiguous', { folder: '/mnt/media/asimov' }),
+    ]);
+    const { result } = await renderLane();
+
+    // 🔴 WAIT ON THE IDS, NOT ON THE COUNT. Every query below happens to leave
+    // exactly one row visible, so `waitFor(visible === 1)` is already satisfied
+    // by the PREVIOUS query's result and returns before the debounce has moved
+    // anything. That is not a hypothetical: it passed this test against the
+    // wrong row until the assertion named the row.
+    const expectOnly = async (q: string, id: string) => {
+      await act(async () => result.current.setFilters({ search: q }));
+      await waitFor(() =>
+        expect(result.current.buckets.flatMap((b) => b.items.map((i) => i.id))).toEqual([id])
+      );
+    };
+
+    await expectOnly('silmarillion', 'a1');
+    await expectOnly('silm-01', 'a2');
+    await expectOnly('asimov', 'a3');
+
+    // The item's own summary, which is what a hold with no payload shows.
+    await expectOnly('hold a3', 'a3');
+
+    // And the item's own folder_ref, which is the fallback the row renders when
+    // the payload carries no folder of its own.
+    await expectOnly('/audiobooks/a2', 'a2');
+  });
+
+  it('waits for the debounce before narrowing the buckets', async () => {
+    // The search never leaves the browser, so removing the debounce changes no
+    // REQUEST -- which is exactly why a request-counting test cannot see it.
+    // Fake timers and the visible count can.
+    mockItems([
+      makeItem('a1', 'regroup.ambiguous'),
+      makeItem('a2', 'regroup.ambiguous'),
+      makeItem('a3', 'regroup.ambiguous'),
+    ]);
+    const { result } = await renderLane();
+    expect(result.current.visible).toBe(3);
+
+    // Fake timers only now: faking before the initial load makes that load
+    // resolve outside act().
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        result.current.setFilters({ search: 'a1' });
+      });
+
+      // The field has the text immediately -- typing must never lag.
+      expect(result.current.filters.search).toBe('a1');
+      // The buckets have NOT moved yet. This is the assertion the missing
+      // debounce fails.
+      expect(result.current.visible).toBe(3);
+
+      await act(async () => {
+        vi.advanceTimersByTime(REGROUP_SEARCH_DEBOUNCE_MS);
+      });
+
+      expect(result.current.visible).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clearFilters drops the pending debounced query in the same tick', async () => {
+    // Leaving it to the timer would mean "Clear filters" visibly did nothing for
+    // a quarter of a second.
+    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('a2', 'regroup.ambiguous')]);
+    const { result } = await renderLane();
+
+    await act(async () => result.current.setFilters({ search: 'a1' }));
+    await waitFor(() => expect(result.current.visible).toBe(1));
+
+    act(() => result.current.clearFilters());
+    expect(result.current.filters.search).toBe('');
+    expect(result.current.visible).toBe(2);
+    expect(result.current.filtersActive).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sort: a TOTAL comparator, because equal rows must not reshuffle
+// ---------------------------------------------------------------------------
+
+describe('sort ordering', () => {
+  // Insertion order is deliberately NOT the answer for any of these. A fixture
+  // whose correct order happens to equal its input order cannot observe a
+  // comparator that returns 0 -- Array.prototype.sort is stable, so it would
+  // hand the input straight back and the assertion would pass.
+  const scrambled = [
+    makeItemAt('b', 'regroup.ambiguous', '2026-03-01T00:00:00Z'),
+    makeItemAt('a', 'regroup.ambiguous', '2026-01-01T00:00:00Z'),
+    makeItemAt('c', 'regroup.ambiguous', '2026-02-01T00:00:00Z'),
+  ];
+
+  const idsOf = (result: { current: { buckets: { items: api.ReviewItem[] }[] } }) =>
+    result.current.buckets.flatMap((b) => b.items.map((i) => i.id));
+
+  it('newest first orders by created_at descending', async () => {
+    mockItems(scrambled);
+    const { result } = await renderLane();
+    await act(async () => result.current.setFilters({ sortBy: 'newest' }));
+    await waitFor(() => expect(idsOf(result)).toEqual(['b', 'c', 'a']));
+  });
+
+  it('oldest first orders by created_at ascending', async () => {
+    mockItems(scrambled);
+    const { result } = await renderLane();
+    await act(async () => result.current.setFilters({ sortBy: 'oldest' }));
+    await waitFor(() => expect(idsOf(result)).toEqual(['a', 'c', 'b']));
+  });
+
+  it('breaks a created_at tie on the id rather than leaving it to the fetch order', async () => {
+    // 🔴 Ties are the NORMAL case here, not the exotic one: the queue is written
+    // in bulk by a scan, so holds sharing a created_at to the second are routine.
+    // A comparator that returned 0 for them would leave their order at the mercy
+    // of whatever the server handed back, and the list would reshuffle between
+    // renders. Insertion order below is [zz, aa]; the id tie-break says [aa, zz].
+    mockItems([
+      makeItemAt('zz', 'regroup.ambiguous', '2026-01-01T00:00:00Z'),
+      makeItemAt('aa', 'regroup.ambiguous', '2026-01-01T00:00:00Z'),
+    ]);
+    const { result } = await renderLane();
+
+    await act(async () => result.current.setFilters({ sortBy: 'oldest' }));
+    await waitFor(() => expect(idsOf(result)).toEqual(['aa', 'zz']));
+
+    // And descending on the other axis, so a tie-break hard-coded to one
+    // direction is caught too.
+    await act(async () => result.current.setFilters({ sortBy: 'newest' }));
+    await waitFor(() => expect(idsOf(result)).toEqual(['zz', 'aa']));
+  });
+
+  it('kind sort keeps buckets alphabetical by label, which is the pre-filter behaviour', async () => {
+    // 'Ambiguous folders' < 'Multi-disc groups'. The default must reproduce what
+    // the lane did before there was a sort control at all.
+    mockItems([
+      makeItemAt('m1', 'regroup.multidisc', '2026-05-01T00:00:00Z'),
+      makeItemAt('a1', 'regroup.ambiguous', '2026-01-01T00:00:00Z'),
+    ]);
+    const { result } = await renderLane();
+
+    expect(result.current.filters.sortBy).toBe('kind');
+    expect(result.current.buckets.map((b) => b.kind)).toEqual([
+      'regroup.ambiguous',
+      'regroup.multidisc',
+    ]);
+
+    // Newest-first reorders the BUCKETS too, by their leading hold -- the sort
+    // is over the whole visible set, merely rendered grouped.
+    await act(async () => result.current.setFilters({ sortBy: 'newest' }));
+    await waitFor(() =>
+      expect(result.current.buckets.map((b) => b.kind)).toEqual([
+        'regroup.multidisc',
+        'regroup.ambiguous',
+      ])
+    );
   });
 });

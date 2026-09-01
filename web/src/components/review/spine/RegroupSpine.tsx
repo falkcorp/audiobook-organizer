@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 
 /**
  * The regroup lane's renderer -- the THIRD comparison shape in this workspace.
@@ -62,6 +62,7 @@ import { regroupEvidence } from '../evidence/adapters';
 import { formatBytes, formatDuration } from '../../../utils/mediaFormat';
 import { PathLinks, usePathAliases } from '../../common/PathLinks';
 import type { RegroupBucket, RegroupLane } from '../lanes/useRegroupLane';
+import { regroupLane } from '../lanes/regroup';
 
 // fetchBooksByIds resolves member book IDs to full Book records in bounded batches
 // (a group can hold dozens of files; don't fire dozens of concurrent requests). A
@@ -520,25 +521,46 @@ function BucketHeader({ bucket, lane }: { bucket: RegroupBucket; lane: RegroupLa
           here. When those differ, saying only the loaded count would understate
           what the button does by whatever the difference happens to be. On
           production today that is 484 shown against 714 acted on.
+
+          🔴 BOTH NUMBERS ARE PRE-SEARCH. `loadedForKind`, never `items.length`:
+          the search box hides rows without unloading them, so feeding the
+          visible count in here would make every keystroke look like the lane
+          had failed to load rows it is holding -- and would understate the
+          bulk buttons' scope at the same time. What the search hid is its own
+          chip below, in its own words.
         */}
         {bucket.truncated ? (
           <Tooltip
-            title={`${bucket.items.length} loaded, ${bucket.totalForKind} pending on the server. Bulk actions below apply to all ${bucket.totalForKind}.`}
+            title={`${bucket.loadedForKind} loaded, ${bucket.totalForKind} pending on the server. Bulk actions below apply to all ${bucket.totalForKind}.`}
           >
             <Chip
               size="small"
               color="warning"
               variant="outlined"
               data-testid={`regroup-count-${bucket.kind}`}
-              label={`${bucket.items.length} of ${bucket.totalForKind}`}
+              label={`${bucket.loadedForKind} of ${bucket.totalForKind}`}
             />
           </Tooltip>
         ) : (
           <Chip
             size="small"
             data-testid={`regroup-count-${bucket.kind}`}
-            label={bucket.items.length}
+            label={bucket.loadedForKind}
           />
+        )}
+        {bucket.hiddenBySearch > 0 && (
+          <Tooltip
+            title={`${bucket.hiddenBySearch} loaded hold${
+              bucket.hiddenBySearch === 1 ? '' : 's'
+            } of this kind do not match the search. They are hidden, not gone — bulk actions below still reach them.`}
+          >
+            <Chip
+              size="small"
+              variant="outlined"
+              data-testid={`regroup-hidden-${bucket.kind}`}
+              label={`${bucket.items.length} match the search`}
+            />
+          </Tooltip>
         )}
       </Box>
       <Stack direction="row" spacing={1}>
@@ -613,13 +635,38 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
   }
 
   if (lane.buckets.length === 0) {
+    // 🔴 EMPTY AND FILTERED-EMPTY ARE DIFFERENT ANSWERS. This branch used to
+    // say "Nothing to review 🎉" for both, which under a filter is a
+    // congratulation on a queue that may hold hundreds of holds — the reviewer's
+    // next step is "widen the filter", not "go home". The queue-empty copy now
+    // comes from the lane descriptor, which has carried it unused since the
+    // lane was ported.
+    if (lane.filtersActive) {
+      return (
+        <Paper sx={{ p: 6, textAlign: 'center' }} data-testid="regroup-spine">
+          <Typography variant="h6" gutterBottom data-testid="regroup-empty-filtered">
+            No holds match these filters
+          </Typography>
+          <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
+            {lane.queueTotal > 0
+              ? `The queue still holds ${lane.queueTotal} pending item${
+                  lane.queueTotal === 1 ? '' : 's'
+                }. Widen the filters to see them.`
+              : 'Widen the filters to see the queue.'}
+          </Typography>
+          <Button size="small" variant="outlined" onClick={lane.clearFilters}>
+            Clear filters
+          </Button>
+        </Paper>
+      );
+    }
     return (
       <Paper sx={{ p: 6, textAlign: 'center' }} data-testid="regroup-spine">
-        <Typography variant="h6" gutterBottom>
+        <Typography variant="h6" gutterBottom data-testid="regroup-empty">
           Nothing to review 🎉
         </Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          When the system flags something for a decision, it will show up here.
+          {regroupLane.emptyMessage}
         </Typography>
       </Paper>
     );

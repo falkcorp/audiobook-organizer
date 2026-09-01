@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.73.0
+// version: 2.74.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-28
+// last-edited: 2026-09-01
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -6291,7 +6291,15 @@ export interface ReviewCount {
 }
 
 /** GET /review/items → flat {items, count, limit, offset, total} (RespondWithList,
- *  no `data` wrapper). */
+ *  no `data` wrapper).
+ *
+ *  🔴 `total` IS SCOPED TO THE FILTER, not to the queue. The store applies `kind`
+ *  BEFORE taking the length (internal/database/review_store.go, ListReviewItems:
+ *  `total := len(all)` after the Kind loop), so a kind-filtered request answers
+ *  with that kind's pending count and NOT with the queue's. A caller that renders
+ *  this as "N pending" beside a kind selector will understate the queue by
+ *  whatever the other kinds hold. Use the polled /review/count for the all-kinds
+ *  number. */
 export interface ReviewItemsPage {
   items: ReviewItem[];
   count: number;
@@ -6355,7 +6363,12 @@ export async function getReviewItems(
   // apiFetch has always accepted a signal; this function simply never plumbed
   // one through, so a lane that switched away kept its request running with no
   // way to cancel it. Same gap, same fix as getDedupCandidates.
-  opts?: { signal?: AbortSignal }
+  //
+  // `timeoutMs` is opt-in per caller rather than a default here, matching
+  // apiFetch's own contract: a caller that knows this endpoint should be fast
+  // asks for a deadline, and the globally polled useReviewStore keeps the
+  // historical no-deadline behaviour untouched.
+  opts?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<ReviewItemsPage> {
   const params = new URLSearchParams();
   params.set('status', filter.status ?? 'pending');
@@ -6364,6 +6377,7 @@ export async function getReviewItems(
   if (filter.offset !== undefined) params.set('offset', String(filter.offset));
   const response = await apiFetch(`${API_BASE}/review/items?${params.toString()}`, {
     signal: opts?.signal,
+    timeoutMs: opts?.timeoutMs,
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch review items');
