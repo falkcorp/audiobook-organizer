@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-01
 
@@ -736,7 +736,7 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 
 		// If we still don't have an artist, try to get from parent directory
 		if metadata.Artist == "" {
-			metadata.Artist = extractAuthorFromDirectory(filePath)
+			metadata.Artist = authorname.ExtractAuthorFromDirectory(filePath)
 		}
 
 		// And the directory itself is usually literally "Unknown Author".
@@ -797,7 +797,7 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 
 	// Try to parse "Title - Author" or "Author - Title" patterns
 	if strings.Contains(filename, " - ") {
-		title, author := parseFilenameForAuthor(filename)
+		title, author := authorname.ParseFilenameForAuthor(filename)
 		if author != "" {
 			metadata.Title = title
 			metadata.Artist = author
@@ -816,91 +816,6 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 	}
 
 	return metadata
-}
-
-// extractAuthorFromDirectory extracts author from directory name with validation
-func extractAuthorFromDirectory(filePath string) string {
-	dir := filepath.Dir(filePath)
-	dirName := filepath.Base(dir)
-
-	// Skip common non-author directory names
-	skipDirs := map[string]bool{
-		"books": true, "audiobooks": true, "newbooks": true, "downloads": true,
-		"media": true, "audio": true, "library": true, "collection": true,
-		"bt": true, "incomplete": true, "data": true,
-	}
-
-	if skipDirs[strings.ToLower(dirName)] {
-		return ""
-	}
-
-	// Handle "Author - translator - Title" patterns, and "Author, Co-Author -
-	// translator - Title" for TWO authors only. The shape gate below gives
-	// LooksLikePersonName the whole credit, and that caps it at four words, so
-	// "Terry Pratchett, Neil Gaiman, Stephen Fry - translator - X" is refused
-	// where the ungated code accepted it. A refusal here yields no author
-	// rather than a wrong one, which is the trade this file makes everywhere,
-	// but the old comment promised a capability the gate does not deliver.
-	if strings.Contains(dirName, " - translator - ") || strings.Contains(dirName, " - narrated by - ") {
-		re := regexp.MustCompile(`^([^-]+)\s*-\s*(?:translator|narrated by)\s*-`)
-		matches := re.FindStringSubmatch(dirName)
-		if len(matches) > 1 {
-			// Shape-gated like the two branches below. This returned matches[1]
-			// with NO predicate at all -- not IsValidAuthor, not
-			// LooksLikePersonName -- and it is the FIRST branch tried, so it
-			// decided the author before either gate could run:
-			//   "Discworld - translator - Mort"            -> "Discworld"
-			//   "the quick brown - translator - Mort"       -> "the quick brown"
-			//   "Unabridged - narrated by - Stephen Fry"    -> "Unabridged"
-			// Same defect as internal/dedup's slash branch, and missed the same
-			// way: the branches were gated one at a time by READING the function,
-			// and the first-tried one was not in the corpus that measured it.
-			if candidate := strings.TrimSpace(matches[1]); personname.LooksLikePersonName(candidate) {
-				return candidate
-			}
-		}
-	}
-
-	// Extract author from "Author - Title" directory pattern
-	if strings.Contains(dirName, " - ") {
-		parts := strings.SplitN(dirName, " - ", 2)
-		if len(parts) > 0 {
-			author := strings.TrimSpace(parts[0])
-			if personname.LooksLikePersonName(author) {
-				return author
-			}
-		}
-	}
-
-	// Use directory name if it's valid
-	if personname.LooksLikePersonName(dirName) {
-		return dirName
-	}
-
-	return ""
-}
-
-// parseFilenameForAuthor attempts to intelligently parse title and author from filename
-// Handles patterns like "Title - Author" or "Author - Title"
-// Returns (title, author) where author is empty string if pattern not detected
-func parseFilenameForAuthor(filename string) (string, string) {
-	parts := strings.Split(filename, " - ")
-	if len(parts) != 2 {
-		return "", "" // Not a simple two-part pattern
-	}
-
-	left := strings.TrimSpace(parts[0])
-	right := strings.TrimSpace(parts[1])
-
-	// One shared decision, four call sites. This copy used to carry the ONLY
-	// initials tiebreak of the four; it now lives in ChooseAuthorSide, so
-	// scanner gets it too.
-	title, author, ok := personname.ChooseAuthorSide(left, right, personname.PreferRightOnTie)
-	if !ok {
-		// Couldn't determine, return empty author
-		return "", ""
-	}
-	return title, author
 }
 
 // ExtractCoverArt extracts embedded cover art from an audio file and saves it

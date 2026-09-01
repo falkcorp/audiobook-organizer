@@ -1,140 +1,128 @@
 <!-- file: PLAN.md -->
-<!-- version: 1.1.0 -->
-<!-- guid: 7d21c8f4-3e05-4a97-b6d2-1c8f5a09e743 -->
+<!-- version: 1.0.0 -->
+<!-- guid: f8f51548-8481-466d-b8e8-bc96a250ee51 -->
 <!-- last-edited: 2026-09-01 -->
 
-# Plan — unify the metadata-provenance duplication
+# Plan — collapse the two path→author parsers
 
-**Status: EXECUTED 2026-09-01.** Three places where reality differed from this
-plan are recorded at the bottom under "What the plan got wrong" — the plan is
-kept as written above so the difference is legible.
+Branch `refactor/unify-author-parsers`, worktree `.worktrees/author-parsers`.
 
-Branch `refactor/unify-metadata-provenance`, worktree `.worktrees/provenance`.
-Next target after `internal/metastate` (#3025) and `internal/personname` (#3029),
-both of which found real bugs hiding in the duplication.
+Written while the user is AFK, on "fix everything you can". No approval gate was
+available; the plan is recorded here so the reasoning is reviewable after the
+fact. **Status: EXECUTED 2026-09-01**, with one finding that inverted the premise
+— see "What the plan got wrong".
 
 ## Goal
 
-Remove the last measured duplication in the metadata-state cluster:
-`buildMetadataProvenance` (79 lines, two copies) and `metadataFieldState`
-(one copy that shadows `metafetch.MetadataFieldState`).
+`extractAuthorFromDirectory` and `parseFilenameForAuthor` existed as separate
+copies in `internal/scanner` and `internal/metadata`. `internal/authorname`'s
+package comment had been tracking them as the last outstanding duplication in
+this cluster since the `personname` unification (#3029), with the note: *"Until
+they are collapsed, a fix to one is not a fix to the other."*
 
-## What is actually there — verified by grep at `cb6136033`, not assumed
+Collapse them. Close that note.
 
-| symbol | locations | status |
-|---|---|---|
-| `buildMetadataProvenance` | `audiobooks/helpers.go:398`, `server/server_metadata.go:355` | identical but for one type name |
-| `metadataFieldState` (audiobooks) | `helpers.go:45` | field-for-field, tag-for-tag identical to `metafetch.MetadataFieldState` |
-| `database.MetadataFieldState` | `store.go:1077` | **NOT a copy — do not touch** |
+## What was actually there — measured, not assumed
 
-Two findings that shape the plan:
+| function | scanner | metadata | real difference |
+|---|---|---|---|
+| `parseFilenameForAuthor` | 18 lines | 19 lines | **none** — identical modulo comments; both are a shim over `personname.ChooseAuthorSide` |
+| `extractAuthorFromDirectory` | 121 lines | 60 lines | **two**: the path-split idiom, and 4 extra `skipDirs` entries |
 
-1. **The `server` copy has ZERO production callers.** Its only caller is
-   `server/tag_roundtrip_test.go:153`. It is dead production code kept alive by
-   its own test — the same shape as `isInitialToken`, removed in #3029. The
-   `audiobooks` copy carries both real callers (`service_single.go:64,181`).
-2. **`database.MetadataFieldState` is a false positive.** It is the *stored row*
-   type — `*string` JSON-encoded values plus `BookID`/`Field` — while the other
-   two are the *decoded view* type (`any` values, no keys). Same name, different
-   meaning. Anyone who greps the name and folds all three corrupts data. This is
-   why the plan names files rather than symbols.
+The 121-vs-60 line gap is almost entirely comment. Stripping comment-only lines
+left a diff of two hunks.
 
-## Why `internal/metafetch` is the home, and not a new package
+## The premise this plan started from was wrong
 
-`audiobooks` and `server` **both already import `metafetch`**
-(`audiobooks/organize.go:17`, `audiobooks/rename.go:15`,
-`server/server_metadata.go:18`), and `metafetch` imports neither — so no new
-dependency and no cycle in either direction. `metafetch` already owns the
-canonical `MetadataFieldState`. A new leaf package would be justified only if a
-cycle forced it; it does not, so this is a move, not an extraction.
+Memory carried the claim *"metadata runs FIRST, so a scanner-only fix is INERT."*
+Both call sites are guarded by `== ""` on **different fields** (`metadata.Artist`
+vs `book.Author`), so that framing did not obviously hold and had to be settled
+before designing anything.
 
-## Files to change
+Traced: `scanner.go:1383` does `books[idx].Author = meta.Artist` when non-empty,
+and two of the three `extractInfoFromPath` calls run before it. So metadata's
+copy **can** overwrite scanner's result. The premise survives — but it turned out
+not to matter, for the reason below.
 
-1. `internal/metafetch/helpers.go` — add exported `BuildMetadataProvenance`
-   (the `audiobooks` body verbatim, retyped to `MetadataFieldState`).
-   Delete the deprecated `metadataFieldState` alias at `:167` if it has no users left.
-2. `internal/audiobooks/helpers.go` — delete local `metadataFieldState` and
-   `buildMetadataProvenance`; keep the narrowed mirror comment from #3025 accurate.
-3. `internal/audiobooks/{service_single,service_mutation}.go` — retype ~8 uses.
-4. `internal/server/server_metadata.go` — delete the dead copy.
-5. `internal/server/tag_roundtrip_test.go` — call `metafetch.BuildMetadataProvenance`.
-6. `changelog.d/` fragment — headerless.
+## The finding that made this a small change
 
-## Ordered steps
+A 28-path differential corpus was run through **both** copies before anything was
+moved. They disagreed on **exactly one** path:
 
-1. Confirm the two bodies are identical modulo the type name
-   (`git show`-extract both, `diff`) — **do not** assume from the earlier survey.
-2. Move the function into `metafetch`, exported. Build.
-3. Repoint `audiobooks`, delete its local type and function. Build.
-4. Delete the `server` copy, repoint its test. Build.
-5. `go build ./... && go vet ./... && gofmt -l ./internal/`.
-6. Full suites for `audiobooks`, `server`, `metafetch`, `metadata`.
+```
+/lib/Unknown Author/01.mp3   metadata => "Unknown Author"   scanner => ""
+```
+
+Every other path agreed, including all three of scanner's other extra `skipDirs`
+entries (`import`, `imports`, `organized`).
+
+**Why:** `personname.LooksLikePersonName` requires 2–4 words. Every single-word
+directory name is refused by the shape gate whether or not `skipDirs` catches it
+first — so 14 of the map's 15 entries **cannot change an answer**. `Unknown
+Author` is the only two-word entry, hence the only live one.
+
+So the change is a one-row behaviour delta, not the four-entry fix it looked
+like. And that row is cleared by `metadata.go`'s own placeholder guard six lines
+below the assignment, making it invisible to callers.
+
+## Files changed
+
+1. `internal/authorname/parse.go` — **new**. `ExtractAuthorFromDirectory` and
+   `ParseFilenameForAuthor`, one implementation each, `skipDirs` as the union.
+2. `internal/authorname/authorname.go` — the duplication NOTE closed.
+3. `internal/metadata/metadata.go`, `internal/scanner/scanner.go` — copies
+   deleted, 4 production call sites repointed.
+4. `internal/{metadata,scanner}/author_parsers_shim_test.go` — **new**,
+   test-only aliases so each package keeps its own consumer-side tests without
+   churning ~40 references.
+5. `internal/authorname/parse_test.go` — **new**, the corpus as a table.
+6. `internal/metadata/unknown_author_directory_consumer_test.go` — **new**, the
+   consumer-level assertion.
+7. `changelog.d/` fragment — headerless.
 
 ## Test strategy
 
-- **The move must be behaviour-preserving, so prove it rather than assert it.**
-  Before changing anything, capture `buildMetadataProvenance` output for a fixed
-  set of books/metadata from **both** copies via a throwaway probe; after the
-  move, re-run against the shared one and diff. This is the differential that
-  #3029 shipped without, at the cost of two rounds of review.
-- `internal/metadata/write_roundtrip_test.go:432` already asserts every
-  `Metadata` field is represented. Confirm it still runs and still fails when a
-  field is dropped — mutation-check it rather than trusting the green.
-- Mutation-test the moved function once: drop one provenance field, confirm a
-  test fails. If none does, the coverage is nominal and I will say so.
+- **Differential over both copies, before and after.** Predicted result was an
+  empty diff on the scanner side and one row on the metadata side; both confirmed.
+- **Assert on the CONSUMER, not the helper.** #3029 measured a predicate and
+  asserted about the consumer, and 886 bad author strings followed. So
+  `ExtractMetadata` itself is driven over a real temp file under an
+  `Unknown Author` directory, with a known-good twin (`Terry Pratchett`) so the
+  empty-result assertion cannot pass vacuously.
+- **Mutation-check the one live `skipDirs` entry** rather than trusting the green.
 
 ## Rollback
 
-Single branch, no data migration, no config, no flags. `git revert` the merge, or
-close the PR — nothing outside these six files changes.
+Single branch, no data migration, no config, no flags. `git revert` the merge.
 
 ## Explicitly NOT in scope
 
-- `stringPtr` (×8) and `boolPtr` (×6). Trivial one-liners that cannot diverge
-  harmfully; folding them is churn with no defect to point at.
-- `database.MetadataFieldState` — see above.
-- The two still-duplicated parsers (`parseFilenameForAuthor`,
-  `extractAuthorFromDirectory`), flagged in `internal/authorname/authorname.go`.
-  Separate change, and #3029 must land first since it touches both copies.
+- `todo.d/20260825-directory-fallback-reads-title-as-author.md` — the scanner's
+  Pratchett-036 guard. Referenced by the moved comments; not touched.
+- Each call site's own guards and their ordering. The Pratchett-036 argument is
+  about **when** the placeholder is cleared relative to the filename fallback;
+  that is call-site-specific and deliberately stayed where it was.
 
 ---
 
 ## What the plan got wrong
 
-Recorded rather than edited away, because the gap between a plan and its
-execution is the useful part.
+**1. It expected a bug fix and found an inert divergence.** The plan was framed
+around scanner's `skipDirs` being stronger and metadata's being the one that
+decides production authors. Measurement inverted it: three of the four extra
+entries are dead, and the fourth is masked downstream. Reasoning about the
+predicate said "scanner is stronger"; running the function said "they agree on 27
+of 28 paths, and the 28th is cleared anyway."
 
-**1. `buildMetadataProvenance` had an undeclared dependency: `nonEmpty`.** The
-plan listed the files to change and did not notice that the function body calls a
-5-line helper which ALSO existed twice (`internal/audiobooks/helpers.go`,
-`internal/server/server_helpers.go`, byte-identical). Moving the function without
-it would have created a THIRD copy — the exact outcome the change exists to
-prevent. `metafetch.NonEmpty` is now canonical and both packages hold a one-line
-`var nonEmpty = metafetch.NonEmpty`, so there is one implementation and none of
-the 52 call sites had to change.
+**2. It nearly shipped a test that measured the wrong string.**
+`TestSkipDirsIsRedundantExceptForThePlaceholder` first asked
+`LooksLikePersonName` about the map's **keys** — which are lowercased, because
+lookup lowercases the directory name. The gate refuses `"unknown author"` for
+starting lowercase, not for its shape, so every entry looked redundant and the
+test failed on its own placeholder case. The question "could any capitalisation
+of this key reach the gate?" needs the key title-cased first.
 
-The plan explicitly scoped out `stringPtr`/`boolPtr` as "trivial one-liners that
-cannot diverge harmfully". That reasoning was fine for them and wrong for
-`nonEmpty`, on a distinction the plan did not draw: a helper the moved code
-DEPENDS ON is not optional scope.
-
-**2. `metafetch`'s deprecated `metadataFieldState` alias is not dead.** Step 1
-said to "delete the deprecated alias at :167 if it has no users left". It has ~15,
-across `metadata_state_service.go` and `helpers.go` itself. Checked rather than
-assumed; left in place with its comment corrected to say so.
-
-**3. The differential probe was worth more than the plan implied.** It is listed
-as a test-strategy bullet, and it is the only reason "behaviour-preserving" is a
-measurement here rather than a claim: six cases covering nil state,
-override-beats-stored-beats-fetched, name threading and comparison values,
-captured before the move and diffed after. **Byte-identical, 14,666 bytes.** The
-probe is deleted; the result is this paragraph.
-
-## Result, measured
-
-| symbol | before | after |
-|---|---|---|
-| `buildMetadataProvenance` | 2 copies, 79 lines each | 1, in `metafetch`, exported |
-| `metadataFieldState` (audiobooks) | a second struct definition | an alias to `metafetch.MetadataFieldState` |
-| `nonEmpty` | 2 copies | 1, plus 2 aliases |
-| `database.MetadataFieldState` | untouched — a different type, see above | untouched |
+**3. The pre-existing scanner failure is not this change.**
+`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` fails with a
+chapter-duration float mismatch. Verified byte-identical on unmodified `main`
+(`9975.827` vs `9975.431111`) — an ffprobe/environment issue, unrelated.

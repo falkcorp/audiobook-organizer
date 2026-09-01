@@ -1,5 +1,5 @@
 // file: internal/scanner/extract_author_directory_gates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a97f31c-6d40-4b8e-9c05-7f31e8ab2064
 // last-edited: 2026-09-01
 

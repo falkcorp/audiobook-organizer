@@ -1,5 +1,5 @@
 // file: internal/metadata/extract_author_directory_gates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c81b0e6-42fa-4d19-8b73-0a6d92e4f157
 // last-edited: 2026-09-01
 
@@ -17,12 +17,17 @@ import "testing"
 // READING the function, and the corpus that measured the result contained no
 // "- translator -" strings, so nothing reached it.
 //
-// This is the byte-identical TWIN of internal/scanner's copy, and it is tested
-// separately ON PURPOSE: the two have diverged before (scanner called the bare
-// IsValidAuthor at two call sites where this one called LooksLikePersonName),
-// and a single test over one copy cannot observe the other drifting. Until
-// parseFilenameForAuthor and extractAuthorFromDirectory are collapsed -- see
-// internal/authorname/authorname.go -- a fix to one is not a fix to the other.
+// This WAS the near-twin of internal/scanner's copy, tested separately because
+// the two had diverged before and a single test over one copy could not observe
+// the other drifting. They are now collapsed into
+// internal/authorname.ExtractAuthorFromDirectory, so drift is impossible by
+// construction and that reason has expired.
+//
+// The test is kept anyway, and so is scanner's, for a different reason: each
+// asserts from ITS OWN consumer's side. A shared unit test in authorname pins
+// what the function returns; it cannot see that this package assigns the result
+// to metadata.Artist and then clears the placeholder six lines later. Duplicate
+// inputs are cheap; the consumer context is not reproducible elsewhere.
 func TestExtractAuthorFromDirectoryGatesEveryBranch(t *testing.T) {
 	cases := []struct {
 		dir  string

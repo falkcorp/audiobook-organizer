@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.78.0
+// version: 1.79.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -1756,7 +1756,7 @@ func extractInfoFromPath(book *Book) {
 
 	// Try to parse "Title - Author" or "Author - Title" patterns from filename
 	if strings.Contains(baseName, " - ") {
-		title, author := parseFilenameForAuthor(baseName)
+		title, author := authorname.ParseFilenameForAuthor(baseName)
 		if author != "" && book.Author == "" {
 			book.Author = author
 			book.Title = title
@@ -1792,157 +1792,12 @@ func extractInfoFromPath(book *Book) {
 	// The directory fallback becomes safe once
 	// todo.d/20260825-directory-fallback-reads-title-as-author.md is fixed.
 	if book.Author == "" {
-		book.Author = extractAuthorFromDirectory(path)
+		book.Author = authorname.ExtractAuthorFromDirectory(path)
 	}
 
 	if book.Position <= 0 {
 		book.Position = metadata.DetectVolumeNumber(book.Title)
 	}
-}
-
-// extractAuthorFromDirectory extracts author from directory with validation
-func extractAuthorFromDirectory(filePath string) string {
-	dirs := strings.Split(filepath.Dir(filePath), string(os.PathSeparator))
-	if len(dirs) == 0 {
-		return ""
-	}
-
-	dirName := dirs[len(dirs)-1]
-
-	// Skip common non-author directory names
-	skipDirs := map[string]bool{
-		// The organizer's own placeholder directory. Reading it back as an author
-		// is what made an authorless book look authored and locked it out of AI
-		// re-parsing; see internal/authorname.
-		strings.ToLower(authorname.Placeholder): true,
-
-		"books": true, "audiobooks": true, "newbooks": true, "downloads": true,
-		"media": true, "audio": true, "library": true, "collection": true,
-		"import": true, "imports": true, "organized": true,
-		"bt": true, "incomplete": true, "data": true,
-	}
-
-	if skipDirs[strings.ToLower(dirName)] {
-		return ""
-	}
-
-	// Handle "Author - translator - Title" patterns, and "Author, Co-Author -
-	// translator - Title" for TWO authors only. The shape gate below gives
-	// LooksLikePersonName the whole credit, and that caps it at four words, so
-	// "Terry Pratchett, Neil Gaiman, Stephen Fry - translator - X" is refused
-	// where the ungated code accepted it. A refusal here yields no author
-	// rather than a wrong one, which is the trade this file makes everywhere,
-	// but the old comment promised a capability the gate does not deliver.
-	if strings.Contains(dirName, " - translator - ") || strings.Contains(dirName, " - narrated by - ") {
-		re := regexp.MustCompile(`^([^-]+)\s*-\s*(?:translator|narrated by)\s*-`)
-		matches := re.FindStringSubmatch(dirName)
-		if len(matches) > 1 {
-			// Shape-gated like the two branches below. This returned matches[1]
-			// with NO predicate at all -- not IsValidAuthor, not
-			// LooksLikePersonName -- and it is the FIRST branch tried, so it
-			// decided the author before either gate could run:
-			//   "Discworld - translator - Mort"            -> "Discworld"
-			//   "the quick brown - translator - Mort"       -> "the quick brown"
-			//   "Unabridged - narrated by - Stephen Fry"    -> "Unabridged"
-			// Same defect as internal/dedup's slash branch, and missed the same
-			// way: the branches were gated one at a time by READING the function,
-			// and the first-tried one was not in the corpus that measured it.
-			if candidate := strings.TrimSpace(matches[1]); personname.LooksLikePersonName(candidate) {
-				return candidate
-			}
-		}
-	}
-
-	// Extract from "Author - Title" directory pattern
-	if strings.Contains(dirName, " - ") {
-		parts := strings.SplitN(dirName, " - ", 2)
-		if len(parts) > 0 {
-			author := strings.TrimSpace(parts[0])
-			if personname.LooksLikePersonName(author) {
-				return author
-			}
-		}
-	}
-
-	// Every branch of this function gates on LooksLikePersonName, and the
-	// "Author - Title" branch above was reviewed as a candidate to leave on the
-	// bare IsValidAuthor. Declined, and the reason is the one already recorded
-	// at the Pratchett-036 guard at :1788: a WRONG author is strictly
-	// worse than an ABSENT one on this exact path, because it still closes the AI
-	// nomination gate and nothing downstream can recognise it as junk, while an
-	// empty author routes to AI filename nomination and gets a second chance.
-	// Measured 2026-08-25. That asymmetry is STRUCTURAL, not a headcount.
-	//
-	// A tally -- "6 real mononyms recovered vs 4 junk series names admitted" --
-	// was the first justification written here, and it does not survive scrutiny:
-	// both sides are artifacts of which directory names someone happened to type,
-	// not frequency measurements of a real library, so a differently-composed
-	// corpus "proves" the opposite. The measurement that DOES hold is the narrow
-	// factual one: junk reaches this branch at all. "Discworld - Mort",
-	// "Bookends - Volume One", "Chapterhouse - Dune" and "Discography - Live" each
-	// yield the series name as the author when it is ungated, so the claim that
-	// only bare directory names carry junk here is false.
-	//
-	// Cost, stated plainly: single-name authors in "Tolkien - The Hobbit" form are
-	// refused here. They are not lost -- they become AI-parse candidates.
-	//
-	// Use directory name if it is person-SHAPED, not merely non-empty.
-	//
-	// This called the bare IsValidAuthor until 2026-09-01 while metadata.go's
-	// byte-identical twin called LooksLikePersonName -- a divergence that
-	// predates the personname unification and survived it, because the refactor
-	// faithfully preserved each call site's own predicate.
-	//
-	// "It now matches metadata" is NOT the argument, and should not be read as
-	// one: metadata has always had this loss, and two copies agreeing on a loss
-	// is not evidence the loss is right -- that is the same "one copy was the
-	// good one" assumption internal/personname exists to disprove. The argument
-	// is the measurement below.
-	//
-	// It has to change here because IsValidAuthor has NO shape check, and the
-	// result is assigned straight to book.Author. Once the structural-word test
-	// stopped being a bare prefix match, that admitted "Discworld", "Bookends",
-	// "Chapterhouse" and "Discography" as authors -- names main rejected only
-	// because they happen to start with "disc"/"book"/"chapter".
-	//
-	// HONEST LIMIT: this does not restore main's behaviour, and nothing can.
-	// Main also rejected "Bookclub Picks", "Partition Wall", "Part-Time Job",
-	// "Partners In Crime" and "Bookkeeping Basics" -- by the SAME accident that
-	// rejected Booker T. Washington, Volker Kutscher and Partha Chatterjee. Those
-	// strings are person-SHAPED; no shape predicate can separate them, and
-	// keeping the accident means keeping the bug. They still pass here.
-	//
-	// COST: single-word directory authors ("Tolkien", "Shakespeare", "Homer") are
-	// now refused at this call site, because LooksLikePersonName requires 2-4
-	// words. metadata.go's twin has always refused them, so this makes the two
-	// agree rather than introducing a new rule.
-	if personname.LooksLikePersonName(dirName) {
-		return dirName
-	}
-
-	return ""
-}
-
-// parseFilenameForAuthor attempts to intelligently parse title and author from filename
-// Handles patterns like "Title - Author" or "Author - Title"
-// Returns (title, author) where author is empty string if pattern not detected
-func parseFilenameForAuthor(filename string) (string, string) {
-	parts := strings.Split(filename, " - ")
-	if len(parts) != 2 {
-		return "", "" // Not a simple two-part pattern
-	}
-
-	left := strings.TrimSpace(parts[0])
-	right := strings.TrimSpace(parts[1])
-
-	// One shared decision, four call sites -- see personname.ChooseAuthorSide
-	// for why this is not written out here any more.
-	title, author, ok := personname.ChooseAuthorSide(left, right, personname.PreferRightOnTie)
-	if !ok {
-		// Couldn't determine, return empty author
-		return "", ""
-	}
-	return title, author
 }
 
 // recoverNormalizedBookPath answers "is this segment file's book already
