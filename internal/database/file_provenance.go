@@ -1,7 +1,7 @@
 // file: internal/database/file_provenance.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1f4a92-3d6b-4e08-9a5c-1b2e8f0d4a37
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 
 package database
 
@@ -53,14 +53,16 @@ const (
 // recording: it is cheap, it is true, and it narrows a later search.
 type FileDigest struct {
 	// SHA256Full is a SHA-256 over the entire file, matching
-	// fileops.ComputeFileHash. This is the field the codebase was missing:
+	// fileops.ComputeFileHashAndSize. This is the field the codebase was missing:
 	// original_file_hash holds one, but only for files that happened to go
 	// through a tag write, and each write overwrote the previous value.
 	SHA256Full string `json:"sha256_full,omitempty"`
-	// SHA256Chunk is the scanner's cheap variant — for files over 100MB,
+	// SHA256Chunk is the cheap identity variant — for files over 100MB,
 	// SHA-256(first 10MB ‖ last 10MB ‖ size); a full-file digest below that
-	// threshold. Matches scanner.ComputeFileHash and book_files.file_hash, so
-	// existing rows can be reconciled against the ledger without rehashing.
+	// threshold. It is produced by filehash.BookFileHash, which is the ONE
+	// entry point every writer of book_files.file_hash / books.file_hash must
+	// use, so existing rows can be reconciled against the ledger without
+	// rehashing. (scanner.ComputeFileHash is a thin test-seam wrapper over it.)
 	SHA256Chunk string `json:"sha256_chunk,omitempty"`
 	// SizeBytes is the file size. Cheap, always available, and the first-pass
 	// key for tag-independent matching.

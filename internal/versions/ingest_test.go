@@ -1,16 +1,20 @@
 // file: internal/versions/ingest_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-07-03
+// last-edited: 2026-09-01
 
 package versions
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 
 func writeTestFile(t *testing.T, path, content string) {
@@ -138,17 +142,113 @@ func TestCreateIngestVersion_FingerprintBlocksPurged(t *testing.T) {
 	}
 }
 
-func TestHashFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.bin")
-	writeTestFile(t, path, "hello world")
-
-	hash, err := HashFile(path)
-	if err != nil {
-		t.Fatalf("hash: %v", err)
+// writeLargeSparseFile creates a file larger than filehash.Threshold without
+// writing anything like that many bytes: the middle is a hole (APFS/ext4 both
+// support sparse files, and a hole reads back as zeros either way).
+//
+// A test fixture at or below the threshold CANNOT observe the bug this file
+// guards: the chunked and whole-file algorithms return the same string there.
+// Distinct head and tail markers mean a digest that reads the wrong window is
+// also caught, not just one that reads the wrong number of bytes.
+func writeLargeSparseFile(t *testing.T, path string, size int64) {
+	t.Helper()
+	if size <= filehash.Threshold {
+		t.Fatalf("fixture size %d is not above filehash.Threshold %d; the two hash strategies agree below it and the test would be vacuous", size, int64(filehash.Threshold))
 	}
-	if len(hash) != 64 {
-		t.Errorf("hash length = %d, want 64 (SHA-256 hex)", len(hash))
+	if err := os.MkdirAll(filepath.Dir(path), 0o775); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("HEAD-MARKER-ingest")); err != nil {
+		t.Fatalf("write head: %v", err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if _, err := f.Seek(size-int64(len("TAIL-MARKER-ingest")), 0); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+	if _, err := f.Write([]byte("TAIL-MARKER-ingest")); err != nil {
+		t.Fatalf("write tail: %v", err)
+	}
+}
+
+// fullFileSHA256 is the WRONG algorithm for book_files.file_hash, reproduced
+// here on purpose so the test can assert the stored value is not it.
+func fullFileSHA256(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// TestCreateIngestVersion_StoresChunkedHashAboveThreshold is the regression
+// test for the ingest half of the file-hash algorithm split.
+//
+// CreateIngestVersion used to call a local whole-file SHA-256 (HashFile) and
+// store the result in book_files.file_hash. For any file over 100 MB that value
+// can never equal the digest the scanner and the backfill job write, so
+// dedup's exact-file collector — which reports Confidence 1.0 on a match — was
+// comparing two different alphabets and silently found nothing.
+func TestCreateIngestVersion_StoresChunkedHashAboveThreshold(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	dir := t.TempDir()
+	allowDir(t, store, dir)
+	filePath := filepath.Join(dir, "Big Book.m4b")
+	writeLargeSparseFile(t, filePath, filehash.Threshold+(1<<20))
+
+	book, _ := store.CreateBook(&database.Book{
+		Title: "Big", FilePath: filePath, Format: "m4b",
+	})
+	if err := store.CreateBookFile(&database.BookFile{
+		ID: "big1", BookID: book.ID, FilePath: filePath, Format: "m4b",
+	}); err != nil {
+		t.Fatalf("create book file: %v", err)
+	}
+
+	if _, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: book.ID, FilePath: filePath, Format: "m4b", Source: "imported",
+	}); err != nil {
+		t.Fatalf("CreateIngestVersion: %v", err)
+	}
+
+	want, err := filehash.BookFileHash(filePath)
+	if err != nil {
+		t.Fatalf("BookFileHash: %v", err)
+	}
+	notWant := fullFileSHA256(t, filePath)
+	if want == notWant {
+		t.Fatalf("fixture is degenerate: chunked and whole-file digests agree, so this test cannot observe the bug")
+	}
+
+	files, _ := store.GetBookFiles(book.ID)
+	var got string
+	for _, f := range files {
+		if f.ID == "big1" {
+			got = f.FileHash
+		}
+	}
+	if got != want {
+		t.Errorf("stored file_hash = %q, want the canonical chunked digest %q", got, want)
+	}
+	if got == notWant {
+		t.Errorf("stored file_hash is a whole-file SHA-256 (%q); book_files.file_hash must hold filehash.BookFileHash", got)
 	}
 }
 

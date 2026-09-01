@@ -1,6 +1,6 @@
 // file: internal/versions/unit_test.go
-// version: 1.1.0
-// last-edited: 2026-06-17
+// version: 1.2.0
+// last-edited: 2026-09-01
 
 package versions
 
@@ -112,7 +112,7 @@ func TestCreateIngestVersion_FirstVersionIsActive_Mock(t *testing.T) {
 		ID: "v-1", BookID: "book-1", Status: database.BookVersionStatusActive,
 	}, nil)
 
-	// HashFile will fail on nonexistent path — that's fine, it's a warning path.
+	// Hashing will fail on nonexistent path — that's fine, it's a warning path.
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil).Maybe()
 
 	ver, err := CreateIngestVersion(mockStore, IngestVersionParams{

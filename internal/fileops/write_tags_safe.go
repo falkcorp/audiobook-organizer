@@ -64,7 +64,7 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 	// The hashes exist solely to be persisted against a book_file row. When no
 	// row is supplied there is nothing to persist and every caller discards the
 	// return values, so computing them is pure waste — and it is expensive waste:
-	// ComputeFileHash streams the ENTIRE audio file through SHA-256 with no size
+	// ComputeFileHashAndSize streams the ENTIRE audio file through SHA-256 with no size
 	// cap and no mtime/size shortcut, twice per call. On NAS-backed audiobooks
 	// that dominated the cost of a tag write.
 	// Provenance needs the same two digests the columns do, so either

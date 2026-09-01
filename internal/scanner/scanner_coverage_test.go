@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-07-01
+// last-edited: 2026-09-01
 
 // NOTE(fable5 T022): Removed tests that used database.DB, database.Initialize,
 // or database.Close (legacy SQLite path removed). TestSaveBookToDatabaseWithoutStore
@@ -64,7 +64,10 @@ func TestGetFileSize(t *testing.T) {
 	})
 }
 
-// TestComputeFullFileHash tests the full file hash computation
+// TestComputeFullFileHash tests whole-file hashing through the public entry
+// point. Every file here is below filehash.Threshold, so ComputeFileHash takes
+// the whole-file branch — which is what the deleted computeFullFileHash helper
+// used to be called for directly.
 func TestComputeFullFileHash(t *testing.T) {
 	t.Run("valid file", func(t *testing.T) {
 		tmp := t.TempDir()
@@ -74,7 +77,7 @@ func TestComputeFullFileHash(t *testing.T) {
 			t.Fatalf("write file: %v", err)
 		}
 
-		hash, err := computeFullFileHash(path)
+		hash, err := ComputeFileHash(path)
 		if err != nil {
 			t.Fatalf("computeFullFileHash error: %v", err)
 		}
@@ -87,7 +90,7 @@ func TestComputeFullFileHash(t *testing.T) {
 	})
 
 	t.Run("nonexistent file", func(t *testing.T) {
-		_, err := computeFullFileHash("/nonexistent/file.m4b")
+		_, err := ComputeFileHash("/nonexistent/file.m4b")
 		if err == nil {
 			t.Error("expected error for nonexistent file")
 		}
@@ -100,7 +103,7 @@ func TestComputeFullFileHash(t *testing.T) {
 			t.Fatalf("write file: %v", err)
 		}
 
-		hash, err := computeFullFileHash(path)
+		hash, err := ComputeFileHash(path)
 		if err != nil {
 			t.Fatalf("computeFullFileHash error: %v", err)
 		}

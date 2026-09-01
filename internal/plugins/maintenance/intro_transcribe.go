@@ -476,7 +476,8 @@ func (p *Plugin) processTranscribePage(
 	}
 	jobs := make([]bookJob, 0, len(books))
 	for _, b := range books {
-		src, hash, _, _ := firstAudioFile(store, b)
+		ref, _ := firstAudioFile(store, b)
+		src, hash := ref.Path, ref.CacheKey
 		jobs = append(jobs, bookJob{book: b, audioSrc: src, fileHash: hash})
 	}
 
@@ -638,7 +639,8 @@ func (p *Plugin) processTranscribePage(
 	for bookID, result := range batchResults {
 		if result.Error == "" && result.Text == "" {
 			if b, ok := bookByID[bookID]; ok {
-				src, _, _, _ := firstAudioFile(store, b)
+				ref, _ := firstAudioFile(store, b)
+				src := ref.Path
 				if src != "" {
 					silentQueue = append(silentQueue, silentBook{book: b, src: src})
 				}
@@ -685,7 +687,8 @@ func (p *Plugin) processTranscribePage(
 			log.Info("transcribe: retrying with second audio file", "count", len(stillSilent))
 			retry2Jobs := make(map[string]string, len(stillSilent))
 			for _, s := range stillSilent {
-				src2, _, _, _ := nthAudioFile(store, s.book, 1)
+				ref2, _ := nthAudioFile(store, s.book, 1)
+				src2 := ref2.Path
 				if src2 == "" {
 					continue
 				}
@@ -874,22 +877,45 @@ var transcribableExtSet = map[string]bool{
 	".flac": true, ".aac": true, ".ogg": true, ".wma": true,
 }
 
-// firstAudioFile returns the path, cache key, and BookFile ID for the first
-// (lowest track number) audio file of book. Delegates to nthAudioFile(0).
-func firstAudioFile(store bookFileLister, book database.Book) (path, cacheKey, bookFileID string, err error) {
+// audioFileRef identifies one audio file of a book, together with everything
+// the transcription/clip cache needs to know about it.
+//
+// StoredHash is carried separately from CacheKey on purpose. CacheKey falls
+// back to an "fp:"/"path:" form when the row has no hash, so a caller that
+// wants to know whether book_files.file_hash is populated would otherwise have
+// to sniff a prefix off the cache key — one string answering two questions,
+// which is how a caller ends up overwriting a hash it meant to leave alone.
+type audioFileRef struct {
+	// Path is the on-disk path. Empty when the book has no usable audio file;
+	// every caller must check this before using the rest.
+	Path string
+	// CacheKey is the clip-cache filename stem:
+	// StoredHash > "fp:"+sha256(AcoustIDFingerprint) > "path:"+sha256(FilePath).
+	CacheKey string
+	// BookFileID is the book_files row id. Empty for the Book.FilePath
+	// fallback, where there is no row to write back to.
+	BookFileID string
+	// StoredHash is book_files.file_hash exactly as stored — empty when the row
+	// has none. Per internal/filehash it is the canonical chunked digest; a
+	// value that disagrees with filehash.BookFileHash is a corrupted row, not a
+	// signal to rewrite.
+	StoredHash string
+}
+
+// firstAudioFile returns the first (lowest disc/track) audio file of book.
+// Delegates to nthAudioFile(0).
+func firstAudioFile(store bookFileLister, book database.Book) (audioFileRef, error) {
 	return nthAudioFile(store, book, 0)
 }
 
-// nthAudioFile returns the path, cache key, and BookFile ID for the nth audio
-// file of book, sorted by (disc, track, path) — the same canonical ordering
-// GetBookFiles uses. n=0 is the first file.
+// nthAudioFile returns the nth audio file of book, sorted by (disc, track,
+// path) — the same canonical ordering GetBookFiles uses. n=0 is the first file.
 // The book-level FilePath fallback (for single-track iTunes imports with no
 // BookFile rows) is only used when n==0 and no BookFile records exist.
-// Cache key priority: FileHash > fp:sha256(AcoustIDFingerprint) > path:sha256(FilePath).
-func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheKey, bookFileID string, err error) {
+func nthAudioFile(store bookFileLister, book database.Book, n int) (audioFileRef, error) {
 	files, err := store.GetBookFiles(book.ID)
 	if err != nil {
-		return "", "", "", err
+		return audioFileRef{}, err
 	}
 
 	var audio []database.BookFile
@@ -901,15 +927,15 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheK
 
 	if len(audio) == 0 {
 		if n != 0 {
-			return "", "", "", nil
+			return audioFileRef{}, nil
 		}
 		// No BookFile rows — fall back to Book.FilePath for single-file imports.
 		fp := book.FilePath
 		if fp != "" && transcribableExtSet[strings.ToLower(filepath.Ext(fp))] {
 			h := sha256.Sum256([]byte(fp))
-			return fp, "path:" + hex.EncodeToString(h[:]), "", nil
+			return audioFileRef{Path: fp, CacheKey: "path:" + hex.EncodeToString(h[:])}, nil
 		}
-		return "", "", "", nil
+		return audioFileRef{}, nil
 	}
 
 	// Sort: disc ASC, track ASC, file_path ASC — IDENTICAL to the canonical
@@ -950,7 +976,7 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheK
 	})
 
 	if n >= len(audio) {
-		return "", "", "", nil
+		return audioFileRef{}, nil
 	}
 
 	f := audio[n]
@@ -965,7 +991,7 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheK
 		h := sha256.Sum256([]byte(f.FilePath))
 		key = "path:" + hex.EncodeToString(h[:])
 	}
-	return f.FilePath, key, f.ID, nil
+	return audioFileRef{Path: f.FilePath, CacheKey: key, BookFileID: f.ID, StoredHash: f.FileHash}, nil
 }
 
 // wavCacheDir returns the directory used to cache extracted 90s WAV clips.

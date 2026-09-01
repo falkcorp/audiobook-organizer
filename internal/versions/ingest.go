@@ -1,7 +1,7 @@
 // file: internal/versions/ingest.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-19
+// last-edited: 2026-09-01
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
@@ -17,14 +17,11 @@
 package versions
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"log/slog"
-	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 )
 
@@ -41,8 +38,12 @@ type IngestVersionParams struct {
 // If the book already has an active version, the new one gets status=alt.
 // If no active version exists, the new one becomes active.
 //
-// Also computes and stores the file's SHA-256 hash on the BookFile row
-// (if one exists for the book + file path).
+// Also computes and stores the file's identity hash on the BookFile row (if
+// one exists for the book + file path). The hash MUST come from
+// filehash.BookFileHash: book_files.file_hash is the column dedup's exact-file
+// collector treats as certainty, and a whole-file SHA-256 written here — which
+// is what this function used to do — disagrees with every scanner-written row
+// above 100 MB, so the duplicate is silently never found.
 func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*database.BookVersion, error) {
 	if params.BookID == "" || params.FilePath == "" {
 		return nil, fmt.Errorf("book_id and file_path required")
@@ -84,7 +85,7 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 	}
 
 	// Compute file hash and update the BookFile row.
-	hash, hashErr := HashFile(params.FilePath)
+	hash, hashErr := filehash.BookFileHash(params.FilePath)
 	if hashErr != nil {
 		slog.Warn("hash", "params", params.FilePath, "hashErr", hashErr)
 	} else {
@@ -104,16 +105,9 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 	return ver, nil
 }
 
-// HashFile computes the SHA-256 hex digest of the file at path.
-func HashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
+// HashFile is deliberately gone. It computed a whole-file SHA-256 and its only
+// caller stored the result in book_files.file_hash, which expects
+// filehash.BookFileHash. Leaving an exported, plausibly-named whole-file hasher
+// in this package is how the next writer picks the wrong algorithm; callers
+// that genuinely want a whole-file digest should use
+// fileops.ComputeFileHashAndSize.
