@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -38,6 +38,9 @@ import type {
 import { ScoreBadgeRow } from './ScoreBadgeRow';
 import { EvidencePanel } from '../review/evidence/EvidencePanel';
 import { dedupEvidence } from '../review/evidence/adapters';
+// One label map for every surface. This file kept its own near-duplicate until
+// 2026-09-01; it had already drifted from the other two copies.
+import { isPrimaryKind, signalLabel } from '../review/evidence/signalLabels';
 import { FileInfoCompare } from './FileInfoCompare';
 import { AudioSamplePair } from './AudioSamplePair';
 import { FingerprintPair } from './FingerprintCanvas';
@@ -51,19 +54,6 @@ interface CandidateCompareDrawerProps {
   /** Called after a dismiss action. */
   onDismissed?: (candidateId: number) => void;
 }
-
-const SIGNAL_LABELS: Record<string, string> = {
-  exact_file: 'Exact file hash',
-  exact_acoustid: 'Exact AcoustID',
-  isbn_asin: 'ISBN/ASIN',
-  lsh_acoustid: 'LSH AcoustID',
-  embedding_high: 'Embedding (high)',
-  metadata_hash: 'Metadata hash',
-  metadata_fuzzy: 'Metadata fuzzy',
-  embedding_med: 'Embedding (medium)',
-  duration: 'Duration match',
-  folder_path: 'Folder path',
-};
 
 function formatBytes(bytes: number | undefined): string {
   if (bytes == null) return 'Unknown';
@@ -95,10 +85,6 @@ function totalFileSize(book: DedupBookDetail): number | undefined {
 
 function totalDuration(book: DedupBookDetail): number | undefined {
   return book.duration ?? book.files?.reduce((sum, file) => sum + (file.duration ?? 0), 0);
-}
-
-function signalLabel(signal: DedupSignal): string {
-  return SIGNAL_LABELS[signal.kind] ?? signal.kind.replace(/_/g, ' ');
 }
 
 interface MetadataCompareRowProps {
@@ -220,12 +206,15 @@ function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelPro
         </Typography>
         {signals.length > 0 ? (
           signals.map((signal) => (
+            // `primary` is not on the wire; it is re-derived from the kind.
+            // See isPrimaryKind -- the backend does not serialize the
+            // primary/supporting split that score.go applies internally.
             <Tooltip key={signal.kind} title={signal.evidence}>
               <Chip
-                label={signalLabel(signal)}
+                label={signalLabel(signal.kind)}
                 size="small"
-                color={signal.primary ? 'primary' : 'default'}
-                variant={signal.primary ? 'filled' : 'outlined'}
+                color={isPrimaryKind(signal.kind) ? 'primary' : 'default'}
+                variant={isPrimaryKind(signal.kind) ? 'filled' : 'outlined'}
               />
             </Tooltip>
           ))

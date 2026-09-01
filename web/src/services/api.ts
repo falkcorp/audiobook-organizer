@@ -5141,12 +5141,24 @@ export async function saveSavedFilterPresets(presets: SavedFilterPreset[]): Prom
 export type DedupBand = 'CERTAIN' | 'HIGH' | 'MEDIUM' | 'REVIEW';
 
 // T016: single evidence signal stored in ScoreBreakdown.
+//
+// These field names are the JSON tags on models.Signal in
+// internal/models/dedup_score.go -- NOT a restatement of them. Until 2026-09-01
+// this interface declared `value`, `weight` and `primary`, none of which the Go
+// side has ever emitted, so every field but `kind` and `evidence` arrived
+// `undefined` and the evidence panel rendered blank in production. There is no
+// custom MarshalJSON; the struct tags are the whole contract.
+//
+// NOTE there is deliberately no `primary` here: the backend does not serialize
+// the primary/supporting classification. See `isPrimaryKind` in
+// components/review/evidence/signalLabels.ts for how the frontend re-derives it
+// and why that is a stopgap.
 export interface DedupSignal {
   kind: string; // e.g. "exact_file", "embedding_high", "duration"
-  value: number; // raw signal value 0–1
-  weight: number; // calibration weight
+  raw: number; // unscaled measurement (cosine 0.961, Hamming 0.93, ...)
+  confidence: number; // calibrated P(duplicate | this signal), 0–1; ComposeScore reads THIS
   evidence: string; // human-readable description for UI
-  primary: boolean; // whether this signal alone can indicate a duplicate
+  fp_version?: string; // fingerprint-algorithm version; omitted for non-acoustic signals
 }
 
 // T016: composite score breakdown stored on each candidate.

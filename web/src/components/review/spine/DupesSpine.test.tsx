@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 1.1.0
+// version: 2.0.0
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 //
 // Covers the signal chips on a dupes row, plus (Task 8) the dual-path display
 // wired into BookSide.
@@ -56,13 +56,23 @@ function candidate(over: Partial<DedupCandidate> = {}): DedupCandidate {
   } as unknown as DedupCandidate;
 }
 
-function withSignals(sigs: Array<{ kind: string; primary: boolean }>): DedupCandidate {
+// Signals in the REAL wire shape (models.Signal JSON tags). There is no
+// `primary` on the wire -- the chips derive it from the kind -- so callers pass
+// kinds and the primary/supporting split follows from them.
+function withSignals(kinds: string[]): DedupCandidate {
   return candidate({
     score_breakdown: {
       score: 98,
-      signals: sigs.map((s) => ({ kind: s.kind, value: 1, weight: 1, primary: s.primary })),
+      band: 'CERTAIN',
+      formula: 'v2',
+      signals: kinds.map((kind) => ({
+        kind,
+        raw: 1,
+        confidence: 0.95,
+        evidence: `${kind} fired`,
+      })),
     },
-  } as unknown as Partial<DedupCandidate>);
+  });
 }
 
 function ctx(): DupesSpineContext {
@@ -97,36 +107,28 @@ describe('signal chips on a dupes row', () => {
     // The row is compact and NOT expanded -- the evidence section renders only
     // when expanded or two-column, so this asserts the reviewer can read the
     // justification from the row itself.
-    renderSpine([withSignals([{ kind: 'exact_file', primary: true }])]);
+    renderSpine([withSignals(['exact_file'])]);
 
     expect(screen.queryByTestId('evidence-section')).toBeNull();
-    expect(screen.getByTestId('signal-chip-exact_file')).toHaveTextContent('exact file');
+    // "Exact file hash", from the one shared label map. The chip said
+    // "exact file" here while the panel said "Exact file hash" until the three
+    // copies of the map were consolidated on 2026-09-01.
+    expect(screen.getByTestId('signal-chip-exact_file')).toHaveTextContent('Exact file hash');
   });
 
   it('renders one chip per primary signal', () => {
-    renderSpine([
-      withSignals([
-        { kind: 'isbn_asin', primary: true },
-        { kind: 'metadata_hash', primary: true },
-      ]),
-    ]);
+    renderSpine([withSignals(['isbn_asin', 'metadata_hash'])]);
 
     expect(screen.getByTestId('signal-chip-isbn_asin')).toHaveTextContent('ISBN/ASIN');
-    expect(screen.getByTestId('signal-chip-metadata_hash')).toHaveTextContent(
-      'same source record'
-    );
+    expect(screen.getByTestId('signal-chip-metadata_hash')).toHaveTextContent('Metadata hash');
   });
 
   it('does not render supporting signals on the row', () => {
     // A supporting signal can corroborate a pair but never produce one, so a
     // chip beside the primaries would give it weight it cannot earn.
-    renderSpine([
-      withSignals([
-        { kind: 'exact_file', primary: true },
-        { kind: 'duration', primary: false },
-        { kind: 'folder_path', primary: false },
-      ]),
-    ]);
+    // Mixed on purpose: a fixture holding only one of the two groups cannot
+    // tell a correct filter from an inverted one.
+    renderSpine([withSignals(['exact_file', 'duration', 'folder_path'])]);
 
     expect(screen.getByTestId('signal-chip-exact_file')).toBeInTheDocument();
     expect(screen.queryByTestId('signal-chip-duration')).toBeNull();
@@ -144,7 +146,7 @@ describe('signal chips on a dupes row', () => {
   });
 
   it('shows an unrecognised kind under its raw name rather than blank', () => {
-    renderSpine([withSignals([{ kind: 'some_future_collector', primary: true }])]);
+    renderSpine([withSignals(['some_future_collector'])]);
 
     expect(screen.getByTestId('signal-chip-some_future_collector')).toHaveTextContent(
       'some_future_collector'

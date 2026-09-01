@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/types.ts
-// version: 1.2.0
+// version: 2.0.0
 // guid: 8b3f1a94-6c02-4e7d-95a1-2f8e4d0c7b63
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 //
 // The evidence model behind the unified EvidencePanel.
 //
@@ -9,10 +9,9 @@
 // three lanes. The naive version of that is "one shape with optional fields",
 // and it produces a specific, hard-to-notice lie.
 //
-// ScoreBreakdownPanel draws a stacked bar whose segment widths are
+// ScoreBreakdownPanel drew a stacked bar whose segment widths were
 // `weight / sum(weights)` -- a SHARE OF A TOTAL. That encoding asserts "these
-// parts sum to the whole". The assertion is true for dedup, whose score is a
-// weighted sum. It is false for metadata, whose score is
+// parts sum to the whole". It is false for metadata, whose score is
 //
 //     (base * compilationPenalty * lengthPenalty) + richMetadataBonus
 //
@@ -21,45 +20,74 @@
 // showing no bar at all, because it still looks complete. See
 // docs/evidence-panel-audit.md.
 //
+// IT WAS ALSO FALSE FOR DEDUP, which is why the bar is gone entirely as of
+// 2026-09-01. This file used to assert "the assertion is true for dedup, whose
+// score is a weighted sum". ComposeScore (internal/dedup/unified/compose.go)
+// computes
+//
+//     100 * (1 - PROD(1 - confidence_i)) + SUM(boost_j)      capped at 100
+//
+// -- a noisy-OR product over the primary signals plus bounded additive boosts
+// from the two supporting ones. There are no weights anywhere in it: ScoreConfig
+// carries a per-kind `Confidence` and a `Boost` for the supporting kinds only.
+// A product has no decomposition into shares, so the bar was asserting of dedup
+// exactly what docs/evidence-panel-audit.md rejected a bar for on the metadata
+// lane. The signals are still each other's context, but they are not each
+// other's fractions, and they are rendered as independent confidences.
+//
 // So evidence is a discriminated union over how the number was actually
 // computed, and each kind gets the rendering its arithmetic supports:
 //
-//   weighted  -- score is a weighted sum      -> stacked share bar
-//   facts     -- named observations, no score -> fact rows, no bar
-//   waterfall -- ordered ops on a running total -> waterfall rows
+//   confidence -- independent per-signal probabilities -> confidence rows, no bar
+//   facts      -- named observations, no score          -> fact rows, no bar
+//   waterfall  -- ordered ops on a running total        -> waterfall rows
 //
 // Adding a lane means picking the kind that matches its arithmetic, never
 // bending the arithmetic to fit a kind that already renders nicely.
 
 /** Discriminator: how the underlying number was computed. */
-export type EvidenceKind = 'weighted' | 'facts' | 'waterfall';
+export type EvidenceKind = 'confidence' | 'facts' | 'waterfall';
 
 // ---------------------------------------------------------------------------
-// weighted -- dedup
+// confidence -- dedup
 // ---------------------------------------------------------------------------
 
-export interface WeightedSignal {
+/**
+ * One signal's contribution to a noisy-OR score.
+ *
+ * `confidence` is the number the scorer actually consumes -- models.Signal in
+ * internal/models/dedup_score.go says so outright: "ComposeScore reads this
+ * field; Raw is stored for human auditing and re-calibration". So confidence is
+ * the headline and `raw` is context, never the other way round.
+ *
+ * There is deliberately no `weight`. Nothing weights these signals; see the
+ * formula at the top of this file.
+ */
+export interface ConfidenceSignal {
   /** Stable key: dedup signal `kind`, used for colour and React keys. */
   id: string;
   label: string;
-  /** Raw signal strength, 0-1. */
-  value: number;
-  /** Calibration weight. Negative weights are clamped to 0 for the bar. */
-  weight: number;
+  /** Calibrated P(duplicate | this signal alone), 0-1. Drives the score. */
+  confidence: number;
+  /** The unscaled measurement behind `confidence` (cosine, Hamming, ...). */
+  raw: number;
   /** Human-readable justification, shown on hover. */
   detail?: string;
-  /** Whether this signal alone is sufficient to call a duplicate. */
+  /**
+   * Whether this signal alone can be the reason a pair exists. Re-derived from
+   * `kind` by signalLabels.isPrimaryKind -- the wire format does not carry it.
+   */
   primary?: boolean;
 }
 
-export interface WeightedEvidence {
-  kind: 'weighted';
+export interface ConfidenceEvidence {
+  kind: 'confidence';
   score: number;
   /** Band label (CERTAIN | HIGH | MEDIUM | REVIEW) when the lane has one. */
   band?: string;
   /** Scoring algorithm version tag. */
   formula?: string;
-  signals: WeightedSignal[];
+  signals: ConfidenceSignal[];
   /** Why there are no signals, when the list is empty. */
   emptyReason?: string;
 }
@@ -134,7 +162,7 @@ export interface WaterfallEvidence {
   emptyReason?: string;
 }
 
-export type Evidence = WeightedEvidence | FactsEvidence | WaterfallEvidence;
+export type Evidence = ConfidenceEvidence | FactsEvidence | WaterfallEvidence;
 
 // ---------------------------------------------------------------------------
 // Verification

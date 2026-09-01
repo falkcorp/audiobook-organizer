@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/dupes.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1d4e93-2c05-48a6-b39f-0e6a2c85f174
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 import type { LaneDescriptor } from './types';
 
@@ -17,9 +17,12 @@ import type { LaneDescriptor } from './types';
 export const dupesLane = {
   lane: 'dupes',
   label: 'Duplicates',
-  // The dedup score is a weighted sum of calibrated signals, so it is the one
-  // lane entitled to a stacked share bar.
-  evidenceKind: 'weighted',
+  // The dedup score is a noisy-OR product over calibrated per-signal
+  // confidences plus bounded boosts, NOT a weighted sum -- this comment claimed
+  // the latter, and claimed the lane was "the one lane entitled to a stacked
+  // share bar", until 2026-09-01. A product has no decomposition into shares.
+  // See dedupEvidence in ../evidence/adapters.ts for the formula.
+  evidenceKind: 'confidence',
   verbs: {
     merge: 'Merge',
     dismiss: 'Not a duplicate',

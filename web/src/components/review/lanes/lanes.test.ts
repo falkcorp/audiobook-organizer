@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/lanes.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: b6d29a04-8f35-4c71-90e2-3a5f7c1b8046
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 import { describe, expect, it } from 'vitest';
 import { LANES, LANE_ORDER, dupesLane, metadataLane, regroupLane } from './index';
@@ -103,7 +103,7 @@ describe('evidence kind matches the lane arithmetic', () => {
   // changed would be asserting something different about how its score is
   // computed, which is a backend change, not a display tweak.
   it('assigns each lane the encoding its arithmetic supports', () => {
-    expect(dupesLane.evidenceKind).toBe('weighted'); // weighted sum
+    expect(dupesLane.evidenceKind).toBe('confidence'); // noisy-OR product + boosts
     expect(metadataLane.evidenceKind).toBe('waterfall'); // product + terms
     expect(regroupLane.evidenceKind).toBe('facts'); // no score at all
   });

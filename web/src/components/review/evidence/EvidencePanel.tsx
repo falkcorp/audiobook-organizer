@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/EvidencePanel.tsx
-// version: 1.2.0
+// version: 2.0.0
 // guid: c07f4b91-8d23-4e56-a1b8-5f2c9d0e3a74
-// last-edited: 2026-08-31
+// last-edited: 2026-09-01
 //
 // The shared "why did it conclude that" panel, promoted out of the dedup lane
 // so all three review lanes explain themselves the same way.
@@ -9,18 +9,18 @@
 // It renders whichever of the three evidence kinds it is handed, and the
 // rendering is chosen by the ARITHMETIC, not by the lane -- see ./types.ts. The
 // short version: a stacked share bar asserts that its parts sum to the whole,
-// which is true of a weighted sum and false of a multiplicative pipeline, so
-// metadata gets a waterfall and regroup (which has no score at all) gets chips.
+// and NO lane here has arithmetic that supports that claim -- dedup's score is a
+// noisy-OR product, metadata's is a multiplicative pipeline, and regroup has no
+// score at all. So there is no share bar in this file at all any more.
 
 import { Box, Chip, Stack, Tooltip, Typography } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
 import type {
+  ConfidenceEvidence,
   Evidence,
   FactsEvidence,
   WaterfallEvidence,
   WaterfallStep,
-  WeightedEvidence,
-  WeightedSignal,
 } from './types';
 import { incompleteReason, recomposeWaterfall, waterfallIsConsistent } from './types';
 
@@ -48,21 +48,11 @@ const zebraRowSx = (index: number) => (theme: Theme) => ({
   backgroundColor: index % 2 === 1 ? theme.palette.action.hover : 'transparent',
 });
 
-// Human-friendly labels for dedup signal kinds. An unknown kind falls through
-// to its raw value rather than rendering blank -- a signal we cannot name is
-// still evidence, and hiding it would understate the case.
-const SIGNAL_LABELS: Record<string, string> = {
-  exact_file: 'Exact file hash',
-  exact_acoustid: 'Exact AcoustID',
-  isbn_asin: 'ISBN/ASIN',
-  lsh_acoustid: 'LSH AcoustID',
-  embedding_high: 'Embedding (high)',
-  metadata_hash: 'Metadata hash',
-  metadata_fuzzy: 'Metadata fuzzy',
-  embedding_med: 'Embedding (medium)',
-  duration: 'Duration match',
-  folder_path: 'Folder path',
-};
+// NOTE: signal labels are NOT resolved here. This file carried its own copy of
+// the kind -> label map until 2026-09-01, as did CandidateCompareDrawer and
+// signalLabels.ts, and the three had drifted -- the row chip said "exact file"
+// where this panel said "Exact file hash". There is now one map, in
+// signalLabels.ts, applied by the adapter; the panel renders `label` as given.
 
 /**
  * Signal colours come from the theme's categorical palette, which is defined
@@ -128,19 +118,21 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// weighted -- dedup
+// confidence -- dedup
 // ---------------------------------------------------------------------------
 
-/** Each signal's share of total weight. Negative weights clamp to 0. */
-function withShares(signals: WeightedSignal[]): Array<WeightedSignal & { share: number }> {
-  const totalWeight = signals.reduce((sum, s) => sum + Math.max(0, s.weight), 0);
-  return signals.map((s) => ({
-    ...s,
-    share: totalWeight > 0 ? Math.max(0, s.weight) / totalWeight : 0,
-  }));
-}
-
-function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
+/**
+ * Dedup evidence: one row per signal, NO stacked bar.
+ *
+ * The bar that used to be here divided each signal's weight by the sum of
+ * weights and drew the result as a share of a total. Two things were wrong with
+ * it. The wire format carries no `weight` at all, so every segment computed to
+ * NaN and rendered at 0% in production; and even with a number to divide, the
+ * score is `100 * (1 - PROD(1 - confidence)) + SUM(boost)`, which is a product,
+ * not a sum, and so has no decomposition into shares to draw. Restoring the bar
+ * requires changing the scorer first, not the renderer.
+ */
+function ConfidenceView({ evidence }: { evidence: ConfidenceEvidence }) {
   if (evidence.signals.length === 0) {
     return (
       <EmptyNote>
@@ -149,10 +141,8 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
     );
   }
 
-  const rows = withShares(evidence.signals);
-
   return (
-    <Box data-testid="evidence-weighted">
+    <Box data-testid="evidence-confidence">
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
           Score: {num(evidence.score, 1)}
@@ -167,45 +157,13 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
         )}
       </Stack>
 
-      <Tooltip
-        placement="bottom"
-        title={
-          <Box>
-            {rows.map((s) => (
-              <Typography key={s.id} variant="caption" sx={{ display: 'block' }}>
-                {SIGNAL_LABELS[s.id] ?? s.label}: {num(s.share * 100, 1)}%
-              </Typography>
-            ))}
-          </Box>
-        }
-      >
-        <Box
-          data-testid="evidence-stacked-bar"
-          sx={{
-            display: 'flex',
-            height: 16,
-            borderRadius: 1,
-            overflow: 'hidden',
-            mb: 1.5,
-            bgcolor: 'action.disabledBackground',
-          }}
-        >
-          {rows.map((s) => (
-            <Box
-              key={s.id}
-              sx={(theme) => ({
-                width: barPercent(s.share * 100),
-                bgcolor: signalColor(theme, s.id),
-                minWidth: s.share > 0 ? 2 : 0,
-              })}
-            />
-          ))}
-        </Box>
-      </Tooltip>
-
       <Stack>
-        {rows.map((s, i) => (
-          <Tooltip key={s.id} title={s.detail || s.label} placement="left">
+        {evidence.signals.map((s, i) => (
+          <Tooltip
+            key={s.id}
+            title={s.detail || s.label}
+            placement="left"
+          >
             <Stack
               direction="row"
               spacing={1}
@@ -213,6 +171,7 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
               sx={zebraRowSx(i)}
             >
               <Box
+                data-testid={`signal-swatch-${s.id}`}
                 sx={(theme) => ({
                   width: 10,
                   height: 10,
@@ -222,29 +181,43 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
                 })}
               />
               <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }} noWrap>
-                {SIGNAL_LABELS[s.id] ?? s.label}
+                {s.label}
+                {s.primary === false && (
+                  <Typography component="span" variant="caption" sx={{ color: 'text.disabled' }}>
+                    {' '}
+                    (supporting)
+                  </Typography>
+                )}
               </Typography>
+              {/*
+                Confidence is the headline because it is the number ComposeScore
+                actually consumes; `raw` is the measurement behind it and is
+                shown second, dimmed. Swapping them would put a cosine distance
+                where a probability belongs and still look plausible.
+              */}
               <Typography
                 variant="caption"
+                data-testid={`signal-confidence-${s.id}`}
                 sx={{
                   color: 'text.secondary',
                   fontVariantNumeric: 'tabular-nums',
                   flexShrink: 0,
                 }}
               >
-                {num(s.value * 100, 0)}%
+                {num(s.confidence * 100, 0)}%
               </Typography>
               <Typography
                 variant="caption"
+                data-testid={`signal-raw-${s.id}`}
                 sx={{
                   color: 'text.disabled',
                   fontVariantNumeric: 'tabular-nums',
                   flexShrink: 0,
-                  minWidth: 36,
+                  minWidth: 52,
                   textAlign: 'right',
                 }}
               >
-                w={num(s.weight)}
+                raw {num(s.raw)}
               </Typography>
             </Stack>
           </Tooltip>
@@ -456,8 +429,8 @@ export function EvidencePanel({ evidence }: EvidencePanelProps) {
     return <EmptyNote>No evidence recorded.</EmptyNote>;
   }
   switch (evidence.kind) {
-    case 'weighted':
-      return <WeightedView evidence={evidence} />;
+    case 'confidence':
+      return <ConfidenceView evidence={evidence} />;
     case 'facts':
       return <FactsView evidence={evidence} />;
     case 'waterfall':
