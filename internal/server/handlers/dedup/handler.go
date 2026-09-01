@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -174,6 +174,30 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// candidate sat on page 2 showed an empty list under a banner naming it.
 	if v := c.Query("entity_id"); v != "" {
 		filter.EntityID = v
+	}
+	// q is the panel's free-text search. Until this existed the search box
+	// filtered only the rows already fetched -- 50 of 40,251 candidates in
+	// production -- so typing a title that sat on any other page returned
+	// nothing, with no error to distinguish "not in the queue" from "not on
+	// this page".
+	//
+	// The needle is applied in two places because it has two possible homes:
+	// filter.Search matches the candidate row's own layer/band/entity IDs,
+	// while the book-derived fields (title, author, path) are resolved to a
+	// book-ID set FIRST and matched via SearchEntityIDs. Both are scan-level,
+	// so `total` stays consistent with the rows returned.
+	if v := strings.TrimSpace(c.Query("q")); v != "" {
+		filter.Search = v
+		ids, rerr := resolveBookIDsMatching(h.store, v)
+		if rerr != nil {
+			// Fail the request rather than falling back to a row-only match:
+			// a partial search returns a SHORT result set under a 200, which
+			// reads as "nothing matched" and is indistinguishable from a
+			// correct empty result.
+			httputil.InternalError(c, "failed to resolve dedup search", rerr)
+			return
+		}
+		filter.SearchEntityIDs = ids
 	}
 	includeBreakdown := c.Query("include_breakdown") == "true"
 	// include_books surfaces the full book objects (title/author/path/metadata)
