@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.73.0
+// version: 1.74.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"io"
 	"io/fs"
 	"math"
@@ -1731,8 +1732,8 @@ func extractInfoFromPath(book *Book) {
 		if len(parts) == 2 {
 			left := strings.TrimSpace(parts[0])
 			right := strings.TrimSpace(parts[1])
-			leftIsName := looksLikePersonName(left)
-			rightIsName := looksLikePersonName(right)
+			leftIsName := personname.LooksLikePersonName(left)
+			rightIsName := personname.LooksLikePersonName(right)
 			if rightIsName && !leftIsName && book.Author == "" {
 				book.Author = right
 				book.Title = left
@@ -1844,47 +1845,21 @@ func extractAuthorFromDirectory(filePath string) string {
 		parts := strings.SplitN(dirName, " - ", 2)
 		if len(parts) > 0 {
 			author := strings.TrimSpace(parts[0])
-			if isValidAuthor(author) {
+			if personname.IsValidAuthor(author) {
 				return author
 			}
 		}
 	}
 
 	// Use directory name if valid
-	if isValidAuthor(dirName) {
+	if personname.IsValidAuthor(dirName) {
 		return dirName
 	}
 
 	return ""
 }
 
-// isValidAuthor checks if extracted author string is valid
-func isValidAuthor(author string) bool {
-	if author == "" {
-		return false
-	}
-
-	lower := strings.ToLower(author)
-
-	// Skip invalid patterns
-	if strings.HasPrefix(lower, "book") || strings.HasPrefix(lower, "chapter") ||
-		strings.HasPrefix(lower, "part") || strings.HasPrefix(lower, "vol") ||
-		strings.HasPrefix(lower, "volume") || strings.HasPrefix(lower, "disc") {
-		return false
-	}
-
-	// Skip purely numeric
-	if _, err := strconv.Atoi(author); err == nil {
-		return false
-	}
-
-	// Skip chapter patterns
-	if strings.HasPrefix(lower, "chapter ") {
-		return false
-	}
-
-	return true
-} // parseFilenameForAuthor attempts to intelligently parse title and author from filename
+// parseFilenameForAuthor attempts to intelligently parse title and author from filename
 // Handles patterns like "Title - Author" or "Author - Title"
 // Returns (title, author) where author is empty string if pattern not detected
 func parseFilenameForAuthor(filename string) (string, string) {
@@ -1897,8 +1872,8 @@ func parseFilenameForAuthor(filename string) (string, string) {
 	right := strings.TrimSpace(parts[1])
 
 	// Heuristic: check if right side looks like an author name
-	rightIsName := looksLikePersonName(right)
-	leftIsName := looksLikePersonName(left)
+	rightIsName := personname.LooksLikePersonName(right)
+	leftIsName := personname.LooksLikePersonName(left)
 
 	if rightIsName && !leftIsName {
 		// Pattern: "Title - Author"
@@ -1913,62 +1888,6 @@ func parseFilenameForAuthor(filename string) (string, string) {
 
 	// Couldn't determine, return empty author
 	return "", ""
-}
-
-// looksLikePersonName checks if a string looks like a person's name
-// Looks for patterns like "John Smith", "J. Smith", "J. K. Rowling"
-func looksLikePersonName(s string) bool {
-	if !isValidAuthor(s) {
-		return false
-	}
-
-	// Check for initials like "J. K. Rowling" or "J.K. Rowling"
-	if strings.Contains(s, ".") {
-		words := strings.Fields(s)
-		if len(words) > 1 {
-			initials := 0
-			nonInitials := 0
-			for _, word := range words {
-				if isInitialToken(word) {
-					initials++
-					continue
-				}
-				nonInitials++
-			}
-			if nonInitials > 0 || initials >= 2 {
-				return true
-			}
-		}
-	}
-
-	// Check for multi-word names with proper capitalization
-	words := strings.Fields(s)
-	if len(words) >= 2 && len(words) <= 4 {
-		// Check if all words start with uppercase
-		allProperCase := true
-		for _, word := range words {
-			if len(word) == 0 || (word[0] < 'A' || word[0] > 'Z') {
-				allProperCase = false
-				break
-			}
-		}
-		if allProperCase {
-			return true
-		}
-	}
-
-	// Check for "FirstName LastName" pattern (at least one space, proper case)
-	if len(words) >= 2 {
-		// First word starts with capital
-		if len(words[0]) > 0 && words[0][0] >= 'A' && words[0][0] <= 'Z' {
-			// Second word starts with capital
-			if len(words[1]) > 0 && words[1][0] >= 'A' && words[1][0] <= 'Z' {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 // looksLikeTitleCandidate flags titles that commonly begin with articles.

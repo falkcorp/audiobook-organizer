@@ -1,10 +1,12 @@
 // file: internal/metadata/helpers_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1f2e3d4c-5b6a-7c8d-9e0f-1a2b3c4d5e6f
+// last-edited: 2026-09-01
 
 package metadata
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"os"
 	"path/filepath"
 	"testing"
@@ -299,7 +301,7 @@ func TestIsValidAuthor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isValidAuthor(tt.author)
+			got := personname.IsValidAuthor(tt.author)
 			if got != tt.expected {
 				t.Errorf("For %q, expected %v, got %v", tt.author, tt.expected, got)
 			}
@@ -440,7 +442,7 @@ func TestLooksLikePersonName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := looksLikePersonName(tt.input)
+			got := personname.LooksLikePersonName(tt.input)
 			if got != tt.expected {
 				t.Errorf("For %q, expected %v, got %v", tt.input, tt.expected, got)
 			}

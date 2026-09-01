@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5c1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-07-01
+// last-edited: 2026-09-01
 
 package scanner
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,8 +145,8 @@ func TestLooksLikePersonName(t *testing.T) {
 		"12345":      false,
 	}
 	for name, expected := range cases {
-		if looksLikePersonName(name) != expected {
-			t.Fatalf("looksLikePersonName(%s) expected %v", name, expected)
+		if personname.LooksLikePersonName(name) != expected {
+			t.Fatalf("personname.LooksLikePersonName(%s) expected %v", name, expected)
 		}
 	}
 }
@@ -249,9 +250,9 @@ func TestIsValidAuthor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.author, func(t *testing.T) {
-			got := isValidAuthor(tt.author)
+			got := personname.IsValidAuthor(tt.author)
 			if got != tt.valid {
-				t.Errorf("isValidAuthor(%q) = %v, want %v", tt.author, got, tt.valid)
+				t.Errorf("personname.IsValidAuthor(%q) = %v, want %v", tt.author, got, tt.valid)
 			}
 		})
 	}
