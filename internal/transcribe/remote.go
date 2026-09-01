@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-08-31
+// last-edited: 2026-09-01
 
 package transcribe
 
@@ -319,16 +319,38 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 		close(resultCh)
 	}()
 
+	// Drain resultCh to completion even after an error, rather than returning
+	// on the first one.
+	//
+	// resultCh is closed only after wg.Wait(), so returning early leaves the
+	// remaining workers RUNNING: they keep calling acquireInFlight (which reads
+	// config.AppConfig) and transcribeOneRemote (which sends real HTTP), so a
+	// dispatch that has already reported failure goes on generating load
+	// against the endpoint and holding in-flight slots the caller believes it
+	// released. Under -race it also lets those goroutines outlive the test that
+	// spawned them and collide with the next test's global-config write, which
+	// is how this surfaced.
+	//
+	// cancel() still fires immediately, so draining costs only the time the
+	// in-flight requests take to notice the cancelled context.
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
+	var firstErr error
 	for item := range resultCh {
 		if item.err != nil {
-			return nil, fmt.Errorf("remote transcribe %s: %w", item.id, item.err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("remote transcribe %s: %w", item.id, item.err)
+				cancel()
+			}
+			continue
 		}
 		results[item.id] = item.result
 		if onProgress != nil {
 			onProgress(len(results), total)
 		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return results, nil
 }
