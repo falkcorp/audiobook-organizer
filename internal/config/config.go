@@ -2880,7 +2880,7 @@ func ResetToDefaults() {
 			WriteStartupReadOnlyKey: true,
 
 			SupportedExtensions: audioext.Default(),
-			ExcludePatterns: []string{},
+			ExcludePatterns:     []string{},
 
 			// Default metadata sources
 			MetadataSources: []MetadataSource{
