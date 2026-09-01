@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-09-01
 
@@ -126,9 +126,7 @@ describe('bulk skips are kept per kind', () => {
     await act(async () => {
       result.current.bulkAction('regroup.ambiguous', 'approve');
     });
-    await waitFor(() =>
-      expect(result.current.skipsByKind['regroup.ambiguous']).toHaveLength(1)
-    );
+    await waitFor(() => expect(result.current.skipsByKind['regroup.ambiguous']).toHaveLength(1));
 
     vi.mocked(api.bulkReviewAction).mockResolvedValueOnce({
       action: 'approve',
@@ -177,9 +175,7 @@ describe('bulk skips are kept per kind', () => {
     } as unknown as api.ReviewBulkResult);
     await act(async () => result.current.bulkAction('regroup.ambiguous', 'approve'));
 
-    await waitFor(() =>
-      expect(result.current.skipsByKind['regroup.ambiguous']).toBeUndefined()
-    );
+    await waitFor(() => expect(result.current.skipsByKind['regroup.ambiguous']).toBeUndefined());
   });
 });
 
@@ -202,7 +198,9 @@ describe('actionFor', () => {
     // insufficient-evidence is a statement BY the machine, not a decision a
     // human can take. Pre-filling a guess here would put `combine` on precisely
     // the holds with the least evidence.
-    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'insufficient-evidence' })]);
+    mockItems([
+      makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'insufficient-evidence' }),
+    ]);
     const { result } = await renderLane();
     expect(result.current.actionFor(result.current.buckets[0].items[0])).toBe('');
   });
@@ -339,6 +337,62 @@ describe('the kind filter is pushed to the server', () => {
 
     expect(api.approveReviewItem).toHaveBeenCalled();
     expect(lastFilter().kind).toBe('regroup.multidisc');
+  });
+
+  it('does not paint the old kind rows when a reload lands after a kind switch', async () => {
+    // 🔴 THE RACE THE TWO FETCH PATHS HID. reload() deliberately carries no
+    // abort signal -- it has to finish so the decided hold actually leaves the
+    // list -- so nothing cancels it when the reviewer switches kind while it is
+    // in flight. Its response is for the OLD kind. Without a guard it wins the
+    // race, and the lane paints the old kind's holds under the new kind's
+    // heading: no error, no spinner, no way for the reviewer to tell.
+    //
+    // This was invisible while the two paths built their requests separately;
+    // it surfaced on folding them into one fetchPage.
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.setFilters({ kind: 'regroup.ambiguous' });
+    });
+    await waitFor(() => expect(lastFilter().kind).toBe('regroup.ambiguous'));
+
+    // The reload's request hangs; the kind switch that follows it resolves.
+    let releaseReload: (page: api.ReviewItemsPage) => void = () => {};
+    const held = new Promise<api.ReviewItemsPage>((res) => {
+      releaseReload = res;
+    });
+    mockItems([makeItem('m1', 'regroup.multidisc', { recommendedAction: 'combine' })]);
+    vi.mocked(api.getReviewItems).mockImplementationOnce(() => held);
+
+    // Not awaited: runItemAction awaits reload, and reload is the thing being
+    // held open.
+    act(() => {
+      void result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+    await waitFor(() => expect(api.approveReviewItem).toHaveBeenCalled());
+
+    await act(async () => {
+      result.current.setFilters({ kind: 'regroup.multidisc' });
+    });
+    await waitFor(() =>
+      expect(result.current.buckets.flatMap((b) => b.items).map((i) => i.id)).toEqual(['m1'])
+    );
+
+    // Now the stale reload answers, with the ambiguous kind's rows.
+    await act(async () => {
+      releaseReload({
+        items: [makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })],
+        count: 1,
+        limit: 500,
+        offset: 0,
+        total: 1,
+      });
+      await held;
+    });
+
+    expect(result.current.buckets.flatMap((b) => b.items).map((i) => i.id)).toEqual(['m1']);
   });
 
   it('drops the previous kind rows while the new request is in flight', async () => {
