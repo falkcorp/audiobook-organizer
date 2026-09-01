@@ -15,8 +15,11 @@ apart, and **no copy was correct** — each one had a bug the others did not:
 - **scanner** additionally ended in a fallback that returned true for *any* string
   whose first two words start with ASCII capitals, bypassing the 2–4 word limit the
   same function declares. That is why it answered true for `A Game of Thrones` and
-  `The Lord of the Rings` — and `splitAuthorTitle` then filed the **title as the
-  author**.
+  `The Lord of the Rings` — and `parseFilenameForAuthor` then filed the **title as
+  the author**. (An earlier draft of this note named `splitAuthorTitle` as the
+  consumer. No such function exists anywhere in the tree; the real one is
+  `parseFilenameForAuthor`, and naming the wrong consumer is what let a
+  regression in it survive three review rounds.)
 - **dedup** handled Unicode and particles correctly but had no structural guard, so
   `Book 3`, `Chapter 1`, `Volume 2`, `Disc 1` and `Pratchett 036` were all names.
 
@@ -264,3 +267,72 @@ round it was first measured in, since a later fix can defuse an earlier test —
 and one of these mutants had already survived a guard written to kill it once.
 Ten mutants, each verified to match exactly one anchor, to actually change the
 file, and to still compile before the tests were run: **10 killed, 0 survived.**
+
+#### A stricter predicate made one caller WORSE, because it was choosing a side
+
+A fourth review round found the most serious defect in this change, and it is a
+different shape from the three before it. Those were all "a closed set fails open
+and admits junk." This one is a gate that fails **closed** and, because the caller
+uses the answer to choose an **orientation** rather than to accept or reject, a
+false does not cause a miss — it causes an **inversion**.
+
+`parseFilenameForAuthor` splits `"X - Y"` and asks which side is the author. The
+old per-package predicate ended in a fallback that approved almost anything
+capitalized, so a decorated author string on the right was recognised as a name.
+The shared predicate is strict, and it answers **false** for
+`"Neil Gaiman (Unabridged)"` — because of the trailing parenthesis, not because
+Neil Gaiman is not a person. The caller read that false as "so the right side must
+be the title", took the `"Author - Title"` branch, and stored:
+
+```
+"Good Omens - Neil Gaiman (Unabridged)"        Author = "Good Omens"
+"Good Omens - Neil Gaiman and Terry Pratchett" Author = "Good Omens"
+"The Hobbit - Neil Gaiman [Unabridged]"        Author = "The Hobbit"
+```
+
+The title, filed as the author. Nothing downstream can catch it: the minted string
+passed the person check on the left by construction, so it is person-shaped, it is
+not the placeholder, and re-running the predicate on it returns true. `(Unabridged)`
+is native to this library — `internal/titleutil` exists to strip it — so this is a
+common shape, not an exotic one. And it directly contradicts the rule this change
+argues for sixty lines earlier, that a wrong author is strictly worse than an absent
+one.
+
+The cause is that one bit was being asked a two-way question. `LooksLikePersonName`
+answers "is this one bare human name?", and "not a person" and "a person carrying an
+edition marker" both come back false. Callers deciding an orientation now ask
+`LooksLikeAuthorCredit` instead — one name, a name with an edition marker, or several
+names joined by a conjunction — while callers deciding whether to *accept* a single
+string keep the strict predicate, because a credit list is not a person.
+
+Fixing it by making the branch refuse was rejected: that branch is right far more
+often than it is wrong, and refusing would have thrown away every correct
+`"Author - Title"` reading with it.
+
+Measured at the consumer against a corpus where the author side is known, 1,792
+filenames, scanner:
+
+| | correct | wrong | empty |
+|---|---|---|---|
+| before this change (`origin/main`) | 512 | 1,152 | 128 |
+| with the strict predicate (the bug) | 448 | 438 | 906 |
+| with `LooksLikeAuthorCredit` | **1,120** | 384 | 288 |
+
+**Zero** filenames go from a correct author to a wrong one, 552 go from wrong to
+correct, and 36 go from correct to empty — and empty is the outcome this file
+treats as safe, because it routes to AI nomination.
+
+The metadata twin had the same inversion **before** this change as well as after,
+because its own older predicate also rejected a decorated name. So it is fixed
+rather than repaired: 620 correct before, 1,144 after, at the cost of 101 filenames
+in a class that is genuinely ambiguous — a two-to-four-word capitalized title with
+no leading article is not distinguishable from a person's name by structure, and
+whichever side you prefer, some corpus makes you wrong. Preferring the right-hand
+side is what both copies' own comments already said they did; the metadata copy was
+only doing otherwise by accident, because decoration made its check fail.
+
+Four comment claims from the same review are corrected rather than left standing,
+the first being the one that mattered: two places named `splitAuthorTitle` as the
+function that filed titles as authors. **No such function exists in the tree.** The
+real consumer is `parseFilenameForAuthor` — the one that then carried this
+regression through three review rounds without being named once.

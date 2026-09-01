@@ -1,5 +1,5 @@
 // file: internal/personname/personname.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
 // last-edited: 2026-09-01
 
@@ -45,7 +45,9 @@
 // letters are Unicode Ll -- unicode.IsLower('გ') is true, because Unicode 11
 // added Mtavruli capitals -- yet Mkhedruli is how Georgian is normally written.
 // So LooksLikePersonName("გიორგი ბაქრაძე") is FALSE and every Georgian author is
-// dropped at all five call sites. Not a regression (the ASCII test this package
+// dropped at all 20 non-test call sites (scanner 6, metadata 6, dedup 8) --
+// "five" was written from the number of SPLIT BRANCHES, not call sites. Not a
+// regression (the ASCII test this package
 // replaced dropped them too), but not fixed either.
 //
 // Do not "fix" it by accepting runes with no uppercase mapping: Go DOES map
@@ -56,6 +58,7 @@
 package personname
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -125,6 +128,58 @@ func IsValidAuthor(author string) bool {
 // precisely the duplication this package exists to remove.
 func IsNameParticle(w string) bool {
 	return nameParticles[strings.ToLower(strings.TrimSpace(w))]
+}
+
+// editionSuffixRe matches a trailing edition/format marker -- "(Unabridged)",
+// "[Dramatized Adaptation]". These attach to the WORK, so in a filename they
+// trail whichever field happens to come last, author or title alike.
+var editionSuffixRe = regexp.MustCompile(`\s*[\(\[][^\)\]]*[\)\]]\s*$`)
+
+// creditSeparatorRe splits an author credit into the individual names it lists.
+var creditSeparatorRe = regexp.MustCompile(`(?i)\s*(?:,|;|&|\band\b|\bwith\b)\s*`)
+
+// LooksLikeAuthorCredit reports whether s could be the AUTHOR field of a
+// "Title - Author" pair: one name, a name carrying an edition marker, or
+// several names joined by a conjunction.
+//
+// LooksLikePersonName answers a NARROWER question -- "is this one bare human
+// name?" -- and returns false for "Neil Gaiman (Unabridged)" and for
+// "Neil Gaiman and Terry Pratchett" because of the DECORATION, not because
+// they are not people. A caller that reads that false as "so this side must be
+// the title" does not merely miss the author; it INVERTS and files the title
+// AS the author. Measured: parseFilenameForAuthor stored
+// "Good Omens - Neil Gaiman (Unabridged)" with Author = "Good Omens", where the
+// pre-refactor code stored "Neil Gaiman (Unabridged)".
+//
+// That is why this is a separate predicate rather than a looser
+// LooksLikePersonName: one bit cannot answer a two-way question. Any caller
+// deciding an ORIENTATION -- which side is the author -- must ask this one.
+// Callers deciding whether to ACCEPT a single string as a name still want the
+// strict predicate, because a credit list is not a person.
+func LooksLikeAuthorCredit(s string) bool {
+	s = strings.TrimSpace(s)
+	if LooksLikePersonName(s) {
+		return true
+	}
+	bare := strings.TrimSpace(editionSuffixRe.ReplaceAllString(s, ""))
+	if bare != s && LooksLikePersonName(bare) {
+		return true
+	}
+	// A credit list: EVERY clause must be a name. One title clause poisons the
+	// whole credit rather than half-matching it -- the same fail-closed rule
+	// internal/dedup's composite splitter uses, and for the same reason:
+	// refusing leaves the field visibly wrong for repair, while a partial match
+	// launders a title fragment into an author.
+	clauses := creditSeparatorRe.Split(bare, -1)
+	if len(clauses) < 2 {
+		return false
+	}
+	for _, c := range clauses {
+		if !LooksLikePersonName(strings.TrimSpace(c)) {
+			return false
+		}
+	}
+	return true
 }
 
 // LooksLikePersonName reports whether s reads as a human name: two to four

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.77.0
+// version: 1.78.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -1831,7 +1831,13 @@ func extractAuthorFromDirectory(filePath string) string {
 		return ""
 	}
 
-	// Handle "Author, Co-Author - translator - Title" patterns
+	// Handle "Author - translator - Title" patterns, and "Author, Co-Author -
+	// translator - Title" for TWO authors only. The shape gate below gives
+	// LooksLikePersonName the whole credit, and that caps it at four words, so
+	// "Terry Pratchett, Neil Gaiman, Stephen Fry - translator - X" is refused
+	// where the ungated code accepted it. A refusal here yields no author
+	// rather than a wrong one, which is the trade this file makes everywhere,
+	// but the old comment promised a capability the gate does not deliver.
 	if strings.Contains(dirName, " - translator - ") || strings.Contains(dirName, " - narrated by - ") {
 		re := regexp.MustCompile(`^([^-]+)\s*-\s*(?:translator|narrated by)\s*-`)
 		matches := re.FindStringSubmatch(dirName)
@@ -1866,7 +1872,7 @@ func extractAuthorFromDirectory(filePath string) string {
 	// Every branch of this function gates on LooksLikePersonName, and the
 	// "Author - Title" branch above was reviewed as a candidate to leave on the
 	// bare IsValidAuthor. Declined, and the reason is the one already recorded
-	// twenty lines above at the Pratchett-036 guard: a WRONG author is strictly
+	// at the Pratchett-036 guard at :1788: a WRONG author is strictly
 	// worse than an ABSENT one on this exact path, because it still closes the AI
 	// nomination gate and nothing downstream can recognise it as junk, while an
 	// empty author routes to AI filename nomination and gets a second chance.
@@ -1934,17 +1940,29 @@ func parseFilenameForAuthor(filename string) (string, string) {
 	left := strings.TrimSpace(parts[0])
 	right := strings.TrimSpace(parts[1])
 
-	// Heuristic: check if right side looks like an author name
-	rightIsName := personname.LooksLikePersonName(right)
+	// The RIGHT side is asked whether it could be an author CREDIT, not whether
+	// it is one bare name. These three branches use the answer to choose an
+	// ORIENTATION, so a false does not cause a miss here -- it flips the
+	// assignment and files the title as the author. LooksLikePersonName returns
+	// false for "Neil Gaiman (Unabridged)" and "Neil Gaiman and Terry Pratchett"
+	// because of the decoration, and reading that as "so the right side is the
+	// title" sent "Good Omens - Neil Gaiman (Unabridged)" to branch two, which
+	// stored Author = "Good Omens". Measured against the pre-refactor code,
+	// which stored "Neil Gaiman (Unabridged)".
+	//
+	// The LEFT side keeps the strict predicate: it is asked to ACCEPT a string
+	// as a name, not to choose between two, and a credit list on the left is not
+	// evidence of anything.
+	rightIsCredit := personname.LooksLikeAuthorCredit(right)
 	leftIsName := personname.LooksLikePersonName(left)
 
-	if rightIsName && !leftIsName {
+	if rightIsCredit && !leftIsName {
 		// Pattern: "Title - Author"
 		return left, right
-	} else if leftIsName && !rightIsName {
+	} else if leftIsName && !rightIsCredit {
 		// Pattern: "Author - Title"
 		return right, left
-	} else if rightIsName {
+	} else if rightIsCredit {
 		// Both could be names, prefer "Title - Author" pattern
 		return left, right
 	}
