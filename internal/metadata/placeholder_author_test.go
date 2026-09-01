@@ -1,7 +1,7 @@
 // file: internal/metadata/placeholder_author_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b0d24e9-8f13-4a57-b2c6-0d94e1738ac5
-// last-edited: 2026-08-25
+// last-edited: 2026-09-01
 
 package metadata
 
@@ -62,4 +62,62 @@ func TestExtractFromFilenameRecoversARealAuthorFromTheDirectory(t *testing.T) {
 func TestExtractFromFilenameKeepsARealAuthor(t *testing.T) {
 	m := extractFromFilename("/mnt/bigdata/books/audiobook-organizer/Terry Pratchett/Mort/Mort - Terry Pratchett.mp3")
 	require.Equal(t, "Terry Pratchett", m.Artist, "a real author was dropped")
+}
+
+// Everything above goes through the " - " branch. The UNDERSCORE branch returned
+// early, before the placeholder guard, the directory fallback and the
+// series-index derivation at the bottom of the function -- so every assertion
+// above held while the same input spelled with "_" laundered the placeholder
+// straight through. Found in review of #3029, on merged main:
+//
+//	"Mort_Unknown Author"               -> Artist "Unknown Author"
+//	"Mort_Unknown Author (Unabridged)"  -> Artist "Unknown Author (Unabridged)"
+//
+// The guard is now deferred rather than trailing, so no branch can skip it.
+func TestExtractFromFilenameUnderscoreBranchAlsoClearsThePlaceholder(t *testing.T) {
+	for _, name := range []string{
+		"Mort_Unknown Author.mp3",
+		"Mort_Unknown Author (Unabridged).mp3",
+		"Mort_Unknown Author [Unabridged].mp3",
+	} {
+		m := extractFromFilename("/mnt/bigdata/books/audiobook-organizer/" + name)
+		require.Empty(t, m.Artist,
+			"%s: the underscore branch returned before the placeholder guard", name)
+	}
+}
+
+// The converse for the underscore branch, so the test above cannot pass by
+// breaking underscore extraction outright.
+func TestExtractFromFilenameUnderscoreBranchKeepsARealAuthor(t *testing.T) {
+	m := extractFromFilename("/mnt/bigdata/books/audiobook-organizer/Neil Gaiman_Stardust.mp3")
+	require.Equal(t, "Neil Gaiman", m.Artist, "a real author was dropped by the underscore branch")
+	require.Equal(t, "Stardust", m.Title, "the title and author were swapped")
+}
+
+// The deferred tail also carries the directory fallback, so an underscore-named
+// book under a real author's directory must still recover it.
+func TestExtractFromFilenameUnderscoreBranchStillReachesTheDirectoryFallback(t *testing.T) {
+	m := extractFromFilename("/mnt/bigdata/books/audiobook-organizer/Terry Pratchett/Mort_Unknown Author.mp3")
+	require.Equal(t, "Terry Pratchett", m.Artist,
+		"the deferred tail did not run for the underscore branch")
+}
+
+// The FIRST guard in the deferred tail strips the edition suffix, and the second
+// one would mask a regression there: a decorated placeholder that survives the
+// first guard is still cleared by the second, so Artist ends up empty either
+// way. The difference only shows when the directory can supply a REAL author --
+// clearing must happen BEFORE the fallback, or a recoverable author is lost.
+//
+// Found by mutation: dropping StripEditionSuffix from the first guard survived
+// every other test in this file.
+func TestExtractFromFilenameStripsBeforeTheDirectoryFallbackNotAfter(t *testing.T) {
+	for _, name := range []string{
+		"Mort - Unknown Author (Unabridged).mp3",
+		"Mort_Unknown Author (Unabridged).mp3",
+	} {
+		m := extractFromFilename("/mnt/bigdata/books/audiobook-organizer/Terry Pratchett/" + name)
+		require.Equal(t, "Terry Pratchett", m.Artist,
+			"%s: the DECORATED placeholder survived the first guard, so the directory "+
+				"fallback was skipped and a recoverable author was lost", name)
+	}
 }
