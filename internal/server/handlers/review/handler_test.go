@@ -149,11 +149,12 @@ func TestListReviewItems(t *testing.T) {
 
 // TestListReviewItems_SearchParam covers `q` reaching the store filter.
 //
-// The seeded rows differ ONLY in dedup key -- seedPayload gives every hold the
-// same Summary ("s") and derives FolderRef from the key -- so the needle has to
-// travel through the query string into ReviewFilter.Search and be matched by the
-// store for any of these to pass. A handler that ignored `q` would return every
-// row and fail on the count, not merely on the ordering.
+// The seeded rows share a Summary ("s") and differ in dedup key -- and, because
+// seedPayload DERIVES FolderRef from the dedup key, in folder_ref too. So the
+// needle reaches the store through two fields, not one: this pins that `q`
+// travels from the query string into ReviewFilter.Search at all, and nothing
+// about WHICH field matched (the store test owns that). A handler that ignored
+// `q` returns every row and fails on the count.
 func TestListReviewItems_SearchParam(t *testing.T) {
 	s := newTestStore(t)
 	seed(t, s, "regroup.multidisc", "alpha")

@@ -1,5 +1,5 @@
 // file: web/src/components/review/RegroupPanel.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a0f9595-7a40-4662-abfa-be27845db5fd
 // last-edited: 2026-09-01
 
@@ -290,7 +290,7 @@ describe('the filter rail', () => {
     // the typist. The debounce lives behind it, in the hook, where the buckets
     // are.
     render(<RegroupPanel regroup={makeLane()} />);
-    await userEvent.type(screen.getByRole('textbox', { name: 'Search loaded holds' }), 'ab');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Search the queue' }), 'ab');
 
     expect(setFilters).toHaveBeenCalledWith({ search: 'a' });
     expect(setFilters).toHaveBeenCalledWith({ search: 'b' });

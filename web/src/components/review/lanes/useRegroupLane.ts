@@ -24,7 +24,7 @@
  * rather than carries.
  *
  * ---------------------------------------------------------------------------
- * FILTERING: ONE DIMENSION SERVER-SIDE, TWO CLIENT-SIDE — AND WHY THAT SPLIT
+ * FILTERING: TWO DIMENSIONS SERVER-SIDE, ONE CLIENT-SIDE — AND WHY THAT SPLIT
  * ---------------------------------------------------------------------------
  *
  * `kind` is pushed to the SERVER. It is the only one of the three that can be,
@@ -41,9 +41,10 @@
  *     rows that happened to load: on production 2026-09-01, regroup.ambiguous
  *     held 714 pending holds, so 214 of them could not be found by typing, and
  *     setting the kind dropdown did not help because they were all one kind.
- *   - The CLIENT decides which loaded rows are shown, on the keystroke. The
- *     server round-trip is behind a 250 ms debounce; without the local pass the
- *     list would sit unchanged for a quarter of a second after every character.
+ *   - The CLIENT decides which loaded rows are shown, from the moment the
+ *     debounce fires until the response lands. It is keyed on the DEBOUNCED
+ *     term, so it does not narrow per keystroke -- it removes the round trip
+ *     from the felt latency, not the debounce.
  *
  * They are not identical predicates and are not meant to be. The client also
  * matches labelForKind(kind), which the server has no counterpart for (see
@@ -104,10 +105,12 @@ export const REGROUP_FETCH_LIMIT = 500;
 /**
  * How long the lane waits after the last keystroke before searching.
  *
- * The search never leaves the browser, so this is not about sparing the server.
- * It is about the work between a keystroke and a frame: every character
- * re-filters up to REGROUP_FETCH_LIMIT rows and re-renders every bucket beneath
- * them, and doing that per keystroke is what makes a text box feel broken.
+ * Two reasons now, where there used to be one. The original: the work between a
+ * keystroke and a frame — every character re-filters up to REGROUP_FETCH_LIMIT
+ * rows and re-renders every bucket beneath them, and doing that per keystroke is
+ * what makes a text box feel broken. The second, since the term is pushed down:
+ * this gates a NETWORK REQUEST, so an undebounced box would issue one per
+ * character and leave the ordering guard to sort out the pile.
  */
 export const REGROUP_SEARCH_DEBOUNCE_MS = 250;
 
@@ -133,16 +136,17 @@ export const REGROUP_SORTS: { value: RegroupSort; label: string }[] = [
 export interface RegroupFilters {
   /**
    * Server-side. Empty string means every kind.
-   *
-   * The only filter that round-trips, and the only one that produces an honest
-   * `total`.
    */
   kind: string;
   /**
-   * Client-side, over the loaded rows only.
+   * Server-side too, as of the `q` parameter — so an empty result now means
+   * "not in the queue" rather than "not on this page", and `total` counts
+   * matches.
    *
-   * Debounced by REGROUP_SEARCH_DEBOUNCE_MS before it reaches the buckets; the
-   * raw value stays here so the text field never lags the typist.
+   * Debounced by REGROUP_SEARCH_DEBOUNCE_MS before it is sent; the raw value
+   * stays here so the text field never lags the typist. A local pass over the
+   * already-loaded rows covers that debounce window and then stands down — see
+   * the `visible` derivation for why it must not keep running.
    */
   search: string;
   sortBy: RegroupSort;
@@ -351,6 +355,12 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   // The debounced twin of filters.search. The raw value drives the text field so
   // typing never lags; this one drives the buckets.
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  // The search term the rows currently in `items` were fetched under. '' means
+  // "these rows are the unsearched queue".
+  const [appliedSearch, setAppliedSearch] = useState('');
+  // Ref mirror, so the load effect can read the previously-applied term without
+  // taking it as a dependency (which would re-fire the effect on every apply).
+  const appliedSearchRef = useRef('');
 
   // The badge count is shared, genuinely global, and already polled by App.tsx.
   // The lane READS it for honest per-kind totals rather than counting its own
@@ -450,9 +460,14 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     [kindFilter, searchFilter]
   );
 
-  const applyPage = useCallback((page: ReviewItemsPage) => {
+  const applyPage = useCallback((page: ReviewItemsPage, term: string) => {
     setItems(page.items ?? []);
     setTotal(page.total ?? 0);
+    // WHICH TERM THESE ROWS ARE AN ANSWER TO. Not cosmetic: the local predicate
+    // below must stand down once the server has answered for the term in the
+    // box, or it subtracts rows the server matched. See its comment.
+    setAppliedSearch(term);
+    appliedSearchRef.current = term;
   }, []);
 
   useEffect(() => {
@@ -485,21 +500,58 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     setLoading(true);
     setError(null);
 
+    // The term the rows on screen answered BEFORE this request. Read from a ref
+    // rather than the state so it does not become an effect dependency and
+    // re-fire the effect on every successful apply.
+    const previousTerm = appliedSearchRef.current;
+
     const seq = ++reqSeq.current;
     fetchPage(ctrl.signal)
       .then((page) => {
         if (ctrl.signal.aborted || seq < appliedSeq.current) return;
         appliedSeq.current = seq;
-        applyPage(page);
-        setLoading(false);
+        applyPage(page, searchFilter);
       })
       .catch((err: unknown) => {
         // An abort is this hook cancelling its own request, not a failure the
         // reviewer should see. A TIMEOUT is not an abort in that sense — it
         // means the server never answered, and it must reach the reviewer.
         if (ctrl.signal.aborted) return;
+        // 🔴 STALE ROWS UNDER AN ERROR BANNER ARE THREE WRONG NUMBERS.
+        //
+        // If the request that failed was for a NEW term, the rows still on
+        // screen answer the old one, `total` counts the old one's matches, and
+        // the queue chip is derived from that. The reviewer would see a banner
+        // over a plausible-looking result set with no way to tell which of the
+        // numbers the error invalidated. A failed request for the SAME term is
+        // a refresh that did not land, and its rows are still a correct answer,
+        // so those stay. The "widening must not clear" rule below is about the
+        // SUCCESS path and does not extend to this.
+        if (previousTerm !== searchFilter) {
+          setItems([]);
+          setTotal(0);
+          setAppliedSearch(searchFilter);
+          appliedSearchRef.current = searchFilter;
+        }
         setError(err instanceof Error ? err.message : 'Failed to load the review queue');
-        setLoading(false);
+      })
+      .finally(() => {
+        // 🔴 CLEARED HERE, NOT IN EITHER BRANCH ABOVE.
+        //
+        // This effect set `loading`, so this effect owns clearing it, on every
+        // way the request can settle -- including the superseded-drop, which
+        // returns early from the `then` above. That path is reachable: reload()
+        // carries no abort signal on purpose, so an action's refresh can land
+        // AFTER a later load request was issued and win the ordering guard;
+        // the load's response is then dropped before it can clear the flag and
+        // the progress bar runs forever. A hung request and a superseded one
+        // would render identically, which is this file's recurring failure in
+        // its third form.
+        //
+        // Guarded on `aborted` because a newer run of this effect has already
+        // set `loading` true for its own request; clearing it here would report
+        // that request finished.
+        if (!ctrl.signal.aborted) setLoading(false);
       });
 
     return () => ctrl.abort();
@@ -566,9 +618,37 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
       loadedPerKind.set(item.kind, (loadedPerKind.get(item.kind) ?? 0) + 1);
     }
 
-    const visible = query
-      ? items.filter((item) => (searchIndex.get(item.id) ?? '').includes(query))
-      : items;
+    // 🔴 THE LOCAL PASS COVERS THE ROUND TRIP, NOT THE DEBOUNCE, AND IT IS NOT
+    // A SECOND OPINION.
+    //
+    // Note WHAT IT IS KEYED ON: `query` comes from `debouncedSearch`, not from
+    // `filters.search`. So it does not narrow on the keystroke -- it narrows at
+    // the same instant the request is issued, and covers the window between
+    // that and the response landing. An earlier draft of this comment claimed
+    // the keystroke; a test asserting it failed, which is the only reason the
+    // claim was checked at all.
+    //
+    // The moment the server has answered for the term in the box, it must stand
+    // down -- because it does not match the same things the server does, and the
+    // direction that matters is the one where it matches LESS.
+    //
+    // searchTextFor indexes payload.folder / survivorTitle / derived_title /
+    // title / files[]. The server walks EVERY string leaf, which includes
+    // recommendationReason -- by its producer's own comment "the sentence a
+    // reviewer actually reads" -- plus recommendedAction, proposedAction and
+    // confidence. So a reviewer types a word off the sentence on screen, the
+    // server finds the hold, and this filter would throw it away: 1 matched,
+    // 0 shown, and the row still unfindable. That is the exact defect the
+    // server-side search was added to fix, wearing a different hat.
+    //
+    // Comparing case-folded because the server matches case-insensitively; the
+    // question is "has the server answered for THIS term", not "is the string
+    // byte-identical".
+    const serverAnsweredThisTerm = appliedSearch.trim().toLowerCase() === query;
+    const visible =
+      query && !serverAnsweredThisTerm
+        ? items.filter((item) => (searchIndex.get(item.id) ?? '').includes(query))
+        : items;
 
     // One sorted pass feeds both orders: a Map keeps insertion order, so the
     // bucket sequence follows the first row of each kind under the same
@@ -595,11 +675,29 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         items: kindItems,
         loadedForKind,
         totalForKind,
-        truncated: totalForKind > loadedForKind,
+        // 🔴 NOT MEASURABLE UNDER A SEARCH, so it is not claimed under one.
+        //
+        // `loadedForKind` counts the rows that came back, which the server has
+        // now narrowed by the search term. `totalForKind` comes from the polled
+        // /review/count map, which is NOT search-scoped -- there is no per-kind
+        // MATCH count anywhere. Comparing them under a search asks "did we fail
+        // to load rows that exist?" and answers with "did the search hide some?",
+        // which is true of every useful search: on production shape a three-hit
+        // search in regroup.ambiguous would render a warning-coloured "3 of 714".
+        //
+        // The doc block at the top of this file already forbids exactly this --
+        // "the one warning that means something" stops being readable if it
+        // fires on every keystroke. It named `visible` as the number not to feed
+        // in; pushing the search to the server made `items` itself narrowed, so
+        // the same mistake arrives through a different door.
+        //
+        // Genuine truncation under a search is still reported, at panel grain,
+        // where both sides ARE search-scoped: `loaded < total`.
+        truncated: query === '' && totalForKind > loadedForKind,
         hiddenBySearch: loadedForKind - kindItems.length,
       };
     });
-  }, [items, byKind, query, searchIndex, filters.sortBy]);
+  }, [items, byKind, query, appliedSearch, searchIndex, filters.sortBy]);
 
   const visible = useMemo(() => buckets.reduce((n, b) => n + b.items.length, 0), [buckets]);
 
@@ -653,7 +751,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         return fetchPage().then((page) => {
           if (seq < appliedSeq.current) return;
           appliedSeq.current = seq;
-          applyPage(page);
+          applyPage(page, searchFilter);
         });
       })().catch(() => {
         // A failed refresh after a SUCCESSFUL action must not report the
@@ -664,7 +762,9 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   // No `kindFilter` here: this body no longer reads it. `fetchPage` is keyed on
   // it, so reload is still rebuilt on a kind change -- carrying it twice only
   // tells a reader the body reads something it does not.
-  }, [loadCount, fetchPage, applyPage]);
+  // `searchFilter` IS read here now -- it is handed to applyPage as the term
+  // these rows answer. It is not the dead duplicate that `kindFilter` was.
+  }, [loadCount, fetchPage, applyPage, searchFilter]);
 
   const runItemAction = useCallback(
     async (item: ReviewItem, action: 'approve' | 'reject') => {
@@ -770,12 +870,22 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     error,
     buckets,
     total,
+    // 🔴 `total` IS ONLY THE QUEUE WHEN NOTHING IS PUSHED DOWN.
+    //
     // Under a kind filter the fetched `total` is that kind's count, so the
     // all-kinds number has to come from the polled endpoint — the same
     // instrument `totalForKind` already trusts, so the two cannot disagree.
-    // Unfiltered, the fetched total IS the queue and is preferred: it is the
-    // fresher of the two, having just been read.
-    queueTotal: kindFilter ? (storeCount > 0 ? storeCount : null) : total,
+    //
+    // A SEARCH IS NOW THE SAME KIND OF NARROWING, and the condition had to
+    // learn about it. The old comment here read "unfiltered, the fetched total
+    // IS the queue and is preferred: it is the fresher of the two" — true when
+    // search never left the browser, and false the moment `q` was added. Left
+    // alone it rendered "1 pending" beside a 728-hold queue, because `total`
+    // had become the match count. A justification that stops being true does
+    // not announce itself; this is the CLAUDE.md worked example, so the
+    // condition names both filters rather than the one that existed first.
+    queueTotal:
+      kindFilter || searchFilter ? (storeCount > 0 ? storeCount : null) : total,
     loaded: items.length,
     visible,
     oldestSortIsPartial: filters.sortBy === 'oldest' && items.length < total,
