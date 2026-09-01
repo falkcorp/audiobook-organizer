@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-01
 
@@ -823,7 +823,19 @@ func extractAuthorFromDirectory(filePath string) string {
 		re := regexp.MustCompile(`^([^-]+)\s*-\s*(?:translator|narrated by)\s*-`)
 		matches := re.FindStringSubmatch(dirName)
 		if len(matches) > 1 {
-			return strings.TrimSpace(matches[1])
+			// Shape-gated like the two branches below. This returned matches[1]
+			// with NO predicate at all -- not IsValidAuthor, not
+			// LooksLikePersonName -- and it is the FIRST branch tried, so it
+			// decided the author before either gate could run:
+			//   "Discworld - translator - Mort"            -> "Discworld"
+			//   "the quick brown - translator - Mort"       -> "the quick brown"
+			//   "Unabridged - narrated by - Stephen Fry"    -> "Unabridged"
+			// Same defect as internal/dedup's slash branch, and missed the same
+			// way: the branches were gated one at a time by READING the function,
+			// and the first-tried one was not in the corpus that measured it.
+			if candidate := strings.TrimSpace(matches[1]); personname.LooksLikePersonName(candidate) {
+				return candidate
+			}
 		}
 	}
 

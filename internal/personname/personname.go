@@ -1,5 +1,5 @@
 // file: internal/personname/personname.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
 // last-edited: 2026-09-01
 
@@ -37,6 +37,22 @@
 // CJK, Hebrew, Arabic, Thai -- so requiring positive uppercase excludes them
 // entirely. That distinction is not stylistic; it is the difference between
 // supporting Japanese authors and silently dropping them.
+//
+// # Known limit: Georgian, and Armenian written lowercase
+//
+// The formulation above is right for CASELESS scripts and wrong for a CASED
+// script whose DEFAULT written form is the lowercase one. Georgian Mkhedruli
+// letters are Unicode Ll -- unicode.IsLower('გ') is true, because Unicode 11
+// added Mtavruli capitals -- yet Mkhedruli is how Georgian is normally written.
+// So LooksLikePersonName("გიორგი ბაქრაძე") is FALSE and every Georgian author is
+// dropped at all five call sites. Not a regression (the ASCII test this package
+// replaced dropped them too), but not fixed either.
+//
+// Do not "fix" it by accepting runes with no uppercase mapping: Go DOES map
+// Mkhedruli to Mtavruli (unicode.ToUpper('გ') == 'Გ'), so that test rejects
+// Georgian exactly as today. Measured 2026-09-01; see
+// todo.d/20260901_georgian_dropped_by_person_name_predicate.md for the disproof
+// and for why a per-script exception is needed instead.
 package personname
 
 import (
