@@ -412,3 +412,36 @@ to catch it and closed the AI-nomination gate, the exact failure that guard
 exists to prevent, in a shape it was not written for. The comparison is now made
 against the edition-stripped form. `authorname` stays standard-library-only, as
 its own doc comment promises, so the strip happens at the call sites.
+
+#### Mutation testing found five gaps in the unification, and one real omission
+
+Ten mutants against the shared decision, run against a baseline verified green
+first — the previous run's baseline was red, because an interrupted harness had
+left a mutant applied, and a harness with a red baseline reports every mutant as
+killed. **Five survived**, each a genuine gap in code that had just been measured
+at the consumer and called done:
+
+- deleting `/` from the credit separators (nothing observed it — and nothing
+  could, since a `/` cannot appear in a filename, so only a direct predicate test
+  can see it);
+- never refusing on a tie, and the `"_"` path preferring right instead of
+  refusing (the tie policy was load-bearing — it is what removed the whole class
+  of "mints an author where the old code minted none" — and no test touched it);
+- reducing the edition strip to a single group;
+- dropping the edition strip from the placeholder guard.
+
+Two more mutants did not compile, which is its own kind of empty result and was
+counted as such rather than as a pass.
+
+Writing the missing tests then exposed a real omission rather than just a
+coverage hole. A **list of several names is stronger evidence of author-hood than
+a single person-shaped phrase** — `"Neil Gaiman and Terry Pratchett"` is a credit
+in a way `"Good Omens"` is not, though both satisfy the credit predicate. Without
+that, the pair was scored a tie, and the `"_"` path refused a credit it had ample
+evidence to place. It is now the first and strongest of three discriminators,
+ahead of the leading article and the initials.
+
+Re-measured over the same 1,232 filenames: correct rises from 928 to **1,000**
+and wrong falls from 156 to **132**, with scanner still at **0** correct→wrong and
+**0** empty→wrong against `origin/main`. On the 448 inputs whose author is a
+credit list, correct answers go from 216 (main) to 336.
