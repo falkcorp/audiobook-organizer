@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-01
 
@@ -489,21 +489,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 					TrackNumber:        track.TrackNumber,
 					TrackCount:         totalTracks,
 				}
-				// book_files.file_hash is an identity column — dedup's exact-file
-				// collector reports Confidence 1.0 on a match — so it must hold
-				// the canonical digest and nothing else. This used to store
-				// ComputeSegmentFileHash, a SHA-256 of only the first 1 MB, which
-				// is wrong in BOTH directions: it never equals the scanner's
-				// value for any real audiobook (so genuine duplicates go unfound)
-				// and two different tracks sharing a 1 MB opening collide on it
-				// (so false duplicates are asserted at certainty).
-				//
-				// Cost of the change: the canonical digest reads the whole file
-				// up to 100 MB and 20 MB above that, against a flat 1 MB before.
-				// On a large iTunes import that is real extra I/O — accepted here
-				// because a cheap value in an identity column is not a cheaper
-				// version of the right answer, it is a wrong one.
-				if trackHash, hashErr := filehash.BookFileHash(trackPath); hashErr == nil {
+				if trackHash, hashErr := canonicalTrackFileHash(trackPath); hashErr == nil {
 					bf.FileHash = trackHash
 				}
 				if createErr := imp.store.CreateBookFile(bf); createErr != nil {
@@ -2138,4 +2124,26 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// canonicalTrackFileHash returns the value that belongs in
+// book_files.file_hash for an iTunes track.
+//
+// It is a named function rather than an inline call so the invariant has a
+// place to be TESTED. book_files.file_hash is an identity column — dedup's
+// exact-file collector (internal/dedup/collectors_exact.go) reports Confidence
+// 1.0 on a match — so it must hold filehash.BookFileHash and nothing else.
+//
+// This used to store scanner.ComputeSegmentFileHash, a SHA-256 of only the
+// FIRST 1 MB, which is wrong in both directions: it never equals the value the
+// scanner writes for any real audiobook, so genuine duplicates are silently
+// never found; and two different tracks that share a 1 MB opening collide on
+// it, so a false duplicate is asserted at certainty.
+//
+// Cost of the change: the canonical digest reads the whole file up to 100 MB
+// and 20 MB above that, against a flat 1 MB before. On a large iTunes import
+// that is real extra I/O — accepted because a cheap value in an identity column
+// is not a cheaper version of the right answer, it is a wrong one.
+func canonicalTrackFileHash(path string) (string, error) {
+	return filehash.BookFileHash(path)
 }
