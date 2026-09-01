@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/EvidencePanel.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f8b0d13-97a2-4c65-b83e-1e6a5c9f0d27
-// last-edited: 2026-08-20
+// last-edited: 2026-08-31
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -358,5 +358,50 @@ describe('metadata lane, end to end from the Go payload', () => {
     ).toMatch(/cannot be replayed at all/i);
     // ...whereas a breakdown that replays to the wrong number names both numbers.
     expect(incompleteReason(0.41, 0.9)).toMatch(/replay to 0\.4100, not 0\.9000/);
+  });
+});
+
+describe('score row zebra striping', () => {
+  // The rows are wide -- label hard left, numbers hard right -- so pairing a
+  // label with its value means crossing a lot of empty space. Striping is the
+  // rail the eye follows, and it only works if it actually ALTERNATES: a
+  // uniform background reads as one block again.
+  const threeSteps: WaterfallEvidence = {
+    kind: 'waterfall',
+    score: 0.4,
+    steps: [
+      { id: 'base', label: 'Title/author match', op: 'base', operand: 0.8, running: 0.8 },
+      { id: 'rich', label: 'Rich metadata', op: 'add', operand: 0.1, running: 0.9 },
+      { id: 'comp', label: 'Compilation penalty', op: 'multiply', operand: 0.444, running: 0.4 },
+    ],
+  };
+
+  it('alternates row backgrounds so a label tracks to its own numbers', () => {
+    renderPanel(threeSteps);
+    const rows = screen.getAllByTestId('evidence-step-row');
+    expect(rows).toHaveLength(3);
+
+    const bg = (el: HTMLElement) => getComputedStyle(el).backgroundColor;
+
+    // Adjacent rows must differ, or there is no stripe at all.
+    expect(bg(rows[0])).not.toBe(bg(rows[1]));
+    // ...and the pattern must repeat every other row rather than, say, fading.
+    expect(bg(rows[0])).toBe(bg(rows[2]));
+  });
+
+  it('stripes the weighted signal rows on the same cadence', () => {
+    renderPanel({
+      ...weighted,
+      signals: [
+        { id: 'exact_file', label: 'exact_file', value: 1, weight: 0.5 },
+        { id: 'duration', label: 'duration', value: 0.9, weight: 0.3 },
+        { id: 'title', label: 'title', value: 0.8, weight: 0.2 },
+      ],
+    });
+    const rows = screen.getAllByTestId('evidence-signal-row');
+    expect(rows).toHaveLength(3);
+    const bg = (el: HTMLElement) => getComputedStyle(el).backgroundColor;
+    expect(bg(rows[0])).not.toBe(bg(rows[1]));
+    expect(bg(rows[0])).toBe(bg(rows[2]));
   });
 });

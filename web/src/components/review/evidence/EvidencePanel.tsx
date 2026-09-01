@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/EvidencePanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c07f4b91-8d23-4e56-a1b8-5f2c9d0e3a74
-// last-edited: 2026-08-20
+// last-edited: 2026-08-31
 //
 // The shared "why did it conclude that" panel, promoted out of the dedup lane
 // so all three review lanes explain themselves the same way.
@@ -23,6 +23,30 @@ import type {
   WeightedSignal,
 } from './types';
 import { incompleteReason, recomposeWaterfall, waterfallIsConsistent } from './types';
+
+/**
+ * Zebra striping for a score row, by index.
+ *
+ * These rows are unusually wide: the label sits hard left and its numbers hard
+ * right, with a progress bar between them. At full panel width the eye has to
+ * cross several hundred pixels of empty space to pair a label with its value,
+ * and adjacent rows are the easiest thing in the world to slip between.
+ * Alternating bands give it a rail to follow.
+ *
+ * The stripe is theme.palette.action.hover rather than a literal colour because
+ * MUI defines it for both light and dark themes. A hardcoded rgba would have to
+ * be written twice and could drift; this cannot.
+ *
+ * Callers must also drop the parent Stack's `spacing`: a gap between striped
+ * rows breaks the band into floating chips and defeats the point.
+ */
+const zebraRowSx = (index: number) => (theme: Theme) => ({
+  alignItems: 'center',
+  px: 1,
+  py: 0.5,
+  borderRadius: 0.5,
+  backgroundColor: index % 2 === 1 ? theme.palette.action.hover : 'transparent',
+});
 
 // Human-friendly labels for dedup signal kinds. An unknown kind falls through
 // to its raw value rather than rendering blank -- a signal we cannot name is
@@ -179,10 +203,15 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
         </Box>
       </Tooltip>
 
-      <Stack spacing={0.75}>
-        {rows.map((s) => (
+      <Stack>
+        {rows.map((s, i) => (
           <Tooltip key={s.id} title={s.detail || s.label} placement="left">
-            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              data-testid="evidence-signal-row"
+              sx={zebraRowSx(i)}
+            >
               <Box
                 sx={(theme) => ({
                   width: 10,
@@ -340,13 +369,18 @@ function WaterfallView({ evidence }: { evidence: WaterfallEvidence }) {
         )}
       </Stack>
 
-      <Stack spacing={0.5}>
+      <Stack>
         {evidence.steps.map((step, i) => {
           const previousRunning = i === 0 ? 0 : evidence.steps[i - 1].running;
           const tone = stepTone(step, previousRunning);
           return (
             <Tooltip key={step.id} title={step.detail ?? ''} placement="left">
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                data-testid="evidence-step-row"
+                sx={zebraRowSx(i)}
+              >
                 <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }} noWrap>
                   {step.label}
                   {step.capped && (
