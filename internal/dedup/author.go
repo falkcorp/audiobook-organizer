@@ -87,6 +87,15 @@ var leadingConjunctionRe = regexp.MustCompile(`(?i)^(?:&|and)\s+`)
 var (
 	authorSpaceRe    = regexp.MustCompile(`\s+`)
 	authorInitialsRe = regexp.MustCompile(`([A-Z]\.)([A-Z])`)
+	// extractBaseAuthor's: called twice per author-name comparison
+	// (authorNamesEquivalent, below) and once per author when the prefilter
+	// index is built.
+	authorParenSuffixRe = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
+	// SplitCompositeAuthorName's two. Not on the pairwise scan path -- these
+	// are hoisted for consistency, so "compile once" is the rule in this file
+	// rather than a thing three of five declarations happen to do.
+	authorAkaRe          = regexp.MustCompile(`(?i)\(aka\s`)
+	authorBracketSplitRe = regexp.MustCompile(`^(.+?)\s*[\(\[]\s*(.+?)\s*[\)\]]\s*$`)
 )
 
 // NormalizeAuthorName normalizes whitespace around initials and trims.
@@ -149,8 +158,10 @@ func splitAuthorParts(name string) (first, last string) {
 // or "Author (Narrator Name)" and returns the base author name.
 func extractBaseAuthor(name string) string {
 	// Strip " (anything)" parenthetical that looks like a role
-	parenRe := regexp.MustCompile(`\s*\([^)]*\)\s*$`)
-	name = parenRe.ReplaceAllString(name, "")
+	// authorParenSuffixRe: see the note on authorSpaceRe. extractBaseAuthor is
+	// called twice per author-name comparison (author.go:538-539) and once per
+	// author in the prefilter build (:1068).
+	name = authorParenSuffixRe.ReplaceAllString(name, "")
 
 	// If name contains "/" and isn't just initials, take the first part
 	if idx := strings.Index(name, "/"); idx > 0 {
@@ -250,7 +261,7 @@ func looksLikePersonName(part string) bool {
 // Returns nil or single-element slice if the name doesn't look composite.
 func SplitCompositeAuthorName(name string) []string {
 	// Don't split AKA patterns
-	if regexp.MustCompile(`(?i)\(aka\s`).MatchString(name) {
+	if authorAkaRe.MatchString(name) {
 		return nil
 	}
 
@@ -310,7 +321,7 @@ func SplitCompositeAuthorName(name string) []string {
 	}
 
 	// Try parentheses or brackets: "Author (Author 2)" or "Author [Author 2]"
-	if m := regexp.MustCompile(`^(.+?)\s*[\(\[]\s*(.+?)\s*[\)\]]\s*$`).FindStringSubmatch(name); len(m) == 3 {
+	if m := authorBracketSplitRe.FindStringSubmatch(name); len(m) == 3 {
 		outer := strings.TrimSpace(m[1])
 		inner := strings.TrimSpace(m[2])
 		// Both parts must look like author names (contain a space for first+last)

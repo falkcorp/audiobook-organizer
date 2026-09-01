@@ -1,5 +1,5 @@
 // file: internal/matcher/fuzzy.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-01
 
@@ -228,11 +228,15 @@ func tokenSimilarity(a, b string) float64 {
 	if maxLen == 0 {
 		return 0
 	}
-	sim := 1.0 - float64(LevenshteinDistance(a, b))/float64(maxLen)
-	if sim < 0 {
-		sim = 0
-	}
-	return sim
+	// No `if sim < 0` clamp, for the same reason it was removed from
+	// internal/dedup: the only way this goes negative is the numerator and
+	// denominator disagreeing on their unit, and flooring that to 0 turns a
+	// detectable defect into a plausible-looking score. Both are runes here.
+	// LevenshteinDistance lowercases internally while maxLen is taken from the
+	// originals, which is safe because Go's strings.ToLower maps rune-by-rune:
+	// verified across all 1,112,064 valid code points that ToLower never
+	// changes a string's rune count.
+	return 1.0 - float64(LevenshteinDistance(a, b))/float64(maxLen)
 }
 
 // RankResults scores each candidate against the query and returns results

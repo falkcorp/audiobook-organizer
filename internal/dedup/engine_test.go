@@ -667,7 +667,7 @@ func TestLevenshteinDistance(t *testing.T) {
 		{"Émile Zola", "Emile Zola", 1},
 		{"Достоевский", "Достоевскiй", 1},
 		{"村上春樹", "村上春树", 1}, // traditional vs simplified: one rune
-		{"東京", "東京都", 1},     // one CJK rune inserted
+		{"東京", "東京都", 1},    // one CJK rune inserted
 	}
 
 	for _, tc := range tests {

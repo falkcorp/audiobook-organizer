@@ -84,3 +84,20 @@ func TestNormalizedSimilarityOnNonASCII(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkNormalizeAuthorName exists so the figures quoted for the regex
+// hoist are REPRODUCIBLE rather than ad-hoc. NormalizeAuthorName runs twice per
+// candidate pair in the pairwise metadata-fuzzy scan.
+//
+// Measured on darwin/arm64, -benchtime=2s -count=3, before the hoist (two
+// regexp.MustCompile calls in the function body) vs after:
+//
+//	before  7976 ns/op  3708 B/op  43 allocs/op
+//	after   1608 ns/op   181 B/op  10 allocs/op
+func BenchmarkNormalizeAuthorName(b *testing.B) {
+	names := []string{"J.R.R. Tolkien", "& Conrad Westmaas", "Ursula K. Le Guin", "José Saramago"}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		NormalizeAuthorName(names[i%len(names)])
+	}
+}

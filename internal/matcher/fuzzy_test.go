@@ -5,7 +5,10 @@
 
 package matcher
 
-import "testing"
+import (
+	"math/rand"
+	"testing"
+)
 
 // scoreMatchGoldenRow captures a (query, target) pair and the ScoreMatch value
 // it produced BEFORE the TokenSetRatio raise-only blend was introduced. The
@@ -249,6 +252,32 @@ func TestNormalize(t *testing.T) {
 		got := normalize(tt.input)
 		if got != tt.want {
 			t.Errorf("normalize(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestSimilarityStaysInUnitRange guards the clamp's removal: rune edit distance
+// cannot exceed the longer rune length, so similarity is in [0,1] by
+// construction. This fails immediately if the distance unit and the length unit
+// ever diverge again (the defect that motivated removing the clamp).
+func TestSimilarityStaysInUnitRange(t *testing.T) {
+	alphabets := []string{"abc", "aé東", "ΣİǄ", "Достй", ""}
+	r := rand.New(rand.NewSource(7))
+	for i := 0; i < 100000; i++ {
+		mk := func() string {
+			al := []rune(alphabets[r.Intn(len(alphabets))])
+			if len(al) == 0 {
+				return ""
+			}
+			out := make([]rune, r.Intn(6))
+			for j := range out {
+				out[j] = al[r.Intn(len(al))]
+			}
+			return string(out)
+		}
+		a, b := mk(), mk()
+		if s := tokenSimilarity(a, b); s < 0 || s > 1 {
+			t.Fatalf("tokenSimilarity(%q, %q) = %f, outside [0,1]", a, b, s)
 		}
 	}
 }
