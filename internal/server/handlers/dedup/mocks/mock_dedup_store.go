@@ -36,6 +36,129 @@ func (_m *MockDedupStore) EXPECT() *MockDedupStore_Expecter {
 	return &MockDedupStore_Expecter{mock: &_m.Mock}
 }
 
+// GetAllAuthors provides a mock function for the type MockDedupStore
+func (_mock *MockDedupStore) GetAllAuthors() ([]database.Author, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllAuthors")
+	}
+
+	var r0 []database.Author
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.Author, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.Author); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Author)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockDedupStore_GetAllAuthors_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllAuthors'
+type MockDedupStore_GetAllAuthors_Call struct {
+	*mock.Call
+}
+
+// GetAllAuthors is a helper method to define mock.On call
+func (_e *MockDedupStore_Expecter) GetAllAuthors() *MockDedupStore_GetAllAuthors_Call {
+	return &MockDedupStore_GetAllAuthors_Call{Call: _e.mock.On("GetAllAuthors")}
+}
+
+func (_c *MockDedupStore_GetAllAuthors_Call) Run(run func()) *MockDedupStore_GetAllAuthors_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockDedupStore_GetAllAuthors_Call) Return(authors []database.Author, err error) *MockDedupStore_GetAllAuthors_Call {
+	_c.Call.Return(authors, err)
+	return _c
+}
+
+func (_c *MockDedupStore_GetAllAuthors_Call) RunAndReturn(run func() ([]database.Author, error)) *MockDedupStore_GetAllAuthors_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetAllBooksCore provides a mock function for the type MockDedupStore
+func (_mock *MockDedupStore) GetAllBooksCore(limit int, offset int) ([]database.BookCore, error) {
+	ret := _mock.Called(limit, offset)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllBooksCore")
+	}
+
+	var r0 []database.BookCore
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.BookCore, error)); ok {
+		return returnFunc(limit, offset)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int, int) []database.BookCore); ok {
+		r0 = returnFunc(limit, offset)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookCore)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int, int) error); ok {
+		r1 = returnFunc(limit, offset)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockDedupStore_GetAllBooksCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksCore'
+type MockDedupStore_GetAllBooksCore_Call struct {
+	*mock.Call
+}
+
+// GetAllBooksCore is a helper method to define mock.On call
+//   - limit int
+//   - offset int
+func (_e *MockDedupStore_Expecter) GetAllBooksCore(limit any, offset any) *MockDedupStore_GetAllBooksCore_Call {
+	return &MockDedupStore_GetAllBooksCore_Call{Call: _e.mock.On("GetAllBooksCore", limit, offset)}
+}
+
+func (_c *MockDedupStore_GetAllBooksCore_Call) Run(run func(limit int, offset int)) *MockDedupStore_GetAllBooksCore_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDedupStore_GetAllBooksCore_Call) Return(bookCores []database.BookCore, err error) *MockDedupStore_GetAllBooksCore_Call {
+	_c.Call.Return(bookCores, err)
+	return _c
+}
+
+func (_c *MockDedupStore_GetAllBooksCore_Call) RunAndReturn(run func(limit int, offset int) ([]database.BookCore, error)) *MockDedupStore_GetAllBooksCore_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAuthorByID provides a mock function for the type MockDedupStore
 func (_mock *MockDedupStore) GetAuthorByID(id int) (*database.Author, error) {
 	ret := _mock.Called(id)
