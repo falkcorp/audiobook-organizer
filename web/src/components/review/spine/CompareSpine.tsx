@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
 // last-edited: 2026-09-01
 //
@@ -57,6 +57,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import { memo, useMemo } from 'react';
 import CloseIcon from '@mui/icons-material/Close';
 import type { CandidateResult, MetadataCandidate, PathAlias } from '../../../services/api';
 import type { MetadataAction } from '../reviewActions';
@@ -127,6 +128,41 @@ export interface SpineContext {
   /** Compact mode only. Single-open: opening one closes the other. */
   expandedId: string | null;
   onToggleExpand: (id: string) => void;
+}
+
+/**
+ * The CALLBACK half of SpineContext, split out so the row renderers can be
+ * memoized.
+ *
+ * `SpineContext` is rebuilt by useMetadataLane whenever `rowStates`,
+ * `selectedIds` or `expandedId` changes -- which is to say on every checkbox
+ * tick and every expand. Passing the whole context to each row therefore gave
+ * every row a new prop on every selection change, so all of them re-rendered to
+ * repaint one. At a page size of 100 that is 99 wasted row renders per click.
+ *
+ * The callbacks themselves are stable (`toggleSelect` and `toggleExpand` are
+ * `useCallback(..., [])`; `dispatch` depends only on things that do not move
+ * when a checkbox is ticked), so lifting them into their own object gives the
+ * memoized rows a prop that holds still.
+ */
+export type SpineHandlers = Pick<
+  SpineContext,
+  'onToggleSelect' | 'onPreviewCover' | 'onAction' | 'onToggleExpand'
+>;
+
+/**
+ * What one row renderer needs. The three per-row VALUES are resolved by the
+ * spine and passed as plain props rather than looked up through the context,
+ * so a row's props change only when that row's own state does.
+ */
+export interface SpineRowProps {
+  r: CandidateResult;
+  selected: boolean;
+  rowState: RowState | undefined;
+  /** Compact mode only; ignored by the two-column renderers. */
+  expanded: boolean;
+  handlers: SpineHandlers;
+  pathAliases: PathAlias[];
 }
 
 /**
@@ -371,38 +407,37 @@ function GroupedCard({
   );
 }
 
-function CompactRow({
+const CompactRow = memo(function CompactRow({
   r,
-  ctx,
+  selected,
+  rowState,
+  expanded,
+  handlers,
   pathAliases,
-}: {
-  r: CandidateResult;
-  ctx: SpineContext;
-  pathAliases: PathAlias[];
-}) {
+}: SpineRowProps) {
   const bookId = r.book.id;
-  const isExpanded = ctx.expandedId === bookId;
+  const isExpanded = expanded;
 
   return (
     <Box key={bookId}>
       <Stack
         direction="row"
         spacing={1}
-        onClick={() => ctx.onToggleExpand(bookId)}
+        onClick={() => handlers.onToggleExpand(bookId)}
         sx={{
           alignItems: 'center',
           p: 1,
           cursor: 'pointer',
           '&:hover': { bgcolor: 'action.hover' },
-          ...getRowSx(ctx.rowState(bookId)),
+          ...getRowSx(rowState),
         }}
       >
         <Checkbox
           size="small"
-          checked={ctx.isSelected(bookId)}
+          checked={selected}
           onClick={(e) => e.stopPropagation()}
-          onChange={() => ctx.onToggleSelect(bookId)}
-          disabled={!isRowActionable(ctx.rowState(bookId))}
+          onChange={() => handlers.onToggleSelect(bookId)}
+          disabled={!isRowActionable(rowState)}
         />
         <Avatar
           src={r.candidate?.cover_url || r.book.cover_url || ''}
@@ -410,7 +445,7 @@ function CompactRow({
           sx={{ width: 40, height: 50, cursor: 'pointer' }}
           onClick={(e) => {
             e.stopPropagation();
-            ctx.onPreviewCover(r.candidate?.cover_url || r.book.cover_url || '');
+            handlers.onPreviewCover(r.candidate?.cover_url || r.book.cover_url || '');
           }}
         />
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -479,7 +514,7 @@ function CompactRow({
             )}
           </>
         )}
-        {isRowActionable(ctx.rowState(bookId)) && r.candidate && (
+        {isRowActionable(rowState) && r.candidate && (
           <>
             <Button
               size="small"
@@ -487,7 +522,7 @@ function CompactRow({
               color="success"
               onClick={(e) => {
                 e.stopPropagation();
-                ctx.onAction({ lane: 'metadata', type: 'apply', id: bookId });
+                handlers.onAction({ lane: 'metadata', type: 'apply', id: bookId });
               }}
             >
               Apply
@@ -498,7 +533,7 @@ function CompactRow({
               color="error"
               onClick={(e) => {
                 e.stopPropagation();
-                ctx.onAction({ lane: 'metadata', type: 'reject', id: bookId });
+                handlers.onAction({ lane: 'metadata', type: 'reject', id: bookId });
               }}
             >
               Reject
@@ -508,35 +543,35 @@ function CompactRow({
               variant="text"
               onClick={(e) => {
                 e.stopPropagation();
-                ctx.onAction({ lane: 'metadata', type: 'skip', id: bookId });
+                handlers.onAction({ lane: 'metadata', type: 'skip', id: bookId });
               }}
             >
               Skip
             </Button>
           </>
         )}
-        {ctx.rowState(bookId) === 'skipped' && (
+        {rowState === 'skipped' && (
           <Chip
             label="Skipped"
             size="small"
             onClick={(e) => {
               e.stopPropagation();
-              ctx.onAction({ lane: 'metadata', type: 'unskip', id: bookId });
+              handlers.onAction({ lane: 'metadata', type: 'unskip', id: bookId });
             }}
             sx={{ cursor: 'pointer' }}
           />
         )}
-        {ctx.rowState(bookId) === 'applied' && (
+        {rowState === 'applied' && (
           <Chip label="Applied" size="small" color="success" />
         )}
-        {ctx.rowState(bookId) === 'rejected' && (
+        {rowState === 'rejected' && (
           <Chip
             label="Rejected — click to undo"
             size="small"
             color="error"
             onClick={(e) => {
               e.stopPropagation();
-              ctx.onAction({ lane: 'metadata', type: 'unreject', id: bookId });
+              handlers.onAction({ lane: 'metadata', type: 'unreject', id: bookId });
             }}
             sx={{ cursor: 'pointer' }}
           />
@@ -562,7 +597,7 @@ function CompactRow({
                   src={r.book.cover_url || ''}
                   variant="rounded"
                   sx={{ width: 60, height: 80, cursor: r.book.cover_url ? 'pointer' : 'default' }}
-                  onClick={() => r.book.cover_url && ctx.onPreviewCover(r.book.cover_url)}
+                  onClick={() => r.book.cover_url && handlers.onPreviewCover(r.book.cover_url)}
                 />
                 <Box>
                   <Typography
@@ -631,7 +666,7 @@ function CompactRow({
                     cursor: r.candidate?.cover_url ? 'pointer' : 'default',
                   }}
                   onClick={() =>
-                    r.candidate?.cover_url && ctx.onPreviewCover(r.candidate.cover_url)
+                    r.candidate?.cover_url && handlers.onPreviewCover(r.candidate.cover_url)
                   }
                 />
                 <Box>
@@ -726,17 +761,15 @@ function CompactRow({
       )}
     </Box>
   );
-}
+});
 
-function TwoColumnCard({
+const TwoColumnCard = memo(function TwoColumnCard({
   r,
-  ctx,
+  selected,
+  rowState,
+  handlers,
   pathAliases,
-}: {
-  r: CandidateResult;
-  ctx: SpineContext;
-  pathAliases: PathAlias[];
-}) {
+}: SpineRowProps) {
   const bookId = r.book.id;
 
   return (
@@ -747,7 +780,7 @@ function TwoColumnCard({
         mb: 1,
         border: 1,
         borderColor: 'divider',
-        ...getRowSx(ctx.rowState(bookId)),
+        ...getRowSx(rowState),
       }}
     >
       <Stack direction="row" spacing={2}>
@@ -762,15 +795,15 @@ function TwoColumnCard({
           >
             <Checkbox
               size="small"
-              checked={ctx.isSelected(bookId)}
-              onChange={() => ctx.onToggleSelect(bookId)}
-              disabled={!isRowActionable(ctx.rowState(bookId))}
+              checked={selected}
+              onChange={() => handlers.onToggleSelect(bookId)}
+              disabled={!isRowActionable(rowState)}
             />
             <Avatar
               src={r.book.cover_url || ''}
               variant="rounded"
               sx={{ width: 60, height: 80, cursor: r.book.cover_url ? 'pointer' : 'default' }}
-              onClick={() => r.book.cover_url && ctx.onPreviewCover(r.book.cover_url)}
+              onClick={() => r.book.cover_url && handlers.onPreviewCover(r.book.cover_url)}
             />
             <Box sx={{ minWidth: 0 }}>
               <Typography
@@ -838,7 +871,7 @@ function TwoColumnCard({
                   height: 80,
                   cursor: r.candidate?.cover_url ? 'pointer' : 'default',
                 }}
-                onClick={() => r.candidate?.cover_url && ctx.onPreviewCover(r.candidate.cover_url)}
+                onClick={() => r.candidate?.cover_url && handlers.onPreviewCover(r.candidate.cover_url)}
               />
               <Box sx={{ minWidth: 0, flex: 1 }}>
                 <Typography
@@ -940,13 +973,13 @@ function TwoColumnCard({
                     />
                   )}
                 </Stack>
-                {isRowActionable(ctx.rowState(bookId)) && (
+                {isRowActionable(rowState) && (
                   <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
                     <Button
                       size="small"
                       variant="contained"
                       color="success"
-                      onClick={() => ctx.onAction({ lane: 'metadata', type: 'apply', id: bookId })}
+                      onClick={() => handlers.onAction({ lane: 'metadata', type: 'apply', id: bookId })}
                     >
                       Apply
                     </Button>
@@ -954,37 +987,37 @@ function TwoColumnCard({
                       size="small"
                       variant="outlined"
                       color="error"
-                      onClick={() => ctx.onAction({ lane: 'metadata', type: 'reject', id: bookId })}
+                      onClick={() => handlers.onAction({ lane: 'metadata', type: 'reject', id: bookId })}
                     >
                       Reject
                     </Button>
                     <Button
                       size="small"
                       variant="text"
-                      onClick={() => ctx.onAction({ lane: 'metadata', type: 'skip', id: bookId })}
+                      onClick={() => handlers.onAction({ lane: 'metadata', type: 'skip', id: bookId })}
                     >
                       Skip
                     </Button>
                   </Stack>
                 )}
-                {ctx.rowState(bookId) === 'skipped' && (
+                {rowState === 'skipped' && (
                   <Chip
                     label="Skipped — click to undo"
                     size="small"
-                    onClick={() => ctx.onAction({ lane: 'metadata', type: 'unskip', id: bookId })}
+                    onClick={() => handlers.onAction({ lane: 'metadata', type: 'unskip', id: bookId })}
                     sx={{ cursor: 'pointer', mt: 1 }}
                   />
                 )}
-                {ctx.rowState(bookId) === 'rejected' && (
+                {rowState === 'rejected' && (
                   <Chip
                     label="Rejected — click to undo"
                     size="small"
                     color="error"
-                    onClick={() => ctx.onAction({ lane: 'metadata', type: 'unreject', id: bookId })}
+                    onClick={() => handlers.onAction({ lane: 'metadata', type: 'unreject', id: bookId })}
                     sx={{ cursor: 'pointer', mt: 1 }}
                   />
                 )}
-                {ctx.rowState(bookId) === 'applied' && (
+                {rowState === 'applied' && (
                   <Chip label="Applied" size="small" color="success" sx={{ mt: 1 }} />
                 )}
               </Box>
@@ -1006,7 +1039,7 @@ function TwoColumnCard({
       {r.candidate && <EvidenceSection candidate={r.candidate} />}
     </Box>
   );
-}
+});
 
 /**
  * Width at which `auto` shows the two-column comparison.
@@ -1062,6 +1095,26 @@ export function CompareSpine({
   // pure and don't each re-fetch config on their own.
   const pathAliases = usePathAliases();
 
+  // The stable half of `ctx`. Keyed on the individual callbacks, NOT on `ctx`
+  // itself: `ctx` gets a new identity on every selection and expand change,
+  // while the callbacks inside it do not move. This is what lets the memoized
+  // rows below actually skip.
+  //
+  // This MUST stay ABOVE the early returns below. Those returns are
+  // conditional, so a hook placed after them is skipped on a loading or errored
+  // render and called on a populated one -- React counts hooks by call order
+  // and throws "Rendered more hooks than during the previous render" on the
+  // transition back. tsc cannot see this; only the order protects it.
+  const handlers: SpineHandlers = useMemo(
+    () => ({
+      onToggleSelect: ctx.onToggleSelect,
+      onPreviewCover: ctx.onPreviewCover,
+      onAction: ctx.onAction,
+      onToggleExpand: ctx.onToggleExpand,
+    }),
+    [ctx.onToggleSelect, ctx.onPreviewCover, ctx.onAction, ctx.onToggleExpand]
+  );
+
   // Both of these run BEFORE the empty branch. Order is the whole fix: the
   // empty message is a claim about the server's answer, so it may only be made
   // once there IS an answer and it succeeded.
@@ -1113,15 +1166,25 @@ export function CompareSpine({
         <GroupedCard key={group.key} group={group} ctx={ctx} pathAliases={pathAliases} />
       ))}
 
-      {rows.map((r) =>
-        viewMode === 'compact' ? (
-          <CompactRow key={r.book.id} r={r} ctx={ctx} pathAliases={pathAliases} />
+      {rows.map((r) => {
+        // Resolved HERE, once per row, so each row receives plain values it can
+        // be compared on rather than the whole churning context.
+        const rowProps = {
+          r,
+          selected: ctx.isSelected(r.book.id),
+          rowState: ctx.rowState(r.book.id),
+          expanded: ctx.expandedId === r.book.id,
+          handlers,
+          pathAliases,
+        };
+        return viewMode === 'compact' ? (
+          <CompactRow key={r.book.id} {...rowProps} />
         ) : viewMode === 'two-column' ? (
-          <TwoColumnCard key={r.book.id} r={r} ctx={ctx} pathAliases={pathAliases} />
+          <TwoColumnCard key={r.book.id} {...rowProps} />
         ) : (
-          <AutoCard key={r.book.id} r={r} ctx={ctx} pathAliases={pathAliases} />
-        )
-      )}
+          <AutoCard key={r.book.id} {...rowProps} />
+        );
+      })}
     </Box>
   );
 }
@@ -1140,15 +1203,7 @@ export function CompareSpine({
  * reflows is a browser-level question and belongs to the visual harness -- the
  * same split used for the theme's signal colours.
  */
-function AutoCard({
-  r,
-  ctx,
-  pathAliases,
-}: {
-  r: CandidateResult;
-  ctx: SpineContext;
-  pathAliases: PathAlias[];
-}) {
+const AutoCard = memo(function AutoCard(props: SpineRowProps) {
   return (
     <Box
       data-testid="spine-auto-card"
@@ -1160,7 +1215,7 @@ function AutoCard({
         },
       }}
     >
-      <TwoColumnCard r={r} ctx={ctx} pathAliases={pathAliases} />
+      <TwoColumnCard {...props} />
     </Box>
   );
-}
+});
