@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-01
 //
@@ -71,8 +71,28 @@ export type Toast = (
 /** Review rows are heavy. Deliberately NOT the activity log's 250/500 list. */
 export const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
-/** Largest size a stored preference may restore. See the note above. */
-export const MAX_REVIEW_PAGE_SIZE = 50;
+/**
+ * The size an UNRECOGNISED stored preference is corrected to.
+ *
+ * 🔴 It is NOT "the largest size a stored preference may restore", which is
+ * what this constant was called (PAGE_SIZE_FALLBACK) and what its comment
+ * claimed. A stored 100 restores as 100 -- `loadReviewPageSize` returns any
+ * value in PAGE_SIZE_OPTIONS before it ever reaches this constant, and 100 is
+ * an offered option. Clamping it would be a bug in its own right: a reviewer
+ * who picks 100 from the control must get 100 back on the next open.
+ *
+ * What it actually does, for a value that is NOT an offered option: cap it
+ * first (a stored 250 becomes 50) and then stand in for anything the cap did
+ * not land on an option (a stored 30 also becomes 50). Both directions, not
+ * just downward.
+ *
+ * The old name mattered because it was read as policy. It says 100-row pages
+ * are not restorable; the goal this lane is measured against is explicitly
+ * "quick and responsive even at 50 or 100 items", and the one test that could
+ * have caught the contradiction asserted on 50 -- the single value where "the
+ * ceiling" and "an offered option" give the same answer.
+ */
+export const PAGE_SIZE_FALLBACK = 50;
 
 /**
  * The "Strict review" preset: three filters that were always being set together
@@ -128,8 +148,8 @@ export function loadReviewPageSize(): number {
 
   // Out of range or no longer offered. Persist the correction so the bad value
   // is gone for good rather than being re-clamped on every open.
-  const safe = Math.min(n, MAX_REVIEW_PAGE_SIZE);
-  const corrected = PAGE_SIZE_OPTIONS.includes(safe) ? safe : MAX_REVIEW_PAGE_SIZE;
+  const safe = Math.min(n, PAGE_SIZE_FALLBACK);
+  const corrected = PAGE_SIZE_OPTIONS.includes(safe) ? safe : PAGE_SIZE_FALLBACK;
   try {
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, String(corrected));
   } catch {
