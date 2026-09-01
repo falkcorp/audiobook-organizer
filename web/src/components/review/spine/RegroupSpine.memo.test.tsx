@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.memo.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: b7e34d19-05c2-4f8a-9d16-2a63c8fb4071
 // last-edited: 2026-09-01
 //
@@ -13,6 +13,23 @@
 // were inline JSX inside RegroupSpine's map -- every one of them re-rendered
 // whenever any row became busy, whenever a character was typed in the search
 // box, and on every refresh tick.
+//
+// WHAT IT WAS WORTH, IN WALL CLOCK
+//
+// Render counts are a mechanism proof, not the goal. benchmark-review-lanes
+// .spec.ts was run against origin/main and against this branch, same machine,
+// back-to-back, median of 5 reps, to get the number this file's mechanism buys:
+//
+//   regroup N=500 (the fetch limit)   sort    344ms / 10 long tasks / 328ms blocking
+//                                       ->    282ms /  0            /   0
+//                                     filter  479ms / 10 / 298  ->  418ms / 5 / 266
+//   regroup N=100 @6x CPU throttle    sort    527ms / 11 / 836  ->  441ms / 5 /  67
+//                                     filter  596ms / 10 / 697  ->  513ms / 6 / 441
+//
+// Read the long-task and blocking columns, not the ms: the regroup search box
+// is debounced 250ms, so that floor sits inside every filter number and is a
+// product decision rather than a cost. The blocking-time collapse on sort is
+// the honest headline -- 836ms to 67ms on the slow-machine control.
 //
 // HOW THE RENDERS ARE COUNTED
 //
