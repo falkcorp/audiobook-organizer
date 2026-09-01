@@ -1,5 +1,5 @@
 // file: internal/fileops/copy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d4b0c19-5e83-4a26-9f10-2b6ce8417d3a
 // last-edited: 2026-09-01
 
@@ -291,5 +291,82 @@ func assertNoTemps(t *testing.T, dir string) {
 		if strings.Contains(e.Name(), ".tmp-") {
 			t.Errorf("temp file left behind: %s", e.Name())
 		}
+	}
+}
+
+// --- fsync wiring -----------------------------------------------------------
+//
+// M7 in this PR's mutation run: deleting the fsync from copyBytes left all
+// eight other copy tests green. The whole premise of this package is that two
+// production backup writers silently lacked that call, so an untestable
+// guarantee is not acceptable here. These tests assert the call is wired up and
+// that its failure is not swallowed — not that the bytes reached the platter,
+// which no unit test can show.
+
+func swapSyncFile(t *testing.T, fn func(*os.File) error) {
+	t.Helper()
+	prev := syncFile
+	syncFile = fn
+	t.Cleanup(func() { syncFile = prev })
+}
+
+func TestCopyPathsFsyncBeforeClosing(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(t *testing.T, dir, src string) error
+	}{
+		{"CopyFile", func(t *testing.T, dir, src string) error {
+			return CopyFile(src, filepath.Join(dir, "dst.bin"))
+		}},
+		{"CopyFileExclusive", func(t *testing.T, dir, src string) error {
+			return CopyFileExclusive(src, filepath.Join(dir, "dst.bin"))
+		}},
+		{"CopyFileInto", func(t *testing.T, dir, src string) error {
+			dst := filepath.Join(dir, "dst.bin")
+			writeFileMode(t, dst, "old", 0o644)
+			return CopyFileInto(src, dst)
+		}},
+		{"CopyFileAtomic", func(t *testing.T, dir, src string) error {
+			return CopyFileAtomic(src, filepath.Join(dir, "dst.bin"))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			swapSyncFile(t, func(f *os.File) error { calls++; return f.Sync() })
+
+			dir := t.TempDir()
+			src := filepath.Join(dir, "src.bin")
+			writeFileMode(t, src, "payload", 0o644)
+			if err := tc.call(t, dir, src); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			if calls != 1 {
+				t.Errorf("%s fsynced %d time(s), want exactly 1 — a copy that never reaches the disk is not a backup", tc.name, calls)
+			}
+		})
+	}
+}
+
+// TestCopyFileFailsAndCleansUpWhenFsyncFails: a sync error means the bytes are
+// not durable, so the call must not report success, and the destination this
+// package created must not be left behind looking complete.
+func TestCopyFileFailsAndCleansUpWhenFsyncFails(t *testing.T) {
+	swapSyncFile(t, func(*os.File) error { return errors.New("simulated fsync failure") })
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.bin")
+	dst := filepath.Join(dir, "dst.bin")
+	writeFileMode(t, src, "payload", 0o644)
+
+	err := CopyFile(src, dst)
+	if err == nil {
+		t.Fatal("CopyFile must fail when the fsync fails")
+	}
+	if !strings.Contains(err.Error(), "sync destination") {
+		t.Errorf("error = %v, want it to name the sync as the failing step", err)
+	}
+	if _, statErr := os.Stat(dst); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("a non-durable destination was left behind; stat err = %v", statErr)
 	}
 }

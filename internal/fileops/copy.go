@@ -1,5 +1,5 @@
 // file: internal/fileops/copy.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f6c1a58-9d2e-4b07-8c34-71ae5d9b0f42
 // last-edited: 2026-09-01
 
@@ -49,6 +49,14 @@ import (
 // and a rename is the caller's policy — organizer needs safeRename's
 // refuse-on-collision, the ITL writers need plain replace — so callers keep
 // their own rename step and use these for the bytes.
+
+// syncFile is a seam for testing. Durability cannot be asserted without
+// crashing the machine, but whether the fsync is still WIRED UP can be — and it
+// was the absence of exactly this call in two iTunes backup writers that
+// motivated this package. Without the seam, deleting the Sync below leaves every
+// test in this package green, which is how the guarantee got lost the first
+// time.
+var syncFile = func(f *os.File) error { return f.Sync() }
 
 // CopyFile copies src to dst, creating dst or truncating it if it already
 // exists. dst ends up with src's permission bits exactly (umask does not apply),
@@ -183,7 +191,7 @@ func copyBytes(src, dst string, flag int, removeOnErr bool) error {
 		return fail("fileops: copy %s -> %s: %w", src, dst, err)
 	}
 	// Sync before Close: a backup still in page cache is not a backup.
-	if err := out.Sync(); err != nil {
+	if err := syncFile(out); err != nil {
 		return fail("fileops: sync destination %s: %w", dst, err)
 	}
 	if err := out.Close(); err != nil {
