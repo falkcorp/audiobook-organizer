@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-23
+// last-edited: 2026-09-01
 
 // Package scanner provides file scanning and processing utilities for the
 // audiobook organizer. ProcessFile is the single-pass entry point that opens
@@ -10,8 +10,6 @@ package scanner
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -22,18 +20,18 @@ import (
 	"github.com/dhowden/tag"
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 const (
-	hashThreshold = 100 * 1024 * 1024 // 100 MB — files above this get a partial hash
-	hashChunkSize = 10 * 1024 * 1024  // 10 MB chunks for the partial hash
 	// MaxScanBufferBytes is the named compile-time bound on per-operation buffer
-	// allocations. It equals hashChunkSize so CodeQL can statically verify that
+	// allocations. It equals filehash.ChunkSize — the size of each end-chunk the
+	// canonical identity digest reads — so CodeQL can statically verify that
 	// every make([]byte, MaxScanBufferBytes) call is bounded.
-	MaxScanBufferBytes = hashChunkSize // 10 MB
+	MaxScanBufferBytes = filehash.ChunkSize // 10 MB
 
 	// chapterProbeTimeout bounds each ffprobe subprocess call made while
 	// extracting/synthesizing chapters. Matches mediainfo's
@@ -203,49 +201,15 @@ func ProcessFile(filePath string) (*metadata.Metadata, *mediainfo.MediaInfo, str
 	return &meta, mi, hash, nil
 }
 
-// computeHashFromReader hashes content from an open file reader.
-// For files ≤ hashThreshold it hashes all bytes; for larger files it hashes
-// the first MaxScanBufferBytes bytes + last MaxScanBufferBytes bytes + the
-// file size. This is the same algorithm as ComputeFileHash.
-// MaxScanBufferBytes == hashChunkSize, so CodeQL can statically verify the
-// allocation bound without any runtime cap check.
+// computeHashFromReader hashes content from an open file reader, producing the
+// canonical book_files.file_hash identity digest for a file of fileSize bytes.
+//
+// This used to be a third hand-written copy of the algorithm, kept in step with
+// scanner.ComputeFileHash by a comment and one cross-checking test. It now
+// delegates to internal/filehash so there is exactly one implementation: a
+// duplicated algorithm makes any one-sided fix inert.
 func computeHashFromReader(f *os.File, fileSize int64) (string, error) {
-	if fileSize > hashThreshold {
-		h := sha256.New()
-
-		// First chunk
-		first := make([]byte, MaxScanBufferBytes)
-		n, err := f.Read(first)
-		if err != nil && err != io.EOF {
-			return "", err
-		}
-		h.Write(first[:n])
-
-		// Last chunk (seek from end)
-		if fileSize > MaxScanBufferBytes {
-			if _, err := f.Seek(-MaxScanBufferBytes, io.SeekEnd); err != nil {
-				return "", err
-			}
-			last := make([]byte, MaxScanBufferBytes)
-			n, err = f.Read(last)
-			if err != nil && err != io.EOF {
-				return "", err
-			}
-			h.Write(last[:n])
-		}
-
-		// Include size in hash
-		h.Write([]byte(fmt.Sprintf("%d", fileSize)))
-
-		return hex.EncodeToString(h.Sum(nil)), nil
-	}
-
-	// Full hash for smaller files
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return filehash.BookFileHashFromFile(f, fileSize)
 }
 
 // PersistChaptersForBook extracts and persists the chapter list for the book

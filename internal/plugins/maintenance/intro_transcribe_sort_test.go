@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_sort_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f2b9c81-7d36-4a5e-9b02-3c8e1a6d5f47
-// last-edited: 2026-08-06
+// last-edited: 2026-09-01
 
 package maintenance
 
@@ -48,7 +48,8 @@ func TestNthAudioFile_MultiDiscPicksDisc1Track1(t *testing.T) {
 	store := newSortStore(files)
 	book := database.Book{ID: "b1"}
 
-	_, _, gotID, err := firstAudioFile(store, book)
+	ref, err := firstAudioFile(store, book)
+	gotID := ref.BookFileID
 	if err != nil {
 		t.Fatalf("firstAudioFile: %v", err)
 	}
@@ -61,7 +62,8 @@ func TestNthAudioFile_MultiDiscPicksDisc1Track1(t *testing.T) {
 	// Full (disc, track, path) order — matches PebbleStore.GetBookFiles.
 	want := []string{"d1t1", "d1t2", "d2t1", "d2t2"}
 	for n, wantID := range want {
-		_, _, gotID, err := nthAudioFile(store, book, n)
+		ref, err := nthAudioFile(store, book, n)
+		gotID := ref.BookFileID
 		if err != nil {
 			t.Fatalf("nthAudioFile(%d): %v", n, err)
 		}
@@ -86,7 +88,8 @@ func TestNthAudioFile_FlattenedDiscsUnaffected(t *testing.T) {
 	book := database.Book{ID: "b1"}
 
 	for n, wantID := range []string{"t1", "t2", "t3"} {
-		_, _, gotID, err := nthAudioFile(store, book, n)
+		ref, err := nthAudioFile(store, book, n)
+		gotID := ref.BookFileID
 		if err != nil {
 			t.Fatalf("nthAudioFile(%d): %v", n, err)
 		}
@@ -105,7 +108,8 @@ func TestNthAudioFile_UntaggedFallsBackToPath(t *testing.T) {
 	}
 	store := newSortStore(files)
 
-	_, _, gotID, err := firstAudioFile(store, database.Book{ID: "b1"})
+	ref, err := firstAudioFile(store, database.Book{ID: "b1"})
+	gotID := ref.BookFileID
 	if err != nil {
 		t.Fatalf("firstAudioFile: %v", err)
 	}

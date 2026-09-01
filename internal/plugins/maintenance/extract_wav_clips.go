@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -30,7 +31,7 @@ func (p *Plugin) extractWAVClipsDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Extract WAV clips for transcription cache",
-		Description:     "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file and the extracted clip, persists the source SHA-256 to BookFile.FileHash (when missing), and creates a content-stable hardlink so the transcription cache survives organize path changes.",
+		Description:     "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.extract-wav-clips",
@@ -91,7 +92,8 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 			if gerr != nil || b == nil {
 				continue
 			}
-			src, cacheKey, bookFileID, _ := firstAudioFile(store, *b)
+			ref, _ := firstAudioFile(store, *b)
+			src, cacheKey := ref.Path, ref.CacheKey
 			if src == "" || cacheKey == "" {
 				continue
 			}
@@ -137,20 +139,13 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 					wavHash = ""
 				}
 
-				// Hash the full source audio file and use it as a content-stable
-				// cache key. This survives organize path renames because the key
-				// is derived from file content, not location.
-				srcHash, serr := hashFileSHA256(src)
-				if serr == nil && srcHash != "" && !strings.HasPrefix(cacheKey, srcHash) {
-					// Create a hardlink named by content hash — zero extra disk space.
-					contentDest := cachedClipPath(cacheDir, srcHash)
-					if _, statErr := os.Stat(contentDest); os.IsNotExist(statErr) {
-						_ = os.Link(dest, contentDest)
-					}
-					// Persist to DB so future transcription runs skip the slow path.
-					if bookFileID != "" {
-						_ = store.SetBookFileHash(bookFileID, srcHash)
-					}
+				// Content-addressed identity for the source file. See
+				// persistCanonicalFileHash for why this must be the canonical
+				// digest and why the write-back is when-missing only.
+				srcHash, herr := persistCanonicalFileHash(store, cacheDir, ref, dest)
+				if herr != nil {
+					log.Warn("extract-wav-clips: source hash/persist failed",
+						"book_id", bookID, "file", src, "err", herr)
 				}
 
 				log.Info("extract-wav-clips: extracted",
@@ -181,6 +176,67 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 	_ = reporter.UpdateProgress(1, 1,
 		fmt.Sprintf("Done — %d extracted, %d already cached, %d failed", extracted, skipped, failed))
 	return nil
+}
+
+// fileHashSetter is the narrow store surface persistCanonicalFileHash needs.
+// Kept separate from the plugin's full store interface so the invariant below
+// can be tested without a database.
+type fileHashSetter interface {
+	SetBookFileHash(id, hash string) error
+}
+
+// persistCanonicalFileHash computes ref.Path's identity digest, hardlinks the
+// just-extracted clip under that content-addressed name, and writes the digest
+// back to book_files.file_hash ONLY when the row has none. It returns the
+// digest so the caller can log it.
+//
+// Two rules are load-bearing here, and this op previously broke both.
+//
+// 1. The digest MUST be filehash.BookFileHash. book_files.file_hash is an
+// identity column: internal/dedup/collectors_exact.go emits SigExactFile at
+// Confidence 1.0 — certainty — for two books sharing a value in it. This op
+// used to write a plain whole-file SHA-256, which above 100 MB can never equal
+// the digest the scanner and the backfill job write. Two byte-identical files
+// then hash to two different strings and the collector simply never fires: no
+// error, no log, just duplicates that are never found. The corrupted rows were
+// exactly the >100 MB population the chunked strategy exists for.
+//
+// 2. The write-back MUST be when-missing only. It is what this op's
+// Description has always promised and what the sibling
+// internal/maintenance/jobs backfill_file_hashes.go job does (`if bf.FileHash
+// != "" { continue }`). Clip extraction is a CONSUMER of file identity, not
+// its owner; a row whose stored hash disagrees with the canonical digest is
+// corrupted and needs a repair op that recomputes deliberately, not a silent
+// overwrite as a side effect of caching a WAV.
+func persistCanonicalFileHash(store fileHashSetter, cacheDir string, ref audioFileRef, clipPath string) (string, error) {
+	srcHash, err := filehash.BookFileHash(ref.Path)
+	if err != nil {
+		return "", fmt.Errorf("hash source %s: %w", ref.Path, err)
+	}
+	if srcHash == "" {
+		return "", nil
+	}
+
+	// Hardlink the clip under its content-addressed name — zero extra disk
+	// space, and it survives an organize rename because the name comes from
+	// content, not location. Done even when the row already carries a DIFFERENT
+	// hash (a row corrupted by an earlier run of this op): the link is free and
+	// warms the cache for the name a repaired row will use.
+	if ref.CacheKey != srcHash && clipPath != "" {
+		if contentDest := cachedClipPath(cacheDir, srcHash); contentDest != "" {
+			if _, statErr := os.Stat(contentDest); os.IsNotExist(statErr) {
+				_ = os.Link(clipPath, contentDest)
+			}
+		}
+	}
+
+	if ref.BookFileID == "" || ref.StoredHash != "" {
+		return srcHash, nil
+	}
+	if err := store.SetBookFileHash(ref.BookFileID, srcHash); err != nil {
+		return srcHash, fmt.Errorf("persist file hash for %s: %w", ref.BookFileID, err)
+	}
+	return srcHash, nil
 }
 
 // hashFileSHA256 returns the hex-encoded SHA-256 digest of the file at path.

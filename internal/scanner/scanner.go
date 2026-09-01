@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.72.1
+// version: 1.73.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package scanner
 
@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
@@ -3108,79 +3109,19 @@ func ComputeSegmentFileHash(filePath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// ComputeFileHash computes a SHA256 hash of the file, using a chunked strategy
-// for large audiobook files to balance accuracy and performance.
+// ComputeFileHash returns the canonical identity digest for filePath — the
+// value that belongs in books.file_hash and book_files.file_hash.
+//
+// The algorithm itself lives in internal/filehash, which is the single entry
+// point every writer of those columns must use; this wrapper exists only for
+// the activeScanner test seam and for the in-package callers that predate the
+// split. New code OUTSIDE internal/scanner should call filehash.BookFileHash
+// directly rather than routing through the scanner.
 func ComputeFileHash(filePath string) (string, error) {
 	if activeScanner != nil {
 		return activeScanner.ComputeFileHash(filePath)
 	}
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	// For large files (> 100MB), hash first 10MB + last 10MB + size for speed
-	info, err := file.Stat()
-	if err != nil {
-		return "", err
-	}
-
-	const threshold = 100 * 1024 * 1024 // 100MB
-	const chunkSize = 10 * 1024 * 1024  // 10MB
-
-	if info.Size() > threshold {
-		// Quick hash for large files: first chunk + last chunk + size
-		h := sha256.New()
-
-		// First chunk
-		first := make([]byte, chunkSize)
-		n, err := file.Read(first)
-		if err != nil && err != io.EOF {
-			return "", err
-		}
-		h.Write(first[:n])
-
-		// Last chunk
-		if info.Size() > chunkSize {
-			// A discarded Seek error would hash the wrong window and poison
-			// dedup (audit 2026-07-17 DL-4); matches the check in
-			// process_file.go computeHashFromReader.
-			if _, err := file.Seek(-chunkSize, io.SeekEnd); err != nil {
-				return "", err
-			}
-			last := make([]byte, chunkSize)
-			n, err := file.Read(last)
-			if err != nil && err != io.EOF {
-				return "", err
-			}
-			h.Write(last[:n])
-		}
-
-		// Include size in hash
-		h.Write([]byte(fmt.Sprintf("%d", info.Size())))
-
-		return hex.EncodeToString(h.Sum(nil)), nil
-	}
-
-	// Full hash for smaller files
-	return computeFullFileHash(filePath)
-}
-
-// computeFullFileHash computes the SHA256 hash of the entire file
-func computeFullFileHash(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(hasher.Sum(nil)), nil
+	return filehash.BookFileHash(filePath)
 }
 
 // getFileSize returns the size of a file in bytes

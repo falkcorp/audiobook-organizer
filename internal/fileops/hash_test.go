@@ -1,6 +1,7 @@
 // file: internal/fileops/hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-09-01
 
 package fileops
 
@@ -10,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestComputeFileHash(t *testing.T) {
+func TestComputeFileHashAndSize(t *testing.T) {
 	// Create a temporary test file
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
@@ -21,9 +22,9 @@ func TestComputeFileHash(t *testing.T) {
 	}
 
 	// Compute hash
-	hash, err := ComputeFileHash(testFile)
+	hash, _, err := ComputeFileHashAndSize(testFile)
 	if err != nil {
-		t.Fatalf("ComputeFileHash failed: %v", err)
+		t.Fatalf("ComputeFileHashAndSize failed: %v", err)
 	}
 
 	// Verify hash is not empty
@@ -43,7 +44,7 @@ func TestComputeFileHash(t *testing.T) {
 	}
 }
 
-func TestComputeFileHash_SameContentSameHash(t *testing.T) {
+func TestComputeFileHashAndSize_SameContentSameHash(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create two files with identical content
@@ -58,14 +59,14 @@ func TestComputeFileHash_SameContentSameHash(t *testing.T) {
 		t.Fatalf("Failed to create file2: %v", err)
 	}
 
-	hash1, err := ComputeFileHash(file1)
+	hash1, _, err := ComputeFileHashAndSize(file1)
 	if err != nil {
-		t.Fatalf("ComputeFileHash(file1) failed: %v", err)
+		t.Fatalf("ComputeFileHashAndSize(file1) failed: %v", err)
 	}
 
-	hash2, err := ComputeFileHash(file2)
+	hash2, _, err := ComputeFileHashAndSize(file2)
 	if err != nil {
-		t.Fatalf("ComputeFileHash(file2) failed: %v", err)
+		t.Fatalf("ComputeFileHashAndSize(file2) failed: %v", err)
 	}
 
 	if hash1 != hash2 {
@@ -73,7 +74,7 @@ func TestComputeFileHash_SameContentSameHash(t *testing.T) {
 	}
 }
 
-func TestComputeFileHash_DifferentContentDifferentHash(t *testing.T) {
+func TestComputeFileHashAndSize_DifferentContentDifferentHash(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create two files with different content
@@ -87,14 +88,14 @@ func TestComputeFileHash_DifferentContentDifferentHash(t *testing.T) {
 		t.Fatalf("Failed to create file2: %v", err)
 	}
 
-	hash1, err := ComputeFileHash(file1)
+	hash1, _, err := ComputeFileHashAndSize(file1)
 	if err != nil {
-		t.Fatalf("ComputeFileHash(file1) failed: %v", err)
+		t.Fatalf("ComputeFileHashAndSize(file1) failed: %v", err)
 	}
 
-	hash2, err := ComputeFileHash(file2)
+	hash2, _, err := ComputeFileHashAndSize(file2)
 	if err != nil {
-		t.Fatalf("ComputeFileHash(file2) failed: %v", err)
+		t.Fatalf("ComputeFileHashAndSize(file2) failed: %v", err)
 	}
 
 	if hash1 == hash2 {
@@ -102,17 +103,17 @@ func TestComputeFileHash_DifferentContentDifferentHash(t *testing.T) {
 	}
 }
 
-func TestComputeFileHash_NonExistentFile(t *testing.T) {
+func TestComputeFileHashAndSize_NonExistentFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	nonExistent := filepath.Join(tmpDir, "nonexistent.txt")
 
-	_, err := ComputeFileHash(nonExistent)
+	_, _, err := ComputeFileHashAndSize(nonExistent)
 	if err == nil {
 		t.Error("Expected error for non-existent file")
 	}
 }
 
-func TestComputeFileHash_EmptyFile(t *testing.T) {
+func TestComputeFileHashAndSize_EmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	emptyFile := filepath.Join(tmpDir, "empty.txt")
 
@@ -120,9 +121,9 @@ func TestComputeFileHash_EmptyFile(t *testing.T) {
 		t.Fatalf("Failed to create empty file: %v", err)
 	}
 
-	hash, err := ComputeFileHash(emptyFile)
+	hash, _, err := ComputeFileHashAndSize(emptyFile)
 	if err != nil {
-		t.Fatalf("ComputeFileHash failed: %v", err)
+		t.Fatalf("ComputeFileHashAndSize failed: %v", err)
 	}
 
 	// SHA256 hash of empty file
@@ -132,7 +133,7 @@ func TestComputeFileHash_EmptyFile(t *testing.T) {
 	}
 }
 
-func TestComputeFileHash_LargeFile(t *testing.T) {
+func TestComputeFileHashAndSize_LargeFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	largeFile := filepath.Join(tmpDir, "large.dat")
 
@@ -146,9 +147,9 @@ func TestComputeFileHash_LargeFile(t *testing.T) {
 		t.Fatalf("Failed to create large file: %v", err)
 	}
 
-	hash, err := ComputeFileHash(largeFile)
+	hash, _, err := ComputeFileHashAndSize(largeFile)
 	if err != nil {
-		t.Fatalf("ComputeFileHash failed: %v", err)
+		t.Fatalf("ComputeFileHashAndSize failed: %v", err)
 	}
 
 	if hash == "" {
