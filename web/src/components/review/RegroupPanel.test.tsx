@@ -82,6 +82,10 @@ function makeLane(over: Partial<RegroupLane> = {}): RegroupLane {
       { kind: 'regroup.multidisc', label: 'Multi-disc groups', count: 16 },
     ],
     actionFor: () => '',
+    // The lane parses each row's payload once and hands it to the spine; a
+    // fake that returns null exercises the "unparseable payload" path, which
+    // is the shape these panel tests care about.
+    payloadFor: () => null,
     setAction: vi.fn(),
     isItemBusy: () => false,
     isKindBusy: () => false,

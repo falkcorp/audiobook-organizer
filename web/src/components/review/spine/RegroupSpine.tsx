@@ -689,7 +689,7 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
           <Divider sx={{ mb: 1 }} />
           {bucket.items.map((item) => {
             const itemBusy = lane.isItemBusy(item.id);
-            const payload = parsePayload(item.payload);
+            const payload = lane.payloadFor(item);
             const action = lane.actionFor(item);
             const recommended = payload?.recommendedAction;
             const recSpec = actionSpec(recommended);

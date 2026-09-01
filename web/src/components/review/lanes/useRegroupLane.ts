@@ -67,6 +67,7 @@ import type { ReviewBulkSkip, ReviewItem } from '../../../services/api';
 import { useReviewStore } from '../../../stores/useReviewStore';
 import { labelForKind } from '../../../lib/reviewKinds';
 import { defaultActionFor, parsePayload } from '../../../lib/reviewPayload';
+import type { ReviewPayload } from '../../../lib/reviewPayload';
 
 type Toast = (message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void;
 
@@ -220,6 +221,9 @@ export interface RegroupLane {
 
   /** Resolves what Approve will send for one hold. */
   actionFor: (item: ReviewItem) => string;
+  /** The row's parsed payload, from the lane's one-parse-per-row index. Row
+   *  renderers MUST use this rather than calling parsePayload themselves. */
+  payloadFor: (item: ReviewItem) => ReviewPayload | null;
   setAction: (id: string, value: string) => void;
 
   isItemBusy: (id: string) => boolean;
@@ -259,8 +263,11 @@ export interface RegroupLane {
  * proposed title, the member file paths, the dedup key, the id, and the kind's
  * human label.
  */
-export function searchTextFor(item: ReviewItem): string {
-  const payload = parsePayload(item.payload);
+export function searchTextFor(item: ReviewItem, parsed?: ReviewPayload | null): string {
+  // Takes the parsed payload when the caller already has one. The lane parses
+  // each row exactly once into payloadIndex and passes it in; the parameter is
+  // optional only so the exported helper stays usable on its own in tests.
+  const payload = parsed !== undefined ? parsed : parsePayload(item.payload);
   const parts: (string | undefined)[] = [
     item.summary,
     item.folder_ref,
@@ -416,13 +423,41 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), []);
 
+  // One PARSED payload per loaded row, keyed by id.
+  //
+  // `payload` arrives as a JSON string on the wire and three separate places
+  // want it back: this lane's search index, its actionFor, and the spine's row
+  // renderer. The first was already built once per page; the other two called
+  // parsePayload inline, per row, on EVERY render pass -- two JSON.parse calls
+  // per row, so ~1,000 of them per pass at REGROUP_FETCH_LIMIT. The comment on
+  // searchTextFor already said re-parsing 500 payloads per keystroke "is the
+  // difference between a responsive box and a janky one"; the render path was
+  // doing exactly that and the index it needed was sitting next to it.
+  //
+  // Parsing once here also makes the returned object identity stable across
+  // renders, which is what lets a memoized row skip re-rendering at all.
+  const payloadIndex = useMemo(() => {
+    const index = new Map<string, ReviewPayload | null>();
+    for (const item of items) index.set(item.id, parsePayload(item.payload));
+    return index;
+  }, [items]);
+
+  // has(), not `?? parsePayload(...)`. A payload that legitimately fails to
+  // parse is stored as null, and a nullish fallback would re-parse precisely
+  // those rows on every render -- the unparseable ones, forever.
+  const payloadFor = useCallback(
+    (item: ReviewItem): ReviewPayload | null =>
+      payloadIndex.has(item.id) ? (payloadIndex.get(item.id) ?? null) : parsePayload(item.payload),
+    [payloadIndex]
+  );
+
   // One search index per loaded page, keyed by id. Recomputed when the rows
   // change, NOT when the query changes — the query is compared against it.
   const searchIndex = useMemo(() => {
     const index = new Map<string, string>();
-    for (const item of items) index.set(item.id, searchTextFor(item));
+    for (const item of items) index.set(item.id, searchTextFor(item, payloadIndex.get(item.id) ?? null));
     return index;
-  }, [items]);
+  }, [items, payloadIndex]);
 
   const query = debouncedSearch.trim().toLowerCase();
 
@@ -489,9 +524,9 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     (item: ReviewItem): string => {
       const override = chosenActions[item.id];
       if (override !== undefined) return override;
-      return defaultActionFor(parsePayload(item.payload));
+      return defaultActionFor(payloadFor(item));
     },
-    [chosenActions]
+    [chosenActions, payloadFor]
   );
 
   const setAction = useCallback((id: string, value: string) => {
@@ -645,6 +680,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     filtersActive: Boolean(kindFilter) || query.length > 0,
     kindOptions,
     actionFor,
+    payloadFor,
     setAction,
     isItemBusy,
     isKindBusy,
