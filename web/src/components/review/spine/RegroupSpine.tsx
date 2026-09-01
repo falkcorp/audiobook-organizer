@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-09-01
 
@@ -54,7 +54,6 @@ import {
   type MemberEntry,
   memberCount,
   memberEntries,
-  parsePayload,
   type ReviewPayload,
   type RecommendationEvidence,
 } from '../../../lib/reviewPayload';
@@ -423,10 +422,23 @@ export function ItemActions({
 // list. It fetches the member books lazily (it only mounts when the accordion is
 // expanded, via unmountOnExit) so opening the queue never fans out hundreds of
 // getBook calls up front.
-export function MemberFilesDetail({ item }: { item: ReviewItem }) {
+//
+// `payload` is passed IN rather than parsed here. useRegroupLane's payloadFor
+// carries a categorical rule -- "row renderers MUST use this rather than calling
+// parsePayload themselves" -- and this component is rendered by a row renderer,
+// so parsing again made the rule one with a silent exception. The cost was never
+// the point (the useMemo and unmountOnExit meant one parse per expand, not per
+// render); a MUST that quietly does not hold is a rule the next reader stops
+// believing.
+export function MemberFilesDetail({
+  item,
+  payload,
+}: {
+  item: ReviewItem;
+  payload: ReviewPayload | null;
+}) {
   const pathAliases = usePathAliases();
   const pathVars = usePathVars();
-  const payload = useMemo(() => parsePayload(item.payload), [item.payload]);
   const folder = payload?.folder ?? item.folder_ref;
   const title = payload?.survivorTitle ?? payload?.derived_title ?? payload?.title;
   const confidence =
@@ -676,7 +688,6 @@ const RegroupRow = memo(function RegroupRow({
   const needsHuman = !recSpec || !recSpec.approvable;
   return (
     <Accordion
-      key={item.id}
       disableGutters
       data-testid={`regroup-row-${item.id}`}
       slotProps={{ transition: { unmountOnExit: true } }}
@@ -714,7 +725,7 @@ const RegroupRow = memo(function RegroupRow({
           onActionChange={handlers.onActionChange}
           sx={{ mb: 2 }}
         />
-        <MemberFilesDetail item={item} />
+        <MemberFilesDetail item={item} payload={payload} />
         <ItemActions
           item={item}
           action={action}

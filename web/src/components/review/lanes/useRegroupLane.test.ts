@@ -238,6 +238,53 @@ describe('actionFor', () => {
 // Lane gating -- the reason this does not read from the global store
 // ---------------------------------------------------------------------------
 
+describe('the row callbacks stay stable so the memoized rows can skip', () => {
+  // 🔴 THE FIX THIS LANE'S PERF WORK RESTS ON, AND IT HAD NO TEST. runItemAction
+  // deliberately omits `actionFor` from its dependency list and reads it through
+  // actionForRef instead, so that approveItem and rejectItem do NOT get a new
+  // identity every time any row's dropdown changes. RegroupSpine hoists those
+  // three into a `handlers` object that every row receives; if they move, that
+  // object moves, every row gets a changed prop, and the memo is present and
+  // completely inert -- all 500 rows re-render to repaint one dropdown.
+  //
+  // The memo test cannot see this: it drives a FAKE lane whose handlers are
+  // stable by construction. Only the real hook can answer it, and putting
+  // `actionFor` back in runItemAction's deps passes every other test in the
+  // repo.
+
+  it('setAction on one row does not move approveItem or rejectItem', async () => {
+    const { result } = await renderLane();
+    const approve = result.current.approveItem;
+    const reject = result.current.rejectItem;
+    const setAction = result.current.setAction;
+
+    act(() => result.current.setAction('a1', 'separate'));
+
+    // The action itself must have landed -- otherwise identity is preserved
+    // trivially because nothing happened.
+    expect(result.current.actionFor(result.current.buckets[0].items[0])).toBe('separate');
+    expect(result.current.approveItem).toBe(approve);
+    expect(result.current.rejectItem).toBe(reject);
+    expect(result.current.setAction).toBe(setAction);
+  });
+
+  it('a row going busy does not move them either', async () => {
+    // The other churn source on the same object: busyItems changes on every
+    // approve, and isItemBusy is keyed on it by design.
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    const { result } = await renderLane();
+    const approve = result.current.approveItem;
+    const reject = result.current.rejectItem;
+
+    await act(async () => {
+      await result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(result.current.approveItem).toBe(approve);
+    expect(result.current.rejectItem).toBe(reject);
+  });
+});
+
 describe('the lane only fetches while it is showing', () => {
   it('does not fetch when inactive', async () => {
     renderHook(() => useRegroupLane(toast, false));
@@ -336,7 +383,75 @@ describe('the kind filter is pushed to the server', () => {
     });
 
     expect(api.approveReviewItem).toHaveBeenCalled();
+    // Pin that a THIRD request happened. lastFilter() reads the most recent
+    // getReviewItems call, and the mount fetch triggered by setFilters above
+    // already carries this kind -- so without a call count this assertion
+    // passes whether or not reload's request was ever made.
+    expect(api.getReviewItems).toHaveBeenCalledTimes(3);
     expect(lastFilter().kind).toBe('regroup.multidisc');
+  });
+
+  it('does not let an EARLIER reload overwrite a later one of the same kind', async () => {
+    // 🔴 THE HALF A KIND COMPARISON CANNOT SEE, and the reason the guard is a
+    // sequence token rather than a kind check. Row busy state is per item, so
+    // every other row stays clickable while one is applying. A reviewer
+    // triaging quickly approves a1, then a2, without changing anything else:
+    // two reloads, SAME kind, both in flight. If a1's response -- read from the
+    // server before a2's write landed -- resolves last, it overwrites a2's and
+    // the hold the reviewer just decided reappears. No error, no spinner. The
+    // next click on it either 409s or re-applies a destructive `combine`.
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    mockItems([
+      makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' }),
+      makeItem('a2', 'regroup.ambiguous', { recommendedAction: 'combine' }),
+    ]);
+    const { result } = await renderLane();
+
+    const hold = () => {
+      let release: (page: api.ReviewItemsPage) => void = () => {};
+      const promise = new Promise<api.ReviewItemsPage>((res) => {
+        release = res;
+      });
+      vi.mocked(api.getReviewItems).mockImplementationOnce(() => promise);
+      return { promise, release: (page: api.ReviewItemsPage) => release(page) };
+    };
+    const page = (ids: string[]): api.ReviewItemsPage => ({
+      items: ids.map((id) => makeItem(id, 'regroup.ambiguous', { recommendedAction: 'combine' })),
+      count: ids.length,
+      limit: 500,
+      offset: 0,
+      total: ids.length,
+    });
+
+    const first = hold();
+    act(() => {
+      void result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(2));
+
+    const second = hold();
+    act(() => {
+      void result.current.approveItem(result.current.buckets[0].items[1]);
+    });
+    // Pins WHICH race is under test: both reloads must actually be in flight
+    // before either answers, or this would silently degrade into a sequential
+    // pair that any implementation passes.
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(3));
+
+    // The SECOND reload answers first, with both decided holds gone.
+    await act(async () => {
+      second.release(page(['a3']));
+      await second.promise;
+    });
+    expect(result.current.buckets.flatMap((b) => b.items).map((i) => i.id)).toEqual(['a3']);
+
+    // Then the first answers, from a read that predates a2's approval.
+    await act(async () => {
+      first.release(page(['a2', 'a3']));
+      await first.promise;
+    });
+
+    expect(result.current.buckets.flatMap((b) => b.items).map((i) => i.id)).toEqual(['a3']);
   });
 
   it('does not paint the old kind rows when a reload lands after a kind switch', async () => {

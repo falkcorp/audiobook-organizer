@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.memo.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b7e34d19-05c2-4f8a-9d16-2a63c8fb4071
 // last-edited: 2026-09-01
 //
@@ -39,12 +39,17 @@
 // work: the entire point of a wasted re-render is that the output is identical.
 //
 // 🔴 THE COUNTER DEPENDS ON THE ROWS STAYING COLLAPSED. RecommendationPanel,
-// ActionSelector and ItemActions each call actionSpec too, and all three live
-// under AccordionDetails, which is `unmountOnExit`. A collapsed row therefore
-// contributes exactly one call. The first assertion in each counting test is a
-// sanity check that the initial paint produced exactly ROW_COUNT calls; if a
-// future change renders any of those eagerly, that check fails loudly rather
-// than letting the counts drift into nonsense.
+// ActionSelector and ItemActions all call actionSpec too, and all of them live
+// under AccordionDetails, which is `unmountOnExit` -- an EXPANDED row is five
+// calls, not one, because ItemActions is rendered twice (top with the selector,
+// bottom read-only). A collapsed row is exactly one, and the counting tests
+// never expand. Every counting test opens with an explicit ROW_COUNT assertion
+// on the initial paint, so if a future change renders any of those eagerly the
+// counter fails loudly instead of drifting into nonsense.
+//
+// `wrap()` deliberately has no StrictMode: it would double-render and inflate
+// every count in this file by exactly the factor that makes the numbers look
+// plausible.
 //
 // WHY THIS FILE HAS TWO HALVES -- MEASURED, NOT ASSUMED
 //
@@ -257,13 +262,13 @@ function Harness({
  * The search path, which is a DIFFERENT question from the busy path and the one
  * the goal's wording ("responsive at 50 or 100 items") is really about.
  *
- * The lane narrows inside its `buckets` useMemo and leaves `items` -- the raw
- * fetched page -- untouched, so `payloadIndex` and `searchIndex` are NOT
- * invalidated by a keystroke and a surviving row's `payload` keeps its
- * identity. That is the whole reason the index is keyed on `items` rather than
- * on the filtered array, and it is worth a test because the cheap-looking
- * alternative (index the filtered rows) rebuilds every payload on every
- * character and leaves the memo inert during exactly this interaction.
+ * This half asks only: given props that did not change, does a surviving row
+ * skip? It CANNOT test the lane's half -- that the parse index is keyed on
+ * `items` (the raw fetched page) rather than on the filtered array -- because
+ * its `payloadFor` reads a module-level map and is therefore identical under
+ * both designs. That half lives in useRegroupLane.payloadIndex.test.ts, in
+ * 'does not re-parse when the search box narrows the page', and is verified by
+ * adding `debouncedSearch` to the index's dependency list.
  */
 function SearchHarness() {
   const [query, setQuery] = useState('');
@@ -318,6 +323,8 @@ describe('RegroupSpine row memoization', () => {
     const user = userEvent.setup();
     render(wrap(<Harness />));
 
+    expect(actionSpecSpy).toHaveBeenCalledTimes(ROW_COUNT);
+
     const flip = screen.getByRole('button', { name: 'flip busy' });
     await user.click(flip);
     actionSpecSpy.mockClear();
@@ -355,11 +362,15 @@ describe('RegroupSpine row memoization', () => {
     // actionForRef precisely so approveItem and rejectItem would stop moving
     // whenever any row's dropdown changed.
     //
-    // If this ever stops re-rendering all 20, the lane-stability requirement
-    // has been removed from the design and the comment above RegroupRow is a
-    // lie; it has not been made stricter.
+    // This is a CHARACTERIZATION test: it asserts a bad shape, so read a failure
+    // in two directions rather than one. All-20 stopping could mean the
+    // lane-stability requirement was removed from the design (and the comment
+    // above RegroupRow is now a lie) -- or that the comparator started ignoring
+    // `handlers`, which is a stale-handler bug and the opposite of an
+    // improvement. Neither is "it got stricter".
     const user = userEvent.setup();
     render(wrap(<Harness stableHandlers={false} />));
+    expect(actionSpecSpy).toHaveBeenCalledTimes(ROW_COUNT);
 
     actionSpecSpy.mockClear();
     await user.click(screen.getByRole('button', { name: 'flip busy' }));
