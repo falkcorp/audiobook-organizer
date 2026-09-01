@@ -1,5 +1,5 @@
 // file: internal/fileops/reflink.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3ef49b71-3f2d-4ecd-ad6b-abd926f282d1
 // last-edited: 2026-09-01
 
@@ -80,8 +80,5 @@ func ReflinkOrCopy(src, dst string) error {
 	if errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	return CopyFileExclusive(src, dst)
+	return CopyFileIngestExclusive(src, dst)
 }
-
-// copyFileExclusive copies src to dst with O_EXCL, removing a partially
-// written destination if the copy fails so a retry is not blocked by debris.

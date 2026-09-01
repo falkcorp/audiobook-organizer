@@ -1,5 +1,5 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
 // last-edited: 2026-09-01
 
@@ -95,8 +95,22 @@ func NewFileOperation(originalPath, targetPath string, config OperationConfig) (
 	return op, nil
 }
 
-// Execute performs the file operation with copy-first logic
+// Execute performs the file operation with copy-first logic.
+//
+// A source and target naming the SAME file is a no-op, not a copy. It used to
+// run the copy anyway: os.Create truncated the file to zero, io.Copy then read
+// zero bytes from it and reported success, and the operation returned nil
+// having destroyed the file's contents. TestFileOperation_Execute_SameSourceAndTarget
+// passed throughout, because it asserted only that the file still EXISTED —
+// and its config disables checksum verification, which is the one thing that
+// would have caught it.
 func (op *FileOperation) Execute() error {
+	if srcInfo, err := os.Stat(op.originalPath); err == nil {
+		if dstInfo, dErr := os.Stat(op.targetPath); dErr == nil && os.SameFile(srcInfo, dstInfo) {
+			return nil
+		}
+	}
+
 	// Step 1: If target exists, back it up
 	targetExists := false
 	if _, err := os.Stat(op.targetPath); err == nil {
