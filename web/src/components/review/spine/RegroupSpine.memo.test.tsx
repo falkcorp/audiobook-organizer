@@ -29,21 +29,41 @@
 // future change renders any of those eagerly, that check fails loudly rather
 // than letting the counts drift into nonsense.
 //
-// WHY THIS FILE HAS TWO INDEPENDENT HALVES
+// WHY THIS FILE HAS TWO HALVES -- MEASURED, NOT ASSUMED
 //
-// A render-count assertion and a staleness assertion fail on opposite
-// mutations, and neither substitutes for the other:
+// A render-count assertion and a staleness assertion catch different defects.
+// Three mutations of `memo(RegroupRow)` were run against this file to establish
+// which, because the comment inherited from DupesSpine.memo.test.tsx asserted a
+// neat symmetry that turns out not to hold:
 //
-//   - Reverting the memo (`memo(RegroupRow)` -> `RegroupRow`) fails ONLY the
-//     count half. The staleness half stays green: an un-memoized row is never
-//     stale.
-//   - `memo(RegroupRow, () => true)` -- an always-equal comparator, the shape a
-//     wrong dependency list degenerates to -- fails ONLY the staleness half.
-//     The count half stays green, and in fact reports BETTER numbers.
+//   memo(RegroupRow) -> RegroupRow          2 failed, 7 passed
+//       Both counting tests fail. The whole staleness half stays GREEN -- an
+//       un-memoized row is never stale.
 //
-// The pre-existing RegroupPanel.test.tsx cannot observe either: every test in
-// it renders once and asserts on that single paint, so it passes against a memo
-// with an arbitrarily wrong comparator.
+//   memo(RegroupRow, () => true)            7 failed, 2 passed
+//       Fails BOTH halves, not just the staleness one. With an always-equal
+//       comparator no row ever re-renders, so `toHaveBeenCalledTimes(1)` gets
+//       0. The tidy claim that this mutation "reports better numbers" on the
+//       count half is simply wrong, in this file and in the dupes one it came
+//       from; both were corrected to say so.
+//
+//   a comparator that compares item/busy/handlers and DROPS payload+action
+//                                           2 failed, 7 passed
+//       This is the mutation that earns the staleness half its keep: it is the
+//       shape a wrong dependency list actually takes (some props compared, one
+//       forgotten), the count half stays green, and the only two tests that
+//       fail are the two whose forgotten prop they read.
+//
+// 🔴 That third mutant SURVIVED the first draft of this file, 9/9 green. The
+// staleness tests built their lane with inline `() => {}` handlers, so
+// RegroupSpine's `handlers` useMemo recomputed on every rerender and forced all
+// N rows to re-render whatever the comparator said. The harness reported a
+// working memo while comparing nothing. STATIC_HANDLERS below is the fix, and
+// it is the reason this file is worth more than its assertions look like.
+//
+// The pre-existing RegroupPanel.test.tsx cannot observe any of this: every test
+// in it renders once and asserts on that single paint, so it passes against a
+// memo with an arbitrarily wrong comparator.
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -143,6 +163,21 @@ function laneBase(): Omit<
     refresh: () => {},
   };
 }
+
+/**
+ * Stable across every rerender, and that stability is load-bearing rather than
+ * tidiness: RegroupSpine's `handlers` useMemo is keyed on these three, so a
+ * fresh `() => {}` per call would recompute it, hand every row a changed prop,
+ * and re-render all N no matter what the memo's comparator says. A harness that
+ * did that would report the memo as fine while comparing nothing -- measured:
+ * a comparator that ignores `payload` and `action` entirely SURVIVED against an
+ * inline-arrow version of these tests, and is killed by this one.
+ */
+const STATIC_HANDLERS = {
+  approveItem: () => {},
+  rejectItem: () => {},
+  setAction: () => {},
+};
 
 function wrap(children: ReactNode) {
   return (
@@ -271,9 +306,7 @@ describe('RegroupSpine memoized rows are not stale', () => {
     return {
       ...laneBase(),
       buckets: [makeBucket(ITEMS)],
-      approveItem: () => {},
-      rejectItem: () => {},
-      setAction: () => {},
+      ...STATIC_HANDLERS,
       isItemBusy: () => false,
       actionFor: () => 'combine',
       payloadFor: (item) => PAYLOADS.get(item.id) ?? null,
@@ -378,9 +411,7 @@ describe('RegroupSpine hook ordering', () => {
     return {
       ...laneBase(),
       buckets: [],
-      approveItem: () => {},
-      rejectItem: () => {},
-      setAction: () => {},
+      ...STATIC_HANDLERS,
       isItemBusy: () => false,
       actionFor: () => 'combine',
       payloadFor: (item) => PAYLOADS.get(item.id) ?? null,

@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.memo.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a2e9c71-3b84-4d06-9e17-8c40b2f6a35d
 // last-edited: 2026-09-01
 //
@@ -23,20 +23,34 @@
 // component. Counting DOM nodes would not work: the whole point of a wasted
 // re-render is that the output is identical.
 //
-// WHY THIS FILE HAS TWO INDEPENDENT HALVES
+// WHY THIS FILE HAS TWO HALVES -- MEASURED, NOT ASSUMED
 //
-// A render-count assertion and a staleness assertion fail on opposite
-// mutations, and neither substitutes for the other:
+// 🔴 This section used to claim a neat symmetry: that reverting the memo fails
+// only the count half, and that `memo(CandidateRow, () => true)` fails only the
+// staleness half while the count half "stays green, and in fact reports BETTER
+// numbers". The second half of that is false. It was measured while writing
+// RegroupSpine.memo.test.tsx and corrected here:
 //
-//   - Reverting the memo (`memo(X)` -> `X`) fails ONLY the count half. The
-//     staleness half stays green, because an un-memoized row is never stale.
-//   - `memo(CandidateRow, () => true)` -- an always-equal comparator, the shape
-//     a wrong dependency list degenerates to -- fails ONLY the staleness half.
-//     The count half stays green, and in fact reports BETTER numbers.
+//   memo(CandidateRow) -> CandidateRow      count half fails; staleness GREEN.
+//       An un-memoized row is never stale, so this direction really is
+//       one-sided, as originally claimed.
 //
-// The pre-existing DupesSpine.test.tsx cannot observe either: every test in it
-// renders once and asserts on that single paint, so it passes against a memo
-// with an arbitrarily wrong comparator.
+//   memo(CandidateRow, () => true)          9 failed, 2 passed -- BOTH halves.
+//       With an always-equal comparator no row ever re-renders, so the count
+//       assertions get 0 where they want 1 and fail too. This mutation does not
+//       separate the halves.
+//
+//   a comparator over selected/handlers/candidate that DROPS focused+expanded
+//                                           2 failed, 9 passed
+//       THIS is the mutation that earns the staleness half its keep: the shape
+//       a wrong dependency list actually takes, count half green, and the only
+//       failures are "the focus ring moves when focusedId changes" and
+//       "expanding a row reveals that row is evidence" -- exactly the two tests
+//       that read the dropped props.
+//
+// The pre-existing DupesSpine.test.tsx cannot observe any of this: every test
+// in it renders once and asserts on that single paint, so it passes against a
+// memo with an arbitrarily wrong comparator.
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -79,8 +93,9 @@ vi.mock('../../common/PathLinks', async () => {
 // mid-test and hands all 20 rows a new array -- which is exactly what this file
 // measures, and it would report the memo as broken when it is not.
 vi.mock('../../../utils/formatPath', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../../utils/formatPath')>('../../../utils/formatPath');
+  const actual = await vi.importActual<typeof import('../../../utils/formatPath')>(
+    '../../../utils/formatPath'
+  );
   const NO_VARS: never[] = [];
   const { useState: useStateReal } = await import('react');
   return {
@@ -157,9 +172,7 @@ function Harness({ stableExpand = true }: { stableExpand?: boolean }) {
     onOpenCompare: noop,
   };
 
-  return (
-    <DupesSpine candidates={ROWS} viewMode="compact" ctx={ctx} emptyMessage="Nothing here" />
-  );
+  return <DupesSpine candidates={ROWS} viewMode="compact" ctx={ctx} emptyMessage="Nothing here" />;
 }
 
 describe('DupesSpine row memoization', () => {
@@ -349,7 +362,7 @@ describe('DupesSpine memoized rows are not stale', () => {
     expect(screen.getByTestId('dupes-row-5')).toContainElement(panels[0]);
   });
 
-  it("a row whose candidate data changed shows the new data", () => {
+  it('a row whose candidate data changed shows the new data', () => {
     // `candidate` is the one prop memo compares by reference rather than by
     // value. A merge marks the row decided, which greys it and swaps its action
     // buttons for a status chip -- the reviewer must not keep seeing Keep A.
@@ -401,7 +414,12 @@ describe('DupesSpine hook ordering', () => {
 
     const { rerender } = render(
       wrap(
-        <DupesSpine candidates={[]} viewMode="compact" ctx={STATIC_CTX} emptyMessage="Nothing here" />
+        <DupesSpine
+          candidates={[]}
+          viewMode="compact"
+          ctx={STATIC_CTX}
+          emptyMessage="Nothing here"
+        />
       )
     );
     expect(screen.getByText('Nothing here')).toBeInTheDocument();
@@ -439,7 +457,12 @@ describe('DupesSpine hook ordering', () => {
 
     rerender(
       wrap(
-        <DupesSpine candidates={[]} viewMode="compact" ctx={STATIC_CTX} emptyMessage="Nothing here" />
+        <DupesSpine
+          candidates={[]}
+          viewMode="compact"
+          ctx={STATIC_CTX}
+          emptyMessage="Nothing here"
+        />
       )
     );
     expect(screen.getByText('Nothing here')).toBeInTheDocument();
