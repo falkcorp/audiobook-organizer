@@ -1,5 +1,5 @@
 // file: internal/dedup/split_composite_consumer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f7c1a94-8d02-4e6b-b5a1-2c9e07f4d813
 // last-edited: 2026-09-01
 
@@ -59,6 +59,14 @@ func TestSplitCompositeNeverMintsANonPersonPart(t *testing.T) {
 		"Do Androids Dream?, Ida Wells; Bob Jones",
 		"Smith, John; Doe, Jane",
 		"R.A. Mejia Charles Dean",
+		// Bracket branch specifically. It runs BEFORE the semicolon and "and"
+		// branches, so a comma-free string with a parenthetical reaches it first.
+		// Without these, ungating the bracket branch back to
+		// `len(x) > 2 && strings.Contains(x, " ")` survives the whole suite.
+		"the quick brown (Bob Jones Smith)",
+		"One Two Three Four Five (Bob Jones)",
+		"Do Androids Dream? (Bob Jones)",
+		"So Long and Thanks (for All the Fish)",
 	)
 
 	bad := 0
@@ -94,6 +102,10 @@ func TestSplitCompositeRefusesRatherThanLaunders(t *testing.T) {
 		"the quick brown, Ida Wells; Bob Jones",
 		"Book 3, Ida Wells; Bob Jones",
 		"So Long, and Thanks for All the Fish; Bob Jones",
+		"the quick brown (Bob Jones Smith)",
+		"One Two Three Four Five (Bob Jones)",
+		"Do Androids Dream? (Bob Jones)",
+		"So Long and Thanks (for All the Fish)",
 	} {
 		if got := SplitCompositeAuthorName(in); got != nil {
 			t.Errorf("SplitCompositeAuthorName(%q) = %q; want nil (refuse, do not launder)", in, got)

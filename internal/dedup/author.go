@@ -442,28 +442,26 @@ func trySplitConcatenatedAuthors(name string, words []string) []string {
 // real surname (not just an initial like "A." which is likely a middle initial).
 func looksLikeAuthorName(s string) bool {
 	s = strings.TrimSpace(s)
+	// This was a FIFTH copy of the person-name heuristic, and it carried the
+	// ASCII byte test (r < 'A' || r > 'Z') that this package's unification exists
+	// to delete -- so trySplitConcatenatedAuthors silently refused to split any
+	// name whose first letter is non-ASCII (Émile Zola, Åsa Larsson, 村上 春樹)
+	// while accepting title fragments the shared predicate rejects. Found by
+	// TestSplitCompositeNeverMintsANonPersonPart, which caught
+	// "One Two Three Four Five (Bob Jones)" being split into
+	// ["One Two" "Three Four" "Five (Bob Jones)"].
+	//
+	// It is composed rather than replaced: the surname rule below is a genuine
+	// extra constraint this branch needs and the shared predicate does not have.
+	if !personname.LooksLikePersonName(s) {
+		return false
+	}
+	// Last part (surname) must be a real name, not an initial: "A." and "B" are
+	// initials. This is what keeps "R.A. Mejia Charles Dean" splitting at the
+	// right boundary instead of stranding "R.A." as a surname.
 	parts := strings.Fields(s)
-	if len(parts) < 2 {
-		return false
-	}
-	// First part should start with uppercase letter
-	first := parts[0]
-	if len(first) == 0 {
-		return false
-	}
-	r := rune(first[0])
-	if r < 'A' || r > 'Z' {
-		return false
-	}
-	// Last part (surname) must be a real name, not an initial
-	// "A." or "B" are initials, not surnames
-	last := parts[len(parts)-1]
-	lastTrimmed := strings.TrimRight(last, ".")
-	if len(lastTrimmed) < 3 {
-		return false // too short to be a surname — likely an initial
-	}
-	r = rune(last[0])
-	return r >= 'A' && r <= 'Z'
+	last := strings.TrimRight(parts[len(parts)-1], ".")
+	return len([]rune(last)) >= 3
 }
 
 // scoreAuthorSplit scores a split of names. Higher = more likely correct.
