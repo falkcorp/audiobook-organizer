@@ -556,6 +556,127 @@ func TestListReviewItems_Search(t *testing.T) {
 		}
 	})
 
+	t.Run("matches the kind string itself", func(t *testing.T) {
+		// 🔴 THE COMPENSATING CONTROL FOR A DOCUMENTED OMISSION, and it was
+		// untested. reviewSearchMatches deliberately does not search the
+		// frontend's kind LABELS, and the argument for that is partly "the kind
+		// string is searchable instead". Deleting it.Kind from the field list
+		// survived the entire suite, because neither fixture's needle appears in
+		// any kind. A load-bearing claim with no test under it is the shape this
+		// repo keeps getting caught by.
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "multidisc", Limit: totalRows})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		// Seven multidisc rows, and not the anthology.
+		if total != 7 || len(items) != 7 {
+			t.Fatalf("kind-string search: want the 7 multidisc rows, got total=%d len=%d", total, len(items))
+		}
+		for _, it := range items {
+			if it.Kind != "regroup.multidisc" {
+				t.Fatalf("kind-string search returned a %q row", it.Kind)
+			}
+		}
+	})
+
+	t.Run("matches the item id", func(t *testing.T) {
+		// Low value on its own -- reviewers rarely type ULIDs -- but recorded so
+		// a surviving "delete it.ID" mutant is not chased as a mystery later.
+		all, _, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Limit: totalRows})
+		if err != nil {
+			t.Fatalf("list all: %v", err)
+		}
+		target := all[0]
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: target.ID})
+		if err != nil {
+			t.Fatalf("list by id: %v", err)
+		}
+		if total != 1 || len(items) != 1 || items[0].ID != target.ID {
+			t.Fatalf("id search: want exactly that row, got total=%d len=%d", total, len(items))
+		}
+	})
+
+	t.Run("does not match numbers, only strings", func(t *testing.T) {
+		// jsonStringValuesContain documents that numeric leaves are not matched,
+		// mirroring the frontend: searching "3" must not return every hold
+		// carrying a disc number 3. Adding a float64 case to that switch
+		// survived the whole suite. This is DIFFERENTIAL -- two rows, the same
+		// digits, one as a number and one as a string -- so a digit colliding
+		// with some ULID cannot fake the result.
+		s2 := newReviewTestStore(t)
+		if _, err := s2.UpsertReviewItem(mkReviewItem("regroup.multidisc", "num-row", "/lib/n", "plain", `{"discNumbers":[424242]}`)); err != nil {
+			t.Fatalf("seed number row: %v", err)
+		}
+		if _, err := s2.UpsertReviewItem(mkReviewItem("regroup.multidisc", "str-row", "/lib/s", "plain", `{"title":"424242"}`)); err != nil {
+			t.Fatalf("seed string row: %v", err)
+		}
+		items, total, err := s2.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "424242"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != 1 || len(items) != 1 {
+			t.Fatalf("want only the STRING row, got total=%d len=%d", total, len(items))
+		}
+		if items[0].DedupKey != "str-row" {
+			t.Fatalf("matched the number row instead of the string row")
+		}
+	})
+
+	t.Run("pages through the matches without losing or repeating one", func(t *testing.T) {
+		// 🔴 SEARCH MADE PAGING LOAD-BEARING. `total` now advertises 7 matches
+		// while a page shows 2, so the other 5 have to be REACHABLE -- and
+		// `start := f.Offset` -> `start := 0` survived every test here, because
+		// no test in this file has ever passed a non-zero Offset.
+		seen := map[string]int{}
+		for offset := 0; offset < totalMatches; offset += 2 {
+			page, total, err := s.ListReviewItems(ReviewFilter{
+				Status: ReviewStatusPending, Search: "zephyr", Limit: 2, Offset: offset,
+			})
+			if err != nil {
+				t.Fatalf("offset %d: %v", offset, err)
+			}
+			// The total must not move as the caller walks the pages.
+			if total != totalMatches {
+				t.Fatalf("offset %d: total moved to %d", offset, total)
+			}
+			for _, it := range page {
+				seen[it.DedupKey]++
+			}
+		}
+		if len(seen) != totalMatches {
+			t.Fatalf("walking the pages saw %d distinct rows, want %d", len(seen), totalMatches)
+		}
+		for key, n := range seen {
+			if n != 1 {
+				t.Fatalf("row %q appeared on %d pages; pages must be disjoint", key, n)
+			}
+		}
+	})
+
+	t.Run("respects the status filter as well as the search", func(t *testing.T) {
+		// Every seeded row is pending, so without this nothing distinguishes
+		// "search respects status" from "search ignores it".
+		s3 := newReviewTestStore(t)
+		keep, err := s3.UpsertReviewItem(mkReviewItem("regroup.multidisc", "still-pending", "/lib/p", "Zephyr one", `{}`))
+		if err != nil {
+			t.Fatalf("seed pending: %v", err)
+		}
+		gone, err := s3.UpsertReviewItem(mkReviewItem("regroup.multidisc", "decided", "/lib/d", "Zephyr two", `{}`))
+		if err != nil {
+			t.Fatalf("seed decided: %v", err)
+		}
+		if _, err := s3.SetReviewItemStatus(gone.ID, ReviewStatusApproved); err != nil {
+			t.Fatalf("set status: %v", err)
+		}
+		items, total, err := s3.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != 1 || len(items) != 1 || items[0].ID != keep.ID {
+			t.Fatalf("want only the pending match, got total=%d len=%d", total, len(items))
+		}
+	})
+
 	t.Run("an empty or blank search narrows nothing", func(t *testing.T) {
 		for _, needle := range []string{"", "   ", "\t\n"} {
 			_, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: needle})

@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-09-01
 
@@ -544,12 +544,22 @@ function BucketHeader({ bucket, lane }: { bucket: RegroupBucket; lane: RegroupLa
           what the button does by whatever the difference happens to be. On
           production today that is 484 shown against 714 acted on.
 
-          🔴 BOTH NUMBERS ARE PRE-SEARCH. `loadedForKind`, never `items.length`:
-          the search box hides rows without unloading them, so feeding the
+          🔴 `loadedForKind`, NEVER `items.length`. During the debounce window
+          the local pass hides rows without unloading them, so feeding the
           visible count in here would make every keystroke look like the lane
           had failed to load rows it is holding -- and would understate the
-          bulk buttons' scope at the same time. What the search hid is its own
-          chip below, in its own words.
+          bulk buttons' scope at the same time. What the local pass hid is its
+          own chip below, in its own words.
+
+          🔴 AND THIS WHOLE CHIP IS SUPPRESSED WHILE A SEARCH IS ACTIVE. The
+          term is pushed to the server now, so `loadedForKind` counts MATCHES
+          while `totalForKind` still comes from the search-blind polled count.
+          Comparing them under a search asks "did we fail to load rows that
+          exist?" and answers "did the search narrow anything?", which is true
+          of every useful search -- a three-hit search in a 714-hold kind would
+          render a warning-coloured "3 of 714". The lane sets `truncated` false
+          under a search for that reason; genuine truncation is still reported
+          at panel grain, where both sides are search-scoped.
         */}
         {bucket.truncated ? (
           <Tooltip

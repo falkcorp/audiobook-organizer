@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.payloadIndex.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e7a4c19-5d80-4b36-91af-6c3e08d5b724
 // last-edited: 2026-09-01
 //
@@ -72,12 +72,25 @@ beforeEach(() => {
   const items = Array.from({ length: N }, (_, i) =>
     i === 0 ? makeItem('i0', 'not json at all') : makeItem(`i${i}`)
   );
-  vi.mocked(api.getReviewItems).mockResolvedValue({
-    items,
-    count: items.length,
-    limit: 500,
-    offset: 0,
-    total: items.length,
+  // Honours `search`, because the term is a server-side filter now: a mock that
+  // returned the whole fixture regardless would model a server that ignores `q`
+  // and this file's search assertions would be about nothing.
+  vi.mocked(api.getReviewItems).mockImplementation(async (filter = {}) => {
+    const needle = (filter.search ?? '').trim().toLowerCase();
+    const matched = needle
+      ? items.filter((it) =>
+          [it.summary, it.folder_ref, it.id, it.dedup_key, it.payload].some((f) =>
+            (f ?? '').toLowerCase().includes(needle)
+          )
+        )
+      : items;
+    return {
+      items: matched,
+      count: matched.length,
+      limit: 500,
+      offset: 0,
+      total: matched.length,
+    };
   });
 });
 
@@ -115,13 +128,23 @@ describe('the regroup lane parses each payload once per loaded page', () => {
     spy.mockRestore();
   });
 
-  it('does not re-parse when the search box narrows the page', async () => {
-    // THE interaction the responsiveness goal is about. The lane keys its index
-    // on `items` -- the raw fetched page -- and narrows inside the `buckets`
-    // memo, so a keystroke leaves both indexes intact. Indexing the FILTERED
-    // rows instead would look equivalent and would re-parse all 500 payloads on
-    // every character typed, which is precisely what searchTextFor's own
-    // comment says must not happen.
+  it('re-parses once per FETCHED PAGE when a search narrows it, not once per render', async () => {
+    // THE interaction the responsiveness goal is about, restated for the
+    // server-side search.
+    //
+    // 🔴 THIS TEST USED TO ASSERT ZERO re-parses across a search, and that was
+    // the right contract while the search never left the browser: the same rows
+    // stayed loaded and only the view narrowed. Pushing the term to the server
+    // means a search FETCHES A DIFFERENT PAGE, so parsing it is not waste -- it
+    // is the first time those rows have been seen. Keeping the old assertion
+    // would have meant either a false failure or, worse, "fixing" the lane by
+    // caching across pages to satisfy a test whose premise had expired.
+    //
+    // What still must hold, and what this now pins: the index is keyed on
+    // `items` -- the raw fetched page -- and the narrowing happens in the
+    // `buckets` memo, so the cost is ONE parse per row per page. Keying it on
+    // the filtered rows would look equivalent and would re-parse on every
+    // render pass, which is what searchTextFor's own comment forbids.
     const spy = vi.spyOn(reviewPayload, 'parsePayload');
 
     const view = renderHook(() => useRegroupLane(toast, true));
@@ -129,16 +152,26 @@ describe('the regroup lane parses each payload once per loaded page', () => {
     const afterLoad = spy.mock.calls.length;
 
     act(() => view.result.current.setFilters({ search: 'i1' }));
-    // The box is debounced, so wait for the narrowing to actually land rather
-    // than asserting on a page the filter has not reached yet -- an assertion
-    // made too early would pass whether or not the index was rebuilt.
+    // The box is debounced AND the answer is a round trip, so wait for the
+    // narrowed page to actually land. An assertion made too early would pass
+    // whether or not the index was rebuilt.
     await waitFor(() =>
       expect(view.result.current.buckets.flatMap((b) => b.items).length).toBeLessThan(N)
     );
 
-    // i1, i10..i19 survive the substring match; the rest are filtered out.
-    expect(view.result.current.buckets.flatMap((b) => b.items).length).toBe(11);
-    expect(spy.mock.calls.length).toBe(afterLoad);
+    // i1, i10..i19 match; the server returns exactly those 11 rows.
+    const shown = view.result.current.buckets.flatMap((b) => b.items).length;
+    expect(shown).toBe(11);
+    // EXACTLY one parse per row of the new page. `toBeGreaterThan` would pass
+    // for a lane that re-parsed on every render; the exact count is the whole
+    // assertion. i0 (the unparseable row) does not match "i1" and is not in
+    // this page, so it contributes nothing here.
+    expect(spy.mock.calls.length).toBe(afterLoad + shown);
+
+    // And a re-render that changes no rows costs nothing more.
+    const afterSearch = spy.mock.calls.length;
+    act(() => view.result.current.setFilters({ sortBy: 'oldest' }));
+    expect(spy.mock.calls.length).toBe(afterSearch);
 
     spy.mockRestore();
   });

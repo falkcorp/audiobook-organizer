@@ -1,5 +1,5 @@
 // file: web/src/components/review/RegroupPanel.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a92d0c8-4e17-4b63-8d05-9f2c6a7b1e30
 // last-edited: 2026-09-01
 
@@ -34,13 +34,28 @@
  *   "N pending"          the whole queue, all kinds (lane.queueTotal)
  *   "N in <kind>"        that kind on the server, shown only while filtering
  *   "N loaded"           what the lane fetched, shown only when it is short
- *   "showing N of M"     what the search left, shown only while searching
+ *   "showing N of M"     what the local pass left, shown only while searching
  *
  * The third and the fourth are the pair that must never merge. Truncation is the
  * lane failing to load rows that exist; a search hiding rows is the reviewer
  * asking for that. Rendering them as one number would put a "your view is
  * partial" warning on every keystroke, and a warning that fires constantly is
  * one nobody reads on the occasion it matters.
+ *
+ * 🔴 SEARCH IS PUSHED TO THE SERVER NOW, AND THAT MOVED TWO OF THESE.
+ *
+ * "N pending" is taken from the POLLED count whenever any server-side filter is
+ * set — kind or search. It used to prefer the fetched total when no kind was
+ * chosen, on the reasoning that an unfiltered total IS the queue. A search now
+ * narrows that total too, so on the default path (no kind selected) this chip
+ * rendered the match count: "1 pending" over a queue holding 728. See the
+ * queueTotal comment in useRegroupLane.ts.
+ *
+ * "showing N of M" now closes to N === M as soon as the server answers for the
+ * term in the box, because the local pass stands down at that point rather than
+ * intersecting with a server that matches more fields than it does. It reports
+ * the ROUND-TRIP window only: the local pass is keyed on the debounced term, so
+ * it narrows when the request is issued, not while the reviewer is still typing.
  */
 
 import {
@@ -103,10 +118,10 @@ export function RegroupPanel({ regroup }: RegroupPanelProps) {
             // htmlInput on the hidden native input, while the element a reviewer
             // (and a test) actually reaches is the role=combobox div.
             slotProps={{ select: { 'aria-label': 'Filter by kind' } }}
-            // Says which way this one goes. Every other control in this rail
-            // narrows rows already loaded; this one changes what is fetched, so
-            // it is also the only one whose "no results" means "none on the
-            // server" rather than "none on this page".
+            // Says which way this one goes. Sort still narrows rows already
+            // loaded; kind and search both change WHAT IS FETCHED, so for both
+            // of them "no results" means "none on the server" rather than "none
+            // on this page".
             helperText="Fetched from the server"
           >
             <MenuItem value="">All kinds</MenuItem>
@@ -119,13 +134,13 @@ export function RegroupPanel({ regroup }: RegroupPanelProps) {
 
           <TextField
             size="small"
-            label="Search loaded holds"
+            label="Search the queue"
             value={filters.search}
             onChange={(e) => setFilters({ search: e.target.value })}
-            placeholder="title, folder, file path"
+            placeholder="title, folder, file path, reason"
             sx={{ minWidth: 240, flexGrow: 1 }}
             slotProps={{
-              htmlInput: { 'aria-label': 'Search loaded holds' },
+              htmlInput: { 'aria-label': 'Search the queue' },
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
@@ -145,9 +160,16 @@ export function RegroupPanel({ regroup }: RegroupPanelProps) {
                 ) : null,
               },
             }}
-            // The counterpart to the Kind helper text: this one never leaves the
-            // browser, so an empty result says nothing about the queue.
-            helperText="Matches the loaded page only"
+            // 🔴 THIS COPY IS THE FEATURE. It used to read "Matches the loaded
+            // page only", under a comment explaining that the search never left
+            // the browser — true then, and the reason an empty result said
+            // nothing about the queue. The term is pushed to the server now, so
+            // an empty result DOES mean "not in the queue", and copy still
+            // telling a reviewer otherwise sends them off to widen filters that
+            // cannot help. The label, the aria-label and this line all moved
+            // together; a search box whose helper text contradicts its own
+            // behaviour is worse than one with no helper text.
+            helperText="Searched on the server"
           />
 
           <TextField

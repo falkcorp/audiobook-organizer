@@ -1,5 +1,5 @@
 // file: web/tests/e2e/benchmark-review-lanes.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: e0d8440c-7578-4a92-9f69-4d05bae4b33e
 // last-edited: 2026-09-01
 
@@ -64,7 +64,7 @@ import { setupPhase2Interactive } from './utils/test-helpers';
  *   metadata "Title filter" is client-side and undebounced. Measured.
  *            (There is no server-side filter pushdown on this lane at all —
  *            see the "metadata review filter-pushdown prerequisite" TODO.)
- *   regroup  "Search loaded holds" is client-side but DEBOUNCED 250 ms
+ *   regroup  "Search the queue" is pushed to the server and DEBOUNCED 250 ms
  *            (REGROUP_SEARCH_DEBOUNCE_MS). The reported wall-clock therefore
  *            contains a 250 ms floor that is a deliberate product decision, not
  *            a cost. Read the longtask columns for this lane, not the ms.
@@ -586,7 +586,7 @@ async function metadataFilterOnce(page: Page, n: number): Promise<number> {
  * maxTaskMs for this one.
  */
 async function regroupFilterOnce(page: Page, n: number): Promise<number> {
-  const box = page.getByRole('textbox', { name: 'Search loaded holds' });
+  const box = page.getByRole('textbox', { name: 'Search the queue' });
   const ms = await timed(
     async () => {
       await box.fill('Regroup Hold 0001');

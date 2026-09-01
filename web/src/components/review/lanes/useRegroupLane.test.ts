@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.3.0
+// version: 1.8.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-09-01
 
@@ -34,13 +34,69 @@ function makeItem(id: string, kind: string, payload: object = {}): api.ReviewIte
   } as api.ReviewItem;
 }
 
-function mockItems(items: api.ReviewItem[], total = items.length) {
-  vi.mocked(api.getReviewItems).mockResolvedValue({
-    items,
-    count: items.length,
-    limit: 500,
-    offset: 0,
-    total,
+/**
+ * Mocks the row endpoint with a server that HONOURS the filters it is sent.
+ *
+ * 🔴 THIS USED TO BE `mockResolvedValue`, and that made the whole suite blind.
+ * A static page returned regardless of the filter argument models a server that
+ * ignores `kind` and `q`, so every search test ran against a backend that never
+ * narrowed. Three real defects passed under it: the client-side predicate
+ * subtracting rows the server had matched, `queueTotal` collapsing to the match
+ * count, and the per-kind truncation warning firing on every search. A mock is a
+ * claim about the server; a mock that ignores the parameters under test cannot
+ * observe anything about them.
+ *
+ * The narrowing here mirrors internal/database/review_store.go: kind is an
+ * equality, `search` is a case-insensitive substring over the same fields
+ * reviewSearchMatches walks -- the hold's own columns plus the STRING VALUES in
+ * its payload, never the payload's JSON keys. `total` is the match count, taken
+ * before the page is cut, which is the contract the endpoint now promises.
+ *
+ * @param items the whole seeded queue, not the expected page
+ * @param total overrides the computed total, for truncation cases where the
+ *              server holds more rows than the fixture lists
+ */
+function mockItems(items: api.ReviewItem[], total?: number) {
+  const serverMatches = (item: api.ReviewItem, needle: string): boolean => {
+    const columns = [item.summary, item.folder_ref, item.kind, item.dedup_key, item.id];
+    if (columns.some((c) => (c ?? '').toLowerCase().includes(needle))) return true;
+    // Values only, never keys -- the same decision the Go matcher makes.
+    const valuesOf = (v: unknown): string[] => {
+      if (typeof v === 'string') return [v];
+      if (Array.isArray(v)) return v.flatMap(valuesOf);
+      if (v && typeof v === 'object') return Object.values(v).flatMap(valuesOf);
+      return [];
+    };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(item.payload);
+    } catch {
+      // An undecodable payload falls back to raw text, as the store does.
+      return item.payload.toLowerCase().includes(needle);
+    }
+    return valuesOf(parsed).some((v) => v.toLowerCase().includes(needle));
+  };
+
+  vi.mocked(api.getReviewItems).mockImplementation(async (filter = {}) => {
+    const needle = (filter.search ?? '').trim().toLowerCase();
+    const matched = items
+      .filter((it) => !filter.kind || it.kind === filter.kind)
+      .filter((it) => !needle || serverMatches(it, needle));
+    const limit = filter.limit ?? 500;
+    const page = matched.slice(filter.offset ?? 0, (filter.offset ?? 0) + limit);
+    return {
+      items: page,
+      count: page.length,
+      limit,
+      offset: filter.offset ?? 0,
+      // Taken BEFORE the page is cut, and after both filters. The `total`
+      // override describes how many rows the SERVER holds unfiltered (used for
+      // truncation cases where the fixture lists fewer than exist); once a
+      // search narrows, the honest total is the match count, so the override
+      // must not survive it -- otherwise the mock reports a search that
+      // narrowed nothing and no test can see the difference.
+      total: needle ? matched.length : (total ?? matched.length),
+    };
   });
 }
 
@@ -456,6 +512,50 @@ describe('the kind filter is pushed to the server', () => {
     expect(lastFilter().search).toBe('hold a1');
   });
 
+  it('bulk actions stay kind-scoped and say so, even under a search', async () => {
+    // 🔴 THE DISCLOSURE GAP THIS PR WIDENED WITHOUT CAUSING.
+    //
+    // Bulk approve/reject has always been kind-scoped -- bulkReviewAction sends
+    // {action, kind} and no search -- and the button has always said
+    // "Approve all <totalForKind>". That was already a gap when the search was
+    // client-side. It is WIDER now: a search that visibly round-trips to the
+    // server reads as authoritative, so a reviewer looking at 1 row is more
+    // likely to believe "Approve all 714" respects it.
+    //
+    // Pinning BOTH halves so neither can drift silently: the request carries no
+    // search key, and the number on the button still describes the whole kind.
+    vi.mocked(api.bulkReviewAction).mockResolvedValue({ approved: 0, skipped: [] } as never);
+    setByKind({ 'regroup.ambiguous': 714 });
+    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('a2', 'regroup.ambiguous')], 714);
+    const { result } = await renderLane();
+
+    await act(async () => result.current.setFilters({ search: 'a1' }));
+    await waitFor(() => expect(result.current.loaded).toBe(1));
+
+    // The button's number: still the whole kind, not the match count.
+    expect(result.current.buckets[0].totalForKind).toBe(714);
+
+    // Signature is (kind, action) -- the first draft of this test had them the
+    // other way round and asserted `sent.kind === 'approve'` without noticing.
+    await act(async () => {
+      result.current.bulkAction('regroup.ambiguous', 'approve');
+    });
+    await waitFor(() => expect(api.bulkReviewAction).toHaveBeenCalled());
+
+    // Through `unknown`: ReviewBulkRequest has no index signature, and the
+    // point of the last two assertions is to look for keys the TYPE does not
+    // have -- which is exactly what would need to change if bulk ever became
+    // search-scoped.
+    const sent = vi.mocked(api.bulkReviewAction).mock.calls[0][0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(sent.kind).toBe('regroup.ambiguous');
+    // If this ever gains a search key, the button copy has to change with it.
+    expect(sent).not.toHaveProperty('search');
+    expect(sent).not.toHaveProperty('q');
+  });
+
   it('omits the search param entirely when the box is empty or whitespace', async () => {
     // An empty `q` would be a filter for the empty string rather than for no
     // filter -- the same trap the kind param documents. Whitespace-only is the
@@ -483,14 +583,46 @@ describe('the kind filter is pushed to the server', () => {
     const { result } = await renderLane();
 
     await act(async () => result.current.setFilters({ search: 'a1' }));
-    // Narrowed instantly by the CLIENT predicate, long before the debounce.
-    await waitFor(() => expect(result.current.visible).toBe(1));
-    expect(result.current.loaded).toBe(2);
-
-    await act(async () => result.current.clearFilters());
-    // No blank frame: the rows never left.
+    // NOT narrowed yet: the local pass is keyed on the DEBOUNCED term, so both
+    // rows are still shown for the first 250 ms. This pins the actual timing
+    // rather than the one the comments used to claim -- an earlier version of
+    // this line expected 1 here and failed, which is how the claim got checked.
     expect(result.current.visible).toBe(2);
     expect(result.current.loaded).toBe(2);
+    // Then the debounce fires, the local pass narrows, the request goes out,
+    // and the server's answer makes `loaded` the match count.
+    await waitFor(() => expect(result.current.loaded).toBe(1));
+
+    // HOLD the widening request, so the in-flight window is observable at all.
+    // Without this the response lands inside the same act() and the assertion
+    // below reads the settled state -- it would pass whether or not the lane
+    // blanked on the way, which is the only thing this test is about.
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realImpl = vi.mocked(api.getReviewItems).getMockImplementation();
+    vi.mocked(api.getReviewItems).mockImplementationOnce(async (filter) => {
+      await held;
+      return realImpl!(filter);
+    });
+
+    await act(async () => result.current.clearFilters());
+
+    // 🔴 THE ASSERTION, taken WHILE the wider request is still in flight.
+    // Widening asks for a SUPERSET of what is on screen, so the row already
+    // there must not be thrown away to fetch it. Zero here is the blank frame
+    // this must not have -- and it is what generalising the kind-change clear
+    // to "any server-side filter changed" produced.
+    expect(result.current.loaded).toBe(1);
+    expect(result.current.visible).toBe(1);
+
+    await act(async () => {
+      release?.();
+      await held;
+    });
+    await waitFor(() => expect(result.current.loaded).toBe(2));
+    expect(result.current.visible).toBe(2);
   });
 
   it('does not let an EARLIER reload overwrite a later one of the same kind', async () => {
@@ -657,28 +789,137 @@ describe('the counts stay distinct under a filter', () => {
     expect(result.current.queueTotal).toBe(730);
   });
 
-  it('a search narrows `visible` without touching `loaded` or `truncated`', async () => {
-    // 🔴 THE INTERACTION THAT WOULD SHIP BROKEN. Truncation means the lane
-    // failed to load rows that exist; a search hiding rows is the reviewer
-    // asking for that. Derive one from the other and every keystroke raises a
-    // "your view is partial" warning, which makes the real one unreadable.
-    setByKind({ 'regroup.ambiguous': 2 });
-    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('a2', 'regroup.ambiguous')], 2);
+  it('does not raise the truncation warning when a search narrows the queue', async () => {
+    // 🔴 THE INTERACTION THAT DID SHIP BROKEN, TWICE, BY TWO DIFFERENT ROUTES.
+    //
+    // Truncation means the lane failed to load rows that EXIST; a search
+    // returning fewer rows is the reviewer asking for that. Derive one from the
+    // other and every keystroke raises a "your view is partial" warning, which
+    // makes the real one unreadable.
+    //
+    // The first version of this test asserted `loaded` was UNCHANGED by a
+    // search, which was the right contract while the search never left the
+    // browser. Pushing the term to the server inverted it: `loaded` is now the
+    // match count. The warning came back through that door -- `loadedForKind`
+    // became search-scoped while `totalForKind` stayed on the search-blind
+    // polled count, so comparing them lit the chip on every search. The lane
+    // suppresses `truncated` under a search for exactly this reason.
+    setByKind({ 'regroup.ambiguous': 714 });
+    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('a2', 'regroup.ambiguous')], 714);
     const { result } = await renderLane();
-    expect(result.current.buckets[0].truncated).toBe(false);
+    // Genuinely truncated before any search: 2 loaded against 714 pending.
+    expect(result.current.buckets[0].truncated).toBe(true);
 
     await act(async () => {
       result.current.setFilters({ search: 'a1' });
     });
-    await waitFor(() => expect(result.current.visible).toBe(1));
+    await waitFor(() => expect(result.current.loaded).toBe(1));
 
     const bucket = result.current.buckets[0];
-    expect(result.current.loaded).toBe(2);
-    expect(bucket.loadedForKind).toBe(2);
+    // The server narrowed the fetch, so `loaded` IS the match count now.
+    expect(bucket.loadedForKind).toBe(1);
     expect(bucket.items).toHaveLength(1);
-    expect(bucket.hiddenBySearch).toBe(1);
-    // The load-bearing assertion.
+    // 🔴 The load-bearing assertion. Without the suppression this is `true`,
+    // and the reviewer sees a warning-coloured "1 of 714" for a search that
+    // loaded every one of its matches.
     expect(bucket.truncated).toBe(false);
+  });
+
+  it('does not let the local pass subtract a row the server matched', async () => {
+    // 🔴 THE DEFECT THIS PR ALMOST SHIPPED, WHICH IS THE DEFECT IT EXISTS TO FIX.
+    //
+    // The two predicates are not the same. The server walks every string leaf
+    // of the payload; searchTextFor indexes a fixed list that does NOT include
+    // recommendationReason -- the one-sentence case the reviewer literally
+    // reads on the row. So a reviewer types a word off the screen, the server
+    // finds the hold, and an unconditional local pass throws it away: matched
+    // 1, shown 0, row still unfindable.
+    //
+    // The rule: once the server has answered for the term in the box, the local
+    // pass stands down.
+    const hold = makeItem('a1', 'regroup.ambiguous', {
+      recommendationReason: 'four numbered chapters under one folder',
+    });
+    mockItems([hold, makeItem('a2', 'regroup.ambiguous')]);
+    const { result } = await renderLane();
+
+    await act(async () => result.current.setFilters({ search: 'chapters' }));
+
+    // The server matched it on the payload sentence.
+    await waitFor(() => expect(result.current.loaded).toBe(1));
+    expect(result.current.total).toBe(1);
+    // And it is actually on screen. `visible` 0 here would mean the row is
+    // findable by the backend and invisible to the reviewer.
+    expect(result.current.visible).toBe(1);
+    expect(result.current.buckets[0].items[0].id).toBe('a1');
+    expect(result.current.buckets[0].hiddenBySearch).toBe(0);
+  });
+
+  it('reports the whole queue in queueTotal while a search is active', async () => {
+    // 🔴 `total` IS NOT THE QUEUE ONCE A SEARCH IS PUSHED DOWN. The chip reads
+    // "N pending" and is documented as the whole queue, all kinds. It used to
+    // prefer the fetched total whenever no kind was selected -- correct while
+    // search stayed in the browser, and wrong the moment `q` narrowed that
+    // total. Left alone it rendered "1 pending" over a 714-hold queue, which is
+    // the one number whose job is to stop a reviewer concluding the queue is
+    // empty.
+    setByKind({ 'regroup.ambiguous': 714 });
+    mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('a2', 'regroup.ambiguous')], 714);
+    const { result } = await renderLane();
+    await waitFor(() => expect(result.current.queueTotal).toBe(714));
+
+    await act(async () => result.current.setFilters({ search: 'a1' }));
+    await waitFor(() => expect(result.current.loaded).toBe(1));
+
+    // The search-scoped total is still available and still correct...
+    expect(result.current.total).toBe(1);
+    // ...but the QUEUE chip must not become it.
+    expect(result.current.queueTotal).toBe(714);
+  });
+
+  it('clears loading even when a response is dropped as superseded', async () => {
+    // 🔴 A SUPERSEDED RESPONSE USED TO LEAVE THE PROGRESS BAR RUNNING FOREVER.
+    //
+    // reload() carries no abort signal on purpose, so an action's refresh can
+    // land after a later load request was issued and win the ordering guard.
+    // The load's own response is then dropped by an early `return` that sat
+    // BEFORE setLoading(false), so a hung request and a superseded one rendered
+    // identically -- this file's recurring failure in its third form. The flag
+    // is cleared in a `finally` now.
+    mockItems([makeItem('a1', 'regroup.ambiguous')]);
+    const { result } = await renderLane();
+
+    // Force the drop. The kind change issues request N and holds it; approving
+    // a row then issues request N+1 through reload(), which resolves at once and
+    // sets appliedSeq = N+1. Releasing N makes it arrive stale.
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    let releaseStale: (() => void) | undefined;
+    const stale = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const realImpl = vi.mocked(api.getReviewItems).getMockImplementation();
+    vi.mocked(api.getReviewItems).mockImplementationOnce(async (filter) => {
+      await stale;
+      return realImpl!(filter);
+    });
+
+    // A SEARCH change, not a kind change: a kind change clears the rows, and
+    // then there is nothing on screen to approve. The term matches the fixture
+    // (makeItem's summary is `Hold a1`) so the local pass keeps the row too.
+    await act(async () => result.current.setFilters({ search: 'hold a1' }));
+    await waitFor(() => expect(result.current.loading).toBe(true));
+
+    await act(async () => {
+      await result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+    await act(async () => {
+      releaseStale?.();
+      await stale;
+    });
+
+    // Without the `finally`, this stays true forever and the panel renders a
+    // permanent progress bar.
+    await waitFor(() => expect(result.current.loading).toBe(false));
   });
 
   it('offers every kind the SERVER holds, not merely the loaded ones', async () => {
@@ -776,9 +1017,16 @@ describe('search over the loaded holds', () => {
     await waitFor(() => expect(result.current.visible).toBe(1));
 
     act(() => result.current.clearFilters());
+    // The claim is about the TERM being dropped in the same tick -- leaving it
+    // to the debounce timer would mean "Clear filters" visibly did nothing for
+    // a quarter of a second. It is NOT a claim that the wider row set arrives
+    // synchronously; the server has to answer for that now.
     expect(result.current.filters.search).toBe('');
-    expect(result.current.visible).toBe(2);
     expect(result.current.filtersActive).toBe(false);
+    // The rows already on screen survive the widening (no blank frame)...
+    expect(result.current.visible).toBeGreaterThan(0);
+    // ...and the rest follow.
+    await waitFor(() => expect(result.current.visible).toBe(2));
   });
 });
 

@@ -324,6 +324,28 @@ func (p *PebbleStore) ListReviewItems(f ReviewFilter) ([]ReviewItem, int, error)
 	// different set than the rows beside it.
 	if needle := strings.ToLower(strings.TrimSpace(f.Search)); needle != "" {
 		filtered := all[:0:0]
+		// 🔴 NO CORRUPTION COUNTER HERE, AND THAT IS THE CONSIDERED ANSWER.
+		//
+		// An undecodable payload still matches, on raw text (see
+		// reviewPayloadValuesContain), and it does mean a corrupt row -- so
+		// counting them from this loop and logging the total is the obvious
+		// move. It was written, and it is wrong, because THE NUMBER IT PRODUCES
+		// IS NOT A PROPERTY OF THE DATA:
+		//
+		//   - reviewSearchMatches returns on the first column hit, so a corrupt
+		//     payload on a row that matched by summary is never decoded and never
+		//     counted. It is blind exactly for the rows the search returns.
+		//   - The count therefore depends on the NEEDLE. `q=a` short-circuits on
+		//     columns almost everywhere and reports near zero; `q=zephyr` reaches
+		//     the payload far more often and reports a large number. Same
+		//     library, a different "corruption level" per keystroke.
+		//
+		// An operator reading that log would draw a conclusion the data does not
+		// support, which is worse than not logging: a blind instrument reads the
+		// same whether the thing it watches is fine or broken. Corruption is a
+		// property of the whole queue and belongs in an op that scans every
+		// payload once, unbiased by a search term -- filed in todo.d rather than
+		// approximated here.
 		for _, it := range all {
 			if reviewSearchMatches(it, needle) {
 				filtered = append(filtered, it)
@@ -375,8 +397,15 @@ func (p *PebbleStore) ListReviewItems(f ReviewFilter) ([]ReviewItem, int, error)
 // two-copies-that-diverge defect this codebase has spent five refactors deleting,
 // and a display string is the worst possible thing to duplicate into a backend: it
 // changes for reasons that have nothing to do with the data. The kind DROPDOWN
-// selects that bucket directly and is the better control for it. Three of the four
-// known labels share a word with their kind and keep working regardless.
+// selects that bucket directly and is the better control for it.
+//
+// The cost, stated accurately rather than minimised: of the four known labels,
+// only "Ambiguous folders" / regroup.ambiguous survives whole, and
+// "Anthologies / collections" / regroup.anthology survives by stem. "Multi-disc
+// groups" / regroup.multidisc survives only unhyphenated -- searching
+// "multi-disc" no longer finds it. "Abridged / Unabridged editions" /
+// regroup.version-group shares nothing at all and is lost entirely; that kind
+// currently has zero pending holds.
 func reviewSearchMatches(it ReviewItem, needle string) bool {
 	// Ordered cheapest first: a hold that matches on its summary never pays for
 	// the payload decode below.
@@ -405,7 +434,15 @@ func reviewPayloadValuesContain(payload, needle string) bool {
 		return false
 	}
 	var decoded any
-	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+	if json.Unmarshal([]byte(payload), &decoded) != nil {
+		// 🔴 THIS ROW IS NOW MATCHED BY A DIFFERENT RULE THAN EVERY OTHER ROW.
+		// Raw text matches JSON KEY NAMES, which the decoded path deliberately
+		// does not -- so `q=folder` returns exactly the corrupt subset of the
+		// queue and nothing else, and the reviewer cannot tell those rows from
+		// real matches. That is accepted: the alternative is a row that renders
+		// in the list and cannot be found, which is worse. The decode error is
+		// NOT surfaced from here -- see the caller for why a count taken from
+		// this path would be a blind instrument.
 		return strings.Contains(strings.ToLower(payload), needle)
 	}
 	return jsonStringValuesContain(decoded, needle)
