@@ -7,14 +7,13 @@ package audiobooks
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )

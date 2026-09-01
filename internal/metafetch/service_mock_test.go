@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 
 package metafetch
 
@@ -11,8 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
 	"github.com/stretchr/testify/assert"
 	tmock "github.com/stretchr/testify/mock"
@@ -607,7 +605,7 @@ func TestServiceSetters(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper functions: stringVal, intVal, metadataStateKey
+// Helper functions: stringVal, intVal
 // ---------------------------------------------------------------------------
 
 func TestStringVal(t *testing.T) {
@@ -620,58 +618,6 @@ func TestIntVal(t *testing.T) {
 	n := 42
 	assert.Equal(t, 42, intVal(&n))
 	assert.Nil(t, intVal(nil))
-}
-
-func TestMetadataStateKey(t *testing.T) {
-	assert.Equal(t, "metadata_state_book-123", metastate.Key("book-123"))
-	assert.Equal(t, "metadata_state_", metastate.Key(""))
-}
-
-// ---------------------------------------------------------------------------
-// encodeMetadataValue / decodeMetadataValue
-// ---------------------------------------------------------------------------
-
-func TestEncodeDecodeMetadataValue(t *testing.T) {
-	t.Run("nil_value", func(t *testing.T) {
-		encoded, err := metastate.Encode(nil)
-		assert.NoError(t, err)
-		assert.Nil(t, encoded)
-	})
-
-	t.Run("string_value", func(t *testing.T) {
-		encoded, err := metastate.Encode("hello")
-		require.NoError(t, err)
-		require.NotNil(t, encoded)
-		assert.Equal(t, `"hello"`, *encoded)
-
-		decoded := metastate.Decode(encoded)
-		assert.Equal(t, "hello", decoded)
-	})
-
-	t.Run("number_value", func(t *testing.T) {
-		encoded, err := metastate.Encode(42)
-		require.NoError(t, err)
-		require.NotNil(t, encoded)
-		assert.Equal(t, "42", *encoded)
-
-		decoded := metastate.Decode(encoded)
-		assert.Equal(t, float64(42), decoded) // JSON numbers decode as float64
-	})
-
-	t.Run("decode_nil", func(t *testing.T) {
-		assert.Nil(t, metastate.Decode(nil))
-	})
-
-	t.Run("decode_empty", func(t *testing.T) {
-		empty := ""
-		assert.Nil(t, metastate.Decode(&empty))
-	})
-
-	t.Run("decode_invalid_json_returns_raw", func(t *testing.T) {
-		raw := "not valid json {"
-		decoded := metastate.Decode(&raw)
-		assert.Equal(t, "not valid json {", decoded)
-	})
 }
 
 // ---------------------------------------------------------------------------

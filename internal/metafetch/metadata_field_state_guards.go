@@ -1,12 +1,12 @@
 // file: internal/metafetch/metadata_field_state_guards.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7377aa81-4186-49ac-9e47-8bcefb000ac2
-// last-edited: 2026-08-23
+// last-edited: 2026-09-01
 
 package metafetch
 
 // MetadataFieldState is the decoded twin of database.MetadataFieldState: the
-// stored *string values have been through decodeMetadataValue into any. These
+// stored *string values have been through metastate.Decode into any. These
 // two predicates must answer identically for the same stored row, which
 // TestMetadataFieldStateGuardsConform (internal/metafetch) pins.
 //

@@ -1,5 +1,5 @@
 // file: internal/metastate/metastate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d9b2e73-4a18-4c56-9e02-7f3a1c8b6d45
 // last-edited: 2026-09-01
 
@@ -83,5 +83,30 @@ func TestDecodeUnsetForms(t *testing.T) {
 	empty := ""
 	if got := Decode(&empty); got != nil {
 		t.Errorf("Decode(&\"\") = %#v, want nil", got)
+	}
+}
+
+// TestEncodeSurfacesMarshalErrors pins the one distinction this API cannot afford
+// to lose: a marshal FAILURE must not be encodable as a successful UNSET.
+//
+// Encode(nil) legitimately returns (nil, nil) -- that is how "this field has no
+// value" is stored (see TestUnsetIsAbsenceNotNullLiteral). So if the marshal error
+// path ever returned (nil, nil) too, a caller such as
+// metafetch/metadata_state_service.go's persist path could not tell the two apart:
+// it would receive a nil pointer and no error, write the field as unset, and
+// report success. The user's value would be gone with nothing logged.
+//
+// Mutation-verified: changing `return nil, err` to `return nil, nil` in Encode
+// passes the entire repo suite without this test, and fails with it.
+func TestEncodeSurfacesMarshalErrors(t *testing.T) {
+	// A channel is not representable in JSON, so encoding/json must fail here.
+	encoded, err := Encode(make(chan int))
+	if err == nil {
+		t.Fatal("Encode(chan int) returned a nil error; want a non-nil error. " +
+			"A swallowed marshal error is indistinguishable from a successful " +
+			"unset and silently discards the caller's value.")
+	}
+	if encoded != nil {
+		t.Errorf("Encode returned encoded=%q alongside an error; want nil", *encoded)
 	}
 }

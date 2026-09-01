@@ -1,11 +1,19 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
 // last-edited: 2026-09-01
 //
-// Private utilities needed by the audiobooks service package. These mirror
-// equivalent helpers from internal/server/ but are standalone so that the
-// audiobooks package does not import internal/server (which would cycle).
+// Private utilities needed by the audiobooks service package. Most still mirror
+// equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
+// asExternalIDStore, stringVal, intVal, nonEmpty, buildMetadataProvenance) and
+// are standalone so that the audiobooks package does not import internal/server
+// (which would cycle).
+//
+// The metadata-state codec is the exception: its three helpers were byte-identical
+// here, in internal/server and in internal/metafetch, so they now live in
+// internal/metastate -- a leaf package all three import. A leaf is the way out of
+// the cycle that forced the copies; the remaining mirrors above are candidates for
+// the same treatment.
 
 package audiobooks
 
