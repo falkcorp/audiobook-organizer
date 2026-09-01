@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f7c9e21-5a4b-4d8e-9c1f-2b6a7d0e4c53
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 
 /**
  * Task 6 fix round: RegroupSpine wired PathLinks into MemberRow (commit
@@ -47,7 +47,7 @@ function entry(filePath: string): MemberEntry {
 function renderRow(e: MemberEntry, aliases: PathAlias[] = []) {
   return render(
     <ThemeProvider theme={appTheme} defaultMode="dark">
-      <MemberRow entry={e} book={undefined} pathAliases={aliases} />
+      <MemberRow entry={e} book={undefined} pathAliases={aliases} pathVars={[]} />
     </ThemeProvider>,
   );
 }

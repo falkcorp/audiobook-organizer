@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/FolderFilesChip.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: 4a1c8e92-6d35-4b70-9f28-1e7a5c3d2b69
-// last-edited: 2026-08-19
+// last-edited: 2026-09-01
 
 // FolderFilesChip shows a small "Files" chip on a dedup candidate card. Clicking
 // it opens a popover that lazily fetches the book's file list (getBookFiles) and
@@ -87,16 +87,31 @@ export function FolderFilesChip({ bookId, label = 'Files' }: FolderFilesChipProp
 
   return (
     <>
-      <Tooltip title="Show files in this book">
-        <Chip
-          icon={<FolderOpenIcon />}
-          label={count > 0 ? `${count} ${label}` : label}
-          size="small"
-          variant="outlined"
-          clickable
-          onClick={open}
-        />
-      </Tooltip>
+      {/* A plain `title` rather than an MUI <Tooltip>: this chip renders twice
+          per dupes row and an MUI Tooltip costs ~85 ms per instance per 100
+          rows -- 45% of the lane's blocked main-thread time came from the four
+          Tooltips on a row. See the note in PathLinks.tsx. The chip already
+          reads "Files"/"N Files", so the hint is supplementary. */}
+      <Chip
+        icon={<FolderOpenIcon />}
+        label={count > 0 ? `${count} ${label}` : label}
+        title="Show files in this book"
+        size="small"
+        variant="outlined"
+        clickable
+        onClick={open}
+      />
+      {/*
+        The Popover is mounted only once it has an anchor. MUI's Modal does
+        early-return null when closed, but only AFTER useDefaultProps (a theme
+        lookup), useModal (refs, callbacks, state) and emotion's processing of
+        the styled PopoverRoot -- so a closed Popover is not free. This chip
+        renders twice per dupes row, and ablating the closed Popover at the
+        100-row page cap was measured at 40 ms of 763 ms (5%) of the lane's
+        blocked main-thread time. Small, but it buys nothing at all until the
+        user clicks.
+      */}
+      {anchorEl !== null && (
       <Popover
         open={Boolean(anchorEl)}
         anchorEl={anchorEl}
@@ -171,6 +186,7 @@ export function FolderFilesChip({ bookId, label = 'Files' }: FolderFilesChipProp
           )}
         </Box>
       </Popover>
+      )}
     </>
   );
 }

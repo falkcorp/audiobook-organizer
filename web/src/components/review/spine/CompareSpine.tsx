@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
 // last-edited: 2026-09-01
 //
@@ -64,6 +64,7 @@ import type { MetadataAction } from '../reviewActions';
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { metadataEvidence } from '../evidence/adapters';
 import { PathLinks, usePathAliases } from '../../common/PathLinks';
+import { usePathVars, type PathVar } from '../../../utils/formatPath';
 import {
   SOURCE_COLORS,
   formatDuration,
@@ -163,6 +164,8 @@ export interface SpineRowProps {
   expanded: boolean;
   handlers: SpineHandlers;
   pathAliases: PathAlias[];
+  /** Threaded, not re-derived per row -- see the vars prop on PathLinksProps. */
+  pathVars: PathVar[];
 }
 
 /**
@@ -176,10 +179,12 @@ function GroupedCard({
   group,
   ctx,
   pathAliases,
+  pathVars,
 }: {
   group: CandidateGroup;
   ctx: SpineContext;
   pathAliases: PathAlias[];
+  pathVars: PathVar[];
 }) {
   const c = group.candidate;
   const actionableIds = group.results
@@ -256,7 +261,7 @@ function GroupedCard({
                       </Typography>
                     )}
                   </Stack>
-                  <PathLinks path={r.book.file_path} aliases={pathAliases} />
+                  <PathLinks path={r.book.file_path} aliases={pathAliases} vars={pathVars} />
                   {r.book.itunes_path && (
                     <Typography
                       variant="caption"
@@ -414,6 +419,7 @@ const CompactRow = memo(function CompactRow({
   expanded,
   handlers,
   pathAliases,
+  pathVars,
 }: SpineRowProps) {
   const bookId = r.book.id;
   const isExpanded = expanded;
@@ -630,7 +636,7 @@ const CompactRow = memo(function CompactRow({
                       {formatFileSize(r.book.file_size_bytes)}
                     </Typography>
                   )}
-                  <PathLinks path={r.book.file_path} aliases={pathAliases} />
+                  <PathLinks path={r.book.file_path} aliases={pathAliases} vars={pathVars} />
                   {r.book.itunes_path && (
                     <Typography
                       variant="caption"
@@ -769,6 +775,7 @@ const TwoColumnCard = memo(function TwoColumnCard({
   rowState,
   handlers,
   pathAliases,
+  pathVars,
 }: SpineRowProps) {
   const bookId = r.book.id;
 
@@ -836,7 +843,7 @@ const TwoColumnCard = memo(function TwoColumnCard({
                   {formatFileSize(r.book.file_size_bytes)}
                 </Typography>
               )}
-              <PathLinks path={r.book.file_path} aliases={pathAliases} />
+              <PathLinks path={r.book.file_path} aliases={pathAliases} vars={pathVars} />
               {r.book.itunes_path && (
                 <Typography
                   variant="caption"
@@ -1094,6 +1101,7 @@ export function CompareSpine({
   // the three renderers (GroupedCard, CompactRow, TwoColumnCard/AutoCard) stay
   // pure and don't each re-fetch config on their own.
   const pathAliases = usePathAliases();
+  const pathVars = usePathVars();
 
   // The stable half of `ctx`. Keyed on the individual callbacks, NOT on `ctx`
   // itself: `ctx` gets a new identity on every selection and expand change,
@@ -1163,7 +1171,13 @@ export function CompareSpine({
       }}
     >
       {groups.map((group) => (
-        <GroupedCard key={group.key} group={group} ctx={ctx} pathAliases={pathAliases} />
+        <GroupedCard
+          key={group.key}
+          group={group}
+          ctx={ctx}
+          pathAliases={pathAliases}
+          pathVars={pathVars}
+        />
       ))}
 
       {rows.map((r) => {
@@ -1176,6 +1190,7 @@ export function CompareSpine({
           expanded: ctx.expandedId === r.book.id,
           handlers,
           pathAliases,
+          pathVars,
         };
         return viewMode === 'compact' ? (
           <CompactRow key={r.book.id} {...rowProps} />
