@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -53,7 +54,12 @@ const (
 	fileProvSampleCap  = 12
 )
 
-var fileProvDefaultExts = []string{".m4b", ".m4a", ".mp3", ".flac", ".ogg", ".opus", ".wma", ".aac"}
+// fileProvDefaultExts is the op's default extension list when the caller
+// passes none. It follows supported_extensions — this walk only hashes bytes,
+// it decodes nothing — so a library holding .aax/.aiff/.mka/.oga/.wav books
+// now gets provenance for them instead of a ledger that quietly covered part
+// of the library while reporting a clean run.
+func fileProvDefaultExts() []string { return config.SupportedExtensionSet().Sorted() }
 
 // fileProvCaptureResult is what the op reports back.
 type fileProvCaptureResult struct {
@@ -156,7 +162,7 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 	}
 	exts := params.Extensions
 	if len(exts) == 0 {
-		exts = fileProvDefaultExts
+		exts = fileProvDefaultExts()
 	}
 	extSet := make(map[string]struct{}, len(exts))
 	for _, e := range exts {

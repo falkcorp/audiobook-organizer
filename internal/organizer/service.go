@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package organizer
 
@@ -744,9 +744,11 @@ func (orgSvc *Service) bookNeedsReOrganize(book *database.Book, log logger.Logge
 	org := orgSvc.newOrganizer()
 
 	// Determine dir vs file by extension — avoids os.Stat (the main scan bottleneck)
-	ext := strings.ToLower(filepath.Ext(book.FilePath))
-	audioExts := map[string]bool{".m4b": true, ".m4a": true, ".mp3": true, ".flac": true, ".ogg": true, ".opus": true, ".wma": true, ".aac": true}
-	isFile := audioExts[ext]
+	// Follows supported_extensions. Getting this wrong is not cosmetic: a book
+	// whose extension was missing from the private list took the directory
+	// branch and was compared against GenerateTargetDirPath, so it was judged
+	// to need a re-organize on every pass, forever.
+	isFile := config.SupportedExtensionSet().MatchPath(book.FilePath)
 
 	if !isFile {
 		targetDir, err := org.GenerateTargetDirPath(book)

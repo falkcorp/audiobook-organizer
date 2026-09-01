@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package jobs
 
@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -99,7 +100,8 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 		done[r.BookID] = true // BookID stores file path for this op
 	}
 
-	audioExts := map[string]bool{".m4b": true, ".m4a": true, ".mp3": true, ".flac": true, ".ogg": true}
+	// Filename-only test; follows supported_extensions.
+	audioExts := config.SupportedExtensionSet()
 	var workItems []sct_work
 	for i := range allBooks {
 		b := &allBooks[i]

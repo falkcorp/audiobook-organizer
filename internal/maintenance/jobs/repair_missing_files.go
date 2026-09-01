@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package jobs
 
@@ -140,7 +140,9 @@ func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobSt
 		itunesOpts.PathMappings[i] = itunes.PathMapping{From: m.From, To: m.To}
 	}
 
-	audioExts := map[string]bool{".m4b": true, ".m4a": true, ".mp3": true, ".flac": true, ".ogg": true, ".opus": true}
+	// Filename-only test used to index candidate files on disk; follows
+	// supported_extensions so a repair can find a .aax/.wav/.aiff original.
+	audioExts := config.SupportedExtensionSet()
 
 	var filenameIdx map[string][]string
 	var idxOnce sync.Once

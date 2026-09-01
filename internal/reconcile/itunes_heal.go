@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-09-01
 
@@ -97,10 +97,9 @@ func ParseITunesXML(xmlPath string) ([]iTunesTrack, error) {
 		return nil, fmt.Errorf("parse iTunes plist: %w", err)
 	}
 
-	extSet := map[string]bool{
-		".m4b": true, ".mp3": true, ".m4a": true,
-		".flac": true, ".aac": true, ".ogg": true, ".wma": true,
-	}
+	// Follows supported_extensions; a private list here silently dropped
+	// iTunes tracks whose container the library is configured to accept.
+	extSet := config.SupportedExtensionSet()
 	var tracks []iTunesTrack
 	for _, raw := range lib.Tracks {
 		loc, _ := raw["Location"].(string)
@@ -568,10 +567,7 @@ func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, 
 // pickFirstFile returns the FilePath of the first audio file in the slice
 // (lowest TrackNumber, then alphabetical). Returns "" if none are audio files.
 func pickFirstFile(files []database.BookFile) string {
-	extSet := map[string]bool{
-		".m4b": true, ".mp3": true, ".m4a": true,
-		".flac": true, ".aac": true, ".ogg": true, ".wma": true,
-	}
+	extSet := config.SupportedExtensionSet()
 	best := ""
 	bestTrack := -1
 	for _, f := range files {
@@ -711,10 +707,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 	}
 	log.Info("itunes-heal: parsed tracks", "count", len(allTracks))
 
-	extSet := map[string]bool{
-		".m4b": true, ".mp3": true, ".m4a": true,
-		".flac": true, ".aac": true, ".ogg": true, ".wma": true,
-	}
+	extSet := config.SupportedExtensionSet()
 	var missing []iTunesTrack
 	alreadyGood, untranslatable := 0, 0
 	for _, t := range allTracks {

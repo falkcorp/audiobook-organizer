@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0123
-// last-edited: 2026-06-11
+// last-edited: 2026-09-01
 
 package acoustid
 
@@ -161,16 +161,16 @@ func TestFingerprintEligibility_ProceedsWhenAllChecksPass(t *testing.T) {
 func TestAudioExtensions_KnownFormats(t *testing.T) {
 	want := []string{".aac", ".aiff", ".alac", ".ape", ".flac", ".m4a", ".m4b", ".mp3", ".ogg", ".opus", ".wav", ".wma", ".wv"}
 	for _, ext := range want {
-		if !audioExtensions[ext] {
-			t.Errorf("expected %q in audioExtensions", ext)
+		if !fpcalcDecodableExtensions[ext] {
+			t.Errorf("expected %q in fpcalcDecodableExtensions", ext)
 		}
 	}
 }
 
 func TestAudioExtensions_RejectsNonAudio(t *testing.T) {
 	for _, ext := range []string{".txt", ".pdf", ".jpg", ".mkv", ".mp4", ".avi", ".epub"} {
-		if audioExtensions[ext] {
-			t.Errorf("did not expect %q in audioExtensions", ext)
+		if fpcalcDecodableExtensions[ext] {
+			t.Errorf("did not expect %q in fpcalcDecodableExtensions", ext)
 		}
 	}
 }

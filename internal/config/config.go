@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.96.0
+// version: 1.97.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-31
+// last-edited: 2026-09-01
 
 package config
 
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/spf13/viper"
@@ -1203,6 +1204,28 @@ func Snapshot() Config {
 	return AppConfig
 }
 
+// SupportedExtensionSet returns the effective library audio-extension set:
+// the user's `supported_extensions`, or — when that is nil or empty — the
+// compiled-in audioext.Default list.
+//
+// Every predicate that asks "is this file part of the library?" should call
+// this rather than hardcoding a list or reading AppConfig.SupportedExtensions
+// directly. Reading the field directly is wrong twice over: it races with
+// Mutate (this function takes the read lock), and it returns nil in any binary
+// that has not run InitConfig, which makes the predicate answer false for
+// every file. See internal/audioext for why fail-open is the required
+// behaviour rather than a convenience.
+//
+// The returned Set is freshly built and owned by the caller. Hoist the call
+// out of a per-file loop; do not call it once per item.
+func SupportedExtensionSet() audioext.Set {
+	// Resolve runs INSIDE the read lock: taking a copy of the slice header and
+	// releasing first would read the backing array unsynchronised.
+	mu.RLock()
+	defer mu.RUnlock()
+	return audioext.Resolve(AppConfig.SupportedExtensions)
+}
+
 // Mutate applies fn to AppConfig under a write lock.
 // ALL write sites (startup init, update service, test setups) must use this.
 func Mutate(fn func(*Config)) {
@@ -1853,18 +1876,20 @@ func InitConfig() {
 	viper.SetDefault("dedup.signals.duration.boost", 4.0)
 	viper.SetDefault("dedup.signals.folder_path.boost", 3.0)
 
-	viper.SetDefault("supported_extensions", []string{
-		".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",
-		".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc",
-	})
+	// Sourced from internal/audioext so the shipped default and every
+	// downstream predicate cannot drift apart. See that package's doc comment.
+	viper.SetDefault("supported_extensions", audioext.Default())
 	viper.SetDefault("exclude_patterns", []string{})
 
-	supportedExtensions := []string{
-		".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",
-		".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc",
-	}
-	if viper.IsSet("supported_extensions") {
-		supportedExtensions = viper.GetStringSlice("supported_extensions")
+	// 🔴 len > 0, NOT viper.IsSet. IsSet is true for `supported_extensions: []`
+	// in config.yaml, so the old guard let a user's empty list through and
+	// AppConfig.SupportedExtensions became empty — after which every
+	// audioext.Resolve call falls back and every raw reader sees nothing.
+	// internal/config/persistence.go already guards its own load with len > 0;
+	// this path had simply never been given the same treatment.
+	supportedExtensions := audioext.Default()
+	if configured := viper.GetStringSlice("supported_extensions"); len(configured) > 0 {
+		supportedExtensions = configured
 	}
 	excludePatterns := viper.GetStringSlice("exclude_patterns")
 
@@ -2847,10 +2872,7 @@ func ResetToDefaults() {
 			VerifyAfterWrite:        true,
 			WriteStartupReadOnlyKey: true,
 
-			SupportedExtensions: []string{
-				".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma",
-				".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc",
-			},
+			SupportedExtensions: audioext.Default(),
 			ExcludePatterns: []string{},
 
 			// Default metadata sources

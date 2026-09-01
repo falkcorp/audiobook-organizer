@@ -1,35 +1,49 @@
 // file: internal/metafetch/service_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-08-16
+// last-edited: 2026-09-01
 
 package metafetch
 
 import (
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
+// AudioFilesInDir returns the library audio files directly inside dir, sorted
+// by name.
+//
+// Follows supported_extensions. The previous implementation globbed a private
+// 8-pattern list, which was wrong three ways: it skipped the seven configured
+// extensions it did not know about; filepath.Glob is case-sensitive on Linux,
+// so a "Chapter 01.MP3" was invisible; and a directory whose own name contains
+// a glob metacharacter ("[Unabridged]" is a real shape in this library) made
+// every pattern match nothing. Reading the directory and testing the extension
+// has none of those failure modes.
 func AudioFilesInDir(dir string) []string {
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return nil
 	}
+	exts := config.SupportedExtensionSet()
 	var files []string
-	for _, ext := range audioExtensions {
-		matches, err := filepath.Glob(filepath.Join(dir, ext))
-		if err == nil {
-			files = append(files, matches...)
+	for _, e := range entries {
+		if e.IsDir() || !exts.MatchPath(e.Name()) {
+			continue
 		}
+		files = append(files, filepath.Join(dir, e.Name()))
 	}
+	sort.Strings(files)
 	return files
 }
 
@@ -153,5 +167,3 @@ func removeEmptyDirs(dir, stopAt string) {
 		dir = filepath.Dir(dir)
 	}
 }
-
-var audioExtensions = []string{"*.m4b", "*.m4a", "*.mp3", "*.flac", "*.ogg", "*.opus", "*.wma", "*.aac"}

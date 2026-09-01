@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.9.0
+// version: 5.10.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 
 package metafetch
 
@@ -270,7 +270,10 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		return
 	}
 
-	audioExts := map[string]bool{
+	// A TagLib CAPABILITY list — which containers can carry an embedded cover
+	// picture — not supported_extensions. It stays narrow on purpose: .wav and
+	// .aiff have no standard cover atom, and .aax/.aaxc are DRM-encrypted.
+	coverEmbeddableExts := map[string]bool{
 		".mp3": true, ".m4b": true, ".m4a": true, ".aac": true,
 		".ogg": true, ".flac": true,
 	}
@@ -290,7 +293,7 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 	// collectFiles gathers all audio files that need cover embedding
 	var files []string
 	ext := strings.ToLower(filepath.Ext(book.FilePath))
-	if audioExts[ext] {
+	if coverEmbeddableExts[ext] {
 		files = append(files, book.FilePath)
 	} else {
 		// Multi-file book
@@ -308,7 +311,7 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 				continue
 			}
 			bfExt := strings.ToLower(filepath.Ext(bf.FilePath))
-			if audioExts[bfExt] {
+			if coverEmbeddableExts[bfExt] {
 				files = append(files, bf.FilePath)
 			}
 		}

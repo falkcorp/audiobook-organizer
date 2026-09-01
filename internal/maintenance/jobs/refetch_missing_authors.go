@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-08-23
+// last-edited: 2026-09-01
 
 package jobs
 
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -67,10 +68,9 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 
 	reporter.SetTotal(len(books))
 
-	audioExts := map[string]bool{
-		".m4b": true, ".m4a": true, ".mp3": true,
-		".flac": true, ".ogg": true, ".opus": true,
-	}
+	// Filename-only test (which of this book's files is its audio), so it
+	// follows supported_extensions rather than a private 6-entry list.
+	audioExts := config.SupportedExtensionSet()
 
 	filled := 0
 	skipped := 0
