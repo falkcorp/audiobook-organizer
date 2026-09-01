@@ -236,6 +236,45 @@ function Harness({
   );
 }
 
+/**
+ * The search path, which is a DIFFERENT question from the busy path and the one
+ * the goal's wording ("responsive at 50 or 100 items") is really about.
+ *
+ * The lane narrows inside its `buckets` useMemo and leaves `items` -- the raw
+ * fetched page -- untouched, so `payloadIndex` and `searchIndex` are NOT
+ * invalidated by a keystroke and a surviving row's `payload` keeps its
+ * identity. That is the whole reason the index is keyed on `items` rather than
+ * on the filtered array, and it is worth a test because the cheap-looking
+ * alternative (index the filtered rows) rebuilds every payload on every
+ * character and leaves the memo inert during exactly this interaction.
+ */
+function SearchHarness() {
+  const [query, setQuery] = useState('');
+  const noop = useCallback(() => {}, []);
+  const actionFor = useCallback(() => 'combine', []);
+  const payloadFor = useCallback((item: ReviewItem) => PAYLOADS.get(item.id) ?? null, []);
+
+  const shown = query ? ITEMS.filter((it) => (it.summary ?? '').includes(query)) : ITEMS;
+
+  const lane: RegroupLane = {
+    ...laneBase(),
+    buckets: [makeBucket(shown)],
+    approveItem: noop,
+    rejectItem: noop,
+    setAction: noop,
+    isItemBusy: () => false,
+    actionFor,
+    payloadFor,
+  };
+
+  return (
+    <>
+      <input aria-label="search" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <RegroupSpine lane={lane} />
+    </>
+  );
+}
+
 describe('RegroupSpine row memoization', () => {
   beforeEach(() => {
     actionSpecSpy.mockClear();
@@ -271,6 +310,21 @@ describe('RegroupSpine row memoization', () => {
     // the incoming value would pass the busy->true case and fail this one.
     await user.click(flip);
     expect(actionSpecSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('typing in the search box re-renders no surviving row', async () => {
+    const user = userEvent.setup();
+    render(wrap(<SearchHarness />));
+    expect(actionSpecSpy).toHaveBeenCalledTimes(ROW_COUNT);
+
+    actionSpecSpy.mockClear();
+    await user.type(screen.getByLabelText('search'), '1');
+
+    // "Hold 1" and "Hold 10".."Hold 19" survive; the other nine unmount. A
+    // surviving row's props are identical, so none of them re-renders --
+    // filtering a page must cost only the rows it removes.
+    expect(screen.getAllByText(/^Hold 1/)).toHaveLength(11);
+    expect(actionSpecSpy).toHaveBeenCalledTimes(0);
   });
 
   it('an unstable handler from the lane makes the memo inert', async () => {

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.payloadIndex.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7a4c19-5d80-4b36-91af-6c3e08d5b724
 // last-edited: 2026-09-01
 //
@@ -90,6 +90,34 @@ describe('the regroup lane parses each payload once per loaded page', () => {
     // A re-render with identical rows must not re-parse either. This is the
     // case that regresses if a row renderer calls parsePayload inline again.
     view.rerender();
+    expect(spy.mock.calls.length).toBe(afterLoad);
+
+    spy.mockRestore();
+  });
+
+  it('does not re-parse when the search box narrows the page', async () => {
+    // THE interaction the responsiveness goal is about. The lane keys its index
+    // on `items` -- the raw fetched page -- and narrows inside the `buckets`
+    // memo, so a keystroke leaves both indexes intact. Indexing the FILTERED
+    // rows instead would look equivalent and would re-parse all 500 payloads on
+    // every character typed, which is precisely what searchTextFor's own
+    // comment says must not happen.
+    const spy = vi.spyOn(reviewPayload, 'parsePayload');
+
+    const view = renderHook(() => useRegroupLane(toast, true));
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    const afterLoad = spy.mock.calls.length;
+
+    act(() => view.result.current.setFilters({ search: 'i1' }));
+    // The box is debounced, so wait for the narrowing to actually land rather
+    // than asserting on a page the filter has not reached yet -- an assertion
+    // made too early would pass whether or not the index was rebuilt.
+    await waitFor(() =>
+      expect(view.result.current.buckets.flatMap((b) => b.items).length).toBeLessThan(N)
+    );
+
+    // i1, i10..i19 survive the substring match; the rest are filtered out.
+    expect(view.result.current.buckets.flatMap((b) => b.items).length).toBe(11);
     expect(spy.mock.calls.length).toBe(afterLoad);
 
     spy.mockRestore();
