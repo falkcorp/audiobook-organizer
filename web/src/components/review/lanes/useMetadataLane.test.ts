@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-08-29
+// last-edited: 2026-09-01
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -982,5 +982,79 @@ describe('an optimistic apply must be correctable by the server', () => {
     });
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.pageResults).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A failed load must be visible
+// ---------------------------------------------------------------------------
+
+describe('a failed load is surfaced rather than swallowed', () => {
+  it('exposes the failure message instead of looking like an empty queue', async () => {
+    // The catch used to be `.catch(() => setLoading(false))`: no state, no
+    // toast, not even a console line. A 500 and an empty cache produced byte
+    // for byte the same screen, and that screen told the reviewer to go search
+    // providers -- advice that cannot possibly help when the server is down.
+    vi.mocked(api.getCachedReviewResults).mockRejectedValue(new Error('boom: 500'));
+    const { result } = renderHook(() => useMetadataLane(toast, true));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe('boom: 500');
+    expect(result.current.results).toEqual([]);
+  });
+
+  it('falls back to a readable message when the rejection carries none', async () => {
+    vi.mocked(api.getCachedReviewResults).mockRejectedValue('not an Error');
+    const { result } = renderHook(() => useMetadataLane(toast, true));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toMatch(/could not load/i);
+  });
+
+  it('clears the error when a retry succeeds', async () => {
+    // Without clearing on the NEXT attempt rather than only on success, a
+    // successful Retry would leave the failure Alert on screen forever.
+    vi.mocked(api.getCachedReviewResults).mockRejectedValueOnce(new Error('boom'));
+    const { result } = renderHook(() => useMetadataLane(toast, true));
+    await waitFor(() => expect(result.current.error).toBe('boom'));
+
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('b1')])
+    );
+    act(() => result.current.refresh());
+
+    // Wait for the retry to SETTLE, not merely to start -- `error` is cleared
+    // when the new attempt begins, so waiting on it alone would pass before the
+    // response landed and would not prove the Alert stays gone.
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+    expect(result.current.error).toBeNull();
+  });
+
+  it('ignores a rejection from a superseded fetch', async () => {
+    // A request the reviewer has already superseded can still reject later.
+    // Letting that write `error` would paint a failure banner over a page that
+    // loaded perfectly well -- the same stale-guard the success path has.
+    let rejectFirst: (e: Error) => void = () => {};
+    vi.mocked(api.getCachedReviewResults).mockReturnValueOnce(
+      new Promise((_, rej) => {
+        rejectFirst = rej;
+      }) as ReturnType<typeof api.getCachedReviewResults>
+    );
+    const { result } = renderHook(() => useMetadataLane(toast, true));
+
+    // Supersede it with a fetch that succeeds.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('b1')])
+    );
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+
+    // The abandoned request only now fails.
+    await act(async () => {
+      rejectFirst(new Error('late failure'));
+      await Promise.resolve();
+    });
+
+    expect(result.current.error).toBeNull();
   });
 });

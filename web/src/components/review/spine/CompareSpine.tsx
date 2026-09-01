@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -52,6 +52,7 @@ import {
   Checkbox,
   Chip,
   IconButton,
+  LinearProgress,
   Stack,
   Tooltip,
   Typography,
@@ -1032,17 +1033,58 @@ export function CompareSpine({
   viewMode,
   ctx,
   emptyMessage = 'Nothing to compare.',
+  loading = false,
+  errored = false,
 }: {
   rows: CandidateResult[];
   groups?: CandidateGroup[];
   viewMode: SpineViewMode;
   ctx: SpineContext;
   emptyMessage?: string;
+  /**
+   * A load is in flight. Without this the spine cannot tell "still fetching"
+   * from "fetched, and there is nothing" -- and it renders the SAME empty copy
+   * for both, so a slow server looks like an empty queue.
+   */
+  loading?: boolean;
+  /**
+   * The load failed. The panel owns the error message, so the spine's job here
+   * is only to STOP TALKING: `emptyMessage` tells the reviewer to go search
+   * providers, which is advice that cannot help and is not even true when the
+   * request 500'd -- there may be thousands of rows behind a server that is
+   * down. Rendering the Alert above an unchanged "nothing to review" is the
+   * exact symptom this change exists to remove.
+   */
+  errored?: boolean;
 }) {
   // Called once here and threaded down to every render site as a plain prop --
   // the three renderers (GroupedCard, CompactRow, TwoColumnCard/AutoCard) stay
   // pure and don't each re-fetch config on their own.
   const pathAliases = usePathAliases();
+
+  // Both of these run BEFORE the empty branch. Order is the whole fix: the
+  // empty message is a claim about the server's answer, so it may only be made
+  // once there IS an answer and it succeeded.
+  if (rows.length === 0 && groups.length === 0 && loading) {
+    return (
+      <Box sx={{ p: 3 }} data-testid="spine-loading">
+        <LinearProgress />
+        <Typography
+          variant="body2"
+          sx={{ color: 'text.secondary', fontStyle: 'italic', mt: 2 }}
+        >
+          Loading the review queue…
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (rows.length === 0 && groups.length === 0 && errored) {
+    // Deliberately renders nothing. The panel has already said what went wrong
+    // and offered Retry; a second message here would either repeat it or, worse,
+    // contradict it with advice that assumes the load worked.
+    return null;
+  }
 
   if (rows.length === 0 && groups.length === 0) {
     return (

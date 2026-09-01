@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-08-27
+// last-edited: 2026-09-01
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -400,5 +400,82 @@ describe('queue rail', () => {
     expect(
       screen.getByLabelText('Hide multi-book matches').closest('[data-testid="queue-rail"]')
     ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A failed load must not read as an empty queue
+//
+// End-to-end through the real hook, the real MetadataPanel and the real
+// CompareSpine, because the defect lived in the WIRING between them: the hook
+// swallowed the rejection, the panel had nowhere to show one, and the spine
+// rendered its empty copy regardless. Testing any one of the three in isolation
+// would miss it.
+// ---------------------------------------------------------------------------
+
+const METADATA_EMPTY_COPY =
+  'No metadata matches to review. Search providers from the Metadata menu to find some.';
+
+describe('the metadata lane distinguishes failed, loading and empty', () => {
+  it('shows the error and NOT the go-search-providers advice when the load fails', async () => {
+    vi.mocked(api.getCachedReviewResults).mockRejectedValue(new Error('server exploded'));
+    renderWorkspace();
+
+    const alert = await screen.findByTestId('metadata-error');
+    expect(alert).toHaveTextContent('server exploded');
+
+    // The whole point. Telling the reviewer to go search providers is wrong
+    // when the request 500'd -- there may be thousands of rows waiting behind a
+    // server that is simply down, and following the advice does nothing.
+    expect(screen.queryByText(METADATA_EMPTY_COPY)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('spine-empty')).not.toBeInTheDocument();
+  });
+
+  it('still says the queue is empty when the load SUCCEEDS with no rows', async () => {
+    // The counterpart. Suppressing the empty copy on error is only correct if a
+    // genuinely empty queue still gets it -- otherwise the fix has just traded
+    // one indistinguishable pair for another.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      results: [],
+      total_count: 0,
+      matched: 0,
+      no_match: 0,
+      errors: 0,
+    });
+    renderWorkspace();
+
+    expect(await screen.findByText(METADATA_EMPTY_COPY)).toBeInTheDocument();
+    expect(screen.queryByTestId('metadata-error')).not.toBeInTheDocument();
+  });
+
+  it('shows a loading state, not the empty copy, while the request is in flight', async () => {
+    // A hung request used to render exactly the same screen as an empty queue.
+    vi.mocked(api.getCachedReviewResults).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.getCachedReviewResults>
+    );
+    renderWorkspace();
+
+    expect(await screen.findByTestId('spine-loading')).toBeInTheDocument();
+    expect(screen.queryByText(METADATA_EMPTY_COPY)).not.toBeInTheDocument();
+  });
+
+  it('retries the load from the error Alert', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getCachedReviewResults).mockRejectedValueOnce(new Error('server exploded'));
+    renderWorkspace();
+    await screen.findByTestId('metadata-error');
+
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      results: [makeResult('a')],
+      total_count: 1,
+      matched: 1,
+      no_match: 0,
+      errors: 0,
+    });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    // The Alert clears rather than sitting on top of a page that now loaded.
+    await waitFor(() => expect(screen.queryByTestId('metadata-error')).not.toBeInTheDocument());
+    expect(await screen.findByTestId('compare-spine')).toBeInTheDocument();
   });
 });

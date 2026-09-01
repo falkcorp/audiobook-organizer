@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-08-29
+// last-edited: 2026-09-01
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -303,6 +303,19 @@ function initialFilters(): MetadataFilters {
 
 export interface MetadataLane {
   loading: boolean;
+  /**
+   * Why the last load failed, or null.
+   *
+   * This lane swallowed load failures entirely -- `.catch(() => setLoading(false))`
+   * with no state, no toast and no console line. A 500 and an empty cache were
+   * therefore indistinguishable, and the spine told the reviewer "No metadata
+   * matches to review. Search providers from the Metadata menu to find some."
+   * That advice is actively wrong when the request failed: there may be
+   * thousands of matches waiting behind a server that is simply down, and
+   * following it does nothing. The other two lanes have carried an `error` for
+   * exactly this reason; this one was the outlier.
+   */
+  error: string | null;
   /** Every cached row the server returned, unfiltered. */
   results: CandidateResult[];
   /** After filters, before pagination. */
@@ -378,6 +391,7 @@ export interface MetadataLane {
 export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [results, setResults] = useState<CandidateResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [rowStates, setRowStates] = useState<Map<string, RowState>>(new Map());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filters, setFiltersState] = useState<MetadataFilters>(initialFilters);
@@ -487,6 +501,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   useEffect(() => {
     if (!active) return;
     setLoading(true);
+    // Cleared on every attempt, not only on success. Leaving it set would mean a
+    // successful Retry still rendered the failure Alert forever.
+    setError(null);
     const fetchId = ++fetchIdRef.current;
     api
       .getCachedReviewResults(0, 0)
@@ -594,8 +611,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         });
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        // The stale guard runs FIRST. A request the user has already superseded
+        // can still reject later, and letting that write `error` would paint a
+        // failure banner over a page that loaded perfectly well.
         if (fetchId !== fetchIdRef.current) return;
+        setError(
+          err instanceof Error && err.message
+            ? err.message
+            : 'Could not load the metadata review queue.'
+        );
         setLoading(false);
       });
   }, [active, refreshKey]);
@@ -1148,6 +1173,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   return {
     loading,
+    error,
     results,
     filteredResults,
     pageResults,
