@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.memo.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2e9c71-3b84-4d06-9e17-8c40b2f6a35d
 // last-edited: 2026-09-01
 //
@@ -65,6 +65,25 @@ vi.mock('../../common/PathLinks', async () => {
     usePathAliases: () => {
       const [aliases] = useStateReal(NO_ALIASES);
       return aliases;
+    },
+  };
+});
+
+// Same requirement, same reasoning, for the second config-backed hook the spine
+// hoists. usePathVars() sits beside usePathAliases() in DupesSpine and feeds the
+// same two memo boundaries, so an unmocked one resolves its real getConfig()
+// mid-test and hands all 20 rows a new array -- which is exactly what this file
+// measures, and it would report the memo as broken when it is not.
+vi.mock('../../../utils/formatPath', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../../utils/formatPath')>('../../../utils/formatPath');
+  const NO_VARS: never[] = [];
+  const { useState: useStateReal } = await import('react');
+  return {
+    ...actual,
+    usePathVars: () => {
+      const [vars] = useStateReal(NO_VARS);
+      return vars;
     },
   };
 });
