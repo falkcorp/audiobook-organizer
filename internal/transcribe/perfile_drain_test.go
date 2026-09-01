@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,7 +31,6 @@ func TestPerFileDrainsWorkersBeforeReturning(t *testing.T) {
 
 	const limit = 4
 
-	var blocking atomic.Int64
 	unblock := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if filepath.Base(r.URL.Path) == "fail" || r.Header.Get("X-Fail") != "" {
@@ -42,8 +40,6 @@ func TestPerFileDrainsWorkersBeforeReturning(t *testing.T) {
 		// Everything else parks until the test releases it or the client's
 		// context is cancelled, so a worker is demonstrably mid-request at the
 		// moment the failing job reports its error.
-		blocking.Add(1)
-		defer blocking.Add(-1)
 		select {
 		case <-unblock:
 		case <-r.Context().Done():
@@ -92,7 +88,11 @@ func TestPerFileDrainsWorkersBeforeReturning(t *testing.T) {
 			"without draining", held)
 	}
 
-	if n := blocking.Load(); n != 0 {
-		t.Errorf("%d server handler(s) still executing on return", n)
-	}
+	// NOTE: deliberately no assertion on server-side handler state. Go's
+	// http.Server does not kill a handler when the client disconnects -- the
+	// handler runs until it returns on its own, so its defer can lag the
+	// client's return by an arbitrary amount. An earlier version of this test
+	// asserted "no handler still executing" and failed in CI against correct
+	// code. The slot count above is the actual contract: it is client-side
+	// state, owned by the code under test.
 }
