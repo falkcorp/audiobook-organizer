@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
-// last-edited: 2026-08-23
+// last-edited: 2026-09-01
 
 package fileops
 
@@ -101,13 +101,13 @@ func (op *FileOperation) Execute() error {
 	targetExists := false
 	if _, err := os.Stat(op.targetPath); err == nil {
 		targetExists = true
-		if err := copyFile(op.targetPath, op.backupPath); err != nil {
+		if err := copyFileMkdirAll(op.targetPath, op.backupPath); err != nil {
 			return fmt.Errorf("failed to backup existing file: %w", err)
 		}
 	}
 
 	// Step 2: Copy source to target
-	if err := copyFile(op.originalPath, op.targetPath); err != nil {
+	if err := copyFileMkdirAll(op.originalPath, op.targetPath); err != nil {
 		// Rollback: restore from backup if it exists.
 		//
 		// A discarded rollback error is WORSE than no rollback, because the
@@ -132,7 +132,7 @@ func (op *FileOperation) Execute() error {
 		// (internal/audiobooks/service_mutation.go) — and neither resolves
 		// symlinks. Left open deliberately; see TASK-083.
 		if _, statErr := os.Stat(op.backupPath); statErr == nil {
-			if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
+			if rbErr := copyFileMkdirAll(op.backupPath, op.targetPath); rbErr != nil {
 				slog.Error("ROLLBACK FAILED: target may be corrupt and the only intact copy is the backup",
 					"target", op.targetPath, "backup", op.backupPath,
 					"copy_error", err, "rollback_error", rbErr)
@@ -145,7 +145,7 @@ func (op *FileOperation) Execute() error {
 
 	// Step 2.5: Create a backup of the source if PreserveOriginal is true and target didn't exist
 	if op.config.PreserveOriginal && !targetExists {
-		if err := copyFile(op.originalPath, op.backupPath); err != nil {
+		if err := copyFileMkdirAll(op.originalPath, op.backupPath); err != nil {
 			return fmt.Errorf("failed to create backup: %w", err)
 		}
 	}
@@ -173,7 +173,7 @@ func (op *FileOperation) Execute() error {
 			// not cut the flow CodeQL flagged. The real constraints are
 			// upstream and do not resolve symlinks.
 			if _, statErr := os.Stat(op.backupPath); statErr == nil {
-				if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
+				if rbErr := copyFileMkdirAll(op.backupPath, op.targetPath); rbErr != nil {
 					slog.Error("ROLLBACK FAILED after checksum mismatch: a known-corrupt file is left in place",
 						"target", op.targetPath, "backup", op.backupPath,
 						"original_hash", op.originalHash, "target_hash", op.targetHash,
@@ -214,7 +214,7 @@ func (op *FileOperation) Rollback() error {
 
 	// Restore from backup if it exists
 	if _, err := os.Stat(op.backupPath); err == nil {
-		if err := copyFile(op.backupPath, op.targetPath); err != nil {
+		if err := copyFileMkdirAll(op.backupPath, op.targetPath); err != nil {
 			return fmt.Errorf("failed to restore from backup: %w", err)
 		}
 	}
@@ -275,40 +275,15 @@ func (op *FileOperation) cleanupOldBackups() error {
 
 // Helper functions
 
-// copyFile copies a file from src to dst with verification
-func copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
+// copyFileMkdirAll is CopyFile with the destination's parent directory created
+// first. The rollback machinery below copies into a backup directory that may
+// not exist yet; the mkdir is this package's policy, not part of the shared
+// copy contract, so it lives here rather than inside CopyFile.
+func copyFileMkdirAll(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o775); err != nil {
+		return fmt.Errorf("fileops: create destination directory for %s: %w", dst, err)
 	}
-	defer sourceFile.Close()
-
-	// Ensure destination directory exists
-	if err := os.MkdirAll(filepath.Dir(dst), 0775); err != nil {
-		return err
-	}
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	if _, err := io.Copy(destFile, sourceFile); err != nil {
-		return err
-	}
-
-	// Sync to ensure data is written to disk
-	if err := destFile.Sync(); err != nil {
-		return err
-	}
-
-	// Copy file permissions
-	sourceInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	return os.Chmod(dst, sourceInfo.Mode())
+	return CopyFile(src, dst)
 }
 
 // calculateChecksum computes SHA256 hash of a file

@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-01
 
@@ -7,7 +7,6 @@ package organizer
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -529,43 +528,28 @@ func stringOrEmpty(s *string) string {
 	return *s
 }
 
-// copyFile copies a file from src to dst
+// copyFile copies src to dst without ever replacing an existing dst.
+//
+// The bytes go through fileops.CopyFile (the package's single copy
+// implementation: source mode preserved, fsynced, partial destination removed
+// on failure); the temp-then-safeRename dance stays here because the temp name
+// is this package's own — cleanupTempFiles sweeps `*.tmp-organizer` under
+// RootDir and must be able to recognise what it wrote.
+//
+// safeRename rather than a bare os.Rename: os.Rename silently REPLACES a
+// destination that appeared between the caller's exists-check and now
+// (concurrent organize workers), which for an audiobook means the other
+// worker's file is gone. The wrapped error still satisfies os.IsExist, so
+// organizeFile callers' race recovery keeps working.
 func (o *Organizer) copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("cannot read source file %s: %w", src, err)
-	}
-	defer sourceFile.Close()
-
 	tempPath := dst + tempFileSuffix
 	_ = os.Remove(tempPath)
 
-	destFile, err := os.Create(tempPath)
-	if err != nil {
-		return fmt.Errorf("cannot create destination file %s: %w (check parent directory permissions and disk space)", tempPath, err)
-	}
-	defer func() {
-		_ = destFile.Close()
-	}()
-
-	if _, err := io.Copy(destFile, sourceFile); err != nil {
+	if err := fileops.CopyFile(src, tempPath); err != nil {
 		_ = os.Remove(tempPath)
-		return fmt.Errorf("failed to copy file: %w", err)
+		return err
 	}
 
-	if err := destFile.Sync(); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("failed to sync destination file: %w", err)
-	}
-
-	if err := destFile.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("failed to close destination file: %w", err)
-	}
-	// safeRename: a bare os.Rename would silently replace a destination that
-	// appeared between the caller's exists-check and now (concurrent organize
-	// workers) — refuse instead. The wrapped error still satisfies
-	// os.IsExist, so organizeFile callers' race recovery keeps working.
 	if err := safeRename(tempPath, dst); err != nil {
 		_ = os.Remove(tempPath)
 		if os.IsExist(err) {
@@ -573,7 +557,6 @@ func (o *Organizer) copyFile(src, dst string) error {
 		}
 		return fmt.Errorf("failed to finalize destination file: %w", err)
 	}
-
 	return nil
 }
 
