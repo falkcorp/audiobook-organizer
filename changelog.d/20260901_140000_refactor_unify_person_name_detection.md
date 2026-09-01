@@ -234,3 +234,33 @@ too — and the obvious remedy does not work: Go does map Mkhedruli to Mtavruli
 (`unicode.ToUpper('გ') == 'Გ'`), so accepting runes with no uppercase mapping
 rejects Georgian exactly as today. Measured, and filed with the disproof rather
 than left as a plausible-sounding suggestion.
+
+#### Measured at the second consumer too, not just the splitter
+
+The differential above exercises `SplitCompositeAuthorName`. It does not touch
+`extractAuthorFromDirectory`, which this change also altered in both the scanner
+and metadata copies — and where a refused branch **falls through** to the next
+branch rather than returning, which is the same amplifier shape that made the
+first version of this change unshippable. Reasoning that the fall-through is
+harmless was not enough, so it was measured the same way: 6,699 directory shapes,
+both copies, old tree and new tree, exact comparison.
+
+- **No input gets a different author.** 0 changed answers in either package: a
+  gated branch's refusal never hands the decision to a branch that answers with
+  some *other* name.
+- **The two copies now agree exactly.** They disagreed on **128** of the 6,699
+  inputs before — the same folder yielding `Ludwig van Beethoven` from one path
+  and nothing from the other — and on **0** after.
+- Scanner: 88 folders newly yield an author (all of them the near-miss-prefix
+  class this change exists to fix — `Booker …`, `Volker …`, `Partha …` — the
+  particle class, or non-ASCII names); 36 stop yielding one, being 14 bare
+  single-word folder names, 11 `Pratchett 036` placeholder variants and 11
+  `the quick brown` title fragments. Metadata: 180 newly yield an author, 0 stop.
+
+Nothing in either list is unaccounted for.
+
+The mutation matrix was re-run at the final commit rather than trusted from the
+round it was first measured in, since a later fix can defuse an earlier test —
+and one of these mutants had already survived a guard written to kill it once.
+Ten mutants, each verified to match exactly one anchor, to actually change the
+file, and to still compile before the tests were run: **10 killed, 0 survived.**
