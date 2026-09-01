@@ -150,7 +150,7 @@ func TestBuildMetadataProvenance_FileValues(t *testing.T) {
 		PrintYear: "2019",
 	}
 
-	provenance := buildMetadataProvenance(book, nil, meta, "Author Name", "Series Name", nil)
+	provenance := metafetch.BuildMetadataProvenance(book, nil, meta, "Author Name", "Series Name", nil)
 
 	// Verify file_value is populated (not nil) for fields we read from file
 	fieldsWithFileValues := []string{

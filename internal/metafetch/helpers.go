@@ -8,6 +8,7 @@ package metafetch
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"log/slog"
 	"path/filepath"
 	"regexp"
@@ -165,7 +166,10 @@ type MetadataFieldState struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-// metadataFieldState is an alias for backward compatibility (deprecated).
+// metadataFieldState is the unexported spelling of MetadataFieldState, used by
+// ~15 call sites in this package. NOT dead: the plan for the 2026-09-01
+// provenance unification listed it for deletion "if it has no users left", and
+// it has plenty -- checked rather than assumed.
 type metadataFieldState = MetadataFieldState
 
 // These four helpers are *Service methods so they use mfs.db rather than
@@ -387,4 +391,115 @@ func dedupeBookFilesByPath(bookID string, files []database.BookFile) []database.
 			"collapsed", len(files)-len(out))
 	}
 	return out
+}
+
+// NonEmpty maps "" to a nil `any` and any other string to itself.
+//
+// Exported and canonical here because BuildMetadataProvenance below depends on
+// it: moving the function without it would have meant a THIRD copy of a helper
+// that already existed twice (internal/audiobooks, internal/server). Both of
+// those are now one-line aliases to this, so there is one implementation and no
+// call site had to change.
+//
+// The nil matters: a provenance entry distinguishes "this field has no value"
+// from "this field is the empty string", and a bare "" would collapse them.
+func NonEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// BuildMetadataProvenance constructs a per-field provenance map for the
+// audiobook metadata panel, combining file-extracted, fetched, stored, and
+// override values with their effective resolution.
+//
+// Lives here because BOTH callers already import metafetch (audiobooks/organize.go,
+// audiobooks/rename.go, server/server_metadata.go) and metafetch imports neither,
+// so this is a move rather than an extraction -- no new package, no new edge in
+// the dependency graph, and MetadataFieldState was already the canonical type.
+//
+// It was two byte-identical 79-line copies until 2026-09-01, in internal/audiobooks
+// and internal/server, differing only in which spelling of the field-state type
+// they named. The server copy had ZERO production callers -- its only caller was
+// its own test -- which is the same shape as isInitialToken, removed in #3029:
+// dead production code kept alive by the test written for it.
+func BuildMetadataProvenance(book *database.Book, state map[string]MetadataFieldState, meta metadata.Metadata, authorName, seriesName string, comparisonValues map[string]any) map[string]database.MetadataProvenanceEntry {
+	if state == nil {
+		state = map[string]MetadataFieldState{}
+	}
+
+	provenance := map[string]database.MetadataProvenanceEntry{}
+
+	addEntry := func(field string, fileValue any, storedValue any) {
+		entryState := state[field]
+		effectiveSource := ""
+		var effectiveValue any
+		switch {
+		case entryState.OverrideValue != nil:
+			effectiveSource = "override"
+			effectiveValue = entryState.OverrideValue
+		case storedValue != nil:
+			effectiveSource = "stored"
+			effectiveValue = storedValue
+		case entryState.FetchedValue != nil:
+			effectiveSource = "fetched"
+			effectiveValue = entryState.FetchedValue
+		case fileValue != nil:
+			effectiveSource = "file"
+			effectiveValue = fileValue
+		}
+
+		var updatedAt *time.Time
+		if !entryState.UpdatedAt.IsZero() {
+			ts := entryState.UpdatedAt.UTC()
+			updatedAt = &ts
+		}
+
+		entry := database.MetadataProvenanceEntry{
+			FileValue:       fileValue,
+			FetchedValue:    entryState.FetchedValue,
+			StoredValue:     storedValue,
+			OverrideValue:   entryState.OverrideValue,
+			OverrideLocked:  entryState.OverrideLocked,
+			EffectiveValue:  effectiveValue,
+			EffectiveSource: effectiveSource,
+			UpdatedAt:       updatedAt,
+		}
+
+		if comparisonValues != nil {
+			if cv, ok := comparisonValues[field]; ok {
+				entry.ComparisonValue = cv
+			}
+		}
+
+		provenance[field] = entry
+	}
+
+	addEntry("title", meta.Title, book.Title)
+	addEntry("author_name", meta.Artist, authorName)
+	addEntry("narrator", meta.Narrator, stringVal(book.Narrator))
+	addEntry("series_name", meta.Series, seriesName)
+	addEntry("publisher", meta.Publisher, stringVal(book.Publisher))
+	addEntry("language", meta.Language, stringVal(book.Language))
+	addEntry("audiobook_release_year", meta.Year, intVal(book.AudiobookReleaseYear))
+	addEntry("isbn10", meta.ISBN10, stringVal(book.ISBN10))
+	addEntry("isbn13", meta.ISBN13, stringVal(book.ISBN13))
+	addEntry("genre", meta.Genre, stringVal(book.Genre))
+	addEntry("album", meta.Album, book.Title)
+	addEntry("asin", NonEmpty(meta.ASIN), stringVal(book.ASIN))
+	var seriesIdx any
+	if meta.SeriesIndex > 0 {
+		seriesIdx = meta.SeriesIndex
+	}
+	addEntry("series_index", seriesIdx, intVal(book.SeriesSequence))
+	addEntry("print_year", NonEmpty(meta.PrintYear), intVal(book.PrintYear))
+	addEntry("edition", NonEmpty(meta.Edition), stringVal(book.Edition))
+	addEntry("description", NonEmpty(meta.Comments), stringVal(book.Description))
+	addEntry("book_id", NonEmpty(meta.BookOrganizerID), book.ID)
+	addEntry("open_library_id", NonEmpty(meta.OpenLibraryID), stringVal(book.OpenLibraryID))
+	addEntry("hardcover_id", NonEmpty(meta.HardcoverID), stringVal(book.HardcoverID))
+	addEntry("google_books_id", NonEmpty(meta.GoogleBooksID), stringVal(book.GoogleBooksID))
+
+	return provenance
 }

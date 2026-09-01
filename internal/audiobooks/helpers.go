@@ -33,6 +33,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 // --- basic pointer helpers --------------------------------------------------
@@ -52,12 +53,13 @@ func ptrStr(p *string) string {
 // --- metadata field state ---------------------------------------------------
 
 // metadataFieldState represents the persisted state of one metadata field.
-type metadataFieldState struct {
-	FetchedValue   any       `json:"fetched_value,omitempty"`
-	OverrideValue  any       `json:"override_value,omitempty"`
-	OverrideLocked bool      `json:"override_locked"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
+// metadataFieldState is metafetch's type, not a local one.
+//
+// It was a field-for-field, tag-for-tag copy of metafetch.MetadataFieldState
+// until 2026-09-01. An ALIAS rather than a rename because the name is used ~40
+// times in this package and the two are the same type either way -- what
+// mattered was deleting the second definition, not the second spelling.
+type metadataFieldState = metafetch.MetadataFieldState
 
 func decodeRawValue(raw json.RawMessage) any {
 	if raw == nil {
@@ -368,95 +370,10 @@ func intVal(p *int) any {
 	return *p
 }
 
-func nonEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
-// buildMetadataProvenance constructs a per-field provenance map for the
-// audiobook metadata panel, combining file-extracted, fetched, stored, and
-// override values with their effective resolution.
-func buildMetadataProvenance(book *database.Book, state map[string]metadataFieldState, meta metadata.Metadata, authorName, seriesName string, comparisonValues map[string]any) map[string]database.MetadataProvenanceEntry {
-	if state == nil {
-		state = map[string]metadataFieldState{}
-	}
-
-	provenance := map[string]database.MetadataProvenanceEntry{}
-
-	addEntry := func(field string, fileValue any, storedValue any) {
-		entryState := state[field]
-		effectiveSource := ""
-		var effectiveValue any
-		switch {
-		case entryState.OverrideValue != nil:
-			effectiveSource = "override"
-			effectiveValue = entryState.OverrideValue
-		case storedValue != nil:
-			effectiveSource = "stored"
-			effectiveValue = storedValue
-		case entryState.FetchedValue != nil:
-			effectiveSource = "fetched"
-			effectiveValue = entryState.FetchedValue
-		case fileValue != nil:
-			effectiveSource = "file"
-			effectiveValue = fileValue
-		}
-
-		var updatedAt *time.Time
-		if !entryState.UpdatedAt.IsZero() {
-			ts := entryState.UpdatedAt.UTC()
-			updatedAt = &ts
-		}
-
-		entry := database.MetadataProvenanceEntry{
-			FileValue:       fileValue,
-			FetchedValue:    entryState.FetchedValue,
-			StoredValue:     storedValue,
-			OverrideValue:   entryState.OverrideValue,
-			OverrideLocked:  entryState.OverrideLocked,
-			EffectiveValue:  effectiveValue,
-			EffectiveSource: effectiveSource,
-			UpdatedAt:       updatedAt,
-		}
-
-		if comparisonValues != nil {
-			if cv, ok := comparisonValues[field]; ok {
-				entry.ComparisonValue = cv
-			}
-		}
-
-		provenance[field] = entry
-	}
-
-	addEntry("title", meta.Title, book.Title)
-	addEntry("author_name", meta.Artist, authorName)
-	addEntry("narrator", meta.Narrator, stringVal(book.Narrator))
-	addEntry("series_name", meta.Series, seriesName)
-	addEntry("publisher", meta.Publisher, stringVal(book.Publisher))
-	addEntry("language", meta.Language, stringVal(book.Language))
-	addEntry("audiobook_release_year", meta.Year, intVal(book.AudiobookReleaseYear))
-	addEntry("isbn10", meta.ISBN10, stringVal(book.ISBN10))
-	addEntry("isbn13", meta.ISBN13, stringVal(book.ISBN13))
-	addEntry("genre", meta.Genre, stringVal(book.Genre))
-	addEntry("album", meta.Album, book.Title)
-	addEntry("asin", nonEmpty(meta.ASIN), stringVal(book.ASIN))
-	var seriesIdx any
-	if meta.SeriesIndex > 0 {
-		seriesIdx = meta.SeriesIndex
-	}
-	addEntry("series_index", seriesIdx, intVal(book.SeriesSequence))
-	addEntry("print_year", nonEmpty(meta.PrintYear), intVal(book.PrintYear))
-	addEntry("edition", nonEmpty(meta.Edition), stringVal(book.Edition))
-	addEntry("description", nonEmpty(meta.Comments), stringVal(book.Description))
-	addEntry("book_id", nonEmpty(meta.BookOrganizerID), book.ID)
-	addEntry("open_library_id", nonEmpty(meta.OpenLibraryID), stringVal(book.OpenLibraryID))
-	addEntry("hardcover_id", nonEmpty(meta.HardcoverID), stringVal(book.HardcoverID))
-	addEntry("google_books_id", nonEmpty(meta.GoogleBooksID), stringVal(book.GoogleBooksID))
-
-	return provenance
-}
+// nonEmpty is metafetch.NonEmpty. BuildMetadataProvenance moved to metafetch and
+// depends on it, so the implementation moved with it rather than becoming a
+// third copy; this alias keeps all 43 call sites in this file unchanged.
+var nonEmpty = metafetch.NonEmpty
 
 func buildComparisonValuesFromMetadata(comparisonMeta *metadata.Metadata) map[string]any {
 	if comparisonMeta == nil {
