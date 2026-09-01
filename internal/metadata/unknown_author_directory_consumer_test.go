@@ -1,5 +1,5 @@
 // file: internal/metadata/unknown_author_directory_consumer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c47a1d95-3e82-4b60-a7f1-90d5e6c83b24
 // last-edited: 2026-09-01
 
@@ -30,9 +30,21 @@ import (
 // on ExtractMetadata's OUTPUT.
 //
 // It is deliberately an INVARIANT, not a change-detector: it passes on both
-// sides of the refactor. That is the point. If a future change moves the
-// placeholder clear, reorders the defer, or drops the skipDirs entry, this fails
-// regardless of which of those it was.
+// sides of the refactor. That is the point.
+//
+// AN EARLIER VERSION OF THIS COMMENT CLAIMED MORE THAN THE TEST DELIVERS. It
+// said this would fail "if a future change moves the placeholder clear,
+// reorders the defer, or drops the skipDirs entry". The third is false, and
+// mutation testing showed it: delete authorname's placeholder skipDirs entry and
+// this test still passes, because the downstream clear at :733/:745 catches the
+// value anyway. Of the three triggers it named, the one the change actually
+// introduced is the one it cannot see -- the #3029 pattern, in a comment written
+// to warn about the #3029 pattern.
+//
+// What it DOES pin is the consumer invariant: whatever the layers do between
+// them, ExtractMetadata never hands back the placeholder as an Artist. The
+// skipDirs entry is separately pinned by authorname's own unit tests, which is
+// where the only instrument that can see it lives.
 func TestExtractMetadataNeverReturnsThePlaceholderAsArtist(t *testing.T) {
 	cases := []struct {
 		name string

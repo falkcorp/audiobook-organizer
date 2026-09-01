@@ -1,5 +1,5 @@
 // file: internal/authorname/authorname.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e2b7c14-9a36-4f81-b0d7-2c93e845af60
 // last-edited: 2026-09-01
 
@@ -24,7 +24,24 @@
 //
 // looksLikePersonName was on that list too and left earlier: all copies of it
 // (and of isValidAuthor, and of dedup's looksLikeAuthorName) live in
-// internal/personname. Nothing remains on the list.
+// internal/personname.
+//
+// THE LIST IS NOT EMPTY. A first draft of this comment said "nothing remains",
+// which was false and is exactly the sentence that stops the next person
+// looking. internal/metadata/folder_parser.go is a THIRD path->author parser --
+// in the same package as one of the two collapsed above -- and it is live in
+// production via scanner.go and internal/importer. It has its own container-skip
+// map and its own shape predicate, looksLikeAuthorSegment, which diverges from
+// personname.LooksLikePersonName on named input classes: 2-5 words rather than
+// 2-4, an ASCII-only 'A'..'Z' first-letter test that drops every caseless script
+// personname deliberately keeps, and early returns on "," and " & " that skip the
+// shape check entirely.
+//
+// Its skip map now carries the placeholder, so the specific harm this package
+// exists to prevent is closed on that path too. The PREDICATE divergence is not,
+// and unifying it changes answers on the comma / "&" / five-word classes, so it
+// needs its own differential corpus rather than a compile-and-green. Tracked in
+// todo.d/20260901-folder-parser-shape-predicate-diverges.md.
 //
 // Depends only on the standard library and internal/personname, which is itself
 // a standard-library-only leaf, so any package may still import this one
