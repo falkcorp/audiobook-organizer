@@ -1,11 +1,28 @@
 // file: web/src/stores/useReviewStore.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e9d4c72-8a36-4f50-b1c7-3d2e6a9b7c81
-// last-edited: 2026-07-13
+// last-edited: 2026-09-01
 
 import { create } from 'zustand';
 import * as api from '../services/api';
 import { type ReviewItem, type ReviewItemsFilter } from '../services/api';
+
+/**
+ * True when two count breakdowns hold exactly the same kinds and the same
+ * numbers. Used to decide whether a poll tick has anything to publish.
+ */
+function sameCounts(a: Record<string, number>, b: Record<string, number>): boolean {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  for (const k of aKeys) {
+    // `Object.prototype.hasOwnProperty` matters: a kind present with value
+    // `undefined` is not the same as a kind that is absent, and `b[k] === a[k]`
+    // alone would call those equal.
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+}
 
 // Default poll cadence for the review count. The review queue is low-volume
 // (intentional holds only, never raw backlogs — decision #1), so a slow poll is
@@ -47,7 +64,21 @@ export const useReviewStore = create<ReviewState>()((set, get) => ({
   loadCount: async () => {
     try {
       const { count, byKind } = await api.getReviewCount();
-      set({ count, byKind });
+      // Publish a NEW `byKind` object only when the numbers actually moved.
+      //
+      // This poller ticks every 30s for the life of the session. A freshly
+      // parsed object is never `Object.is`-equal to the last one, so installing
+      // it unconditionally woke every `(s) => s.byKind` subscriber twice a
+      // minute even when nothing had changed. On /review that subscriber is
+      // useRegroupLane, whose `buckets` useMemo is keyed on `byKind` -- so the
+      // new identity rebuilt the buckets, produced a new lane object, and
+      // re-rendered ReviewWorkspace and every panel under it, in ALL THREE
+      // lanes, regardless of which one was visible.
+      //
+      // `count` is a primitive, so zustand's own `Object.is` check already
+      // absorbed it; `byKind` was the only identity churn on this path.
+      const prev = get().byKind;
+      set(sameCounts(prev, byKind) ? { count } : { count, byKind });
     } catch (err) {
       // Non-critical — the badge/banner just stays at its last value.
       console.error('Failed to load review count', err);

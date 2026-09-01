@@ -13,6 +13,38 @@ import { apiFetch } from '../utils/apiFetch';
 
 const API_BASE = '/api/v1';
 
+// ---------------------------------------------------------------------------
+// Review-route request deadlines
+// ---------------------------------------------------------------------------
+//
+// apiFetch leaves `timeoutMs` opt-in on purpose (see its doc comment): several
+// endpoints legitimately run for minutes and a blanket default would break
+// them. But the /review route had NO deadline on any of its calls, so a server
+// that accepted the connection and then stalled left the reviewer on a spinner
+// forever with no error and no retry -- the loading state and the hung state
+// were indistinguishable.
+//
+// These are per-endpoint rather than one shared number because the endpoints
+// are not remotely comparable in cost. Each is set generously enough that a
+// merely slow response still lands.
+
+/** Cheap pending-count endpoint, polled every 30s. Must not outlive its poll. */
+const REVIEW_COUNT_TIMEOUT_MS = 15_000;
+
+/** Review queue list. Server-paginated and small. */
+const REVIEW_ITEMS_TIMEOUT_MS = 30_000;
+
+/** Dedup candidate list. Server-paginated, but scoring makes it heavier. */
+const DEDUP_CANDIDATES_TIMEOUT_MS = 60_000;
+
+/**
+ * Cached metadata review set. Deliberately the most generous of the four: the
+ * lane calls it with limit=0, so the server resolves cached candidates AND
+ * builds book info for every reviewable row (5,774 on production). This is a
+ * backstop against a hung connection, not a latency budget.
+ */
+const CACHED_REVIEW_TIMEOUT_MS = 120_000;
+
 /**
  * wrapTrigger is the single seam every op-launching API call funnels through.
  * It inserts an optimistic placeholder into the ops store BEFORE the network
@@ -3830,7 +3862,8 @@ export async function getCachedReviewResults(
   };
 }> {
   const response = await apiFetch(
-    `${API_BASE}/audiobooks/metadata/cache/review?limit=${limit}&offset=${offset}`
+    `${API_BASE}/audiobooks/metadata/cache/review?limit=${limit}&offset=${offset}`,
+    { timeoutMs: CACHED_REVIEW_TIMEOUT_MS }
   );
   if (!response.ok) throw await buildApiError(response, 'Failed to load cached review results');
   const data = await response.json();
@@ -5234,7 +5267,10 @@ export async function getDedupCandidates(
   const url = qs.toString() ? `${API_BASE}/dedup/candidates?${qs}` : `${API_BASE}/dedup/candidates`;
   // apiFetch has always accepted a signal; this function simply never plumbed
   // one through, which is why the dedup UI reached past it to a raw fetch.
-  const response = await apiFetch(url, { signal: opts?.signal });
+  const response = await apiFetch(url, {
+    signal: opts?.signal,
+    timeoutMs: DEDUP_CANDIDATES_TIMEOUT_MS,
+  });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch dedup candidates');
   }
@@ -6349,7 +6385,9 @@ export interface ReviewBulkRequest {
 }
 
 export async function getReviewCount(): Promise<ReviewCount> {
-  const response = await apiFetch(`${API_BASE}/review/count`);
+  const response = await apiFetch(`${API_BASE}/review/count`, {
+    timeoutMs: REVIEW_COUNT_TIMEOUT_MS,
+  });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch review count');
   }
@@ -6364,10 +6402,12 @@ export async function getReviewItems(
   // one through, so a lane that switched away kept its request running with no
   // way to cancel it. Same gap, same fix as getDedupCandidates.
   //
-  // `timeoutMs` is opt-in per caller rather than a default here, matching
-  // apiFetch's own contract: a caller that knows this endpoint should be fast
-  // asks for a deadline, and the globally polled useReviewStore keeps the
-  // historical no-deadline behaviour untouched.
+  // `timeoutMs` now DEFAULTS to REVIEW_ITEMS_TIMEOUT_MS and a caller may
+  // override it. It was opt-in when this signature was added, deliberately
+  // leaving the globally polled useReviewStore on the historical no-deadline
+  // behaviour; that exemption is gone, because a poll with no deadline is
+  // exactly the request that leaves the route spinning forever against a hung
+  // server.
   opts?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<ReviewItemsPage> {
   const params = new URLSearchParams();
@@ -6377,7 +6417,7 @@ export async function getReviewItems(
   if (filter.offset !== undefined) params.set('offset', String(filter.offset));
   const response = await apiFetch(`${API_BASE}/review/items?${params.toString()}`, {
     signal: opts?.signal,
-    timeoutMs: opts?.timeoutMs,
+    timeoutMs: opts?.timeoutMs ?? REVIEW_ITEMS_TIMEOUT_MS,
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch review items');
