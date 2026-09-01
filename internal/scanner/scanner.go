@@ -1701,8 +1701,16 @@ func extractInfoFromPath(book *Book) {
 	// returns from several branches; a guard per branch is one a future branch
 	// can miss. The title half of the parse is still wanted, so only the author
 	// is dropped.
+	// Compared against the EDITION-STRIPPED form. authorname.Placeholder is the
+	// bare literal, but the author half of a filename parse routinely carries a
+	// marker -- "Mort - Unknown Author (Unabridged)" -- and personname's credit
+	// predicate now accepts that decorated form BY DESIGN, so without the strip
+	// the placeholder walks straight past a guard written to catch it and closes
+	// the AI nomination gate. authorname stays standard-library-only on purpose
+	// (any package must be able to import it), so the strip happens here rather
+	// than inside IsPlaceholder.
 	defer func() {
-		if authorname.IsPlaceholder(book.Author) {
+		if authorname.IsPlaceholder(personname.StripEditionSuffix(book.Author)) {
 			book.Author = ""
 		}
 	}()
@@ -1732,29 +1740,16 @@ func extractInfoFromPath(book *Book) {
 		if len(parts) == 2 {
 			left := strings.TrimSpace(parts[0])
 			right := strings.TrimSpace(parts[1])
-			leftIsName := personname.LooksLikePersonName(left)
-			rightIsName := personname.LooksLikePersonName(right)
-			if rightIsName && !leftIsName && book.Author == "" {
-				book.Author = right
-				book.Title = left
+			// Same shared decision as the " - " path below. This branch used
+			// the strict predicate on BOTH sides until 2026-09-01 and so carried
+			// the decoration inversion after the " - " path was fixed for it:
+			// "Good Omens_Neil Gaiman (Unabridged)" stored Author = "Good Omens".
+			// Two copies of one decision, and only one of them got the fix --
+			// which is the argument for there being one copy.
+			if title, author, ok := personname.ChooseAuthorSide(left, right, personname.RefuseOnTie); ok && book.Author == "" {
+				book.Author = author
+				book.Title = title
 				return
-			} else if leftIsName && !rightIsName && book.Author == "" {
-				book.Author = left
-				book.Title = right
-				return
-			} else if leftIsName && rightIsName && book.Author == "" {
-				leftIsTitle := looksLikeTitleCandidate(left)
-				rightIsTitle := looksLikeTitleCandidate(right)
-				if leftIsTitle && !rightIsTitle {
-					book.Author = right
-					book.Title = left
-					return
-				}
-				if rightIsTitle && !leftIsTitle {
-					book.Author = left
-					book.Title = right
-					return
-				}
 			}
 		}
 	}
@@ -1940,41 +1935,14 @@ func parseFilenameForAuthor(filename string) (string, string) {
 	left := strings.TrimSpace(parts[0])
 	right := strings.TrimSpace(parts[1])
 
-	// The RIGHT side is asked whether it could be an author CREDIT, not whether
-	// it is one bare name. These three branches use the answer to choose an
-	// ORIENTATION, so a false does not cause a miss here -- it flips the
-	// assignment and files the title as the author. LooksLikePersonName returns
-	// false for "Neil Gaiman (Unabridged)" and "Neil Gaiman and Terry Pratchett"
-	// because of the decoration, and reading that as "so the right side is the
-	// title" sent "Good Omens - Neil Gaiman (Unabridged)" to branch two, which
-	// stored Author = "Good Omens". Measured against the pre-refactor code,
-	// which stored "Neil Gaiman (Unabridged)".
-	//
-	// The LEFT side keeps the strict predicate: it is asked to ACCEPT a string
-	// as a name, not to choose between two, and a credit list on the left is not
-	// evidence of anything.
-	rightIsCredit := personname.LooksLikeAuthorCredit(right)
-	leftIsName := personname.LooksLikePersonName(left)
-
-	if rightIsCredit && !leftIsName {
-		// Pattern: "Title - Author"
-		return left, right
-	} else if leftIsName && !rightIsCredit {
-		// Pattern: "Author - Title"
-		return right, left
-	} else if rightIsCredit {
-		// Both could be names, prefer "Title - Author" pattern
-		return left, right
+	// One shared decision, four call sites -- see personname.ChooseAuthorSide
+	// for why this is not written out here any more.
+	title, author, ok := personname.ChooseAuthorSide(left, right, personname.PreferRightOnTie)
+	if !ok {
+		// Couldn't determine, return empty author
+		return "", ""
 	}
-
-	// Couldn't determine, return empty author
-	return "", ""
-}
-
-// looksLikeTitleCandidate flags titles that commonly begin with articles.
-func looksLikeTitleCandidate(s string) bool {
-	lower := util.NormalizeString(s)
-	return strings.HasPrefix(lower, "the ") || strings.HasPrefix(lower, "a ") || strings.HasPrefix(lower, "an ")
+	return title, author
 }
 
 // recoverNormalizedBookPath answers "is this segment file's book already

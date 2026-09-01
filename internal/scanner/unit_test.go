@@ -97,31 +97,6 @@ func TestShouldSkipFileNeedsRescan(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// looksLikeTitleCandidate
-// ---------------------------------------------------------------------------
-
-func TestLooksLikeTitleCandidate(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		{"The Great Gatsby", true},
-		{"A Tale of Two Cities", true},
-		{"An Example", true},
-		{"  the padded  ", true},
-		{"Stephen King", false},
-		{"My Book", false},
-		{"", false},
-		{"another thing", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, looksLikeTitleCandidate(tt.input))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // isValidAuthor — edge cases not covered
 // ---------------------------------------------------------------------------
 

@@ -336,10 +336,20 @@ func TestParseFilenameForAuthorEdgeCases(t *testing.T) {
 		wantAuthor string
 	}{
 		{
-			name:       "author - title (swapped due to name detection)",
+			// This case previously asserted the BUG. It expected
+			// author = "The Stand" -- the title, filed as the author -- with the
+			// comment "Right side detected as name due to capitalization", which
+			// describes the old permissive predicate rather than a decision about
+			// names. "Stephen King - The Stand" has the author on the LEFT.
+			//
+			// personname.ChooseAuthorSide now resolves it on the leading article:
+			// a title may open with "The", a person's name may not. That
+			// discriminator already existed in the tree (scanner's "_" path had
+			// it) and was simply never applied on this path.
+			name:       "author - title, resolved by the leading article",
 			filename:   "Stephen King - The Stand",
-			wantTitle:  "Stephen King", // Left side is treated as title
-			wantAuthor: "The Stand",    // Right side detected as name due to capitalization
+			wantTitle:  "The Stand",
+			wantAuthor: "Stephen King",
 		},
 		{
 			name:       "title - author",

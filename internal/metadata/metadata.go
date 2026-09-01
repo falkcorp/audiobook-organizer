@@ -742,13 +742,12 @@ func extractFromFilename(filePath string) Metadata {
 		if len(parts) == 2 {
 			left := strings.TrimSpace(parts[0])
 			right := strings.TrimSpace(parts[1])
-			if personname.LooksLikePersonName(right) && !personname.LooksLikePersonName(left) {
-				metadata.Title = left
-				metadata.Artist = right
-				return metadata
-			} else if personname.LooksLikePersonName(left) && !personname.LooksLikePersonName(right) {
-				metadata.Title = right
-				metadata.Artist = left
+			// Same shared decision as the " - " path below -- and this copy had
+			// no tiebreak of its own at all, so it refused every both-sides-
+			// plausible pair outright.
+			if title, artist, ok := personname.ChooseAuthorSide(left, right, personname.RefuseOnTie); ok {
+				metadata.Title = title
+				metadata.Artist = artist
 				return metadata
 			}
 		}
@@ -781,7 +780,9 @@ func extractFromFilename(filePath string) Metadata {
 	// the book forever. Cleared HERE, before the directory fallback, so a book at
 	// ".../Terry Pratchett/Mort - Unknown Author.mp3" still recovers the real
 	// author from its directory instead of being left blank.
-	if authorname.IsPlaceholder(metadata.Artist) {
+	// Edition-stripped: see the same guard in internal/scanner. A decorated
+	// placeholder ("Unknown Author (Unabridged)") is still the placeholder.
+	if authorname.IsPlaceholder(personname.StripEditionSuffix(metadata.Artist)) {
 		metadata.Artist = ""
 	}
 
@@ -791,7 +792,9 @@ func extractFromFilename(filePath string) Metadata {
 	}
 
 	// And the directory itself is usually literally "Unknown Author".
-	if authorname.IsPlaceholder(metadata.Artist) {
+	// Edition-stripped: see the same guard in internal/scanner. A decorated
+	// placeholder ("Unknown Author (Unabridged)") is still the placeholder.
+	if authorname.IsPlaceholder(personname.StripEditionSuffix(metadata.Artist)) {
 		metadata.Artist = ""
 	}
 
@@ -876,50 +879,15 @@ func parseFilenameForAuthor(filename string) (string, string) {
 	left := strings.TrimSpace(parts[0])
 	right := strings.TrimSpace(parts[1])
 
-	// The RIGHT side is asked whether it could be an author CREDIT, not whether
-	// it is one bare name -- these branches use the answer to choose an
-	// ORIENTATION, so a false flips the assignment rather than causing a miss.
-	// See the same change in internal/scanner, and personname.LooksLikeAuthorCredit
-	// for the measurement. This copy was inverting BEFORE the refactor too (its
-	// old per-word [A-Z] test also rejected "Neil Gaiman (Unabridged)"), so this
-	// is a fix rather than a regression repair -- but it is the same defect, and
-	// leaving the twins divergent is what this package exists to stop.
-	rightIsCredit := personname.LooksLikeAuthorCredit(right)
-	leftIsName := personname.LooksLikePersonName(left)
-
-	if rightIsCredit && !leftIsName {
-		// Pattern: "Title - Author"
-		return left, right
-	} else if leftIsName && !rightIsCredit {
-		// Pattern: "Author - Title"
-		return right, left
-	} else if leftIsName && rightIsCredit {
-		leftHasInitials := strings.Contains(left, ".")
-		rightHasInitials := strings.Contains(right, ".")
-		if leftHasInitials && !rightHasInitials {
-			return right, left
-		}
-		if rightHasInitials && !leftHasInitials {
-			return left, right
-		}
-		// Both could be names, prefer "Title - Author" pattern
-		return left, right
-	} else if isTitleCaseCandidate(left) && isTitleCaseCandidate(right) {
-		// Both are capitalized words; assume "Title - Author"
-		return left, right
+	// One shared decision, four call sites. This copy used to carry the ONLY
+	// initials tiebreak of the four; it now lives in ChooseAuthorSide, so
+	// scanner gets it too.
+	title, author, ok := personname.ChooseAuthorSide(left, right, personname.PreferRightOnTie)
+	if !ok {
+		// Couldn't determine, return empty author
+		return "", ""
 	}
-
-	// Couldn't determine, return empty author
-	return "", ""
-}
-
-// isTitleCaseCandidate reports whether a string starts with an uppercase letter.
-func isTitleCaseCandidate(value string) bool {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return false
-	}
-	return trimmed[0] >= 'A' && trimmed[0] <= 'Z'
+	return title, author
 }
 
 // ExtractCoverArt extracts embedded cover art from an audio file and saves it

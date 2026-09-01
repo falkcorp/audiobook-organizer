@@ -1,5 +1,5 @@
 // file: internal/personname/personname.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
 // last-edited: 2026-09-01
 
@@ -133,10 +133,127 @@ func IsNameParticle(w string) bool {
 // editionSuffixRe matches a trailing edition/format marker -- "(Unabridged)",
 // "[Dramatized Adaptation]". These attach to the WORK, so in a filename they
 // trail whichever field happens to come last, author or title alike.
-var editionSuffixRe = regexp.MustCompile(`\s*[\(\[][^\)\]]*[\)\]]\s*$`)
+var editionSuffixRe = regexp.MustCompile(`\s*(?:[\(\[][^\)\]]*[\)\]]\s*)+$`)
 
 // creditSeparatorRe splits an author credit into the individual names it lists.
-var creditSeparatorRe = regexp.MustCompile(`(?i)\s*(?:,|;|&|\band\b|\bwith\b)\s*`)
+var creditSeparatorRe = regexp.MustCompile(`(?i)\s*(?:,|;|&|\+|/|\band\b|\bwith\b)\s*`)
+
+// NOTE on "/" and on "with", because these two look like inconsistencies with
+// internal/dedup and are deliberate.
+//
+// "/" was MISSING here at first, and that is not a miss but an inversion: with
+// no "/" in this list, "Good Omens / Neil Gaiman / Terry Pratchett" is not a
+// credit, so the caller concludes the right side is a title and files "Good
+// Omens" as the author. internal/dedup/author.go treats "/" as an author
+// separator -- and as the FIRST branch tried -- so omitting it here gave one
+// repo two answers to "is this an author credit?", which is precisely what this
+// package exists to abolish. It was missed the same way dedup's slash branch
+// was: the corpus that measured this predicate contained no "/".
+//
+// "with" is in THIS list but is deliberately NOT a separator in dedup's
+// splitter. That is not a divergence, because the two answer different
+// questions. The splitter must decide WHERE TO CUT a credit into separate
+// author rows, and "A with B" has no reliable cut point -- it was minting
+// "Volker Kutscher with Bob". This predicate only decides WHETHER the field is
+// a credit at all, and "Neil Gaiman with Terry Pratchett" plainly is one. Same
+// string, two questions, two correct answers.
+
+// titleLeadRe matches the articles an English title commonly opens with. A
+// person's name does not start with one, so this discriminates the otherwise
+// identical shape "two to four capitalised words".
+var titleLeadRe = regexp.MustCompile(`(?i)^(?:the|a|an)\s`)
+
+// StripEditionSuffix removes trailing edition/format markers -- "(Unabridged)",
+// "[Dramatized Adaptation]", and repeats of them. Exported because callers that
+// compare an author against a known string (authorname.IsPlaceholder) must
+// compare the same normalisation this package accepts, or the decorated form of
+// that string silently passes a guard written for the bare one.
+func StripEditionSuffix(s string) string {
+	return strings.TrimSpace(editionSuffixRe.ReplaceAllString(strings.TrimSpace(s), ""))
+}
+
+// ChooseAuthorSide decides which half of a two-part filename ("Title - Author",
+// "Author_Title") is the author. It returns ok=false when it cannot tell, and
+// callers MUST treat that as "no author" rather than falling back to a default
+// orientation -- an empty author is re-examined by AI nomination, a wrong one is
+// not.
+//
+// This exists because the decision was written out FOUR times -- the " - " and
+// "_" paths of internal/scanner and internal/metadata -- and the copies had
+// already diverged: only scanner's "_" path had the article tiebreak, only
+// metadata's " - " path had the initials tiebreak, and when the " - " paths were
+// fixed for the decoration inversion the "_" paths were left carrying it. Every
+// copy of this decision is a place for the next one to drift.
+//
+// Both sides are tested with LooksLikeAuthorCredit, not LooksLikePersonName.
+// Asking the strict predicate here is what produced the inversion: it answers
+// false for "Neil Gaiman (Unabridged)" because of the DECORATION, and a caller
+// choosing between two sides reads that false as "so the other side is the
+// author" and files the title.
+// TiePolicy says what ChooseAuthorSide should do when both sides are equally
+// plausible and neither discriminator fires.
+//
+// The two separators genuinely carry different evidence, and this is the ONE
+// place the four call sites legitimately differ -- so it is a named argument
+// rather than a second implementation. "Title - Author" is the dominant
+// audiobook filename convention and all four copies' own comments said they
+// preferred author-on-the-right, so a dash tie resolves that way. An underscore
+// carries no such convention, and the pre-refactor scanner code refused there
+// (it fell out of its tiebreak without assigning an author); folding that into
+// "prefer right" would mint an author where the old code deliberately minted
+// none, and an absent author is recoverable by AI nomination while a wrong one
+// is not.
+type TiePolicy int
+
+const (
+	// PreferRightOnTie resolves a tie as "Title - Author". For the " - " path.
+	PreferRightOnTie TiePolicy = iota
+	// RefuseOnTie returns ok=false. For the "_" path.
+	RefuseOnTie
+)
+
+func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string, ok bool) {
+	left, right = strings.TrimSpace(left), strings.TrimSpace(right)
+	leftIsCredit, rightIsCredit := LooksLikeAuthorCredit(left), LooksLikeAuthorCredit(right)
+
+	switch {
+	case rightIsCredit && !leftIsCredit:
+		return left, right, true
+	case leftIsCredit && !rightIsCredit:
+		return right, left, true
+	case !leftIsCredit && !rightIsCredit:
+		return "", "", false
+	}
+
+	// Both sides could be a credit. Two discriminators, both of which already
+	// existed in the tree but each in only ONE of the four copies.
+	leftLead, rightLead := titleLeadRe.MatchString(left), titleLeadRe.MatchString(right)
+	if leftLead != rightLead {
+		// A leading article marks the title.
+		if leftLead {
+			return left, right, true
+		}
+		return right, left, true
+	}
+
+	// Initials belong to a person, not to a title: "J.K. Rowling - Harry Potter".
+	leftInitials, rightInitials := strings.Contains(left, "."), strings.Contains(right, ".")
+	if leftInitials != rightInitials {
+		if leftInitials {
+			return right, left, true
+		}
+		return left, right, true
+	}
+
+	// Genuinely ambiguous -- a two-to-four-word capitalised phrase with no
+	// article and no initials is not distinguishable from a name by structure.
+	// "Good Omens" and "Neil Gaiman" are the same shape, which is why no
+	// discriminator can settle it and why the caller's convention decides.
+	if onTie == RefuseOnTie {
+		return "", "", false
+	}
+	return left, right, true
+}
 
 // LooksLikeAuthorCredit reports whether s could be the AUTHOR field of a
 // "Title - Author" pair: one name, a name carrying an edition marker, or
