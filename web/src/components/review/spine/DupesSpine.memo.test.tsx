@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.memo.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a2e9c71-3b84-4d06-9e17-8c40b2f6a35d
 // last-edited: 2026-09-01
 //
@@ -7,10 +7,14 @@
 // and the memo that achieves that must not serve stale rows.
 //
 // The dupes analogue of CompareSpine.memo.test.tsx, written because d01f15a87
-// memoized CompareSpine and RegroupSpine and skipped DupesSpine, and
-// benchmark-review-lanes.spec.ts then measured the difference: at N=100 a dupes
-// checkbox toggle cost 61 ms against a 13 ms N=5 noise floor, while the
-// memoized metadata lane's cost 26 ms.
+// memoized CompareSpine ALONE, and benchmark-review-lanes.spec.ts then measured
+// the difference: at N=100 a dupes checkbox toggle cost 61 ms against a 13 ms
+// N=5 noise floor, while the memoized metadata lane's cost 26 ms.
+//
+// 🔴 This comment used to say d01f15a87 "memoized CompareSpine and RegroupSpine
+// and skipped DupesSpine". It did not -- `git show --stat` on it lists two
+// files, both CompareSpine. RegroupSpine was memoized later, by the commit that
+// added RegroupSpine.memo.test.tsx beside this file.
 //
 // HOW THE RENDERS ARE COUNTED
 //

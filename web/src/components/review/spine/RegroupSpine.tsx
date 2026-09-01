@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-09-01
 
@@ -18,7 +18,7 @@
  * surfaces render these same components, so they cannot drift apart in the gap.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -55,6 +55,7 @@ import {
   memberCount,
   memberEntries,
   parsePayload,
+  type ReviewPayload,
   type RecommendationEvidence,
 } from '../../../lib/reviewPayload';
 import { EvidencePanel } from '../evidence/EvidencePanel';
@@ -69,7 +70,10 @@ import { regroupLane } from '../lanes/regroup';
 // (a group can hold dozens of files; don't fire dozens of concurrent requests). A
 // member that was hard-deleted since the hold was created simply resolves to
 // undefined — the row still renders from its file path.
-export async function fetchBooksByIds(ids: string[], signal: AbortSignal): Promise<Map<string, Book>> {
+export async function fetchBooksByIds(
+  ids: string[],
+  signal: AbortSignal
+): Promise<Map<string, Book>> {
   const out = new Map<string, Book>();
   const unique = Array.from(new Set(ids.filter((id) => id)));
   const BATCH = 6;
@@ -631,7 +635,114 @@ function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) {
   );
 }
 
+/** The four lane callbacks a row needs, hoisted so their identity is stable.
+ *  Passing `lane` itself would defeat the memo: the lane object is rebuilt on
+ *  every render. */
+interface RegroupRowHandlers {
+  onApprove: (item: ReviewItem) => void;
+  onReject: (item: ReviewItem) => void;
+  onActionChange: (id: string, value: string) => void;
+}
+
+/**
+ * One regroup hold.
+ *
+ * Memoized because this lane renders up to REGROUP_FETCH_LIMIT (500) rows with
+ * no page-size control -- the most rows of any lane -- and was the only one of
+ * the three whose rows were inline JSX. Every row re-rendered whenever any row
+ * became busy, whenever the search text changed, and on every poll tick.
+ *
+ * The props are deliberately all plain values or stable references: `payload`
+ * comes from the lane's parse index so its identity survives a re-render, and
+ * `handlers` is hoisted once. Passing `lane` directly, or an inline arrow for
+ * any handler, leaves the memo present and inert -- see the same warning in
+ * DupesPanel.
+ */
+const RegroupRow = memo(function RegroupRow({
+  item,
+  handlers,
+  busy,
+  payload,
+  action,
+}: {
+  item: ReviewItem;
+  handlers: RegroupRowHandlers;
+  busy: boolean;
+  payload: ReviewPayload | null;
+  action: string;
+}) {
+  const recommended = payload?.recommendedAction;
+  const recSpec = actionSpec(recommended);
+  const needsHuman = !recSpec || !recSpec.approvable;
+  return (
+    <Accordion
+      key={item.id}
+      disableGutters
+      data-testid={`regroup-row-${item.id}`}
+      slotProps={{ transition: { unmountOnExit: true } }}
+    >
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexGrow: 1, minWidth: 0 }}>
+          <Typography variant="body2" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>
+            {item.summary || item.folder_ref || item.id}
+          </Typography>
+          {/* Shown COLLAPSED so a reviewer can triage a bucket without
+                      opening every row. An undecidable hold is flagged rather
+                      than hidden: those are the ones that need a person, and
+                      they are the majority of the current queue. */}
+          <Chip
+            size="small"
+            label={needsHuman ? 'Needs a decision' : `Rec: ${labelForAction(recommended)}`}
+            color={needsHuman ? 'warning' : recSpec?.destructive ? 'default' : 'info'}
+            variant="outlined"
+          />
+        </Stack>
+      </AccordionSummary>
+      <AccordionDetails>
+        <RecommendationPanel
+          recommended={recommended}
+          reason={payload?.recommendationReason}
+          evidence={payload?.recommendationEvidence}
+        />
+        <ItemActions
+          item={item}
+          action={action}
+          busy={busy}
+          withSelector
+          onApprove={handlers.onApprove}
+          onReject={handlers.onReject}
+          onActionChange={handlers.onActionChange}
+          sx={{ mb: 2 }}
+        />
+        <MemberFilesDetail item={item} />
+        <ItemActions
+          item={item}
+          action={action}
+          busy={busy}
+          onApprove={handlers.onApprove}
+          onReject={handlers.onReject}
+          onActionChange={handlers.onActionChange}
+          sx={{ mt: 2 }}
+        />
+      </AccordionDetails>
+    </Accordion>
+  );
+});
+
 export function RegroupSpine({ lane }: { lane: RegroupLane }) {
+  // Hoisted once so every RegroupRow receives the same references. These three
+  // are stable in the lane (approveItem/rejectItem read the chosen action
+  // through a ref precisely so a change to one row's dropdown does not rebuild
+  // them and re-render every other row).
+  const handlers: RegroupRowHandlers = useMemo(
+    () => ({
+      onApprove: lane.approveItem,
+      onReject: lane.rejectItem,
+      onActionChange: lane.setAction,
+    }),
+    [lane.approveItem, lane.rejectItem, lane.setAction]
+  );
+
   if (lane.loading && lane.buckets.length === 0) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }} data-testid="regroup-spine">
@@ -687,71 +798,18 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
           <BucketHeader bucket={bucket} lane={lane} />
           <SkipsAlert kind={bucket.kind} lane={lane} />
           <Divider sx={{ mb: 1 }} />
-          {bucket.items.map((item) => {
-            const itemBusy = lane.isItemBusy(item.id);
-            const payload = lane.payloadFor(item);
-            const action = lane.actionFor(item);
-            const recommended = payload?.recommendedAction;
-            const recSpec = actionSpec(recommended);
-            const needsHuman = !recSpec || !recSpec.approvable;
-            return (
-              <Accordion
-                key={item.id}
-                disableGutters
-                data-testid={`regroup-row-${item.id}`}
-                slotProps={{ transition: { unmountOnExit: true } }}
-              >
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    sx={{ alignItems: 'center', flexGrow: 1, minWidth: 0 }}
-                  >
-                    <Typography variant="body2" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>
-                      {item.summary || item.folder_ref || item.id}
-                    </Typography>
-                    {/* Shown COLLAPSED so a reviewer can triage a bucket without
-                        opening every row. An undecidable hold is flagged rather
-                        than hidden: those are the ones that need a person, and
-                        they are the majority of the current queue. */}
-                    <Chip
-                      size="small"
-                      label={needsHuman ? 'Needs a decision' : `Rec: ${labelForAction(recommended)}`}
-                      color={needsHuman ? 'warning' : recSpec?.destructive ? 'default' : 'info'}
-                      variant="outlined"
-                    />
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <RecommendationPanel
-                    recommended={recommended}
-                    reason={payload?.recommendationReason}
-                    evidence={payload?.recommendationEvidence}
-                  />
-                  <ItemActions
-                    item={item}
-                    action={action}
-                    busy={itemBusy}
-                    withSelector
-                    onApprove={lane.approveItem}
-                    onReject={lane.rejectItem}
-                    onActionChange={lane.setAction}
-                    sx={{ mb: 2 }}
-                  />
-                  <MemberFilesDetail item={item} />
-                  <ItemActions
-                    item={item}
-                    action={action}
-                    busy={itemBusy}
-                    onApprove={lane.approveItem}
-                    onReject={lane.rejectItem}
-                    onActionChange={lane.setAction}
-                    sx={{ mt: 2 }}
-                  />
-                </AccordionDetails>
-              </Accordion>
-            );
-          })}
+          {bucket.items.map((item) => (
+            // Resolved HERE, once per row, so each row receives plain values it
+            // can be compared on rather than the whole churning lane object.
+            <RegroupRow
+              key={item.id}
+              item={item}
+              handlers={handlers}
+              busy={lane.isItemBusy(item.id)}
+              payload={lane.payloadFor(item)}
+              action={lane.actionFor(item)}
+            />
+          ))}
         </Paper>
       ))}
     </Stack>

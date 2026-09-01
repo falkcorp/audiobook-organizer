@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-09-01
 
@@ -529,6 +529,18 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     [chosenActions, payloadFor]
   );
 
+  // runItemAction needs the CURRENT action for a row, but only at the moment a
+  // reviewer clicks. Depending on actionFor directly would rebuild approveItem
+  // and rejectItem every time any row's dropdown changed, and those two are
+  // passed to every row -- so a memoized row would be re-rendered by a change
+  // to a DIFFERENT row's action. That is the "memo present and inert" shape
+  // DupesPanel warns about. A ref keeps the read current and the identity
+  // stable.
+  const actionForRef = useRef(actionFor);
+  useEffect(() => {
+    actionForRef.current = actionFor;
+  }, [actionFor]);
+
   const setAction = useCallback((id: string, value: string) => {
     setChosenActions((prev) => ({ ...prev, [id]: value }));
   }, []);
@@ -571,7 +583,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           // Always send the resolved action explicitly. The backend would accept
           // an empty body and use the recommendation, but sending what the UI
           // actually displayed removes any chance of the two disagreeing.
-          await api.approveReviewItem(item.id, actionFor(item));
+          await api.approveReviewItem(item.id, actionForRef.current(item));
         } else {
           await api.rejectReviewItem(item.id);
         }
@@ -598,7 +610,9 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         });
       }
     },
-    [actionFor, reload, toast]
+    // actionFor is deliberately absent: it is read through actionForRef at call
+    // time, which keeps approveItem/rejectItem stable for the memoized rows.
+    [reload, toast]
   );
 
   const approveItem = useCallback(
