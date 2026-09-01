@@ -55,7 +55,10 @@ func TestLevenshteinDistanceIsMeasuredInRunes(t *testing.T) {
 		if d := levenshteinDistance(a, b); d > maxLen {
 			t.Fatalf("distance is not in runes: d(%q,%q)=%d > maxRuneLen=%d", a, b, d, maxLen)
 		}
-		// The direct consequence, and the reason the clamp is gone.
+		// The direct consequence, and the reason the clamp is gone. Redundant
+		// with the check above for the distance-INFLATION case (that Fatalf
+		// preempts this one), but it is live logic and states the property the
+		// clamp used to hide, so it stays.
 		if s := normalizedLevenshteinSimilarity(a, b); s < 0 || s > 1 {
 			t.Fatalf("similarity %f out of [0,1] for (%q,%q)", s, a, b)
 		}

@@ -375,3 +375,52 @@ func TestCanonicalPairIDs(t *testing.T) {
 	assert.Equal(t, [2]string{"A", "B"}, canonicalPairIDs("B", "A"))
 	assert.Equal(t, [2]string{"x", "y"}, canonicalPairIDs("y", "x"))
 }
+
+// TestCollectMetaFuzzy_EmitsSignalForNonLatinTitles is the test that actually
+// exercises the DEFECT, at the gate where it did its damage.
+//
+// Everything else added with the rune fix tests levenshteinDistance or
+// normalizedLevenshteinSimilarity in isolation. This one goes through
+// metaTitleAuthorSimilarity's 70/30 title+author blend and the
+// `sim < cfg.MinLevSimilarity` gate in CollectMetaFuzzy -- the point where a
+// real pair of books either produces evidence or silently produces none.
+//
+// The fixture is chosen to STRADDLE the 0.50 threshold, which most non-Latin
+// fixtures do not:
+//
+//	origin/main (byte distance): blend 0.3500 -> 0 signals, evidence discarded
+//	with rune distance:          blend 0.7250 -> 1 SigMetaFuzzy
+//
+// Fixtures that look right and prove nothing, recorded so the next person does
+// not reach for them:
+//   - 東京 / 東京都 emits 0 signals on BOTH sides -- hasUsableTitle requires
+//     more than 2 runes, so it never reaches this gate at all. (It is the
+//     example the original commit message led with.)
+//   - 東京奇譚集 / 東京奇談集 already scores 0.5700 on main: CJK substitutions
+//     often share a leading UTF-8 byte (譚 E8 AD 9A vs 談 E8 AB 87), so the byte
+//     distance is 2 rather than 3 and the pair was never below the gate.
+func TestCollectMetaFuzzy_EmitsSignalForNonLatinTitles(t *testing.T) {
+	authorID := 1
+	bookA := &database.Book{ID: "BOOK_A", Title: "雪国物語", AuthorID: &authorID}
+	bookB := &database.Book{ID: "BOOK_B", Title: "雪國物語", AuthorID: &authorID}
+
+	mock := &database.MockStore{}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if id == "BOOK_B" {
+			return bookB, nil
+		}
+		return nil, nil
+	}
+	mock.GetAuthorByIDFunc = func(id int) (*database.Author, error) {
+		return &database.Author{ID: 1, Name: "太宰冶"}, nil
+	}
+
+	cfg := DefaultMetaFuzzyConfig()
+	sigs, err := CollectMetaFuzzy(mock, bookA, "太宰治", []string{"BOOK_B"}, cfg)
+	require.NoError(t, err)
+	require.Len(t, sigs, 1,
+		"one kanji apart in both title and author must clear MinLevSimilarity; "+
+			"with byte-indexed distance this blend was 0.35 and the signal was dropped entirely")
+	assert.Equal(t, unified.SigMetaFuzzy, sigs[0].Kind)
+	assert.Greater(t, sigs[0].Confidence, 0.70)
+}

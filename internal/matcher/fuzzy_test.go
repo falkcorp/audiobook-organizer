@@ -281,3 +281,52 @@ func TestSimilarityStaysInUnitRange(t *testing.T) {
 		}
 	}
 }
+
+// TestLevenshteinDistanceCaseSensitiveDoesNotFold pins the DIFFERENCE between
+// the core and the wrapper, which is the entire reason they are separate
+// functions.
+//
+// internal/dedup routes through the core precisely because NormalizeAuthorName
+// preserves case (it expands collapsed initials with an [A-Z]-anchored
+// pattern), so folding here would silently make author comparison
+// case-insensitive. Until this test existed, adding strings.ToLower to the core
+// left the whole dedup + matcher suite GREEN -- the design argument had no
+// enforcement at all.
+func TestLevenshteinDistanceCaseSensitiveDoesNotFold(t *testing.T) {
+	if got := LevenshteinDistanceCaseSensitive("Boll", "boll"); got != 1 {
+		t.Errorf("LevenshteinDistanceCaseSensitive(%q, %q) = %d, want 1: the core must NOT fold case", "Boll", "boll", got)
+	}
+	if got := LevenshteinDistanceCaseSensitive("ABC", "abc"); got != 3 {
+		t.Errorf("LevenshteinDistanceCaseSensitive(%q, %q) = %d, want 3: the core must NOT fold case", "ABC", "abc", got)
+	}
+	// The wrapper is the one that folds. Both halves stated together, so the
+	// pair cannot drift into agreeing.
+	if got := LevenshteinDistance("ABC", "abc"); got != 0 {
+		t.Errorf("LevenshteinDistance(%q, %q) = %d, want 0: the wrapper MUST fold case", "ABC", "abc", got)
+	}
+}
+
+// TestTokenSimilarityPinsNonASCIIValues is the twin of dedup's
+// TestNormalizedSimilarityOnNonASCII, and exists for the reason that test
+// turned out to matter: the [0,1] property test above is ONE-SIDED. A
+// denominator that is too LARGE pushes similarity toward 1, which no [0,1]
+// range check can observe -- and too-high similarity is the direction that
+// causes false merges. Changing maxLen to len(a)/len(b) (bytes) survived
+// everything until these pinned values existed.
+func TestTokenSimilarityPinsNonASCIIValues(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want float64
+	}{
+		{"Böll", "Boll", 0.75},
+		{"村上春樹", "村上春树", 0.75},
+		{"Émile Zola", "Emile Zola", 0.90},
+		{"東京", "東京都", 1 - 1.0/3},
+	}
+	for _, c := range cases {
+		got := tokenSimilarity(c.a, c.b)
+		if diff := got - c.want; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("tokenSimilarity(%q, %q) = %.6f, want %.6f", c.a, c.b, got, c.want)
+		}
+	}
+}
