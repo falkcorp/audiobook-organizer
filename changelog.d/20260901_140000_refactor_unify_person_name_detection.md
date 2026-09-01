@@ -156,3 +156,36 @@ splitting, every one used the word "with", where the old code was producing
 authors like `Volker Kutscher with Bob`; and it now correctly splits 440 strings
 the old code could not split at all, because either name began with a non-ASCII
 letter.
+
+#### The two rules turned out to be entangled
+
+A second review round found that the fix above had traded one bug for a quieter
+version of itself. Relaxing the "is this an abbreviation?" rule from three
+characters to two — done so that 村上 春樹, a two-character Japanese surname, would
+stop being rejected — removed the accidental shield that had been covering the
+particle list's incompleteness. `St`, `Zu` and `Ph` are not in that list, and at
+three characters they could never reach it; at two they began qualifying as
+surnames, and `Jane St Clair` split as `Jane St` / `Clair …`.
+
+Length cannot settle this, because two characters is also exactly what makes
+`Wang Li` work. The discriminator is **script**: a two-character surname is
+ordinary in Japanese, Chinese and Korean, and is almost always an abbreviation in
+Latin, Cyrillic and Greek. The threshold is now conditional on script. The
+accepted cost is that romanized two-letter surnames written in Latin letters —
+`Wang Li`, `Ng`, `Wu`, `Ho` — are refused, so those composites are left unsplit.
+That is a *missed* split rather than a *wrong* one, and this is the same rule the
+rest of the file follows: refusing leaves a composite visibly wrong for repair,
+while a confident wrong answer leaves nothing to notice.
+
+Two smaller things from the same round. A guard written as "reject a lowercase
+first letter **or** a known particle" was carrying a comment claiming both halves
+were needed; the first half was **dead code** — by the time it runs, a lowercase
+word has already been rejected unless it is a particle, which the second half
+catches. That is the third time in this change that a comment asserted a control
+which did not exist. And the review recommended reverting the stricter check on
+the `Author - Title` directory pattern, on the grounds that no junk name arrives
+that way. Measured, that turned out not to hold: `Discworld - Mort`,
+`Bookends - Volume One` and `Chapterhouse - Dune` all do. Reverting would have
+recovered six real single-name authors and introduced four junk ones the old code
+never produced, so the stricter check stays — a book left without an author is
+re-examined by the filename parser, and one given the wrong author is not.
