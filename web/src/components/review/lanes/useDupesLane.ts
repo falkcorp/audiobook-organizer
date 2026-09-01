@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-09-01
 
@@ -581,6 +581,18 @@ export function useDupesLane(
     // render pass, leaving the ref holding values from work that never
     // committed. The identity churn this costs is free in practice: a change to
     // `visible` is a new array, so every row re-renders regardless.
+    //
+    // ONE EXCEPTION, since the progressive mount above introduced it: lifting
+    // `mountCap` to the full page produces a `visible` whose first
+    // FIRST_PAINT_ROWS entries are the same objects as before, so those rows
+    // re-render for no reason other than this dependency. That is ~20 wasted
+    // row renders, once per page load, INSIDE the transition and therefore off
+    // the critical path -- it does not show up in the benchmark (N=100 load
+    // measures no task over the 50 ms longtask threshold). Recorded so the next
+    // reader does not mistake it for a bug that was missed. Fixing it properly
+    // means giving the row handlers an identity that does not depend on
+    // `visible` at all, which the ref shortcut above is explicitly not safe
+    // enough to do.
     [visible]
   );
 
