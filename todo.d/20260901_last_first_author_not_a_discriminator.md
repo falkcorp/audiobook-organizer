@@ -29,9 +29,11 @@ Two cautions before writing it:
   end up with two answers to "is this an inverted name?" — the same divergence
   that produced this package.
 
-Related: a mutation weakening `isMultiNameCredit`'s every-clause rule to
-"any clause" survives the suite, and the only input separating the two versions
-is exactly this shape — the weakened version gets `"Smith, John - Good Omens"`
-*right*. The mutant is documented as an accepted survivor at
-`internal/personname/personname.go` rather than killed, because killing it would
-mean asserting the wrong answer in a test.
+Related, and now superseded: this was originally filed alongside an accepted
+mutation survivor in `isMultiNameCredit`. **That function has since been removed**
+— it was a multi-CLAUSE test that filed omnibus titles as authors — so the
+survivor and the reasoning attached to it are void. The underlying gap recorded
+here is unaffected and still open: a last-first name (`"Smith, John"`) is not
+used as a discriminator, and `"Smith, John - Good Omens"` is still answered
+wrongly. Its replacement, `looksLikeAmpersandCredit`, was mutation-tested
+separately: 8 mutants, 8 killed, no accepted survivors.

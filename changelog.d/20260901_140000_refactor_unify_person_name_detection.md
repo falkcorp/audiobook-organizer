@@ -390,8 +390,11 @@ decorations, and credit lists joined by `/`, `and`, `&` and `,`:
 | after, **both** | **928** | **156** | 148 |
 
 Scanner: **0** correct→wrong and **0** empty→wrong. Wrong answers fall by 69%.
-The two packages now return byte-identical answers on every one of the 1,232
-inputs, where before they disagreed on hundreds.
+The two packages returned byte-identical answers on every one of the 1,232
+inputs, where before they disagreed on hundreds. **That claim does not
+generalise, and the corrections section below has the number: on 40,261 real
+library paths the two still disagree on 1,110 rows.** The 1,232-input corpus was
+synthetic and did not contain the shapes they diverge on.
 
 Metadata gives up 24 correct answers, plus 12 where it previously declined. All
 36 are the ambiguous tie, and all 12 of the declines are non-ASCII authors — main
@@ -438,8 +441,10 @@ coverage hole. A **list of several names is stronger evidence of author-hood tha
 a single person-shaped phrase** — `"Neil Gaiman and Terry Pratchett"` is a credit
 in a way `"Good Omens"` is not, though both satisfy the credit predicate. Without
 that, the pair was scored a tie, and the `"_"` path refused a credit it had ample
-evidence to place. It is now the first and strongest of three discriminators,
-ahead of the leading article and the initials.
+evidence to place. It was made the first of three discriminators,
+ahead of the leading article and the initials. **Both halves of that sentence
+were wrong and are corrected below** -- it was removed, and what replaced it runs
+last, not first.
 
 Re-measured over the same 1,232 filenames: correct rises from 928 to **1,000**
 and wrong falls from 156 to **132**, with scanner still at **0** correct→wrong and
@@ -454,3 +459,44 @@ version answers it correctly. Killing that mutant would mean writing
 `"Good Omens"` into a test as the author of that file. The mutant is left alive
 and the real gap it points at — a last-first name is not used as a discriminator,
 which `origin/main` gets wrong too — is filed rather than fixed here.
+
+## Corrections, made before release
+
+Three claims above were measured on a synthetic 1,232-input corpus and do not
+survive contact with the real library. They are corrected here rather than
+deleted, because the way they failed is the useful part.
+
+**`isMultiNameCredit` was wrong and has been removed.** "A list of two or more
+names beats a single name" is a multi-CLAUSE test, and titles have clauses:
+`"Norse Mythology and Anansi Boys"` splits on `" and "` exactly as
+`"Neil Gaiman and Terry Pratchett"` does. So the omnibus title beat the real
+author on the other side and was filed AS the author -- the wrong-answer
+direction this whole change exists to close. On 40,261 real paths it cost 8 rows
+outright, including
+`"Jonathan Strange and Mr Norrell - Clarke, Susanna" -> author "Jonathan Strange and Mr Norrell"`.
+
+**Deleting it outright was also wrong**, by the same standard: on the same paths
+it cost 4 rows in the other direction, all of the shape
+`"Elora Bishop & Bridget Essex - Under Her Spell"`. The separator is the whole
+difference. `looksLikeAmpersandCredit` replaces it, testing `"&"` and `"+"` only
+and never the full separator set, and it runs **last** of the three
+discriminators rather than first -- with it first,
+`"The City & The City - China Mieville"` filed the title as the author.
+
+Validated on data it was not fit on: the rule was chosen from 40,261 paths, then
+evaluated unchanged on a held-out 28,532. Over all 68,793, in both packages,
+**zero rows where `origin/main` produced a correct-or-absent author and this
+produces a wrong one**, against 11 recovered. Refusing the tie instead was
+measured too and is far worse -- **491** wrong-author regressions -- because
+`ok=false` does not stop the caller, it hands the decision to a fallback with
+less information. Fail-closed at the predicate is not fail-closed at the
+consumer.
+
+**The "0 correct→wrong" scanner claim and the 24/36 metadata counts** are
+artefacts of the synthetic corpus and should be read as describing it only. The
+real-library figures are the ones above.
+
+**The accepted mutant survivor is void.** It was accepted on the strength of
+`isMultiNameCredit`, which no longer exists. The replacement was mutation-tested
+separately: 8 mutants, 8 killed, including two that initially survived and were
+killed by tests added for them.
