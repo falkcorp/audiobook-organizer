@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_field_state_guards_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4673e12e-5c70-456a-a4c6-11a63dd02ed2
-// last-edited: 2026-08-23
+// last-edited: 2026-09-01
 
 package metafetch
 
@@ -17,7 +17,7 @@ import (
 // one stored row, and the provenance guards read BOTH: the maintenance repair
 // jobs hold the database view, the bulk-fetch handler holds the metafetch view.
 // The types are not interchangeable -- database stores *string, metafetch stores
-// the decodeMetadataValue output as any -- so "x != nil" is not the same question
+// the metastate.Decode output as any -- so "x != nil" is not the same question
 // on the two sides, and a shared method NAME does not by itself make it one.
 //
 // This test is the only thing that makes the pair trustworthy. Extracting the
@@ -52,8 +52,8 @@ func TestMetadataFieldStateGuardsConform(t *testing.T) {
 			name:     "typed-nil pointer",
 			value:    typedNil,
 			diverges: true,
-			why: "encodeMetadataValue json.Marshals a typed nil to the 4-byte raw " +
-				"\"null\", so the stored *string is NON-nil, but decodeMetadataValue " +
+			why: "metastate.Encode json.Marshals a typed nil to the 4-byte raw " +
+				"\"null\", so the stored *string is NON-nil, but metastate.Decode " +
 				"json.Unmarshals \"null\" back to an untyped nil. Stored-but-not-decoded. " +
 				"UNREACHABLE through every current writer: audiobooks/service_mutation.go's " +
 				"fieldExtractors all dereference before returning and return (nil, false) " +

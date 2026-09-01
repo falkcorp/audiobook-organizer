@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_test.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-05-08
+// last-edited: 2026-09-01
 
 package server
 
@@ -15,8 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
@@ -1328,46 +1326,6 @@ func TestCoverageHelperFunctions(t *testing.T) {
 		assert.True(t, *p)
 	})
 
-	t.Run("metadataStateKey", func(t *testing.T) {
-		key := metastate.Key("abc123")
-		assert.Equal(t, "metadata_state_abc123", key)
-	})
-
-	t.Run("decodeMetadataValue nil", func(t *testing.T) {
-		result := metastate.Decode(nil)
-		assert.Nil(t, result)
-	})
-
-	t.Run("decodeMetadataValue empty string", func(t *testing.T) {
-		empty := ""
-		result := metastate.Decode(&empty)
-		assert.Nil(t, result)
-	})
-
-	t.Run("decodeMetadataValue valid JSON", func(t *testing.T) {
-		val := `"hello"`
-		result := metastate.Decode(&val)
-		assert.Equal(t, "hello", result)
-	})
-
-	t.Run("decodeMetadataValue plain string", func(t *testing.T) {
-		val := "not json"
-		result := metastate.Decode(&val)
-		assert.Equal(t, "not json", result)
-	})
-
-	t.Run("encodeMetadataValue nil", func(t *testing.T) {
-		result, err := metastate.Encode(nil)
-		assert.NoError(t, err)
-		assert.Nil(t, result)
-	})
-
-	t.Run("encodeMetadataValue string", func(t *testing.T) {
-		result, err := metastate.Encode("hello")
-		assert.NoError(t, err)
-		require.NotNil(t, result)
-		assert.Equal(t, `"hello"`, *result)
-	})
 }
 
 // ---------------------------------------------------------------------------

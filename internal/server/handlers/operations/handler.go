@@ -35,12 +35,11 @@ package operations
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
