@@ -1,5 +1,5 @@
 // file: internal/authorname/authorname.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e2b7c14-9a36-4f81-b0d7-2c93e845af60
 // last-edited: 2026-09-01
 
@@ -15,19 +15,20 @@
 // one another cannot be kept in step, and the cost of it drifting is that a book
 // silently acquires the placeholder as a real author.
 //
-// NOTE: this unifies the LITERAL only. The filename/directory author parser
-// itself STILL exists twice, in internal/scanner and internal/metadata, as
-// divergent copies: parseFilenameForAuthor (scanner.go:1865, metadata.go:852)
-// and extractAuthorFromDirectory (scanner.go:1809, metadata.go:806). Verified
-// still duplicated 2026-09-01. Until they are collapsed, a fix to one is not a
-// fix to the other, which is exactly how the first version of this change came
-// to be inert on the path that produces the bug.
+// This package once unified the LITERAL only, and carried a NOTE that the
+// filename/directory author parsers themselves still existed twice, in
+// internal/scanner and internal/metadata, as divergent copies. That is CLOSED:
+// ExtractAuthorFromDirectory and ParseFilenameForAuthor now live here, in
+// parse.go, with one implementation each. See that file for what the two copies
+// actually differed on -- measured, and smaller than it looked.
 //
-// looksLikePersonName WAS on that list and is no longer: all copies of it (and
-// of isValidAuthor, and of dedup's looksLikeAuthorName) now live in
-// internal/personname. The two parsers above are what remain.
+// looksLikePersonName was on that list too and left earlier: all copies of it
+// (and of isValidAuthor, and of dedup's looksLikeAuthorName) live in
+// internal/personname. Nothing remains on the list.
 //
-// Depends on nothing but the standard library, so any package may import it.
+// Depends only on the standard library and internal/personname, which is itself
+// a standard-library-only leaf, so any package may still import this one
+// without risking a cycle.
 package authorname
 
 import "strings"
