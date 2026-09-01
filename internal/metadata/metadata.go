@@ -715,7 +715,11 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 	// "Mort_Unknown Author" was recorded with Artist="Unknown Author", the exact
 	// laundering the guard exists to stop. Deferring it is the structural fix --
 	// a future branch that returns early cannot miss it either. The same
-	// argument, and the same shape, as the defer in internal/scanner.
+	// argument as the defer in internal/scanner -- though NOT the same shape:
+	// scanner's defer carries only the placeholder clear, while this one carries
+	// four things, and scanner's underscore branch still returns early past its
+	// own directory fallback. The two packages do not agree here; see
+	// todo.d/20260901_metadata_scanner_filename_parsers_still_diverge.md.
 	defer func() {
 		// The organizer names an authorless book "<title> - Unknown Author.ext", so
 		// the parse above happily hands back the placeholder as the author. Recording
