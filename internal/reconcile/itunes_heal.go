@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package reconcile
 
@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -639,17 +639,21 @@ func fuzzyFindByAlbum(track iTunesTrack, fileIndex map[string][]string) string {
 	return ""
 }
 
-// healTrack creates a reflink (ZFS COW) from src to dst, falling back to a
-// regular copy when reflink fails (cross-subvol or non-ZFS).
+// healTrack restores a missing iTunes track by cloning it back from the
+// library, falling back to a byte copy when the filesystem cannot clone.
+//
+// This used to shell out to `cp --reflink=always` and then to a plain `cp`.
+// The plain `cp` OVERWROTE an existing destination; fileops.ReflinkOrCopy
+// refuses one instead. That is the safer contract here by construction: this
+// function only runs for a track the reconciler found MISSING, so a
+// destination that exists means the premise no longer holds and healing it
+// would clobber whatever is actually there.
 func healTrack(dst, src string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o775); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := exec.Command("cp", "--reflink=always", src, dst).Run(); err == nil {
-		return nil
-	}
-	if out, err := exec.Command("cp", src, dst).CombinedOutput(); err != nil {
-		return fmt.Errorf("cp: %w (%s)", err, strings.TrimSpace(string(out)))
+	if err := fileops.ReflinkOrCopy(src, dst); err != nil {
+		return fmt.Errorf("heal %s -> %s: %w", src, dst, err)
 	}
 	return nil
 }
