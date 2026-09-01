@@ -1,5 +1,5 @@
 // file: web/src/components/review/RegroupPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a92d0c8-4e17-4b63-8d05-9f2c6a7b1e30
 // last-edited: 2026-09-01
 
@@ -158,8 +158,25 @@ export function RegroupPanel({ regroup }: RegroupPanelProps) {
             onChange={(e) => setFilters({ sortBy: e.target.value as RegroupSort })}
             sx={{ minWidth: 160 }}
             data-testid="regroup-sort-select"
-            slotProps={{ select: { 'aria-label': 'Sort holds' } }}
-            helperText="Orders holds and buckets"
+            slotProps={{
+              select: { 'aria-label': 'Sort holds' },
+              // No testid: the assertion that matters is on the copy a reviewer
+              // reads, not on a hook only a test can see.
+              formHelperText: regroup.oldestSortIsPartial
+                ? { sx: { color: 'warning.main' } }
+                : undefined,
+            }}
+            // 🔴 "Oldest first" over a short page is the one option that lies.
+            // The server sorts newest-first and truncates AFTERWARDS, so a
+            // capped page is the NEWEST rows; ordering it ascending puts the
+            // oldest of those on top while the genuinely oldest holds were
+            // never fetched. Said here, at the control making the claim,
+            // because the generic "N of M loaded" chip does not imply it.
+            helperText={
+              regroup.oldestSortIsPartial
+                ? 'Oldest of the loaded page only'
+                : 'Orders holds and buckets'
+            }
           >
             {REGROUP_SORTS.map((s) => (
               <MenuItem key={s.value} value={s.value}>
@@ -180,8 +197,23 @@ export function RegroupPanel({ regroup }: RegroupPanelProps) {
             Holds the system flagged for a human decision, grouped by type.
           </Typography>
 
-          {/* The queue, all kinds — unchanged by any control in this rail. */}
-          <Chip size="small" data-testid="regroup-total" label={`${regroup.queueTotal} pending`} />
+          {/* The queue, all kinds — unchanged by any control in this rail.
+              Null when the count poll has not answered: a chip reading
+              "0 pending" beside "16 in Multi-disc groups" is two numbers
+              contradicting each other, which this codebase has shipped before.
+              The absence is rendered rather than papered over. */}
+          {regroup.queueTotal === null ? (
+            <Tooltip title="The queue-wide pending count could not be read. The kind-scoped count beside this one is unaffected.">
+              <Chip
+                size="small"
+                variant="outlined"
+                data-testid="regroup-total-unknown"
+                label="queue total unavailable"
+              />
+            </Tooltip>
+          ) : (
+            <Chip size="small" data-testid="regroup-total" label={`${regroup.queueTotal} pending`} />
+          )}
 
           {filters.kind && (
             // The server's count for the selected kind. Named rather than left

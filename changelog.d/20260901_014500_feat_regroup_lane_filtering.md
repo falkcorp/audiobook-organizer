@@ -58,6 +58,18 @@ the reviewer asking for that. Had the two been merged, every keystroke would hav
 raised the warning, which is how the one occurrence that matters becomes
 unreadable.
 
+**One of the three sort orders cannot be answered from a short page, and says
+so.** `ListReviewItems` sorts `CreatedAt DESC` and truncates *afterwards*, so a
+capped page is the NEWEST rows of the matching set — the cut is made along the
+same axis the sort control re-orders. "Newest first" over that page is therefore
+correct, and "Kind" makes no temporal claim, but "Oldest first" would put the
+oldest of the newest 500 on top while the genuinely oldest holds were never
+fetched. That is a wrong answer wearing an authoritative face, and the generic
+"500 of 714 loaded" chip does not imply it. The Sort control's helper text now
+says "Oldest of the loaded page only" in exactly that case, and in no other —
+a warning that fires on all three orders is one nobody reads on the occasion it
+means something.
+
 ### Fixed
 
 #### The regroup lane rendered "Nothing to review 🎉" over a queue holding hundreds of items
@@ -67,6 +79,15 @@ congratulated as an empty queue — telling a reviewer to go home when the next
 step was to widen the filter. Filtered-empty now says what the queue still holds
 and offers a clear; genuinely-empty uses the lane descriptor's `emptyMessage`,
 which had been carried unused since the lane was ported.
+
+The lane also no longer renders a queue total it does not have. The all-kinds
+count comes from a SECOND request that swallows its own failure, so under a kind
+filter it can be absent while rows are on screen — which would have put "0
+pending" next to "16 in Multi-disc groups", two chips contradicting each other
+over a queue that is not empty. The count is now typed as nullable, so every
+consumer had to state what it does without one: the rail shows "queue total
+unavailable" and the filtered-empty copy drops the sentence that would have
+quoted the number.
 
 Three more states that were previously indistinguishable or missing: the lane now
 shows progress while refetching even when rows are already on screen (a kind

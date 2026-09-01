@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-09-01
 
@@ -588,5 +588,73 @@ describe('sort ordering', () => {
         'regroup.ambiguous',
       ])
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The page is the NEWEST rows, so not every sort can be answered from it
+// ---------------------------------------------------------------------------
+
+describe('a sort the loaded page cannot answer says so', () => {
+  it('flags "oldest" over a truncated page, because the cut was made by date', async () => {
+    // 🔴 ListReviewItems sorts CreatedAt DESC then slices, so a short page is
+    // the NEWEST rows of the matching set. Ordering it ascending puts the
+    // oldest of THOSE on top while the genuinely oldest holds were never
+    // fetched -- a wrong answer that looks authoritative.
+    mockItems([makeItem('a1', 'regroup.ambiguous')], 714);
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ sortBy: 'oldest' }));
+    await waitFor(() => expect(result.current.oldestSortIsPartial).toBe(true));
+  });
+
+  it('does NOT flag "newest" over the same truncated page', async () => {
+    // The newest N sorted newest-first really are the newest holds: the slice
+    // and the sort agree. Flagging this too would train the reviewer to ignore
+    // the warning on the one occasion it means something.
+    mockItems([makeItem('a1', 'regroup.ambiguous')], 714);
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ sortBy: 'newest' }));
+    await waitFor(() => expect(result.current.filters.sortBy).toBe('newest'));
+    expect(result.current.oldestSortIsPartial).toBe(false);
+  });
+
+  it('does NOT flag "oldest" when the lane holds every matching row', async () => {
+    mockItems([makeItem('a1', 'regroup.ambiguous')], 1);
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ sortBy: 'oldest' }));
+    await waitFor(() => expect(result.current.filters.sortBy).toBe('oldest'));
+    expect(result.current.oldestSortIsPartial).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A number the lane does not have
+// ---------------------------------------------------------------------------
+
+describe('the queue total is absent rather than invented', () => {
+  it('is null under a kind filter while the count poll has not answered', async () => {
+    // The count poll is a SECOND request that swallows its own failure. Left as
+    // a number, its zero renders "0 pending" beside "16 in Multi-disc groups" --
+    // two chips contradicting each other over a queue that is not empty.
+    // beforeEach leaves the count endpoint answering {count: 0} -- the shape a
+    // failed or not-yet-returned poll leaves behind.
+    mockItems([makeItem('m1', 'regroup.multidisc')], 16);
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ kind: 'regroup.multidisc' }));
+    await waitFor(() => expect(result.current.total).toBe(16));
+    expect(result.current.queueTotal).toBeNull();
+  });
+
+  it('is the polled count once that count has arrived', async () => {
+    setByKind({ 'regroup.multidisc': 16, 'regroup.ambiguous': 714 });
+    mockItems([makeItem('m1', 'regroup.multidisc')], 16);
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ kind: 'regroup.multidisc' }));
+    await waitFor(() => expect(result.current.queueTotal).toBe(730));
   });
 });
