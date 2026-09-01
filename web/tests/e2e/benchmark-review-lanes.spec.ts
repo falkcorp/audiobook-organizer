@@ -1,5 +1,5 @@
 // file: web/tests/e2e/benchmark-review-lanes.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: e0d8440c-7578-4a92-9f69-4d05bae4b33e
 // last-edited: 2026-09-01
 
@@ -430,9 +430,22 @@ async function seedDupes(page: Page, n: number) {
  * CLIENT-side, so N is pinned by seeding exactly N results AND pinning the page
  * size to N in localStorage. 50 and 100 are both in PAGE_SIZE_OPTIONS, so
  * loadReviewPageSize() restores them verbatim rather than clamping.
+ *
+ * `setSize` exists because those two numbers are NOT the same thing on this
+ * lane, and conflating them hid the regime that matters. Every other lane
+ * renders what it fetched; metadata fetches the WHOLE review set and pages it
+ * in the browser, so its filter chain -- eleven chained .filter() passes in
+ * preGroupFiltered, re-run on every keystroke of an undebounced title box --
+ * scales with the SET, not with the page. Seeding n === pageSize therefore
+ * measures an 11-pass scan over 100 rows and calls it "N=100", when the user's
+ * set is however many rows the server holds.
+ *
+ * Passing setSize > n seeds a production-shaped set while still rendering one
+ * page, which is the only configuration in this file where the metadata filter
+ * cost can be observed at all.
  */
-async function seedMetadata(page: Page, n: number) {
-  const resultsPayload = metadataResults(n);
+async function seedMetadata(page: Page, n: number, setSize = n) {
+  const resultsPayload = metadataResults(setSize);
   await page.addInitScript(
     ([key, size]) => {
       try {
@@ -450,8 +463,8 @@ async function seedMetadata(page: Page, n: number) {
       body: JSON.stringify({
         data: {
           results: resultsPayload,
-          total_count: n,
-          matched: n,
+          total_count: setSize,
+          matched: setSize,
           no_match: 0,
           errors: 0,
         },
@@ -520,9 +533,9 @@ async function loadLane(page: Page, lane: string, n: number): Promise<number> {
   return Date.now() - t0;
 }
 
-async function seed(page: Page, lane: string, n: number) {
+async function seed(page: Page, lane: string, n: number, setSize = n) {
   if (lane === 'dupes') return seedDupes(page, n);
-  if (lane === 'metadata') return seedMetadata(page, n);
+  if (lane === 'metadata') return seedMetadata(page, n, setSize);
   return seedRegroup(page, n);
 }
 
@@ -734,11 +747,16 @@ test.describe('review lane responsiveness (measurement only)', () => {
    * the throttled control — so the control runs the IDENTICAL code path and a
    * difference between them cannot be a difference in what was measured.
    */
-  async function runLane(page: Page, lane: string, n: number, throttle = 1) {
-    const note = throttle > 1 ? `CONTROL ${throttle}x CPU throttle` : '';
+  async function runLane(page: Page, lane: string, n: number, throttle = 1, setSize = n) {
+    const note =
+      throttle > 1
+        ? `CONTROL ${throttle}x CPU throttle`
+        : setSize !== n
+          ? `${setSize}-row set, ${n}-row page`
+          : '';
     await instrument(page, throttle);
     await setupPhase2Interactive(page);
-    await seed(page, lane, n);
+    await seed(page, lane, n, setSize);
 
     await resetPerf(page);
     const loadMs = await loadLane(page, lane, n);
@@ -828,4 +846,24 @@ test.describe('review lane responsiveness (measurement only)', () => {
   test('regroup @ N=500 (control: fetch-limit ceiling)', async ({ page }) => {
     await runLane(page, 'regroup', 500);
   });
+
+  // The regime every other row in this table stubs out.
+  //
+  // Metadata is the only lane that fetches the WHOLE set and pages it in the
+  // browser, so its per-keystroke filter cost scales with the set, not with the
+  // page. Every `metadata @ N=...` row above seeds set === page, which means the
+  // eleven-pass filter chain was only ever measured over 50 or 100 rows -- and
+  // the claim it produced ("metadata blocked 0 ms") is true of that regime and
+  // says nothing about a production set.
+  //
+  // These hold the page at 100 -- the largest a user can select -- and grow only
+  // the set. If the title-filter numbers here track the set rather than the page,
+  // the undebounced box is the cost and the page size is a red herring.
+  for (const setSize of [500, 2000] as const) {
+    test(`metadata @ 100-row page over a ${setSize}-row set (production regime)`, async ({
+      page,
+    }) => {
+      await runLane(page, 'metadata', 100, 1, setSize);
+    });
+  }
 });
