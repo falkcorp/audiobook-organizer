@@ -1,0 +1,86 @@
+// file: internal/dedup/levenshtein_units_test.go
+// version: 1.0.0
+// guid: 7c4e1a92-3d68-4b05-9f27-8a1c6e0d5b34
+// last-edited: 2026-09-01
+
+package dedup
+
+import (
+	"math/rand"
+	"testing"
+)
+
+// TestLevenshteinDistanceIsMeasuredInRunes pins the unit that
+// normalizedLevenshteinSimilarity divides by.
+//
+// This package used to carry a BYTE-indexed Levenshtein while
+// normalizedLevenshteinSimilarity divided its result by a RUNE length. A
+// multi-byte character therefore cost 2-3 edits instead of 1, the quotient
+// could exceed 1.0, and the resulting negative similarity was hidden by an
+// `if sim < 0 { sim = 0 }` clamp -- so a pair of near-identical CJK or Cyrillic
+// names silently scored as MAXIMALLY different.
+//
+// The property below is what actually catches that class of mistake: rune edit
+// distance can never exceed the longer string's rune length, so if the two
+// units ever disagree again this fails immediately. Verified to do so: with
+// []rune swapped for []byte in matcher.LevenshteinDistanceCaseSensitive it
+// reports d("東東é","Д")=8 > maxRuneLen=3.
+func TestLevenshteinDistanceIsMeasuredInRunes(t *testing.T) {
+	// Mixed scripts on purpose: an ASCII-only alphabet cannot observe the bug,
+	// which is exactly why the original table test passed for so long.
+	alphabets := [][]rune{
+		[]rune("abc"),
+		[]rune("aé東"),
+		[]rune("Достй"),
+		{}, // the empty-string edges
+	}
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 200000; i++ {
+		mk := func() string {
+			al := alphabets[r.Intn(len(alphabets))]
+			if len(al) == 0 {
+				return ""
+			}
+			out := make([]rune, r.Intn(6))
+			for j := range out {
+				out[j] = al[r.Intn(len(al))]
+			}
+			return string(out)
+		}
+		a, b := mk(), mk()
+		maxLen := len([]rune(a))
+		if lb := len([]rune(b)); lb > maxLen {
+			maxLen = lb
+		}
+		if d := levenshteinDistance(a, b); d > maxLen {
+			t.Fatalf("distance is not in runes: d(%q,%q)=%d > maxRuneLen=%d", a, b, d, maxLen)
+		}
+		// The direct consequence, and the reason the clamp is gone.
+		if s := normalizedLevenshteinSimilarity(a, b); s < 0 || s > 1 {
+			t.Fatalf("similarity %f out of [0,1] for (%q,%q)", s, a, b)
+		}
+	}
+}
+
+// TestNormalizedSimilarityOnNonASCII pins EXACT values for the pairs the
+// byte-indexed implementation got wrong. The property test above proves the
+// unit is self-consistent; these prove it is also correct.
+func TestNormalizedSimilarityOnNonASCII(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want float64 // was, under byte indexing
+	}{
+		{"José Saramago", "Jose Saramago", 1 - 1.0/13}, // 0.846
+		{"Böll", "Boll", 0.75},                         // 0.500
+		{"Émile Zola", "Emile Zola", 0.90},             // 0.800
+		{"Достоевский", "Достоевскiй", 1 - 1.0/11},     // 0.818
+		{"村上春樹", "村上春树", 0.75},                         // 0.500
+		{"東京", "東京都", 1 - 1.0/3},                       // 0.000 (byte d=3, maxLen=3)
+	}
+	for _, c := range cases {
+		got := normalizedLevenshteinSimilarity(c.a, c.b)
+		if diff := got - c.want; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("normalizedLevenshteinSimilarity(%q, %q) = %.6f, want %.6f", c.a, c.b, got, c.want)
+		}
+	}
+}

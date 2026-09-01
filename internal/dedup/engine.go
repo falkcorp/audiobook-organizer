@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.69.0
+// version: 1.70.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-08-29
+// last-edited: 2026-09-01
 
 package dedup
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"go.opentelemetry.io/otel"
@@ -3843,55 +3844,18 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 	return applied
 }
 
-// levenshteinDistance computes the Levenshtein edit distance between two strings.
+// levenshteinDistance measures the edit distance between two strings in RUNES,
+// preserving case.
+//
+// It is a thin alias for matcher.LevenshteinDistanceCaseSensitive and exists
+// only so the call sites in this package read unchanged. This package used to
+// carry its own BYTE-indexed copy: it charged 2 edits for "José"/"Jose" and 3
+// for inserting one character into "東京", which made
+// normalizedLevenshteinSimilarity divide a byte count by a rune count and
+// understate the metadata-fuzzy dedup signal for every non-Latin title and
+// author. See matcher.LevenshteinDistanceCaseSensitive for the full note.
 func levenshteinDistance(a, b string) int {
-	la := len(a)
-	lb := len(b)
-
-	if la == 0 {
-		return lb
-	}
-	if lb == 0 {
-		return la
-	}
-
-	// Use two rows instead of full matrix for O(min(m,n)) space.
-	prev := make([]int, lb+1)
-	curr := make([]int, lb+1)
-
-	for j := 0; j <= lb; j++ {
-		prev[j] = j
-	}
-
-	for i := 1; i <= la; i++ {
-		curr[0] = i
-		for j := 1; j <= lb; j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-			del := prev[j] + 1
-			ins := curr[j-1] + 1
-			sub := prev[j-1] + cost
-			curr[j] = min3(del, ins, sub)
-		}
-		prev, curr = curr, prev
-	}
-	return prev[lb]
-}
-
-// min3 returns the minimum of three integers.
-func min3(a, b, c int) int {
-	if a < b {
-		if a < c {
-			return a
-		}
-		return c
-	}
-	if b < c {
-		return b
-	}
-	return c
+	return matcher.LevenshteinDistanceCaseSensitive(a, b)
 }
 
 // normalizeTitle lowercases, trims whitespace, and collapses internal whitespace.

@@ -1,7 +1,7 @@
 // file: internal/matcher/fuzzy.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 package matcher
 
@@ -24,10 +24,41 @@ type FuzzyResult struct {
 	Score int // 0-100, higher is better
 }
 
-// LevenshteinDistance computes the edit distance between two strings.
+// LevenshteinDistance computes the case-insensitive edit distance between two
+// strings, in RUNES. It lowercases both sides and defers to
+// LevenshteinDistanceCaseSensitive.
+//
+// Callers that must NOT fold case want that function directly — see its doc
+// comment for why the two are separate.
 func LevenshteinDistance(a, b string) int {
-	a = strings.ToLower(a)
-	b = strings.ToLower(b)
+	return LevenshteinDistanceCaseSensitive(strings.ToLower(a), strings.ToLower(b))
+}
+
+// LevenshteinDistanceCaseSensitive computes the edit distance between two
+// strings in RUNES, comparing them exactly as given.
+//
+// # Runes, not bytes
+//
+// Distance is measured in runes because these strings are book titles and
+// author names. In UTF-8 an accented, Cyrillic or CJK character occupies two
+// or three bytes, so a byte-indexed implementation charges several edits for a
+// single character substitution: "José"/"Jose" scores 2 instead of 1, and
+// inserting one character into "東京" scores 3 instead of 1. Anything dividing
+// that distance by a rune length then produces a similarity that is not merely
+// imprecise but can fall out of [0,1] entirely. internal/dedup carried exactly
+// such a copy until it was folded into this function.
+//
+// # Why this is separate from LevenshteinDistance
+//
+// The case-folding wrapper above is what the search/scan callers want. The
+// dedup collectors are NOT among them: titles reach them already lowercased by
+// normalizeTitle, but NormalizeAuthorName deliberately PRESERVES case (it
+// expands collapsed initials with an [A-Z]-anchored pattern). Routing dedup
+// through the folding wrapper would quietly make author comparison
+// case-insensitive — a behaviour change to the population that already works.
+// Hence a case-preserving core with a folding wrapper, rather than one
+// function with an opinion.
+func LevenshteinDistanceCaseSensitive(a, b string) int {
 	ra := []rune(a)
 	rb := []rune(b)
 	la, lb := len(ra), len(rb)
@@ -38,22 +69,25 @@ func LevenshteinDistance(a, b string) int {
 		return la
 	}
 
-	// Single-row DP
+	// Two-row DP with the rows SWAPPED rather than reallocated per outer
+	// iteration: this runs pairwise over title/author forms inside
+	// full-library dedup scans, so an allocation per row of the matrix is an
+	// allocation per candidate pair per form pair.
 	prev := make([]int, lb+1)
-	for j := range prev {
+	curr := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
 		prev[j] = j
 	}
 	for i := 1; i <= la; i++ {
-		curr := make([]int, lb+1)
 		curr[0] = i
 		for j := 1; j <= lb; j++ {
 			cost := 1
 			if ra[i-1] == rb[j-1] {
 				cost = 0
 			}
-			curr[j] = min(curr[j-1]+1, min(prev[j]+1, prev[j-1]+cost))
+			curr[j] = min(curr[j-1]+1, prev[j]+1, prev[j-1]+cost)
 		}
-		prev = curr
+		prev, curr = curr, prev
 	}
 	return prev[lb]
 }
