@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-01
 
@@ -818,7 +818,13 @@ func extractAuthorFromDirectory(filePath string) string {
 		return ""
 	}
 
-	// Handle complex directory patterns like "Author, Co-Author - translator - Title"
+	// Handle "Author - translator - Title" patterns, and "Author, Co-Author -
+	// translator - Title" for TWO authors only. The shape gate below gives
+	// LooksLikePersonName the whole credit, and that caps it at four words, so
+	// "Terry Pratchett, Neil Gaiman, Stephen Fry - translator - X" is refused
+	// where the ungated code accepted it. A refusal here yields no author
+	// rather than a wrong one, which is the trade this file makes everywhere,
+	// but the old comment promised a capability the gate does not deliver.
 	if strings.Contains(dirName, " - translator - ") || strings.Contains(dirName, " - narrated by - ") {
 		re := regexp.MustCompile(`^([^-]+)\s*-\s*(?:translator|narrated by)\s*-`)
 		matches := re.FindStringSubmatch(dirName)
@@ -870,17 +876,24 @@ func parseFilenameForAuthor(filename string) (string, string) {
 	left := strings.TrimSpace(parts[0])
 	right := strings.TrimSpace(parts[1])
 
-	// Heuristic: check if right side looks like an author name
-	rightIsName := personname.LooksLikePersonName(right)
+	// The RIGHT side is asked whether it could be an author CREDIT, not whether
+	// it is one bare name -- these branches use the answer to choose an
+	// ORIENTATION, so a false flips the assignment rather than causing a miss.
+	// See the same change in internal/scanner, and personname.LooksLikeAuthorCredit
+	// for the measurement. This copy was inverting BEFORE the refactor too (its
+	// old per-word [A-Z] test also rejected "Neil Gaiman (Unabridged)"), so this
+	// is a fix rather than a regression repair -- but it is the same defect, and
+	// leaving the twins divergent is what this package exists to stop.
+	rightIsCredit := personname.LooksLikeAuthorCredit(right)
 	leftIsName := personname.LooksLikePersonName(left)
 
-	if rightIsName && !leftIsName {
+	if rightIsCredit && !leftIsName {
 		// Pattern: "Title - Author"
 		return left, right
-	} else if leftIsName && !rightIsName {
+	} else if leftIsName && !rightIsCredit {
 		// Pattern: "Author - Title"
 		return right, left
-	} else if leftIsName && rightIsName {
+	} else if leftIsName && rightIsCredit {
 		leftHasInitials := strings.Contains(left, ".")
 		rightHasInitials := strings.Contains(right, ".")
 		if leftHasInitials && !rightHasInitials {

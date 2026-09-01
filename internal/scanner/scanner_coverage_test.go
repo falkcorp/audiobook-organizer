@@ -189,8 +189,10 @@ func TestLooksLikePersonNameEdgeCases(t *testing.T) {
 		// The old comment ("Actually valid - has proper capitalization") was
 		// derived from the implementation, not from a decision about names.
 		// That fallback is why scanner also answered true for "The Lord of the
-		// Rings" and "A Game of Thrones", so splitAuthorTitle filed TITLES as
-		// authors. See TestDifferentialAgainstAllThreeLegacyCopies.
+		// Rings" and "A Game of Thrones", so parseFilenameForAuthor filed TITLES
+		// as authors. See TestDifferentialAgainstAllThreeLegacyCopies, and
+		// TestParseFilenameDoesNotFileTheTitleAsTheAuthor for the orientation
+		// bug the strict predicate then introduced in the same function.
 		{"five word name", "Too Many Words Here Name", false},
 		{"single initial", "J.", false}, // Single initial alone doesn't have enough uppercase letters
 		{"double initial with space", "J. K.", true},
