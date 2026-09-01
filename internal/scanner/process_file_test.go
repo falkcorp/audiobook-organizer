@@ -1,14 +1,20 @@
 // file: internal/scanner/process_file_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
+// last-edited: 2026-09-01
 
 package scanner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 
 // testdataDir returns the absolute path to the project testdata/fixtures directory.
@@ -143,5 +149,72 @@ func TestProcessFile_HashConsistency(t *testing.T) {
 
 	if hashFromProcessFile != hashFromComputeFileHash {
 		t.Fatalf("hash mismatch: ProcessFile=%q, ComputeFileHash=%q", hashFromProcessFile, hashFromComputeFileHash)
+	}
+}
+
+// TestComputeHashFromReader_MatchesCanonicalAboveThreshold guards the scanner's
+// single-pass reader path at a file size where it can actually be wrong.
+//
+// TestProcessFile_HashConsistency above cross-checks the two entry points on a
+// small fixture — and below filehash.Threshold the chunked and whole-file
+// strategies produce the SAME string, so that test passes against either
+// algorithm and cannot observe a swap. Measured: replacing the reader path with
+// a plain io.Copy into SHA-256 left the whole scanner package green.
+//
+// The fixture is sparse: a hole costs no disk blocks on APFS or ext4, so a
+// >100 MB file is cheap to make and nothing like 100 MB is written.
+func TestComputeHashFromReader_MatchesCanonicalAboveThreshold(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.m4b")
+	const size = int64(filehash.Threshold) + (1 << 20)
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := f.WriteString("HEAD-MARKER-scan"); err != nil {
+		t.Fatalf("write head: %v", err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if _, err := f.Seek(size-int64(len("TAIL-MARKER-scan")), io.SeekStart); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+	if _, err := f.WriteString("TAIL-MARKER-scan"); err != nil {
+		t.Fatalf("write tail: %v", err)
+	}
+	f.Close()
+
+	rf, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer rf.Close()
+	got, err := computeHashFromReader(rf, size)
+	if err != nil {
+		t.Fatalf("computeHashFromReader: %v", err)
+	}
+
+	want, err := ComputeFileHash(path)
+	if err != nil {
+		t.Fatalf("ComputeFileHash: %v", err)
+	}
+	if got != want {
+		t.Errorf("reader path = %q, path entry point = %q; both write book_files.file_hash and must agree", got, want)
+	}
+
+	// And it must not be a whole-file digest, which is what a swapped
+	// implementation would return.
+	wf, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer wf.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, wf); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if whole := hex.EncodeToString(h.Sum(nil)); got == whole {
+		t.Errorf("reader path returned a whole-file SHA-256 above filehash.Threshold")
 	}
 }
