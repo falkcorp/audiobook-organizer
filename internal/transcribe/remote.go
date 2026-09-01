@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -170,6 +171,12 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, j
 		batchResults, err := sendBatch(ctx, client, remoteURL, chunk)
 		release()
 		if err != nil {
+			// Everything this endpoint already transcribed is discarded and
+			// re-queued elsewhere. That is correct but not free, and
+			// whisper_batch_size now lets an operator make the loss much
+			// larger by lowering the chunk size -- so say how much was lost.
+			slog.Warn("transcribe: chunk failed, discarding completed work from this endpoint",
+				"url", remoteURL, "completed", done, "total", total, "chunk_start", start)
 			return nil, fmt.Errorf("transcribe-batch chunk %d-%d: %w", start, end, err)
 		}
 		for id, r := range batchResults {

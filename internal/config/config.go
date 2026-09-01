@@ -1228,7 +1228,11 @@ func Mutate(fn func(*Config)) {
 // Mirror of transcribe.Endpoint kept as a plain config struct so this package
 // never imports internal/transcribe.
 type WhisperEndpoint struct {
-	URL         string `json:"url"         mapstructure:"url"`
+	URL string `json:"url"         mapstructure:"url"`
+	// Concurrency is the max SIMULTANEOUS requests to this endpoint. Omitted
+	// or 0 means 1 -- note this is NOT the whisper_max_in_flight convention,
+	// where 0 means unlimited; a per-endpoint cap that defaulted to unlimited
+	// would silently reinstate the unbounded fan-out this exists to prevent.
 	Concurrency int    `json:"concurrency" mapstructure:"concurrency"`
 	Label       string `json:"label"       mapstructure:"label"`
 	// Priority: lower = preferred (GPU box 1, CPU box 100).

@@ -308,6 +308,14 @@ config typo, and for the other it is the hardware.
 `whisper_batch_sleep_ms` still exists but is a blind timer from the CUDA era. Prefer the
 caps above; it is set to 0 in production.
 
+Two things to know before you tune these:
+
+- An omitted or `0` endpoint `concurrency` means **1**, not unlimited — unlike
+  `whisper_max_in_flight`, where `0` does mean unlimited.
+- Changing either cap takes effect **at restart**. A live change is logged and the
+  established cap kept: swapping a live semaphore installs an empty one, which would
+  remove the cap while every signal still reported it working.
+
 ## Do NOT demote the worker process
 
 The launchd agent must not set `ProcessType=Background` or `Nice`. On Apple Silicon,
