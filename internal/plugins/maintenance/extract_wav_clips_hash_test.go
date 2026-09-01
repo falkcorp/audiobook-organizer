@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips_hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c8a1d5f3-2e94-4b07-a6d1-5f83b20c9e7a
 // last-edited: 2026-09-01
 
@@ -11,8 +11,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 
@@ -251,4 +253,48 @@ func TestPersistCanonicalFileHash_NoRowToWriteBackTo(t *testing.T) {
 	if len(store.calls) != 0 {
 		t.Errorf("SetBookFileHash called with no book_file row present: %+v", store.calls)
 	}
+}
+
+// TestNthAudioFile_CarriesStoredHash connects the two halves of the
+// when-missing guard: persistCanonicalFileHash reads audioFileRef.StoredHash,
+// and this is what proves nthAudioFile actually POPULATES it from the row.
+//
+// Without this, the guard and the field were introduced in the same change and
+// nothing exercised the path between them — a guard reading a field nothing
+// fills is decorative, and would silently readmit the overwrite it exists to
+// prevent.
+func TestNthAudioFile_CarriesStoredHash(t *testing.T) {
+	t.Run("row with a hash", func(t *testing.T) {
+		store := newSortStore([]database.BookFile{
+			{ID: "f1", BookID: "b1", FilePath: "/lib/b/track01.mp3", TrackNumber: 1, FileHash: "deadbeef"},
+		})
+		ref, err := firstAudioFile(store, database.Book{ID: "b1"})
+		if err != nil {
+			t.Fatalf("firstAudioFile: %v", err)
+		}
+		if ref.StoredHash != "deadbeef" {
+			t.Errorf("StoredHash = %q, want %q — the when-missing guard reads this field", ref.StoredHash, "deadbeef")
+		}
+		if ref.CacheKey != "deadbeef" {
+			t.Errorf("CacheKey = %q, want the stored hash %q", ref.CacheKey, "deadbeef")
+		}
+	})
+
+	t.Run("row without a hash", func(t *testing.T) {
+		store := newSortStore([]database.BookFile{
+			{ID: "f1", BookID: "b1", FilePath: "/lib/b/track01.mp3", TrackNumber: 1},
+		})
+		ref, err := firstAudioFile(store, database.Book{ID: "b1"})
+		if err != nil {
+			t.Fatalf("firstAudioFile: %v", err)
+		}
+		if ref.StoredHash != "" {
+			t.Errorf("StoredHash = %q, want empty for a row with no hash", ref.StoredHash)
+		}
+		// The cache key falls back to a path-derived form, which is exactly why
+		// StoredHash cannot be inferred from it.
+		if !strings.HasPrefix(ref.CacheKey, "path:") {
+			t.Errorf("CacheKey = %q, want a path: fallback", ref.CacheKey)
+		}
+	})
 }
