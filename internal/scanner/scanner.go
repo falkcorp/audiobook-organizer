@@ -1896,11 +1896,6 @@ func looksLikeTitleCandidate(s string) bool {
 	return strings.HasPrefix(lower, "the ") || strings.HasPrefix(lower, "a ") || strings.HasPrefix(lower, "an ")
 }
 
-// isInitialToken reports whether a word is a single-letter initial with a period.
-func isInitialToken(word string) bool {
-	return len(word) == 2 && word[1] == '.' && word[0] >= 'A' && word[0] <= 'Z'
-}
-
 // recoverNormalizedBookPath answers "is this segment file's book already
 // filed under its parent directory?" and returns that directory if so.
 //
