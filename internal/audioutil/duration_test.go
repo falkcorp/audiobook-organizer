@@ -1,7 +1,7 @@
 // file: internal/audioutil/duration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b0e6d3a-7c1f-4a52-9d8e-2f6a1c9b0d47
-// last-edited: 2026-07-18
+// last-edited: 2026-08-31
 
 package audioutil
 
@@ -66,6 +66,12 @@ func TestProbeDurationSeconds_RealFixture(t *testing.T) {
 }
 
 func TestProbeDurationSeconds_ExplicitFFprobePath(t *testing.T) {
+	// mediainfo is tried before ffprobe, and it answers a real mp3 happily --
+	// which would make this test pass without the explicit ffprobePath ever
+	// being used, i.e. still green while no longer testing its own name.
+	// Disable mediainfo so the explicit path is genuinely exercised.
+	t.Setenv(disableMediaInfoEnv, "1")
+
 	ffmpegPath, ffprobePath := b4RequireFFmpeg(t)
 	dir := t.TempDir()
 	path := b4GenerateSilentAudio(t, ffmpegPath, dir, "b4-2s.mp3", 2)
