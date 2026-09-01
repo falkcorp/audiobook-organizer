@@ -1,5 +1,5 @@
 // file: internal/personname/legacy_differential_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e2c7b48-5a13-4f80-b6d9-3c0e8a1f7452
 // last-edited: 2026-09-01
 
@@ -203,24 +203,28 @@ var legacyParticles = map[string]bool{
 // TestDifferentialAgainstAllThreeLegacyCopies enumerates every input where the
 // unified implementation disagrees with any historical copy, and asserts the
 // unified answer is the CORRECT one. Each row states which copy was wrong.
+// differentialCorpus is shared by the differential test and the
+// direction-of-change test below.
+var differentialCorpus = []struct {
+	in   string
+	want bool
+}{
+	{"Isaac Asimov", true}, {"J.R.R. Tolkien", true}, {"J. K. Rowling", true},
+	{"Ursula K. Le Guin", true}, {"Stephen King", true}, {"José Saramago", true},
+	{"Simone de Beauvoir", true}, {"Ludwig van Beethoven", true},
+	{"Émile Zola", true}, {"Åsa Larsson", true}, {"Ítalo Calvino", true},
+	{"Øyvind Torseter", true}, {"Александр Пушкин", true}, {"村上 春樹", true},
+	{"A Game of Thrones", false}, {"The Lord of the Rings", false},
+	{"Dune", false}, {"01", false}, {"1984", false},
+	{"Book 3", false}, {"Chapter 1", false}, {"Volume 2", false}, {"Disc 1", false},
+	{"Do Androids Dream?", false}, {"Fear and Loathing!", false},
+	{"Something (Unabridged)", false},
+	{"Pratchett 036", false}, {"Asimov 12", false},
+	{"Too Many Words Here Name", false},
+}
+
 func TestDifferentialAgainstAllThreeLegacyCopies(t *testing.T) {
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"Isaac Asimov", true}, {"J.R.R. Tolkien", true}, {"J. K. Rowling", true},
-		{"Ursula K. Le Guin", true}, {"Stephen King", true}, {"José Saramago", true},
-		{"Simone de Beauvoir", true}, {"Ludwig van Beethoven", true},
-		{"Émile Zola", true}, {"Åsa Larsson", true}, {"Ítalo Calvino", true},
-		{"Øyvind Torseter", true}, {"Александр Пушкин", true}, {"村上 春樹", true},
-		{"A Game of Thrones", false}, {"The Lord of the Rings", false},
-		{"Dune", false}, {"01", false}, {"1984", false},
-		{"Book 3", false}, {"Chapter 1", false}, {"Volume 2", false}, {"Disc 1", false},
-		{"Do Androids Dream?", false}, {"Fear and Loathing!", false},
-		{"Something (Unabridged)", false},
-		{"Pratchett 036", false}, {"Asimov 12", false},
-		{"Too Many Words Here Name", false},
-	}
+	cases := differentialCorpus
 	disagreements := 0
 	for _, c := range cases {
 		got := LooksLikePersonName(c.in)
@@ -237,4 +241,51 @@ func TestDifferentialAgainstAllThreeLegacyCopies(t *testing.T) {
 	if disagreements == 0 {
 		t.Error("no disagreements found -- this corpus no longer demonstrates why the copies were merged")
 	}
+}
+
+// TestDedupConsumersOnlyBecomeMoreRestrictive pins the safety property that makes
+// this unification safe to ship, and it is specifically about DIRECTION, which the
+// compiler cannot check.
+//
+// Of the three legacy copies, dedup's is the only one whose consumers reach WRITES:
+// all three of its call sites are inside SplitCompositeAuthorName, which is called
+// by internal/plugins/maintenance/author.go, internal/scheduler/extra_ops.go,
+// internal/itunes/service/importer.go and internal/server/handlers/entities. A
+// `true` there keeps a split, and a split mints author rows. scanner's and
+// metadata's call sites are read-side filename/dirname parsing that produces a
+// candidate author for the book being scanned.
+//
+// So the two directions have very different blast radii, and they must be checked
+// separately -- the lesson from #3023, where a shared helper fed both a ratio
+// consumer (safe to raise) and three absolute gates (where the same change ADMITTED
+// pairs), and "it only ever raises X" was written as a safety claim for both.
+//
+// The property: for every corpus input, unified may DISAGREE with legacy dedup only
+// by going true -> false. If it ever goes false -> true, this change can mint an
+// author that the deployed code would not have, and that needs its own analysis
+// before shipping.
+func TestDedupConsumersOnlyBecomeMoreRestrictive(t *testing.T) {
+	newlyAdmitted := 0
+	newlyRefused := 0
+	for _, c := range differentialCorpus {
+		legacy := legacyDedup(c.in)
+		unified := LooksLikePersonName(c.in)
+		switch {
+		case !legacy && unified:
+			newlyAdmitted++
+			t.Errorf("NEWLY ADMITTED %q: legacy dedup said false, unified says true. "+
+				"SplitCompositeAuthorName reaches author-creating writes, so this "+
+				"can mint an author the deployed code would not have.", c.in)
+		case legacy && !unified:
+			newlyRefused++
+			t.Logf("newly refused (safe direction) %q", c.in)
+		}
+	}
+	if newlyRefused == 0 {
+		t.Error("no newly-refused inputs -- the corpus no longer exercises the " +
+			"structural guard that dedup's copy was missing (Book 3, Chapter 1, " +
+			"Pratchett 036, ...), so this test is no longer proving anything")
+	}
+	t.Logf("dedup direction: %d newly refused, %d newly admitted (must be 0)",
+		newlyRefused, newlyAdmitted)
 }
