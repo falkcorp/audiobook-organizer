@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-01
 //
@@ -270,11 +270,20 @@ describe('persisted page size', () => {
     expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE)).toBe('100');
   });
 
-  it('corrects an unrecognised size UPWARD too, not only down', () => {
+  it('replaces an unrecognised size UPWARD too, not only down', () => {
     // A stored 30 is not an offered option, so it is replaced -- by 50, which
-    // is larger. "Clamp" describes only half of what this loader does.
+    // is LARGER. "Clamp" describes only half of what this loader does, and the
+    // half it describes is the only half the 250 test above can see.
+    //
+    // Neither this test nor that one can distinguish the correction expression
+    // from the constant it provably is; that is why the expression was written
+    // as the constant. What they do pin is the OBSERVABLE contract -- both
+    // directions land on PAGE_SIZE_FALLBACK, and the bad value is rewritten.
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, '30');
     expect(loadReviewPageSize()).toBe(PAGE_SIZE_FALLBACK);
+    expect(window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE)).toBe(
+      String(PAGE_SIZE_FALLBACK)
+    );
   });
 
   it('falls back to 25 for junk', () => {

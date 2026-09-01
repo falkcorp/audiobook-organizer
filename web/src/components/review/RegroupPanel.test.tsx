@@ -1,5 +1,5 @@
 // file: web/src/components/review/RegroupPanel.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a0f9595-7a40-4662-abfa-be27845db5fd
 // last-edited: 2026-09-01
 
@@ -82,9 +82,14 @@ function makeLane(over: Partial<RegroupLane> = {}): RegroupLane {
       { kind: 'regroup.multidisc', label: 'Multi-disc groups', count: 16 },
     ],
     actionFor: () => '',
-    // The lane parses each row's payload once and hands it to the spine; a
-    // fake that returns null exercises the "unparseable payload" path, which
-    // is the shape these panel tests care about.
+    // The lane parses each row's payload once and hands it to the spine. This
+    // fake returns null, which for these fixtures changes NOTHING: makeItem's
+    // payload is '{}', and every field the row reads off it
+    // (recommendedAction, recommendationReason, recommendationEvidence) is
+    // undefined either way. It is a stub to satisfy the interface, not
+    // coverage of the unparseable path -- that lives in
+    // useRegroupLane.payloadIndex.test.ts, which seeds a row whose payload
+    // genuinely does not parse.
     payloadFor: () => null,
     setAction: vi.fn(),
     isItemBusy: () => false,
@@ -160,9 +165,7 @@ describe('truncation is stated, not left to be noticed', () => {
       '2 match the search'
     );
     // The reviewer's own narrowing, said in its own words and with no warning.
-    expect(screen.getByTestId('regroup-search-count')).toHaveTextContent(
-      'showing 2 of 40 loaded'
-    );
+    expect(screen.getByTestId('regroup-search-count')).toHaveTextContent('showing 2 of 40 loaded');
     // And NOT as a truncation.
     expect(screen.queryByTestId('regroup-truncated')).not.toBeInTheDocument();
   });
@@ -208,7 +211,9 @@ describe('the states are distinguishable', () => {
   });
 
   it('an EMPTY queue reads as empty, in the lane descriptor s own words', () => {
-    render(<RegroupPanel regroup={makeLane({ buckets: [], loaded: 0, total: 0, queueTotal: 0 })} />);
+    render(
+      <RegroupPanel regroup={makeLane({ buckets: [], loaded: 0, total: 0, queueTotal: 0 })} />
+    );
     expect(screen.getByTestId('regroup-empty')).toBeInTheDocument();
     // The descriptor has carried this string unused since the lane was ported.
     expect(screen.getByText(regroupLane.emptyMessage)).toBeInTheDocument();
@@ -293,9 +298,7 @@ describe('the filter rail', () => {
 
   it('offers newest, oldest and kind as sort orders', async () => {
     render(<RegroupPanel regroup={makeLane()} />);
-    await userEvent.click(
-      within(screen.getByTestId('regroup-sort-select')).getByRole('combobox')
-    );
+    await userEvent.click(within(screen.getByTestId('regroup-sort-select')).getByRole('combobox'));
 
     const options = await screen.findAllByRole('option');
     expect(options.map((o) => o.textContent)).toEqual([

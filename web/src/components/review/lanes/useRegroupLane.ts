@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.4.0
+// version: 1.6.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-09-01
 
@@ -349,6 +349,27 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   // the new request is in flight — that is the "a failed, an empty and a hung
   // request all render identically" failure in its stale-data form.
   const fetchedKindRef = useRef<string | null>(null);
+  /**
+   * Monotonic ordering for the two writers of `items`.
+   *
+   * 🔴 A KIND COMPARISON CANNOT EXPRESS THIS. The first version of this guard
+   * asked "is this response for the kind on screen?", which closes the
+   * cross-kind case and nothing else. Row busy state is PER ITEM, so every
+   * other row stays clickable while one is applying: a reviewer triaging
+   * quickly approves a1 then a2, both reloads are in flight for the SAME kind,
+   * and if a1's response (read from the server before a2's write) lands last it
+   * overwrites a2's — the hold the reviewer just decided reappears in the list
+   * with no error and no spinner, and approving it again either 409s or
+   * re-applies a destructive `combine`.
+   *
+   * `reqSeq` is bumped by BOTH the load effect and reload(); `appliedSeq` is the
+   * newest response already painted. A response older than what is on screen is
+   * dropped whether it lost the race to a different kind or to a later reload of
+   * its own kind. This also removes the `null`-sentinel question entirely: a
+   * first reload carries seq 1 against appliedSeq 0 and applies.
+   */
+  const reqSeq = useRef(0);
+  const appliedSeq = useRef(0);
 
   const setFilters = useCallback((patch: Partial<RegroupFilters>) => {
     setFiltersState((prev) => ({ ...prev, ...patch }));
@@ -425,9 +446,11 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     setLoading(true);
     setError(null);
 
+    const seq = ++reqSeq.current;
     fetchPage(ctrl.signal)
       .then((page) => {
-        if (ctrl.signal.aborted) return;
+        if (ctrl.signal.aborted || seq < appliedSeq.current) return;
+        appliedSeq.current = seq;
         applyPage(page);
         setLoading(false);
       })
@@ -484,10 +507,15 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   // change, NOT when the query changes — the query is compared against it.
   const searchIndex = useMemo(() => {
     const index = new Map<string, string>();
-    for (const item of items)
-      index.set(item.id, searchTextFor(item, payloadIndex.get(item.id) ?? null));
+    // payloadFor, NOT `payloadIndex.get(item.id) ?? null`. searchTextFor's
+    // second parameter distinguishes `undefined` ("I do not have it, parse it")
+    // from `null` ("there is none"); `?? null` collapses a miss into a definite
+    // null and defeats exactly the fallback the signature exists for, silently
+    // dropping that row's folder, title and member paths out of the search
+    // index. payloadFor already draws that distinction correctly.
+    for (const item of items) index.set(item.id, searchTextFor(item, payloadFor(item)));
     return index;
-  }, [items, payloadIndex]);
+  }, [items, payloadFor]);
 
   const query = debouncedSearch.trim().toLowerCase();
 
@@ -577,23 +605,21 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
 
   const reload = useCallback(async () => {
     await Promise.all([
-      fetchPage()
-        .then((page) => {
-          // 🔴 This response is for the kind that was showing when the action
-          // was taken. Reload carries no abort signal on purpose -- it must
-          // finish so the decided hold actually leaves the list -- so nothing
-          // else cancels it, and a reviewer who switches kind while it is in
-          // flight would otherwise get the OLD kind's holds painted under the
-          // NEW kind's heading, with no error and no way to tell.
-          //
-          // fetchedKindRef is what the effect below is currently showing.
-          if (fetchedKindRef.current !== kindFilter) return;
+      (() => {
+        // Reload carries no abort signal ON PURPOSE -- it has to finish so the
+        // hold the reviewer just decided actually leaves the list -- so nothing
+        // cancels it and it can land after a newer request. It orders itself
+        // instead: see reqSeq above for the two races that reach here.
+        const seq = ++reqSeq.current;
+        return fetchPage().then((page) => {
+          if (seq < appliedSeq.current) return;
+          appliedSeq.current = seq;
           applyPage(page);
-        })
-        .catch(() => {
-          // A failed refresh after a SUCCESSFUL action must not report the
-          // action as failed. The rows are stale, not wrong.
-        }),
+        });
+      })().catch(() => {
+        // A failed refresh after a SUCCESSFUL action must not report the
+        // action as failed. The rows are stale, not wrong.
+      }),
       loadCount(),
     ]);
   }, [loadCount, kindFilter, fetchPage, applyPage]);

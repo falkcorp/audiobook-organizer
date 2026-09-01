@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.payloadIndex.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e7a4c19-5d80-4b36-91af-6c3e08d5b724
 // last-edited: 2026-09-01
 //
@@ -13,6 +13,15 @@
 // payloads per keystroke "is the difference between a responsive box and a
 // janky one". The render path was doing exactly that, next to the index that
 // would have prevented it.
+//
+// 🔴 WHAT THIS FILE CANNOT SEE. It drives the hook with renderHook and no spine
+// mounted, so it counts the LANE's parses and nothing else. It cannot fail on a
+// row renderer that reintroduces an inline parsePayload -- and RegroupSpine's
+// memo test cannot either, because that one stubs the lane. The control for the
+// renderer half is not a test at all: RegroupSpine.tsx no longer imports
+// parsePayload, so reintroducing one there is an import, not a slip. (It did
+// slip once: MemberFilesDetail parsed a second time until the payload was
+// threaded in as a prop.)
 //
 // WHY A CALL-COUNT TEST AND NOT A TIMING ONE
 //
@@ -32,7 +41,7 @@ vi.mock('../../../services/api');
 
 const toast = vi.fn();
 
-function makeItem(id: string): api.ReviewItem {
+function makeItem(id: string, payload?: string): api.ReviewItem {
   return {
     id,
     kind: 'regroup.ambiguous',
@@ -40,7 +49,7 @@ function makeItem(id: string): api.ReviewItem {
     folder_ref: `/audiobooks/${id}`,
     status: 'pending',
     summary: `Hold ${id}`,
-    payload: JSON.stringify({ folder: `/audiobooks/${id}`, recommendedAction: 'split' }),
+    payload: payload ?? JSON.stringify({ folder: `/audiobooks/${id}`, recommendedAction: 'split' }),
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   } as api.ReviewItem;
@@ -53,7 +62,16 @@ beforeEach(() => {
   toast.mockReset();
   useReviewStore.setState({ byKind: {}, count: 0 });
   vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, byKind: {} });
-  const items = Array.from({ length: N }, (_, i) => makeItem(`i${i}`));
+  // 🔴 ONE ROW'S PAYLOAD DOES NOT PARSE, on purpose. Every fixture here used to
+  // be valid JSON, which made two deliberately-commented decisions in the lane
+  // unobservable: `payloadIndex.has(id)` rather than `?? parsePayload(...)`, and
+  // searchTextFor's `parsed !== undefined` rather than `parsed ?? ...`. Both
+  // mutations SURVIVED the whole suite, because a nullish fallback and an
+  // explicit-null check are identical until something actually is null -- and
+  // both re-parse precisely the unparseable rows, forever, on every render.
+  const items = Array.from({ length: N }, (_, i) =>
+    i === 0 ? makeItem('i0', 'not json at all') : makeItem(`i${i}`)
+  );
   vi.mocked(api.getReviewItems).mockResolvedValue({
     items,
     count: items.length,
@@ -88,7 +106,9 @@ describe('the regroup lane parses each payload once per loaded page', () => {
     expect(spy.mock.calls.length).toBe(afterLoad);
 
     // A re-render with identical rows must not re-parse either. This is the
-    // case that regresses if a row renderer calls parsePayload inline again.
+    // case that regresses if the LANE grows a second parse of its own -- an
+    // inline parsePayload in actionFor, or a memo keyed on something that
+    // churns. A row renderer doing it is invisible from here; see the header.
     view.rerender();
     expect(spy.mock.calls.length).toBe(afterLoad);
 
@@ -141,7 +161,10 @@ describe('the regroup lane parses each payload once per loaded page', () => {
       total: next.length,
     });
     act(() => view.result.current.refresh());
-    await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(afterLoad));
+    // Exactly N more, not merely "more". This file's whole thesis is an exact
+    // per-row count; a refresh that parsed every row twice would satisfy a
+    // toBeGreaterThan and contradict the claim in the header.
+    await waitFor(() => expect(spy.mock.calls.length).toBe(afterLoad + N));
 
     const ids = view.result.current.buckets.flatMap((b) => b.items.map((i) => i.id));
     expect(ids).toContain('j0');
