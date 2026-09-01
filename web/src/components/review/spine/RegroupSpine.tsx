@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-09-01
 
@@ -648,7 +648,9 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
             No holds match these filters
           </Typography>
           <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
-            {lane.queueTotal > 0
+            {/* null = the count poll has not answered; the generic copy below
+                is the honest fallback rather than an invented number. */}
+            {lane.queueTotal !== null && lane.queueTotal > 0
               ? `The queue still holds ${lane.queueTotal} pending item${
                   lane.queueTotal === 1 ? '' : 's'
                 }. Widen the filters to see them.`

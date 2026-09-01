@@ -1,5 +1,5 @@
 // file: web/src/components/review/RegroupPanel.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a0f9595-7a40-4662-abfa-be27845db5fd
 // last-edited: 2026-09-01
 
@@ -72,6 +72,7 @@ function makeLane(over: Partial<RegroupLane> = {}): RegroupLane {
     queueTotal: over.queueTotal ?? loaded,
     loaded,
     visible: over.visible ?? buckets.reduce((n, b) => n + b.items.length, 0),
+    oldestSortIsPartial: false,
     filters: REGROUP_INITIAL_FILTERS,
     setFilters,
     clearFilters,
@@ -298,6 +299,42 @@ describe('the filter rail', () => {
       'Newest first',
       'Oldest first',
     ]);
+  });
+
+  it('warns that "Oldest first" can only answer for the loaded page', () => {
+    // 🔴 The generic "500 of 714 loaded" chip does not imply this. The server
+    // cut the page by DATE, so the reviewer sorting ascending is looking at the
+    // oldest of the newest 500 -- the actually-oldest holds are not on screen.
+    render(<RegroupPanel regroup={makeLane({ oldestSortIsPartial: true })} />);
+    expect(screen.getByText('Oldest of the loaded page only')).toBeInTheDocument();
+  });
+
+  it('says nothing extra about a sort the page can answer', () => {
+    render(<RegroupPanel regroup={makeLane()} />);
+    expect(screen.getByText('Orders holds and buckets')).toBeInTheDocument();
+    expect(screen.queryByText('Oldest of the loaded page only')).not.toBeInTheDocument();
+  });
+
+  it('renders the ABSENCE of a queue total rather than a zero it does not have', () => {
+    render(
+      <RegroupPanel
+        regroup={makeLane({
+          queueTotal: null,
+          total: 16,
+          filters: { ...REGROUP_INITIAL_FILTERS, kind: 'regroup.multidisc' },
+          filtersActive: true,
+        })}
+      />
+    );
+
+    expect(screen.getByTestId('regroup-total-unknown')).toHaveTextContent(
+      'queue total unavailable'
+    );
+    expect(screen.queryByTestId('regroup-total')).not.toBeInTheDocument();
+    // The specific contradiction this prevents.
+    expect(screen.queryByText('0 pending')).not.toBeInTheDocument();
+    // ...while the number the lane DOES have is still shown.
+    expect(screen.getByTestId('regroup-kind-total')).toHaveTextContent('16 in Multi-disc groups');
   });
 
   it('offers a clear only while something is narrowing the view', async () => {

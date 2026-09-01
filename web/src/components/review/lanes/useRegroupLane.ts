@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-09-01
 
@@ -182,12 +182,33 @@ export interface RegroupLane {
    * `queueTotal`.
    */
   total: number;
-  /** Pending holds across every kind, per the polled /review/count. */
-  queueTotal: number;
+  /**
+   * Pending holds across every kind, per the polled /review/count.
+   *
+   * 🔴 `null` when that number is genuinely not known — the count poll is a
+   * SECOND request that swallows its own failure, so under a kind filter it can
+   * be absent while rows are on screen. Rendering its zero would have put
+   * "0 pending" beside "16 in Multi-disc groups"; a lane with two contradicting
+   * numbers is worse than a lane with one. Callers must render the absence, not
+   * substitute a number they do not have.
+   */
+  queueTotal: number | null;
   /** Holds actually loaded, across every loaded kind. */
   loaded: number;
   /** Loaded holds still visible after the search box. */
   visible: number;
+  /**
+   * True when "Oldest first" is ordering a page that cannot answer it.
+   *
+   * 🔴 The store sorts `CreatedAt DESC, ID DESC` and slices AFTERWARDS
+   * (`ListReviewItems`), so a short page is the NEWEST rows of the matching
+   * set. The cut is made along the very axis this control re-orders. Sorting
+   * that page ascending therefore puts the oldest of the newest N on top while
+   * the genuinely oldest holds were never fetched at all — an answer that looks
+   * authoritative and is wrong. "Newest first" over the same page is not
+   * affected: the newest N sorted newest-first really are the newest holds.
+   */
+  oldestSortIsPartial: boolean;
 
   filters: RegroupFilters;
   setFilters: (patch: Partial<RegroupFilters>) => void;
@@ -614,9 +635,10 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     // instrument `totalForKind` already trusts, so the two cannot disagree.
     // Unfiltered, the fetched total IS the queue and is preferred: it is the
     // fresher of the two, having just been read.
-    queueTotal: kindFilter ? storeCount : total,
+    queueTotal: kindFilter ? (storeCount > 0 ? storeCount : null) : total,
     loaded: items.length,
     visible,
+    oldestSortIsPartial: filters.sortBy === 'oldest' && items.length < total,
     filters,
     setFilters,
     clearFilters,
