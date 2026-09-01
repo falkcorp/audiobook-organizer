@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/CandidateCompareDrawer.test.tsx
-// version: 1.1.0
+// version: 2.0.0
 // guid: c4d5e6f7-a8b9-0123-cdef-cd4567890123
-// last-edited: 2026-06-28
+// last-edited: 2026-09-01
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -35,20 +35,24 @@ const breakdown: DedupCandidateBreakdownResponse = {
       score: 91.4,
       band: 'HIGH',
       formula: 'v2',
+      // Real wire shape (models.Signal JSON tags), no cast. `raw` and
+      // `confidence` differ on every row: they were interchangeable in the
+      // fixture this replaces, which is how a mapping that reads the wrong one
+      // stays green. `primary` is absent because the backend does not send it;
+      // the drawer re-derives it from the kind via isPrimaryKind, so
+      // metadata_fuzzy chips as primary and duration does not.
       signals: [
         {
           kind: 'metadata_fuzzy',
-          value: 0.91,
-          weight: 80,
+          raw: 0.91,
+          confidence: 0.78,
           evidence: 'Title, narrator, and series are close matches',
-          primary: true,
         },
         {
           kind: 'duration',
-          value: 0.73,
-          weight: 20,
+          raw: 0.004,
+          confidence: 0.31,
           evidence: 'Durations are close',
-          primary: false,
         },
       ],
     },

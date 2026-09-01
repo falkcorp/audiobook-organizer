@@ -1,7 +1,7 @@
 // file: web/tests/e2e/review-dupes-lane.spec.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 47849aa3-3814-42c5-81aa-299a39fb5384
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 // End-to-end coverage for the dupes lane of /review.
 //
@@ -59,20 +59,23 @@ const MOCK_CANDIDATE = {
     score: 98.0,
     band: 'CERTAIN',
     formula: 'v2',
+    // Real wire shape: these are the JSON tags on models.Signal in
+    // internal/models/dedup_score.go. This mock previously sent
+    // {value, weight, primary}, none of which the backend emits -- so the e2e
+    // suite was exercising a payload production never produces, and the
+    // blank evidence panel in production stayed invisible to it.
     signals: [
       {
         kind: 'exact_file',
-        value: 1.0,
-        weight: 100,
+        raw: 1.0,
+        confidence: 0.99,
         evidence: 'Exact file hash match',
-        primary: true,
       },
       {
         kind: 'embedding_high',
-        value: 0.97,
-        weight: 80,
+        raw: 0.97,
+        confidence: 0.85,
         evidence: 'High embedding similarity',
-        primary: true,
       },
     ],
   },
@@ -261,13 +264,16 @@ test.describe('the dupes lane of /review', () => {
     // Breakdown panel should render with signal data.
     //
     // ScoreBreakdownPanel was promoted to the shared EvidencePanel, which names
-    // its test ids by EVIDENCE KIND rather than by lane: dedup's score is a
-    // weighted sum, so it renders the `weighted` view -- the only one of the
-    // three kinds entitled to a stacked share bar. See
-    // src/components/review/evidence/types.ts.
-    await expect(page.locator('[data-testid="evidence-weighted"]')).toBeVisible();
-    await expect(page.locator('[data-testid="evidence-stacked-bar"]')).toBeVisible();
+    // its test ids by EVIDENCE KIND rather than by lane. Dedup's score is a
+    // noisy-OR product over per-signal confidences plus bounded boosts, so it
+    // renders the `confidence` view. See src/components/review/evidence/types.ts.
+    await expect(page.locator('[data-testid="evidence-confidence"]')).toBeVisible();
+    // No share bar, on any lane: a product does not decompose into shares.
+    await expect(page.locator('[data-testid="evidence-stacked-bar"]')).toHaveCount(0);
     await expect(page.locator('text=Exact file hash')).toBeVisible();
+    // The calibrated confidence, not the raw measurement -- the mock sends
+    // raw 1.0 / confidence 0.99, so a mapping that read `raw` would show 100%.
+    await expect(page.locator('[data-testid="signal-confidence-exact_file"]')).toHaveText('99%');
   });
 
   test('a ?book= deep link opens the dupes lane, filtered server-side', async ({ page }) => {

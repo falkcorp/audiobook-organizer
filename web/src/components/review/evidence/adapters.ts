@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/adapters.ts
-// version: 1.0.0
+// version: 2.0.0
 // guid: e21a8c47-3f60-4b95-8d1e-7a4c0b6f2953
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 //
 // Lane payload -> Evidence. One adapter per lane, each choosing the evidence
 // kind that matches how that lane's number was actually computed.
@@ -15,29 +15,56 @@
 import type { DedupScoreBreakdown, MetadataCandidate } from '../../../services/api';
 import type { RecommendationEvidence } from '../../../lib/reviewPayload';
 import { evidenceFacts } from '../../../lib/reviewPayload';
-import type { Evidence, FactsEvidence, WaterfallEvidence, WeightedEvidence } from './types';
+import type { ConfidenceEvidence, FactsEvidence, WaterfallEvidence } from './types';
+import { isPrimaryKind, signalLabel } from './signalLabels';
 
 /**
- * Dedup -> weighted. This lane's score genuinely IS a weighted sum, which is
- * why it keeps the stacked contribution bar the other two cannot have.
+ * Dedup -> confidence rows, NO bar.
+ *
+ * This comment used to claim "this lane's score genuinely IS a weighted sum,
+ * which is why it keeps the stacked contribution bar the other two cannot have".
+ * That was false. ComposeScore (internal/dedup/unified/compose.go) computes
+ *
+ *     100 * (1 - PROD(1 - confidence_i)) + SUM(boost_j)     capped at 100
+ *
+ * over the primary signals, with bounded additive boosts from the two supporting
+ * kinds. It is a product plus terms; there are no weights in it anywhere --
+ * ScoreConfig carries a per-kind `Confidence` and a `Boost` for the supporting
+ * kinds only. A share bar asserts its parts sum to the whole, which is the exact
+ * reasoning docs/evidence-panel-audit.md used to REJECT a bar for the metadata
+ * lane, so this lane does not get one either.
+ *
+ * The field names below are the Go JSON tags (models.Signal). They are not
+ * interchangeable: `confidence` is what the scorer consumes and `raw` is the
+ * measurement kept for auditing, so mapping `raw` into the headline slot would
+ * show a cosine distance where a probability belongs.
  */
-export function dedupEvidence(breakdown: DedupScoreBreakdown | null | undefined): WeightedEvidence {
+export function dedupEvidence(
+  breakdown: DedupScoreBreakdown | null | undefined
+): ConfidenceEvidence {
   if (!breakdown) {
-    return { kind: 'weighted', score: 0, signals: [], emptyReason: 'No score breakdown recorded.' };
+    return {
+      kind: 'confidence',
+      score: 0,
+      signals: [],
+      emptyReason: 'No score breakdown recorded.',
+    };
   }
   return {
-    kind: 'weighted',
+    kind: 'confidence',
     score: breakdown.score,
     band: breakdown.band,
     formula: breakdown.formula,
     emptyReason: breakdown.skipped_reason,
     signals: (breakdown.signals ?? []).map((s) => ({
       id: s.kind,
-      label: s.kind,
-      value: s.value,
-      weight: s.weight,
+      label: signalLabel(s.kind),
+      confidence: s.confidence,
+      raw: s.raw,
       detail: s.evidence,
-      primary: s.primary,
+      // Re-derived from the kind: the wire format does not carry it. See
+      // isPrimaryKind for why that is a stopgap.
+      primary: isPrimaryKind(s.kind),
     })),
   };
 }
@@ -105,9 +132,4 @@ export function metadataEvidence(
       capped: s.capped,
     })),
   };
-}
-
-/** Narrowing helper for callers holding an Evidence of unknown kind. */
-export function isWeighted(e: Evidence): e is WeightedEvidence {
-  return e.kind === 'weighted';
 }
