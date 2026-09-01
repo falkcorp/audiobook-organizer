@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-01
 
@@ -8,7 +8,6 @@ package metadata
 import (
 	"crypto/sha256"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 var yearPattern = regexp.MustCompile(`(\d{4})`)

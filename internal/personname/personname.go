@@ -1,5 +1,5 @@
 // file: internal/personname/personname.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
 // last-edited: 2026-09-01
 
@@ -101,6 +101,14 @@ func IsValidAuthor(author string) bool {
 		return false
 	}
 	return true
+}
+
+// IsNameParticle reports whether w is a name particle ("de", "van", "Le") in any
+// casing. Exported because internal/dedup needs the SAME set to decide that a
+// trailing particle is not a surname -- a second copy of this list in dedup is
+// precisely the duplication this package exists to remove.
+func IsNameParticle(w string) bool {
+	return nameParticles[strings.ToLower(strings.TrimSpace(w))]
 }
 
 // LooksLikePersonName reports whether s reads as a human name: two to four
