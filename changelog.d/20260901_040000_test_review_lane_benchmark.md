@@ -16,18 +16,37 @@ table rather than asserting a threshold, because a wall-clock threshold on a
 shared runner is a flake factory and one loose enough not to flake would pass
 while the page is slow.
 
-Measured on an M-series laptop under load average 8–12 on 10 cores, chromium,
-one worker, median of 5 repetitions per interaction (so these are ceilings for
-this machine, not clean-room numbers):
+**The categorical result, which does not depend on wall-clock at all:** at
+N≤100 the dupes lane is the only review lane that blocks the main thread. Every
+metadata and regroup interaction reports zero long tasks, zero blocking time and
+zero max-task at both sizes; dupes reports 288 ms blocking / 120 ms longest task
+at N=50 and 830 ms / 234 ms at N=100. Long-task counters are gathered inside the
+page, so unlike the wall-clock figures they carry no CDP round-trip floor.
 
-| lane | metric | N=50 | N=100 | N=100 @6x CPU |
-| --- | --- | --- | --- | --- |
-| dupes | filter (client) | 32 ms | 50 ms | 271 ms |
-| dupes | checkbox toggle | 41 ms | 67 ms | 423 ms |
-| metadata | filter (client) | 22 ms | 25 ms | 174 ms |
-| metadata | checkbox toggle | 19 ms | 26 ms | 217 ms |
-| regroup | filter (250 ms debounce incl.) | 389 ms | 399 ms | 619 ms |
-| regroup | sort change (client) | 240 ms | 263 ms | 527 ms |
+The wall-clock table, measured on an M-series laptop under load average 8–12 on
+10 cores, chromium, one worker, median of 5 repetitions (min–max in brackets).
+The N=5 column is a noise floor running the identical code path; a row whose
+N=100 figure does not clear its own floor is labelled as such rather than
+quoted as a trend:
+
+| lane | metric | N=5 floor | N=50 | N=100 | N=100 @6x | resolves above floor? |
+| --- | --- | --- | --- | --- | --- | --- |
+| dupes | filter (client) | 17 [14–29] | 32 [25–33] | 50 [47–67] | 271 | yes |
+| dupes | checkbox toggle | 14 [13–23] | 41 [39–50] | 67 [63–83] | 423 | yes |
+| metadata | filter (client) | 15 [14–30] | 22 [18–33] | 25 [24–39] | 174 | **no** |
+| metadata | checkbox toggle | 9 [8–20] | 19 [17–26] | 26 [26–39] | 217 | marginal |
+| regroup | filter (250 ms debounce incl.) | 377 [374–395] | 389 [382–402] | 399 [394–421] | 619 | marginal |
+| regroup | sort change (client) | 221 [213–304] | 240 [234–288] | 263 [256–295] | 527 | **no** |
+
+So only the two dupes rows are a measured scaling result. The metadata filter
+and the regroup sort move by less than their own N=5 spread and must be read as
+"no cost detectable at this N", not as a trend.
+
+The regroup figures also need reading with their zero blocking time in mind:
+377 ms at N=5 with no main-thread work at all is the 250 ms search debounce plus
+a MUI transition and the idle wait, and 221 ms for a sort at N=5 is the Select
+menu's open/close animation. `regroupSortOnce` is largely measuring the control,
+not the re-sort. Neither number is compute.
 
 Initial load to N interactive rows is 930–1015 ms for every lane at every size,
 dominated by the lazy route chunk rather than by row count.
@@ -41,9 +60,13 @@ change.
 **The dupes lane is the outlier and `DupesSpine.tsx` has no memoization at
 all** — the memo commit covered `CompareSpine` and `RegroupSpine` only. At
 N=100 a dupes checkbox costs 67 ms against metadata's 26 ms, and a dupes filter
-keystroke produces a 234 ms longest-single-task against metadata's 55 ms. A
-234 ms main-thread task is above the threshold where a keystroke stops feeling
-instant. Reported, not fixed: this change is test-only.
+apply-and-clear cycle at N=100 produces a 234 ms longest single task while
+metadata's produces none at all. A 234 ms main-thread task is above the
+threshold where an interaction stops feeling instant. (The long-task counters
+are reset once per 5-repetition batch and span both the apply and the clear of
+each repetition, so they do not divide into the per-interaction medians — they
+answer "did this lane block the main thread", not "what did one apply cost".)
+Reported, not fixed: this change is test-only.
 
 Two things the harness deliberately does not cover, stated because a number
 without its scope invites over-reading. Rows are seeded by `page.route`

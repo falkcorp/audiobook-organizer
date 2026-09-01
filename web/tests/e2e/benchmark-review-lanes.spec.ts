@@ -1,5 +1,5 @@
 // file: web/tests/e2e/benchmark-review-lanes.spec.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: e0d8440c-7578-4a92-9f69-4d05bae4b33e
 // last-edited: 2026-09-01
 
@@ -150,7 +150,14 @@ interface Sample {
   minMs: number;
   maxMs: number;
   reps: number;
-  /** Longtask counters for the MEDIAN-producing pass, summed over reps. */
+  /**
+   * Longtask counters summed over the WHOLE batch of reps -- and over both
+   * directions of each rep (apply AND clear, plus both settles), because
+   * __perf is reset once per batch rather than once per timed window. So these
+   * do NOT line up arithmetically with medianMs, and must not be read as "the
+   * cost of one apply". They answer a coarser question, which is the one that
+   * survives the CDP floor: did this lane block the main thread at all?
+   */
   longTasks: number;
   blockingMs: number;
   maxTaskMs: number;
