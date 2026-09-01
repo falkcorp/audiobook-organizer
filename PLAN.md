@@ -1,11 +1,13 @@
 <!-- file: PLAN.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d21c8f4-3e05-4a97-b6d2-1c8f5a09e743 -->
 <!-- last-edited: 2026-09-01 -->
 
 # Plan — unify the metadata-provenance duplication
 
-**Status: AWAITING APPROVAL. No code has been changed.**
+**Status: EXECUTED 2026-09-01.** Three places where reality differed from this
+plan are recorded at the bottom under "What the plan got wrong" — the plan is
+kept as written above so the difference is legible.
 
 Branch `refactor/unify-metadata-provenance`, worktree `.worktrees/provenance`.
 Next target after `internal/metastate` (#3025) and `internal/personname` (#3029),
@@ -94,3 +96,45 @@ close the PR — nothing outside these six files changes.
 - The two still-duplicated parsers (`parseFilenameForAuthor`,
   `extractAuthorFromDirectory`), flagged in `internal/authorname/authorname.go`.
   Separate change, and #3029 must land first since it touches both copies.
+
+---
+
+## What the plan got wrong
+
+Recorded rather than edited away, because the gap between a plan and its
+execution is the useful part.
+
+**1. `buildMetadataProvenance` had an undeclared dependency: `nonEmpty`.** The
+plan listed the files to change and did not notice that the function body calls a
+5-line helper which ALSO existed twice (`internal/audiobooks/helpers.go`,
+`internal/server/server_helpers.go`, byte-identical). Moving the function without
+it would have created a THIRD copy — the exact outcome the change exists to
+prevent. `metafetch.NonEmpty` is now canonical and both packages hold a one-line
+`var nonEmpty = metafetch.NonEmpty`, so there is one implementation and none of
+the 52 call sites had to change.
+
+The plan explicitly scoped out `stringPtr`/`boolPtr` as "trivial one-liners that
+cannot diverge harmfully". That reasoning was fine for them and wrong for
+`nonEmpty`, on a distinction the plan did not draw: a helper the moved code
+DEPENDS ON is not optional scope.
+
+**2. `metafetch`'s deprecated `metadataFieldState` alias is not dead.** Step 1
+said to "delete the deprecated alias at :167 if it has no users left". It has ~15,
+across `metadata_state_service.go` and `helpers.go` itself. Checked rather than
+assumed; left in place with its comment corrected to say so.
+
+**3. The differential probe was worth more than the plan implied.** It is listed
+as a test-strategy bullet, and it is the only reason "behaviour-preserving" is a
+measurement here rather than a claim: six cases covering nil state,
+override-beats-stored-beats-fetched, name threading and comparison values,
+captured before the move and diffed after. **Byte-identical, 14,666 bytes.** The
+probe is deleted; the result is this paragraph.
+
+## Result, measured
+
+| symbol | before | after |
+|---|---|---|
+| `buildMetadataProvenance` | 2 copies, 79 lines each | 1, in `metafetch`, exported |
+| `metadataFieldState` (audiobooks) | a second struct definition | an alias to `metafetch.MetadataFieldState` |
+| `nonEmpty` | 2 copies | 1, plus 2 aliases |
+| `database.MetadataFieldState` | untouched — a different type, see above | untouched |

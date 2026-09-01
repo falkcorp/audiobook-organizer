@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 // GetAudiobook retrieves a single audiobook by ID with full metadata provenance
@@ -61,7 +62,7 @@ func (svc *AudiobookService) GetAudiobook(ctx context.Context, id string) (*data
 	}
 
 	// Build metadata provenance
-	book.MetadataProvenance = buildMetadataProvenance(book, state, meta, authorName, seriesName, nil)
+	book.MetadataProvenance = metafetch.BuildMetadataProvenance(book, state, meta, authorName, seriesName, nil)
 	nowUTC := time.Now().UTC()
 	book.MetadataProvenanceAt = &nowUTC
 
@@ -178,7 +179,7 @@ func (svc *AudiobookService) GetAudiobookTags(ctx context.Context, id string, co
 		}
 	}
 
-	tags := buildMetadataProvenance(book, state, meta, authorName, seriesName, comparisonValues)
+	tags := metafetch.BuildMetadataProvenance(book, state, meta, authorName, seriesName, comparisonValues)
 	response["tags"] = tags
 
 	return response, nil
