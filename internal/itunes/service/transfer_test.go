@@ -1,5 +1,5 @@
 // file: internal/itunes/service/transfer_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-01
 
@@ -13,6 +13,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 
 // TestBackupITLFile verifies that backupITLFile creates a .bak-* copy.
@@ -129,13 +131,13 @@ func TestBackupITLFile_TimestampFormat(t *testing.T) {
 		t.Fatal("no backup file found")
 	}
 
-	// The suffix should be like ".bak-20260101T000000Z"
+	// The suffix should be like ".bak-2026-01-01T00-00-00.000000000Z"
 	if !strings.Contains(bak, ".bak-") {
 		t.Errorf("backup name %q does not contain '.bak-'", bak)
 	}
 	// Parse the timestamp from the suffix.
 	suffix := strings.TrimPrefix(bak, filepath.Base(itlPath)+".bak-")
-	ts, err := time.Parse("20060102T150405Z", suffix)
+	ts, err := time.Parse(itunes.BackupTimeLayout, suffix)
 	if err != nil {
 		t.Errorf("backup timestamp %q did not parse: %v", suffix, err)
 		return

@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_safe_write.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-11
+// last-edited: 2026-09-01
 //
 // SafeWriteITL — the single atomic iTunes-library writeback chokepoint
 // (fable5 TASK-004). Implements SPEC 2 §3 (the 8-step atomic write protocol,
@@ -37,7 +37,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -85,11 +84,9 @@ const (
 // .bak-<RFC3339> copies; .bak-lkg is pinned separately and never rotated.
 const defaultBackupRetention = 10
 
-// backupTimeLayout is the timestamp form used for .bak-<RFC3339> files. RFC3339
-// uses ':' which is filesystem-legal on the Linux/ZFS production target; we use
-// a colon-free RFC3339-equivalent so the names are also portable for tests on
-// case-insensitive / colon-hostile filesystems.
-const backupTimeLayout = "2006-01-02T15-04-05.000000000Z07-00"
+// The backup name layout and the rotation rule now live in backupname.go,
+// shared with the two writers in internal/itunes/service that were dropping
+// differently-formatted names into this same directory.
 
 // safeWriteOptions is the resolved option set for one SafeWriteITL call.
 type safeWriteOptions struct {
@@ -275,7 +272,7 @@ func SafeWriteITL(path string, mutate func(before []byte) (after []byte, err err
 	// Step 6: backup <path> → <path>.bak-<RFC3339>; then rename .itl.new → path;
 	// fsync directory. Steps 6/7: any failure after step 4 removes .itl.new and
 	// leaves the original untouched.
-	backupPath := path + ".bak-" + time.Now().UTC().Format(backupTimeLayout)
+	backupPath := BackupName(path, time.Now())
 	if err := os.Rename(path, backupPath); err != nil {
 		_ = os.Remove(newPath)
 		return nil, fmt.Errorf("SafeWriteITL: backing up %s → %s: %w", path, backupPath, err)
@@ -482,44 +479,19 @@ func PinLastKnownGood(path string) error {
 	return nil
 }
 
-// rotateBackups keeps the `keep` newest <path>.bak-<RFC3339> files and removes
-// the rest. The pinned <path>.bak-lkg is never considered or removed.
+// rotateBackups keeps the `keep` newest backups of path and removes the rest.
+//
+// It delegates to RotateBackups, which orders by PARSED timestamp rather than
+// by string. The local implementation this replaces sorted with sort.Strings
+// on a comment asserting that lexical order equals chronological order — true
+// of the layout THIS file writes, false across the three layouts that actually
+// share the directory, which made it delete the newest backups first. See
+// backupname.go.
 func rotateBackups(path string, keep int) error {
 	if keep <= 0 {
 		keep = defaultBackupRetention
 	}
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	prefix := base + ".bak-"
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return fmt.Errorf("rotateBackups: reading %s: %w", dir, err)
-	}
-	var baks []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		if name == base+".bak-lkg" { // pinned, never rotated
-			continue
-		}
-		baks = append(baks, name)
-	}
-	if len(baks) <= keep {
-		return nil
-	}
-	// .bak-<RFC3339> timestamps sort chronologically as strings (zero-padded,
-	// fixed-width, UTC), so lexical sort == chronological. Newest last.
-	sort.Strings(baks)
-	toRemove := baks[:len(baks)-keep]
-	var firstErr error
-	for _, name := range toRemove {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	return RotateBackups(path, keep)
 }
 
 // ---------------------------------------------------------------------------
