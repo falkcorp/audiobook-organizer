@@ -47,3 +47,37 @@ verifying bytes survived a mutation.
 **Rows already written with the wrong algorithm are not repaired by this change.**
 You cannot tell a whole-file digest from a chunked one by looking at it — both are
 64 hex characters — so a repair has to recompute, and it needs its own design.
+
+Consolidating the algorithm also surfaced three ways the same column could be
+given a well-formed but wrong value, all now closed:
+
+- A **truncated read** produced a digest that was not reproducible. The chunked
+  path only runs on files over 100 MB, so a short read of a 10 MB window never
+  meant "the file ended" — it meant the read was cut short, which happens on the
+  NFS/SMB mounts a NAS-backed library lives on. The partial window was folded
+  into the digest anyway, so hashing the same unchanged file twice could yield
+  two different values. Windows are now filled, and a genuinely short one is an
+  error instead of a hash.
+- The scanner sized the file with a `stat` of the **path** taken before it opened
+  the file, then folded that size into the digest of whatever the handle actually
+  pointed at. `WriteTagsSafe` finishes with an atomic rename over that path and
+  the organizer renames files under the library root, so the two could disagree.
+  It now sizes the open descriptor.
+- `BookFileHashFromFile` hashed from the caller's current file offset, which for
+  its natural caller was already past the tag header. It now positions the handle
+  itself.
+
+#### A failed hash no longer orphans a newly-ingested version
+
+`versions.CreateIngestVersion` created the `book_version` row, then set both the
+file's hash and its link back to that version inside the same success branch. If
+hashing failed — the file moved by a concurrent organize, a permissions or I/O
+error — the link was skipped along with the hash, and the function returned
+success. The version existed with nothing pointing at it. Linking is now
+unconditional; only the hash is skipped, and it is left for the backfill job.
+
+`maintenance.extract-wav-clips` and the iTunes importer also now count and log
+the per-file hash failures they previously discarded, so a run that writes no
+hashes at all can no longer report "0 failed". `extract-wav-clips` additionally
+counts rows whose stored hash disagrees with the canonical digest — it already
+recomputes that digest, so this sizes the repair population at no extra cost.

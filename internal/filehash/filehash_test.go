@@ -1,5 +1,5 @@
 // file: internal/filehash/filehash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d2e7f04-1a63-4b58-8e70-c3f5a916d84b
 // last-edited: 2026-09-01
 
@@ -93,13 +93,13 @@ func TestBookFileHash_AboveThresholdIsChunked(t *testing.T) {
 	// Expected value derived independently of the implementation: SHA-256 over
 	// the first ChunkSize bytes, the last ChunkSize bytes, and the decimal size.
 	//
-	// This derivation uses io.ReadFull where the implementation uses a single
-	// Read. That asymmetry is deliberate and must NOT be "fixed" by changing the
-	// implementation: a single Read is what the original scanner code did, and
-	// every hash already stored in production was produced that way, so
-	// switching to ReadFull would silently change values for any file where a
-	// short read occurs. The fixture here is a plain regular file at a known
-	// offset, where a short read cannot happen, so the two forms agree.
+	// This derivation fills each window with io.ReadFull, and so does the
+	// implementation. An earlier draft of the implementation used a single Read
+	// and tolerated a short one, to stay byte-compatible with hashes already in
+	// production. This test is what showed that argument to be empty: the two
+	// forms agree on every file whose digest is reproducible, and where they
+	// disagree the stored value came from a truncated read, which is not a
+	// baseline worth preserving. See writeChunk's comment for the full reasoning.
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -219,5 +219,134 @@ func TestBookFileHashFromFile_MatchesPathVariant(t *testing.T) {
 func TestBookFileHash_NonexistentFile(t *testing.T) {
 	if _, err := BookFileHash(filepath.Join(t.TempDir(), "nope.m4b")); err == nil {
 		t.Error("expected an error for a missing file")
+	}
+}
+
+// TestBookFileHashFromFile_IgnoresTheCallersOffset pins that the digest does
+// not depend on where the caller left the handle.
+//
+// BookFileHashFromFile is exported, and its natural caller (scanner.ProcessFile)
+// has already read a tag header off the same descriptor. An earlier draft hashed
+// from the CURRENT offset, so such a caller got a silent partial digest — a
+// well-formed 64-hex string, no error, wrong value, straight into the identity
+// column. Nothing but this test stops that from coming back.
+func TestBookFileHashFromFile_IgnoresTheCallersOffset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.m4b")
+	size := int64(Threshold + (2 << 20))
+	writeSparse(t, path, size, "HEADER-BYTES", "TRAILER-BYTES")
+
+	want, err := BookFileHash(path)
+	if err != nil {
+		t.Fatalf("BookFileHash: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+	// Stand in for a caller that has already consumed a tag header.
+	if _, err := f.Seek(4096, io.SeekStart); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+
+	got, err := BookFileHashFromFile(f, size)
+	if err != nil {
+		t.Fatalf("BookFileHashFromFile: %v", err)
+	}
+	if got != want {
+		t.Errorf("digest depends on the caller's file offset:\n got  %s\n want %s", got, want)
+	}
+}
+
+// TestBookFileHashFromFile_ShortWindowIsAnErrorNotADigest is the regression test
+// for the tolerated short read.
+//
+// It passes a size LARGER than the file, which is exactly what a stale stat
+// produces when the file shrinks between stat and hash. The old implementation
+// answered with a confident digest built from whatever bytes happened to arrive.
+// The only acceptable answer is an error: a digest that pairs a partial window
+// with a size the file does not have is wrong, and worse, is not reproducible.
+func TestBookFileHashFromFile_ShortWindowIsAnErrorNotADigest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shrunk.m4b")
+	// Real size sits above Threshold so the chunked branch is taken, but the
+	// tail window is short of the claimed end.
+	writeSparse(t, path, Threshold+(1<<20), "HEAD", "TAIL")
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+
+	got, err := BookFileHashFromFile(f, Threshold+(64<<20))
+	if err == nil {
+		t.Fatalf("a window short of the claimed size produced digest %q instead of an error; "+
+			"that value is not reproducible and would be stored as identity", got)
+	}
+	if got != "" {
+		t.Errorf("digest returned alongside an error: %q", got)
+	}
+}
+
+// TestBookFileHash_AtExactlyThresholdIsWholeFile pins the boundary itself.
+//
+// Every other fixture in this package is either tiny or comfortably above
+// Threshold, which leaves `if size <= Threshold` (filehash.go) untested at the
+// one value that decides which algorithm a file gets. Flip that `<=` to `<` and
+// without this test the whole suite stays green — while every file of exactly
+// 100 MB in production would silently switch to the chunked digest and stop
+// matching its own stored hash.
+func TestBookFileHash_AtExactlyThresholdIsWholeFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "exactly-threshold.m4b")
+	writeSparse(t, path, Threshold, "HEAD", "TAIL")
+
+	got, err := BookFileHash(path)
+	if err != nil {
+		t.Fatalf("BookFileHash: %v", err)
+	}
+
+	// Independent derivation: a plain whole-file SHA-256, with no size suffix.
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	want := hex.EncodeToString(h.Sum(nil))
+
+	if got != want {
+		t.Errorf("a file of exactly Threshold bytes must be hashed WHOLE, not chunked:\n got  %s\n want %s", got, want)
+	}
+}
+
+// TestBookFileHash_OneByteOverThresholdIsChunked is the other side of the
+// boundary: Threshold+1 must take the chunked branch. Together with the test
+// above this pins `<=` exactly — neither `<` nor `>=` survives both.
+func TestBookFileHash_OneByteOverThresholdIsChunked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "one-over.m4b")
+	writeSparse(t, path, Threshold+1, "HEAD", "TAIL")
+
+	got, err := BookFileHash(path)
+	if err != nil {
+		t.Fatalf("BookFileHash: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	whole := hex.EncodeToString(h.Sum(nil))
+
+	if got == whole {
+		t.Error("a file one byte over Threshold was hashed whole; the chunked branch was not taken")
 	}
 }

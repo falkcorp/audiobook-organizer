@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
 // last-edited: 2026-09-01
 
@@ -10,8 +10,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -80,7 +82,11 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 
 	pages := chunkIDs(allIDs, extractWAVPageSize)
 
+	// hashFailed and hashMismatched are counted separately from failed: clip
+	// extraction can succeed while the identity write fails, and a summary that
+	// folds those together reports "0 failed" for a run that wrote no hashes.
 	var extracted, skipped, failed int
+	var hashFailed, hashMismatched int
 
 	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
 		sem := make(chan struct{}, introTranscribeFFWorkers)
@@ -136,6 +142,10 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 				// Hash the extracted WAV clip (small: 90s × 16kHz × 2B ≈ 2.9MB).
 				wavHash, werr := hashFileSHA256(dest)
 				if werr != nil {
+					// Logged, not just blanked: an empty wav_sha256 in the
+					// journal with no cause is unreadable six months on.
+					log.Warn("extract-wav-clips: clip hash failed",
+						"book_id", bookID, "clip", dest, "err", werr)
 					wavHash = ""
 				}
 
@@ -146,6 +156,21 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 				if herr != nil {
 					log.Warn("extract-wav-clips: source hash/persist failed",
 						"book_id", bookID, "file", src, "err", herr)
+					hashFailed++
+				}
+
+				// Free census for TODO-FILEHASH-REPAIR. This op recomputes the
+				// canonical digest for every book it touches anyway, so a row
+				// whose stored hash disagrees is positively identified as
+				// corrupted at zero extra I/O. Do NOT write — repair must be a
+				// deliberate op — but do COUNT: the repair task cannot be sized
+				// without a number, and throwing the observation away here means
+				// paying for the same full-library read a second time.
+				if srcHash != "" && ref.StoredHash != "" && ref.StoredHash != srcHash {
+					log.Warn("extract-wav-clips: stored file_hash disagrees with the canonical digest",
+						"book_id", bookID, "book_file_id", ref.BookFileID,
+						"stored", ref.StoredHash, "canonical", srcHash, "file", src)
+					hashMismatched++
 				}
 
 				log.Info("extract-wav-clips: extracted",
@@ -158,7 +183,8 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 		wg.Wait()
 
 		_ = reporter.UpdateProgress(extracted+skipped, total,
-			fmt.Sprintf("WAV clips: %d extracted, %d skipped (cached), %d failed", extracted, skipped, failed))
+			fmt.Sprintf("WAV clips: %d extracted, %d skipped (cached), %d failed, %d hash failed, %d hash mismatched",
+				extracted, skipped, failed, hashFailed, hashMismatched))
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency:   1,
@@ -172,9 +198,11 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 	}
 
 	log.Info("extract-wav-clips: complete",
-		"extracted", extracted, "skipped", skipped, "failed", failed, "total", total)
+		"extracted", extracted, "skipped", skipped, "failed", failed,
+		"hash_failed", hashFailed, "hash_mismatched", hashMismatched, "total", total)
 	_ = reporter.UpdateProgress(1, 1,
-		fmt.Sprintf("Done — %d extracted, %d already cached, %d failed", extracted, skipped, failed))
+		fmt.Sprintf("Done — %d extracted, %d already cached, %d failed, %d hash failed, %d hash mismatched",
+			extracted, skipped, failed, hashFailed, hashMismatched))
 	return nil
 }
 
@@ -214,7 +242,11 @@ func persistCanonicalFileHash(store fileHashSetter, cacheDir string, ref audioFi
 		return "", fmt.Errorf("hash source %s: %w", ref.Path, err)
 	}
 	if srcHash == "" {
-		return "", nil
+		// Unreachable: BookFileHash returns a 64-char hex string on every
+		// non-error path. Loud rather than a silent success, because as a
+		// `return "", nil` the caller's `herr != nil` check would not fire and
+		// an empty digest would be logged as though it were one.
+		return "", fmt.Errorf("filehash returned an empty digest for %s", ref.Path)
 	}
 
 	// Hardlink the clip under its content-addressed name — zero extra disk
@@ -224,8 +256,17 @@ func persistCanonicalFileHash(store fileHashSetter, cacheDir string, ref audioFi
 	// warms the cache for the name a repaired row will use.
 	if ref.CacheKey != srcHash && clipPath != "" {
 		if contentDest := cachedClipPath(cacheDir, srcHash); contentDest != "" {
-			if _, statErr := os.Stat(contentDest); os.IsNotExist(statErr) {
-				_ = os.Link(clipPath, contentDest)
+			// Link unconditionally and forgive only ErrExist. The previous
+			// os.Stat/IsNotExist gate was wrong twice: it is a TOCTOU against
+			// the sibling workers in this same fan-out, and every non-ENOENT
+			// stat error (EACCES, EIO, ELOOP) made IsNotExist false, so a
+			// broken cache directory looked exactly like a warm cache. ErrExist
+			// is the one error that means "another worker got here first";
+			// anything else (EXDEV, EPERM on an SMB/FUSE mount that refuses
+			// hardlinks, ENOSPC) means the content-addressed cache is not
+			// working and every future run re-runs ffmpeg for this book.
+			if lerr := os.Link(clipPath, contentDest); lerr != nil && !errors.Is(lerr, fs.ErrExist) {
+				return srcHash, fmt.Errorf("hardlink clip %s -> %s: %w", clipPath, contentDest, lerr)
 			}
 		}
 	}

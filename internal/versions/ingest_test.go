@@ -1,5 +1,5 @@
 // file: internal/versions/ingest_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-09-01
 
@@ -290,5 +290,68 @@ func TestCreateIngestVersion_FileHashUpdated(t *testing.T) {
 	}
 	if !found {
 		t.Error("file f1 not found")
+	}
+}
+
+// TestCreateIngestVersion_LinksVersionEvenWhenHashingFails is the regression
+// test for an orphaned version row.
+//
+// The hash and the version linkage used to share one error gate: the row update
+// lived in the `else` of the hash check. So when hashing failed — the file moved
+// by a concurrent organize, EACCES, EIO on a NAS — `f.VersionID = ver.ID` was
+// skipped too, and CreateIngestVersion returned (ver, nil). A version row
+// existed that nothing pointed at, and the caller was told it succeeded.
+//
+// The book_file row here names a path that does not exist, so BookFileHash
+// fails for certain. The version must still be linked, and the hash must be
+// left empty for the backfill job rather than the whole update being abandoned.
+func TestCreateIngestVersion_LinksVersionEvenWhenHashingFails(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	dir := t.TempDir()
+	allowDir(t, store, dir)
+	missing := filepath.Join(dir, "Vanished.m4b")
+
+	book, _ := store.CreateBook(&database.Book{
+		Title: "Gone", FilePath: missing, Format: "m4b",
+	})
+	if cerr := store.CreateBookFile(&database.BookFile{
+		ID: "f-missing", BookID: book.ID, FilePath: missing, Format: "m4b",
+	}); cerr != nil {
+		t.Fatalf("CreateBookFile: %v", cerr)
+	}
+
+	ver, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: book.ID, FilePath: missing, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatalf("CreateIngestVersion: %v", err)
+	}
+	if ver == nil {
+		t.Fatal("CreateIngestVersion returned a nil version")
+	}
+
+	files, gerr := store.GetBookFiles(book.ID)
+	if gerr != nil {
+		t.Fatalf("GetBookFiles: %v", gerr)
+	}
+	var got *database.BookFile
+	for i := range files {
+		if files[i].ID == "f-missing" {
+			got = &files[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("book file f-missing not found")
+	}
+	if got.VersionID != ver.ID {
+		t.Errorf("version_id = %q, want %q — a hash failure orphaned the version row", got.VersionID, ver.ID)
+	}
+	if got.FileHash != "" {
+		t.Errorf("file_hash = %q, want empty: the file could not be read, so any value here is invented", got.FileHash)
 	}
 }

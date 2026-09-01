@@ -1,5 +1,5 @@
 // file: internal/versions/ingest.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-09-01
 //
@@ -84,22 +84,54 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 		return nil, fmt.Errorf("create version: %w", err)
 	}
 
-	// Compute file hash and update the BookFile row.
+	// Link the new version to its book_file row, and stamp the identity hash
+	// onto the same row while we are there.
+	//
+	// These are two separate units of work and must not share one error gate.
+	// They used to: the row update lived in the `else` of the hash check, so a
+	// hash failure — a concurrent organize renaming the file out from under us,
+	// EACCES, EIO on the NAS — skipped `f.VersionID = ver.ID` as well. The
+	// version row was created, nothing pointed at it, and CreateIngestVersion
+	// returned (ver, nil). An orphaned version is a data-integrity bug; a
+	// missing hash is a backfill job's problem. Only the second is acceptable.
 	hash, hashErr := filehash.BookFileHash(params.FilePath)
 	if hashErr != nil {
-		slog.Warn("hash", "params", params.FilePath, "hashErr", hashErr)
-	} else {
-		files, _ := store.GetBookFiles(params.BookID)
-		for _, f := range files {
-			if f.FilePath == params.FilePath {
+		slog.Warn("versions.CreateIngestVersion: identity hash failed; version linkage still written, file_hash left empty for backfill",
+			"book_id", params.BookID, "file_path", params.FilePath, "version_id", ver.ID, "err", hashErr)
+	}
+
+	files, filesErr := store.GetBookFiles(params.BookID)
+	if filesErr != nil {
+		// Previously discarded, which made a store failure look identical to
+		// "this book has no files" — with no log line either way.
+		slog.Warn("versions.CreateIngestVersion: cannot load book files; version created but NOT linked to any file row",
+			"book_id", params.BookID, "version_id", ver.ID, "err", filesErr)
+		return ver, nil
+	}
+
+	linked := false
+	for _, f := range files {
+		if f.FilePath == params.FilePath {
+			if hashErr == nil {
 				f.FileHash = hash
-				f.VersionID = ver.ID
-				if updateErr := store.UpdateBookFile(f.ID, &f); updateErr != nil {
-					slog.Warn("update file hash", "f", f.ID, "updateErr", updateErr)
-				}
-				break
 			}
+			f.VersionID = ver.ID
+			if updateErr := store.UpdateBookFile(f.ID, &f); updateErr != nil {
+				slog.Warn("versions.CreateIngestVersion: book file update failed; version created but NOT linked",
+					"book_id", params.BookID, "book_file_id", f.ID, "version_id", ver.ID, "err", updateErr)
+			} else {
+				linked = true
+			}
+			break
 		}
+	}
+	if !linked {
+		// A real condition, not a nit: CreateIngestVersion did half its job and
+		// its caller cannot tell. Paths drift (organize renames under RootDir),
+		// so the ingest path may no longer match any row by the time we look.
+		slog.Warn("versions.CreateIngestVersion: no book_file row matched the ingest path; version is orphaned",
+			"book_id", params.BookID, "file_path", params.FilePath, "version_id", ver.ID,
+			"candidate_files", len(files))
 	}
 
 	return ver, nil

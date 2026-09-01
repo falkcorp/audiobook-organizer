@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-08-17
+// last-edited: 2026-09-01
 
 package jobs
 
@@ -13,9 +13,9 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
-	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
 
 func init() { maintenance.Register(&backfillFileHashesJob{}) }
@@ -65,7 +65,12 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		if bf.FileHash != "" {
 			continue
 		}
-		hash, herr := scanner.ComputeFileHash(bf.FilePath)
+		// filehash.BookFileHash directly, not scanner.ComputeFileHash: the
+		// latter is a thin wrapper whose only remaining job is the
+		// activeScanner test seam, so a package-global set by a test could
+		// swap the algorithm out from under the very job that repairs this
+		// column. Same digest, one fewer place it can be substituted.
+		hash, herr := filehash.BookFileHash(bf.FilePath)
 		if herr != nil {
 			msg := herr.Error()
 			slog.Warn("backfill-file-hashes hash failed for"+bf.FilePath, "details", msg)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips_hash_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c8a1d5f3-2e94-4b07-a6d1-5f83b20c9e7a
 // last-edited: 2026-09-01
 
@@ -297,4 +297,45 @@ func TestNthAudioFile_CarriesStoredHash(t *testing.T) {
 			t.Errorf("CacheKey = %q, want a path: fallback", ref.CacheKey)
 		}
 	})
+}
+
+// TestPersistCanonicalFileHash_LinksWhenTheKeyMerelySTARTSWithTheHash pins the
+// exact comparison the hardlink guard makes, because the guard was tightened
+// and "equivalent" was asserted in prose rather than in a test.
+//
+// The guard used to read `!strings.HasPrefix(ref.CacheKey, srcHash)` and now
+// reads `ref.CacheKey != srcHash`. Those two differ on exactly one input shape:
+// a CacheKey that STARTS with the canonical hash but carries a suffix. HasPrefix
+// treats such a key as already canonical and skips the link; `!=` treats it as a
+// different name and links.
+//
+// `!=` is the behaviour we want, not merely a tidier spelling of the old one. A
+// suffixed key is a DIFFERENT filename in the cache directory, so a later run
+// keyed on the bare canonical hash finds nothing there — skipping the link would
+// leave the canonical name permanently cold.
+//
+// No CacheKey produced by nthAudioFile has this shape today (it is a bare
+// 64-hex hash, or an "fp:"/"path:" form that cannot begin with hex), so the two
+// spellings agree on every value reachable right now and this test cannot fail
+// by accident. It exists so that if the key scheme ever grows a suffix — a clip
+// offset, a duration, an extension — the intended behaviour is already written
+// down instead of being silently decided by whichever operator is in the source.
+func TestPersistCanonicalFileHash_LinksWhenTheKeyMerelySTARTSWithTheHash(t *testing.T) {
+	fx := newClipFixture(t)
+	store := &fakeHashSetter{}
+
+	ref := audioFileRef{
+		Path:     fx.src,
+		CacheKey: fx.chunked + "_30s",
+		// No BookFileID: this test is about the link, not the write-back.
+	}
+	if _, err := persistCanonicalFileHash(store, fx.cacheDir, ref, fx.clip); err != nil {
+		t.Fatalf("persistCanonicalFileHash: %v", err)
+	}
+
+	linked := filepath.Join(fx.cacheDir, fx.chunked+".wav")
+	if _, err := os.Stat(linked); err != nil {
+		t.Fatalf("a CacheKey that only starts with the canonical hash is a different "+
+			"filename, so the clip must still be linked under the bare hash; stat %s: %v", linked, err)
+	}
 }
