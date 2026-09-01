@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -111,6 +111,45 @@ describe('view mode dispatch', () => {
     const { ctx } = makeCtx();
     renderSpine({ rows: [], viewMode: 'compact', ctx, emptyMessage: 'Nothing left to review.' });
     expect(screen.getByText('Nothing left to review.')).toBeInTheDocument();
+  });
+
+  it('shows a loading state instead of the empty copy while a load is in flight', () => {
+    // Before this prop existed the spine had no way to tell "still fetching"
+    // from "fetched, and there is nothing", so a slow server rendered as an
+    // empty queue.
+    const { ctx } = makeCtx();
+    renderSpine({
+      rows: [],
+      viewMode: 'compact',
+      ctx,
+      emptyMessage: 'Nothing left to review.',
+      loading: true,
+    });
+    expect(screen.getByTestId('spine-loading')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing left to review.')).not.toBeInTheDocument();
+  });
+
+  it('says nothing at all when the load failed', () => {
+    // The panel owns the error message. The empty copy is a claim about the
+    // server's answer, so it may not be made when there is no answer.
+    const { ctx } = makeCtx();
+    renderSpine({
+      rows: [],
+      viewMode: 'compact',
+      ctx,
+      emptyMessage: 'Nothing left to review.',
+      errored: true,
+    });
+    expect(screen.queryByText('Nothing left to review.')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('spine-empty')).not.toBeInTheDocument();
+  });
+
+  it('still renders loaded rows even if a later refresh failed', () => {
+    // `errored` suppresses only the EMPTY branch. Rows already on screen are
+    // real and must survive a failed refresh.
+    const { ctx } = makeCtx();
+    renderSpine({ rows: [row('b1')], viewMode: 'compact', ctx, errored: true });
+    expect(screen.getByTestId('compare-spine')).toBeInTheDocument();
   });
 });
 

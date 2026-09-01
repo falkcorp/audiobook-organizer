@@ -1,7 +1,7 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
-// last-edited: 2026-08-21
+// last-edited: 2026-09-01
 //
 // The metadata lane's full surface: queue rail, comparison spine, action bar.
 //
@@ -18,7 +18,7 @@
 // and is handled here.
 
 import { useCallback, useState } from 'react';
-import { Box } from '@mui/material';
+import { Alert, Box, Button } from '@mui/material';
 
 import * as api from '../../services/api';
 import type { Book } from '../../services/api';
@@ -117,12 +117,34 @@ export function MetadataPanel({
         />
 
         <Box sx={{ minWidth: 0, overflowY: 'auto' }}>
+          {/*
+            Mirrors the Alert DupesPanel and RegroupPanel already render. Retry
+            is wired to the lane's existing `refresh` -- the same one the rail's
+            refresh button uses -- so a failed load has a way forward that does
+            not require the reviewer to reload the page.
+          */}
+          {metadata.error && (
+            <Alert
+              severity="error"
+              sx={{ m: 2 }}
+              data-testid="metadata-error"
+              action={
+                <Button color="inherit" size="small" onClick={metadata.refresh}>
+                  Retry
+                </Button>
+              }
+            >
+              {metadata.error}
+            </Alert>
+          )}
           <CompareSpine
             rows={metadata.rows}
             groups={metadata.groups}
             viewMode={viewMode}
             ctx={metadata.spineCtx}
             emptyMessage={LANES.metadata.emptyMessage}
+            loading={metadata.loading}
+            errored={!!metadata.error}
           />
         </Box>
       </Box>
