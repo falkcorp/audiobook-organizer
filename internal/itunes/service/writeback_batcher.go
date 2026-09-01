@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.5.0
+// version: 5.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
-// last-edited: 2026-08-18
+// last-edited: 2026-09-01
 //
 // Combined write-back batcher: handles location updates, track additions,
 // and track removals in a single ITL read-modify-write cycle.
@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 
@@ -746,7 +747,11 @@ func SafeWriteITL(itlPath string, ops itunes.ITLOperationSet) error {
 	if err := itlValidateFn(itlPath); err != nil {
 		slog.Error("iTunes write-back post-rename validation failed ()", "err", err)
 		if backupPath != "" {
-			if rbErr := copyFileContents(backupPath, itlPath); rbErr != nil {
+			// CopyFileAtomic: this restores over the LIVE library after a failed
+			// validation. The previous os.WriteFile was not atomic at all — a
+			// crash partway through the rollback left neither a good library nor
+			// a good original, the exact outcome the rollback exists to prevent.
+			if rbErr := fileops.CopyFileAtomic(backupPath, itlPath); rbErr != nil {
 				return fmt.Errorf("post-rename validation failed AND backup restore failed: validation=%v restore=%v", err, rbErr)
 			}
 			slog.Info("iTunes write-back restored from backup after corrupted write", "backupPath", backupPath)
@@ -773,24 +778,13 @@ const itlBackupRetention = 5
 func writeITLBackup(itlPath string) (string, error) {
 	stamp := time.Now().Format("20060102-150405")
 	backupPath := fmt.Sprintf("%s.bak-%s", itlPath, stamp)
-	if err := copyFileContents(itlPath, backupPath); err != nil {
+	// fileops.CopyFile: the old local helper slurped the whole ITL into RAM
+	// via os.ReadFile/os.WriteFile, wrote it at a hardcoded 0644 regardless
+	// of the library's own mode, and never fsynced.
+	if err := fileops.CopyFile(itlPath, backupPath); err != nil {
 		return "", err
 	}
 	return backupPath, nil
-}
-
-// copyFileContents duplicates src to dst by reading the whole file
-// into memory and writing it out. Small enough for ITL files
-// (typically < 100 MB) and avoids needing io.Copy's dance.
-func copyFileContents(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", src, err)
-	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", dst, err)
-	}
-	return nil
 }
 
 // pruneITLBackups deletes rotating backups beyond the keep limit.

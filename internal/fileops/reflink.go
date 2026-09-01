@@ -1,5 +1,5 @@
 // file: internal/fileops/reflink.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3ef49b71-3f2d-4ecd-ad6b-abd926f282d1
 // last-edited: 2026-09-01
 
@@ -38,10 +38,7 @@ package fileops
 
 import (
 	"errors"
-	"fmt"
-	"io"
 	"io/fs"
-	"os"
 )
 
 // ErrReflinkUnsupported reports that the filesystem cannot clone extents (or
@@ -83,34 +80,8 @@ func ReflinkOrCopy(src, dst string) error {
 	if errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	return copyFileExclusive(src, dst)
+	return CopyFileExclusive(src, dst)
 }
 
 // copyFileExclusive copies src to dst with O_EXCL, removing a partially
 // written destination if the copy fails so a retry is not blocked by debris.
-func copyFileExclusive(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open source %s: %w", src, err)
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o664)
-	if err != nil {
-		if os.IsExist(err) {
-			return err
-		}
-		return fmt.Errorf("create destination %s: %w", dst, err)
-	}
-
-	if _, cerr := io.Copy(out, in); cerr != nil {
-		out.Close()
-		os.Remove(dst)
-		return fmt.Errorf("copy %s -> %s: %w", src, dst, cerr)
-	}
-	if cerr := out.Close(); cerr != nil {
-		os.Remove(dst)
-		return fmt.Errorf("close destination %s: %w", dst, cerr)
-	}
-	return nil
-}

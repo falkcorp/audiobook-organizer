@@ -1,6 +1,7 @@
 // file: internal/fileops/safe_operations_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-09-01
 
 package fileops
 
@@ -378,7 +379,7 @@ func TestCopyFile(t *testing.T) {
 		t.Fatalf("Failed to create source file: %v", err)
 	}
 
-	if err := copyFile(srcFile, dstFile); err != nil {
+	if err := copyFileMkdirAll(srcFile, dstFile); err != nil {
 		t.Fatalf("copyFile failed: %v", err)
 	}
 
@@ -628,7 +629,7 @@ func TestCopyFile_NonExistentSource(t *testing.T) {
 	nonExistentSrc := filepath.Join(tmpDir, "nonexistent.txt")
 	dstFile := filepath.Join(tmpDir, "dest.txt")
 
-	err := copyFile(nonExistentSrc, dstFile)
+	err := copyFileMkdirAll(nonExistentSrc, dstFile)
 	if err == nil {
 		t.Error("Expected error when copying non-existent file")
 	}

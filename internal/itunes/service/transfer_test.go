@@ -1,7 +1,7 @@
 // file: internal/itunes/service/transfer_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-30
+// last-edited: 2026-09-01
 
 package itunesservice
 
@@ -69,35 +69,6 @@ func TestBackupITLFile_NoExistingFile(t *testing.T) {
 	}
 }
 
-// TestCopyFile verifies atomic copy semantics.
-func TestCopyFile(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src.itl")
-	dst := filepath.Join(dir, "dst.itl")
-
-	content := []byte("hello world")
-	if err := os.WriteFile(src, content, 0o644); err != nil {
-		t.Fatalf("write src: %v", err)
-	}
-
-	if err := copyFile(src, dst); err != nil {
-		t.Fatalf("copyFile: %v", err)
-	}
-
-	got, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatalf("read dst: %v", err)
-	}
-	if string(got) != string(content) {
-		t.Errorf("dst content = %q, want %q", got, content)
-	}
-
-	// Source should still exist.
-	if _, err := os.Stat(src); err != nil {
-		t.Errorf("source should still exist: %v", err)
-	}
-}
-
 // TestITLBackupEntry_Sort verifies newest-first sort order.
 func TestITLBackupEntry_Sort(t *testing.T) {
 	now := time.Now()
@@ -119,70 +90,11 @@ func TestITLBackupEntry_Sort(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// copyFile — error paths
-// ---------------------------------------------------------------------------
-
-// TestCopyFile_SourceMissing verifies copyFile returns an error when the
-// source does not exist.
-func TestCopyFile_SourceMissing(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "nonexistent.itl")
-	dst := filepath.Join(dir, "dst.itl")
-
-	err := copyFile(src, dst)
-	if err == nil {
-		t.Fatal("expected error for missing source, got nil")
-	}
-	if !os.IsNotExist(err) {
-		t.Errorf("expected IsNotExist error, got: %v", err)
-	}
-}
-
-// TestCopyFile_DestDirMissing verifies copyFile returns an error when the
-// destination directory does not exist (temp-file creation fails).
-func TestCopyFile_DestDirMissing(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src.itl")
-	if err := os.WriteFile(src, []byte("data"), 0o644); err != nil {
-		t.Fatalf("write src: %v", err)
-	}
-
-	// Destination in a non-existent sub-directory
-	dst := filepath.Join(dir, "nonexistent-subdir", "dst.itl")
-	err := copyFile(src, dst)
-	if err == nil {
-		t.Fatal("expected error for missing destination directory, got nil")
-	}
-}
-
-// TestCopyFile_OverwritesExisting verifies that copyFile replaces an existing
-// destination file atomically.
-func TestCopyFile_OverwritesExisting(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src.itl")
-	dst := filepath.Join(dir, "dst.itl")
-
-	if err := os.WriteFile(src, []byte("new-content"), 0o644); err != nil {
-		t.Fatalf("write src: %v", err)
-	}
-	// Pre-create destination with old content.
-	if err := os.WriteFile(dst, []byte("old-content"), 0o644); err != nil {
-		t.Fatalf("write dst: %v", err)
-	}
-
-	if err := copyFile(src, dst); err != nil {
-		t.Fatalf("copyFile: %v", err)
-	}
-
-	got, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatalf("read dst: %v", err)
-	}
-	if string(got) != "new-content" {
-		t.Errorf("dst content = %q, want %q", got, "new-content")
-	}
-}
+// The copyFile tests that lived here moved to internal/fileops/copy_test.go
+// when this package's private copy was replaced by fileops.CopyFile /
+// fileops.CopyFileAtomic. They gained mode-preservation and partial-cleanup
+// assertions there; this package's own tests below cover the ITL-specific
+// backup naming and handler behaviour.
 
 // ---------------------------------------------------------------------------
 // backupITLFile — timestamped filename

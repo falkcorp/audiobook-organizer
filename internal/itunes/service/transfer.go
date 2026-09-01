@@ -1,7 +1,7 @@
 // file: internal/itunes/service/transfer.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 //
 // ITL file transfer handlers: download, upload+validate, backup
 // list, and restore. Part of backlog 6.4.
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/gin-gonic/gin"
@@ -245,7 +246,9 @@ func (t *TransferService) HandleRestore(c *gin.Context) {
 		return
 	}
 
-	if err := copyFile(backupPath, itlPath); err != nil {
+	// CopyFileAtomic: this writes over the LIVE iTunes library, so it must
+	// never be observed truncated — temp beside it, fsync, then rename.
+	if err := fileops.CopyFileAtomic(backupPath, itlPath); err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("failed to restore backup: %v", err))
 		return
 	}
@@ -266,34 +269,9 @@ func backupITLFile(itlPath string) error {
 
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	backupPath := itlPath + ".bak-" + ts
-	return copyFile(itlPath, backupPath)
-}
-
-// copyFile copies src to dst using a temp-write + rename for atomicity.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	dir := filepath.Dir(dst)
-	tmp, err := os.CreateTemp(dir, ".itl-copy-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-
-	if _, err := io.Copy(tmp, in); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	tmp.Close()
-
-	if err := os.Rename(tmpPath, dst); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	// fileops.CopyFile, not a hand-rolled temp+rename: this path used
+	// os.CreateTemp (mode 0600) and renamed it into place, so every backup
+	// it ever wrote was owner-only, and it never fsynced — a backup still
+	// in page cache when the library is rewritten is not a backup.
+	return fileops.CopyFile(itlPath, backupPath)
 }

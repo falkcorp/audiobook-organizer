@@ -1,5 +1,5 @@
 // file: internal/fileops/reflink_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3c4cfb5-9506-4f5a-b176-95cccb39a4e1
 // last-edited: 2026-09-01
 
@@ -194,7 +194,7 @@ func TestCopyFileExclusiveRefusesExistingDestination(t *testing.T) {
 	writeFile(t, src, "new content")
 	writeFile(t, dst, "PRECIOUS EXISTING DATA")
 
-	err := copyFileExclusive(src, dst)
+	err := CopyFileExclusive(src, dst)
 	if err == nil {
 		t.Fatal("copyFileExclusive overwrote an existing destination; it must refuse")
 	}
@@ -220,7 +220,7 @@ func TestCopyFileExclusiveCopiesContent(t *testing.T) {
 	dst := filepath.Join(dir, "dst.bin")
 	writeFile(t, src, "payload to copy")
 
-	if err := copyFileExclusive(src, dst); err != nil {
+	if err := CopyFileExclusive(src, dst); err != nil {
 		t.Fatalf("copyFileExclusive: %v", err)
 	}
 	got, err := os.ReadFile(dst)
