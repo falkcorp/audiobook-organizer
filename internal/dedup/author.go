@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-09-01
 
@@ -503,29 +503,71 @@ func looksLikeAuthorName(s string) bool {
 	// every caseless script.
 	parts := strings.Fields(s)
 	lastWord := parts[len(parts)-1]
-	// A name particle is never a surname. BOTH tests are needed and each catches
-	// what the other misses: the lowercase test catches "Ludwig van", and the
-	// particle test catches "Volker Le" -- capitalized, so IsLower is false, yet
-	// still a particle. Dropping the particle half reproduced the exact bug one
-	// character down: "Volker Le Guin Wolfgang Amadeus Mozart" split as
-	// ["Volker Le" "Guin Wolfgang" "Amadeus Mozart"].
-	if unicode.IsLower([]rune(lastWord)[0]) || personname.IsNameParticle(lastWord) {
+	// A name particle is never a surname, in any casing: "Ludwig van" and
+	// "Volker Le" are both non-names, and admitting either unlocks a 3-way split
+	// that scoreAuthorSplit then ranks ABOVE the correct 2-way one.
+	//
+	// This was written as `unicode.IsLower(first rune) || IsNameParticle(...)`
+	// with a comment claiming both halves were needed. The IsLower half was DEAD:
+	// LooksLikePersonName has already run above, and it rejects any word starting
+	// lowercase UNLESS it is a listed particle -- so by this line a lowercase last
+	// word is necessarily a particle that IsNameParticle catches. Mutation-verified
+	// (neutralizing that half leaves the suite green). The claim was asserted, not
+	// controlled.
+	//
+	// KNOWN WEAKNESS, stated plainly rather than implied: this is a CLOSED LIST.
+	// Der, Ten, Abu, Ben, Bint, Op, Zu, Zur, Dem, Af, Av, Nic and Ap are all real
+	// particles that are not in it. The length rule below is what currently keeps
+	// most of them out, which means the two rules are entangled -- relaxing the
+	// length rule re-exposes exactly this gap.
+	if personname.IsNameParticle(lastWord) {
 		return false
 	}
 	// And it must not be a bare INITIAL: "A." and "B" are initials. This is what
 	// keeps "R.A. Mejia Charles Dean" splitting at the right boundary instead of
 	// stranding "R.A." as a surname.
 	//
-	// Expressed as "is it one character?", which is what an initial actually is.
-	// The original said `len(lastTrimmed) < 3` -- a BYTE count used as a proxy,
-	// and the proxy is wrong in both directions once non-ASCII is admitted:
-	//   - as bytes it is meaningless for CJK ("春樹" is 6 bytes, so it passed by
-	//     accident, and only the ASCII test above was rejecting it);
-	//   - rewritten as a RUNE count it becomes actively wrong, rejecting "村上 春樹"
-	//     -- a two-character Japanese surname -- from the one package extracted to
-	//     stop dropping Japanese authors.
-	// It also excluded real two-letter surnames in any script: Ng, Wu, Li, Ho.
-	return len([]rune(strings.TrimRight(lastWord, "."))) >= 2
+	// The original said `len(lastTrimmed) < 3` -- a BYTE count standing in for the
+	// question "is this an abbreviation?", and the proxy is wrong in both
+	// directions once non-ASCII is admitted:
+	//   - as BYTES it is meaningless for CJK ("春樹" is 6 bytes, so it passed by
+	//     accident and only the ASCII test above was rejecting it);
+	//   - rewritten as a flat RUNE count >= 2 it admits two-letter LATIN tokens,
+	//     which re-opens the particle gap above: "Jane St Clair Wolfgang Amadeus
+	//     Mozart" split as ["Jane St" "Clair Wolfgang" "Amadeus Mozart"], and the
+	//     same for "Klaus Zu Guttenberg" and "Jane Ph D". St/Zu/Ph are not in the
+	//     particle list and at >= 3 could never reach it.
+	//
+	// The discriminator is SCRIPT, not length: a two-character surname is ordinary
+	// in Han/Hiragana/Katakana/Hangul and is almost always an abbreviation in
+	// Latin/Cyrillic/Greek. So the threshold is script-conditional.
+	//
+	// COST, accepted deliberately: romanized two-letter surnames written in Latin
+	// (Wang Li, Chen Yu, Ng, Wu, Ho) are refused, so "Wang Li Chen Yu" does not
+	// split. That is a MISS. The alternative is the three silent WRONG splits
+	// above, and this file's own C414 rule is that refusing beats laundering:
+	// a missed split leaves the composite visibly wrong for repair, a wrong split
+	// does not.
+	trimmed := []rune(strings.TrimRight(lastWord, "."))
+	if len(trimmed) == 0 {
+		return false
+	}
+	if isAbbreviationProneScript(trimmed[0]) {
+		return len(trimmed) >= 3
+	}
+	return len(trimmed) >= 2
+}
+
+// isAbbreviationProneScript reports whether r belongs to a script where a
+// two-character word is far more likely an abbreviation ("St", "Zu", "Ph", "Jr")
+// than a surname. Han, Hiragana, Katakana and Hangul surnames are routinely one
+// or two characters, so they must NOT be held to the same threshold -- that is
+// what rejected 村上 春樹 from the package extracted to stop dropping Japanese
+// authors.
+func isAbbreviationProneScript(r rune) bool {
+	return unicode.Is(unicode.Latin, r) ||
+		unicode.Is(unicode.Cyrillic, r) ||
+		unicode.Is(unicode.Greek, r)
 }
 
 // scoreAuthorSplit scores a split of names. Higher = more likely correct.

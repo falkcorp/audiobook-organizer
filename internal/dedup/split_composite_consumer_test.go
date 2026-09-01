@@ -1,5 +1,5 @@
 // file: internal/dedup/split_composite_consumer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f7c1a94-8d02-4e6b-b5a1-2c9e07f4d813
 // last-edited: 2026-09-01
 
@@ -81,6 +81,15 @@ func TestSplitCompositeNeverMintsANonPersonPart(t *testing.T) {
 		"Ludwig van Beethoven Wolfgang Amadeus Mozart",
 		"Vincent van Gogh Pablo Diego Picasso",
 		"Simone de Beauvoir Jean Paul Sartre",
+		"Jane St Clair Wolfgang Amadeus Mozart",
+		"Klaus Zu Guttenberg Wolfgang Amadeus Mozart",
+		"Volker Le Guin Wolfgang Amadeus Mozart",
+		// Mononym slash pairs. origin/main split these, but the slash branch was
+		// the ONLY separator on main that accepted mononym pairs -- comma,
+		// semicolon, and, & and bracket all returned nil for "Homer, Virgil" and
+		// friends. Gating slash brings the outlier into line, and stops
+		// "Discworld / Mort" being filed as two authors at the same time.
+		"Homer / Virgil", "Discworld / Mort",
 	)
 
 	bad := 0
@@ -166,6 +175,11 @@ func TestSplitCompositeStillSplitsLegitimateComposites(t *testing.T) {
 		// A two-rune CJK surname: the rune-count rule must reject INITIALS, not
 		// short names, or this package drops the very authors it exists to keep.
 		{"R.A. Mejia Charles Dean", "R. A. Mejia|Charles Dean"},
+		// Two-rune LATIN trailing tokens. These are abbreviations/particles absent
+		// from the closed particle list, and a flat >=2-rune surname rule let them
+		// qualify as surnames -- the Beethoven bug again, unshielded.
+		{"Jane St Clair Wolfgang Amadeus Mozart", "Jane St Clair|Wolfgang Amadeus Mozart"},
+		{"Klaus Zu Guttenberg Wolfgang Amadeus Mozart", "Klaus Zu Guttenberg|Wolfgang Amadeus Mozart"},
 	} {
 		got := strings.Join(SplitCompositeAuthorName(tc.in), "|")
 		if got != tc.want {

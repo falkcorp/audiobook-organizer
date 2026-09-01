@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.75.0
+// version: 1.76.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -1851,14 +1851,35 @@ func extractAuthorFromDirectory(filePath string) string {
 		}
 	}
 
+	// Both branches of this function gate on LooksLikePersonName, and the "Author -
+	// Title" branch above was reviewed as a candidate to leave on the bare
+	// IsValidAuthor. It was MEASURED instead of argued, and the measurement went
+	// the other way. Reverting that branch, vs origin/main:
+	//
+	//   buys  Tolkien, Homer, King, Asimov, Plato, Colette   (6 real mononyms)
+	//   costs Discworld, Bookends, Chapterhouse, Discography (4 junk authors that
+	//         origin/main did NOT mint -- "Discworld - Mort", "Bookends - Volume
+	//         One", "Chapterhouse - Dune", "Discography - Live" all reach that
+	//         branch, contrary to the claim that only bare directory names do)
+	//
+	// So gating loses 6 real authors and mints 0 junk; not gating keeps them and
+	// mints 4 junk. C414's rule decides it: refusing leaves the composite visibly
+	// wrong for repair, laundering does not. The caller here sits under
+	// `if book.Author == ""`, so a refusal routes to AI filename nomination and
+	// gets a second chance -- a wrong author gets none.
+	//
 	// Use directory name if it is person-SHAPED, not merely non-empty.
 	//
 	// This called the bare IsValidAuthor until 2026-09-01 while metadata.go's
 	// byte-identical twin called LooksLikePersonName -- a divergence that
 	// predates the personname unification and survived it, because the refactor
-	// faithfully preserved each call site's own predicate. Every other
-	// personname call in this file already uses LooksLikePersonName; these two
-	// were the outliers.
+	// faithfully preserved each call site's own predicate.
+	//
+	// "It now matches metadata" is NOT the argument, and should not be read as
+	// one: metadata has always had this loss, and two copies agreeing on a loss
+	// is not evidence the loss is right -- that is the same "one copy was the
+	// good one" assumption internal/personname exists to disprove. The argument
+	// is the measurement below.
 	//
 	// It has to change here because IsValidAuthor has NO shape check, and the
 	// result is assigned straight to book.Author. Once the structural-word test
