@@ -1,6 +1,6 @@
 ### Changed
 
-#### Three diverged copies of "does this string look like a person's name?" folded into one, fixing a Unicode bug and a title-as-author bug on the way
+#### Five diverged copies of "does this string look like a person's name?" folded into one, fixing a Unicode bug and a title-as-author bug on the way
 
 `looksLikePersonName` existed in three packages (`internal/scanner`,
 `internal/metadata`, `internal/dedup`) and `isValidAuthor` in two. They had drifted
@@ -43,3 +43,56 @@ the test.
 Books whose filename previously yielded a wrong author (the title) will now yield
 no author instead. That is the better failure: an empty author field is refilled by
 the AI parse and metadata paths, while a confidently wrong one is not.
+
+#### Two more copies, and a safety claim that was measured at the wrong level
+
+Review of the above found that the first version of this change was **not** safe to
+ship, for a reason worth recording. The claim made for it was that the unified
+predicate is monotonically more restrictive — it can only ever go `true → false`,
+so it can never mint an author the deployed code would not have. That premise was
+true. The conclusion did not follow, because it was measured on the **predicate**
+and asserted about the **consumer**.
+
+`SplitCompositeAuthorName`'s comma branch does not return when a part fails the
+shape check — it `break`s, and falls through to weaker branches. So a newly-*false*
+predicate does not stop a split, it changes **which branch wins**. Measured against
+the real splitter, the first version minted **886 distinct author strings** that the
+deployed code never minted, and sent **33,580 of 195,245** realistic composites from
+a correct split to no split at all.
+
+Two compounding causes, both now fixed:
+
+- **The trigger.** `IsValidAuthor` matched the structural words (`book`, `chapter`,
+  `part`, `vol`, `volume`, `disc`) with `strings.HasPrefix` and no word boundary, so
+  it rejected every real author whose name merely begins with those letters — Booker
+  T. Washington, Volker Kutscher, Volney Beckner, Volodymyr Zelensky, Voltaire,
+  Partha Chatterjee, Partridge. Structural words are now matched as whole first
+  words, with trailing punctuation and digits stripped so `Vol. 2`, `Book3` and
+  `Disc 1` still match. Plurals are listed explicitly, so widening the match does not
+  start admitting `Parts Unknown`, which the prefix test had caught by accident.
+- **The amplifier.** The comma branch's own comment says every part must be
+  person-shaped "or the whole split is refused — refusing leaves the composite
+  VISIBLY wrong for repair rather than laundering a title fragment into a name." The
+  bracket and semicolon branches it fell through to asked only whether a part was
+  longer than two characters and contained a space — which is exactly the test that
+  was removed from the comma branch for minting `and the Farm Boy (DBY)`. The comment
+  described a control that did not exist, and those branches were still minting
+  `Ann Petry (DBY), Ida Wells`, `the quick brown, Ida Wells` and
+  `So Long, and Thanks for All the Fish` as author names. All branches now gate on
+  the same shared predicate.
+
+A **fifth** copy then turned up, caught by the new consumer test rather than by
+reading: `looksLikeAuthorName`, used by the concatenated-name splitter, still carried
+the same ASCII byte test this whole change exists to delete. It has been composed
+with the shared predicate rather than replaced, because it also enforces one rule the
+shared predicate does not — a surname must not be a bare initial — which is what
+keeps `R.A. Mejia Charles Dean` splitting at the right boundary.
+
+Re-measured at the consumer over 258,845 composites: **0** author strings are minted
+that the deployed code did not mint, and the 13 strings no longer minted are all
+structural labels (`Book 3`, `Chapter 1`, `Disc 1`, `Vol. 2`, `Parts Unknown`),
+never a person.
+
+Turning the `break` into a `return` was the other candidate fix and was rejected on
+measurement, not taste: it also destroys legitimate last-first composites such as
+`Smith, John; Doe, Jane`.
