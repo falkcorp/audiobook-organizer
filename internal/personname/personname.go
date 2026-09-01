@@ -172,6 +172,20 @@ func StripEditionSuffix(s string) string {
 	return strings.TrimSpace(editionSuffixRe.ReplaceAllString(strings.TrimSpace(s), ""))
 }
 
+// isMultiNameCredit reports whether s lists two or more names.
+func isMultiNameCredit(s string) bool {
+	clauses := creditSeparatorRe.Split(StripEditionSuffix(s), -1)
+	if len(clauses) < 2 {
+		return false
+	}
+	for _, c := range clauses {
+		if !LooksLikePersonName(strings.TrimSpace(c)) {
+			return false
+		}
+	}
+	return true
+}
+
 // ChooseAuthorSide decides which half of a two-part filename ("Title - Author",
 // "Author_Title") is the author. It returns ok=false when it cannot tell, and
 // callers MUST treat that as "no author" rather than falling back to a default
@@ -225,8 +239,23 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 		return "", "", false
 	}
 
-	// Both sides could be a credit. Two discriminators, both of which already
-	// existed in the tree but each in only ONE of the four copies.
+	// Both sides could be a credit. Three discriminators, applied strongest
+	// first. The last two already existed in the tree but each in only ONE of
+	// the four copies.
+
+	// A list of several names is stronger evidence of author-hood than a single
+	// person-shaped phrase: "Neil Gaiman and Terry Pratchett" is a credit in a
+	// way "Good Omens" is not, even though both pass LooksLikeAuthorCredit.
+	// Without this the pair is treated as a tie, and the "_" path then refuses
+	// a credit it had enough evidence to place.
+	leftMulti, rightMulti := isMultiNameCredit(left), isMultiNameCredit(right)
+	if leftMulti != rightMulti {
+		if leftMulti {
+			return right, left, true
+		}
+		return left, right, true
+	}
+
 	leftLead, rightLead := titleLeadRe.MatchString(left), titleLeadRe.MatchString(right)
 	if leftLead != rightLead {
 		// A leading article marks the title.
