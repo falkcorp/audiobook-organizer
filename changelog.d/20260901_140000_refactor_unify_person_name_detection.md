@@ -336,3 +336,13 @@ the first being the one that mattered: two places named `splitAuthorTitle` as th
 function that filed titles as authors. **No such function exists in the tree.** The
 real consumer is `parseFilenameForAuthor` — the one that then carried this
 regression through three review rounds without being named once.
+
+Nine mutants against the orientation fix, each verified to match exactly one
+anchor and to compile before the tests ran: reverting either twin's right-hand
+side to the strict predicate, deleting the edition-marker clause, deleting the
+credit-list clause, weakening the credit list from "every clause" to "any
+clause", using the credit predicate on the left as well, unanchoring the
+edition-marker pattern, and flipping each of the two orientation branches.
+**Nine killed, none survived.** One of the nine had to be re-run: its first
+anchor matched two places in the file, so it changed the wrong one and tested
+nothing — an ambiguous mutant is as empty as a no-op mutant.
