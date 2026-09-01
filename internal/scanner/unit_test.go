@@ -97,33 +97,6 @@ func TestShouldSkipFileNeedsRescan(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// isInitialToken
-// ---------------------------------------------------------------------------
-
-func TestIsInitialToken(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		{"J.", true},
-		{"K.", true},
-		{"Z.", true},
-		{"A.", true},
-		{"a.", false},  // lowercase
-		{"JK", false},  // no period
-		{"J..", false}, // too long
-		{".", false},   // too short
-		{"J", false},   // no period
-		{"AB.", false}, // too long
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, isInitialToken(tt.input))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // looksLikeTitleCandidate
 // ---------------------------------------------------------------------------
 

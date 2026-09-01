@@ -1,7 +1,7 @@
 // file: internal/authorname/authorname.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2b7c14-9a36-4f81-b0d7-2c93e845af60
-// last-edited: 2026-08-25
+// last-edited: 2026-09-01
 
 // Package authorname holds the one author name the system writes to mean "we
 // could not resolve an author".
@@ -16,11 +16,16 @@
 // silently acquires the placeholder as a real author.
 //
 // NOTE: this unifies the LITERAL only. The filename/directory author parser
-// itself still exists twice, in internal/scanner and internal/metadata, as
-// divergent copies (parseFilenameForAuthor, extractAuthorFromDirectory,
-// looksLikePersonName). Collapsing those is filed separately; until then a fix
-// to one is not a fix to the other, which is exactly how the first version of
-// this change came to be inert on the path that produces the bug.
+// itself STILL exists twice, in internal/scanner and internal/metadata, as
+// divergent copies: parseFilenameForAuthor (scanner.go:1865, metadata.go:852)
+// and extractAuthorFromDirectory (scanner.go:1809, metadata.go:806). Verified
+// still duplicated 2026-09-01. Until they are collapsed, a fix to one is not a
+// fix to the other, which is exactly how the first version of this change came
+// to be inert on the path that produces the bug.
+//
+// looksLikePersonName WAS on that list and is no longer: all copies of it (and
+// of isValidAuthor, and of dedup's looksLikeAuthorName) now live in
+// internal/personname. The two parsers above are what remain.
 //
 // Depends on nothing but the standard library, so any package may import it.
 package authorname
