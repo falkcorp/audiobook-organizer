@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.76.0
+// version: 1.77.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 
@@ -1836,7 +1836,19 @@ func extractAuthorFromDirectory(filePath string) string {
 		re := regexp.MustCompile(`^([^-]+)\s*-\s*(?:translator|narrated by)\s*-`)
 		matches := re.FindStringSubmatch(dirName)
 		if len(matches) > 1 {
-			return strings.TrimSpace(matches[1])
+			// Shape-gated like the two branches below. This returned matches[1]
+			// with NO predicate at all -- not IsValidAuthor, not
+			// LooksLikePersonName -- and it is the FIRST branch tried, so it
+			// decided the author before either gate could run:
+			//   "Discworld - translator - Mort"            -> "Discworld"
+			//   "the quick brown - translator - Mort"       -> "the quick brown"
+			//   "Unabridged - narrated by - Stephen Fry"    -> "Unabridged"
+			// Same defect as internal/dedup's slash branch, and missed the same
+			// way: the branches were gated one at a time by READING the function,
+			// and the first-tried one was not in the corpus that measured it.
+			if candidate := strings.TrimSpace(matches[1]); personname.LooksLikePersonName(candidate) {
+				return candidate
+			}
 		}
 	}
 
@@ -1851,22 +1863,27 @@ func extractAuthorFromDirectory(filePath string) string {
 		}
 	}
 
-	// Both branches of this function gate on LooksLikePersonName, and the "Author -
-	// Title" branch above was reviewed as a candidate to leave on the bare
-	// IsValidAuthor. It was MEASURED instead of argued, and the measurement went
-	// the other way. Reverting that branch, vs origin/main:
+	// Every branch of this function gates on LooksLikePersonName, and the
+	// "Author - Title" branch above was reviewed as a candidate to leave on the
+	// bare IsValidAuthor. Declined, and the reason is the one already recorded
+	// twenty lines above at the Pratchett-036 guard: a WRONG author is strictly
+	// worse than an ABSENT one on this exact path, because it still closes the AI
+	// nomination gate and nothing downstream can recognise it as junk, while an
+	// empty author routes to AI filename nomination and gets a second chance.
+	// Measured 2026-08-25. That asymmetry is STRUCTURAL, not a headcount.
 	//
-	//   buys  Tolkien, Homer, King, Asimov, Plato, Colette   (6 real mononyms)
-	//   costs Discworld, Bookends, Chapterhouse, Discography (4 junk authors that
-	//         origin/main did NOT mint -- "Discworld - Mort", "Bookends - Volume
-	//         One", "Chapterhouse - Dune", "Discography - Live" all reach that
-	//         branch, contrary to the claim that only bare directory names do)
+	// A tally -- "6 real mononyms recovered vs 4 junk series names admitted" --
+	// was the first justification written here, and it does not survive scrutiny:
+	// both sides are artifacts of which directory names someone happened to type,
+	// not frequency measurements of a real library, so a differently-composed
+	// corpus "proves" the opposite. The measurement that DOES hold is the narrow
+	// factual one: junk reaches this branch at all. "Discworld - Mort",
+	// "Bookends - Volume One", "Chapterhouse - Dune" and "Discography - Live" each
+	// yield the series name as the author when it is ungated, so the claim that
+	// only bare directory names carry junk here is false.
 	//
-	// So gating loses 6 real authors and mints 0 junk; not gating keeps them and
-	// mints 4 junk. C414's rule decides it: refusing leaves the composite visibly
-	// wrong for repair, laundering does not. The caller here sits under
-	// `if book.Author == ""`, so a refusal routes to AI filename nomination and
-	// gets a second chance -- a wrong author gets none.
+	// Cost, stated plainly: single-name authors in "Tolkien - The Hobbit" form are
+	// refused here. They are not lost -- they become AI-parse candidates.
 	//
 	// Use directory name if it is person-SHAPED, not merely non-empty.
 	//

@@ -189,3 +189,48 @@ that way. Measured, that turned out not to hold: `Discworld - Mort`,
 recovered six real single-name authors and introduced four junk ones the old code
 never produced, so the stricter check stays — a book left without an author is
 re-examined by the filename parser, and one given the wrong author is not.
+
+#### The script rule was a deny-list, so every script nobody thought of failed open
+
+A third review round found that the script-conditional threshold above was written
+as the wrong kind of list. It named the scripts that *are* abbreviation-prone —
+Latin, Cyrillic, Greek — and let everything else take the permissive branch. That
+is fail-open: a script is admitted precisely because nobody enumerated it. Arabic,
+Hebrew, Armenian and Devanagari were all falling through, and the two-character
+words they fall through on are exactly the ones that must not be surnames:
+
+```
+"محمد بن سلمان أحمد"   ->  ["محمد بن"  "سلمان أحمد"]     (بن = "son of")
+"דוד בן גוריון משה"    ->  ["דוד בן"  "גוריון משה"]      (David Ben-Gurion)
+```
+
+The list is now inverted to name the scripts where a short surname is *ordinary* —
+Han, Hiragana, Katakana, Hangul — and everything else takes the strict branch. An
+unenumerated script now fails closed, which is a missed split rather than a wrong
+name, consistent with the rest of this file. Both strings above now return no split.
+
+Three further things from the same round:
+
+- **The test guard for this rule had the byte-versus-rune bug the production code
+  had just been cured of.** The differential test that was supposed to catch a
+  short surname escaping counted `len(lastWord)` — bytes. `بن` is two characters
+  and four bytes, so it passed a `>= 3` check and the guard waved it through; the
+  mutant that reverts the deny-list **survived**. The guard now counts runes and
+  names the dangerous class directly rather than inferring it from a length.
+- **A must-admit assertion of my own caught the floor was still too high.** `田中 翼`
+  — a single-character Japanese given name — failed a test written to prove
+  Japanese names are admitted. The length floor is now removed entirely for
+  syllabic and logographic scripts, on the grounds that "a one-character word is a
+  bare initial" is a Latin orthographic convention that does not exist in Han or
+  Hangul.
+- **The translator branch of `extractAuthorFromDirectory` was ungated** in both the
+  scanner and metadata copies — the same defect as the slash branch, in the same
+  shape, found the same way.
+
+One known limit is recorded rather than fixed. Georgian is dropped by the shared
+predicate: Mkhedruli letters are Unicode lowercase, so `გიორგი ბაქრაძე` is not a
+name. This is not a regression — the ASCII test this package replaced dropped it
+too — and the obvious remedy does not work: Go does map Mkhedruli to Mtavruli
+(`unicode.ToUpper('გ') == 'Გ'`), so accepting runes with no uppercase mapping
+rejects Georgian exactly as today. Measured, and filed with the disproof rather
+than left as a plausible-sounding suggestion.

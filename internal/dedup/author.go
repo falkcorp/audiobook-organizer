@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-09-01
 
@@ -539,8 +539,9 @@ func looksLikeAuthorName(s string) bool {
 	//     particle list and at >= 3 could never reach it.
 	//
 	// The discriminator is SCRIPT, not length: a two-character surname is ordinary
-	// in Han/Hiragana/Katakana/Hangul and is almost always an abbreviation in
-	// Latin/Cyrillic/Greek. So the threshold is script-conditional.
+	// in Han/Hiragana/Katakana/Hangul and is almost always an abbreviation
+	// elsewhere. So the threshold is script-conditional, and expressed as an
+	// allow-list so an unenumerated script fails CLOSED -- see below.
 	//
 	// COST, accepted deliberately: romanized two-letter surnames written in Latin
 	// (Wang Li, Chen Yu, Ng, Wu, Ho) are refused, so "Wang Li Chen Yu" does not
@@ -552,22 +553,45 @@ func looksLikeAuthorName(s string) bool {
 	if len(trimmed) == 0 {
 		return false
 	}
-	if isAbbreviationProneScript(trimmed[0]) {
-		return len(trimmed) >= 3
+	if isSyllabicOrLogographic(trimmed[0]) {
+		// No length floor at all. "Is this a bare initial?" is a LATIN
+		// orthographic question -- "J.", "R.A." -- and Han/Hiragana/Katakana/
+		// Hangul have no initial form, so the rule simply does not apply. A
+		// single character is an ordinary given name there: 田中 翼 (Tanaka
+		// Tsubasa), 山田 誠. Holding them to a Latin minimum is the same category
+		// error as the byte count this rule replaced.
+		return len(trimmed) >= 1
 	}
-	return len(trimmed) >= 2
+	return len(trimmed) >= 3
 }
 
-// isAbbreviationProneScript reports whether r belongs to a script where a
-// two-character word is far more likely an abbreviation ("St", "Zu", "Ph", "Jr")
-// than a surname. Han, Hiragana, Katakana and Hangul surnames are routinely one
-// or two characters, so they must NOT be held to the same threshold -- that is
-// what rejected 村上 春樹 from the package extracted to stop dropping Japanese
-// authors.
-func isAbbreviationProneScript(r rune) bool {
-	return unicode.Is(unicode.Latin, r) ||
-		unicode.Is(unicode.Cyrillic, r) ||
-		unicode.Is(unicode.Greek, r)
+// isSyllabicOrLogographic reports whether r belongs to a script where a
+// TWO-CHARACTER word is an ordinary whole word rather than an abbreviation, so
+// the surname threshold may safely drop to 2.
+//
+// This is an ALLOW-LIST, and the direction is the point. It was first written as
+// its complement -- a deny-list naming Latin, Cyrillic and Greek, with every
+// other script falling through to the permissive >= 2 branch. That is fail-OPEN
+// for every script nobody enumerated, and the scripts nobody enumerated had the
+// exact bug the threshold exists to prevent:
+//
+//	"محمد بن سلمان أحمد"      -> ["محمد بن" "سلمان أحمد"]     Arabic bin, 2 letters
+//	"דוד בן גוריון משה"       -> ["דוד בן" "גוריון משה"]      Hebrew ben -- that is
+//	                                                          David Ben-Gurion, split
+//	                                                          with "ben" as the surname
+//	"عبد ال فهد محمد"         -> ["عبد ال" "فهد محمد"]        Arabic article al
+//	"Արամ Բա Սարգսյան Պետրոս" -> ["Արամ Բա" "Սարգսյան Պետրոս"] Armenian
+//	"राम बा शर्मा विष्णु"      -> ["राम बा" "शर्मा विष्णु"]     Devanagari
+//
+// personname.IsNameParticle can never catch those -- it is a romanized ASCII
+// list. Inverted, the same four scripts in the corpus behave identically and the
+// next script nobody thought of lands on the STRICT side, which is what this
+// file's refuse-beats-launder rule requires of an unknown case.
+func isSyllabicOrLogographic(r rune) bool {
+	return unicode.Is(unicode.Han, r) ||
+		unicode.Is(unicode.Hiragana, r) ||
+		unicode.Is(unicode.Katakana, r) ||
+		unicode.Is(unicode.Hangul, r)
 }
 
 // scoreAuthorSplit scores a split of names. Higher = more likely correct.
