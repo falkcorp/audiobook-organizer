@@ -7,6 +7,2064 @@
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-v0.221.1'></a>
+## v0.221.1 — 2026-09-01
+
+### Added
+
+#### A Whisper transcription worker that actually runs on Apple Silicon
+
+`scripts/whisper_mlx_server.py` is an optional Mac-only transcription worker
+built on Apple MLX, speaking the exact protocol `internal/transcribe/remote.go`
+already expects (`/health`, `/transcribe`, `/transcribe-batch`).
+
+It exists as a second server rather than a device flag on the existing one for
+a concrete reason: `scripts/whisper_server.py` runs faster-whisper on
+ctranslate2, which has no Metal/MPS backend. Pointing it at a Mac does not
+fail — it silently runs on CPU, roughly an order of magnitude slower, while
+still serving a healthy `/health`. A silent downgrade is worse than a refusal,
+so the Metal path gets its own inference stack.
+
+The worker adds capacity only. It binds loopback by default (the CUDA server
+binds `0.0.0.0`), listens on 19848 so both can run on one host, and is not
+wired into `WHISPER_ENDPOINTS` by this change. When it is offline the Go client
+treats it as absent capacity rather than permission to fall back, so queued
+work stays durable and scans never depend on the Mac being up. `enable_ai_parsing`
+is untouched and stays off.
+
+Two behavioural notes for operators: transcripts are not byte-identical to the
+CUDA server's, because that one applies a tuned VAD filter and MLX Whisper has
+no equivalent; and the batch endpoint keys results by each part's filename
+verbatim, which is the book ID the Go client looks up — normalising it in any
+way makes the transcript unfindable.
+
+Operations guide: `docs/operations/metal-whisper-worker.md`.
+
+- **`require_gpu` for Whisper endpoints.** A Whisper worker on the wrong silicon
+  does not fail — it serves healthy responses from a CPU backend at roughly a
+  tenth of the speed, which looks like a slow library rather than a
+  misconfiguration. Setting `"require_gpu": true` on an entry in
+  `WHISPER_ENDPOINTS` now refuses that endpoint instead of using it. The check is
+  fail-closed: an endpoint whose `/health` cannot be read, or which is too old to
+  report a device, is refused rather than assumed healthy, and accepted devices
+  are an explicit allow-list (`cuda`, `metal`, `mps`, `rocm`, `hip`) so an
+  unrecognised backend is refused rather than waved through.
+
+- **Capability-label routing for Whisper endpoints ("tier routing").** Each
+  endpoint now has a set of capability labels, and `WHISPER_REQUIRES` names the
+  labels work must have. An endpoint receives work only if its set contains
+  **every** required label; the survivors are then ordered by `priority` as
+  before, so labels filter candidates and priority orders them. An empty
+  requirement set means any endpoint, which is the previous behaviour.
+
+  Labels come from two places that are deliberately not interchangeable.
+  *Measured* labels (`gpu`, `cpu`, `batch`, `cuda`, `metal`, `mps`, `rocm`,
+  `hip`) are derived from `/health` and cannot be declared. *Declared* labels
+  (`capabilities`, e.g. `local`, `unmetered`) cover what no probe can see. A
+  declared label colliding with the measured namespace is dropped and logged
+  rather than trusted.
+
+- **launchd agent for the Whisper reverse SSH tunnel.** The Metal worker binds
+  `127.0.0.1` only and is published to the server through
+  `ssh -N -R 19848:127.0.0.1:19848`, so the server reaches it on its own loopback
+  and nothing is exposed on the LAN. The agent passes `ControlMaster=no` and
+  `ControlPath=none` deliberately: with a shared SSH control master configured,
+  `ssh -R` attaches to an interactive session's connection, registers the forward
+  there and exits 0, producing a tunnel that works until that unrelated session
+  ends — and that `KeepAlive` cannot fix, because the exit looks clean.
+
+- `ABK_DISABLE_MEDIAINFO=1` forces the ffprobe-only path, with no rebuild. This changes
+  the tool used on a hot path across the whole library, so reverting must not require a
+  deploy.
+- `audioutil.DurationProbeStats()` reports the mediainfo/ffprobe split. A silent fallback
+  would be worse than a loud one: if mediainfo failed on every file we would run two
+  subprocesses per file instead of one, be *slower* than before, and have no signal saying
+  so. The first fallback also logs once with the concrete reason.
+- `audioutil.DurationProbeAvailable()` — true when *either* prober is present.
+
+- `whisper_batch_size` (env `WHISPER_BATCH_SIZE`, default 16) — files per
+  `/transcribe-batch` request, previously a hardcoded constant. Small values spread work
+  across the pool instead of queueing it at one server.
+- `whisper_max_in_flight` (env `WHISPER_MAX_IN_FLIGHT`, default 0 = unlimited) — a
+  pool-wide ceiling on total simultaneous requests across every endpoint, independent of
+  what the individual endpoints would accept.
+
+#### The review-queue lane can now be filtered, searched and sorted — and says which of its numbers is which
+
+The regroup lane (`/review?lane=regroup`) had no filter, no search and no sort at
+all, while the metadata lane beside it carried nine filter switches, a regex box,
+a provider picker and a slider. It now has three controls, and they deliberately
+do not all work the same way.
+
+**Kind is pushed to the server.** It is the only one of the three that can be,
+and the only one that changes which rows exist rather than which loaded rows are
+shown. That matters because the lane's fetch is capped at 500: an unfiltered load
+of a queue holding 730 holds across kinds spends the whole page budget on a
+mixture — on production, ~484 holds of the kind being worked plus 16 of another.
+Selecting the kind spends all 500 on the kind being worked. `ReviewItemsFilter`
+has carried a `kind` field the whole time; this lane simply never passed it. It
+is now passed on BOTH fetch paths — the mount fetch and the reload that runs
+after every approve, reject and bulk action, which would otherwise have quietly
+repopulated the lane with every kind the moment a reviewer decided one hold.
+
+This raises the cap's usefulness; it does not remove it. A kind holding 714 still
+truncates at 500. Paging past that needs `offset`, which the client already
+supports and this lane still does not use.
+
+**Search and sort are client-side, and the UI says so.** The endpoint offers
+neither, so both act on the loaded page rather than on the queue, and each
+control carries the helper text that admits it. Search matches the summary, the
+folder path (the item's own and the payload's), the proposed title, the member
+file paths, the dedup key, the id and the kind label — built into an index once
+per loaded page rather than re-parsing 500 JSON payloads per keystroke, and
+debounced 250 ms behind the text field so typing never lags. There is
+deliberately no author match: a `ReviewItem` carries no author, and the member
+books that do are fetched lazily per row, so matching on one would silently have
+meant "matches the rows you already expanded". Sort offers kind (the previous
+fixed order, now selectable), newest and oldest by `created_at` — a field that
+until now rendered nowhere. The comparator is total, ending on the id: the queue
+is written in bulk by a scan, so holds sharing a `created_at` to the second are
+the normal case, and a comparator that called them equal would leave their order
+to whatever the fetch happened to return.
+
+#### Four counts that used to be two
+
+The lane now keeps apart four numbers that a filter makes genuinely different:
+the whole queue, the selected kind's server-side total, what was actually
+loaded, and what the search left visible.
+
+The trap this closes is `total`. The store applies `kind` **before** taking the
+length (`ListReviewItems`), so under a kind filter the fetched total is that
+kind's count and not the queue's — rendering it as "N pending" beside a kind
+selector would have understated the queue by everything the other kinds hold. The
+all-kinds number now comes from the already-polled `/review/count`, the same
+instrument the per-kind totals already trusted, so the two cannot disagree.
+
+The second is truncation. The "your view is partial" warning and the per-bucket
+counts are derived from what was LOADED, never from what the search left visible.
+Truncation means the lane failed to load rows that exist; a search hiding rows is
+the reviewer asking for that. Had the two been merged, every keystroke would have
+raised the warning, which is how the one occurrence that matters becomes
+unreadable.
+
+**One of the three sort orders cannot be answered from a short page, and says
+so.** `ListReviewItems` sorts `CreatedAt DESC` and truncates *afterwards*, so a
+capped page is the NEWEST rows of the matching set — the cut is made along the
+same axis the sort control re-orders. "Newest first" over that page is therefore
+correct, and "Kind" makes no temporal claim, but "Oldest first" would put the
+oldest of the newest 500 on top while the genuinely oldest holds were never
+fetched. That is a wrong answer wearing an authoritative face, and the generic
+"500 of 714 loaded" chip does not imply it. The Sort control's helper text now
+says "Oldest of the loaded page only" in exactly that case, and in no other —
+a warning that fires on all three orders is one nobody reads on the occasion it
+means something.
+
+#### First wall-clock measurement of the `/review` route at 50 and 100 items
+
+Every responsiveness claim about `/review` up to now was an inference. The
+commit that memoized the spine rows (`perf(review): memoize spine rows so one
+checkbox re-renders one row`) argued from a re-render COUNT — "at the 100-row
+page cap that is 99 wasted row renders per click, which is the sluggishness the
+larger page sizes actually exhibit" — and nothing measured whether that
+translated into time a user could feel. `web/tests/e2e/benchmark-review-lanes.spec.ts`
+is that measurement.
+
+It is a measuring instrument, not a gate: skipped unless `E2E_PERF=1`, excluded
+from the chromium/webkit gate projects, and named in `GATE_EXEMPT`. It prints a
+table rather than asserting a threshold, because a wall-clock threshold on a
+shared runner is a flake factory and one loose enough not to flake would pass
+while the page is slow.
+
+**The categorical result, which does not depend on wall-clock at all:** at
+N≤100 the dupes lane is the only review lane that blocks the main thread. Every
+metadata and regroup interaction reports zero long tasks, zero blocking time and
+zero max-task at both sizes; dupes reports 288 ms blocking / 120 ms longest task
+at N=50 and 830 ms / 234 ms at N=100. Long-task counters are gathered inside the
+page, so unlike the wall-clock figures they carry no CDP round-trip floor.
+
+The wall-clock table, measured on an M-series laptop under load average 8–12 on
+10 cores, chromium, one worker, median of 5 repetitions (min–max in brackets).
+The N=5 column is a noise floor running the identical code path; a row whose
+N=100 figure does not clear its own floor is labelled as such rather than
+quoted as a trend:
+
+| lane | metric | N=5 floor | N=50 | N=100 | N=100 @6x | resolves above floor? |
+| --- | --- | --- | --- | --- | --- | --- |
+| dupes | filter (client) | 17 [14–29] | 32 [25–33] | 50 [47–67] | 271 | yes |
+| dupes | checkbox toggle | 14 [13–23] | 41 [39–50] | 67 [63–83] | 423 | yes |
+| metadata | filter (client) | 15 [14–30] | 22 [18–33] | 25 [24–39] | 174 | **no** |
+| metadata | checkbox toggle | 9 [8–20] | 19 [17–26] | 26 [26–39] | 217 | marginal |
+| regroup | filter (250 ms debounce incl.) | 377 [374–395] | 389 [382–402] | 399 [394–421] | 619 | marginal |
+| regroup | sort change (client) | 221 [213–304] | 240 [234–288] | 263 [256–295] | 527 | **no** |
+
+So only the two dupes rows are a measured scaling result. The metadata filter
+and the regroup sort move by less than their own N=5 spread and must be read as
+"no cost detectable at this N", not as a trend.
+
+The regroup figures also need reading with their zero blocking time in mind:
+377 ms at N=5 with no main-thread work at all is the 250 ms search debounce plus
+a MUI transition and the idle wait, and 221 ms for a sort at N=5 is the Select
+menu's open/close animation. `regroupSortOnce` is largely measuring the control,
+not the re-sort. Neither number is compute.
+
+Initial load to N interactive rows is 930–1015 ms for every lane at every size,
+dominated by the lazy route chunk rather than by row count.
+
+**The memo commit's claim is now measured rather than argued.** Reverting
+`CompareSpine.tsx` to its pre-memo state and re-running the metadata lane at
+N=100 doubles the checkbox cost, 26 ms → 52 ms. The optimization is real and
+roughly halves the interaction; the revert was local and is not part of this
+change.
+
+**The dupes lane is the outlier and `DupesSpine.tsx` has no memoization at
+all** — the memo commit covered `CompareSpine` and `RegroupSpine` only. At
+N=100 a dupes checkbox costs 67 ms against metadata's 26 ms, and a dupes filter
+apply-and-clear cycle at N=100 produces a 234 ms longest single task while
+metadata's produces none at all. A 234 ms main-thread task is above the
+threshold where an interaction stops feeling instant. (The long-task counters
+are reset once per 5-repetition batch and span both the apply and the clear of
+each repetition, so they do not divide into the per-interaction medians — they
+answer "did this lane block the main thread", not "what did one apply cost".)
+Reported, not fixed: this change is test-only.
+
+Two things the harness deliberately does not cover, stated because a number
+without its scope invites over-reading. Rows are seeded by `page.route`
+interception, so it measures render and client state cost only — never server
+latency, Pebble read cost, or any server-side filter (the dupes band/status
+filters and the regroup kind filter all round-trip, and are excluded for exactly
+that reason). And two of the four requested interactions do not exist to
+measure: neither the dupes nor the metadata lane has a sort control, and the
+regroup lane has no row selection. Those are reported as absent rather than
+synthesised.
+
+The instrument is verified against a known-bad input rather than assumed to
+work: a 6x CPU throttle raises every figure 2–7x and takes blocked main-thread
+time from 0 ms to 1.8–7.4 s, and an N=5 noise-floor row runs the identical path
+so that the N=50-vs-N=100 comparison can be told apart from harness overhead.
+
+#### Observed while measuring: the metadata rail checkbox is not clickable by coordinate
+
+At the benchmark viewport the QueueRail row checkbox's centre is outside the
+viewport, and once scrolled into view a `MuiDivider` / `MuiStack` receives the
+pointer event instead — `check()` retries until timeout and `check({force:true})`
+fails with "Clicking the checkbox did not change its state". Dispatching the
+event directly at the element does flip it, so the handler is correct and the
+problem is layout. The dupes lane's checkbox reports `self` under the identical
+harness. Whether a human at a normal window size is actually blocked is NOT
+established and needs confirming in a real browser; it is recorded in the
+harness output rather than fixed here.
+
+### Changed
+
+#### Operation and book activity queries no longer read the whole operation to return one page
+
+`GET /api/v1/operations/:id/activity` and `GET /api/v1/activity?operation_id=…`
+are served from the `act:op:`/`act:bk:` secondary indexes by
+`PebbleActivityStore.queryByIndexPrefix`. That function used to collect every
+index ref for the id, issue one point-`Get` and one `json.Unmarshal` per ref,
+sort the whole decoded result by timestamp, and only then slice out the
+requested page. An operation with 50,000 activity rows therefore did 50,000
+`Get`s and 50,000 decodes to hand back 1,000 rows — and the default page size of
+the operation-transcript endpoint is exactly 1,000.
+
+The index key is `act:op:<op_id>:<20-digit-zero-padded-unix-nano>:<ulid>`. The
+fixed-width nanosecond field means lexicographic key order *is* chronological
+order, so iterating the index in reverse yields newest-first directly. The query
+now walks the index backwards, decodes only the rows in the requested page, and
+never sorts.
+
+Measured on a 50,000-entry operation, three runs each (ranges, not medians —
+this path's block cache warms within a run):
+
+| page size | before | after | allocations |
+| --- | --- | --- | --- |
+| limit 1000 | 584–589 ms | 34.4–35.3 ms | 1,105,727 → 18,562 |
+| limit 50 | 586–588 ms | 24.8–27.2 ms | 1,105,847 → 1,396 |
+
+That is **16.6–17.1×** at limit 1000 and **21.5–23.7×** at limit 50 in this run.
+
+The ratio is load-sensitive and should be quoted as a floor, not a peak. Three
+independent measurement sessions on the same committed benchmarks produced
+13.4–17.9× (limit 1000) and 17.5–25.2× (limit 50) — so the defensible claim is
+**better than 13× at limit 1000 and better than 17× at limit 50**, and anything
+quoted as a single peak number is an artifact of one session's machine load. The
+allocation counts, by contrast, were stable to within 0.1% across every run, and
+they are the more meaningful figure: the old path's cost is one `Get` plus one
+`json.Unmarshal` per ref, so its allocations scale with the size of the
+operation while the new path's scale with the page.
+
+#### Fixed: what `total` actually means
+
+An earlier draft of this change claimed the returned `total` was **exactly**
+what the old implementation returned. It is not, and the difference is the kind
+that raises no error anywhere — `total` feeds the UI's pager and is serialized
+with no error channel. The claim has been replaced by a contract that holds, and
+by tests that pin each way it can be violated.
+
+`total` is the number of index refs that name **exactly** the requested id and
+whose primary row exists, corrected downward for any row inside the page window
+that turns out not to decode or not to match. That equals the old total for any
+index satisfying this store's own write invariant. Two cases fall outside it,
+both only for a row the caller never pages to, and both now pinned to their
+exact magnitude by a test rather than described in prose:
+
+- a row that exists but whose stored JSON will not decode;
+- a ref whose key names the right id while the row it points at belongs to a
+  different one — index corruption the write path cannot produce.
+
+Deciding either costs a `Get` and a decode **per ref**, which is the entire cost
+this change removes. Rows inside the page *are* checked, so a foreign row can
+inflate a count but can never leak into someone else's transcript. Making it
+exact for real means putting the id in the ref value — a schema change with a
+backfill, not something to smuggle into a performance PR.
+
+Separately, a ref that merely **prefix**-matched the requested id (`act:op:A:`
+also prefix-matches a key for the id `A:B`) used to be counted, and to consume a
+rank in the offset skip, which shifted the returned page. Those are now rejected
+at scan time by an O(1) key-shape check, so they enter neither the total nor the
+rank.
+
+#### Fixed: tied timestamps had no defined order
+
+The retained reference implementation sorted with `sort.Slice`, which is
+**unstable** — so for rows sharing a timestamp its order was not merely different
+from the new path's, it was not well-defined at all, and "the reverse scan
+reproduces the order the sort reached" was a claim about nothing. A fixture with
+tied timestamps produced 149 page mismatches between the two.
+
+Both paths now implement one documented ordering contract: newest timestamp
+first, and among rows sharing a timestamp, highest ULID first — which for
+`ulid.Make`'s monotonic entropy means most-recently-written first. The 149
+mismatches are now 0. Timestamps still collide routinely in practice, because
+`RecordBatch` writes a batch from instants callers supply at whatever resolution
+they have.
+
+#### Fixed: pre-epoch timestamps are refused at write time
+
+`%020d` of a negative Unix-nanosecond value emits a leading `-` (0x2D, below
+`0`) instead of a zero pad, so such a key sorts before every other key **and**
+sorts in reverse chronological order among other negative keys. Three increasing
+instants (1906, 1966, 2023) came back in the order 1966, 1906, 2023 — a silent
+wrong order with no error anywhere. `Record` now rejects a timestamp it cannot
+key, which is what makes "lexicographic key order is chronological order" true of
+every row on disk rather than merely usually true. The rejection is per-entry, so
+one bad row does not doom a batch.
+
+Two things protect the rest of the count:
+
+- Every index ref's primary row is still checked for existence, because an
+  `act:op:` ref outlives the row it points at — deletion paths only recently
+  began removing index keys, and on production `act:op:` had grown to roughly
+  0.783 GiB of a 1.342 GiB activity keyspace, largely refs whose row was pruned
+  months earlier. Counting index keys instead would have inflated the total by
+  whatever fraction of the index is stale. The existence check is a key-only
+  merge over the primary key space (~330 ns per ref) rather than a point `Get`
+  (~7.9 µs per ref) — the `Get`, not the decode, was what the old path was
+  actually paying for.
+- A filter that reads an entry field the index does not carry — `type`, `level`,
+  `source`, `search`, `tags`, `exclude_sources`, `exclude_tags`, `tier`,
+  `exclude_tiers`, or the *other* id — falls back to the original
+  implementation, which is retained in full and is also the reference the new
+  path is differentially tested against.
+
+A stale index ref is skipped without consuming a page slot, so a pruned row
+shifts the page rather than silently returning fewer rows than requested.
+
+#### Activity index queries are now visible to the store's decode counters
+
+`queryByIndexPrefix` was the one scan path in `PebbleActivityStore` that decoded
+stored entries without incrementing `EntriesDecoded`, and it dropped a row whose
+stored JSON would not decode with a bare `continue` — no counter, no log. Both
+paths now count their decodes and their drops and report the drops in aggregate,
+which is also what makes "this query decodes only the page" an assertable fact
+rather than a claim.
+
+#### Known, unchanged: the index path ignores `since` and `until`
+
+`matchesFilter` does not read `f.Since`/`f.Until` and neither implementation
+applies a time bound, so `GET /api/v1/activity?operation_id=X&since=…` silently
+ignores `since` — as it did before this change. Both paths ignore it
+identically. Fixing it is a behavioural change to that endpoint and belongs in
+its own PR with its own test, not folded into a performance change.
+
+**Whoever does fix it must also change the eligibility gate.** The gate accepts
+a filter carrying `since`/`until` *only* because neither path honours them.
+Teaching the reference implementation to apply a time bound without also making
+the gate refuse those filters would make the two paths disagree on every
+time-bounded request, silently. A field-count pin on `ActivityFilter` now fails
+the suite whenever a field is added, because the gate is a deny-list and an
+unclassified field is accepted by omission.
+
+- Tests: adopted `testing/synctest` (Go 1.25+) as a scoped pilot on the six
+  highest-value wall-clock waits in the suite. `TestHandleSSE_Heartbeat`
+  (`internal/realtime`) slept a real 26 seconds to observe a 25s SSE heartbeat
+  ticker and was skipped in `-short` mode because of it; it now runs inside a
+  fake-clock bubble in ~0s and is no longer skipped, so `make ci` covers the
+  heartbeat path for the first time. Four `internal/backup` tests and one
+  `internal/itunes/service` test each slept a real second per backup purely to
+  get a distinct second-resolution filename from `time.Now()`; those sleeps are
+  now fake-clock advances.
+- Tests: recorded, with measured evidence, why
+  `TestServerStartGracefulShutdown` (`internal/server`) **cannot** be bubbled --
+  `signal.Notify` deadlocks a bubble outright, and a real `net/http` listener
+  parks a goroutine in netpoll so the fake clock never advances. The package-wide
+  `t.Parallel()` prohibition is unchanged.
+
+- Converted 18 `sync.WaitGroup` `Add(1)`/`defer Done()` goroutine launches to
+  `WaitGroup.Go` across `internal/operations`, `internal/scanner` and
+  `internal/dedup`. Behaviour is unchanged — `Go` increments the counter
+  synchronously before spawning, and its `Done` still runs after the body's own
+  deferred cleanup, so semaphore-release and progress-channel ordering are
+  preserved. Enrollments that deliberately `Add` under a mutex (the registry's
+  `notifyStopped` gate and the dedup engine's `bgMu` gate) were left alone:
+  moving those out of the lock would reintroduce an Add-after-Wait race.
+
+#### `internal/server` goroutines now start via `sync.WaitGroup.Go`
+
+Twenty `wg.Add(1)` / `go func() { defer wg.Done(); … }()` pairs in
+`internal/server` are now `wg.Go(func() { … })`. `sync.WaitGroup.Go` (Go 1.25+)
+increments the counter, starts the goroutine, and decrements on return, so the
+counter and its matching `Done` can no longer drift apart — the failure mode
+being removed is a goroutine that returns down a path the `defer` did not cover,
+or an `Add` whose `go` statement is deleted in a later edit, either of which
+hangs `Wait()` or panics with a negative counter.
+
+The five converted background goroutines in `Server.Start` (WebSocket system
+metrics, cache-stats snapshotter, auto-scan watcher supervisor, session cleanup,
+stale-operation sweep) are the ones that matter: they are joined by the 30-second
+shutdown grace period. They are also the only converted production sites the test
+suite actually exercises end to end — `TestServerStartGracefulShutdown` starts the
+server, SIGTERMs it, and rides the shutdown path down to `backgroundWG.Wait()`.
+The two worker pools converted alongside them (`runBulkWriteBack` in
+`metadata_ops.go`, the candidate-fetch pool in `metadata_candidate_op.go`) have no
+test that reaches them at all, before or after this change.
+
+`FileIOPool.worker` no longer calls `p.wg.Done()` itself; its single caller
+starts it through `p.wg.Go`, which owns the counter. A comment on `worker` records
+that contract for any future caller.
+
+Behavior is unchanged everywhere. Deliberately NOT converted: the 19 goroutines
+tracked by `namedWaitGroup` (`s.bgWG`), whose `Add(name)` / `Done(name)` API would
+need a new `Go(name, fn)` method rather than a mechanical rewrite; the barrier in
+`browse_unsupported_sort_test.go`, which uses `Add(n)` and a mid-body `Done()`;
+and `namedWaitGroup.Add` itself, which increments for a goroutine started by its
+caller.
+
+#### `sync.WaitGroup` goroutine launches converted to `wg.Go` across the plugin packages and the small-package long tail
+
+Twenty-one `wg.Add(1)` / `go func() { defer wg.Done(); ... }()` pairs in
+`internal/plugins/` and eleven smaller packages (`transcribe`, `scheduler`,
+`maintenance`, `itunes`, `errhandling`, `watcher`, `reconcile`, `organizer`,
+`openlibrary`, `metafetch`, `logger`) now use `sync.WaitGroup.Go`, which does the
+`Add` and the `Done` itself. There is no behaviour change — the counter is
+incremented and decremented at exactly the same points — but the two halves of
+the pair can no longer drift apart, which is the failure mode that leaks a
+goroutine or panics with a negative counter.
+
+Six of the twenty-one took explicit parameters rather than closing over their
+values. Those arguments are now hoisted into locals immediately before the call
+so the snapshot still happens at launch time, not at goroutine-execution time:
+`go func(a, b)(x, y)` evaluates `x, y` at the `go` statement, and a plain closure
+would not. Two more (`acoustid.duration-backfill`, `acoustid.fingerprint-rescan`)
+released a semaphore and dropped the counter in one combined `defer`; the
+semaphore release stays a `defer` inside the body, so it still runs before the
+counter drops.
+
+Most `.Add(1)` calls in `internal/plugins/` are `atomic.Int64` result counters,
+not WaitGroups — 82 of the 87 there, and 121 of the 142 in the whole scope — and
+were left alone. Also left alone: `itunes/service/path_repair_resolver.go`, which
+uses a single `wg.Add(workers)` outside its loop rather than one `Add` per
+goroutine, so it has no one-to-one pair to convert.
+
+#### `namedWaitGroup` gained a `Go(name, fn)` method, closing out the `internal/server` sweep
+
+The previous change converted twenty plain `sync.WaitGroup` sites in
+`internal/server` to `wg.Go`, and explicitly left behind the nineteen background
+goroutines tracked by `s.bgWG`, a `namedWaitGroup` whose API is `Add(name)` /
+`Done(name)`. Those nineteen are now converted too.
+
+`namedWaitGroup.Go(name, fn)` registers `name`, starts `fn` in a new goroutine,
+and deregisters `name` when `fn` returns. It is the `sync.WaitGroup.Go` shape
+without giving up the reason `namedWaitGroup` exists: the name registry, so that
+when the 30-second shutdown grace period expires, `Server.Shutdown` logs *which*
+goroutines are still running instead of an opaque count. `Running()` is unchanged
+and still feeds that log.
+
+The `Add` stays synchronous in the calling goroutine, before `fn` is started — the
+type's own doc comment requires it ("Must be called before the associated
+goroutine is started") and `Wait()` correctness depends on it. This matters at one
+site in particular: the library-list trickle warmer is enrolled from inside the
+eager warmer's own goroutine, and a comment there records that the registration
+happens while the parent's entry is still held, so it can never race a completed
+`bgWG.Wait` in `Stop()`. Moving the `Add` inside the new goroutine would have
+broken that; it was not moved.
+
+All nineteen sites had the identical shape — `Add(name)` immediately followed by
+`go func() { defer Done(name); … }()` in the same function — so the rewrite is
+mechanical and behavior is unchanged, including defer ordering: the cache warmers'
+own `defer warmerRecover(…)` still runs inside `fn`, before the deregistration.
+
+Also added the first direct unit tests for the type (`bg_wg_test.go`): that a name
+is visible to `Running()` synchronously once `Go` returns, that a recovered panic
+in `fn` still deregisters, and that two goroutines sharing one name are both
+tracked. Nothing previously asserted that `Running()` reports names — the existing
+`cache_warmers_bgwg_test.go` only calls it inside a timeout `t.Fatalf` — and the
+shutdown-grace log line that consumes it in production remains untested.
+
+#### The activity index pushdown now refuses an unrecognised filter instead of guessing
+
+The gate that decides whether an activity query can be served from the
+`act:op:`/`act:bk:` secondary index (`pactIndexPushdownEligible`) was a
+deny-list: it enumerated the filter fields it knew could not be decided from an
+index key and refused those. Anything it did not recognise fell through and was
+accepted.
+
+That is the wrong direction to fail. A field added to `ActivityFilter` later
+would have been pushed down silently — the pushdown decodes only the requested
+page, so a predicate it cannot evaluate inflates the `total` it reports without
+returning a single wrong row. `total` drives the UI's pager and has no error
+channel, so the symptom would have been a plausible wrong page count and nothing
+else.
+
+The gate is now an allow-list (`pactPushdownDecidable`) walked reflectively over
+every field of `ActivityFilter`. A field that is not explicitly classified as
+decidable from the index key refuses the pushdown, so the failure mode for an
+unclassified field flips from "wrong count" to "loses the fast path" — the same
+answer, computed the slow way. A renamed field misses the lookup and refuses
+too.
+
+Classification is unchanged for all fifteen fields that exist today, including
+the deliberate one: `Since` and `Until` are still accepted, and still only
+because *neither* implementation honours them. That remains a separate known
+defect (`GET /api/v1/activity?operation_id=X&since=…` ignores `since`), and
+whoever fixes it must remove those two entries from the allow-list or the two
+paths will diverge silently on every time-bounded request.
+
+- **`/health` now reports the device Whisper actually loaded**, not the one it was
+  configured with. `WHISPER_DEVICE` was echoed back verbatim, so a host still
+  carrying an old launch script advertised its old accelerator regardless of the
+  hardware present. The requested values are still reported separately, under
+  `requested_device` / `requested_compute_type`.
+
+- **Duration probing now uses `mediainfo` first and falls back to `ffprobe`.** Every
+  duration probe in the codebase goes through the single `audioutil.ProbeDurationSeconds`
+  seam, so this switches the tool for all of them at once without changing what an answer
+  means: ffprobe remains the source of truth and answers anything mediainfo cannot.
+
+- Score breakdown rows in the metadata review evidence panel now alternate
+  background shading, so a label tracks to its own numbers at a glance. Applies
+  to both the weighted-signal list and the waterfall step list.
+
+- Copy-on-write cloning is now one implementation, `fileops.Reflink` /
+  `fileops.ReflinkOrCopy`, replacing four divergent copies across `organizer`,
+  `deluge`, the Deluge plugin, and `reconcile`.
+- Cloning and its copy fallback never truncate an existing destination. Two of
+  the replaced implementations used `os.Create`, which could zero a file
+  another worker had just written. Callers that intend to replace a file must
+  now remove it explicitly.
+
+#### The /review dupes lane no longer freezes the page when you filter 50 or 100 rows
+
+Typing in the dupes lane's "Search this page" box re-filters the loaded page, and
+at the 100-row page size that meant unmounting ~99 rows and mounting ~99 more in
+one uninterruptible chunk of work. Measured on a production build, that was a
+single **216 ms** freeze of the whole page — long enough to feel — while the
+metadata and regroup lanes at the same row counts froze for 0 ms. Memoizing the
+rows had already been tried and did not help, for a good reason: memoization
+skips re-renders, and nothing here was re-rendering. Every row was being built
+from scratch.
+
+Two independent causes, both found by ablation rather than guessed at:
+
+**The re-filter ran as one indivisible render.** The search term now goes through
+`useDeferredValue`, so React treats the re-filter as a background transition and
+yields between rows instead of running it to completion. Typing itself is
+unaffected — the text box is still bound directly to the live value.
+
+**Each row was building far more machinery than it showed.** Removing only the
+MUI `Tooltip` wrappers from a row — leaving an identical 58 DOM nodes behind —
+cut blocked main-thread time by 45% on its own, because a `Tooltip` costs roughly
+six times a `Button` and twenty times a `Chip` to build, and there were four per
+row that nobody ever points at. Three are now plain `title` hints; one of those
+was already repeating the button's own accessibility label word for word.
+Alongside that, the file-list popover on each book is no longer constructed until
+its chip is actually clicked, and the path-abbreviation setting is now read once
+per page instead of once per path — it was 200 separate reads at the 100-row cap,
+each triggering its own re-render when it arrived.
+
+Measured before and after on the same harness, machine and session:
+
+| at 100 rows | before | after |
+|---|---|---|
+| filter — blocked main-thread time | 755 ms | **0 ms** |
+| filter — longest single freeze | 216 ms | **0 ms** |
+| loading the lane — blocked time | 170 ms | 104 ms |
+| loading the lane — longest freeze | 220 ms | 154 ms |
+
+At 50 rows, filtering also went from 260 ms blocked / 111 ms longest freeze to
+zero. On a deliberately slowed machine (a 6x CPU handicap, standing in for older
+hardware) the same filter went from 6,174 ms blocked / 1,314 ms longest freeze to
+0 ms / 50 ms. "0 ms" means no single task crossed the 50 ms threshold the browser
+counts as a freeze — not that no work happens.
+
+Two honest caveats. **Loading the lane fresh still stalls ~154 ms at 100 rows**;
+deferring the filter does nothing for the first render, and only the per-row
+reductions moved that number. And a filter now takes slightly longer in total
+wall-clock (40 ms → 44 ms at 100 rows) because the work is spread across more
+frames rather than done in one — that is the trade, and it is the right way
+round: nothing blocks long enough to be felt.
+
+The one visible change: the three converted hints use the browser's own tooltip
+styling and timing rather than the app's.
+
+#### The dupes review lane no longer re-renders every row to repaint one checkbox
+
+`perf(review): memoize spine rows so one checkbox re-renders one row`
+(d01f15a87) memoized `CompareSpine` and `RegroupSpine` and skipped
+`DupesSpine`, which had no memoization at all. `benchmark-review-lanes.spec.ts`
+then measured the consequence: on this machine, ticking one dupes checkbox at
+the 100-row page cap took a median 61 ms against a 13 ms N=5 noise floor, while
+the already-memoized metadata lane's equivalent took 26 ms.
+
+Two changes, both required — either alone is inert:
+
+- **`DupesSpine` now follows `CompareSpine`'s shape.** It lifts the four
+  callbacks out of the context into a `useMemo`'d `handlers` object, resolves
+  each row's `selected` / `focused` / `expanded` itself and passes them as plain
+  booleans, and wraps `CandidateRow` and `BookSide` in `memo()`. Constant `sx`
+  literals inside both are hoisted to module scope. `DupesSpineContext`'s public
+  shape is unchanged, so `DupesPanel` needed only a comment and
+  `DupesSpine.test.tsx` needed no edits.
+- **`ReviewWorkspace` passes the dupes `onToggleExpand` as a `useCallback`.** It
+  was an inline arrow, so it got a new identity on every render — and a dupes
+  checkbox tick re-renders `ReviewWorkspace`, because `useDupesLane`'s state
+  lives there. That alone would have rebuilt `handlers` on every tick and left
+  every memo above present, correct and completely inert.
+
+Measured with the same harness, back to back on one machine (median of 5 reps):
+at N=100 the checkbox toggle went 61 ms → 32 ms against an N=5 noise floor that
+barely moved (13 ms → 12 ms); at N=50, 35 ms → 21 ms. Under the 6x CPU-throttle
+control, 390 ms → 220 ms.
+
+An A/B run with the memo in place but ReviewWorkspace's inline arrow restored
+measured 68 ms and 65 ms in two separate runs -- i.e. no improvement on the
+61 ms baseline at all. That is what "either alone is inert" means concretely,
+and it is why the `useCallback` is not a tidiness edit.
+
+The lane's **filter** cost is unchanged and was not expected to move: the
+harness's filter goes 100 rows → 1 → 100, so its 714 ms of blocking time at
+N=100 is dominated by ~99 unmounts followed by ~99 mounts, and `React.memo` does
+not skip a mount. That number is still on the table and still real; it needs
+row virtualization or a debounce, not memoization.
+
+`DupesSpine.memo.test.tsx` pins both halves of this: a render counter
+(`recommendedKeepSide` fires once per row render) asserts one row re-renders per
+tick, and five staleness assertions — a checkbox cleared by the store, the focus
+ring moving in both directions, an expand revealing exactly one evidence panel,
+a candidate whose status changed — assert the memo is not serving stale rows.
+The two halves fail on opposite mutations, so neither can substitute for the
+other. A third pair pins the `handlers` `useMemo` above the empty-state early
+return, which React would otherwise punish on the empty → populated transition.
+
+#### The dupes review lane no longer freezes the page while it loads
+
+Opening `/review` on the dupes lane with the 100-row page size rendered every
+row in ONE synchronous main-thread task. Measured on
+`benchmark-review-lanes.spec.ts`, that task was **156 ms**, with **106 ms** of
+it counted as blocking — against a 5-row noise floor that produces no long task
+at all. Anything past about 50 ms in a single task is a freeze the user can
+feel: during it the page cannot paint, scroll, or respond to a click.
+
+The cause was that the fetch resolving is a plain `setState`, so React rendered
+all 100 rows to completion before yielding. The cost is close to linear in the
+row count — 50 rows measured 87 ms and 100 rows 156 ms, i.e. roughly 18 ms of
+fixed route/mount cost plus ~1.4 ms per row — so it got worse with exactly the
+page-size option a reviewer picks to get more done.
+
+The lane now commits the first 20 rows synchronously and lifts the cap to the
+full page inside a `startTransition`, which lets React yield between rows
+instead of running the pass to completion. The same mechanism was already proven
+one interaction over: the client-side search re-renders ~99 rows through
+`useDeferredValue` and measures zero tasks over 50 ms.
+
+Measured at the 100-row page size, before and after on one machine in one
+session, with the 5-row noise-floor row collected in each run:
+
+| | blocked main-thread time | longest single task |
+|---|---|---|
+| before | 106 ms | 156 ms |
+| after | 0 ms | 0 ms |
+
+Zero here means the browser's longtask observer reported nothing at all, which
+it does for any task under 50 ms — so the remaining load cost is real but below
+the threshold at which it can be felt. Wall-clock to a fully interactive page
+did not regress (995 ms → 970 ms, inside run-to-run noise).
+
+Two behaviours were deliberately preserved rather than traded away, because both
+guard an irreversible bulk merge:
+
+- **"Select all on screen" still cannot reach a row the reviewer cannot see.**
+  It reads the same value the rows are rendered from, so during the brief
+  window where only the first slice is mounted it selects exactly that slice —
+  never the full page waiting behind it.
+- **The shift-click anchor still resolves.** It is an index, and lifting the cap
+  only ever extends a prefix, so an index taken before the rest of the page
+  arrived still points at the same row afterwards.
+
+The first slice is mounted synchronously rather than deferring the whole list
+for a specific reason: deferring everything would hand the first render an empty
+list while loading had already finished, and the spine renders its "no duplicate
+candidates" empty state when it has no rows — so the reviewer would see a
+committed frame saying there is nothing here, immediately before 100 rows
+appeared.
+
+The metadata and regroup lanes are untouched and were re-measured on the same
+build to confirm it. Metadata's pre-existing ~51 ms task at 100 rows is
+unchanged and predates this work.
+
+#### One implementation of how per-book metadata state is stored
+
+Three separate parts of the app each carried their own private copy of the same
+three functions: the key a book's metadata state is filed under, and the pair
+that encodes and decodes an individual field's value. The copies were identical,
+which is precisely why they were worth merging rather than leaving alone — they
+describe a **stored** format, so any one of them could have been tidied in
+isolation and the result would not have been a build failure or a failing test.
+It would have been one part of the app no longer able to read what another part
+had written.
+
+Nothing about what is stored, or how, has changed. There is now a single
+implementation, with the storage key and the "unset means absent" rule both
+pinned by tests that fail if either is altered.
+
+#### Five diverged copies of "does this string look like a person's name?" folded into one, fixing a Unicode bug and a title-as-author bug on the way
+
+`looksLikePersonName` existed in three packages (`internal/scanner`,
+`internal/metadata`, `internal/dedup`) and `isValidAuthor` in two. They had drifted
+apart, and **no copy was correct** — each one had a bug the others did not:
+
+- **scanner** and **metadata** tested capitalization with the ASCII range check
+  `w[0] < 'A' || w[0] > 'Z'`, so a name beginning with a non-ASCII letter was
+  rejected outright. `Émile Zola`, `村上 春樹` and `Достоевский Фёдор` were not
+  names; `José Saramago` and `Søren Kierkegaard` were, because `J` and `S` are
+  ASCII. Neither copy accepted lowercase particles, so `Simone de Beauvoir` failed
+  on `de`.
+- **scanner** additionally ended in a fallback that returned true for *any* string
+  whose first two words start with ASCII capitals, bypassing the 2–4 word limit the
+  same function declares. That is why it answered true for `A Game of Thrones` and
+  `The Lord of the Rings` — and `parseFilenameForAuthor` then filed the **title as
+  the author**. (An earlier draft of this note named `splitAuthorTitle` as the
+  consumer. No such function exists anywhere in the tree; the real one is
+  `parseFilenameForAuthor`, and naming the wrong consumer is what let a
+  regression in it survive three review rounds.)
+- **dedup** handled Unicode and particles correctly but had no structural guard, so
+  `Book 3`, `Chapter 1`, `Volume 2`, `Disc 1` and `Pratchett 036` were all names.
+
+The replacement is a new leaf package, `internal/personname`, carrying the **union**
+of the three copies' checks rather than any one of them. Capitalization is now
+expressed as "the first rune must be a letter and must not be lowercase" — never
+"must be uppercase", because `unicode.IsUpper` is false for every caseless script
+(CJK, Hebrew, Arabic, Thai), and the `IsLetter` half is what keeps digits and
+punctuation from passing as names.
+
+The behaviour change is pinned by `TestDifferentialAgainstAllThreeLegacyCopies`,
+which runs all three original implementations — extracted verbatim from git, not
+re-typed — beside the unified one over a 29-case corpus and logs every
+disagreement. The unified answer differs from at least one legacy copy on **18 of
+29** inputs, and the test fails if that count ever reaches zero, since that would
+mean the corpus no longer demonstrates why the copies were merged.
+
+One existing scanner test changed its expectation as a result: `five_word_name`
+asserted `true` for `Too Many Words Here Name` with the comment "Actually valid -
+has proper capitalization". That expectation was derived from the buggy fallback,
+not from a decision about names; it is now `false`, with the rationale recorded at
+the test.
+
+Books whose filename previously yielded a wrong author (the title) will now yield
+no author instead. That is the better failure: an empty author field is refilled by
+the AI parse and metadata paths, while a confidently wrong one is not.
+
+#### Two more copies, and a safety claim that was measured at the wrong level
+
+Review of the above found that the first version of this change was **not** safe to
+ship, for a reason worth recording. The claim made for it was that the unified
+predicate is monotonically more restrictive — it can only ever go `true → false`,
+so it can never mint an author the deployed code would not have. That premise was
+true. The conclusion did not follow, because it was measured on the **predicate**
+and asserted about the **consumer**.
+
+`SplitCompositeAuthorName`'s comma branch does not return when a part fails the
+shape check — it `break`s, and falls through to weaker branches. So a newly-*false*
+predicate does not stop a split, it changes **which branch wins**. Measured against
+the real splitter, the first version minted **886 distinct author strings** that the
+deployed code never minted, and sent **33,580 of 195,245** realistic composites from
+a correct split to no split at all.
+
+Two compounding causes, both now fixed:
+
+- **The trigger.** `IsValidAuthor` matched the structural words (`book`, `chapter`,
+  `part`, `vol`, `volume`, `disc`) with `strings.HasPrefix` and no word boundary, so
+  it rejected every real author whose name merely begins with those letters — Booker
+  T. Washington, Volker Kutscher, Volney Beckner, Volodymyr Zelensky, Voltaire,
+  Partha Chatterjee, Partridge. Structural words are now matched as whole first
+  words, with trailing punctuation and digits stripped so `Vol. 2`, `Book3` and
+  `Disc 1` still match. Plurals are listed explicitly, so widening the match does not
+  start admitting `Parts Unknown`, which the prefix test had caught by accident.
+- **The amplifier.** The comma branch's own comment says every part must be
+  person-shaped "or the whole split is refused — refusing leaves the composite
+  VISIBLY wrong for repair rather than laundering a title fragment into a name." The
+  bracket and semicolon branches it fell through to asked only whether a part was
+  longer than two characters and contained a space — which is exactly the test that
+  was removed from the comma branch for minting `and the Farm Boy (DBY)`. The comment
+  described a control that did not exist, and those branches were still minting
+  `Ann Petry (DBY), Ida Wells`, `the quick brown, Ida Wells` and
+  `So Long, and Thanks for All the Fish` as author names. All branches now gate on
+  the same shared predicate.
+
+A **fifth** copy then turned up, caught by the new consumer test rather than by
+reading: `looksLikeAuthorName`, used by the concatenated-name splitter, still carried
+the same ASCII byte test this whole change exists to delete. It has been composed
+with the shared predicate rather than replaced, because it also enforces one rule the
+shared predicate does not — a surname must not be a bare initial — which is what
+keeps `R.A. Mejia Charles Dean` splitting at the right boundary.
+
+Re-measured at the consumer over 258,845 composites: **0** author strings are minted
+that the deployed code did not mint, and the 13 strings no longer minted are all
+structural labels (`Book 3`, `Chapter 1`, `Disc 1`, `Vol. 2`, `Parts Unknown`),
+never a person.
+
+Turning the `break` into a `return` was the other candidate fix and was rejected on
+measurement, not taste: it also destroys legitimate last-first composites such as
+`Smith, John; Doe, Jane`.
+
+#### A sixth and seventh copy, and a regression the first fix introduced
+
+Review of the fix above found that it shipped its own regression, for a reason
+worth recording alongside the first one. The claim was that
+`looksLikeAuthorName` had been "composed rather than replaced" — kept intact by
+adding the shared predicate to the one rule it carried that the predicate lacks.
+It carried **two** rules, and only one was preserved. The lost rule was "the last
+word must start with an uppercase letter", and because the shared predicate
+deliberately *permits* interior lowercase name particles, every particle of three
+or more characters — `van`, `von`, `del`, `della`, `dos` — began qualifying as a
+**surname**. Through the split scorer that does not merely add a candidate, it
+makes a wrong answer beat the right one:
+
+```
+"Ludwig van Beethoven Wolfgang Amadeus Mozart"
+   before  ["Ludwig van Beethoven"  "Wolfgang Amadeus Mozart"]
+   after   ["Ludwig van"  "Beethoven Wolfgang"  "Amadeus Mozart"]
+```
+
+Fixing that exposed the same bug one character down: `Le` is a *capitalized*
+particle, so a lowercase test does not catch it, and `Ursula Le Guin` split as
+`["Ursula Le", "Guin …"]`. Both tests are needed, and the particle list is now
+shared rather than copied a second time.
+
+Four further things came out of the same review:
+
+- **The slash branch was never gated**, and it is the first one tried. Its only
+  check was that a part be longer than two characters — it did not even require a
+  space. It was minting `Book 3`, `the quick brown`, `Ann Petry (DBY)` and
+  `Unabridged` as authors. It was missed because the branches were found by
+  reading rather than by running: the test's separator list contained no `/`, so
+  nothing ever reached it.
+- **The scanner and metadata copies called different predicates** at the same
+  logical place — a divergence that predates this work and survived it, because
+  the refactor faithfully preserved each call site's own predicate. They now
+  agree. Recorded honestly at the call site: this does **not** restore the old
+  behaviour and nothing can. The old code also rejected `Partners In Crime` and
+  `Part-Time Job`, by the very same accident that rejected Booker T. Washington
+  and Partha Chatterjee. Those strings are person-*shaped*; keeping the accident
+  means keeping the bug.
+- **Non-breaking spaces** were never normalized, because Go's `\s` is ASCII-only —
+  so `John Smith` was being stored as an author that can never match
+  `John Smith` in any index. Fixed by normalizing the space rather than refusing
+  the name.
+- **The "is this an initial?" rule was a byte count standing in for the question.**
+  As bytes it was meaningless for CJK; rewritten as a character count it became
+  actively wrong and rejected 村上 春樹 — a two-character Japanese surname — from
+  the very change made to stop dropping Japanese authors. It now asks what it
+  means, and as a side effect stops rejecting real two-letter surnames (Ng, Wu,
+  Li, Ho) in any script.
+
+Re-measured over 51,744 composites on a corpus built to include what the previous
+one could not see — non-ASCII names, trailing particles, slashes, non-breaking
+spaces and separator-free concatenations — the splitter now mints **392** distinct
+author strings where the old code minted **637**. Of the 224 composites it stops
+splitting, every one used the word "with", where the old code was producing
+authors like `Volker Kutscher with Bob`; and it now correctly splits 440 strings
+the old code could not split at all, because either name began with a non-ASCII
+letter.
+
+#### The two rules turned out to be entangled
+
+A second review round found that the fix above had traded one bug for a quieter
+version of itself. Relaxing the "is this an abbreviation?" rule from three
+characters to two — done so that 村上 春樹, a two-character Japanese surname, would
+stop being rejected — removed the accidental shield that had been covering the
+particle list's incompleteness. `St`, `Zu` and `Ph` are not in that list, and at
+three characters they could never reach it; at two they began qualifying as
+surnames, and `Jane St Clair` split as `Jane St` / `Clair …`.
+
+Length cannot settle this, because two characters is also exactly what makes
+`Wang Li` work. The discriminator is **script**: a two-character surname is
+ordinary in Japanese, Chinese and Korean, and is almost always an abbreviation in
+Latin, Cyrillic and Greek. The threshold is now conditional on script. The
+accepted cost is that romanized two-letter surnames written in Latin letters —
+`Wang Li`, `Ng`, `Wu`, `Ho` — are refused, so those composites are left unsplit.
+That is a *missed* split rather than a *wrong* one, and this is the same rule the
+rest of the file follows: refusing leaves a composite visibly wrong for repair,
+while a confident wrong answer leaves nothing to notice.
+
+Two smaller things from the same round. A guard written as "reject a lowercase
+first letter **or** a known particle" was carrying a comment claiming both halves
+were needed; the first half was **dead code** — by the time it runs, a lowercase
+word has already been rejected unless it is a particle, which the second half
+catches. That is the third time in this change that a comment asserted a control
+which did not exist. And the review recommended reverting the stricter check on
+the `Author - Title` directory pattern, on the grounds that no junk name arrives
+that way. Measured, that turned out not to hold: `Discworld - Mort`,
+`Bookends - Volume One` and `Chapterhouse - Dune` all do. Reverting would have
+recovered six real single-name authors and introduced four junk ones the old code
+never produced, so the stricter check stays — a book left without an author is
+re-examined by the filename parser, and one given the wrong author is not.
+
+#### The script rule was a deny-list, so every script nobody thought of failed open
+
+A third review round found that the script-conditional threshold above was written
+as the wrong kind of list. It named the scripts that *are* abbreviation-prone —
+Latin, Cyrillic, Greek — and let everything else take the permissive branch. That
+is fail-open: a script is admitted precisely because nobody enumerated it. Arabic,
+Hebrew, Armenian and Devanagari were all falling through, and the two-character
+words they fall through on are exactly the ones that must not be surnames:
+
+```
+"محمد بن سلمان أحمد"   ->  ["محمد بن"  "سلمان أحمد"]     (بن = "son of")
+"דוד בן גוריון משה"    ->  ["דוד בן"  "גוריון משה"]      (David Ben-Gurion)
+```
+
+The list is now inverted to name the scripts where a short surname is *ordinary* —
+Han, Hiragana, Katakana, Hangul — and everything else takes the strict branch. An
+unenumerated script now fails closed, which is a missed split rather than a wrong
+name, consistent with the rest of this file. Both strings above now return no split.
+
+Three further things from the same round:
+
+- **The test guard for this rule had the byte-versus-rune bug the production code
+  had just been cured of.** The differential test that was supposed to catch a
+  short surname escaping counted `len(lastWord)` — bytes. `بن` is two characters
+  and four bytes, so it passed a `>= 3` check and the guard waved it through; the
+  mutant that reverts the deny-list **survived**. The guard now counts runes and
+  names the dangerous class directly rather than inferring it from a length.
+- **A must-admit assertion of my own caught the floor was still too high.** `田中 翼`
+  — a single-character Japanese given name — failed a test written to prove
+  Japanese names are admitted. The length floor is now removed entirely for
+  syllabic and logographic scripts, on the grounds that "a one-character word is a
+  bare initial" is a Latin orthographic convention that does not exist in Han or
+  Hangul.
+- **The translator branch of `extractAuthorFromDirectory` was ungated** in both the
+  scanner and metadata copies — the same defect as the slash branch, in the same
+  shape, found the same way.
+
+One known limit is recorded rather than fixed. Georgian is dropped by the shared
+predicate: Mkhedruli letters are Unicode lowercase, so `გიორგი ბაქრაძე` is not a
+name. This is not a regression — the ASCII test this package replaced dropped it
+too — and the obvious remedy does not work: Go does map Mkhedruli to Mtavruli
+(`unicode.ToUpper('გ') == 'Გ'`), so accepting runes with no uppercase mapping
+rejects Georgian exactly as today. Measured, and filed with the disproof rather
+than left as a plausible-sounding suggestion.
+
+#### Measured at the second consumer too, not just the splitter
+
+The differential above exercises `SplitCompositeAuthorName`. It does not touch
+`extractAuthorFromDirectory`, which this change also altered in both the scanner
+and metadata copies — and where a refused branch **falls through** to the next
+branch rather than returning, which is the same amplifier shape that made the
+first version of this change unshippable. Reasoning that the fall-through is
+harmless was not enough, so it was measured the same way: 6,699 directory shapes,
+both copies, old tree and new tree, exact comparison.
+
+- **No input gets a different author.** 0 changed answers in either package: a
+  gated branch's refusal never hands the decision to a branch that answers with
+  some *other* name.
+- **The two copies now agree exactly.** They disagreed on **128** of the 6,699
+  inputs before — the same folder yielding `Ludwig van Beethoven` from one path
+  and nothing from the other — and on **0** after.
+- Scanner: 88 folders newly yield an author (all of them the near-miss-prefix
+  class this change exists to fix — `Booker …`, `Volker …`, `Partha …` — the
+  particle class, or non-ASCII names); 36 stop yielding one, being 14 bare
+  single-word folder names, 11 `Pratchett 036` placeholder variants and 11
+  `the quick brown` title fragments. Metadata: 180 newly yield an author, 0 stop.
+
+Nothing in either list is unaccounted for.
+
+The mutation matrix was re-run at the final commit rather than trusted from the
+round it was first measured in, since a later fix can defuse an earlier test —
+and one of these mutants had already survived a guard written to kill it once.
+Ten mutants, each verified to match exactly one anchor, to actually change the
+file, and to still compile before the tests were run: **10 killed, 0 survived.**
+
+#### A stricter predicate made one caller WORSE, because it was choosing a side
+
+A fourth review round found the most serious defect in this change, and it is a
+different shape from the three before it. Those were all "a closed set fails open
+and admits junk." This one is a gate that fails **closed** and, because the caller
+uses the answer to choose an **orientation** rather than to accept or reject, a
+false does not cause a miss — it causes an **inversion**.
+
+`parseFilenameForAuthor` splits `"X - Y"` and asks which side is the author. The
+old per-package predicate ended in a fallback that approved almost anything
+capitalized, so a decorated author string on the right was recognised as a name.
+The shared predicate is strict, and it answers **false** for
+`"Neil Gaiman (Unabridged)"` — because of the trailing parenthesis, not because
+Neil Gaiman is not a person. The caller read that false as "so the right side must
+be the title", took the `"Author - Title"` branch, and stored:
+
+```
+"Good Omens - Neil Gaiman (Unabridged)"        Author = "Good Omens"
+"Good Omens - Neil Gaiman and Terry Pratchett" Author = "Good Omens"
+"The Hobbit - Neil Gaiman [Unabridged]"        Author = "The Hobbit"
+```
+
+The title, filed as the author. Nothing downstream can catch it: the minted string
+passed the person check on the left by construction, so it is person-shaped, it is
+not the placeholder, and re-running the predicate on it returns true. `(Unabridged)`
+is native to this library — `internal/titleutil` exists to strip it — so this is a
+common shape, not an exotic one. And it directly contradicts the rule this change
+argues for sixty lines earlier, that a wrong author is strictly worse than an absent
+one.
+
+The cause is that one bit was being asked a two-way question. `LooksLikePersonName`
+answers "is this one bare human name?", and "not a person" and "a person carrying an
+edition marker" both come back false. Callers deciding an orientation now ask
+`LooksLikeAuthorCredit` instead — one name, a name with an edition marker, or several
+names joined by a conjunction — while callers deciding whether to *accept* a single
+string keep the strict predicate, because a credit list is not a person.
+
+Fixing it by making the branch refuse was rejected: that branch is right far more
+often than it is wrong, and refusing would have thrown away every correct
+`"Author - Title"` reading with it.
+
+Measured at the consumer against a corpus where the author side is known, 1,792
+filenames, scanner:
+
+| | correct | wrong | empty |
+|---|---|---|---|
+| before this change (`origin/main`) | 512 | 1,152 | 128 |
+| with the strict predicate (the bug) | 448 | 438 | 906 |
+| with `LooksLikeAuthorCredit` | **1,120** | 384 | 288 |
+
+**Zero** filenames go from a correct author to a wrong one, 552 go from wrong to
+correct, and 36 go from correct to empty — and empty is the outcome this file
+treats as safe, because it routes to AI nomination.
+
+The metadata twin had the same inversion **before** this change as well as after,
+because its own older predicate also rejected a decorated name. So it is fixed
+rather than repaired: 620 correct before, 1,144 after, at the cost of 101 filenames
+in a class that is genuinely ambiguous — a two-to-four-word capitalized title with
+no leading article is not distinguishable from a person's name by structure, and
+whichever side you prefer, some corpus makes you wrong. Preferring the right-hand
+side is what both copies' own comments already said they did; the metadata copy was
+only doing otherwise by accident, because decoration made its check fail.
+
+Four comment claims from the same review are corrected rather than left standing,
+the first being the one that mattered: two places named `splitAuthorTitle` as the
+function that filed titles as authors. **No such function exists in the tree.** The
+real consumer is `parseFilenameForAuthor` — the one that then carried this
+regression through three review rounds without being named once.
+
+Nine mutants against the orientation fix, each verified to match exactly one
+anchor and to compile before the tests ran: reverting either twin's right-hand
+side to the strict predicate, deleting the edition-marker clause, deleting the
+credit-list clause, weakening the credit list from "every clause" to "any
+clause", using the credit predicate on the left as well, unanchoring the
+edition-marker pattern, and flipping each of the two orientation branches.
+**Nine killed, none survived.** One of the nine had to be re-run: its first
+anchor matched two places in the file, so it changed the wrong one and tested
+nothing — an ambiguous mutant is as empty as a no-op mutant.
+
+#### The same decision existed four times, and fixing two of them proved it
+
+A fifth review round found that the orientation fix above reached the `" - "`
+filename path in both packages and **not** the `"_"` path in either — which still
+carried the identical inversion, unchanged:
+
+```
+"Good Omens_Neil Gaiman (Unabridged)"   Author = "Good Omens"
+```
+
+That is the whole argument of this change, arriving as a bug inside the change
+itself. "Which half of this filename is the author?" was written out **four**
+times — the `" - "` and `"_"` paths of `internal/scanner` and
+`internal/metadata` — and the copies had already drifted: only scanner's `"_"`
+path had the leading-article tiebreak, only metadata's `" - "` path had the
+initials tiebreak, and metadata's `"_"` path had no tiebreak at all. Fixing two
+copies and leaving two is how the four got out of step in the first place.
+
+All four now call one function, `personname.ChooseAuthorSide`, which carries the
+union: the credit predicate on **both** sides, then the article tiebreak, then the
+initials tiebreak. Two helpers became dead and were deleted with their tests —
+and one of them, metadata's `isTitleCaseCandidate`, was still doing
+`trimmed[0] >= 'A' && trimmed[0] <= 'Z'`: the ASCII byte test this entire change
+exists to delete, alive in the tree until now, and the reason metadata alone
+accepted pairs scanner refused.
+
+Where the four legitimately differed, that difference is now a named argument
+rather than an accident. A tie — both sides plausible, neither tiebreak firing —
+resolves to author-on-the-right for `" - "`, because that is the dominant
+convention and what all four copies' comments claimed to do; and refuses for
+`"_"`, because the old scanner code refused there, and turning that into a
+default would mint an author where the previous code deliberately minted none.
+
+Measured over 1,232 filenames covering both separators, both orientations, four
+decorations, and credit lists joined by `/`, `and`, `&` and `,`:
+
+| | correct | wrong | empty |
+|---|---|---|---|
+| `origin/main` scanner | 576 | 496 | 160 |
+| `origin/main` metadata | 476 | 412 | 344 |
+| after, **both** | **928** | **156** | 148 |
+
+Scanner: **0** correct→wrong and **0** empty→wrong. Wrong answers fall by 69%.
+The two packages returned byte-identical answers on every one of the 1,232
+inputs, where before they disagreed on hundreds. **That claim does not
+generalise, and the corrections section below has the number: on 40,261 real
+library paths the two still disagree on 1,110 rows.** The 1,232-input corpus was
+synthetic and did not contain the shapes they diverge on.
+
+Metadata gives up 24 correct answers, plus 12 where it previously declined. All
+36 are the ambiguous tie, and all 12 of the declines are non-ASCII authors — main
+was not "declining" those, it simply could not see the author at all through its
+`A`–`Z` test, so fixing the Unicode bug is what exposes them to the tie rule.
+
+Two more from the same round. `/` was missing from the credit separators while
+`internal/dedup` treats it as an author separator *and tries it first* — one repo
+with two answers to "is `A / B` an author credit?", which is exactly what this
+package exists to abolish, reintroduced one package over. And the edition-marker
+strip took only one trailing group, so `"Neil Gaiman (Unabridged) (2019)"` was not
+a credit. Both fixed.
+
+Finally, the placeholder guard. `authorname.IsPlaceholder` compares against the
+bare literal, but the credit predicate now accepts `"Unknown Author (Unabridged)"`
+**by design** — so the decorated placeholder walked straight past a guard written
+to catch it and closed the AI-nomination gate, the exact failure that guard
+exists to prevent, in a shape it was not written for. The comparison is now made
+against the edition-stripped form. `authorname` stays standard-library-only, as
+its own doc comment promises, so the strip happens at the call sites.
+
+#### Mutation testing found five gaps in the unification, and one real omission
+
+Ten mutants against the shared decision, run against a baseline verified green
+first — the previous run's baseline was red, because an interrupted harness had
+left a mutant applied, and a harness with a red baseline reports every mutant as
+killed. **Five survived**, each a genuine gap in code that had just been measured
+at the consumer and called done:
+
+- deleting `/` from the credit separators (nothing observed it — and nothing
+  could, since a `/` cannot appear in a filename, so only a direct predicate test
+  can see it);
+- never refusing on a tie, and the `"_"` path preferring right instead of
+  refusing (the tie policy was load-bearing — it is what removed the whole class
+  of "mints an author where the old code minted none" — and no test touched it);
+- reducing the edition strip to a single group;
+- dropping the edition strip from the placeholder guard.
+
+Two more mutants did not compile, which is its own kind of empty result and was
+counted as such rather than as a pass.
+
+Writing the missing tests then exposed a real omission rather than just a
+coverage hole. A **list of several names is stronger evidence of author-hood than
+a single person-shaped phrase** — `"Neil Gaiman and Terry Pratchett"` is a credit
+in a way `"Good Omens"` is not, though both satisfy the credit predicate. Without
+that, the pair was scored a tie, and the `"_"` path refused a credit it had ample
+evidence to place. It was made the first of three discriminators,
+ahead of the leading article and the initials. **Both halves of that sentence
+were wrong and are corrected below** -- it was removed, and what replaced it runs
+last, not first.
+
+Re-measured over the same 1,232 filenames: correct rises from 928 to **1,000**
+and wrong falls from 156 to **132**, with scanner still at **0** correct→wrong and
+**0** empty→wrong against `origin/main`. On the 448 inputs whose author is a
+credit list, correct answers go from 216 (main) to 336.
+
+Re-run after those tests were written: **twelve of thirteen mutants killed.** The
+survivor is recorded as an accepted one rather than tidied away. Weakening
+`isMultiNameCredit` from "every clause is a name" to "any clause is" changes the
+answer for exactly one shape, `"Smith, John - Good Omens"`, and the *weakened*
+version answers it correctly. Killing that mutant would mean writing
+`"Good Omens"` into a test as the author of that file. The mutant is left alive
+and the real gap it points at — a last-first name is not used as a discriminator,
+which `origin/main` gets wrong too — is filed rather than fixed here.
+
+## Corrections, made before release
+
+Three claims above were measured on a synthetic 1,232-input corpus and do not
+survive contact with the real library. They are corrected here rather than
+deleted, because the way they failed is the useful part.
+
+**`isMultiNameCredit` was wrong and has been removed.** "A list of two or more
+names beats a single name" is a multi-CLAUSE test, and titles have clauses:
+`"Norse Mythology and Anansi Boys"` splits on `" and "` exactly as
+`"Neil Gaiman and Terry Pratchett"` does. So the omnibus title beat the real
+author on the other side and was filed AS the author -- the wrong-answer
+direction this whole change exists to close. On 40,261 real paths it cost 8 rows
+outright, including
+`"Jonathan Strange and Mr Norrell - Clarke, Susanna" -> author "Jonathan Strange and Mr Norrell"`.
+
+**Deleting it outright was also wrong**, by the same standard: on the same paths
+it cost 4 rows in the other direction, all of the shape
+`"Elora Bishop & Bridget Essex - Under Her Spell"`. The separator is the whole
+difference. `looksLikeAmpersandCredit` replaces it, testing `"&"` and `"+"` only
+and never the full separator set, and it runs **last** of the three
+discriminators rather than first -- with it first,
+`"The City & The City - China Mieville"` filed the title as the author.
+
+Validated on data it was not fit on: the rule was chosen from 40,261 paths, then
+evaluated unchanged on a held-out 28,532. Over all 68,793, in both packages,
+**zero rows where `origin/main` produced a correct-or-absent author and this
+produces a wrong one**, against 11 recovered. Refusing the tie instead was
+measured too and is far worse -- **491** wrong-author regressions -- because
+`ok=false` does not stop the caller, it hands the decision to a fallback with
+less information. Fail-closed at the predicate is not fail-closed at the
+consumer.
+
+**The "0 correct→wrong" scanner claim and the 24/36 metadata counts** are
+artefacts of the synthetic corpus and should be read as describing it only. The
+real-library figures are the ones above.
+
+**The accepted mutant survivor is void.** It was accepted on the strength of
+`isMultiNameCredit`, which no longer exists. The replacement was mutation-tested
+separately: 8 mutants, 8 killed, including two that initially survived and were
+killed by tests added for them.
+
+### Removed
+
+- **`kind` on a Whisper endpoint.** It accepted `"gpu"`/`"cpu"` and read like a
+  routing restriction, but it was informational only — written into config and
+  read by nothing, so setting it guaranteed nothing. Use `require_gpu` (now sugar
+  for requiring the measured `gpu` label) or `capabilities`. An existing
+  `"kind"` key is ignored rather than rejected, so no config change is required.
+
+### Fixed
+
+#### Changelog collection works again — release pin bumped past the EPIPE guard bug
+
+`release-prod.yml` and `prerelease.yml` both pinned
+`falkcorp/github-common`'s `reusable-release.yml` at `375d3b9e`, whose
+"are there any fragments?" guard was written as
+`! find changelog.d ... | grep -q .` under `set -o pipefail`. `grep -q` exits on
+the first match, the still-writing `find` dies on `EPIPE`, and pipefail reports
+the pipeline as failed *even though grep succeeded* — so the `!` fired the "no
+fragments to collect" branch precisely when there were the most fragments. It
+`exit 0`s, so six consecutive releases went green while the changelog was never
+assembled and the backlog grew to 675.
+
+Both pins now point at `66924760`, which replaces that guard with
+`find -print -quit` (no pipeline at all) and closes four more instances of the
+same shape found by sweeping the file — including one in the superseded-release
+cleanup where an EPIPE would skip the "spare this keep-listed RC" branch and let
+the tag fall through to `gh release delete --cleanup-tag`.
+
+`prerelease.yml` matters as much as `release-prod.yml` here: the RC path is where
+that release-deleting site lives.
+
+#### `json.DiscardUnknownMembers` removed — the code now compiles on Go 1.27
+
+`encoding/json/v2` declared `DiscardUnknownMembers` in Go 1.26 and **dropped it
+in 1.27**, where jsonv2 graduates from a `GOEXPERIMENT` to the standard library.
+Three call sites used it, so the repo would have failed to build on 1.27 for a
+reason entirely of its own making, on top of the separate dependency blocker in
+`github.com/cockroachdb/swiss`.
+
+The option was a no-op: unknown members are ignored by default in both v1 and
+v2, so `DiscardUnknownMembers(true)` only ever requested the behaviour already
+in effect. Deleting it is therefore semantically identical on 1.26 and compiles
+on 1.27 — verified on both toolchains rather than reasoned about.
+
+This is a deliberate backport rather than an upgrade. The repo stays on 1.26
+until `cockroachdb/swiss` (transitive via `pebble/v2/internal/cache`) lifts its
+`//go:build (go1.20 && !go1.27)` gate, which is upstream's call. Doing the
+source-compatible half now means that when the dependency does move, the
+toolchain bump is a one-line change to `go.mod` and CI rather than a hunt for
+API drift.
+
+Audited the rest of the `encoding/json/v2` surface in use — `Marshal`,
+`Unmarshal`, `MarshalWrite`, `UnmarshalRead`, `RejectUnknownMembers` — against
+both toolchains. `DiscardUnknownMembers` was the only symbol that changed.
+
+#### `.standards` was pinned three versions behind, so nobody could read the standards
+
+`CLAUDE.md` names `.standards/instructions/` authoritative and points
+contributors and agents at it. A git submodule is a **pinned commit**, not a
+live link, and this one had not moved since 2026-08-10. It served
+`instructions/go.md` at version 1.0.0 while upstream had reached 1.3.0 — a gap
+of 266 lines covering the Go version policy and the 1.26 minimum, the
+`io/ioutil` ban and the rest of the deprecated-stdlib table, the
+`wg.Go(fn)`-over-`Add(1)`/`defer Done()` rule, the testing-isolation table, and
+the `omitempty` vs `omitzero` guidance for `encoding/json/v2`.
+
+None of that was reaching anyone. Every rule was merged upstream and then read
+by no consumer, because the pin is what the repo actually checks out.
+
+A survey of the ~45 repositories carrying this submodule found **zero** pinned
+at current: roughly 35 sit at a 2026-06-12 commit and 8 at 2026-08-10. There is
+no sync automation anywhere in the org — the pin has only ever moved when
+someone remembered.
+
+So this bumps the pin *and* removes the need to remember it: a `gitsubmodule`
+entry in `.github/dependabot.yml` puts `.standards` on the same weekly
+multi-ecosystem schedule as the Go, npm, Docker and Actions dependencies.
+Falling behind now opens a PR instead of going quietly unnoticed.
+
+Nothing in CI or any script reads `.standards` — it is documentation consumed
+by humans and agents — so the bump carries no build risk. Verified by grepping
+every workflow, Makefile and script in the repo before making the change.
+
+#### Two series-merge paths deleted a series without asking whether anything still pointed at it
+
+`dedup.MergeSeries` (the interactive "merge these series" operation) and phase 1
+of the series auto-prune both reassigned the books they could see and then
+deleted the merged-away series row **unconditionally** — including after a
+reassignment they had just recorded as failed, and including when the
+enumeration came back empty.
+
+Empty is not the same as unreferenced. Both series getters skip soft-deleted
+books, so a series whose books are all in the trash enumerates as empty,
+reassigns nothing, and used to be deleted anyway — leaving every one of those
+rows holding a series ID that no longer resolves. That is the shape that had
+already produced 6,893 phantom series IDs held by 13,322 live books (measured on
+production 2026-08-14, `internal/database/series_bookref.go`).
+
+Both paths now read `database.SeriesRefCounts` — the UNFILTERED count, which
+sees trashed and non-primary rows — once before their loop, and refuse to delete
+any series whose reference count exceeds what they actually reassigned. This is
+the pattern `csMergeSeriesGroup` and `DedupSeries` already used. A refusal is
+reported through the channel the caller already returns (`result.Errors` for
+`MergeSeries`, the prune's recorded-errors summary for phase 1) and does not
+count as a completed merge; books that were successfully reassigned stay
+reassigned. Both fail CLOSED: a store that cannot answer the unfiltered question
+aborts before deleting anything rather than falling back to the filtered count.
+
+`MergeSeries` also had one fully silent path — a book the series getter listed
+but `GetBookByID` could not hydrate was skipped with no error and no counter,
+and the delete went ahead. It is now reported and excluded from the reassigned
+count, so the guard catches it.
+
+Phase 2 of the prune deliberately keeps its own second, fresh reference scan:
+phase 1 repoints books ONTO the series it keeps, so reusing the pre-phase-1
+counts there would delete the merge target out from under everything phase 1
+just moved into it.
+
+The operation that runs the interactive merge now reads the result it was given
+rather than discarding it: a run in which every delete was refused used to report
+"merged 3 series" and a green status, because the caller logged the *requested*
+count on a hardcoded success. It now reports what actually merged and fails the
+run when anything was refused. Repeated IDs in a merge request are also collapsed
+up front, so a request that names the same series twice can no longer produce a
+spurious "still references it" error for a series it correctly deleted.
+
+This PREVENTS future stranding on these paths. It does not repair the ~6,893
+series IDs already phantom, and it is not all of the paths: two more series
+deletes carry the same trashed-row hole and are tracked rather than fixed here —
+`mergeSeriesGroupHelper` (series-normalize) and the `maintenance.series-denumber`
+operation. Both need a signature or layering change of their own.
+
+#### `CHANGELOG.md` — folded the 675-fragment backlog into correctly-attributed release sections
+
+Changelog collection had silently stopped after v0.218.0 (2026-08-08), so 675
+fragments covering six releases piled up in `changelog.d/` while CI kept
+requiring a new one on every PR. They are now folded into `CHANGELOG.md` as one
+section per release — v0.218.1 (322), v0.219.0 (98), v0.219.1 (190), v0.219.2
+(3), v0.220.0 (35) and v0.221.0 (27) — rather than one lump attributed to the
+most recent tag.
+
+Each fragment was attributed by asking which release actually shipped it: find
+the commit that introduced the fragment, then take the earliest stable tag
+containing that commit. Filename timestamps were not used, because v0.218.1 was
+published (2026-08-24) after v0.219.0 (2026-08-20) and a date-based split would
+have misfiled changes across that overlap. Section dates are each release's tag
+commit date, the convention the existing v0.218.0 section already follows.
+
+The root cause of the stall is a guard in the shared `reusable-release.yml` and
+is fixed separately in `falkcorp/github-common`; until that lands and the pin in
+`release-prod.yml` is bumped, collection stays manual.
+
+- **`scripts/mutation-matrix.sh` scored a mutation that never happened.** The
+  harness documented `\x7c` as the way to write a literal `|` inside a mutation
+  expression, then rewrote it back into a bare `|` before handing the expression
+  to perl. In a perl *pattern* a bare `|` is alternation, so a mutation quoting
+  Go's `||` became alternation with two empty branches and matched the
+  zero-length string at offset 0.
+
+  Measured on M16 of `activity-index-pushdown.muts`, which is meant to delete the
+  eligibility gate that keeps an undecidable filter off the activity index's fast
+  path: the gate came through byte-for-byte unchanged and the "mutation"
+  prepended a tab and a newline to line 1 of the file. That satisfied the
+  did-it-apply guard, which only asks `git diff --quiet`, so the run scored it
+  APPLIED; the file still compiled and the suite still passed, so it was reported
+  SURVIVED. A survivor is read as an untested branch, and this one was tested all
+  along — with the escape fixed, `TestIndexPushdownEligibilityRefusesUndecidableFilters`
+  kills it on the `level` and `search` subtests.
+
+  perl reads `\x7c` as a literal `|` in both halves of an `s///` on its own, so
+  the un-escaping is deleted rather than reworked. A fifth guard now runs each
+  expression against a one-byte sentinel before the source file is touched and
+  rejects it unless the output is byte-identical: no real mutation pattern
+  matches one arbitrary byte, and a zero-width one matches every input there is.
+
+- **The harness silently dropped every table's last mutation.** `while read`
+  leaves the loop without running the body when the final line has no trailing
+  newline, and `mutations attempted` is counted inside that loop, so the summary
+  was short by one with no signal. `activity-index-pushdown.muts` ends without a
+  newline, so `M18` had never run — and M18 is the entry documented as a known
+  equivalent mutant that is *expected to survive*, whose note asks the reader to
+  confirm it stays survived. A mutation absent from a report is indistinguishable
+  from one that ran and survived, so every run looked like the confirmation.
+
+- **`M10` and `M11` of the activity pushdown table were not running at all.**
+  Both referenced a `skipped` identifier introduced by a source edit that a
+  concurrent harness run had eaten (`git checkout --` cannot tell a mutation from
+  an uncommitted edit), and M10 additionally anchored on a sentence of comment
+  prose that was never in the file. They reported NOT-APPLIED. The rename is
+  redone, M10 now anchors on executable text, and both mutants are killed.
+
+- The Whisper pool made two separate `/health` requests per endpoint per run — one
+  to pick the batch path, one for the gate — which could describe two different
+  server states if the worker restarted between them. It now makes one.
+
+- **The Metal Whisper worker silently failed every transcription when started by
+  launchd.** `mlx_whisper` shells out to `ffmpeg`, and a launchd agent gets the
+  minimal default PATH, which does not include Homebrew. The failure was
+  invisible in the worst possible way: the batch protocol carries per-file errors
+  *inside* a 200 response, so the transport was healthy, `/health` reported `ok`,
+  and the caller recorded one `whisper_error` per book. A full backfill made
+  2,472 batch requests, every one HTTP 200, and produced **zero transcripts and
+  21,443 `whisper_error` rows**.
+
+  The agent now sets PATH explicitly, and the worker **refuses to start** without
+  `ffmpeg` rather than serving requests it cannot fulfil — no process means no
+  `/health`, so the dispatcher's capability gate refuses the endpoint and defers
+  the page instead of writing errors across the library. `/health` also reports
+  the resolved `ffmpeg` path.
+
+- **Both Whisper servers logged nothing of their own.** `uvicorn.run()` applies a
+  logging config with `disable_existing_loggers: True`, which silenced the module
+  logger created at import — so uvicorn's access lines appeared while every
+  `log.info`/`log.error` in the file vanished. That is how a failure on every
+  single request left no trace on the worker: 2,472 requests logged as `200 OK`
+  and not one error line. Both servers now pass `log_config=None`.
+
+- `TestProbeDurationSeconds_ExplicitFFprobePath` was silently defused by this change:
+  mediainfo answers the real mp3 it generates, so the explicit ffprobe path it exists to
+  verify was no longer being used. It now disables mediainfo so it tests its own name
+  again.
+
+- **Whisper endpoint `concurrency` now actually limits concurrent requests.** It was
+  only an *allocation weight*: `allocateJobs` looped until every job was assigned, so
+  with one endpoint it simply ran more passes and handed over the whole list. Callers
+  dispatch independently (the intro-transcribe op runs 6 pages in parallel), so one
+  server received 6-12 simultaneous requests no matter what was configured. The cap is
+  now enforced at the HTTP request itself, in a process-wide registry keyed by endpoint
+  URL, so independent dispatches contend for the same slots.
+- **Removed `ProcessType=Background` / `Nice` from the Metal Whisper launchd agent.** On
+  Apple Silicon, background QoS confines the worker to the efficiency cores. Measured on
+  one machine, same clip and minute: 4.92 s at normal QoS versus a >240 s timeout under
+  background QoS. It also inverted with scale — four background-QoS workers delivered
+  less aggregate throughput than one.
+
+#### The duplicates lane's evidence panel rendered blank because the TypeScript type described a payload the backend has never sent
+
+`DedupSignal` in `web/src/services/api.ts` declared `{kind, value, weight, evidence, primary}`.
+The Go struct it models — `models.Signal`, `internal/models/dedup_score.go` — has the
+JSON tags `{kind, raw, confidence, evidence, fp_version}`, and there is no custom
+`MarshalJSON`. Only `kind` and `evidence` ever lined up. Everything else arrived
+`undefined`, with three separate visible consequences:
+
+- every signal row showed `—` instead of a number, because it read `value`;
+- every segment of the stacked share bar rendered at `0%`, because it divided by
+  `weight` and `barPercent` clamps the resulting `NaN` to zero;
+- the signal chips on a duplicates row **never rendered at all**, because
+  `primarySignals` filtered on `s.primary` and so always returned an empty array.
+
+Nothing caught it because every fixture hand-wrote the fictional shape behind an
+`as unknown as` cast — both unit suites and the Playwright mock. The e2e test was
+asserting against a payload production does not produce. Those casts are gone and
+the fixtures are now real `DedupSignal`s, so the compiler holds the line; the one
+remaining cast fabricates a deliberately malformed payload and says so.
+
+**The stacked share bar is removed from this lane rather than repaired.** The
+comment justifying it claimed the dedup score "genuinely IS a weighted sum". It is
+not. `ComposeScore` (`internal/dedup/unified/compose.go`) computes
+
+    100 * (1 - PROD(1 - confidence_i)) + SUM(boost_j)    capped at 100
+
+— a noisy-OR product over the primary signals plus bounded additive boosts from the
+two supporting ones. There are no weights in it anywhere. A share bar asserts that
+its parts sum to the whole, which is the exact reasoning `docs/evidence-panel-audit.md`
+used to reject a bar for the metadata lane. The lane now renders one confidence row
+per signal with no bar, showing the calibrated `confidence` as the headline number
+and `raw` beside it — that order matters, because `models.Signal` states that
+`ComposeScore` reads `confidence` while `raw` is kept for auditing.
+
+The evidence union member was renamed `weighted` → `confidence` to match, since a
+type named for an arithmetic the data does not have is the same defect in slower
+form. The false justification appeared in five places (`types.ts`, `adapters.ts`,
+`lanes/dupes.ts`, and two test comments); all five now state the real formula.
+
+`primarySignals` derives the primary/supporting split from the signal kind instead,
+via a new `isPrimaryKind` — the supporting kinds are exactly `duration` and
+`folder_path`, per `isSupportingKind` in `internal/dedup/unified/score.go`. This is a
+**duplicated rule, and a stopgap**: the wire format does not serialize the
+classification at all, so the frontend cannot read the answer. A follow-up should add
+`primary` to `models.Signal` and collapse this list into reading it. An unknown kind
+is treated as primary, so a new collector appears in the UI rather than vanishing.
+
+Also consolidated the kind→label map, which existed in three copies that had already
+drifted — a row chip read "exact file" where the panel read "Exact file hash". There
+is now one map, and the longer labels won.
+
+- **Dupes review: a selection no longer survives a page turn.** Selecting rows on
+  one page of the duplicate-candidate lane and then paginating left those rows
+  armed for "Merge Selected" while they were off screen, so the reviewer could
+  irreversibly merge pairs they could not see — this lane has no undo. Changing
+  the page or the page size now clears the selection and says so with a toast.
+  The shift-click anchor is cleared with it: it is an index into the visible
+  rows, so carrying it across a page turn let the next shift-click extend a
+  range from an unrelated row.
+
+- **The metadata review lane no longer reports a failed load as an empty queue.**
+  A failed request to the cached-review endpoint was swallowed entirely — no
+  error state, no toast, not even a console line — so a 500, a hung request and a
+  genuinely empty cache all rendered the same screen: "No metadata matches to
+  review. Search providers from the Metadata menu to find some." That advice
+  cannot help when the server is down. The lane now carries an error, the panel
+  renders it in an Alert with a **Retry** button (matching the dupes and regroup
+  lanes), and the spine shows a loading state while a request is in flight
+  instead of the empty copy.
+
+- Files centralized by the Deluge `deluge.centralize` operation are now
+  copy-on-write clones instead of full byte copies. The plugin called a local
+  `reflinkCopy` that was a placeholder returning an error to force a fallback,
+  so every file that operation ever moved consumed its size again on disk.
+- Reflinks now work on macOS. Both previous implementations issued an ioctl
+  against a pre-created destination, which is not how APFS `clonefile` works,
+  so cloning silently degraded to a copy on every developer machine.
+- The iTunes heal path no longer overwrites an existing destination. It shelled
+  out to `cp`, whose fallback replaced whatever was already there.
+
+#### The regroup lane rendered "Nothing to review 🎉" over a queue holding hundreds of items
+
+The spine had a single empty branch, so a filter that matched nothing was
+congratulated as an empty queue — telling a reviewer to go home when the next
+step was to widen the filter. Filtered-empty now says what the queue still holds
+and offers a clear; genuinely-empty uses the lane descriptor's `emptyMessage`,
+which had been carried unused since the lane was ported.
+
+The lane also no longer renders a queue total it does not have. The all-kinds
+count comes from a SECOND request that swallows its own failure, so under a kind
+filter it can be absent while rows are on screen — which would have put "0
+pending" next to "16 in Multi-disc groups", two chips contradicting each other
+over a queue that is not empty. The count is now typed as nullable, so every
+consumer had to state what it does without one: the rail shows "queue total
+unavailable" and the filtered-empty copy drops the sentence that would have
+quoted the number.
+
+Three more states that were previously indistinguishable or missing: the lane now
+shows progress while refetching even when rows are already on screen (a kind
+change was otherwise completely silent, since the spine only spins when it has
+nothing at all), it drops the previous kind's rows instead of showing them under
+the new kind's heading, and its error alert offers a retry. The lane's own fetch
+also now carries a 30-second deadline — `apiFetch` supports one per caller and
+this lane never asked, so a server that never answered left the spinner turning
+with nothing to tell the reviewer.
+
+- The per-file transcription path no longer returns while its workers are still
+  running. On the first job error it returned immediately, leaving the remaining
+  workers sending HTTP requests to the endpoint and holding in-flight slots the
+  caller believed it had released — so a dispatch that had already reported
+  failure went on generating load. This was also the source of an intermittent
+  data race that failed CI on unrelated pull requests.
+
+#### The review count poller re-rendered the whole /review route every 30 seconds
+
+`useReviewStore.loadCount` installed a freshly-parsed `byKind` object on every
+poll tick, whether or not a single number in it had changed. A new object is
+never `Object.is`-equal to the last one, so every `(s) => s.byKind` subscriber
+woke up twice a minute on an idle queue.
+
+On `/review` that subscriber is `useRegroupLane`, and `byKind` feeds a `useMemo`
+dependency array there — so the new identity rebuilt the lane's buckets,
+produced a new lane object, and re-rendered `ReviewWorkspace` and every panel
+beneath it. `useRegroupLane` is called unconditionally, and its `active` flag
+gates only the fetch, not the subscription, so this fired in **all three lanes**
+regardless of which one was on screen.
+
+`loadCount` now compares the incoming breakdown against the stored one and keeps
+the existing object when the counts are identical. `count` is a primitive and
+zustand's own equality check already absorbed it, so `byKind` was the only
+identity churn on this path; an unchanged tick now causes zero re-renders
+anywhere. Real movement — a changed count, a kind appearing, a kind
+disappearing — still propagates, and the badge still updates when only the
+total moved.
+
+#### Selecting one candidate re-rendered all 100 rows in the compare spine
+
+`CompareSpine`'s row renderers each received the whole `SpineContext`, which is
+rebuilt whenever `rowStates`, `selectedIds` or `expandedId` changes. Ticking a
+single checkbox therefore re-rendered every row on the page — the sluggishness
+that shows up at the larger page sizes.
+
+The spine now derives a stable handlers object from the context and passes each
+row its own `selected` / `rowState` / `expanded` values as plain props, so the
+memoized renderers only re-render when something about *that row* changed.
+`SpineContext`'s public shape is unchanged, so `useMetadataLane` and the spine's
+existing tests were not touched.
+
+The stable-handlers `useMemo` sits deliberately ABOVE the spine's loading and
+errored early returns, which landed separately. A hook placed after a
+conditional return is skipped on a loading render and called on a populated one,
+and React throws on that transition; the existing loading test renders a single
+static frame and cannot see it, so two transition tests now pin the ordering.
+
+#### No request on the review route had a timeout
+
+None of the route's four data calls passed `timeoutMs`, so a server that
+accepted the connection and then stalled left the reviewer on a spinner forever,
+with the loading state and the hung state rendering identically. Each call now
+carries a deadline sized to what it actually does — 15s for the polled count,
+30s for the review queue, 60s for dedup candidates, and a deliberately generous
+120s for the cached metadata review set, which the lane requests in full. A
+caller-supplied abort signal still cancels as before and is still distinguished
+from a deadline, so switching lanes does not flash an error.
+
+#### Six hand-rolled file copies disagreed on four axes; two of the disagreements were losing iTunes backups
+
+Six functions in this repository copied a file byte-for-byte — three of them
+inside `internal/fileops` itself. They disagreed on whether an existing
+destination was refused or truncated, what permission bits the destination
+ended up with, whether the data was fsynced before the call returned, and
+whether a half-written destination was removed when the copy failed.
+
+Two of those disagreements were live defects rather than preferences:
+
+- **Every ITL backup written by the transfer path was owner-only (0600).**
+  `internal/itunes/service/transfer.go` copied through `os.CreateTemp`, which
+  creates at 0600, and renamed the result into place, so the backup inherited
+  the temp file's mode instead of the library's. This is the same failure the
+  2026-08-14 E08 canary caught on the tag-write path, where 100 books' files
+  went share-unreadable after a rewrite replaced an 0664 file with an 0600 one;
+  it had simply never been looked for on the iTunes side.
+- **Neither ITL backup writer fsynced.** A backup still sitting in page cache
+  when the original is rewritten is not a backup — one crash loses both copies,
+  which is the single outcome those backups exist to prevent.
+
+A third defect surfaced while consolidating them: the write-back batcher's
+post-rename-validation rollback restored the backup over the **live** iTunes
+library with a plain `os.WriteFile`. That is not atomic at any point, so a
+crash partway through the rollback left neither a good library nor a good
+original.
+
+All six now go through one implementation in `internal/fileops`, split into
+four functions named for the question each answers rather than one helper with
+flags:
+
+- `CopyFile` — create or truncate, source's mode, fsynced, partial destination
+  removed on failure.
+- `CopyFileExclusive` — the same, but an existing destination is refused via
+  `O_EXCL` rather than a stat-then-create race.
+- `CopyFileInto` — copy into a destination the caller already created, keeping
+  its inode and hardlinks, and applying the source's mode (this is the E08 fix).
+- `CopyFileAtomic` — temp file beside the destination, fsync, rename; the shape
+  every "restore the live file from its backup" path needs.
+
+Whether a copy lands via a temp-and-rename stays the caller's policy, so
+`internal/organizer` keeps its `safeRename` collision refusal and the iTunes
+paths keep plain replacement — only the byte copy is shared.
+
+The Linux reflink path now also applies the source's mode, so the destination's
+permissions no longer silently reveal which of the three code paths (Linux
+`FICLONE`, macOS `clonefile`, byte-copy fallback) produced it — macOS
+`clonefile(2)` had been copying the mode on its own all along.
+
+#### Permission bits are a per-caller decision, and the first draft of this change got that wrong
+
+The first version of the shared copy applied the **source's** mode on every
+path. That was correct for two of the three operations and actively harmful for
+the third, and a review of the change caught it before merge.
+
+Bringing a file in from **outside** the library is not the same operation as
+copying a file the library already owns. An ingest source is a download client's
+output: a client running `umask 077` produces an `0600` file, and adopting that
+mode makes every organized library file owner-only and stops the share serving
+them — with every copy reporting success. That is the same failure as the E08
+canary, in the change written to prevent it. The paths this replaced
+(`os.Create` in the organizer, an `0664` literal in the reflink fallback) were
+floored by the service's own umask and were safe for that reason.
+
+There are now three named policies, because none of them can be inferred:
+
+- **`CopyFile` / `CopyFileInto`** take the source's mode — copying a file to
+  make a sibling of itself (a backup, or a temp that gets renamed back over it).
+- **`CopyFileIngest` / `CopyFileIngestExclusive`** create at the library default
+  under the umask and never adopt the source's bits.
+- **`CopyFileAtomic`** keeps the **destination's** mode when the destination
+  exists. Restoring a library from a backup written months ago under an earlier
+  writer's hardcoded `0644` must not stamp that `0644` onto a live `0664`
+  group-writable library — at exactly the moment a rollback runs.
+
+The Linux reflink path no longer chmods to the source's mode either; that change
+had been justified as making the three code paths agree, and they would have
+agreed on the wrong answer. macOS `clonefile(2)` genuinely does copy the
+source's mode and cannot be told otherwise, so that platform difference is now
+documented rather than papered over.
+
+#### Three more defects the same review surfaced
+
+- **The copy fsynced the data but never the parent directory.** On ext4
+  (`data=ordered`) and XFS, `fsync()` on a newly created file does not commit
+  the directory entry naming it. A crash could therefore leave a backup's bytes
+  on disk under no name at all — which is the very "one crash loses both copies"
+  outcome this change claims to eliminate. All four copy entry points that
+  create a file now fsync the parent directory, through the same test seam as
+  the file fsync; removing it fails a test.
+- **A copy of a file onto itself silently emptied it and returned success.**
+  `O_TRUNC` on the same inode zeroes the file before `io.Copy` reads a byte, and
+  `io.Copy` then reports success having moved nothing. Two of the six replaced
+  implementations were immune by accident. `os.SameFile` now refuses it, and
+  `FileOperation.Execute` treats a same-file operation as a no-op — its existing
+  test passed throughout because it asserted only that the file still *existed*,
+  and disabled checksum verification.
+- **The unconditional `chmod` was a new failure mode on network shares.**
+  `fchmod` returns `EPERM` on CIFS without unix extensions and on vfat/exfat, and
+  three of the six replaced implementations never chmodded at all. In the iTunes
+  write-back path that turned into "proceeding without a rollback anchor" on a
+  perfectly healthy library. The chmod now runs only when the bits on disk are
+  not already the ones wanted.
+
+#### iTunes backup rotation deleted the newest backup and kept two-month-old ones
+
+Three code paths wrote backups of the same iTunes library into the same
+directory under the same `.bak-` prefix, each with its own timestamp format:
+
+| writer | stamp |
+|---|---|
+| `internal/itunes/itl_safe_write.go` (the hardened safe-write path) | `2026-09-01T07-14-49.000000000Z-00` |
+| `internal/itunes/service/writeback_batcher.go` | `20260801-000000` (and in **local** time) |
+| `internal/itunes/service/transfer.go` | `20260701T000000Z` |
+
+Two independent rotators — `rotateBackups` and `pruneITLBackups` — each sorted
+the whole set with `sort.Strings` and deleted from the front, on comments
+asserting that lexical order equals chronological order. That was true of each
+rotator's *own* format and false across the three: the separators differ at the
+fifth character, and `-` (0x2D) sorts before every digit, so every
+dashed-RFC3339 name sorted as older than every compact name regardless of when
+it was written.
+
+The result, with one backup from each writer and a retention of one, is that
+the **September** backup is deleted and the **July** one kept. The backups
+being destroyed first were the ones from the safe-write path — the only writer
+that fsyncs and pins a last-known-good anchor.
+
+Ordering is now by *parsed* timestamp, never by string. One shared
+implementation in `internal/itunes/backupname.go` writes a single canonical
+name and understands every historical layout, so backups already on disk sort
+correctly with no migration step. A name that matches no known layout is kept
+rather than rotated away — deleting a file whose age cannot be established is
+how a rotation bug turns into data loss.
+
+Two further problems surfaced while fixing this:
+
+- **The canonical layout was emitting a stray `-00`.** `Z07-00` is not a zone
+  specifier Go recognises as a unit: it matches `Z07` and treats `-00` as
+  literal text, so every backup the safe-write path has ever produced is named
+  `...Z-00`. It round-tripped against itself, so nothing noticed for as long as
+  the only consumer sorted the names as strings. New names use `Z0700`; the old
+  spelling is retained as a parse-only layout.
+- **The backups list in the UI was sorted by file modification time.** The
+  safe-write path creates its backup by *renaming* the live library, so that
+  file's mtime is the library's, not the moment the backup was taken — the
+  hardened backups were displayed as far older than they are. The list now uses
+  the timestamp in the name, falling back to mtime only for a name that matches
+  no known layout.
+
+The `cleanup-backups` maintenance job's `.bak-\d{8}-\d{6}$` pattern was
+deliberately left alone: it sweeps the library root, not the iTunes tree, and
+widening it to match the canonical layout would let it delete ITL backups if
+those trees ever overlap.
+
+#### Duplicate books with non-English titles or authors were being compared wrongly
+
+The duplicate detector compares two books by counting the single-character edits
+that separate their titles and authors. That count was measuring **bytes rather
+than characters**, and in the encoding this app stores text in, an accented,
+Cyrillic, Greek, Japanese or Chinese character takes two or three bytes rather
+than one.
+
+Every non-English name therefore looked further apart than it really is:
+
+| | scored before | actually |
+|---|---|---|
+| "José Saramago" vs "Jose Saramago" | 0.85 | 0.92 |
+| "Böll" vs "Boll" | 0.50 | 0.75 |
+| "村上春樹" vs "村上春树" | 0.50 | 0.75 |
+| "東京" vs "東京都" | **0.00** | 0.67 |
+
+That last row is the clearest case: two titles one character apart were scored
+**0.00 — as different as two strings can possibly be.**
+
+Because the detector discards this evidence below a similarity of 0.50, a book
+whose title *and* author are both non-Latin could have its strongest metadata
+evidence thrown away and never reach the review queue. The comparison now counts
+characters on both sides.
+
+**What this changes in the review queue, in both directions.** The old count was
+too large for non-English text, and the same count is used two different ways:
+as a similarity score, and as a plain "are these titles nearly identical?"
+threshold. Correcting it therefore does two things, and only the first is an
+unambiguous improvement:
+
+- Non-English pairs that were scored too low, or dropped entirely, now carry
+  their real similarity. **Nothing that was already flagged as a duplicate stops
+  being flagged.**
+- Non-English pairs that the "nearly identical titles" check used to *reject*
+  may now be **accepted** and shown to you. The oversized byte count was
+  incidentally acting as a stricter filter for non-Latin titles, and that side
+  effect is gone. Expect some new same-author CJK or Cyrillic pairs in the
+  queue whose titles differ by one character — which in those scripts can mean
+  an entirely different word. **These are proposals for review, not automatic
+  merges:** nothing is merged without a person, and the automatic-merge path
+  does not use title similarity at all.
+
+Two smaller notes. Titles or authors stored in a non-UTF-8 encoding (older
+Latin-1 tags, unusual filenames) can now score *lower* rather than higher, which
+means evidence discarded rather than a wrong match. And scores already recorded
+against existing candidates were computed the old way; they are refreshed the
+next time those pairs are scored.
+
+Two related cleanups came with it: the app carried two separate copies of this
+comparison, one correct and one not, and they are now a single implementation;
+and the author-name cleaner was rebuilding its text patterns on every call,
+making it about five times slower and producing twenty times more memory garbage
+than necessary during a full library scan.
+
+#### Four writers put four different hashes in the one column dedup treats as certainty
+
+`book_files.file_hash` is an identity column: `internal/dedup/collectors_exact.go`
+emits a `SigExactFile` signal at **Confidence 1.0 — certainty** whenever two books
+share a value in it. A confidence of 1.0 is only defensible if every row in the
+column was produced by the same function, and it was not.
+
+`internal/database/file_provenance.go` has specified the algorithm since it was
+written: for a file over 100 MB, `SHA-256(first 10 MB ‖ last 10 MB ‖ decimal
+size)`; a whole-file digest below that. `internal/scanner` and the
+`backfill-file-hashes` maintenance job wrote exactly that. Three other writers
+did not:
+
+- `maintenance.extract-wav-clips` hashed the source with a plain whole-file
+  SHA-256. Its guard — "write unless the stored hash already matches" — could
+  never match above 100 MB, so the overwrite fired for **every** file in exactly
+  the population the chunked strategy exists for. Its own `OperationDef`
+  description promised the write happened only "(when missing)"; nothing in the
+  body implemented that.
+- `versions.CreateIngestVersion` hashed newly-ingested files with a whole-file
+  SHA-256 and stored it on the `BookFile` row.
+- The iTunes track importer stored `ComputeSegmentFileHash` — a SHA-256 of only
+  the **first 1 MB**. That one is wrong in both directions: it never equals the
+  scanner's value for any real audiobook, and two different tracks that share a
+  1 MB opening collide on it, which asserts a duplicate at certainty.
+
+The user-visible effect was silent under-detection. Two byte-identical files
+hashed by two different algorithms produce two different strings, so the exact-file
+collector never fired: the duplicate was simply never found, with no error and no
+log line anywhere.
+
+The algorithm now lives in one place, the new `internal/filehash` leaf package,
+and every writer of the column calls `filehash.BookFileHash` (or
+`BookFileHashFromFile` for the scanner's single-pass reader). Three hand-written
+copies of the chunked algorithm — in `scanner.ComputeFileHash`,
+`scanner.computeHashFromReader`, and inline in the plugin — are now one.
+`extract-wav-clips` also implements the "when missing" guard its description
+always claimed, so it reads file identity rather than owning it.
+
+Two ambiguously-named whole-file hashers that fed the confusion are gone:
+`fileops.ComputeFileHash` (zero non-test callers) and `versions.HashFile`.
+`fileops.ComputeFileHashAndSize` remains the canonical whole-file digest, for
+verifying bytes survived a mutation.
+
+**Rows already written with the wrong algorithm are not repaired by this change.**
+You cannot tell a whole-file digest from a chunked one by looking at it — both are
+64 hex characters — so a repair has to recompute, and it needs its own design.
+
+Consolidating the algorithm also surfaced three ways the same column could be
+given a well-formed but wrong value, all now closed:
+
+- A **truncated read** produced a digest that was not reproducible. The chunked
+  path only runs on files over 100 MB, so a short read of a 10 MB window never
+  meant "the file ended" — it meant the read was cut short, which happens on the
+  NFS/SMB mounts a NAS-backed library lives on. The partial window was folded
+  into the digest anyway, so hashing the same unchanged file twice could yield
+  two different values. Windows are now filled, and a genuinely short one is an
+  error instead of a hash.
+- The scanner sized the file with a `stat` of the **path** taken before it opened
+  the file, then folded that size into the digest of whatever the handle actually
+  pointed at. `WriteTagsSafe` finishes with an atomic rename over that path and
+  the organizer renames files under the library root, so the two could disagree.
+  It now sizes the open descriptor.
+- `BookFileHashFromFile` hashed from the caller's current file offset, which for
+  its natural caller was already past the tag header. It now positions the handle
+  itself.
+
+#### A failed hash no longer orphans a newly-ingested version
+
+`versions.CreateIngestVersion` created the `book_version` row, then set both the
+file's hash and its link back to that version inside the same success branch. If
+hashing failed — the file moved by a concurrent organize, a permissions or I/O
+error — the link was skipped along with the hash, and the function returned
+success. The version existed with nothing pointing at it. Linking is now
+unconditional; only the hash is skipped, and it is left for the backfill job.
+
+`maintenance.extract-wav-clips` and the iTunes importer also now count and log
+the per-file hash failures they previously discarded, so a run that writes no
+hashes at all can no longer report "0 failed". `extract-wav-clips` additionally
+counts rows whose stored hash disagrees with the canonical digest — it already
+recomputes that digest, so this sizes the repair population at no extra cost.
+
+#### `supported_extensions` was ignored by fifteen code paths, so half the library's formats were watched, relinked and repaired by nothing
+
+`supported_extensions` ships with fifteen audio extensions and is user-editable.
+The ingest scanner reads it. Almost nothing downstream did. The filesystem
+watcher held its own 8-entry list; the iTunes heal path held a 7-entry list in
+three places; `backfill-book-files`, `relink-missing-to-itunes`,
+`repair-missing-files`, `refetch-missing-authors`, `scan-composer-tags` and the
+relink report each held their own 5-to-8-entry list; the file-provenance capture
+held another; `metafetch.AudioFilesInDir` globbed a private 8-pattern list.
+
+The consequence was not an error. A library holding `.aax`, `.aaxc`, `.aiff`,
+`.aif`, `.mka`, `.oga` or `.wav` books — all shipped defaults — got those books
+scanned and imported, and then never watched for changes, never given
+`book_file` rows by the backfill job, never relinked to their iTunes tracks,
+never repaired when their path went stale, and never provenance-captured. Every
+one of those jobs reported a clean run over a library it had silently
+half-skipped.
+
+The canonical list now lives in one leaf package, `internal/audioext`, and every
+predicate that asks "is this file part of the library?" resolves against the
+configured value through `config.SupportedExtensionSet()`.
+
+Three further defects fell out of the consolidation:
+
+* **`supported_extensions: []` disabled file recognition entirely.** `InitConfig`
+  guarded with `viper.IsSet`, which is true for an explicitly empty list, so a
+  user's empty value was written straight into `AppConfig` and every predicate
+  then answered "not audio" for every file. The guard is now `len > 0`, matching
+  what `internal/config/persistence.go` already did, and `audioext.Resolve` falls
+  back to the compiled-in default for a nil or empty list — `AppConfig` is a
+  package-level zero value, so nil is the state of any binary that has not run
+  `InitConfig`.
+* **`metafetch.AudioFilesInDir` could not see two whole classes of file.**
+  `filepath.Glob` is case-sensitive on Linux, so `Chapter 01.MP3` was invisible
+  in production and visible on a developer's case-insensitive Mac; and a folder
+  whose name contains a glob metacharacter — `The Hobbit [Unabridged]` — made
+  every pattern match nothing, so the book appeared to have no audio at all. It
+  now reads the directory and tests the extension. Its result order changed as
+  a side effect: the old code called `Glob` once per pattern and appended, so
+  results came out grouped by that private pattern list; they are now lexical by
+  full path. No caller derives a track or disc number from slice position — all
+  four were checked, and neither `book_file` row builder sets `TrackNumber` —
+  but the order is now pinned by a test rather than left as an artifact.
+* **`reconcile.FindUntrackedFiles` read `config.AppConfig` without the lock.** It
+  goes through the locked accessor now.
+
+Extension lists that answer a *capability* question rather than a membership one
+are deliberately left narrow and renamed to say so:
+`fingerprint.FingerprintableExtensions`, `acoustid.fpcalcDecodableExtensions`,
+`maintenance.transcribableExtSet`, `metafetch.coverEmbeddableExts`. Widening
+those from config would be a regression, not a de-duplication — `.aax` and
+`.aaxc` are library extensions and are DRM-encrypted, which
+`internal/audioutil.DetectDRM` documents this application cannot decode at all,
+so a fingerprint or transcription list that excludes them is correct. The MIME
+and DRM mapping tables (`abs/mapper.go`, `audioutil/drm.go`) are untouched for
+the same reason.
+
+`.mp4` is deliberately **not** added to the canonical list: it feeds the ingest
+scanner, and it is overwhelmingly a video container, so adding it would import a
+trailer sitting in a library folder as an audiobook. The two callers that
+recognise `.mp4` today — `linkintegrity/classify.go` and
+`maintenance/junk_title_derive.go` — are therefore left alone rather than routed
+through config, which would have silently removed that recognition.
+
+- **A book whose title names two works no longer has its title recorded as its
+  author.** Files like `Jonathan Strange and Mr Norrell - Clarke, Susanna.mp3` or
+  `Norse Mythology and Anansi Boys - Neil Gaiman.mp3` were being filed with the
+  title in the author field. The rule that caused it asked whether a phrase
+  splits into two or more name-shaped parts — but titles do that too, and
+  `"Norse Mythology and Anansi Boys"` splits exactly like
+  `"Neil Gaiman and Terry Pratchett"`. It is replaced by a much narrower test
+  that only looks at `&` and `+`, that runs after the stronger signals (a
+  leading "The"/"A", and initials) rather than before them, and that only
+  applies when the other half of the filename is a single undivided name.
+
+  That last condition was missing at first and had to be added in review. An
+  ampersand tells you a phrase *is* a list of authors; it tells you nothing
+  about whether the other half is. Without the condition, a title like
+  `Magic Tides & Magic Claims` beat a genuine two-author credit sitting right
+  next to it.
+
+  Measured on 68,793 real library paths, split into 40,261 used to choose the
+  rule and a held-out 28,532 used only to check it: zero paths where the previous
+  behaviour produced a correct or absent author and this produces a wrong one.
+
+  There is a deliberate trade, stated here because it is a real loss and not
+  only an improvement. A credit joined by "and" or a comma is no longer
+  recognised when it comes *first* in the filename, so
+  `Neil Gaiman and Terry Pratchett - Good Omens.mp3` now records the wrong
+  author. Recognising that shape is exactly what was filing omnibus titles as
+  authors, and nothing in the text separates the two. The loss falls on the
+  rarer ordering: this library measures 57 files named "Title - Author" against
+  9 named "Author - Title".
+
+  The same trade is sharper on underscore-named files, where declining to answer
+  costs the title as well as the author. Every alternative was measured and each
+  costs more than it saves — the numbers are recorded in
+  `todo.d/20260901_underscore_refusal_falls_through_to_a_worse_answer.md` so they
+  are not re-proposed. Neither shape occurs in the 40,261-file production sample.
+
+- **An audiobook named with underscores no longer has "Unknown Author" recorded
+  as a real author.** `Mort_Unknown Author.mp3` was stored with the author
+  literally set to the placeholder, which then made the book look like it already
+  had an author and permanently excluded it from AI author-detection. The
+  underscore branch was returning early, before the guard that clears the
+  placeholder, the fallback that recovers the author from the folder name, and
+  the series-number detection — all of which now run for every branch.
+
+- **A decorated placeholder ("Unknown Author (Unabridged)") is now recognised by
+  the gate that decides whether AI author-detection is worth running.** Three
+  other places already stripped the edition suffix before that comparison; this
+  fourth one did not. No author row in a 60,000-book production sample currently
+  hits it, so this closes a hole rather than repairing existing rows.
+
+### Known issues
+
+The metadata lane still fetches its entire review set with `limit=0` and
+paginates client-side. That is load-bearing rather than an oversight: filtering,
+the staleness set, and candidate grouping all span the whole library, and the
+server endpoint accepts only `limit`/`offset` with no filter push-down. Making
+the client honour the server's pagination would confine filters to a single page.
+It needs server-side filter push-down first and is not addressed here.
+
+### Notes
+
+- A per-endpoint `concurrency` that is omitted or `0` means **1**, not unlimited. This
+  deliberately differs from `whisper_max_in_flight`, where `0` does mean unlimited: a
+  per-endpoint cap defaulting to unlimited would silently reinstate the unbounded fan-out
+  the cap exists to prevent.
+- Changing an endpoint's `concurrency` (or `whisper_max_in_flight`) takes effect at
+  **restart**. A live change is logged and the established cap is kept, because replacing
+  a live semaphore installs an empty one and removes the cap entirely.
+- Duplicate endpoint URLs are now ignored with a warning; one server must occupy at most
+  one pool slot.
+
 <a id='changelog-v0.221.0'></a>
 ## v0.221.0 — 2026-08-30
 
