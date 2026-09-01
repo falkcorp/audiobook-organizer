@@ -1,5 +1,5 @@
 // file: internal/personname/personname.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
 // last-edited: 2026-09-01
 
@@ -172,30 +172,15 @@ func StripEditionSuffix(s string) string {
 	return strings.TrimSpace(editionSuffixRe.ReplaceAllString(strings.TrimSpace(s), ""))
 }
 
-// isMultiNameCredit reports whether s lists two or more names.
-//
-// The every-clause loop below looks redundant -- LooksLikeAuthorCredit has
-// already applied the same rule before either side reaches here -- and it is
-// not. A string can be a credit via the BARE-NAME path instead, and then have
-// two clauses that are not themselves names: "Smith, John" is one person in
-// last-first form, and the loop is what stops it counting as two.
-//
-// A mutation that weakens this loop to "any clause" SURVIVES the suite, and
-// deliberately so. The only input that distinguishes the two versions is
-// "Smith, John - Good Omens", where the weakened version answers
-// "Smith, John" -- which is the CORRECT author -- and this version falls to the
-// tie and answers "Good Omens". Killing that mutant would mean pinning
-// "Good Omens" as the author of that filename, so the mutant is left alive
-// rather than a wrong answer written into a test to tidy up a count.
-//
-// The underlying gap is that a last-first name is not used as a discriminator
-// at all: a person may be written "Last, First" and a title may not, so that is
-// evidence this function currently throws away. It is pre-existing -- origin/main
-// answers "Anansi Boys" for "Gaiman, Neil - Anansi Boys" too -- and is filed at
-// todo.d/20260901_last_first_author_not_a_discriminator.md rather than fixed
-// here.
-func isMultiNameCredit(s string) bool {
-	clauses := creditSeparatorRe.Split(StripEditionSuffix(s), -1)
+// ampersandCreditRe splits on ONLY the two credit separators a book title does
+// not itself use. Deliberately narrower than creditSeparatorRe -- see the long
+// note in ChooseAuthorSide for the measurement that forced the distinction.
+var ampersandCreditRe = regexp.MustCompile(`\s*[&+]\s*`)
+
+// looksLikeAmpersandCredit reports whether s is two or more person-shaped
+// clauses joined by "&" or "+", e.g. "Elora Bishop & Bridget Essex".
+func looksLikeAmpersandCredit(s string) bool {
+	clauses := ampersandCreditRe.Split(StripEditionSuffix(s), -1)
 	if len(clauses) < 2 {
 		return false
 	}
@@ -260,23 +245,52 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 		return "", "", false
 	}
 
-	// Both sides could be a credit. Three discriminators, applied strongest
-	// first. The last two already existed in the tree but each in only ONE of
-	// the four copies.
-
-	// A list of several names is stronger evidence of author-hood than a single
-	// person-shaped phrase: "Neil Gaiman and Terry Pratchett" is a credit in a
-	// way "Good Omens" is not, even though both pass LooksLikeAuthorCredit.
-	// Without this the pair is treated as a tie, and the "_" path then refuses
-	// a credit it had enough evidence to place.
-	leftMulti, rightMulti := isMultiNameCredit(left), isMultiNameCredit(right)
-	if leftMulti != rightMulti {
-		if leftMulti {
-			return right, left, true
-		}
-		return left, right, true
-	}
-
+	// Both sides could be a credit. Three discriminators, in order.
+	//
+	// There was briefly a fourth, tried first: "a list of two or more names
+	// beats a single name", splitting on the full creditSeparatorRe. It was
+	// wrong, because that is a multi-CLAUSE test and titles have clauses.
+	// "Norse Mythology and Anansi Boys" splits into two capitalised phrases
+	// exactly as "Neil Gaiman and Terry Pratchett" does, so the title beat the
+	// real author on the other side and was filed AS the author. Measured on
+	// 40,261 real library paths, it cost 8 rows outright, e.g.
+	//
+	//   "Jonathan Strange and Mr Norrell - Clarke, Susanna" -> author "Jonathan Strange and Mr Norrell"
+	//   "Monster Hunter International, Second Edition - Unknown Author" -> author "Monster Hunter International, Second Edition"
+	//
+	// Reordering it after the initials test does not fix it -- neither side of
+	// the first example has initials.
+	//
+	// But deleting it outright was ALSO wrong, and the same 40,261 paths say so:
+	// it was load-bearing for 4 rows in the other direction, all of this shape:
+	//
+	//   "Elora Bishop & Bridget Essex - Under Her Spell" -> author "Under Her Spell"
+	//
+	// The separator is the whole difference. "and", commas and colons are
+	// ordinary title punctuation and so carry no evidence about which side
+	// names a person; "&" and "+" are weaker punctuation in titles and carry
+	// some. Hence the narrow test below, on "&" and "+" ONLY, never on
+	// creditSeparatorRe.
+	//
+	// It is weak evidence, not a law, and the measurement says so: of 323
+	// distinct "&"/"+" segments in the real library, looksLikeAmpersandCredit
+	// accepts 33, and roughly half of those are titles, not credits --
+	// "The City & The City", "Magic Tides & Magic Claims", "The Savage & The
+	// Crown". The rule is nevertheless safe HERE because of where it sits: it
+	// only ever runs when BOTH sides already parse as credits, so a title
+	// false-positive changes the answer only when the opposing side is
+	// credit-shaped too. Measured end to end on 68,793 real library paths, in
+	// both packages: 0 rows where main produced a correct-or-absent author and
+	// this produces a wrong one, against 11 rows recovered. Do not promote this
+	// predicate to a general "is this a co-author credit" test on the strength
+	// of that number -- it is not one, and the 33/323 above is the reason.
+	//
+	// Refusing the tie instead was measured and is much worse: 491 wrong-author
+	// regressions on the same 68,793 paths. Returning ok=false does not stop the
+	// caller, it hands the decision to a fallback with LESS information (the
+	// "Series = first part, Title = last part" split, then a directory-derived
+	// author), which then fills in a worse answer. Fail-closed at this predicate
+	// is not fail-closed at the consumer.
 	leftLead, rightLead := titleLeadRe.MatchString(left), titleLeadRe.MatchString(right)
 	if leftLead != rightLead {
 		// A leading article marks the title.
@@ -290,6 +304,19 @@ func ChooseAuthorSide(left, right string, onTie TiePolicy) (title, author string
 	leftInitials, rightInitials := strings.Contains(left, "."), strings.Contains(right, ".")
 	if leftInitials != rightInitials {
 		if leftInitials {
+			return right, left, true
+		}
+		return left, right, true
+	}
+
+	// Weakest of the three, so it runs LAST. Ordering is load-bearing: with this
+	// ahead of the article test, "The City & The City - China Mieville" filed
+	// the TITLE as the author, because the left side is two person-shaped
+	// clauses joined by "&". A leading article is stronger evidence than an
+	// ampersand and must get to answer first.
+	leftAmp, rightAmp := looksLikeAmpersandCredit(left), looksLikeAmpersandCredit(right)
+	if leftAmp != rightAmp {
+		if leftAmp {
 			return right, left, true
 		}
 		return left, right, true

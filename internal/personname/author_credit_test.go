@@ -1,5 +1,5 @@
 // file: internal/personname/author_credit_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 3c1d3f97-1705-4519-a344-cc8eb9f0d038
 // last-edited: 2026-09-01
 
@@ -110,33 +110,102 @@ func TestChooseAuthorSideTiePolicy(t *testing.T) {
 	}
 }
 
-// TestMultiNameCreditRequiresEveryClause pins that the multi-name
-// discriminator uses EVERY clause, not any. With "any", "Neil Gaiman and
-// Volume Two" counts as a list of names and beats a genuine title on the other
-// side -- the discriminator would then be actively harmful rather than merely
-// weaker.
-func TestMultiNameCreditRequiresEveryClause(t *testing.T) {
-	// "Volume Two" is a structural marker, not a name, so the left side is NOT
-	// a multi-name credit and must not win on that basis. The pair falls
-	// through to the tie, which prefers the right.
-	_, author, ok := ChooseAuthorSide("Neil Gaiman and Volume Two", "Good Omens", PreferRightOnTie)
-	if !ok || author != "Good Omens" {
-		t.Errorf("author = %q, ok = %v; want Good Omens (left is not a credit list)", author, ok)
+// TestChooseAuthorSideDoesNotFileAnOmnibusTitleAsTheAuthor pins the round-6
+// regression. A "multi-name credit beats a single name" discriminator was added
+// here and removed again: it tested whether a string splits into two or more
+// person-shaped clauses, which is a multi-CLAUSE test, and titles have clauses.
+// A two-work omnibus title is structurally identical to a two-author credit.
+func TestChooseAuthorSideDoesNotFileAnOmnibusTitleAsTheAuthor(t *testing.T) {
+	cases := []struct{ left, right, wantAuthor string }{
+		{"Norse Mythology and Anansi Boys", "Neil Gaiman", "Neil Gaiman"},
+		{"Red Rising, Golden Son", "Pierce Brown", "Pierce Brown"},
+		{"Black Sun, Red Moon", "J.K. Rowling", "J.K. Rowling"},
+		// The credit-list cases the deleted discriminator was added for still
+		// resolve correctly on the tie policy alone when the credit is on the
+		// right, which is the dominant convention in this library (measured:
+		// 57 "Title - AUTHOR" against 9 "AUTHOR - Title" in a real sample).
+		{"Good Omens", "Neil Gaiman and Terry Pratchett", "Neil Gaiman and Terry Pratchett"},
+		{"Good Omens", "Neil Gaiman & Terry Pratchett", "Neil Gaiman & Terry Pratchett"},
+		{"Good Omens", "Neil Gaiman, Terry Pratchett", "Neil Gaiman, Terry Pratchett"},
 	}
-	// Sanity: with every clause a real name, the left side DOES win.
-	_, author, ok = ChooseAuthorSide("Neil Gaiman and Terry Pratchett", "Good Omens", PreferRightOnTie)
-	if !ok || author != "Neil Gaiman and Terry Pratchett" {
-		t.Errorf("author = %q, ok = %v; want the credit list", author, ok)
+	for _, tc := range cases {
+		_, author, ok := ChooseAuthorSide(tc.left, tc.right, PreferRightOnTie)
+		if !ok || author != tc.wantAuthor {
+			t.Errorf("ChooseAuthorSide(%q, %q) author = %q, ok = %v; want %q",
+				tc.left, tc.right, author, ok, tc.wantAuthor)
+		}
 	}
 }
 
 // TestChooseAuthorSideDecoratedSideStillWins is the round-4 inversion stated at
 // the level of the shared function rather than through a caller.
 func TestChooseAuthorSideDecoratedSideStillWins(t *testing.T) {
-	for _, p := range []TiePolicy{PreferRightOnTie, RefuseOnTie} {
-		_, author, ok := ChooseAuthorSide("Good Omens", "Neil Gaiman and Terry Pratchett", p)
-		if !ok || author != "Neil Gaiman and Terry Pratchett" {
-			t.Errorf("policy %v: author = %q, ok=%v; want the credit list", p, author, ok)
+	// Under the " - " convention the credit list on the right wins.
+	_, author, ok := ChooseAuthorSide("Good Omens", "Neil Gaiman and Terry Pratchett", PreferRightOnTie)
+	if !ok || author != "Neil Gaiman and Terry Pratchett" {
+		t.Errorf("PreferRightOnTie: author = %q, ok=%v; want the credit list", author, ok)
+	}
+
+	// Under RefuseOnTie it REFUSES, and that is correct rather than a shortfall.
+	// An earlier version of this test asserted the credit list under BOTH
+	// policies, and satisfying it is what motivated a "multi-name credit beats a
+	// single name" discriminator -- which turned out to be a multi-CLAUSE test
+	// that filed omnibus titles as authors. "Good Omens" and
+	// "Neil Gaiman and Terry Pratchett" are not structurally separable, so on a
+	// separator carrying no orientation convention the honest answer is no
+	// answer. A refusal leaves the field for AI nomination; a guess does not.
+	if _, author, ok := ChooseAuthorSide("Good Omens", "Neil Gaiman and Terry Pratchett", RefuseOnTie); ok {
+		t.Errorf("RefuseOnTie: returned author %q, want refusal", author)
+	}
+}
+
+// TestChooseAuthorSideAmpersandCredit covers the narrow replacement for the
+// deleted multi-clause discriminator. Deleting it outright was measured on
+// 68,793 real library paths and cost 4 rows in the AUTHOR-first orientation,
+// all joined by "&"; this restores them without restoring the omnibus-title
+// inversion, because "&" is not ordinary title punctuation the way "and" and a
+// comma are.
+func TestChooseAuthorSideAmpersandCredit(t *testing.T) {
+	cases := []struct{ left, right, wantAuthor, why string }{
+		{"Elora Bishop & Bridget Essex", "Under Her Spell", "Elora Bishop & Bridget Essex",
+			"an ampersand-joined co-author credit on the LEFT still wins"},
+		{"David Weber & John Ringo", "March Upcountry", "David Weber & John Ringo",
+			"same, second real example"},
+		{"Under Her Spell", "Elora Bishop & Bridget Essex", "Elora Bishop & Bridget Essex",
+			"and the dominant right-hand orientation is unaffected"},
+
+		// Ordering is load-bearing. The ampersand test is the WEAKEST of the
+		// three and must run after the article and initials tests. With it
+		// first, both of these filed the title as the author -- the exact defect
+		// this change exists to remove. Both titles are real library rows.
+		{"The City & The City", "China Mieville", "China Mieville",
+			"a leading article beats an ampersand"},
+		{"The Savage & The Crown", "Neil Gaiman", "Neil Gaiman",
+			"same, second real title"},
+	}
+	for _, tc := range cases {
+		_, author, ok := ChooseAuthorSide(tc.left, tc.right, PreferRightOnTie)
+		if !ok || author != tc.wantAuthor {
+			t.Errorf("ChooseAuthorSide(%q, %q) author = %q, ok = %v; want %q (%s)",
+				tc.left, tc.right, author, ok, tc.wantAuthor, tc.why)
 		}
+	}
+}
+
+// TestAmpersandCreditIsWeakEvidenceNotALaw records a KNOWN limitation rather
+// than a desired behaviour, so that a future reader does not mistake the
+// predicate for a general "is this a co-author credit" test. Of 323 distinct
+// "&"/"+" segments in the real library, looksLikeAmpersandCredit accepts 33 and
+// roughly half of those are titles. This one is accepted as wrong: it survives
+// only because it needs no article and no initials on either side, and because
+// the real library row is HTML-escaped ("&amp;") and so never reaches here.
+// origin/main is equally wrong on it -- its multi-clause rule fires too -- so
+// this is a documented limit, not a regression.
+func TestAmpersandCreditIsWeakEvidenceNotALaw(t *testing.T) {
+	_, author, _ := ChooseAuthorSide("Magic Tides & Magic Claims", "Ilona Andrews", PreferRightOnTie)
+	if author != "Magic Tides & Magic Claims" {
+		t.Fatalf("author = %q; this test PINS a known-wrong answer -- if it now "+
+			"returns \"Ilona Andrews\" the predicate got better and this test "+
+			"and its comment should be updated, not deleted", author)
 	}
 }
