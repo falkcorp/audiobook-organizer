@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../../../services/api';
@@ -361,34 +361,76 @@ export function useDupesLane(
   // `m` and `d` at a row from the page the reviewer just left.
   // -------------------------------------------------------------------------
 
-  const setFilters = useCallback((patch: Partial<LocalDupesFilters>) => {
-    setFiltersState((prev) => ({ ...prev, ...patch }));
-    // Search is client-side over the loaded page, so it does not invalidate the
-    // page number. Everything else does.
-    const serverSide = Object.keys(patch).some((k) => k !== 'search');
-    if (serverSide) {
-      setPageState(1);
-      setSelectedIds(new Set());
+  /**
+   * The shift-click anchor: an INDEX INTO `visible`, not a candidate id.
+   *
+   * Declared here rather than beside `toggleSelect` because the pagination
+   * setters below have to clear it. An index only means anything against the
+   * rows that produced it -- carry it across a page turn and the first
+   * shift-click on the new page extends a span from whatever row happens to sit
+   * at that index now, silently selecting pairs the reviewer never pointed at.
+   */
+  const lastClickedIndexRef = useRef<number | null>(null);
+
+  /**
+   * Drops a selection that is about to stop being visible, and says so.
+   *
+   * Selection is keyed by candidate id, so it SURVIVES a page turn -- rows the
+   * reviewer can no longer see stay armed for "Merge Selected", and a merge on
+   * this lane cannot be undone. Clearing is the only safe answer; the toast
+   * exists so the clear is not itself silent.
+   *
+   * The toast is raised OUTSIDE the state updater on purpose: React invokes
+   * updaters twice under StrictMode, which would double every message.
+   */
+  const clearSelectionForNewRows = useCallback(() => {
+    if (selectedIds.size > 0) {
+      toast(
+        `Selection cleared — ${selectedIds.size} pair(s) are no longer on screen.`,
+        'info'
+      );
     }
-    setFocusedIndex(0);
-  }, []);
+    setSelectedIds(new Set());
+    lastClickedIndexRef.current = null;
+  }, [selectedIds, toast]);
 
-  const setPage = useCallback((p: number) => {
-    setPageState(p);
-    setFocusedIndex(0);
-  }, []);
+  const setFilters = useCallback(
+    (patch: Partial<LocalDupesFilters>) => {
+      setFiltersState((prev) => ({ ...prev, ...patch }));
+      // Search is client-side over the loaded page, so it does not invalidate the
+      // page number. Everything else does.
+      const serverSide = Object.keys(patch).some((k) => k !== 'search');
+      if (serverSide) {
+        setPageState(1);
+        clearSelectionForNewRows();
+      }
+      setFocusedIndex(0);
+    },
+    [clearSelectionForNewRows]
+  );
 
-  const setPageSize = useCallback((n: number) => {
-    setPageSizeState(n);
-    setPageState(1);
-    setFocusedIndex(0);
-  }, []);
+  const setPage = useCallback(
+    (p: number) => {
+      setPageState(p);
+      clearSelectionForNewRows();
+      setFocusedIndex(0);
+    },
+    [clearSelectionForNewRows]
+  );
+
+  const setPageSize = useCallback(
+    (n: number) => {
+      setPageSizeState(n);
+      setPageState(1);
+      clearSelectionForNewRows();
+      setFocusedIndex(0);
+    },
+    [clearSelectionForNewRows]
+  );
 
   // -------------------------------------------------------------------------
   // Selection
   // -------------------------------------------------------------------------
-
-  const lastClickedIndexRef = useRef<number | null>(null);
 
   const toggleSelect = useCallback(
     (id: number, index?: number, shiftKey = false) => {

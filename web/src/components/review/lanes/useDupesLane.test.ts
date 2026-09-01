@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 //
 // The behaviour under test is mostly the behaviour that a port loses silently:
 // eight keyboard shortcuts, a suppression guard, a keep-side decision shared
@@ -641,5 +641,73 @@ describe('every implemented shortcut is documented', () => {
     // reviewer cannot see on exactly the pairs where they need it.
     const m = DEDUP_SHORTCUTS.find((s) => s.keys === 'm');
     expect(m?.action).toMatch(/tie/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Selection must not outlive the rows it points at
+// ---------------------------------------------------------------------------
+
+describe('a page change drops the selection', () => {
+  it('clears selectedIds when the page changes', async () => {
+    // The hazard this closes: selection is keyed by candidate id, so before this
+    // it SURVIVED a page turn. Select on page 1, page to 2, press "Merge
+    // Selected" and you merge pairs that are not on screen -- and a merge on
+    // this lane has no undo.
+    const { result } = await renderLane();
+
+    act(() => result.current.toggleSelect(1, 0));
+    act(() => result.current.toggleSelect(2, 1));
+    expect(result.current.selectedIds.size).toBe(2);
+
+    act(() => result.current.setPage(2));
+
+    expect(result.current.selectedIds.size).toBe(0);
+  });
+
+  it('clears selectedIds when the page size changes', async () => {
+    const { result } = await renderLane();
+
+    act(() => result.current.toggleSelect(1, 0));
+    expect(result.current.selectedIds.size).toBe(1);
+
+    act(() => result.current.setPageSize(100));
+
+    expect(result.current.selectedIds.size).toBe(0);
+  });
+
+  it('tells the reviewer the selection was dropped, but only when there was one', async () => {
+    // A silent clear trades one hazard for another: the reviewer selects, pages,
+    // comes back and finds nothing selected with no explanation. A toast on
+    // EVERY page turn would be noise, so it is raised only when rows were armed.
+    const { result } = await renderLane();
+
+    act(() => result.current.setPage(2));
+    expect(toast).not.toHaveBeenCalled();
+
+    act(() => result.current.toggleSelect(1, 0));
+    act(() => result.current.setPage(3));
+
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/selection cleared/i), 'info');
+  });
+
+  it('resets the shift-click anchor so a range cannot span two pages', async () => {
+    // The anchor is an INDEX into the visible rows, not an id. Carried across a
+    // page turn, the first shift-click on the new page extends from whatever row
+    // now sits at that index -- selecting a span the reviewer never pointed at,
+    // and feeding it to the same irreversible merge.
+    mockList([makeCandidate(1), makeCandidate(2), makeCandidate(3), makeCandidate(4)]);
+    const { result } = await renderLane();
+
+    // Anchor at index 0 on the first page.
+    act(() => result.current.toggleSelect(1, 0));
+    act(() => result.current.setPage(2));
+
+    // With a stale anchor this shift-click would extend 0..2 and select three
+    // rows. With the anchor cleared it can only toggle the row clicked.
+    act(() => result.current.toggleSelect(3, 2, true));
+
+    expect([...result.current.selectedIds]).toEqual([3]);
   });
 });
