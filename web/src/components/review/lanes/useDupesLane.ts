@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.6.1
+// version: 1.7.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-09-01
 
@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { serverAnsweredTerm, useDebouncedSearch } from '../../../hooks/useDebouncedSearch';
 import * as api from '../../../services/api';
 import type { DedupBand, DedupCandidate, DedupStats } from '../../../services/api';
 import type { DupesAction } from '../reviewActions';
@@ -23,6 +24,16 @@ import { PAGE_SIZE_OPTIONS } from './useMetadataLane';
 export { PAGE_SIZE_OPTIONS };
 
 const DEFAULT_PAGE_SIZE = 50;
+
+/**
+ * How long the lane waits after the last keystroke before searching.
+ *
+ * The term gates a NETWORK REQUEST now, so an undebounced box would issue one
+ * per character. Matches REGROUP_SEARCH_DEBOUNCE_MS: the two lanes sit side by
+ * side in the same panel, and a reviewer who learns the feel of one should not
+ * have to relearn it in the other.
+ */
+export const DUPES_SEARCH_DEBOUNCE_MS = 250;
 
 /**
  * How many rows mount in the first, synchronous pass.
@@ -63,10 +74,16 @@ export interface DupesFilters {
   /** Server-side since the ?book= deep link was fixed. */
   entityId: string | null;
   /**
-   * CLIENT-side, and the only filter here that is. It narrows the loaded page
-   * only, so "no results" from search means "none on this page". Every other
-   * filter in this object round-trips and produces an honest `total`; this one
-   * does not, which is why the control that drives it has to say so.
+   * Server-side as of the `q` parameter, so "no results" now means "not in the
+   * queue" rather than "none on this page", and `total` counts matches. Before
+   * that, this searched only the rows already fetched: 50 of 40,251 candidates
+   * in production, or 0.12% of the queue per page.
+   *
+   * Debounced by DUPES_SEARCH_DEBOUNCE_MS before it is sent; the raw value
+   * stays here so the text field never lags the typist. A local pass over the
+   * already-loaded rows covers that debounce window and then STANDS DOWN --
+   * see the `filtered` derivation, where standing down is a correctness
+   * requirement rather than an optimisation.
    */
   search: string;
 }
@@ -186,7 +203,7 @@ export interface DupesLane {
 export function useDupesLane(
   toast: Toast,
   active = true,
-  urlFilters: DupesUrlFilters = NO_URL_FILTERS,
+  urlFilters: DupesUrlFilters = NO_URL_FILTERS
 ): DupesLane {
   const [candidates, setCandidates] = useState<DedupCandidate[]>([]);
   const [total, setTotal] = useState(0);
@@ -222,7 +239,7 @@ export function useDupesLane(
 
   const filters: DupesFilters = useMemo(
     () => ({ ...localFilters, band: urlFilters.band, entityId: urlFilters.entityId }),
-    [localFilters, urlFilters.band, urlFilters.entityId],
+    [localFilters, urlFilters.band, urlFilters.entityId]
   );
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -235,6 +252,29 @@ export function useDupesLane(
   const [prevUrlFilterKey, setPrevUrlFilterKey] = useState(urlFilterKey);
   if (prevUrlFilterKey !== urlFilterKey) {
     setPrevUrlFilterKey(urlFilterKey);
+    setPageState(1);
+    setSelectedIds(new Set());
+    setFocusedIndex(0);
+  }
+
+  // The settled term actually sent to the server. The raw value drives the
+  // text field so typing never lags; this is what the fetch is keyed on.
+  const debouncedSearch = useDebouncedSearch(filters.search, DUPES_SEARCH_DEBOUNCE_MS);
+
+  // The term the rows currently in `candidates` were fetched with. Read by
+  // `filtered` to decide whether the local pass has been superseded.
+  const [appliedSearch, setAppliedSearch] = useState('');
+
+  // A settled search term invalidates the page number for the same reason a
+  // URL filter does: page 5 of the old result set is not page 5 of the new one.
+  // Keyed on the DEBOUNCED term, not the raw one, so it fires once per search
+  // rather than once per keystroke -- resetting the page and clearing the
+  // selection on every character would fight the typist. Runs during render,
+  // matching the block above: an effect would fetch page N and then fetch
+  // page 1.
+  const [prevSearchKey, setPrevSearchKey] = useState(debouncedSearch);
+  if (prevSearchKey !== debouncedSearch) {
+    setPrevSearchKey(debouncedSearch);
     setPageState(1);
     setSelectedIds(new Set());
     setFocusedIndex(0);
@@ -265,6 +305,7 @@ export function useDupesLane(
     if (filters.band) params.band = filters.band;
     if (filters.bothUnmatched) params.both_unmatched = true;
     if (filters.entityId) params.entity_id = filters.entityId;
+    if (debouncedSearch.trim()) params.q = debouncedSearch.trim();
 
     api
       .getDedupCandidates(params, { signal: ctrl.signal })
@@ -287,6 +328,9 @@ export function useDupesLane(
           return kept.size === prev.size ? prev : kept;
         });
         setTotal(res.total ?? 0);
+        // Record the term THESE rows answer for, so the local pass in
+        // `filtered` knows it has been superseded and stands down.
+        setAppliedSearch(debouncedSearch);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -299,7 +343,17 @@ export function useDupesLane(
       });
 
     return () => ctrl.abort();
-  }, [active, filters.status, filters.band, filters.bothUnmatched, filters.entityId, page, pageSize, reloadToken]);
+  }, [
+    active,
+    filters.status,
+    filters.band,
+    filters.bothUnmatched,
+    filters.entityId,
+    debouncedSearch,
+    page,
+    pageSize,
+    reloadToken,
+  ]);
 
   useEffect(() => {
     if (!active) return;
@@ -325,45 +379,71 @@ export function useDupesLane(
   // -------------------------------------------------------------------------
 
   /**
-   * The search term the LIST is filtered by, deliberately one render behind the
-   * text box.
+   * The search term the LOCAL pass is keyed on, deliberately one render behind
+   * the debounced term.
    *
-   * MEASURED, not stylistic. "Search this page" is client-side and
-   * undebounced, so one keystroke at the 100-row page cap unmounts ~99 rows and
-   * mounts ~99 more in a single synchronous render. On a prod build that was
-   * ONE 215 ms main-thread task -- a visible stall, and the thing that made
+   * MEASURED, not stylistic. Re-filtering at the 100-row page cap unmounts ~99
+   * rows and mounts ~99 more in one synchronous render. On a prod build that
+   * was ONE 215 ms main-thread task -- a visible stall, and the thing that made
    * this lane feel slow at 50 and 100 rows while the metadata and regroup lanes
    * blocked for 0 ms.
    *
-   * Deferring it lets React 19 treat that re-render as a transition and yield
-   * between rows instead of running it to completion. Measured on the
-   * benchmark-review-lanes harness at N=100, this change ALONE:
+   * Deferring lets React 19 treat that re-render as a transition and yield
+   * between rows. Measured on the benchmark-review-lanes harness at N=100, this
+   * ALONE:
    *
    *   blocked main-thread time  770 ms -> 54 ms
    *   longest single task       215 ms -> 66 ms
    *   at N=50                   269/116 ms -> 0/0 ms
    *   wall-clock to settle      43 ms -> 84 ms
    *
-   * The wall-clock RISE is the trade and it is the right one: the work is now
-   * two passes instead of one, but no single pass owns the main thread long
-   * enough for the user to feel it. Typing stays instant either way -- the
-   * TextField is bound to `filters.search`, not to this.
+   * The wall-clock RISE is the trade and it is the right one: the work is two
+   * passes instead of one, but no single pass owns the main thread long enough
+   * to feel.
+   *
+   * STILL LOAD-BEARING after search moved server-side, though it fires far less
+   * often. It is now layered on the DEBOUNCED term rather than the raw one, so
+   * the big re-filter happens at most once per search instead of once per
+   * keystroke -- and when it does happen it is still a ~99-row swap, which is
+   * exactly the task this measurement is about. Debouncing changes how OFTEN;
+   * deferring changes how MUCH it blocks. They are not substitutes.
    *
    * SAFETY NOTE, because it looks like a hazard and is not. `selectAllOnScreen`
    * below deliberately reads `visible` rather than the whole page, so a
    * reviewer can never bulk-merge rows they cannot see. `visible` is derived
    * from THIS deferred value, and the rows on screen are rendered from the same
    * `visible` in the same pass -- so the two cannot disagree, including during
-   * the transition window. What lags is the text box relative to the list,
-   * which is what the user is looking at.
+   * the transition window.
    */
-  const deferredSearch = useDeferredValue(filters.search);
+  const deferredSearch = useDeferredValue(debouncedSearch);
 
+  /**
+   * The loaded page, minus locally-decided rows, minus anything the local
+   * search pass excludes WHILE that pass is still meaningful.
+   *
+   * The local pass covers exactly one window: from the moment the debounce
+   * fires until the server's answer for that term lands. It removes the round
+   * trip from the felt latency; it is not a second opinion on the results.
+   *
+   * Once the server HAS answered for this term it must stand down, and that is
+   * a correctness requirement rather than an optimisation. The server's
+   * predicate is strictly wider than this one: it matches author names, which
+   * it resolves through the author table, while the objects rendered here carry
+   * no author_name at all -- the TypeScript Book interface declares
+   * `author_name?: string`, but the API never sets that key, so the optional
+   * read yields undefined and `?? ''` swallows it. Left running, this filter
+   * would throw away every row the server matched on author: `total` says 12,
+   * the list shows 0, and the row stays unfindable -- the exact defect
+   * server-side search was added to fix, wearing a different hat.
+   */
   const filtered = useMemo(() => {
     const decided = (rows: DedupCandidate[]) =>
       decidedIds.size === 0 ? rows : rows.filter((c) => !decidedIds.has(c.id));
     const q = deferredSearch.trim().toLowerCase();
-    if (!q) return decided(candidates);
+    if (!q || serverAnsweredTerm(appliedSearch, q)) return decided(candidates);
+    // Only the fields actually present on a loaded row. author_name is
+    // deliberately absent -- see above; including it would look thorough while
+    // contributing an empty string for every candidate.
     const hay = (c: DedupCandidate) =>
       [
         c.entity_a_id,
@@ -372,8 +452,6 @@ export function useDupesLane(
         c.band ?? '',
         c.book_a?.title ?? '',
         c.book_b?.title ?? '',
-        c.book_a?.author_name ?? '',
-        c.book_b?.author_name ?? '',
         c.book_a?.file_path ?? '',
         c.book_b?.file_path ?? '',
       ]
@@ -381,7 +459,7 @@ export function useDupesLane(
         .toLowerCase();
     const searched = candidates.filter((c) => hay(c).includes(q));
     return decided(searched);
-  }, [candidates, deferredSearch, decidedIds]);
+  }, [candidates, deferredSearch, appliedSearch, decidedIds]);
 
   /**
    * Progressive mount: the first FIRST_PAINT_ROWS rows commit synchronously,
@@ -505,10 +583,7 @@ export function useDupesLane(
    */
   const clearSelectionForNewRows = useCallback(() => {
     if (selectedIds.size > 0) {
-      toast(
-        `Selection cleared — ${selectedIds.size} pair(s) are no longer on screen.`,
-        'info'
-      );
+      toast(`Selection cleared — ${selectedIds.size} pair(s) are no longer on screen.`, 'info');
     }
     setSelectedIds(new Set());
     lastClickedIndexRef.current = null;
@@ -517,8 +592,10 @@ export function useDupesLane(
   const setFilters = useCallback(
     (patch: Partial<LocalDupesFilters>) => {
       setFiltersState((prev) => ({ ...prev, ...patch }));
-      // Search is client-side over the loaded page, so it does not invalidate the
-      // page number. Everything else does.
+      // Search invalidates the page too, but on its DEBOUNCED value rather
+      // than per keystroke -- that reset lives in the during-render block
+      // above. Resetting here as well would clear the selection on every
+      // character typed.
       const serverSide = Object.keys(patch).some((k) => k !== 'search');
       if (serverSide) {
         setPageState(1);
