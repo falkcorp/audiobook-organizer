@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-01
 
@@ -706,8 +706,46 @@ func extractYearDigits(value string) string {
 }
 
 // extractFromFilename tries to extract metadata from filename when tags are unavailable
-func extractFromFilename(filePath string) Metadata {
-	var metadata Metadata
+func extractFromFilename(filePath string) (metadata Metadata) {
+	// Every one of the tails below -- the placeholder guard, the directory
+	// fallback, the second guard over what the directory produced, and the
+	// series-index derivation -- has to run no matter which parse branch
+	// produced the result. It used to sit at the bottom of the function, which
+	// meant the underscore branch's early `return metadata` skipped all four:
+	// "Mort_Unknown Author" was recorded with Artist="Unknown Author", the exact
+	// laundering the guard exists to stop. Deferring it is the structural fix --
+	// a future branch that returns early cannot miss it either. The same
+	// argument, and the same shape, as the defer in internal/scanner.
+	defer func() {
+		// The organizer names an authorless book "<title> - Unknown Author.ext", so
+		// the parse above happily hands back the placeholder as the author. Recording
+		// it launders the system's own "we could not determine this" into a value
+		// indistinguishable from a real author, and the AI nomination gate then skips
+		// the book forever. Cleared HERE, before the directory fallback, so a book at
+		// ".../Terry Pratchett/Mort - Unknown Author.mp3" still recovers the real
+		// author from its directory instead of being left blank.
+		// Edition-stripped: see the same guard in internal/scanner. A decorated
+		// placeholder ("Unknown Author (Unabridged)") is still the placeholder.
+		if authorname.IsPlaceholder(personname.StripEditionSuffix(metadata.Artist)) {
+			metadata.Artist = ""
+		}
+
+		// If we still don't have an artist, try to get from parent directory
+		if metadata.Artist == "" {
+			metadata.Artist = extractAuthorFromDirectory(filePath)
+		}
+
+		// And the directory itself is usually literally "Unknown Author".
+		// Edition-stripped: see the same guard in internal/scanner. A decorated
+		// placeholder ("Unknown Author (Unabridged)") is still the placeholder.
+		if authorname.IsPlaceholder(personname.StripEditionSuffix(metadata.Artist)) {
+			metadata.Artist = ""
+		}
+
+		if metadata.SeriesIndex == 0 {
+			metadata.SeriesIndex = DetectVolumeNumber(metadata.Title)
+		}
+	}()
 
 	filename := filepath.Base(filePath)
 	// Remove extension
@@ -771,35 +809,6 @@ func extractFromFilename(filePath string) Metadata {
 		}
 	} else {
 		metadata.Title = filename
-	}
-
-	// The organizer names an authorless book "<title> - Unknown Author.ext", so
-	// the parse above happily hands back the placeholder as the author. Recording
-	// it launders the system's own "we could not determine this" into a value
-	// indistinguishable from a real author, and the AI nomination gate then skips
-	// the book forever. Cleared HERE, before the directory fallback, so a book at
-	// ".../Terry Pratchett/Mort - Unknown Author.mp3" still recovers the real
-	// author from its directory instead of being left blank.
-	// Edition-stripped: see the same guard in internal/scanner. A decorated
-	// placeholder ("Unknown Author (Unabridged)") is still the placeholder.
-	if authorname.IsPlaceholder(personname.StripEditionSuffix(metadata.Artist)) {
-		metadata.Artist = ""
-	}
-
-	// If we still don't have an artist, try to get from parent directory
-	if metadata.Artist == "" {
-		metadata.Artist = extractAuthorFromDirectory(filePath)
-	}
-
-	// And the directory itself is usually literally "Unknown Author".
-	// Edition-stripped: see the same guard in internal/scanner. A decorated
-	// placeholder ("Unknown Author (Unabridged)") is still the placeholder.
-	if authorname.IsPlaceholder(personname.StripEditionSuffix(metadata.Artist)) {
-		metadata.Artist = ""
-	}
-
-	if metadata.SeriesIndex == 0 {
-		metadata.SeriesIndex = DetectVolumeNumber(metadata.Title)
 	}
 
 	return metadata
