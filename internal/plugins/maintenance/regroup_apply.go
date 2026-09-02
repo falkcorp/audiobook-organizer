@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -94,6 +94,65 @@ type bookCombiner interface {
 // evidence ActionDuplicateOf needs and the regroup classifier never gathers.
 type candidateLister interface {
 	ListCandidatesForEntity(entityType, entityID, status string) ([]database.DedupCandidate, error)
+}
+
+// nominatingCandidateStatuses is the AFFIRMATIVE set: a dedup candidate may
+// nominate a canonical target for ActionDuplicateOf only while it is in one of
+// these statuses. It is an allow-list on purpose. The dedup track grows new
+// terminal statuses over time ("merged", "stale-fp", "stale-drain", ...) and
+// every one of them means "this pair is no longer live evidence"; an allow-list
+// makes a new status inert until someone decides it should nominate, where a
+// deny-list would let it nominate by default.
+var nominatingCandidateStatuses = map[string]bool{
+	"pending": true,
+}
+
+// vetoedCandidateStatuses are the statuses a HUMAN puts a candidate into to say
+// "these are not the same book". They are checked in addition to the allow-list,
+// not instead of it: the allow-list is applied by the store query, the veto is
+// re-applied in Go on every row that comes back, so a lister that ignores the
+// status argument (or a row whose status was changed under us between the query
+// and the read) still cannot turn a human's "no" into a merge.
+var vetoedCandidateStatuses = map[string]bool{
+	"dismissed": true,
+	"rejected":  true,
+	"separate":  true,
+}
+
+// candidateMayNominate is the single gate between a dedup candidate row and a
+// merge target. The order matters: the veto is checked first so that a status
+// mistakenly present in both sets is still a veto.
+func candidateMayNominate(c database.DedupCandidate) bool {
+	if vetoedCandidateStatuses[c.Status] {
+		return false
+	}
+	return nominatingCandidateStatuses[c.Status]
+}
+
+// nominateDuplicateTargets returns the set of book IDs, outside memberSet, that
+// the dedup track's LIVE candidates name as the other half of a pair with any
+// member. Dismissed candidates never nominate — see candidateMayNominate.
+func nominateDuplicateTargets(cands candidateLister, members []string, memberSet map[string]bool) (map[string]bool, error) {
+	nominations := map[string]bool{}
+	for _, id := range members {
+		for status := range nominatingCandidateStatuses {
+			rows, lerr := cands.ListCandidatesForEntity("book", id, status)
+			if lerr != nil {
+				return nil, fmt.Errorf("regroup duplicate-of apply: list %s candidates for %s: %w", status, id, lerr)
+			}
+			for _, c := range rows {
+				if !candidateMayNominate(c) {
+					continue
+				}
+				for _, side := range []string{c.EntityAID, c.EntityBID} {
+					if side != "" && !memberSet[side] {
+						nominations[side] = true
+					}
+				}
+			}
+		}
+	}
+	return nominations, nil
 }
 
 // ApplyMultidisc builds the apply function for regroup.multidisc holds: it collapses
@@ -452,20 +511,12 @@ func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candi
 		}
 
 		// Nominations are gathered across ALL members and de-duplicated, so N pieces of
-		// debris pointing at the same canonical book is one nomination, not N.
-		nominations := map[string]bool{}
-		for _, id := range present {
-			rows, lerr := cands.ListCandidatesForEntity("book", id, "")
-			if lerr != nil {
-				return fmt.Errorf("regroup duplicate-of apply: list candidates for %s: %w", id, lerr)
-			}
-			for _, c := range rows {
-				for _, side := range []string{c.EntityAID, c.EntityBID} {
-					if side != "" && !memberSet[side] {
-						nominations[side] = true
-					}
-				}
-			}
+		// debris pointing at the same canonical book is one nomination, not N. Only
+		// LIVE candidates nominate: a pair a human dismissed is that human saying
+		// "these are not the same book", and this apply must never merge over it.
+		nominations, nerr := nominateDuplicateTargets(cands, present, memberSet)
+		if nerr != nil {
+			return nerr
 		}
 
 		targets := make([]string, 0, len(nominations))
