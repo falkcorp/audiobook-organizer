@@ -6,19 +6,25 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -172,4 +178,51 @@ func TestBatchApplyCachedOp_ZeroConfigIsTheDefaultCap(t *testing.T) {
 	err := capRunOp(t, "metadata.batch-apply-cached", (*Server).RegisterBatchApplyFromCacheOp,
 		batchApplyOpParams{BookIDs: capIDs("b", applycap.Default+1)})
 	requireCapExceeded(t, err, applycap.Default+1, applycap.Default)
+}
+
+// --- handleBatchApplyCandidates (HTTP) --------------------------------------
+
+func capCandidatesReq(t *testing.T, srv *Server, n int) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	body, err := json.Marshal(batchApplyRequest{OperationID: "op1", BookIDs: capIDs("b", n)})
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/metadata/batch-apply-candidates", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	srv.handleBatchApplyCandidates(c)
+	return w
+}
+
+func TestHandleBatchApplyCandidates_RefusesOverTheCap(t *testing.T) {
+	withBulkApplyCapServer(t, 3)
+	var storeReads atomic.Int32
+	srv := &Server{store: &database.MockStore{
+		GetOperationResultsFunc: func(string) ([]database.OperationResult, error) {
+			storeReads.Add(1)
+			return nil, errors.New("must not be reached")
+		},
+	}}
+	w := capCandidatesReq(t, srv, 4)
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "BULK_APPLY_CAP_EXCEEDED")
+	require.Contains(t, w.Body.String(), "cap is 3")
+	require.Equal(t, int32(0), storeReads.Load(), "refusal must happen before any store read")
+}
+
+func TestHandleBatchApplyCandidates_ExactlyTheCapReachesTheStore(t *testing.T) {
+	withBulkApplyCapServer(t, 3)
+	var storeReads atomic.Int32
+	srv := &Server{store: &database.MockStore{
+		GetOperationResultsFunc: func(string) ([]database.OperationResult, error) {
+			storeReads.Add(1)
+			// Failing the results load keeps the test off the apply machinery;
+			// reaching it at all is what proves the gate let the request through.
+			return nil, errors.New("synthetic")
+		},
+	}}
+	w := capCandidatesReq(t, srv, 3)
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	require.Equal(t, int32(1), storeReads.Load())
 }
