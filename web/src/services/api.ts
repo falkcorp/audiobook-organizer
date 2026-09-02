@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.76.0
+// version: 2.77.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-01
 
@@ -586,11 +586,7 @@ export async function getOperationV2(id: string): Promise<OperationV2> {
 
 // SSE event types emitted by the operations EventHub (UOS-06).
 export type OperationSSEEventName =
-  | 'op.created'
-  | 'op.updated'
-  | 'op.log'
-  | 'op.terminal'
-  | 'op.current_item';
+  'op.created' | 'op.updated' | 'op.log' | 'op.terminal' | 'op.current_item';
 
 export interface OperationSSEHandler {
   onEvent: (name: OperationSSEEventName, payload: unknown) => void;
@@ -4514,13 +4510,7 @@ export async function applyAIAuthorReview(
 export interface AIScan {
   id: number;
   status:
-    | 'pending'
-    | 'scanning'
-    | 'enriching'
-    | 'cross_validating'
-    | 'complete'
-    | 'failed'
-    | 'canceled';
+    'pending' | 'scanning' | 'enriching' | 'cross_validating' | 'complete' | 'failed' | 'canceled';
   mode: 'batch' | 'realtime';
   models: { groups: string; full: string };
   author_count: number;
@@ -5371,6 +5361,11 @@ export async function bulkMergeDedupCandidates(filter: {
   max_similarity?: number;
   band?: string;
   entity_id?: string;
+  // The list endpoint's free-text search. Omitting it here would merge every
+  // candidate matching the OTHER filters -- the whole pending queue, where the
+  // reviewer was looking at a handful of search hits. Exactly the failure
+  // `band` caused before it was added on both sides.
+  q?: string;
 }): Promise<BulkMergeDedupResult> {
   const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-merge`, {
     method: 'POST',

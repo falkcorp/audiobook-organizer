@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.14.0
+// version: 2.15.0
 // last-edited: 2026-09-01
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -203,9 +203,14 @@ type CandidateFilter struct {
 	// the needle hits the candidate row OR the joined book. Both halves are
 	// applied at scan level -- BEFORE paginateCandidates -- so `total` counts
 	// every match in the library rather than the ones that survived on the
-	// current page. This is deliberately unlike both_unmatched, which filters
-	// in the handler after pagination and therefore reports a total that does
-	// not match what it returns.
+	// current page.
+	//
+	// Contrast both_unmatched, which cannot be pushed down at all: its signal
+	// lives on the Book, not the candidate row, so the handler asks for the
+	// whole set, filters it, recomputes `total` from the filtered slice and
+	// paginates itself. That is correct but costs a full scan plus a book
+	// lookup per candidate. Search reaches scan level instead, which is why it
+	// can page normally.
 	SearchEntityIDs map[string]struct{}
 
 	Limit  int
@@ -1047,11 +1052,12 @@ func matchesCandidateFilter(c DedupCandidate, f CandidateFilter, checkStatus boo
 	if f.EntityID != "" && c.EntityAID != f.EntityID && c.EntityBID != f.EntityID {
 		return false
 	}
-	// Text search is the ONLY clause here that is a union rather than another
-	// AND: the needle may land on the candidate row (layer/band/id) or on the
-	// book joined to either side. Everything above still AND's, so search
-	// narrows within the other filters rather than escaping them.
-	if f.Search != "" && !candidateMatchesSearch(c, f) {
+	// Search unions across two SOURCES -- the candidate row and the book joined
+	// to it -- which is what makes it different from the EntityID clause above.
+	// That one also accepts either side, but of a single row. Everything here
+	// still AND's with the clauses above, so search narrows within the other
+	// filters rather than escaping them.
+	if (f.Search != "" || len(f.SearchEntityIDs) > 0) && !candidateMatchesSearch(c, f) {
 		return false
 	}
 	return true
@@ -1070,12 +1076,28 @@ func candidateMatchesSearch(c DedupCandidate, f CandidateFilter) bool {
 	if _, ok := f.SearchEntityIDs[c.EntityBID]; ok {
 		return true
 	}
-	// Row-local fields. Layer and Band are the two the UI exposes as its own
-	// dropdowns, but they are searchable as free text too -- dropping them
-	// here would silently stop matching what the old client-side filter
-	// matched, with no error surface.
-	for _, field := range []string{c.Layer, c.Band, c.EntityAID, c.EntityBID} {
+	// Everything below needs a needle. Without this guard the loops below run
+	// with an empty f.Search, and strings.Contains(x, "") is TRUE for every x
+	// -- so a caller passing only SearchEntityIDs would match every row on
+	// Layer and get the whole library back while looking filtered.
+	if f.Search == "" {
+		return false
+	}
+	// Layer and Band are the two the UI exposes as its own dropdowns, but they
+	// are searchable as free text too -- dropping them would silently stop
+	// matching what the old client-side filter matched, with no error surface.
+	for _, field := range []string{c.Layer, c.Band} {
 		if field != "" && strings.Contains(strings.ToLower(field), f.Search) {
+			return true
+		}
+	}
+	// Entity IDs match by PREFIX, not substring. They are ULIDs (Crockford
+	// base32), so a substring test makes every short needle match most of the
+	// library on ID alone -- a one-character search would return essentially
+	// the whole queue and call it a result. Nobody searches for the middle of
+	// an ID; pasting one, or its leading characters, is the real use case.
+	for _, id := range []string{c.EntityAID, c.EntityBID} {
+		if id != "" && strings.HasPrefix(strings.ToLower(id), f.Search) {
 			return true
 		}
 	}

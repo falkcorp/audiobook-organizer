@@ -1,5 +1,5 @@
 // file: web/src/hooks/useDebouncedSearch.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d8b1c47-6e29-4a05-9f73-2c5a8e0b4d16
 // last-edited: 2026-09-01
 
@@ -10,11 +10,17 @@ import { useEffect, useState } from 'react';
  * NETWORK REQUEST rather than a local filter.
  *
  * The raw value stays wherever it lives so the text field never lags the
- * typist; this returns the settled term to send. Two lanes need exactly this
- * and previously only one had it: useRegroupLane hand-rolled it when review
- * search was pushed server-side, and useDupesLane was about to grow a second
- * copy when dedup search followed. The mechanism is identical in both, so it
- * lives here once.
+ * typist; this returns the settled term to send. Two review lanes need exactly
+ * this and previously only one of them had it: useRegroupLane hand-rolled it
+ * when review search was pushed server-side, and useDupesLane was about to grow
+ * a second copy when dedup search followed. The mechanism is identical in both,
+ * so it lives here once.
+ *
+ * Library.tsx has its own 300ms search debounce that is deliberately NOT
+ * consolidated here: its timer moves two values together (a raw term and a
+ * parsed one that is set independently rather than derived), which this
+ * signature cannot express. Folding it in would mean widening this hook until
+ * it fits a case neither lane has.
  *
  * What is deliberately NOT shared is the client-side predicate each lane runs
  * during the debounce window. Those differ on purpose -- regroup also matches

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
 // last-edited: 2026-09-01
 //
@@ -12,7 +12,12 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../../services/api';
 import type { DupesUrlFilters } from './useDupesLane';
-import { useDupesLane, MERGE_ALL_BLOCKED_REASON, DEDUP_SHORTCUTS } from './useDupesLane';
+import {
+  useDupesLane,
+  MERGE_ALL_BLOCKED_REASON,
+  MERGE_ALL_SEARCH_PENDING_REASON,
+  DEDUP_SHORTCUTS,
+} from './useDupesLane';
 
 vi.mock('../../../services/api');
 
@@ -130,9 +135,86 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
       result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
     });
 
-    expect(api.bulkMergeDedupCandidates).toHaveBeenCalledWith(
-      expect.objectContaining({ band: 'REVIEW', entity_id: 'book-7', status: 'pending' })
+    // EXACT payload, deliberately not objectContaining: a partial matcher
+    // cannot fail when a filter is MISSING, which is the only way this action
+    // ever breaks. The suite stayed green through exactly that gap when `q`
+    // was added to the list endpoint and not to this one.
+    expect(api.bulkMergeDedupCandidates).toHaveBeenCalledWith({
+      entity_type: 'book',
+      status: 'pending',
+      band: 'REVIEW',
+      entity_id: 'book-7',
+      q: undefined,
+    });
+  });
+
+  it('sends the search term, so the merge cannot exceed the searched set', async () => {
+    // Without this the reviewer searches, sees a handful of rows, presses
+    // "merge everything matching this filter", and merges every pending
+    // candidate in the library. Irreversible, and reported as a success.
+    mockSearchableList([makeCandidate(1), makeCandidate(2)], (c, q) =>
+      (c.book_a?.title ?? '').toLowerCase().includes(q)
     );
+    vi.mocked(api.bulkMergeDedupCandidates).mockResolvedValue({
+      attempted: 1,
+      merged: 1,
+      failed: 0,
+    } as unknown as api.BulkMergeDedupResult);
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ search: 'A1' }));
+    // Wait for the SERVER to answer, not just for the local pass to narrow the
+    // list. Those are different moments, and dispatching between them is the
+    // bug the refusal below exists for.
+    await waitFor(
+      () => expect(result.current.mergeAllFilteredDisabledReason).toBeNull(),
+      DEBOUNCE_WAIT
+    );
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
+    });
+
+    expect(api.bulkMergeDedupCandidates).toHaveBeenCalledWith({
+      entity_type: 'book',
+      status: 'pending',
+      band: undefined,
+      entity_id: undefined,
+      q: 'A1',
+    });
+  });
+
+  it('REFUSES to merge everything while a search is still settling', async () => {
+    // The window: the local pass has narrowed the list, but the server has only
+    // answered for the previous term. Merging here would send that previous
+    // term and merge a set far wider than the rows on screen. Irreversible.
+    let release: (v: api.DedupCandidatesResponse) => void = () => {};
+    const held = new Promise<api.DedupCandidatesResponse>((res) => {
+      release = res;
+    });
+    let call = 0;
+    vi.mocked(api.getDedupCandidates).mockImplementation(async () => {
+      call += 1;
+      return call === 1 ? { candidates: [makeCandidate(1), makeCandidate(2)], total: 2 } : held;
+    });
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ search: 'A1' }));
+    await waitFor(() => expect(result.current.candidates).toHaveLength(1), DEBOUNCE_WAIT);
+
+    // Narrowed on screen, but the server has not answered for 'A1'.
+    expect(result.current.mergeAllFilteredDisabledReason).toBe(MERGE_ALL_SEARCH_PENDING_REASON);
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
+    });
+    expect(api.bulkMergeDedupCandidates).not.toHaveBeenCalled();
+
+    await act(async () => {
+      release({ candidates: [makeCandidate(1)], total: 1 });
+      await held;
+    });
+    await waitFor(() => expect(result.current.mergeAllFilteredDisabledReason).toBeNull());
   });
 });
 
@@ -469,6 +551,27 @@ describe('search', () => {
       expect(result.current.candidates[0].id).toBe(1);
     }, DEBOUNCE_WAIT);
     expect(result.current.total).toBe(1);
+  });
+
+  it('shows nothing rather than a narrowed subset when the search fails', async () => {
+    // The failure mode: error banner, plus a stale total from the PREVIOUS
+    // term, plus the local pass narrowing the previous page down to a few
+    // plausible-looking rows. A reviewer scrolling past the alert reads those
+    // as search results.
+    let call = 0;
+    vi.mocked(api.getDedupCandidates).mockImplementation(async () => {
+      call += 1;
+      if (call === 1) return { candidates: [dune, neuro], total: 4000 };
+      throw new Error('boom');
+    });
+    const { result } = await renderLane();
+    expect(result.current.total).toBe(4000);
+
+    act(() => result.current.setFilters({ search: 'neuro' }));
+
+    await waitFor(() => expect(result.current.error).toBeTruthy(), DEBOUNCE_WAIT);
+    expect(result.current.candidates).toEqual([]);
+    expect(result.current.total).toBe(0);
   });
 
   it('reports the server total, not the page length', async () => {

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-09-01
 
@@ -61,6 +61,20 @@ export const FIRST_PAINT_ROWS = 20;
  */
 export const MERGE_ALL_BLOCKED_REASON =
   'The bulk endpoint cannot express "both unmatched", so this would merge more pairs than you can see. Clear that filter first.';
+
+/**
+ * Refusal while a search has not settled.
+ *
+ * Between the keystroke and the server's answer, the rows on screen were
+ * narrowed by the LOCAL pass while the server has answered only for the
+ * previous term. Merging then sends the previous term -- so the reviewer sees
+ * a handful of search hits, presses a button labelled "merge everything
+ * matching this filter", and merges the set the filter matched BEFORE they
+ * typed. The window is short and the action is irreversible, which is the
+ * worst combination to leave open.
+ */
+export const MERGE_ALL_SEARCH_PENDING_REASON =
+  'Still searching. Wait for the results to load before merging everything that matches.';
 
 export type DedupStatusFilter = 'pending' | 'merged' | 'dismissed' | '';
 
@@ -340,6 +354,19 @@ export function useDupesLane(
         if (ctrl.signal.aborted) return;
         setError(err instanceof Error ? err.message : 'Failed to load duplicate candidates');
         setLoading(false);
+        // Fail TOTALLY, not partially. Keeping the previous rows would leave
+        // the error banner sitting above a list that answers a DIFFERENT term,
+        // under a total counted for that other term -- and because the local
+        // pass keeps running until the server answers, what shows is a
+        // narrowed subset of it. Three plausible-looking rows under "40,251
+        // candidates match this filter" is exactly the wrong-but-plausible
+        // answer server-side search was added to remove. An empty list beneath
+        // an error is unambiguous.
+        setCandidates([]);
+        setTotal(0);
+        // Stand the local pass down too: it has nothing left to narrow, and
+        // leaving it armed would keep this term looking unanswered forever.
+        setAppliedSearch(debouncedSearch);
       });
 
     return () => ctrl.abort();
@@ -430,8 +457,11 @@ export function useDupesLane(
    * predicate is strictly wider than this one: it matches author names, which
    * it resolves through the author table, while the objects rendered here carry
    * no author_name at all -- the TypeScript Book interface declares
-   * `author_name?: string`, but the API never sets that key, so the optional
-   * read yields undefined and `?? ''` swallows it. Left running, this filter
+   * `author_name?: string`, but THIS endpoint never sets it, so the optional
+   * read yields undefined and `?? ''` swallows it. (Other endpoints do send
+   * it: the audiobooks service and `enrichedBookResponse` both populate the
+   * field, which is why the TS declaration is correct and must not be
+   * deleted on the strength of what this lane sees.) Left running, this filter
    * would throw away every row the server matched on author: `total` says 12,
    * the list shows 0, and the row stays unfindable -- the exact defect
    * server-side search was added to fix, wearing a different hat.
@@ -548,7 +578,14 @@ export function useDupesLane(
     [stats]
   );
 
-  const mergeAllFilteredDisabledReason = filters.bothUnmatched ? MERGE_ALL_BLOCKED_REASON : null;
+  const mergeAllFilteredDisabledReason = filters.bothUnmatched
+    ? MERGE_ALL_BLOCKED_REASON
+    : // The rows on screen must be the rows the SERVER selected before a bulk
+      // merge can claim to match them. serverAnsweredTerm is the same guard the
+      // local filter stands down on, reused so the two cannot disagree.
+      serverAnsweredTerm(appliedSearch, filters.search)
+      ? null
+      : MERGE_ALL_SEARCH_PENDING_REASON;
 
   // -------------------------------------------------------------------------
   // Filters and pagination
@@ -815,6 +852,10 @@ export function useDupesLane(
                 // is what made this action merge the whole library.
                 band: filters.band ?? undefined,
                 entity_id: filters.entityId ?? undefined,
+                // The SETTLED term -- the one the visible rows were
+                // fetched with. Sending filters.search could transmit a
+                // term the reviewer typed but has not seen results for.
+                q: appliedSearch.trim() || undefined,
               });
               toast(
                 `Bulk merge: ${result.merged} merged, ${result.failed} failed of ${result.attempted}`,
@@ -842,6 +883,13 @@ export function useDupesLane(
       filters.status,
       filters.band,
       filters.entityId,
+      // Read directly by mergeAllFiltered to build the bulk payload. It is
+      // currently reachable anyway through mergeAllFilteredDisabledReason,
+      // which now depends on it -- but relying on that is a trap: change how
+      // the refusal is computed and this closure silently goes stale, and a
+      // stale value here means the bulk merge omits `q` and merges the whole
+      // queue. Named explicitly so the dependency cannot be lost by accident.
+      appliedSearch,
     ]
   );
 

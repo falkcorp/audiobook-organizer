@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-01
 
@@ -1021,6 +1021,13 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 		MaxSimilarity *float64 `json:"max_similarity"`
 		Band          string   `json:"band"`
 		EntityID      string   `json:"entity_id"`
+		// Q is the list endpoint's free-text search. It MUST be accepted here:
+		// the reviewer searches, sees a narrow list, and presses "merge
+		// everything matching this filter". Without this field the search is
+		// dropped on the floor and the merge covers every pending candidate in
+		// the library instead of the handful on screen -- the same failure band
+		// caused, and merges are the hardest operation here to undo.
+		Q string `json:"q"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
@@ -1050,6 +1057,22 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 		Band:          body.Band,
 		EntityID:      body.EntityID,
 		Limit:         100000,
+	}
+
+	// Same two-part resolution the list endpoint does, and it must stay
+	// identical: a bulk merge that resolved the needle differently would merge
+	// a set the reviewer never saw. Sharing resolveBookIDsMatching is what
+	// keeps the two in step.
+	if v := strings.TrimSpace(body.Q); v != "" {
+		filter.Search = v
+		ids, rerr := resolveBookIDsMatching(h.store, v)
+		if rerr != nil {
+			// Refuse. Proceeding with a row-only match would merge a WIDER set
+			// than the search showed, and this action cannot be undone.
+			httputil.InternalError(c, "failed to resolve bulk-merge search", rerr)
+			return
+		}
+		filter.SearchEntityIDs = ids
 	}
 
 	candidates, total, err := es.ListCandidates(filter)
