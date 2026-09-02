@@ -39,3 +39,7 @@ M14 stranded-temp-no-size-resumed | internal/organizer/pipeline.go | s/\tif entr
 M15 stranded-temp-size-ignored | internal/organizer/pipeline.go | s/\tif info\.Size\(\) != entry\.ExpectedSize \{/\tif info.Size() != entry.ExpectedSize \&\& false {/
 # A symlink source must take the rename path, not the link path.
 M16 symlink-source-takes-link-path | internal/organizer/saferename.go | s/\tif info\.IsDir\(\) \x7c\x7c info\.Mode\(\)&fs\.ModeSymlink != 0 \{/\tif info.IsDir() {/
+
+# An in-place landing must be refused by CreateOrganizedVersion itself, not
+# only by the callers that happen to branch on InPlace first (#3051 review M1).
+M19 create-version-accepts-inplace | internal/organizer/service.go | s/if landing\.InPlace \{\n\t\treturn nil, fmt\.Errorf\("organize: landing for/if false {\n\t\treturn nil, fmt.Errorf("organize: landing for/

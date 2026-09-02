@@ -1,0 +1,13 @@
+# Mutation table for metafetch's row-less single-file rename entry (PR #3051).
+# Separate file because mutation-matrix.sh runs ONE package per table.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/metafetch/ \
+#     --table scripts/mutation-tables/organize-landing-metafetch.muts
+
+# A virtual entry without the book row's size can never resume a stranded
+# rename temp (strandedTempMismatch refuses size-less entries), parking every
+# row-less book's rename forever.
+M18 virtual-entry-drops-size | internal/metafetch/service.go | s/vf\.FileSize = \*book\.FileSize/vf.FileSize = 0/
