@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-02-locked-fields-were-not-locked-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 8f58de07-0051-4369-b45c-21820ad8dd14 -->
 <!-- last-edited: 2026-09-02 -->
 
 # Locked fields were not locked
 
-**Pull request:** PR_URL_PLACEHOLDER
+**Pull request:** https://github.com/falkcorp/audiobook-organizer/pull/3054
 
 ## Executive Summary
 
