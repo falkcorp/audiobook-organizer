@@ -1,15 +1,17 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.tsx
-// version: 1.1.3
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Alert,
   Box,
   Chip,
   Grid,
   LinearProgress,
+  Link as MuiLink,
   Paper,
   Rating,
   Stack,
@@ -33,6 +35,16 @@ export interface BookDetailInfoTabProps {
   toast: (msg: string, severity: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
+// InfoField is the shape of one label/value cell in the Info grid. It is named
+// rather than inferred because one field (Author) carries a rendered `node`
+// instead of a plain string, and inference across the two array literals
+// widened that node to `{}`.
+interface InfoField {
+  label: string;
+  value?: string | null;
+  node?: ReactNode;
+}
+
 export const BookDetailInfoTab = ({
   book,
   bookId,
@@ -42,6 +54,37 @@ export const BookDetailInfoTab = ({
   detailedTags,
   toast,
 }: BookDetailInfoTabProps) => {
+  const navigate = useNavigate();
+
+  // The Author field is a link to the author's page when — and only when — we
+  // actually hold an author id. `book.authors[]` carries one per credited
+  // author; the legacy `author_name` string does not, so that fallback stays
+  // plain text rather than becoming a link that goes nowhere. Rendering a
+  // control that looks clickable but is not is worse than rendering text.
+  const authorNode: ReactNode = useMemo(() => {
+    const entries = book.authors ?? [];
+    const linkable = entries.filter((a) => typeof a.id === 'number' && a.id > 0);
+    if (linkable.length === 0) return null;
+    return (
+      <>
+        {linkable.map((a, i) => (
+          <span key={a.id}>
+            {i > 0 && ' & '}
+            <MuiLink
+              component="button"
+              type="button"
+              underline="hover"
+              sx={{ verticalAlign: 'baseline', font: 'inherit', color: 'primary.main' }}
+              onClick={() => navigate(`/authors/${a.id}`)}
+            >
+              {a.name}
+            </MuiLink>
+          </span>
+        ))}
+      </>
+    );
+  }, [book.authors, navigate]);
+
   const [ratingOverall, setRatingOverall] = useState<number | null>(null);
   const [ratingStory, setRatingStory] = useState<number | null>(null);
   const [ratingPerformance, setRatingPerformance] = useState<number | null>(null);
@@ -219,9 +262,9 @@ export const BookDetailInfoTab = ({
                   book.narrators && book.narrators.length > 0
                     ? book.narrators.map((n) => n.name).join(' & ')
                     : book.narrator || '';
-                const coreFields = [
+                const coreFields: InfoField[] = [
                   { label: 'Title', value: book.title || '' },
-                  { label: 'Author', value: authorVal },
+                  { label: 'Author', value: authorVal, node: authorNode },
                   { label: 'Narrator', value: narratorVal },
                   { label: 'Language', value: book.language || '' },
                   {
@@ -231,7 +274,7 @@ export const BookDetailInfoTab = ({
                       : '',
                   },
                 ];
-                const dynamicFields = [
+                const dynamicFields: InfoField[] = [
                   { label: 'Publisher', value: book.publisher },
                   {
                     label: 'Release Year',
@@ -308,12 +351,20 @@ export const BookDetailInfoTab = ({
                       >
                         {item.label}
                       </Typography>
-                      <Typography
-                        variant="body1"
-                        sx={{ color: item.value ? 'text.primary' : 'text.disabled' }}
-                      >
-                        {item.value || '\u2014'}
-                      </Typography>
+                      {'node' in item && item.node ? (
+                        // A Box, not a Typography with component="div": the field
+                        // value here contains interactive elements, and nesting a
+                        // button inside a <p> is invalid HTML that React will warn
+                        // about at runtime.
+                        <Box sx={{ typography: 'body1', color: 'text.primary' }}>{item.node}</Box>
+                      ) : (
+                        <Typography
+                          variant="body1"
+                          sx={{ color: item.value ? 'text.primary' : 'text.disabled' }}
+                        >
+                          {item.value || '\u2014'}
+                        </Typography>
+                      )}
                     </Box>
                   </Grid>
                 ));

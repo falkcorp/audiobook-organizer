@@ -1831,6 +1831,15 @@ export async function getAuthorsWithCounts(): Promise<AuthorWithCount[]> {
   return data.items || data.authors || [];
 }
 
+export async function getAuthor(authorId: number): Promise<AuthorWithCount> {
+  const response = await apiFetch(`${API_BASE}/authors/${authorId}`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch author');
+  }
+  const body = await response.json();
+  return body.data.author as AuthorWithCount;
+}
+
 export async function getAuthorBooks(authorId: number): Promise<Book[]> {
   const response = await apiFetch(`${API_BASE}/authors/${authorId}/books`);
   if (!response.ok) {

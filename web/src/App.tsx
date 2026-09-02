@@ -40,6 +40,7 @@ const Diagnostics = lazy(() =>
 const ActivityLog = lazy(() => import('./pages/ActivityLog'));
 const Playlists = lazy(() => import('./pages/Playlists'));
 const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'));
+const AuthorDetail = lazy(() => import('./pages/AuthorDetail'));
 const Setup = lazy(() => import('./pages/Setup'));
 const Users = lazy(() => import('./pages/Users'));
 const TrashedVersions = lazy(() => import('./pages/TrashedVersions'));
@@ -323,6 +324,17 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <Authors />
+                  </ErrorBoundary>
+                }
+              />
+              {/* Declared after /authors/dedup (a static redirect) — gin-style
+                  ranking applies in react-router too: a static segment beats the
+                  :id wildcard, so the redirect keeps working. */}
+              <Route
+                path="/authors/:id"
+                element={
+                  <ErrorBoundary>
+                    <AuthorDetail />
                   </ErrorBoundary>
                 }
               />
