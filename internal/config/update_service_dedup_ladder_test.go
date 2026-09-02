@@ -369,3 +369,78 @@ func TestConfigValidate_NamesPersistedSourceForBadLadder(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateConfig_RejectedPutDoesNotRotateSecrets is the secret half of the
+// same rule as TestUpdateConfig_RejectedPutLeavesNoStrayConfidenceKey: a
+// rejected PUT must change NOTHING.
+//
+// The five secret fields used to be written straight into the live AppConfig by
+// their own Mutate calls, before the payload was validated. A PUT that rotated
+// a key AND carried an invalid dedup ladder was rejected with a 400 while the
+// new key stayed live in memory and never reached the blob — so the process
+// authenticated with the new key until the next restart silently reverted it.
+// The handler-level "roll back on any >=400" that used to hide this was removed
+// with the deep-copy rework, which is what turned a latent ordering problem
+// into a live one.
+//
+// Mutation check: move applySecretUpdates back out of the Mutate closure so it
+// runs against the live config, and this fails — the key rotates on a 400.
+func TestUpdateConfig_RejectedPutDoesNotRotateSecrets(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.OpenAIAPIKey = "old-openai-key"
+		c.BasicAuthPassword = "old-password"
+		c.Dedup.Signals = DedupSignalConfig{
+			BandCertainMin: 97, BandHighMin: 90, BandMediumMin: 75, BandReviewMin: 60,
+		}
+	})
+	ms, blobs := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+
+	// One PUT that rotates two secrets AND carries an invalid ladder.
+	status, _ := svc.UpdateConfig(context.Background(), map[string]any{
+		"openai_api_key":      "rotated-openai-key",
+		"basic_auth_password": "rotated-password",
+		"dedup": map[string]any{"signals": map[string]any{
+			"confidence": map[string]any{"embeding_medium": map[string]any{"min_confidence": 0.7}},
+		}},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (the ladder is invalid)", status)
+	}
+
+	snap := Snapshot()
+	if snap.OpenAIAPIKey != "old-openai-key" {
+		t.Errorf("openai_api_key = %q after a REJECTED PUT, want the old key kept: the process would authenticate with a credential that was never persisted, and revert at the next restart", snap.OpenAIAPIKey)
+	}
+	if snap.BasicAuthPassword != "old-password" {
+		t.Errorf("basic_auth_password = %q after a REJECTED PUT, want the old password kept", snap.BasicAuthPassword)
+	}
+	if len(*blobs) != 0 {
+		t.Fatalf("a rejected PUT persisted %d blob(s); it must write nothing", len(*blobs))
+	}
+}
+
+// TestUpdateConfig_InvalidConfigIsRejectedBeforeAnythingIsWritten covers the
+// whole-config Validate moving from the HTTP handler (where it ran AFTER the
+// save and rolled back memory only) into UpdateConfig, before the swap.
+//
+// Mutation check: drop the candidate.Validate() call and this fails — the
+// invalid value is accepted with a 200 and persisted.
+func TestUpdateConfig_InvalidConfigIsRejectedBeforeAnythingIsWritten(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) { c.DatabaseType = "pebble" })
+	ms, blobs := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{"database_type": "mysql"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d (%v), want 400 for an invalid database_type", status, resp)
+	}
+	if got := Snapshot().DatabaseType; got != "pebble" {
+		t.Errorf("live database_type = %q after a rejected PUT, want the original pebble", got)
+	}
+	if len(*blobs) != 0 {
+		t.Fatalf("a config that fails Validate persisted %d blob(s); it must write nothing", len(*blobs))
+	}
+}
