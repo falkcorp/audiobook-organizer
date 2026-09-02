@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply_duplicateof_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3d81b47a-52e9-4c6f-9a13-8be07f2c65d1
 // last-edited: 2026-09-02
 
@@ -260,6 +260,30 @@ func TestCandidateMayNominate_AgreesWithStoreVocabulary(t *testing.T) {
 		if database.IsTerminalCandidateStatus(tc.status) {
 			require.False(t, got, "a terminal status (%q) is a verdict and must never nominate", tc.status)
 		}
+	}
+}
+
+// The veto is defence in depth against the allow-list, so it can only be
+// observed when the allow-list is wrong: with "pending" the sole allowed status
+// the allow-list alone refuses every verdict, and a veto that checked the wrong
+// strings (the first draft named "rejected"/"separate") passed every test above.
+// This test widens the allow-list to a terminal status on purpose and asserts
+// the veto still wins. The package runs no test in parallel, so mutating the
+// package-level map under a cleanup is safe.
+func TestCandidateMayNominate_VetoBeatsAMisconfiguredAllowList(t *testing.T) {
+	for _, terminal := range []string{"dismissed", "merged"} {
+		t.Run("allow-listed="+terminal, func(t *testing.T) {
+			require.True(t, database.IsTerminalCandidateStatus(terminal), "precondition: %q is a verdict", terminal)
+			require.False(t, nominatingCandidateStatuses[terminal], "precondition: %q is not allow-listed", terminal)
+			nominatingCandidateStatuses[terminal] = true
+			t.Cleanup(func() { delete(nominatingCandidateStatuses, terminal) })
+
+			require.False(t, candidateMayNominate(database.DedupCandidate{Status: terminal}),
+				"%q was mistakenly allow-listed and the veto did not catch it", terminal)
+			// The allow-list still works for a live status, so the veto is not
+			// simply "nothing nominates".
+			require.True(t, candidateMayNominate(database.DedupCandidate{Status: "pending"}))
+		})
 	}
 }
 
