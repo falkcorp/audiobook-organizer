@@ -90,6 +90,11 @@ type maintenanceStore interface {
 	libraryCounters
 	maintenanceBookStore
 	maintenanceSeriesStore
+	// Needed by writeStrippedSeriesPositions: the series-normalize pass
+	// rewrites series_name/series_position, both user-lockable, so its write
+	// goes through database.ApplyRespectingLocks like every other metadata
+	// writer. That guard needs to read the field-lock state.
+	database.MetadataFieldStateReader
 }
 
 func (s *Server) handleWipe(c *gin.Context) {

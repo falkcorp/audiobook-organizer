@@ -1,5 +1,5 @@
 // file: internal/server/series_position_writeback_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e6f4a92-8c07-4d31-b5a8-72c9e0d3f416
 // last-edited: 2026-09-02
 
@@ -231,5 +231,66 @@ func TestComputeSeriesNormalizeActions_UnvouchedFlagCarriesReason(t *testing.T) 
 	if a.CandidateName != "Battle for the Abyss" || a.CandidatePosition != "8" {
 		t.Errorf("candidate = %q/%q, want %q/%q",
 			a.CandidateName, a.CandidatePosition, "Battle for the Abyss", "8")
+	}
+}
+
+// lockFields makes the fixture report the named fields as user-locked.
+//
+// The zero value of the fixture leaves GetMetadataFieldStates unset, which the
+// mock answers as "no locks" -- so every test above runs the unlocked path.
+// This opts one test into the locked path.
+func (f *normalizeFixture) lockFields(bookID string, fields ...string) {
+	f.store.GetMetadataFieldStatesFunc = func(id string) ([]database.MetadataFieldState, error) {
+		if id != bookID {
+			return nil, nil
+		}
+		out := make([]database.MetadataFieldState, 0, len(fields))
+		for _, fl := range fields {
+			out = append(out, database.MetadataFieldState{
+				BookID: id, Field: fl, OverrideLocked: true,
+			})
+		}
+		return out, nil
+	}
+	f.store.GetUserPreferenceFunc = func(string) (*database.UserPreference, error) { return nil, nil }
+}
+
+// "There is absolutely zero series that have a number in them. And when we find
+// one I'll manually override." -- the manual override is a FIELD LOCK, so the
+// normalizer must not undo it. Without the ApplyRespectingLocks guard this pass
+// would happily overwrite the position a user set by hand, silently.
+func TestExecuteSeriesNormalize_RespectsALockedSeriesPosition(t *testing.T) {
+	authorID := 1
+	f := newNormalizeFixture(t,
+		[]database.Series{{ID: 1, Name: "Discworld 05", AuthorID: &authorID}},
+		map[string]*database.Book{
+			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
+		})
+	f.lockFields("book-1", database.FieldKeySeriesPosition)
+
+	f.run(t)
+
+	if got := f.seq(t, "book-1"); got != nil {
+		t.Fatalf("locked series_position was overwritten with %d; a hand-set value must survive the normalizer", *got)
+	}
+}
+
+// A book whose series_position is NOT locked still gets the number, even when
+// some other field is locked -- the guard must be field-specific, not a blanket
+// "this book has locks so skip it".
+func TestExecuteSeriesNormalize_ALockOnAnotherFieldDoesNotBlockThePosition(t *testing.T) {
+	authorID := 1
+	f := newNormalizeFixture(t,
+		[]database.Series{{ID: 1, Name: "Discworld 05", AuthorID: &authorID}},
+		map[string]*database.Book{
+			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
+		})
+	f.lockFields("book-1", database.FieldKeyNarrator)
+
+	f.run(t)
+
+	got := f.seq(t, "book-1")
+	if got == nil || *got != 5 {
+		t.Fatalf("series_sequence = %v, want 5: a narrator lock must not block the position write-back", got)
 	}
 }
