@@ -22,7 +22,7 @@
 
 M01 drop the single final Sync so the pass is durable only by luck | internal/dedup/engine.go | s/if err := de\.rescoreStore\(\)\.SyncCandidateWrites\(\); err != nil \{/if err := error(nil); err != nil {/
 
-M02 a cancelled pass silently forgets the rows abandoned in its buffer | internal/dedup/engine.go | s/\t\t\tresult\.WriteErrors \+= len\(pending\)\n\t\t\treturn result, err/\t\t\treturn result, err/
+M02 a cancelled pass silently forgets the rows abandoned in its buffer | internal/dedup/engine.go | s/\t\t\tresult\.WriteErrors \+= len\(pending\)\n\t\t\t\/\/ Everything ALREADY flushed/\t\t\t\/\/ Everything ALREADY flushed/
 
 M03 report written rows by subtraction instead of what the store confirmed | internal/dedup/engine.go | s/\t\tresult\.Written \+= applied/\t\t_ = applied/
 
