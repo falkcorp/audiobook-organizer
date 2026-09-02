@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-09-02
 //
@@ -836,21 +836,43 @@ func executeSeriesNormalizeCore(
 				a.SeriesID, bErr))
 			continue
 		}
-		pos := 0
-		if a.NewPosition != "" {
-			if p, cErr := strconv.Atoi(a.NewPosition); cErr == nil && p > 0 {
-				pos = p
-			}
-		}
 		for _, b := range books {
 			if !seen[b.ID] {
 				seen[b.ID] = true
 				affectedBookIDs = append(affectedBookIDs, b.ID)
 			}
-			if pos > 0 {
-				if _, dup := positionByBook[b.ID]; !dup {
-					positionByBook[b.ID] = pos
-				}
+		}
+	}
+
+	// Collect the positions from ALL VERSIONS, in a loop of its own.
+	//
+	// 🔑 This deliberately does NOT reuse the Core listing above. The two loops
+	// answer different questions and the interface says so: "Display may filter;
+	// anything that WRITES must not." affectedBookIDs is the organize/write-back
+	// worklist and stays filtered for the reasons its comment gives. This is a
+	// data-preservation concern: a rename or merge de-numbers the series row that
+	// EVERY version points at, primary or not, so a non-primary version left out
+	// here has the number deleted from its name and recorded nowhere -- which is
+	// the exact loss this pass exists to prevent.
+	for _, a := range actions {
+		if a.Action == "flag" || a.NewPosition == "" {
+			continue
+		}
+		pos, cErr := strconv.Atoi(a.NewPosition)
+		if cErr != nil || pos <= 0 {
+			continue
+		}
+		books, bErr := store.GetBooksBySeriesIDAllVersions(a.SeriesID)
+		if bErr != nil {
+			errs = append(errs, fmt.Sprintf(
+				"GetBooksBySeriesIDAllVersions(%d): %v -- the position %d is about to be "+
+					"removed from series %q and will NOT be recorded on its books",
+				a.SeriesID, bErr, pos, a.OldName))
+			continue
+		}
+		for _, b := range books {
+			if _, dup := positionByBook[b.ID]; !dup {
+				positionByBook[b.ID] = pos
 			}
 		}
 	}

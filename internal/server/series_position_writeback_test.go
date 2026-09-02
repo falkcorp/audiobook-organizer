@@ -1,5 +1,5 @@
 // file: internal/server/series_position_writeback_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e6f4a92-8c07-4d31-b5a8-72c9e0d3f416
 // last-edited: 2026-09-02
 
@@ -31,18 +31,33 @@ func newNormalizeFixture(t *testing.T, series []database.Series, books map[strin
 	f := &normalizeFixture{store: &database.MockStore{}, books: books}
 
 	f.store.GetAllSeriesFunc = func() ([]database.Series, error) { return series, nil }
-	f.store.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+	// 🔑 These two MUST return different sets, and the difference is the point.
+	// They were briefly wired to the same closure -- one instrument reporting
+	// perfect agreement with itself, which cannot discriminate between "the
+	// write-back covers every version" and "it covers only the primary". Core
+	// filters to the primary version (nil counts as primary, which is the
+	// common stored state); AllVersions returns every version of the book.
+	bySeries := func(id int, primaryOnly bool) []database.BookCore {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		var out []database.BookCore
 		for _, b := range f.books {
-			if b.SeriesID != nil && *b.SeriesID == id {
-				out = append(out, database.BookCore{ID: b.ID})
+			if b.SeriesID == nil || *b.SeriesID != id {
+				continue
 			}
+			if primaryOnly && b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+				continue
+			}
+			out = append(out, database.BookCore{ID: b.ID})
 		}
-		return out, nil
+		return out
 	}
-	f.store.GetBooksBySeriesIDAllVersionsFunc = f.store.GetBooksBySeriesIDCoreFunc
+	f.store.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		return bySeries(id, true), nil
+	}
+	f.store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		return bySeries(id, false), nil
+	}
 	f.store.UpdateSeriesNameFunc = func(int, string) error { return nil }
 	f.store.DeleteSeriesFunc = func(int) error { return nil }
 	f.store.GetBookByIDFunc = func(id string) (*database.Book, error) {
@@ -85,6 +100,8 @@ func (f *normalizeFixture) seq(t *testing.T, id string) *int {
 
 func seriesID(n int) *int { return &n }
 
+func boolPtr(b bool) *bool { return &b }
+
 // The apply pass renamed "Discworld 05" to "Discworld" and threw the 5 away.
 // Renaming without recording the number destroys the only statement of where
 // the book sits in its series.
@@ -100,6 +117,15 @@ func TestExecuteSeriesNormalize_WritesStrippedPositionIntoSequence(t *testing.T)
 			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
 			"book-2": {ID: "book-2", Title: "The Fifth", SeriesID: seriesID(2)},
 			"book-3": {ID: "book-3", Title: "Blood Bond", SeriesID: seriesID(3)},
+			// A NON-PRIMARY version of book-1. The rename de-numbers the series
+			// row that this book points at too, so if the write-back is built
+			// from the primary-filtered listing, this row loses the 5 with
+			// nothing recording it anywhere. That is the loss this pass exists
+			// to prevent, so it is asserted explicitly below.
+			"book-1b": {
+				ID: "book-1b", Title: "Wyrd Sisters (unabridged)",
+				SeriesID: seriesID(1), IsPrimaryVersion: boolPtr(false),
+			},
 		})
 
 	f.run(t)
@@ -107,7 +133,7 @@ func TestExecuteSeriesNormalize_WritesStrippedPositionIntoSequence(t *testing.T)
 	for _, tc := range []struct {
 		id   string
 		want int
-	}{{"book-1", 5}, {"book-2", 5}, {"book-3", 4}} {
+	}{{"book-1", 5}, {"book-1b", 5}, {"book-2", 5}, {"book-3", 4}} {
 		got := f.seq(t, tc.id)
 		if got == nil {
 			t.Errorf("%s: series_sequence was not written; the stripped number was DELETED", tc.id)
