@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.18.0
+// version: 3.19.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-09-02
 
@@ -324,7 +324,14 @@ func applySecretUpdates(cfg *Config, payload map[string]any) {
 // because Go map assignment is by reference and json.Unmarshal merges into a
 // non-nil map in place; see Config.Clone for the incident.
 //
-// ctx is the HTTP request context; it bounds the dedup re-band hand-off.
+// ctx is the HTTP request context, passed to the dedup score sink instead of
+// the context.Background() this used to use. Be precise about what that buys:
+// the sink only ENQUEUES the re-band, and Registry.EnqueueOp does not currently
+// consult the context it is handed — the queued row is run later by the
+// dispatcher on its own context. So cancelling the request does NOT kill the
+// re-band, which is the behaviour we want; ctx is here so the hand-off carries
+// the request's deadline and values if EnqueueOp ever starts honouring them,
+// not because it bounds the work today.
 func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]any) (int, map[string]any) {
 	if us.DB == nil {
 		return http.StatusInternalServerError, map[string]any{"error": "database not initialized"}
@@ -498,8 +505,20 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	// valid and stays; the response says the re-band did not start and how to
 	// run it by hand.
 	rescoreOpID := ""
-	if sink := us.getDedupScoreSink(); sink != nil {
-		ladderChanged := priorLadderErr != nil || !reflect.DeepEqual(priorLadder, newLadder)
+	sink := us.getDedupScoreSink()
+	ladderChanged := priorLadderErr != nil || !reflect.DeepEqual(priorLadder, newLadder)
+	if sink == nil && ladderChanged {
+		// Not an error — a deployment with no dedup engine (no API key) has
+		// nothing to hand the ladder to, and the config is saved and correct.
+		// But it is not a plain success either: the stored candidates keep the
+		// previous ladder's band, and if an engine is configured later it will
+		// start on the new ladder while every stored row still carries the old
+		// one, with nothing scheduled to reconcile them. Say so once, here,
+		// rather than leaving a 200 with no trace.
+		slog.Warn("dedup score ladder changed but no dedup engine is wired; stored candidates keep their current band",
+			"remedy", DedupRescoreRemedy)
+	}
+	if sink != nil {
 		if ladderChanged {
 			opID, err := sink(ctx, newLadder)
 			if err != nil {
@@ -533,11 +552,12 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 }
 
 // DedupRescoreRemedy is the one operator instruction every "stored candidates
-// were not re-banded" message ends with. It names the endpoint that exists —
-// there is no `dedup.rescore` maintenance op to "run"; the re-band is
-// POST /api/v1/dedup/rescore (internal/server/wire_dedup_routes.go), or the
-// dedup.rescore operation the config PUT queues for you.
-const DedupRescoreRemedy = `run POST /api/v1/dedup/rescore {"apply":true}`
+// were not re-banded" message ends with. It names both real paths, preferring
+// the queued OPERATION over the inline endpoint: the op shares
+// dedup.full-scan's ConcurrencyKey and so cannot interleave its writes with a
+// running scan, while the endpoint does the same work inside the request with
+// no such exclusion. Keep this in sync with dedup.RescoreRemedy.
+const DedupRescoreRemedy = `queue it as an operation: POST /api/v1/operations/v2 {"def_id":"dedup.rescore","params":{"apply":true}} — or, if you need it inline, POST /api/v1/dedup/rescore {"apply":true}`
 
 // payloadString extracts a string value from the payload if present and non-empty.
 func payloadString(payload map[string]any, key string) (string, bool) {

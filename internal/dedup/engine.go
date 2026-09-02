@@ -408,11 +408,20 @@ func (de *Engine) ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig
 }
 
 // RescoreRemedy is the operator instruction every partial-re-band message ends
-// with. There is no `dedup.rescore` maintenance command to "run" by hand —
-// five messages used to say there was; the re-band is the HTTP endpoint below
-// (internal/server/wire_dedup_routes.go), which is also what the
-// dedup.rescore OPERATION the config PUT queues calls into.
-const RescoreRemedy = `run POST /api/v1/dedup/rescore {"apply":true}`
+// with. Five messages used to name a bare `dedup.rescore` command that did not
+// exist. It does now, and both real paths are named here, in the order an
+// operator should prefer them:
+//
+//  1. The OPERATION (internal/plugins/dedup/rescore_op.go), reachable via
+//     POST /api/v1/operations/v2. It shares dedup.full-scan's ConcurrencyKey,
+//     so it waits for a running scan instead of interleaving writes with it,
+//     and it shows up in the operations UI with progress and a red/green
+//     outcome. This is the one to use.
+//  2. The HTTP endpoint (internal/server/wire_dedup_routes.go), which does the
+//     same work INLINE in the request and does NOT take the scan's key. It is
+//     the fallback for when the ops registry is unavailable — which is exactly
+//     one of the cases these messages are reporting.
+const RescoreRemedy = `queue it as an operation: POST /api/v1/operations/v2 {"def_id":"dedup.rescore","params":{"apply":true}} — or, if you need it inline, POST /api/v1/dedup/rescore {"apply":true}`
 
 // HydrateStats is the full per-bucket accounting for one HydrateChromem run.
 //
