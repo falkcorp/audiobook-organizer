@@ -1,11 +1,13 @@
 <!-- file: docs/executive-summaries/2026-09-02-a-merge-can-no-longer-keep-the-wrong-book-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b4d8e2f6-9a1c-4e37-8f5b-0c2d4e6a8b1f -->
 <!-- last-edited: 2026-09-02 -->
 
 # A merge can no longer keep the wrong book
 
-**Pull request:** https://github.com/falkcorp/audiobook-organizer/pull/3047
+**Pull requests:** https://github.com/falkcorp/audiobook-organizer/pull/3047 (merged),
+and https://github.com/falkcorp/audiobook-organizer/pull/3053 correcting a fault in it,
+described at the end.
 
 ## Executive Summary
 
@@ -38,3 +40,33 @@
   known**: the census of file-less entries exists, but no one has yet checked how many
   of them are the survivor of a merge whose loser had the file. That check is the next
   step, and the repair (re-pointing the survivor at the loser's file) is unowned.
+
+## The follow-up: the new rule was reading the wrong evidence
+
+**Pull request:** https://github.com/falkcorp/audiobook-organizer/pull/3053
+
+- The "keeps the copy that can actually play" rule above decided whether an entry had a
+  file by looking at the entry's list of **per-file records**. But the library records a
+  book's audio in two places: an older, single "file path" on the book itself, and the
+  newer per-file list. The roughly 12,500 entries described above as having "no audio
+  file on record" are exactly the ones that have the **old kind** of record and not the
+  new kind — they do have a playable file; the app just hadn't written the per-file rows
+  for them yet.
+- So the guard that shipped in the change above got those 12,500 backwards. In any merge
+  between one of them and a twin that *did* have per-file rows, the guard called the
+  twin "the playable one" and put the other — one in five books in the library — on the
+  delete clock. It was protecting the wrong side. The wording in this summary that
+  called them file-less was itself repeating the mistake.
+- Now either kind of record counts as having a file, and the comparison is simply
+  "has one / doesn't" — an entry with three per-file rows does not outrank one with a
+  single path.
+- Two smaller faults fixed alongside it. Asking the app to merge the same pair twice,
+  with the two books named in the opposite order, could flip which one survived; the
+  survivor choice is now the same regardless of order (an existing survivor is kept,
+  then the older entry). And when the app *refused* a merge for one of the reasons
+  above, the web interface reported it as a generic server error instead of showing the
+  reason — the reason now comes through.
+- Checked the same way: each new rule was deliberately broken and the tests caught it,
+  five of five. Whether any real merge already ran with the backwards guard between the
+  change above (2026-09-02, early) and this correction (same day) has **not** been
+  checked; the window is a few hours and the nightly maintenance did not run in it.
