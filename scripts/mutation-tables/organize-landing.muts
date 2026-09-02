@@ -17,8 +17,8 @@ M01 unlanded-row-gets-empty-path | internal/organizer/service.go | s/\tif !ok \x
 # Fail-closed gate for a single-file landing on a multi-row book.
 M02 multirow-single-landing-accepted | internal/organizer/service.go | s/\tif !isDir && len\(bookFiles\) > 1 \{\n/\tif !isDir && len(bookFiles) > 1000 {\n/
 # Rollback scope.
-M03 rollback-removes-whole-directory | internal/organizer/service.go | s/\t\tif err := os\.Remove\(created\); err != nil && !errors\.Is\(err, fs\.ErrNotExist\) \{\n/\t\tif err := os.RemoveAll(filepath.Dir(created)); err != nil \&\& !errors.Is(err, fs.ErrNotExist) {\n/
-M04 rollback-ignores-containment | internal/organizer/service.go | s/\t\tif created == "" \x7c\x7c !strings\.HasPrefix\(created, config\.AppConfig\.RootDir\) \{\n/\t\tif created == "" {\n/
+M03 rollback-removes-whole-directory | internal/organizer/organizer.go | s/\t\tif err := os\.Remove\(p\); err != nil && !errors\.Is\(err, fs\.ErrNotExist\) \{\n\t\t\tleftover = append\(leftover, p\)/\t\tif err := os.RemoveAll(filepath.Dir(p)); err != nil \&\& !errors.Is(err, fs.ErrNotExist) {\n\t\t\tleftover = append(leftover, p)/
+M04 rollback-ignores-containment | internal/organizer/organizer.go | s/\t\tif p == "" \x7c\x7c ensureUnderRoot\(p, root\) != nil \{\n/\t\tif p == "" {\n/
 M05 adopted-single-file-marked-created | internal/organizer/service.go | s/\tif mode != "" \{\n\t\tl\.Created = \[\]string\{newPath\}\n/\tif mode != "" \x7c\x7c true {\n\t\tl.Created = []string{newPath}\n/
 # Strategy decision.
 M06 multirow-file-path-routed-single | internal/organizer/service.go | s/\tisDir := len\(bookFiles\) > 1\n/\tisDir := len(bookFiles) > 1000\n/
@@ -31,3 +31,11 @@ M10 stranded-glob-unescaped | internal/organizer/pipeline.go | s/filepath\.Glob\
 M11 ambiguous-stranded-picks-first | internal/organizer/pipeline.go | s/\t\t\tcase 1:\n\t\t\t\tslog\.Warn\("RenameFiles resuming/\t\t\tdefault:\n\t\t\t\tslog.Warn("RenameFiles resuming/; s/\t\t\tdefault:\n\t\t\t\tmsg := fmt\.Sprintf\("%d stranded/\t\t\tcase -1:\n\t\t\t\tmsg := fmt.Sprintf("%d stranded/
 # copyFile temp collision must not look like a taken destination.
 M12 nonce-collision-is-errexist | internal/organizer/organizer.go | s/return fmt\.Errorf\("temp file %s for %s already exists \(nonce collision with another writer\): %v", tempPath, dst, err\)/return fmt.Errorf("temp file %s for %s already exists (nonce collision with another writer): %w", tempPath, dst, err)/
+# A directory landing is all-or-nothing: an unlanded file must fail the book.
+M13 partial-directory-landing-kept | internal/organizer/organizer.go | s/\tif len\(unlanded\) > 0 \{\n\t\tleftover := unlinkCreated\(created, targetDir, targetDir\)/\tif len(unlanded) > 0 \&\& false {\n\t\tleftover := unlinkCreated(created, targetDir, targetDir)/
+# A stranded temp with no recorded size must not be resumed.
+M14 stranded-temp-no-size-resumed | internal/organizer/pipeline.go | s/\tif entry\.ExpectedSize <= 0 \{\n\t\treturn fmt\.Sprintf\("stranded temp %s for %s \(source %s is gone\) cannot be verified/\tif entry.ExpectedSize < 0 {\n\t\treturn fmt.Sprintf("stranded temp %s for %s (source %s is gone) cannot be verified/
+# A stranded temp whose size disagrees with the row must not be resumed.
+M15 stranded-temp-size-ignored | internal/organizer/pipeline.go | s/\tif info\.Size\(\) != entry\.ExpectedSize \{/\tif info.Size() != entry.ExpectedSize \&\& false {/
+# A symlink source must take the rename path, not the link path.
+M16 symlink-source-takes-link-path | internal/organizer/saferename.go | s/\tif info\.IsDir\(\) \x7c\x7c info\.Mode\(\)&fs\.ModeSymlink != 0 \{/\tif info.IsDir() {/
