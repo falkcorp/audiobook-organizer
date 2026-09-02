@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-09-02
 
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -535,6 +536,30 @@ func userEditFieldExtractors(payload *AudiobookUpdate, resolvedAuthorName, resol
 			}
 			return *payload.ISBN13, true
 		},
+		database.FieldKeyASIN: func() (any, bool) {
+			if payload.ASIN == nil {
+				return nil, false
+			}
+			return *payload.ASIN, true
+		},
+		database.FieldKeyGenre: func() (any, bool) {
+			if payload.Genre == nil {
+				return nil, false
+			}
+			return *payload.Genre, true
+		},
+		database.FieldKeyDescription: func() (any, bool) {
+			if payload.Description == nil {
+				return nil, false
+			}
+			return *payload.Description, true
+		},
+		database.FieldKeySeriesPosition: func() (any, bool) {
+			if payload.SeriesSequence == nil {
+				return nil, false
+			}
+			return *payload.SeriesSequence, true
+		},
 	}
 }
 
@@ -587,6 +612,27 @@ func ApplyOverrideToPayload(payload *AudiobookUpdate, field string, value any) {
 	case database.FieldKeyASIN:
 		if v, ok := value.(string); ok {
 			payload.ASIN = new(v)
+		}
+	case database.FieldKeyGenre:
+		if v, ok := value.(string); ok {
+			payload.Genre = new(v)
+		}
+	case database.FieldKeyDescription:
+		if v, ok := value.(string); ok {
+			payload.Description = new(v)
+		}
+	case database.FieldKeySeriesPosition:
+		// SeriesSequence is an *int. JSON numbers decode as float64; the UI
+		// also sends the position as a string ("3"), so both are accepted.
+		switch v := value.(type) {
+		case float64:
+			payload.SeriesSequence = new(int(v))
+		case int:
+			payload.SeriesSequence = new(v)
+		case string:
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				payload.SeriesSequence = new(n)
+			}
 		}
 	}
 }

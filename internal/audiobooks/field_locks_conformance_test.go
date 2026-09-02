@@ -1,5 +1,5 @@
 // file: internal/audiobooks/field_locks_conformance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8517d74f-37bb-483a-8f1a-ac589f71c89f
 // last-edited: 2026-09-02
 
@@ -34,6 +34,10 @@ func TestUserEditFieldExtractorsAreInTheLockVocabulary(t *testing.T) {
 		AudiobookReleaseYear: new(2020),
 		ISBN10:               new("1111111111"),
 		ISBN13:               new("9781111111111"),
+		ASIN:                 new("B000000000"),
+		Genre:                new("G"),
+		Description:          new("D"),
+		SeriesSequence:       new(3),
 	}
 	extractors := userEditFieldExtractors(&AudiobookUpdate{Book: book}, "Author", "Series")
 
@@ -47,6 +51,19 @@ func TestUserEditFieldExtractorsAreInTheLockVocabulary(t *testing.T) {
 		}
 		if _, ok := extract(); !ok {
 			t.Errorf("extractor for %q yielded nothing on a fully populated payload", key)
+		}
+	}
+
+	// The other direction, and the one that matters for a field added later: a
+	// lockable field with NO extractor is a field the user can edit through
+	// this handler without any lock row being written, so the next background
+	// apply overwrites the edit. That was true of description, genre, asin and
+	// series_position until 2026-09-02 -- the UI offered a lock for them and
+	// the write path recorded none.
+	for _, f := range database.UserLockableFields {
+		if _, ok := extractors[f.Key]; !ok {
+			t.Errorf("lockable field %q has no user-edit extractor: editing it records no lock, "+
+				"so the next fetch/scan overwrites the user's value", f.Key)
 		}
 	}
 
@@ -84,7 +101,32 @@ func TestApplyOverrideToPayloadUsesTheLockVocabulary(t *testing.T) {
 		{database.FieldKeyISBN10, "1111111111", func(p *AudiobookUpdate) bool { return p.ISBN10 != nil && *p.ISBN10 == "1111111111" }},
 		{database.FieldKeyISBN13, "9781111111111", func(p *AudiobookUpdate) bool { return p.ISBN13 != nil && *p.ISBN13 == "9781111111111" }},
 		{database.FieldKeyASIN, "B000000000", func(p *AudiobookUpdate) bool { return p.ASIN != nil && *p.ASIN == "B000000000" }},
+		{database.FieldKeyGenre, "Sci-Fi", func(p *AudiobookUpdate) bool { return p.Genre != nil && *p.Genre == "Sci-Fi" }},
+		{database.FieldKeyDescription, "About a book", func(p *AudiobookUpdate) bool {
+			return p.Description != nil && *p.Description == "About a book"
+		}},
+		{database.FieldKeySeriesPosition, float64(3), func(p *AudiobookUpdate) bool {
+			return p.SeriesSequence != nil && *p.SeriesSequence == 3
+		}},
+		{database.FieldKeySeriesPosition, "4", func(p *AudiobookUpdate) bool {
+			return p.SeriesSequence != nil && *p.SeriesSequence == 4
+		}},
 	}
+
+	// Completeness, checked against the vocabulary rather than against this
+	// table: a key in UserLockableFields that this switch ignores is a lock
+	// the user can set and a value the same request can never write.
+	covered := map[string]bool{}
+	for _, tc := range cases {
+		covered[tc.key] = true
+	}
+	for _, f := range database.UserLockableFields {
+		if !covered[f.Key] {
+			t.Errorf("lockable field %q is not projected by ApplyOverrideToPayload "+
+				"(or the case is untested): an override on it would be stored but never applied", f.Key)
+		}
+	}
+
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
 			p := &AudiobookUpdate{Book: &database.Book{}}
