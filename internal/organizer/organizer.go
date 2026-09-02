@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-02
 
@@ -8,15 +8,15 @@ package organizer
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
@@ -556,21 +556,29 @@ func stringOrEmpty(s *string) string {
 // Finalisation is finalizeExclusive rather than a bare os.Rename: os.Rename
 // silently REPLACES a destination that appeared between the caller's
 // exists-check and now (concurrent organize workers), which for an audiobook
-// means the other worker's file is gone. The returned error still satisfies
-// os.IsExist, so organizeFile callers' race recovery keeps working.
+// means the other worker's file is gone. A destination collision is returned
+// as an error satisfying errors.Is(err, fs.ErrExist) so organizeFile callers'
+// race recovery keeps working.
+//
+// A collision on the TEMP name is deliberately NOT one of those. It means two
+// writers drew the same nonce, not that dst is occupied, and if it surfaced as
+// ErrExist the caller would stat dst, find nothing, and log "lost a race" for a
+// file that simply was not written. It is reported as the plain failure it is,
+// and the temp is left alone because it is the other writer's.
 func (o *Organizer) copyFile(src, dst string) error {
 	tempPath := o.tempPathFor(dst)
 
 	if err := fileops.CopyFileIngestExclusive(src, tempPath); err != nil {
-		if !os.IsExist(err) {
-			_ = os.Remove(tempPath)
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("temp file %s for %s already exists (nonce collision with another writer): %v", tempPath, dst, err)
 		}
+		_ = os.Remove(tempPath)
 		return fmt.Errorf("failed to write temp file for %s: %w", dst, err)
 	}
 
 	if err := finalizeExclusive(tempPath, dst); err != nil {
 		_ = os.Remove(tempPath)
-		if os.IsExist(err) {
+		if errors.Is(err, fs.ErrExist) {
 			return err
 		}
 		return fmt.Errorf("failed to finalize destination file: %w", err)
@@ -588,17 +596,19 @@ func (o *Organizer) tempPathFor(dst string) string {
 }
 
 // tempNonce is a package variable, not a direct call, so a test can make two
-// writers collide on one temp name. Production never reassigns it.
+// writers collide on one temp name. Production never reassigns it. A test that
+// does reassign it is mutating package state and must not run under
+// t.Parallel(); restore it with t.Cleanup.
 var tempNonce = randomTempNonce
 
+// randomTempNonce returns 16 hex characters from crypto/rand. Since Go 1.24
+// rand.Read is documented never to return an error (it crashes the program if
+// the platform source is unavailable), so there is no fallback branch here: a
+// clock-based fallback would have been dead code that, had it ever run, made
+// two same-nanosecond writers collide by design.
 func randomTempNonce() string {
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failing is a broken host, not a recoverable condition;
-		// fall back to the clock so the name is still per-call, and let
-		// O_EXCL catch the astronomically unlikely collision.
-		return strconv.FormatInt(time.Now().UnixNano(), 36)
-	}
+	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
 
@@ -645,11 +655,14 @@ func (o *Organizer) symlinkFile(src, dst string) error {
 
 // PlanFilePaths returns current file path -> organized target path for every
 // non-missing file of a directory book, using the SAME planner
-// OrganizeBookDirectory copies with. Because the plan is a pure function of the
-// root, the two patterns and the rows, a caller that needs to know where
-// OrganizeBookDirectory put things can recompute it instead of having the map
-// threaded down to it -- which is what CreateOrganizedVersion does. Files
-// already at their target map to themselves.
+// OrganizeBookDirectory copies with. It answers "where WOULD this go", which
+// is not the same question as "where DID it go": a planned target can be
+// skipped (source vanished, occupant not proven to be this file, lost race),
+// and until 2026-09-02 CreateOrganizedVersion recomputed the plan and then
+// adopted any file that happened to exist at a planned target — pointing a
+// book's row at another book's audio. Callers that need the landed paths must
+// take them from OrganizeBookDirectory's returned map (see service.Landing),
+// never from this plan. Files already at their target map to themselves.
 func (o *Organizer) PlanFilePaths(book *database.Book, files []database.BookFile) (map[string]string, error) {
 	planned, err := planTargetPaths(o.config.RootDir, o.config.FolderNamingPattern,
 		o.config.FileNamingPattern, files, o.pathVars(book, 0, 0, ""), o.buildOpts())
@@ -678,11 +691,26 @@ func (o *Organizer) PlanFilePaths(book *database.Book, files []database.BookFile
 // still land on different names. Both now run planTargetPaths over the same
 // rows, so they cannot disagree.
 func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
+	landing, err := o.organizeBookDirectory(book, files)
+	if err != nil {
+		return "", nil, err
+	}
+	return landing.Path, landing.Files, nil
+}
+
+// organizeBookDirectory is OrganizeBookDirectory's implementation, returning
+// the full Landing: which files it wrote (Created) and which planned, present
+// files did not land (Skipped), on top of the landed map. The exported wrapper
+// keeps the (dir, map, err) shape for the metafetch and iTunes callers that
+// only need the map; Service.OrganizeDirectoryBook takes the Landing so that
+// CreateOrganizedVersion can point rows at landed paths only and roll back
+// created files only.
+func (o *Organizer) organizeBookDirectory(book *database.Book, files []database.BookFile) (*Landing, error) {
 	if book == nil {
-		return "", nil, fmt.Errorf("invalid book")
+		return nil, fmt.Errorf("invalid book")
 	}
 	if len(files) == 0 {
-		return "", nil, fmt.Errorf("no segment files to organize")
+		return nil, fmt.Errorf("no segment files to organize")
 	}
 
 	// Generate target directory from folder naming pattern. This is the same
@@ -691,7 +719,7 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 	// planned target path are the same string by construction.
 	folderPath, err := o.expandPattern(o.config.FolderNamingPattern, book)
 	if err != nil {
-		return "", nil, fmt.Errorf("folder pattern: %w", err)
+		return nil, fmt.Errorf("folder pattern: %w", err)
 	}
 	folderPath = sanitizePath(folderPath)
 	targetDir := filepath.Join(o.config.RootDir, folderPath)
@@ -699,17 +727,18 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 	planned, err := planTargetPaths(o.config.RootDir, o.config.FolderNamingPattern,
 		o.config.FileNamingPattern, files, o.pathVars(book, 0, 0, ""), o.buildOpts())
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	if len(planned) == 0 {
-		return "", nil, fmt.Errorf("all %d file(s) for %q (id=%s) are flagged missing on disk — re-scan to verify, or restore from backup", len(files), book.Title, book.ID)
+		return nil, fmt.Errorf("all %d file(s) for %q (id=%s) are flagged missing on disk — re-scan to verify, or restore from backup", len(files), book.Title, book.ID)
 	}
 
 	if err := os.MkdirAll(targetDir, 0775); err != nil {
-		return "", nil, fmt.Errorf("failed to create target directory: %w", err)
+		return nil, fmt.Errorf("failed to create target directory: %w", err)
 	}
 
 	pathMap := make(map[string]string, len(planned))
+	var created []string
 	for _, entry := range planned {
 		srcPath, dstPath := entry.SourcePath, entry.TargetPath
 		fileName := filepath.Base(dstPath)
@@ -754,8 +783,13 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 		}
 
 		if _, err := o.organizeFile(srcPath, dstPath); err != nil {
-			// Skip missing source files instead of aborting the entire book
-			if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") {
+			// Skip a missing SOURCE instead of aborting the entire book. "Is the
+			// source missing" is answered by looking at the source, not by
+			// pattern-matching the error: the old test (os.IsNotExist on the
+			// error, or "no such file" anywhere in its text) also matched a
+			// temp swept from under a live copy and a target directory that
+			// vanished mid-write, and skipped those as if the source were gone.
+			if _, statErr := os.Lstat(srcPath); errors.Is(statErr, fs.ErrNotExist) {
 				slog.Warn("organizeFile skipping missing source file",
 					"source_path", srcPath, "dest_path", dstPath,
 					"book_id", book.ID, "book_title", book.Title,
@@ -771,7 +805,7 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 			// Re-run the same content test; an occupant that is not proven to
 			// be this file leaves the row unchanged, as it would have had it
 			// been there a millisecond earlier.
-			if os.IsExist(err) {
+			if errors.Is(err, fs.ErrExist) {
 				if dstInfo, statErr := os.Stat(dstPath); statErr == nil && adoptExistingDestination(book, srcPath, dstPath, dstInfo) {
 					pathMap[srcPath] = dstPath
 				} else {
@@ -782,9 +816,10 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 				}
 				continue
 			}
-			return "", nil, fmt.Errorf("failed to organize segment %s: %w", fileName, err)
+			return nil, fmt.Errorf("failed to organize segment %s: %w", fileName, err)
 		}
 		pathMap[srcPath] = dstPath
+		created = append(created, dstPath)
 	}
 
 	// Nothing landed. Report it HERE rather than leaving each caller to notice,
@@ -804,11 +839,21 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 	// skips a source that has vanished from disk since the last scan, so rows
 	// that look present can all skip and leave pathMap empty.
 	if len(pathMap) == 0 {
-		return "", nil, fmt.Errorf("organize produced no files for %q (id=%s): all %d planned source file(s) were missing or skipped — re-scan to verify, or restore from backup",
+		return nil, fmt.Errorf("organize produced no files for %q (id=%s): all %d planned source file(s) were missing or skipped — re-scan to verify, or restore from backup",
 			book.Title, book.ID, len(planned))
 	}
 
-	return targetDir, pathMap, nil
+	// Every planned source that is not in pathMap took one of the `continue`s
+	// above. planTargetPaths already dropped rows flagged Missing, so these
+	// are files the library believed present that did not land.
+	var skipped []string
+	for _, entry := range planned {
+		if _, landed := pathMap[entry.SourcePath]; !landed {
+			skipped = append(skipped, entry.SourcePath)
+		}
+	}
+
+	return &Landing{Path: targetDir, Files: pathMap, Created: created, Skipped: skipped}, nil
 }
 
 // adoptExistingDestination decides whether a file already sitting at dstPath

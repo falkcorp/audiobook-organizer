@@ -1,7 +1,7 @@
 // file: internal/organizer/version_group_primary_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c41b8d6-2e59-4a03-b18f-6d0a3e95c247
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 // Regression tests for the surplus-primary defect found 2026-08-13.
 //
@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -58,7 +57,6 @@ func TestCreateOrganizedVersion_DoesNotAddASecondPrimary(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	svc := NewService(store)
-	org := &Organizer{config: &config.Config{}}
 
 	gid := "test-vg-existing-primary"
 	yes, no := true, false
@@ -95,7 +93,7 @@ func TestCreateOrganizedVersion_DoesNotAddASecondPrimary(t *testing.T) {
 	}
 
 	newPath := filepath.Join(t.TempDir(), "organized-newcomer.m4b")
-	created, err := svc.CreateOrganizedVersion(org, newcomer, newPath, false, "", &noopLogger{})
+	created, err := svc.CreateOrganizedVersion(newcomer, &Landing{Path: newPath}, "", &noopLogger{})
 	if err != nil {
 		t.Fatalf("CreateOrganizedVersion: %v", err)
 	}
@@ -141,7 +139,6 @@ func TestCreateOrganizedVersion_StillClaimsPrimaryWhenGroupHasNone(t *testing.T)
 	t.Cleanup(func() { _ = store.Close() })
 
 	svc := NewService(store)
-	org := &Organizer{config: &config.Config{}}
 
 	gid := "test-vg-no-primary"
 	no := false
@@ -163,7 +160,7 @@ func TestCreateOrganizedVersion_StillClaimsPrimaryWhenGroupHasNone(t *testing.T)
 	}
 
 	newPath := filepath.Join(t.TempDir(), "organized-lonely.m4b")
-	created, err := svc.CreateOrganizedVersion(org, source, newPath, false, "", &noopLogger{})
+	created, err := svc.CreateOrganizedVersion(source, &Landing{Path: newPath}, "", &noopLogger{})
 	if err != nil {
 		t.Fatalf("CreateOrganizedVersion: %v", err)
 	}
@@ -192,7 +189,6 @@ func TestCreateOrganizedVersion_NewGroupStillClaimsPrimary(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	svc := NewService(store)
-	org := &Organizer{config: &config.Config{}}
 
 	source, err := store.CreateBook(&database.Book{
 		Title:    "Ungrouped Book",
@@ -203,7 +199,7 @@ func TestCreateOrganizedVersion_NewGroupStillClaimsPrimary(t *testing.T) {
 	}
 
 	newPath := filepath.Join(t.TempDir(), "organized-ungrouped.m4b")
-	created, err := svc.CreateOrganizedVersion(org, source, newPath, false, "", &noopLogger{})
+	created, err := svc.CreateOrganizedVersion(source, &Landing{Path: newPath}, "", &noopLogger{})
 	if err != nil {
 		t.Fatalf("CreateOrganizedVersion: %v", err)
 	}

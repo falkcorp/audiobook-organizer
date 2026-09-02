@@ -1,7 +1,7 @@
 // file: internal/organizer/organized_version_writeback_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8eea5b3c-7be2-4f84-a629-aca6c5044dbb
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -67,7 +66,6 @@ func TestCreateOrganizedVersion_OriginalDemotedToNonPrimary(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	svc := NewService(store)
-	org := &Organizer{config: &config.Config{}}
 
 	seeded := newWritebackTestBook(t, store)
 
@@ -79,7 +77,7 @@ func TestCreateOrganizedVersion_OriginalDemotedToNonPrimary(t *testing.T) {
 	slim.Description = nil
 
 	newPath := filepath.Join(t.TempDir(), "organized.m4b")
-	if _, err := svc.CreateOrganizedVersion(org, &slim, newPath, false, "", &noopLogger{}); err != nil {
+	if _, err := svc.CreateOrganizedVersion(&slim, &Landing{Path: newPath}, "", &noopLogger{}); err != nil {
 		t.Fatalf("CreateOrganizedVersion: %v", err)
 	}
 
@@ -123,13 +121,12 @@ func TestCreateOrganizedVersion_RecordsOrganizeProvenance(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	svc := NewService(store)
-	org := &Organizer{config: &config.Config{}}
 
 	seeded := newWritebackTestBook(t, store)
 	oldPath := seeded.FilePath
 
 	newPath := filepath.Join(t.TempDir(), "organized.m4b")
-	created, err := svc.CreateOrganizedVersion(org, seeded, newPath, false, "", &noopLogger{})
+	created, err := svc.CreateOrganizedVersion(seeded, &Landing{Path: newPath}, "", &noopLogger{})
 	if err != nil {
 		t.Fatalf("CreateOrganizedVersion: %v", err)
 	}
@@ -184,7 +181,6 @@ func TestCreateOrganizedVersion_AuthorSeriesSurviveOriginalWriteback(t *testing.
 	t.Cleanup(func() { _ = store.Close() })
 
 	svc := NewService(store)
-	org := &Organizer{config: &config.Config{}}
 
 	seeded := newWritebackTestBook(t, store)
 
@@ -194,7 +190,7 @@ func TestCreateOrganizedVersion_AuthorSeriesSurviveOriginalWriteback(t *testing.
 	slim.Description = nil
 
 	newPath := filepath.Join(t.TempDir(), "organized.m4b")
-	if _, err := svc.CreateOrganizedVersion(org, &slim, newPath, false, "", &noopLogger{}); err != nil {
+	if _, err := svc.CreateOrganizedVersion(&slim, &Landing{Path: newPath}, "", &noopLogger{}); err != nil {
 		t.Fatalf("CreateOrganizedVersion: %v", err)
 	}
 

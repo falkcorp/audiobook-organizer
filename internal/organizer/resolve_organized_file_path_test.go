@@ -1,7 +1,7 @@
 // file: internal/organizer/resolve_organized_file_path_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a1f0c8d-4b52-4f7e-9d31-2c8ea45b7f60
-// last-edited: 2026-08-15
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -16,22 +16,26 @@ import (
 //
 // CreateOrganizedVersion used to derive these by GUESSING --
 // filepath.Join(newPath, filepath.Base(bf.FilePath)) -- a fourth independent
-// answer to "where does this file go", never checked against the disk. Now that
-// the file naming pattern actually renames the files, that guess is simply
-// wrong, and wrong here is SILENT: a row that names a plausible path nobody ever
-// wrote is indistinguishable from a correct one until someone opens the book.
+// answer to "where does this file go", never checked against the disk. The
+// 2026-08-15 fix replaced the guess with a recomputed PLAN plus an os.Stat
+// tiebreaker: "if a file exists at the planned target, the copy landed". That
+// was wrong in the one case that matters: two books planning the same target.
+// The loser's copy was skipped, the winner's file sat at the planned path, and
+// the tiebreaker pointed the loser's row at the winner's audio.
 //
-// The plan says where organize INTENDED to put each file, not that the copy
-// happened, so disk is the tiebreaker. This is the case-by-case statement of
-// that rule.
+// The rule now: the row follows Landing.Files, the source->landed map the
+// organize that just ran produced, and nothing else. A file in the map landed
+// (created or adopted, decided by hash inside organizeBookDirectory); a file
+// not in the map keeps its source path. There is no disk lookup here, and the
+// cases below include the one where a file DOES exist at a plausible target
+// and must still be ignored.
 func TestResolveOrganizedFilePath(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "source.m4b")
 	dst := filepath.Join(dir, "Organized - 01.m4b")
-	gone := filepath.Join(dir, "vanished.m4b")
-	unwritten := filepath.Join(dir, "never-copied.m4b")
+	strangers := filepath.Join(dir, "Another Book - 01.m4b")
 
-	for _, p := range []string{src, dst} {
+	for _, p := range []string{src, dst, strangers} {
 		if err := os.WriteFile(p, []byte("audio"), 0644); err != nil {
 			t.Fatalf("fixture: %v", err)
 		}
@@ -42,65 +46,58 @@ func TestResolveOrganizedFilePath(t *testing.T) {
 	cases := []struct {
 		name    string
 		srcPath string
-		planned map[string]string
+		landed  map[string]string
 		want    string
 		why     string
 	}{
 		{
-			name:    "target exists — the copy landed, take it",
+			name:    "landed — take the landed path",
 			srcPath: src,
-			planned: map[string]string{src: dst},
+			landed:  map[string]string{src: dst},
 			want:    dst,
-			why:     "the normal path: organize copied the file, so the row must name the copy",
+			why:     "the normal path: organize copied (or adopted) the file, so the row must name that copy",
 		},
 		{
-			name:    "target planned but absent, source still there — keep the source",
+			name:    "not in the landing, though a file sits at the would-be target — keep the source",
 			srcPath: src,
-			planned: map[string]string{src: unwritten},
+			landed:  map[string]string{},
 			want:    src,
-			why: "organize skips files whose destination is unsafe or occupied by a stranger. " +
-				"Writing the plan on faith here is exactly the silent defect: a row pointing at nothing",
+			why: "this is the two-books-one-target case: the file at the target is the OTHER book's. " +
+				"A disk lookup here is exactly what pointed the loser's row at the winner's audio",
 		},
 		{
-			name:    "file not in the plan at all — keep the source",
+			name:    "landing maps other files only — keep the source",
 			srcPath: src,
-			planned: map[string]string{dst: unwritten},
+			landed:  map[string]string{"/elsewhere/ch02.m4b": strangers},
 			want:    src,
-			why:     "a row the planner dropped (no path, unreadable) must not inherit some other file's target",
+			why:     "a row the organize did not land must not inherit some other file's target",
 		},
 		{
-			name:    "plan is a no-op — keep the source",
+			name:    "landed in place — the same path",
 			srcPath: src,
-			planned: map[string]string{src: src},
+			landed:  map[string]string{src: src},
 			want:    src,
-			why:     "already in place; nothing moved",
-		},
-		{
-			name:    "neither exists — take the plan",
-			srcPath: gone,
-			planned: map[string]string{gone: unwritten},
-			want:    unwritten,
-			why:     "the file is missing either way, and the planned path is where a restore should put it",
+			why:     "already in place; the map says so and the row keeps it",
 		},
 		{
 			name:    "empty target — keep the source",
 			srcPath: src,
-			planned: map[string]string{src: ""},
+			landed:  map[string]string{src: ""},
 			want:    src,
 			why:     "an empty string is not a path; never write one into a row",
 		},
 		{
-			name:    "nil plan — keep the source",
+			name:    "nil landing — keep the source",
 			srcPath: src,
-			planned: nil,
+			landed:  nil,
 			want:    src,
-			why:     "PlanFilePaths returning an error leaves the map nil; rows must survive that unchanged",
+			why:     "a single-file Landing has no Files map; rows must survive that unchanged",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resolveOrganizedFilePath(tc.srcPath, tc.planned, log)
+			got := resolveOrganizedFilePath(tc.srcPath, tc.landed, log)
 			if got != tc.want {
 				t.Errorf("resolveOrganizedFilePath(%q) = %q, want %q\n  why: %s",
 					tc.srcPath, got, tc.want, tc.why)

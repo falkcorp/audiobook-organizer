@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_one_book_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6e2a91d4-3c58-4b7f-8a06-1d94f2e7b350
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -131,10 +131,14 @@ func TestOrganizeOneBook_DirectoryBook_OrganizesSegments(t *testing.T) {
 	svc := NewService(mockStore)
 	org := NewOrganizer(&config.AppConfig)
 
-	targetDir, err := svc.OrganizeOneBook(org, book, logger.New("test"))
+	landing, err := svc.OrganizeOneBook(org, book, logger.New("test"))
 	if err != nil {
 		t.Fatalf("OrganizeOneBook on a multi-file book: %v", err)
 	}
+	if !landing.IsDir() {
+		t.Fatalf("expected a directory landing (Files non-nil), got %+v", landing)
+	}
+	targetDir := landing.Path
 	if !strings.HasPrefix(targetDir, config.AppConfig.RootDir) {
 		t.Fatalf("expected target %s under RootDir %s", targetDir, config.AppConfig.RootDir)
 	}
@@ -173,16 +177,25 @@ func TestOrganizeOneBook_SingleFileBook_TakesSingleFilePath(t *testing.T) {
 		Author:   &database.Author{Name: "Some Author"},
 	}
 
-	// No GetBookFiles expectation: if the directory branch were taken this
-	// mock would fail the test on an unexpected call.
+	// One book_file row: OrganizeOneBook reads the rows to decide the strategy
+	// (>1 rows is a directory book even when file_path names a file). A single
+	// row plus a file at file_path is the single-file shape. Nothing else may be
+	// called — the directory branch's further reads would fail this mock.
 	mockStore := mocks.NewMockStore(t)
+	mockStore.EXPECT().GetBookFiles("book-file-1").Return([]database.BookFile{
+		{ID: "bf-1", BookID: "book-file-1", FilePath: srcFile},
+	}, nil).Once()
 	svc := NewService(mockStore)
 	org := NewOrganizer(&config.AppConfig)
 
-	newPath, err := svc.OrganizeOneBook(org, book, logger.New("test"))
+	landing, err := svc.OrganizeOneBook(org, book, logger.New("test"))
 	if err != nil {
 		t.Fatalf("OrganizeOneBook on a single-file book: %v", err)
 	}
+	if landing.IsDir() {
+		t.Fatalf("expected a single-file landing (Files nil), got %+v", landing)
+	}
+	newPath := landing.Path
 	if !strings.HasPrefix(newPath, rootDir) {
 		t.Fatalf("expected organized path %s under RootDir %s", newPath, rootDir)
 	}

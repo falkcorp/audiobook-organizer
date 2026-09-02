@@ -1,5 +1,5 @@
 // file: internal/organizer/copyfile_race_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9c2a7e-6b41-4d58-9e02-7c1a5d8f4b36
 // last-edited: 2026-09-02
 
@@ -144,9 +144,15 @@ func TestCopyFile_RefusesToReplaceAnExistingDestination(t *testing.T) {
 
 // The second defence, isolated. With the nonce pinned, two writers ARE handed
 // the same temp name — the pre-fix situation exactly — and only O_EXCL stands
-// between them. One must fail at open with an os.IsExist error, the winner's
-// bytes must reach dst intact, and the loser must NOT remove the temp it did
-// not create (that would abort the winner's in-flight copy).
+// between them. One must fail at open, the winner's bytes must reach dst
+// intact, and the loser must NOT remove the temp it did not create (that would
+// abort the winner's in-flight copy).
+//
+// The loser's error is deliberately NOT an exists-error. An fs.ErrExist from
+// copyFile means "the DESTINATION is taken" and the organize loop's recovery
+// branch answers it by checking whether the file there is this book's and
+// adopting it. A temp-name collision says nothing about the destination — the
+// winner may still be mid-copy — so it must not trigger that adoption.
 func TestCopyFile_PinnedNonce_OnlyOneWriterOpensTheTemp(t *testing.T) {
 	prev := tempNonce
 	tempNonce = func() string { return "pinned" }
@@ -191,8 +197,11 @@ func TestCopyFile_PinnedNonce_OnlyOneWriterOpensTheTemp(t *testing.T) {
 				winner = [][]byte{a, b}[i]
 				continue
 			}
-			if !os.IsExist(err) && !errors.Is(err, fs.ErrExist) {
-				t.Fatalf("iter %d: loser error must be an exists-error, got %v", iter, err)
+			if errors.Is(err, fs.ErrExist) || os.IsExist(err) {
+				t.Fatalf("iter %d: a temp-name collision must not look like a taken destination, got %v", iter, err)
+			}
+			if !strings.Contains(err.Error(), "nonce collision") {
+				t.Fatalf("iter %d: loser error must name the nonce collision, got %v", iter, err)
 			}
 		}
 		if wins != 1 {
