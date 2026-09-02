@@ -44,3 +44,29 @@
   different value, assert the stored value did not move AND that an unlocked sibling
   field did — an all-locked fixture cannot tell a working guard from an op that writes
   nothing.
+
+- [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** — none of these
+  lose data; they are clarity and drift risks the review (L1–L4) named:
+  - **L1: a third field vocabulary.** `internal/metafetch/service_apply.go`'s
+    `fields`/`allowed` apply-selection allowlist uses `author`, `series`, `year`,
+    `isbn`, `cover_url` — caller-supplied *selection* names, not lock names, so it is
+    legitimately a different vocabulary. But it is spelled close enough to the lock
+    keys to be misread as one, and `RecordChangeHistory` (`series`) and
+    `persistFetchedMetadata` (`print_year`, `cover_url`) add two more spellings.
+    Either give the selection vocabulary its own named constants or document at each
+    site that it is deliberately not `database.FieldKey*`.
+  - **L2: the UI locks 12 keys, the backend 13.** `FIELD_TO_API` has no `asin`, so a
+    user cannot lock ASIN from the edit dialog even though the backend honours it.
+    Decide whether to expose it or to document the asymmetry in the conformance test,
+    which currently pins the UI list as literals without saying why it is short.
+  - **L3: `series_position` can be locked while `series_name` is not.**
+    `FieldLocks.Apply` protects `SeriesSequence` when `series_name` is locked, so the
+    pair is consistent in that direction; the reverse (position locked, name free) lets
+    a fetch move the book to a different series while pinning its number. Decide
+    whether that combination should be rejected at write time or is intentional.
+  - **L4: the hand-written `database.MockStore` reads as "nothing locked."**
+    `GetMetadataFieldStatesFunc` unset returns `(nil, nil)`, so any test using the
+    hand-written mock without seeding lock rows silently exercises the unlocked path.
+    That is the right default, but it means a guard test that forgets to seed passes
+    for the wrong reason. Worth a comment on the field, and worth preferring the
+    mockery mock (which fails on an unexpected call) in new lock tests.
