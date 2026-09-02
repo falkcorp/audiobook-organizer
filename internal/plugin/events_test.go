@@ -1,5 +1,6 @@
 // file: internal/plugin/events_test.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-09-02
 
 package plugin
 
@@ -32,7 +33,7 @@ func TestEventBus_MultipleSubscribers(t *testing.T) {
 	bus := NewEventBus()
 	var count atomic.Int32
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		bus.Subscribe(EventMetadataApplied, func(ctx context.Context, evt Event) error {
 			count.Add(1)
 			return nil
