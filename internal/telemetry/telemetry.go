@@ -1,6 +1,7 @@
 // file: internal/telemetry/telemetry.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-09-02
 
 package telemetry
 
@@ -73,11 +74,11 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 }
 
 // GlobalTracer returns the global OpenTelemetry tracer.
-func GlobalTracer() interface{} {
+func GlobalTracer() any {
 	return otel.Tracer("audiobook-organizer")
 }
 
 // GlobalMeter returns the global OpenTelemetry meter.
-func GlobalMeter() interface{} {
+func GlobalMeter() any {
 	return otel.Meter("audiobook-organizer")
 }
