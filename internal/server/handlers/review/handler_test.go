@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
 // last-edited: 2026-09-02
 
@@ -408,5 +408,40 @@ func TestBulkReviewAction_InvalidAction(t *testing.T) {
 		map[string]any{"action": "delete", "kind": "regroup.multidisc"}, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid action, got %d", w.Code)
+	}
+}
+
+// GET /review/items?limit= is refused, not reinterpreted, when it is not a page
+// size the store will honour. The store treats limit<=0 as a default page of 50,
+// so a client sending 0 for "everything" would get 50 rows and a total that
+// disagrees — the exact silent truncation the replay handler shipped with.
+func TestListReviewItems_RefusesUnboundedOrOversizedLimit(t *testing.T) {
+	s := newTestStore(t)
+	seed(t, s, "regroup.multidisc", "m1")
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+
+	for _, limit := range []string{"0", "-1", "1001", "99999", "all", "1e3"} {
+		t.Run("limit="+limit, func(t *testing.T) {
+			w := doReq(t, h.ListReviewItems, http.MethodGet, "/review/items?limit="+limit, nil, nil)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("limit=%s: code %d, want 400; body %s", limit, w.Code, w.Body.String())
+			}
+			body := decodeBody(t, w)
+			if body["code"] != "REVIEW_LIST_LIMIT_INVALID" {
+				t.Fatalf("limit=%s: code field = %v, want REVIEW_LIST_LIMIT_INVALID", limit, body["code"])
+			}
+		})
+	}
+
+	// The boundaries themselves are accepted, and an absent limit still defaults.
+	for _, q := range []string{"?limit=1", "?limit=1000", ""} {
+		w := doReq(t, h.ListReviewItems, http.MethodGet, "/review/items"+q, nil, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%q: code %d, want 200; body %s", q, w.Code, w.Body.String())
+		}
+	}
+	w := doReq(t, h.ListReviewItems, http.MethodGet, "/review/items", nil, nil)
+	if got := decodeBody(t, w)["limit"]; got != float64(50) {
+		t.Fatalf("default limit echoed as %v, want 50", got)
 	}
 }

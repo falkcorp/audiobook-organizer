@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-09-02
 
@@ -53,6 +53,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -302,11 +303,15 @@ func (h *Handler) ListReviewItems(c *gin.Context) {
 	if status == "all" {
 		status = ""
 	}
+	limit, ok := parseReviewListLimit(c)
+	if !ok {
+		return
+	}
 	filter := database.ReviewFilter{
 		Status: status,
 		Kind:   c.Query("kind"),
 		Search: c.Query("q"),
-		Limit:  atoiDefault(c.Query("limit"), 50),
+		Limit:  limit,
 		Offset: atoiDefault(c.Query("offset"), 0),
 	}
 	items, total, err := h.store.ListReviewItems(filter)
@@ -640,6 +645,51 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 // bulkScanLimit caps the kind-scoped pending fetch. Comfortably exceeds any
 // realistic v1 hold population (intentional holds only, never raw backlogs).
 const bulkScanLimit = 100_000
+
+// Bounds on GET /review/items?limit=. The default is what the handler always
+// used; the ceiling is twice what the largest UI caller (the regroup lane, 500)
+// asks for, and enough for an operator's curl. Anything outside is refused with
+// a 400 and a stable code rather than silently rewritten.
+const (
+	defaultReviewListLimit = 50
+	maxReviewListLimit     = 1000
+	reviewListLimitCode    = "REVIEW_LIST_LIMIT_INVALID"
+)
+
+// parseReviewListLimit reads ?limit= and refuses anything the store would have
+// silently reinterpreted. It returns ok=false after writing the 400.
+//
+// 🔴 WHY REFUSE INSTEAD OF CLAMP. The store treats Limit<=0 as "default page of
+// 50". A client that sends limit=0 meaning "everything" therefore gets 50 rows,
+// a total that says otherwise, and no error — the replay handler in this very
+// package made exactly that mistake and reported a 300-hold queue as 50. A
+// non-numeric limit used to fall to the default the same silent way. Refusing
+// at the edge turns the misunderstanding into a message the caller sees on the
+// first request instead of a page that looks complete and is not.
+func parseReviewListLimit(c *gin.Context) (int, bool) {
+	raw := c.Query("limit")
+	if raw == "" {
+		return defaultReviewListLimit, true
+	}
+	n, err := strconv.Atoi(raw)
+	switch {
+	case err != nil:
+		httputil.RespondWithError(c, http.StatusBadRequest,
+			fmt.Sprintf("limit %q is not an integer", raw), reviewListLimitCode)
+		return 0, false
+	case n <= 0:
+		httputil.RespondWithError(c, http.StatusBadRequest,
+			fmt.Sprintf("limit must be between 1 and %d; %d is not a request for every item — page with offset instead", maxReviewListLimit, n),
+			reviewListLimitCode)
+		return 0, false
+	case n > maxReviewListLimit:
+		httputil.RespondWithError(c, http.StatusBadRequest,
+			fmt.Sprintf("limit must be between 1 and %d, got %d — page with offset instead", maxReviewListLimit, n),
+			reviewListLimitCode)
+		return 0, false
+	}
+	return n, true
+}
 
 func atoiDefault(s string, def int) int {
 	if s == "" {

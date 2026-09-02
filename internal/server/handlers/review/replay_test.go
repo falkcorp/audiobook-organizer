@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/replay_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e3c5a71-9d24-4b60-af18-2c47e0b96d35
 // last-edited: 2026-09-02
 
@@ -7,6 +7,7 @@ package reviewhandler_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -393,5 +394,121 @@ func TestApprove_AlreadyApprovedItem_CanBeReApprovedWithAnExplicitAction(t *test
 	got, _ := s.GetReviewItem(it.ID)
 	if got.Status != database.ReviewStatusApplied {
 		t.Fatalf("status = %q, want applied", got.Status)
+	}
+}
+
+// ═══ REPLAY MUST SEE EVERY APPROVED ITEM, NOT THE FIRST PAGE ═══════════════════
+//
+// The store treats Limit<=0 as a default page of 50. The previous replay passed
+// Limit: 0 believing it meant "all", so a queue of 300 approved holds replayed 50,
+// reported approved_total=50, and looked finished. This fixture is deliberately
+// LARGER than the replay page size (100) AND larger than the store's default page
+// (50), so a handler that reads one page — of either size — cannot pass it.
+const replayFixtureSize = 250
+
+// seedApprovedFixture writes replayFixtureSize approved holds directly through
+// the store (the HTTP approve path would work too, but 250 sync'd writes through
+// gin is a slow way to say "status=approved") and returns their IDs.
+func seedApprovedFixture(t *testing.T, s *database.PebbleStore) map[string]bool {
+	t.Helper()
+	ids := make(map[string]bool, replayFixtureSize)
+	for i := range replayFixtureSize {
+		it := seedAction(t, s, "regroup.multidisc", fmt.Sprintf("m%03d", i), itunesservice.ActionCombine)
+		if _, err := s.SetReviewItemStatus(it.ID, database.ReviewStatusApproved); err != nil {
+			t.Fatalf("approve %s: %v", it.ID, err)
+		}
+		ids[it.ID] = true
+	}
+	return ids
+}
+
+func TestReplayApproved_PaginatesThroughEveryApprovedItemExactlyOnce(t *testing.T) {
+	s := newTestStore(t)
+	want := seedApprovedFixture(t, s)
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+
+	applied := map[string]int{}
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, item database.ReviewItem) error {
+		applied[item.ID]++
+		return nil
+	})
+
+	// The dry run must already report the whole queue, from the store's count.
+	w := doReq(t, h.ReplayApprovedItems, http.MethodPost, "/review/replay-approved", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dry run: code %d body %s", w.Code, w.Body.String())
+	}
+	dry := decodeBody(t, w)
+	if data, ok := dry["data"].(map[string]any); ok {
+		dry = data
+	}
+	if got := dry["approved_total"]; got != float64(replayFixtureSize) {
+		t.Fatalf("dry run approved_total = %v, want %d", got, replayFixtureSize)
+	}
+	if got := dry["would_replay"]; got != float64(replayFixtureSize) {
+		t.Fatalf("dry run would_replay = %v, want %d", got, replayFixtureSize)
+	}
+	if len(applied) != 0 {
+		t.Fatalf("dry run applied %d items", len(applied))
+	}
+
+	data := replayApply(t, h)
+	if got := data["approved_total"]; got != float64(replayFixtureSize) {
+		t.Fatalf("approved_total = %v, want %d", got, replayFixtureSize)
+	}
+	if got := data["applied"]; got != float64(replayFixtureSize) {
+		t.Fatalf("applied = %v, want %d", got, replayFixtureSize)
+	}
+	if got := data["failed"]; got != float64(0) {
+		t.Fatalf("failed = %v, want 0", got)
+	}
+
+	// Every seeded item exactly once — no item skipped by a short walk, no item
+	// repeated by a page overlap.
+	if len(applied) != replayFixtureSize {
+		t.Fatalf("apply handler saw %d distinct items, want %d", len(applied), replayFixtureSize)
+	}
+	for id := range want {
+		if n := applied[id]; n != 1 {
+			t.Fatalf("item %s applied %d times, want exactly 1", id, n)
+		}
+	}
+
+	// And the store agrees: nothing is left approved, everything is applied.
+	if n, err := s.CountReviewItems(database.ReviewStatusApproved); err != nil || n != 0 {
+		t.Fatalf("approved remaining = %d (err %v), want 0", n, err)
+	}
+	if n, err := s.CountReviewItems(database.ReviewStatusApplied); err != nil || n != replayFixtureSize {
+		t.Fatalf("applied count = %d (err %v), want %d", n, err, replayFixtureSize)
+	}
+}
+
+// A canary limit still works on top of the full walk: it caps how many are
+// applied, not how many are counted.
+func TestReplayApproved_CanaryLimitCapsApplyNotTotal(t *testing.T) {
+	s := newTestStore(t)
+	seedApprovedFixture(t, s)
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+
+	ran := 0
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
+		ran++
+		return nil
+	})
+
+	w := doReq(t, h.ReplayApprovedItems, http.MethodPost, "/review/replay-approved",
+		map[string]any{"apply": true, "limit": 7}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("replay: code %d body %s", w.Code, w.Body.String())
+	}
+	data := decodeBody(t, w)
+	if d, ok := data["data"].(map[string]any); ok {
+		data = d
+	}
+	if got := data["approved_total"]; got != float64(replayFixtureSize) {
+		t.Fatalf("approved_total = %v, want %d even under a canary limit", got, replayFixtureSize)
+	}
+	if got := data["applied"]; got != float64(7) || ran != 7 {
+		t.Fatalf("applied = %v / ran = %d, want 7", got, ran)
 	}
 }
