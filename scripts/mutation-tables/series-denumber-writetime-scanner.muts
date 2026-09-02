@@ -1,0 +1,19 @@
+# Mutation table for the scanner's series write-back.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/scanner/ \
+#     --table scripts/mutation-tables/series-denumber-writetime-scanner.muts
+
+# resolveSeriesID strips the number out of the series name; saveBookToDatabase
+# is the only place it can be recorded. Dropping it here deletes it outright.
+M01 position-discarded-instead-of-written-to-book-position | internal/scanner/scanner.go | s/if seriesPos > 0 && book\.Position <= 0 \{\n\t\t\tbook\.Position = seriesPos\n\t\t\}/_ = seriesPos/
+
+M02 existing-position-overwritten | internal/scanner/scanner.go | s/if seriesPos > 0 && book\.Position <= 0 \{/if seriesPos > 0 {/
+
+# The AI-parse path writes the same position onto the row; it must respect a
+# sequence the row already has.
+M03 existing-sequence-overwritten-on-the-ai-parse-path | internal/scanner/ai_parse_async.go | s/if row\.SeriesSequence == nil \{/if true {/
+
+M04 position-discarded-on-the-ai-parse-path | internal/scanner/ai_parse_async.go | s/if pos > 0 \{\n\t\t\t\t\trow\.SeriesSequence = &pos\n\t\t\t\t\}/_ = pos/
