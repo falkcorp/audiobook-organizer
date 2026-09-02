@@ -1,5 +1,5 @@
 // file: internal/metafetch/library_copy_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c2d6b03-7f18-4a54-b3e6-5d0a91c7e482
 // last-edited: 2026-09-02
 
@@ -109,4 +109,52 @@ func TestSyncMetadataToLibraryCopy_LockReadErrorSyncsNothing(t *testing.T) {
 	assert.Nil(t, *written, "fail closed: an unreadable lock set must not overwrite the copy")
 	assert.Equal(t, 0, *authorWrites)
 	assert.Equal(t, 0, *narratorWrites)
+}
+
+// The thirteen work-identity / rating / collection columns that
+// copyMetadataColumns carries for ensureLibraryCopy sit INSIDE the
+// ApplyRespectingLocks body, alongside the columns #3054 guards. This test
+// pins that the two coexist: a lock on the copy is still honoured, and the
+// carried columns still reach the copy in the same write.
+//
+// WHAT IT DOES NOT PROVE. None of the carried columns is lockable today --
+// UserLockableFields has no key for a rating, WorkID, Quantity or
+// VersionNotes -- so this test passes whether the block sits inside
+// copyMetadataColumns or after the guard in the caller. It is here because
+// the block is easy to LOSE, not because its placement is observable: the
+// 2026-09-02 rebase onto #3054 rewrote this exact region and git's textual
+// auto-merge dropped all thirteen assignments with no conflict marker. A
+// test that fails when they go missing is the cheap defence against the
+// next merge doing it quietly.
+func TestSyncMetadataToLibraryCopy_CarriesRatingsAndWorkIDAlongsideALock(t *testing.T) {
+	store, written, _, _ := libCopySyncFixture(
+		func(bookID string) ([]database.MetadataFieldState, error) {
+			if bookID != "copy" {
+				return nil, nil
+			}
+			return []database.MetadataFieldState{
+				{BookID: bookID, Field: database.FieldKeyTitle, OverrideLocked: true},
+			}, nil
+		})
+	svc := NewService(store)
+	original, libCopy := libCopyPair()
+
+	workID := "work-42"
+	rating := 4.5
+	qty := 3
+	original.WorkID = &workID
+	original.UserRatingOverall = &rating
+	original.Quantity = &qty
+
+	svc.syncMetadataToLibraryCopy(original, libCopy)
+
+	require.NotNil(t, *written)
+	assert.Equal(t, "My Title", (*written).Title, "the copy's locked title was overwritten")
+
+	require.NotNil(t, (*written).WorkID, "WorkID was not carried to the library copy")
+	assert.Equal(t, workID, *(*written).WorkID)
+	require.NotNil(t, (*written).UserRatingOverall, "the user's own rating was not carried to the library copy")
+	assert.Equal(t, rating, *(*written).UserRatingOverall)
+	require.NotNil(t, (*written).Quantity, "Quantity was not carried to the library copy")
+	assert.Equal(t, qty, *(*written).Quantity)
 }
