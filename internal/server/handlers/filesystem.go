@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -18,12 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
@@ -298,28 +296,20 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 			if scanErr == nil {
 				if len(books) > 0 {
 					_ = scanner.ProcessBooks(books, nil)
-					// h.autoOrganize and h.rootDir are snapshot values from construction time.
-					// organizer.NewOrganizer still reads config.AppConfig — these two sources
-					// must be kept in sync by the caller (wireHandlers passes them consistently).
-					if h.autoOrganize && h.rootDir != "" {
-						org := organizer.NewOrganizer(&config.AppConfig)
-						for _, b := range books {
-							dbBook, err := h.store.GetBookByFilePath(b.FilePath)
-							if err != nil || dbBook == nil {
-								continue
-							}
-							newPath, _, err := org.OrganizeBook(dbBook)
-							if err != nil {
-								continue
-							}
-							if newPath != dbBook.FilePath {
-								dbBook.FilePath = newPath
-								scanner.ApplyOrganizedFileMetadata(dbBook, newPath)
-								_, _ = h.store.UpdateBook(dbBook.ID, dbBook)
-							}
-						}
-					} else if h.autoOrganize && h.rootDir == "" {
-						slog.Warn("auto-organize enabled but root_dir not set")
+					// Auto-organize is NOT performed on this fallback. Until
+					// 2026-09-02 it ran its own inline loop here -- OrganizeBook
+					// then UpdateBook of FilePath -- which was a fourth copy of
+					// the organize path and, like the other three, never wrote
+					// or repointed a single book_file row: the book pointed at
+					// the library copy while its rows still named the source.
+					// The row-writing path is library.organize
+					// (Service.CommitLanding -> CreateOrganizedVersion), and it
+					// needs the operation registry this branch exists to do
+					// without. Decline loudly, the way enqueueImportOrganize
+					// below already does, rather than move audio with no rows.
+					if h.autoOrganize {
+						slog.Warn("folder auto-organize skipped: the operation registry is unavailable and the synchronous fallback does not organize; run library.organize once the registry is up",
+							"folder_id", folder.ID, "path", folder.Path, "books", len(books))
 					}
 				}
 				folder.BookCount = len(books)

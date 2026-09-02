@@ -1,5 +1,5 @@
 // file: internal/organizer/unit_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-09-02
 
@@ -1336,7 +1336,7 @@ func TestPreviewRename_Success(t *testing.T) {
 
 func TestOrganizeBookDirectory_NilBook_Unit(t *testing.T) {
 	org := &Organizer{config: &config.Config{}}
-	_, _, err := org.OrganizeBookDirectory(nil, segsFor("/a.m4b"))
+	_, _, err := organizeDirTriple(org, nil, segsFor("/a.m4b"))
 	if err == nil {
 		t.Fatal("expected error for nil book")
 	}
@@ -1345,7 +1345,7 @@ func TestOrganizeBookDirectory_NilBook_Unit(t *testing.T) {
 func TestOrganizeBookDirectory_EmptySegments_Unit(t *testing.T) {
 	org := &Organizer{config: &config.Config{}}
 	book := &database.Book{Title: "Test", Author: &database.Author{Name: "A"}}
-	_, _, err := org.OrganizeBookDirectory(book, nil)
+	_, _, err := organizeDirTriple(org, book, nil)
 	if err == nil {
 		t.Fatal("expected error for empty segments")
 	}
@@ -1436,7 +1436,7 @@ func TestOrganizeBookDirectory_CopyStrategy(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(f1, f2))
+	targetDir, pathMap, err := organizeDirTriple(org, book, segsFor(f1, f2))
 	if err != nil {
 		t.Fatalf("OrganizeBookDirectory: %v", err)
 	}
@@ -1482,7 +1482,7 @@ func TestOrganizeBookDirectory_AlreadyAtTarget(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	dir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(f1))
+	dir, pathMap, err := organizeDirTriple(org, book, segsFor(f1))
 	if err != nil {
 		t.Fatalf("OrganizeBookDirectory: %v", err)
 	}

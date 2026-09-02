@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.37.1
+// version: 1.38.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-02
 
@@ -679,7 +679,17 @@ func (o *Organizer) PlanFilePaths(book *database.Book, files []database.BookFile
 
 // OrganizeBookDirectory organizes a multi-file book (directory) by copying each
 // of its files into the target directory generated from the book's metadata.
-// Returns the target directory path and a map of old→new file paths.
+// Returns the Landing: the target directory (Path), the old->new map of every
+// planned file (Files), and the files this call wrote (Created).
+//
+// It returns the full *Landing rather than the (dir, map, err) triple it
+// returned until 2026-09-02 because that triple DROPPED Created: the metafetch
+// and iTunes callers that consumed it could not roll back the copies they had
+// just made when their own row writes failed, so a failed CreateBookFile left
+// orphan audio in the library and (in metafetch) demoted the original anyway.
+// Every caller that moves audio now gets the same three facts the organize
+// service's CreateOrganizedVersion gets, so it can point rows at landed paths
+// only and unlink created files only.
 //
 // It takes []database.BookFile rather than the []string of paths it took until
 // 2026-08-15 because a path string carries no track number. This function used
@@ -691,20 +701,29 @@ func (o *Organizer) PlanFilePaths(book *database.Book, files []database.BookFile
 // TrackNumber is set and disagrees with alphabetical order the two paths would
 // still land on different names. Both now run planTargetPaths over the same
 // rows, so they cannot disagree.
-func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
-	landing, err := o.organizeBookDirectory(book, files)
+func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (*Landing, error) {
+	return o.organizeBookDirectory(book, files)
+}
+
+// OrganizeSingleFile wraps OrganizeBook in a Landing. OrganizeBook's mode is
+// "" when it wrote nothing -- the target was already this file (same inode, or
+// a previous copy this book's row owns) -- so Created is populated only when a
+// mode names the transfer that happened. A rollback that removed the target in
+// the mode=="" case would delete the earlier organized copy.
+func (o *Organizer) OrganizeSingleFile(book *database.Book) (*Landing, error) {
+	newPath, mode, err := o.OrganizeBook(book)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	return landing.Path, landing.Files, nil
+	l := &Landing{Path: newPath}
+	if mode != "" {
+		l.Created = []string{newPath}
+	}
+	return l, nil
 }
 
 // organizeBookDirectory is OrganizeBookDirectory's implementation, returning
 // the full Landing: which files it wrote (Created) on top of the landed map.
-// The exported wrapper keeps the (dir, map, err) shape for the metafetch and
-// iTunes callers that only need the map; Service.OrganizeDirectoryBook takes
-// the Landing so that CreateOrganizedVersion can point rows at landed paths
-// only and roll back created files only.
 //
 // A directory landing is ALL OR NOTHING. Every planned file (planTargetPaths
 // has already dropped rows flagged Missing) must land, or the whole book fails

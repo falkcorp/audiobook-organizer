@@ -1,5 +1,5 @@
 // file: internal/organizer/finalize_exclusive_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b2e4f61-9d3a-4c07-b5e8-2f6a1c9d7e43
 // last-edited: 2026-09-02
 
@@ -155,7 +155,7 @@ func TestOrganizeBookDirectory_ConcurrentSameTarget_NeverRecordsTheOtherBooksByt
 				book := &database.Book{ID: "book-" + string(rune('a'+i)), Title: "Same Title", Format: "m4b",
 					Author: &database.Author{Name: "Same Author"}}
 				start.Wait()
-				_, pm, err := org.OrganizeBookDirectory(book, segsFor(srcs[i]))
+				_, pm, err := organizeDirTriple(org, book, segsFor(srcs[i]))
 				results[i] = result{pm, err}
 			}()
 		}
@@ -226,7 +226,7 @@ func TestOrganizeBookDirectory_ConcurrentSameTargetDirectory_NeverShared(t *test
 				book := &database.Book{ID: "book-" + string(rune('a'+i)), Title: "Same Title", Format: "m4b",
 					Author: &database.Author{Name: "Same Author"}}
 				start.Wait()
-				dir, pm, err := org.OrganizeBookDirectory(book, segsFor(srcs[i]...))
+				dir, pm, err := organizeDirTriple(org, book, segsFor(srcs[i]...))
 				results[i] = result{dir, pm, err}
 			}()
 		}
@@ -313,7 +313,7 @@ func TestOrganizeBookDirectory_RaceBranch_DoesNotAdoptAnUnprovenOccupant(t *test
 	require.NoError(t, os.MkdirAll(filepath.Dir(dst1), 0755))
 	require.NoError(t, os.Symlink(filepath.Join(rootDir, "does-not-exist"), dst1))
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcs...))
+	targetDir, pathMap, err := organizeDirTriple(org, book, segsFor(srcs...))
 	require.Error(t, err, "a directory landing with an unproven occupant must fail the whole book")
 	assert.Contains(t, err.Error(), "did not land 1 of 2")
 	assert.Contains(t, err.Error(), srcs[1])

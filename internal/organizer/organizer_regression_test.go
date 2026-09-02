@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer_regression_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e4f5a6b7-c8d9-e0f1-a2b3-organizer-reg
 // last-edited: 2026-09-02
 
@@ -84,7 +84,7 @@ func TestOrganizeBookDirectory_AllFilesMissing_IsAnError(t *testing.T) {
 		"/nonexistent/ch03.mp3",
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(segmentPaths...))
+	targetDir, pathMap, err := organizeDirTriple(org, book, segsFor(segmentPaths...))
 
 	require.Error(t, err, "organizing a book whose every source has vanished must not report success")
 	assert.Contains(t, err.Error(), "Ghost Book", "the error must name the book")
@@ -126,7 +126,7 @@ func TestOrganizeBookDirectory_PartialFilesMissing(t *testing.T) {
 		filepath.Join(importDir, "ch03.mp3"), // missing
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(segmentPaths...))
+	targetDir, pathMap, err := organizeDirTriple(org, book, segsFor(segmentPaths...))
 	require.Error(t, err, "two rows say present for files that are gone; the book must not land as one third of itself")
 	assert.Contains(t, err.Error(), "did not land 2 of 3")
 	assert.Contains(t, err.Error(), "re-scan")
@@ -148,7 +148,7 @@ func TestOrganizeBookDirectory_PartialFilesMissing(t *testing.T) {
 	segs := segsFor(segmentPaths...)
 	segs[0].Missing = true
 	segs[2].Missing = true
-	targetDir, pathMap, err = org.OrganizeBookDirectory(book, segs)
+	targetDir, pathMap, err = organizeDirTriple(org, book, segs)
 	require.NoError(t, err)
 	assert.NotEmpty(t, targetDir)
 	assert.Len(t, pathMap, 1, "only the one present file is planned and lands")
@@ -184,12 +184,12 @@ func TestOrganizeBookDirectory_DstAlreadyExists(t *testing.T) {
 	}
 
 	// First organize
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPath))
+	targetDir, pathMap, err := organizeDirTriple(org, book, segsFor(srcPath))
 	require.NoError(t, err)
 	require.Len(t, pathMap, 1)
 
 	// Second organize of same book — dst already exists
-	targetDir2, pathMap2, err := org.OrganizeBookDirectory(book, segsFor(srcPath))
+	targetDir2, pathMap2, err := organizeDirTriple(org, book, segsFor(srcPath))
 	require.NoError(t, err)
 	assert.Equal(t, targetDir, targetDir2, "target dir should be the same")
 	assert.Len(t, pathMap2, 1, "dst-exists should still be included in pathMap")
@@ -216,7 +216,7 @@ func TestOrganizeBookDirectory_EmptySegments(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	_, _, err := org.OrganizeBookDirectory(book, nil)
+	_, _, err := organizeDirTriple(org, book, nil)
 	assert.Error(t, err, "empty segment list should error")
 }
 
@@ -231,7 +231,7 @@ func TestOrganizeBookDirectory_NilBook(t *testing.T) {
 	}
 	org := NewOrganizer(cfg)
 
-	_, _, err := org.OrganizeBookDirectory(nil, segsFor("/some/file.m4b"))
+	_, _, err := organizeDirTriple(org, nil, segsFor("/some/file.m4b"))
 	assert.Error(t, err, "nil book should error")
 }
 
@@ -262,7 +262,7 @@ func TestOrganizeBookDirectory_CopyPreservesContent(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(
+	_, pathMap, err := organizeDirTriple(org, book, segsFor(
 		filepath.Join(importDir, "ch01.mp3"),
 		filepath.Join(importDir, "ch02.mp3"),
 	))
@@ -309,7 +309,7 @@ func TestOrganizeBookDirectory_SrcEqualsDst(t *testing.T) {
 	filePath := filepath.Join(targetDir, "SamePlace.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0644))
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(filePath))
+	_, pathMap, err := organizeDirTriple(org, book, segsFor(filePath))
 	require.NoError(t, err)
 	assert.Len(t, pathMap, 1, "src==dst should still be included in pathMap")
 	assert.Equal(t, filePath, pathMap[filePath])
@@ -350,7 +350,7 @@ func TestOrganizeBookDirectory_AppliesFileNamingPattern(t *testing.T) {
 		Author: &database.Author{Name: "Isaac Asimov"},
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	targetDir, pathMap, err := organizeDirTriple(org, book, segsFor(srcPaths...))
 	require.NoError(t, err)
 	require.Len(t, pathMap, 3)
 
@@ -403,7 +403,7 @@ func TestOrganizeBookDirectory_TracklessPatternDoesNotCollapseBook(t *testing.T)
 		Author: &database.Author{Name: "Isaac Asimov"},
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	targetDir, pathMap, err := organizeDirTriple(org, book, segsFor(srcPaths...))
 	require.NoError(t, err)
 	require.Len(t, pathMap, 12, "every file must be planned")
 
@@ -455,7 +455,7 @@ func TestOrganizeBookDirectory_PathTraversalPrevented(t *testing.T) {
 		Author: &database.Author{Name: "../../../root"},
 	}
 
-	targetDir, _, err := org.OrganizeBookDirectory(book, segsFor(
+	targetDir, _, err := organizeDirTriple(org, book, segsFor(
 		filepath.Join(importDir, "file.m4b"),
 	))
 
@@ -544,7 +544,7 @@ func adoptionFixture(t *testing.T) (org *Organizer, book *database.Book, srcPath
 		Author: &database.Author{Name: "Author"},
 	}
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	_, pathMap, err := organizeDirTriple(org, book, segsFor(srcPaths...))
 	require.NoError(t, err)
 	require.Len(t, pathMap, 2, "first organize should place both segments")
 
@@ -580,7 +580,7 @@ func TestOrganizeBookDirectory_DstSameSizeDifferentContent_NotAdopted(t *testing
 	require.NotEqual(t, srcBytes, occupant)
 	require.NoError(t, os.WriteFile(dstPaths[1], occupant, 0644))
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	_, pathMap, err := organizeDirTriple(org, book, segsFor(srcPaths...))
 	require.Error(t, err, "an occupant not proven to be this book's fails the whole book — a version row must never claim a directory it shares")
 	assert.Contains(t, err.Error(), "not proven to be this book's")
 	assert.Empty(t, pathMap,
@@ -616,7 +616,7 @@ func TestOrganizeBookDirectory_DstSameSizeSameContent_Adopted(t *testing.T) {
 			"the rewritten destination must be a different inode, else SameFile adopts it and the content check is untested")
 	}
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	_, pathMap, err := organizeDirTriple(org, book, segsFor(srcPaths...))
 	require.NoError(t, err)
 
 	assert.Len(t, pathMap, 2, "byte-identical destinations must still be adopted")
@@ -636,7 +636,7 @@ func TestOrganizeBookDirectory_DstUnreadable_NotAdopted(t *testing.T) {
 	require.NoError(t, os.Chmod(dstPaths[1], 0000))
 	t.Cleanup(func() { _ = os.Chmod(dstPaths[1], 0644) })
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	_, pathMap, err := organizeDirTriple(org, book, segsFor(srcPaths...))
 	require.Error(t, err, "an unreadable destination is an unknown, and the check must fail closed — for the whole book")
 	assert.Contains(t, err.Error(), "not proven to be this book's")
 	assert.Empty(t, pathMap)

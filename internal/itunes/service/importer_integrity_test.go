@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_integrity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c1d7e2f-3a4b-4c5d-8e6f-0a1b2c3d4e5f
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 //
 // Integrity-finding regression tests from the 2026-07-17 multi-discipline
 // review:
@@ -20,15 +20,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -179,31 +181,59 @@ func TestSoftDeleteBlockedBook_WriteFails_ReturnsFalse(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // w8MultiFileOrganizer is a BookOrganizer double whose directory organize
-// succeeds with a fixed path map. OrganizeBook must never be called for a
-// multi-file book.
+// succeeds with a fixed landing. OrganizeSingleFile must never be called for a
+// multi-file book. When createUnder is set the double really writes the
+// organized copies there, so the rollback under test has files to remove.
 type w8MultiFileOrganizer struct {
-	mu       sync.Mutex
-	dirCalls int
+	mu          sync.Mutex
+	dirCalls    int
+	createUnder string
 }
 
-func (o *w8MultiFileOrganizer) OrganizeBook(book *database.Book) (string, string, error) {
-	return "", "", fmt.Errorf("OrganizeBook must not be called for a multi-file book")
+func (o *w8MultiFileOrganizer) OrganizeSingleFile(book *database.Book) (*organizer.Landing, error) {
+	return nil, fmt.Errorf("OrganizeSingleFile must not be called for a multi-file book")
 }
 
-func (o *w8MultiFileOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
+func (o *w8MultiFileOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (*organizer.Landing, error) {
 	o.mu.Lock()
 	o.dirCalls++
 	o.mu.Unlock()
-	pathMap := make(map[string]string, len(files))
-	for _, bf := range files {
-		pathMap[bf.FilePath] = "/organized/Multi Book/" + filepath.Base(bf.FilePath)
+	dir := "/organized/Multi Book"
+	if o.createUnder != "" {
+		dir = filepath.Join(o.createUnder, "Multi Book")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
 	}
-	return "/organized/Multi Book", pathMap, nil
+	landing := &organizer.Landing{Path: dir, Files: make(map[string]string, len(files))}
+	for _, bf := range files {
+		dst := filepath.Join(dir, filepath.Base(bf.FilePath))
+		landing.Files[bf.FilePath] = dst
+		landing.Created = append(landing.Created, dst)
+		if o.createUnder != "" {
+			if err := os.WriteFile(dst, []byte("organized copy of "+bf.FilePath), 0o644); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return landing, nil
 }
 
 var _ BookOrganizer = (*w8MultiFileOrganizer)(nil)
 
-func TestOrganizeImportedBooks_MultiFileUpdateBookFailure_ReconcileHintNoDirRollback(t *testing.T) {
+// TestOrganizeImportedBooks_MultiFileUpdateBookFailure_RollsBackRowsAndCopies
+// pins the rollback contract for the iTunes organize phase: when the Book
+// write that would make the organized copy reachable fails, the book_file
+// rows already repointed at the copies go back to their source paths, the
+// copies the organize CREATED are removed from disk, and the in-memory
+// FilePath is reset. Until 2026-09-02 this branch left the rows pointing at
+// the copies and logged a "reconcile" hint instead.
+func TestOrganizeImportedBooks_MultiFileUpdateBookFailure_RollsBackRowsAndCopies(t *testing.T) {
+	root := t.TempDir()
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = root
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+
 	imported := "imported"
 	src := "/mnt/itunes/Library.xml"
 	book := database.Book{
@@ -217,37 +247,54 @@ func TestOrganizeImportedBooks_MultiFileUpdateBookFailure_ReconcileHintNoDirRoll
 		{ID: "bf-1", BookID: "mfb-1", FilePath: "/old/common/a.m4b"},
 		{ID: "bf-2", BookID: "mfb-1", FilePath: "/old/common/b.m4b"},
 	}
+	organizedDir := filepath.Join(root, "Multi Book")
 
 	m := dbmocks.NewMockStore(t)
 	m.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{book.Core()}, nil)
 	b := book
 	m.EXPECT().GetBookByID("mfb-1").Return(&b, nil)
 	m.EXPECT().GetBookFiles("mfb-1").Return(files, nil)
-	// organizeMultiFileBook commits the per-file rows BEFORE the Book write.
-	m.EXPECT().UpdateBookFile("bf-1", mock.Anything).Return(nil).Once()
-	m.EXPECT().UpdateBookFile("bf-2", mock.Anything).Return(nil).Once()
-	// The Book write fails → the C-7 branch under test.
+	// Forward: both rows repointed at the copies, BEFORE the Book write.
+	m.EXPECT().UpdateBookFile("bf-1", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == filepath.Join(organizedDir, "a.m4b")
+	})).Return(nil).Once()
+	m.EXPECT().UpdateBookFile("bf-2", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == filepath.Join(organizedDir, "b.m4b")
+	})).Return(nil).Once()
+	// The Book write fails -> rollback.
 	m.EXPECT().UpdateBook("mfb-1", mock.Anything).Return(nil, errors.New("pebble write stall")).Once()
+	// Rollback: both rows restored to their SOURCE paths.
+	m.EXPECT().UpdateBookFile("bf-1", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == "/old/common/a.m4b"
+	})).Return(nil).Once()
+	m.EXPECT().UpdateBookFile("bf-2", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == "/old/common/b.m4b"
+	})).Return(nil).Once()
 
-	org := &w8MultiFileOrganizer{}
+	org := &w8MultiFileOrganizer{createUnder: root}
 	imp := &Importer{
 		store:                       m,
 		organizerFactory:            func() BookOrganizer { return org },
 		organizeConcurrencyOverride: 1,
 	}
 	status := &itunesImportStatus{}
-	imp.organizeImportedBooks(context.Background(), status, logger.New("test-c7"))
+	imp.organizeImportedBooks(context.Background(), status, logger.New("test-rollback"))
 
 	require.Equal(t, 1, org.dirCalls, "multi-file book must route through OrganizeBookDirectory")
 	require.Equal(t, 1, status.Failed, "the UpdateBook failure must be recorded as a failure")
 	require.NotEmpty(t, status.Errors)
 	msg := status.Errors[0]
-	// The reconcile hint must name every committed book_file row and both
-	// path sides of the divergence.
-	assert.Contains(t, msg, "reconcile", "must carry a reconcile hint")
-	assert.Contains(t, msg, "bf-1")
-	assert.Contains(t, msg, "bf-2")
-	assert.Contains(t, msg, "/old/common", "must name the stale book-row path")
-	assert.Contains(t, msg, "/organized/Multi Book", "must name the committed organized path")
-	assert.True(t, strings.Contains(msg, "CRITICAL"), "must be loud: %s", msg)
+	assert.Contains(t, msg, "rolled back", "must say the organize was undone: %s", msg)
+	assert.Contains(t, msg, "/old/common", "must name the path the book was restored to: %s", msg)
+
+	// The copies this organize created are gone, and so is the now-empty
+	// landing directory.
+	for _, f := range files {
+		_, err := os.Stat(filepath.Join(organizedDir, filepath.Base(f.FilePath)))
+		assert.True(t, os.IsNotExist(err), "created copy %s must be removed on rollback (stat err=%v)", filepath.Base(f.FilePath), err)
+	}
+	_, err := os.Stat(organizedDir)
+	assert.True(t, os.IsNotExist(err), "empty landing dir must be removed on rollback (stat err=%v)", err)
+	assert.Equal(t, "/old/common", b.FilePath, "the hydrated book's FilePath must be reset to the source")
+	assert.Equal(t, "organized", *b.LibraryState, "LibraryState in memory is whatever the failed write attempted; it is never persisted")
 }

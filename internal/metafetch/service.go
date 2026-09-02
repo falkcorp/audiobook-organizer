@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.12.0
+// version: 5.13.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-02
 
@@ -50,6 +50,13 @@ type forwardedStores interface {
 	database.UserPreferenceStore
 	// newPathOrganizer, for computing an organized destination path.
 	organizer.OrganizerStore
+	// organizer.NewService, for the organize service ensureLibraryCopy routes
+	// a protected book's library copy through (OrganizeOneBook +
+	// CreateOrganizedVersion). Adds six methods over OrganizerStore's four
+	// (GetAllBooksCore, DeleteBook, BatchCreateBookFiles, CreateOperationChange,
+	// SaveOperationParams, DeleteOperationState); every store handed to
+	// NewService already had them.
+	organizer.Store
 }
 
 // metadataCacheStore is the per-book candidate cache in cache.go.
@@ -169,6 +176,11 @@ type Service struct {
 	chainMu       sync.Mutex
 	cachedChain   []metadata.MetadataSource
 	cachedChainFP string
+
+	// The organize service ensureLibraryCopy routes through, built on first
+	// use by libraryOrganizeService.
+	organizeOnce sync.Once
+	organizeSvc  *organizer.Service
 }
 
 type FetchMetadataResponse struct {

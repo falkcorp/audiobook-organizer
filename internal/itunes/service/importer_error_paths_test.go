@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
 // last-edited: 2026-09-02
 
@@ -30,6 +30,7 @@ import (
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -570,7 +571,7 @@ func TestLinkAsVersion_ExistingHasNoVGID_CreatesVGID(t *testing.T) {
 func TestOrganizeOneBook_NilBook_Error(t *testing.T) {
 	imp := newTestImporter()
 	log := logger.New("test")
-	err := imp.organizeOneBook(nil, log)
+	_, err := imp.organizeOneBook(nil, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil")
 }
@@ -583,17 +584,17 @@ func TestOrganizeOneBook_NoFactory_Error(t *testing.T) {
 	imp := &Importer{organizerFactory: nil}
 	log := logger.New("test")
 	book := &database.Book{ID: "b1", Title: "Some Book", FilePath: "/mnt/books/b.m4b"}
-	err := imp.organizeOneBook(book, log)
+	_, err := imp.organizeOneBook(book, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured")
 }
 
 // ---------------------------------------------------------------------------
 // organizeOneBook — multi-file (merged) book routes to OrganizeBookDirectory
-// instead of the single-file OrganizeBook path (CONS-FRAG-2).
+// instead of the single-file OrganizeSingleFile path (CONS-FRAG-2).
 // ---------------------------------------------------------------------------
 
-// fakeDirOrganizer is a minimal BookOrganizer whose OrganizeBook always fails
+// fakeDirOrganizer is a minimal BookOrganizer whose OrganizeSingleFile always fails
 // (mirroring the real Organizer's directory-path refusal) and whose
 // OrganizeBookDirectory succeeds, recording the segment paths it was called
 // with so the test can assert routing.
@@ -604,17 +605,17 @@ type fakeDirOrganizer struct {
 	pathMap         map[string]string
 }
 
-func (f *fakeDirOrganizer) OrganizeBook(book *database.Book) (string, string, error) {
-	return "", "", fmt.Errorf("file_path %s is a directory but single-file organize was requested", book.FilePath)
+func (f *fakeDirOrganizer) OrganizeSingleFile(book *database.Book) (*organizer.Landing, error) {
+	return nil, fmt.Errorf("file_path %s is a directory but single-file organize was requested", book.FilePath)
 }
 
-func (f *fakeDirOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
+func (f *fakeDirOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (*organizer.Landing, error) {
 	f.calledDirectory = true
 	f.segmentPaths = make([]string, 0, len(files))
 	for _, bf := range files {
 		f.segmentPaths = append(f.segmentPaths, bf.FilePath)
 	}
-	return f.targetDir, f.pathMap, nil
+	return &organizer.Landing{Path: f.targetDir, Files: f.pathMap}, nil
 }
 
 func TestOrganizeOneBook_MultiFile_RoutesToOrganizeBookDirectory(t *testing.T) {
@@ -644,8 +645,10 @@ func TestOrganizeOneBook_MultiFile_RoutesToOrganizeBookDirectory(t *testing.T) {
 	imp.organizerFactory = func() BookOrganizer { return fake }
 
 	log := logger.New("test")
-	err := imp.organizeOneBook(book, log)
+	landing, err := imp.organizeOneBook(book, log)
 	require.NoError(t, err)
+	require.NotNil(t, landing)
+	assert.Equal(t, pathMap, landing.Files, "the caller must get the landing's file map back for rollback")
 
 	assert.True(t, fake.calledDirectory, "expected OrganizeBookDirectory to be called for a multi-file book")
 	assert.ElementsMatch(t, []string{files[0].FilePath, files[1].FilePath}, fake.segmentPaths)
@@ -654,7 +657,7 @@ func TestOrganizeOneBook_MultiFile_RoutesToOrganizeBookDirectory(t *testing.T) {
 
 // TestOrganizeOneBook_SingleFile_StillUsesOrganizeBook verifies that this
 // change is strictly additive: books with 0 or 1 BookFile continue to use
-// the existing single-file OrganizeBook path unchanged.
+// the existing single-file OrganizeSingleFile path unchanged.
 func TestOrganizeOneBook_SingleFile_StillUsesOrganizeBook(t *testing.T) {
 	book := &database.Book{ID: "book-single", Title: "Single File Book", FilePath: "/mnt/books/imported/single.m4b"}
 	files := []database.BookFile{
@@ -670,9 +673,9 @@ func TestOrganizeOneBook_SingleFile_StillUsesOrganizeBook(t *testing.T) {
 	imp.organizerFactory = func() BookOrganizer { return fake }
 
 	log := logger.New("test")
-	err := imp.organizeOneBook(book, log)
+	_, err := imp.organizeOneBook(book, log)
 
-	// The fake's OrganizeBook always errors (mirroring the real directory
+	// The fake's OrganizeSingleFile always errors (mirroring the real directory
 	// refusal); a single-file book must still hit that path, so the error
 	// must propagate and OrganizeBookDirectory must never be called.
 	require.Error(t, err)

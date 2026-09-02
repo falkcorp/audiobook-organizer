@@ -1,5 +1,5 @@
 // file: internal/server/batch_save_op.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-09-02
 //
@@ -149,9 +149,11 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// Organize. Still under the same path lock: organizing MOVES the file,
 				// so releasing between the write and the move would reopen the race.
 				if p.Organize {
+					// Re-load by ID, not by the FilePath captured above: the
+					// write-back may have renamed the file, and a FilePath is
+					// not durable across that boundary.
 					book, _ = store.GetBookByID(id)
 					if book != nil {
-						oldPath := book.FilePath
 						// OrganizeOneBook owns the in-place / directory / single-file
 						// decision. This op used to carry its own copy of it, which
 						// had drifted from the worker loop's; see OrganizeOneBook.
@@ -159,8 +161,23 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 						if orgErr != nil {
 							detail := orgErr.Error()
 							_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
-						} else if landing.Path != "" && landing.Path != oldPath {
-							organized.Add(1)
+						} else {
+							// CommitLanding is the row-writing half of an organize:
+							// the version row and its book_file rows at the landed
+							// paths for an out-of-root book, the stamp for an
+							// in-place one. Until 2026-09-02 this op stopped at
+							// OrganizeOneBook, which only moves files, so every
+							// book it organized was copied into the library with
+							// NOTHING written to the database -- audio with no
+							// row, and the next organize collided with it as
+							// _copy1. The op counted them as organized anyway.
+							outcome, _, commitErr := s.organizeService.CommitLanding(book, landing, opsregistry.ReporterOpID(reporter), log2)
+							if commitErr != nil {
+								detail := commitErr.Error()
+								_ = progress.Log("warn", fmt.Sprintf("organize failed for %s: files were rolled back", book.Title), &detail)
+							} else if outcome != organizer.LandingUnchanged {
+								organized.Add(1)
+							}
 						}
 					}
 				}
