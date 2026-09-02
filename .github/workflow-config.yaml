@@ -1,5 +1,5 @@
 # file: .github/workflow-config.yaml
-# version: 2.0.0
+# version: 2.1.0
 # guid: e5f6a7b8-c9d0-1234-ef56-789012345678
 
 # Modern Workflow Configuration
@@ -8,9 +8,7 @@
 build:
   # Language version matrices
   go_versions:
-    - '1.22'
-    - '1.23'
-    - '1.24'
+    - '1.27'
 
   python_versions:
     - '3.13'
@@ -43,7 +41,7 @@ repositories:
     url: 'https://github.com/jdfalk/gcommon'
     sync_enabled: true
     custom_build_config:
-      go_versions: ['1.24']
+      go_versions: ['1.27']
       enable_protobuf: true
       enable_docker: true
 
@@ -51,7 +49,7 @@ repositories:
     url: 'https://github.com/jdfalk/subtitle-manager'
     sync_enabled: true
     custom_build_config:
-      go_versions: ['1.24']
+      go_versions: ['1.27']
       enable_protobuf: true
       enable_docker: true
 
@@ -59,7 +57,7 @@ repositories:
     url: 'https://github.com/jdfalk/audiobook-organizer'
     sync_enabled: true
     custom_build_config:
-      go_versions: ['1.24']
+      go_versions: ['1.27']
       enable_protobuf: false
       enable_docker: true
 

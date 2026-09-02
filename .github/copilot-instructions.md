@@ -1,7 +1,7 @@
 <!-- file: .github/copilot-instructions.md -->
-<!-- version: 4.2.0 -->
+<!-- version: 4.2.1 -->
 <!-- guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a -->
-<!-- last-edited: 2026-07-21 -->
+<!-- last-edited: 2026-09-01 -->
 
 # Audiobook Organizer — Additional Copilot Context
 
@@ -13,7 +13,7 @@ For full project context see **CLAUDE.md** at the repo root.
 
 ## Project overview
 
-Go 1.24 backend (Gin) + React 18/TypeScript frontend (Material UI).
+Go 1.27 backend (Gin) + React 18/TypeScript frontend (Material UI).
 DB: PebbleDB (primary), NutsDB (activity log). SQLite removed Jun 2026.
 Integration: Open Library, AcoustID fingerprinting, OpenAI batch API.
 
