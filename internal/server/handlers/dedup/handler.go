@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-02
 
@@ -439,12 +439,19 @@ func (h *Handler) GetDedupCandidateBreakdown(c *gin.Context) {
 // Response:
 //
 //	{
-//	  "inspected":   N,   // total pending candidates examined
-//	  "skipped":     N,   // pre-T015 rows with no stored signals
-//	  "changed":     N,   // rows whose band or score changed
-//	  "applied":     bool,
-//	  "band_deltas": { "HIGH→CERTAIN": 3, ... }
+//	  "inspected":    N,   // total pending candidates examined
+//	  "skipped":      N,   // pre-T015 rows with no stored signals
+//	  "changed":      N,   // rows whose band or score changed
+//	  "written":      N,   // changed rows the store confirmed it wrote
+//	  "write_errors": N,   // changed rows it could NOT write (see below)
+//	  "applied":      bool,
+//	  "band_deltas":  { "HIGH→CERTAIN": 3, ... }
 //	}
+//
+// Returns 500 when any changed row could not be written back: a re-band that
+// only partly landed leaves the rest on the previous ladder's band, and this
+// endpoint is the remedy other failures point at, so it must not report that
+// as success.
 //
 // Returns 503 when the dedup engine is unavailable.
 func (h *Handler) RescoreDedupCandidates(c *gin.Context) {
@@ -462,6 +469,23 @@ func (h *Handler) RescoreDedupCandidates(c *gin.Context) {
 	result, err := h.dedupEngine.Rescore(c.Request.Context(), body.Apply)
 	if err != nil {
 		httputil.InternalError(c, "rescore failed", err)
+		return
+	}
+	// A partial write-back is a FAILURE, not a 200 with a footnote. Rescore
+	// returns a nil error when some rows could not be re-banded (see
+	// RescoreResult.WriteErrors), and those rows still carry the previous
+	// ladder's band — which AutoResolveCertain then acts on. This endpoint is
+	// what every partial-re-band message tells the operator to run, so
+	// answering 200 here is the difference between "the remedy worked" and
+	// "the remedy silently did half the job".
+	if result.WriteErrors > 0 {
+		// The message carries the counts, not just the log line: this is the
+		// endpoint an operator reaches for AFTER something else already told
+		// them the re-band did not finish, so "500 rescore incomplete" with
+		// the numbers only in journalctl would restart the same guessing game.
+		httputil.RespondWithInternalError(c, fmt.Sprintf(
+			"rescore incomplete: %d of %d changed candidate rows could not be re-banded (%d written); they still carry the previous ladder's band",
+			result.WriteErrors, result.Changed, result.Written))
 		return
 	}
 
