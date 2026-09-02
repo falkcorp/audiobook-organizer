@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_report.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: a1000022-0000-0000-0000-000000000022
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -80,7 +80,7 @@ func (j *relinkReportJob) Run(ctx context.Context, store maintenance.JobStore, r
 
 		rel := strings.TrimPrefix(fp, organizerRoot)
 		rel = strings.TrimPrefix(rel, string(os.PathSeparator))
-		authorName := strings.SplitN(rel, string(os.PathSeparator), 2)[0]
+		authorName, _, _ := strings.Cut(rel, string(os.PathSeparator))
 		if authorName == "" || authorName == filepath.Base(fp) {
 			if book.Author != nil {
 				authorName = book.Author.Name

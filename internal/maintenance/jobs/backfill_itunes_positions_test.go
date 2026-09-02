@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5577372a-b3ed-4283-9217-345d654e2a57
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 // Package jobs_test — coverage for the backfill-itunes-positions maintenance
 // job. The owner is migrating off iTunes/Apple Books and their existing
@@ -68,7 +68,8 @@ func runPositionBackfill(t *testing.T, store database.Store, dryRun bool) *noopR
 	return rep
 }
 
-func int64p(v int64) *int64 { return &v }
+//go:fix inline
+func int64p(v int64) *int64 { return new(v) }
 
 // wholeBookPosition returns the migrated whole-book row, or nil.
 func wholeBookPosition(t *testing.T, store *database.PebbleStore, userID, bookID string) *database.UserPosition {
@@ -422,7 +423,7 @@ func TestResolveITunesPositionBackfillUser_MultiUserIsDeterministic(t *testing.T
 	first, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.NoError(t, err)
 	require.Contains(t, []string{a.ID, b.ID}, first)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		again, err := jobs.ResolveITunesPositionBackfillUser(store)
 		require.NoError(t, err)
 		require.Equal(t, first, again, "ambiguous user choice must be stable across runs")

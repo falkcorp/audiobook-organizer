@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_operations_single_pass_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c81f27a-5d94-4e60-b1a8-7f26c0d95ab3
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -79,10 +79,7 @@ func newPagingProbeStore(ops []database.Operation, insertPerCall bool) *pagingPr
 		// that relies on it.
 		end := total
 		if limit > 0 {
-			end = offset + limit
-			if end > total {
-				end = total
-			}
+			end = min(offset+limit, total)
 		}
 		return s.ops[offset:end], total, nil
 	}
@@ -98,7 +95,7 @@ func newPagingProbeStore(ops []database.Operation, insertPerCall bool) *pagingPr
 // ordered newest-first the way ListOperations returns them.
 func oldOperations(n int, cutoff time.Time) []database.Operation {
 	ops := make([]database.Operation, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ops = append(ops, database.Operation{
 			ID: fmt.Sprintf("old-%04d", i),
 			// Each is a minute older than the previous, so the slice is
@@ -196,7 +193,7 @@ func TestExpiredOperationIDs_RespectsCutoffAcrossLargeSet(t *testing.T) {
 	var ops []database.Operation
 	const recent, stale = 700, 800
 	// Newest-first: the recent ones come first.
-	for i := 0; i < recent; i++ {
+	for i := range recent {
 		ops = append(ops, database.Operation{
 			ID:        fmt.Sprintf("keep-%04d", i),
 			CreatedAt: cutoff.Add(time.Duration(i+1) * time.Minute),

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/purge_ua_duplicates.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7a4d1e58-9c26-4b73-b0f2-5e8c3a6d9f41
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -137,7 +137,6 @@ func (j *purgeUADuplicatesJob) Run(ctx context.Context, store maintenance.JobSto
 	var mu sync.Mutex
 	samples := []string{}
 	for _, id := range uaBooks {
-		id := id
 		g.Go(func() error {
 			if gctx.Err() != nil {
 				return gctx.Err()

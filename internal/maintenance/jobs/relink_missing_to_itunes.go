@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -97,7 +97,7 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 		// Derive author name from organizer path; fall back to DB.
 		rel := strings.TrimPrefix(fp, organizerRoot)
 		rel = strings.TrimPrefix(rel, string(os.PathSeparator))
-		authorName := strings.SplitN(rel, string(os.PathSeparator), 2)[0]
+		authorName, _, _ := strings.Cut(rel, string(os.PathSeparator))
 		if authorName == "" || authorName == filepath.Base(fp) {
 			if book.Author != nil {
 				authorName = book.Author.Name

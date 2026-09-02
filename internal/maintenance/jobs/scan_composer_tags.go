@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -138,7 +138,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 	slog.Info("scan-composer-tags files total, already done, to process", "opID", opID, "totalFiles", totalFiles, "alreadyDone", alreadyDone, "workItems_count", len(workItems))
 
 	reporter.SetTotal(totalFiles)
-	for i := 0; i < alreadyDone; i++ {
+	for range alreadyDone {
 		reporter.Increment()
 	}
 
@@ -158,7 +158,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Go(func() {
 			for w := range workCh {
 				if ctx.Err() != nil {

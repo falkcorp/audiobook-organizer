@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_sync_ids_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a20f7354-5d7e-49aa-b3b5-94758d52bfc9
-// last-edited: 2026-08-04
+// last-edited: 2026-09-02
 
 // Package jobs_test — coverage for the backfill-sync-ids maintenance job
 // (TASK-04). Every test drives a real PebbleStore because the sync_item /
@@ -26,13 +26,13 @@ import (
 func seedSyncLibrary(t *testing.T, store *database.PebbleStore, n, filesPerBook int) []string {
 	t.Helper()
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		book, err := store.CreateBook(&database.Book{
 			Title:    fmt.Sprintf("Sync Backfill Book %d", i),
 			FilePath: fmt.Sprintf("/library/sync-%d", i),
 		})
 		require.NoError(t, err)
-		for f := 0; f < filesPerBook; f++ {
+		for f := range filesPerBook {
 			require.NoError(t, store.CreateBookFile(&database.BookFile{
 				BookID:   book.ID,
 				FilePath: fmt.Sprintf("/library/sync-%d/track-%02d.mp3", i, f),
