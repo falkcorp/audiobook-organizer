@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-02
 
@@ -201,13 +201,20 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "limit must be a positive integer: "+raw)
 			return
 		}
-		// Clamped with an explicit branch rather than the min builtin. Both bound
+		// Clamped with an explicit switch rather than the min builtin. Both bound
 		// limit to timelineMaxLimit identically, but CodeQL's Go dataflow does not
 		// model the Go 1.21 builtin, so it traced strconv.Atoi(c.Query("limit"))
 		// straight into the make below and raised go/uncontrolled-allocation-size
-		// on an allocation that was already capped at 1000. Written this way the
-		// bound is visible to the analyzer as well as to a reader.
-		limit = min(n, timelineMaxLimit)
+		// on an allocation that was already capped at 1000 (#2837). It is a
+		// switch, not an if-clamp, because `go fix`'s minmax modernizer rewrites
+		// `if limit > x { limit = x }` back into min() and re-opened the alert
+		// on #3043; the switch form is one the modernizer leaves alone.
+		switch {
+		case n > timelineMaxLimit:
+			limit = timelineMaxLimit
+		default:
+			limit = n
+		}
 	}
 
 	defID := c.Query("def_id")
@@ -259,9 +266,16 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// true: an answer that describes itself has to describe the rows that escape
 	// its own window too.
 	inFlightBeforeWindow := 0
-	// Same reason as the clamp above: an explicit branch, so the ceiling on this
-	// allocation (timelineMaxLimit, 1000) is reachable by dataflow analysis.
-	capHint := min(len(rows), limit)
+	// Same reason (and same switch-not-if form) as the clamp above: the ceiling
+	// on this allocation (timelineMaxLimit, 1000) must stay reachable by CodeQL's
+	// dataflow analysis, and the modernizer must not fold it back into min().
+	var capHint int
+	switch {
+	case len(rows) < limit:
+		capHint = len(rows)
+	default:
+		capHint = limit
+	}
 	resp := make([]OperationV2Response, 0, capHint)
 	for _, r := range rows {
 		if defID != "" && r.DefID != defID {
