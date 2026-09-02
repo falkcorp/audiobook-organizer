@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-02
 
@@ -43,7 +43,24 @@ func renderableCoverURL(previous, applied *string, candidateRemote string) *stri
 	return applied
 }
 
-func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookMetadata) {
+// ApplyMetadataToBook applies fetched metadata to an in-memory book, honoring
+// the user's field locks. It returns the lock keys that were skipped because
+// the user has spoken for them (database.UserLockableFields), or an error if the
+// locks could not be read -- in which case NOTHING is applied. Callers that
+// persist the book afterwards must check the error; a lock-read failure is not
+// "nothing locked".
+//
+// History recording is the caller's job (see guardedApply for the path that
+// records it); every other apply behavior lives in applyMetadataUnguarded.
+func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookMetadata) ([]string, error) {
+	_, skipped, err := mfs.guardedApply(book, meta, "")
+	return skipped, err
+}
+
+// applyMetadataUnguarded is the field-by-field apply body. It trusts that meta
+// has ALREADY had locked fields stripped (StripLockedFields) -- never call it
+// from outside guardedApply.
+func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.BookMetadata) {
 	originalTitle := book.Title
 	if meta.Title != "" && meta.Title != "Untitled" && IsBetterValue(book.Title, meta.Title) {
 		// Don't replace a real title with something shorter/worse
@@ -586,9 +603,6 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// into the series name. Same normalization the auto-fetch paths run.
 	NormalizeMetaSeries(&meta)
 
-	// Record history BEFORE applying changes so old values are correct
-	mfs.RecordChangeHistory(book, meta, candidate.Source)
-
 	// Remember the cover we are currently serving. ApplyMetadataToBook overwrites
 	// book.CoverURL with the candidate's REMOTE url, which is not renderable by
 	// the UI: it proxies covers through /api/v1/covers/proxy, which rejects hosts
@@ -603,7 +617,15 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// picked up the local path.
 	previousCoverURL := book.CoverURL
 
-	mfs.ApplyMetadataToBook(book, meta)
+	// guardedApply strips the user's locked fields, records change history for
+	// what will actually change, and applies. fetched keeps the UNSTRIPPED
+	// candidate so provenance below still records what the provider said, which
+	// is exactly what the UI's "fetched vs override" panel exists to show.
+	fetched := meta
+	meta, skippedLocked, err := mfs.guardedApply(book, meta, candidate.Source)
+	if err != nil {
+		return nil, err
+	}
 
 	// Keep serving the previous cover until the new one is actually on disk.
 	// DownloadPendingCover repoints this at the local path when it completes.
@@ -658,8 +680,11 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		mfs.checkMetadataSourceHashDuplicates(id, *book.MetadataSourceHash)
 	}
 
-	// Persist fetched values for provenance tracking
-	mfs.persistFetchedMetadata(id, meta)
+	// Persist fetched values for provenance tracking. This is the full candidate,
+	// including locked fields that were NOT applied: the state row's fetched_value
+	// is "what the provider said", the override is what the user said, and the
+	// UI shows both side by side.
+	mfs.persistFetchedMetadata(id, fetched)
 
 	// Generate segment titles (fast, DB-only)
 	if err := mfs.generateSegmentTitles(id, updatedBook.Title); err != nil {
@@ -715,10 +740,11 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// subsequent scan to hit the external API again.
 
 	return &FetchMetadataResponse{
-		Message:         "metadata candidate applied",
-		Book:            updatedBook,
-		Source:          candidate.Source,
-		PendingCoverURL: pendingCover,
+		Message:             "metadata candidate applied",
+		Book:                updatedBook,
+		Source:              candidate.Source,
+		PendingCoverURL:     pendingCover,
+		SkippedLockedFields: skippedLocked,
 	}, nil
 }
 

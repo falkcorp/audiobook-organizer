@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-08-16
+// last-edited: 2026-09-02
 
 package server
 
@@ -55,6 +55,12 @@ type applyOutcome struct {
 	// !Applied: the database change is real and durable, and reporting the book
 	// as "not applied" would send someone re-applying work that succeeded.
 	WriteBackFailed bool
+	// SkippedLocked lists the lock keys (database.UserLockableFields) the apply
+	// left alone because the user has locked or overridden them. The apply
+	// still counts as Applied -- every other field landed -- but an op summary
+	// that said "applied" while a locked title was silently dropped would be
+	// lying by omission, so the op counts and logs these.
+	SkippedLocked []string
 }
 
 // Skip reason vocabulary, shared with the HTTP response shape in
@@ -95,13 +101,23 @@ func applyCachedCandidateForBook(
 		return applyOutcome{Reason: applySkipDecodeFailed, Err: derr}
 	}
 
-	if _, aerr := svc.ApplyMetadataCandidate(id, cand, nil); aerr != nil {
+	resp, aerr := svc.ApplyMetadataCandidate(id, cand, nil)
+	if aerr != nil {
 		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr}
 	}
 	_ = svc.InvalidateCachedCandidates(id)
 
+	// Every later return is an applied outcome; carry the skipped locks on all
+	// of them. resp is non-nil on a nil error (ApplyMetadataCandidate's
+	// contract), but the mocks in this package's tests return (nil, nil), and a
+	// nil deref here would turn "no response" into a crashed op.
+	out := applyOutcome{Applied: true}
+	if resp != nil {
+		out.SkippedLocked = resp.SkippedLockedFields
+	}
+
 	if !writeBack {
-		return applyOutcome{Applied: true}
+		return out
 	}
 
 	// iTunes library sync is enqueued BEFORE the file work (matching the
@@ -114,7 +130,8 @@ func applyCachedCandidateForBook(
 	// file path we lock and write must be the post-apply one.
 	book, berr := store.GetBookByID(id)
 	if berr != nil || book == nil {
-		return applyOutcome{Applied: true, WriteBackFailed: true, Err: berr}
+		out.WriteBackFailed, out.Err = true, berr
+		return out
 	}
 
 	if lockPath != nil {
@@ -136,10 +153,12 @@ func applyCachedCandidateForBook(
 	fileErr := svc.ApplyMetadataFileIO(id)
 	_, wberr := svc.WriteBackMetadataForBook(id)
 	if fileErr != nil {
-		return applyOutcome{Applied: true, WriteBackFailed: true, Err: fileErr}
+		out.WriteBackFailed, out.Err = true, fileErr
+		return out
 	}
 	if wberr != nil {
-		return applyOutcome{Applied: true, WriteBackFailed: true, Err: wberr}
+		out.WriteBackFailed, out.Err = true, wberr
+		return out
 	}
-	return applyOutcome{Applied: true}
+	return out
 }

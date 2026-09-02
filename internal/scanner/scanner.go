@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.80.2
+// version: 1.81.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-02
 
@@ -3277,16 +3277,16 @@ func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[s
 	}
 
 	// Tag-derived identity fields.
-	if scanned.Title != "" && !locked["title"] {
+	if scanned.Title != "" && !locked[database.FieldKeyTitle] {
 		dst.Title = scanned.Title
 	}
-	if scanned.AuthorID != nil && !locked["author"] {
+	if scanned.AuthorID != nil && !locked[database.FieldKeyAuthorName] {
 		dst.AuthorID = scanned.AuthorID
 	}
-	if scanned.SeriesID != nil && !locked["series"] {
+	if scanned.SeriesID != nil && !locked[database.FieldKeySeriesName] {
 		dst.SeriesID = scanned.SeriesID
 	}
-	if scanned.SeriesSequence != nil && *scanned.SeriesSequence != 0 && !locked["series_sequence"] {
+	if scanned.SeriesSequence != nil && *scanned.SeriesSequence != 0 && !locked[database.FieldKeySeriesPosition] {
 		dst.SeriesSequence = scanned.SeriesSequence
 	}
 	if scanned.WorkID != nil {
@@ -3294,16 +3294,16 @@ func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[s
 	}
 
 	// Tag-derived enrichment fields.
-	if scanned.Narrator != nil && !locked["narrator"] {
+	if scanned.Narrator != nil && !locked[database.FieldKeyNarrator] {
 		dst.Narrator = scanned.Narrator
 	}
-	if scanned.Language != nil && !locked["language"] {
+	if scanned.Language != nil && !locked[database.FieldKeyLanguage] {
 		dst.Language = scanned.Language
 	}
-	if scanned.Publisher != nil && !locked["publisher"] {
+	if scanned.Publisher != nil && !locked[database.FieldKeyPublisher] {
 		dst.Publisher = scanned.Publisher
 	}
-	if scanned.ASIN != nil {
+	if scanned.ASIN != nil && !locked[database.FieldKeyASIN] {
 		dst.ASIN = scanned.ASIN
 	}
 	if scanned.OpenLibraryID != nil {

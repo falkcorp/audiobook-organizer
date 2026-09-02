@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -270,18 +270,22 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 				meta.Title = book.Title // keep original
 			}
 
-			// Record history before applying changes
-			mfs.RecordChangeHistory(book, meta, src.Name())
-
-			// Apply metadata with downgrade protection
-			mfs.ApplyMetadataToBook(book, meta)
+			// Record history, strip the user's locked fields, and apply with
+			// downgrade protection. `fetched` keeps the full provider record for
+			// provenance; `meta` is what actually landed on the book, so the
+			// write-back and cover steps below never carry a refused value.
+			fetched := meta
+			meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
+			if applyErr != nil {
+				return nil, applyErr
+			}
 
 			updatedBook, updateErr := mfs.db.UpdateBook(id, book)
 			if updateErr != nil {
 				return nil, fmt.Errorf("failed to update book: %w", updateErr)
 			}
 
-			mfs.persistFetchedMetadata(id, meta)
+			mfs.persistFetchedMetadata(id, fetched)
 
 			// Download cover art locally if we got a cover URL
 			if meta.CoverURL != "" && config.AppConfig.RootDir != "" {
@@ -316,9 +320,10 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			}
 
 			return &FetchMetadataResponse{
-				Message: "metadata fetched and applied",
-				Book:    updatedBook,
-				Source:  src.Name(),
+				Message:             "metadata fetched and applied",
+				Book:                updatedBook,
+				Source:              src.Name(),
+				SkippedLockedFields: skippedLocked,
 			}, nil
 		}
 	}
@@ -391,15 +396,18 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		meta := scored[0]
 		NormalizeMetaSeries(&meta)
 
-		mfs.RecordChangeHistory(book, meta, src.Name())
-		mfs.ApplyMetadataToBook(book, meta)
+		fetched := meta
+		meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
+		if applyErr != nil {
+			return nil, applyErr
+		}
 
 		updatedBook, updateErr := mfs.db.UpdateBook(id, book)
 		if updateErr != nil {
 			return nil, fmt.Errorf("failed to update book: %w", updateErr)
 		}
 
-		mfs.persistFetchedMetadata(id, meta)
+		mfs.persistFetchedMetadata(id, fetched)
 
 		// Mirror of ApplyMetadataCandidate: tag the book with the
 		// source and language so downstream filters (review dialog,
@@ -407,9 +415,10 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		mfs.ApplyMetadataSystemTags(id, src.Name(), meta.Language)
 
 		return &FetchMetadataResponse{
-			Message: "metadata fetched by title only",
-			Book:    updatedBook,
-			Source:  src.Name(),
+			Message:             "metadata fetched by title only",
+			Book:                updatedBook,
+			Source:              src.Name(),
+			SkippedLockedFields: skippedLocked,
 		}, nil
 	}
 

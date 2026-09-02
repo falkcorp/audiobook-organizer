@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.10.2
+// version: 5.11.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-02
 
@@ -177,6 +177,11 @@ type FetchMetadataResponse struct {
 	Source          string
 	FetchedCount    int
 	PendingCoverURL string // set by ApplyMetadataCandidate for background download
+	// SkippedLockedFields lists the lock keys (database.UserLockableFields) the
+	// apply refused to write because the user had locked or overridden them.
+	// Nil when nothing was skipped. Callers surface it in op summaries and
+	// responses so a locked field is visibly "kept", never silently dropped.
+	SkippedLockedFields []string
 }
 
 // MetadataCandidate represents a single search result for manual metadata matching.

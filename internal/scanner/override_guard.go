@@ -1,7 +1,7 @@
 // file: internal/scanner/override_guard.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: c7c82b95-8fdb-4d7e-9787-b7f136df7a1e
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -18,93 +18,55 @@ import (
 // data-loss bug, not a cosmetic one -- the user's edit is gone with no record
 // that a scan overwrote it.
 //
-// database.MetadataFieldState records per-field provenance, keyed by a field
-// NAME string. The names are the vocabulary the metadata handler writes
-// (handler.go's field list): title, author, narrator, publisher, publishDate,
-// series, language, isbn10, isbn13, series_sequence.
-
-// guardedField ties one Book field the scanner overlays to the field-state key
-// that governs it. Only fields a user can actually lock appear here.
+// HISTORY (2026-08-24 .. 2026-09-02): the first version of this guard kept its
+// own key list -- title, author, series, series_sequence, narrator, language,
+// publisher -- and consulted the field-state rows under those names. The WRITER
+// (audiobooks.UpdateAudiobook and the UI) stores author_name, series_name and
+// series_position. Nothing ever wrote "author", "series" or "series_sequence",
+// so for those three columns the guard was inert: a curated author, series or
+// position was clobbered on every rescan while the guard, and its test (which
+// iterated the guard's own list), reported success. The keys now come from
+// database.UserLockableFields, the ONE vocabulary shared with the writer and
+// every metafetch apply path, and the test fixture uses the writer's spelling.
 //
-// COVERAGE IS DELIBERATELY PARTIAL, and the gaps are listed rather than left
-// implicit -- a guard that looks total but is not is worse than no guard,
-// because it invites the reader to stop checking:
+// COVERAGE, by design:
 //
-//   - COVERED (7): Title, AuthorID, SeriesID, SeriesSequence, Narrator,
-//     Language, Publisher. AuthorID/SeriesID are ids while their keys
-//     ("author"/"series") name the entity; locking the author is taken to mean
-//     "do not repoint this book at a different author", which is the same
-//     intent expressed at the id level.
+//   - GUARDED: every scanner-overlaid column that has a lock key in
+//     database.UserLockableFields -- Title, AuthorID, SeriesID, SeriesSequence,
+//     Narrator, Language, Publisher, ASIN. The scanner never sets Genre,
+//     Description, AudiobookReleaseYear, ISBN10 or ISBN13, so those keys have
+//     nothing to guard here (TestApplyScannerFields_GuardsEveryLockableColumnItOverlays
+//     pins that claim against the Book struct).
 //
-//   - NOT COVERED, no field-state key exists (5): ASIN, OpenLibraryID,
-//     HardcoverID, GoogleBooksID, WorkID. These are provider identifiers with
-//     no entry in the handler's field list, so today a user cannot lock them
-//     and there is nothing to consult. If a key is ever added for one, add it
-//     here in the same change -- otherwise the guard silently keeps skipping it.
+//   - NOT GUARDED, no lock key exists (4): OpenLibraryID, HardcoverID,
+//     GoogleBooksID, WorkID. A user cannot lock them today. If a key is ever
+//     added to the vocabulary for one, the conformance test above fails until
+//     applyScannerFields guards it too.
 //
-//   - NOT COVERED, deliberately (9): FilePath, Format, FileHash, FileSize,
+//   - NOT GUARDED, deliberately (9): FilePath, Format, FileHash, FileSize,
 //     OriginalFileHash, OrganizedFileHash, Duration, LibraryState, Quantity.
 //     These are read off the file itself; the scanner IS authoritative for them
 //     and a user override would be meaningless. Guarding them would let a stale
 //     lock freeze a file's real size or hash, which breaks dedup.
-var guardedFieldKeys = map[string]string{
-	"title":           "title",
-	"author":          "author",
-	"series":          "series",
-	"series_sequence": "series_sequence",
-	"narrator":        "narrator",
-	"language":        "language",
-	"publisher":       "publisher",
-}
 
-// scanFieldStateReader is the one store method this guard needs.
-type scanFieldStateReader interface {
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
-}
-
-// lockedFieldsForBook returns the set of guarded field keys the user has spoken
-// for, so applyScannerFields leaves them alone.
+// lockedFieldsForBook returns the set of lock keys (database.UserLockableFields)
+// the user has spoken for on this book, so applyScannerFields leaves those
+// columns alone. It is a thin adapter over database.LockedUserFields, the guard
+// every other write path shares; the scanner keeps its own wrapper only because
+// it cannot abort -- the file-derived columns still have to be recorded.
 //
-// FAIL CLOSED. If the field states cannot be read we cannot tell a locked field
-// from an unlocked one, and the two error directions are not symmetric: guessing
+// FAIL CLOSED. If the locks cannot be read we cannot tell a locked field from an
+// unlocked one, and the two error directions are not symmetric: guessing
 // "unlocked" overwrites a user edit that cannot be recovered, while guessing
 // "locked" merely leaves a tag value unapplied until the next successful scan.
-// So a read error locks every guarded field for that book. Same reasoning as the
-// provisional-merge guard in internal/merge.
+// So a read error locks EVERY lockable field for that book.
 //
 // The bool reports whether the state was read successfully; callers log on false
 // rather than silently treating a degraded scan as a clean one.
-func lockedFieldsForBook(store scanFieldStateReader, bookID string) (map[string]bool, bool) {
-	locked := make(map[string]bool, len(guardedFieldKeys))
-
-	if store == nil || bookID == "" {
-		for _, key := range guardedFieldKeys {
-			locked[key] = true
-		}
-		return locked, false
-	}
-
-	states, err := store.GetMetadataFieldStates(bookID)
+func lockedFieldsForBook(store database.MetadataFieldStateReader, bookID string) (map[string]bool, bool) {
+	locked, err := database.LockedUserFields(store, bookID)
 	if err != nil {
-		for _, key := range guardedFieldKeys {
-			locked[key] = true
-		}
-		return locked, false
-	}
-
-	for _, st := range states {
-		// HasUserOverride only -- NOT HasProviderValue. A fetched value means a
-		// provider supplied it, not that the user chose it; blocking on that
-		// would make any book that ever had metadata fetched permanently immune
-		// to re-tagging, so a user who fixes a file's tags could never get the
-		// correction picked up. Only an explicit human act (a lock or an
-		// override value) is protected here. This matches the narrower of the
-		// two spellings already in the tree (title_repair.go, handler.go:1001);
-		// the repair jobs additionally refuse on FetchedValue because their job
-		// is only ever to fix file-derived junk, which is not this path's job.
-		if st.HasUserOverride() {
-			locked[st.Field] = true
-		}
+		return database.AllUserLockableFieldsLocked(), false
 	}
 	return locked, true
 }
