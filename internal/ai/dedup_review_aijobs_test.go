@@ -1,6 +1,7 @@
 // file: internal/ai/dedup_review_aijobs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f3c4a8d-9b2e-4f6a-8c1d-2e5f9a1b3c7d
+// last-edited: 2026-09-02
 
 package ai
 
@@ -239,7 +240,7 @@ func TestSubmitDedupReviewJob_SplitsIntoSubBatches(t *testing.T) {
 	// Build 51 inputs.
 	inputs := make([]DedupPairInput, 51)
 	byIndex := make(map[int]int64, 51)
-	for i := 0; i < 51; i++ {
+	for i := range 51 {
 		inputs[i] = DedupPairInput{
 			Index:      i,
 			EntityType: "book",

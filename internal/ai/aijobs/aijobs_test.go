@@ -1,6 +1,7 @@
 // file: internal/ai/aijobs/aijobs_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 92b8a4e2-1647-48c3-acc3-ae3e101623d7
+// last-edited: 2026-09-02
 
 package aijobs
 
@@ -225,7 +226,7 @@ func mustMarshal(v any) []byte {
 func bytesSplitLines(b []byte) [][]byte {
 	var out [][]byte
 	start := 0
-	for i := 0; i < len(b); i++ {
+	for i := range b {
 		if b[i] == '\n' {
 			if i > start {
 				out = append(out, b[start:i])

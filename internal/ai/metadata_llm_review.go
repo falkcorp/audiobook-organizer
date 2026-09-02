@@ -1,7 +1,7 @@
 // file: internal/ai/metadata_llm_review.go
-// version: 3.4.1
+// version: 3.4.2
 // guid: e4f92b17-3c8a-4d65-a1f3-9b2e07d84c61
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package ai
 
@@ -80,10 +80,7 @@ func (p *OpenAIParser) ScoreMetadataCandidates(
 
 	var all []MetadataLLMScore
 	for start := 0; start < len(indexed); start += metadataLLMBatchSize {
-		end := start + metadataLLMBatchSize
-		if end > len(indexed) {
-			end = len(indexed)
-		}
+		end := min(start+metadataLLMBatchSize, len(indexed))
 		batch := indexed[start:end]
 		scores, err := p.scoreMetadataBatch(ctx, query, batch)
 		if err != nil {

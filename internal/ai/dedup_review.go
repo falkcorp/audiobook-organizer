@@ -1,7 +1,7 @@
 // file: internal/ai/dedup_review.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: b2e7c3d1-4a58-4f96-9e0b-7d3a1c8f5b24
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package ai
 
@@ -125,10 +125,7 @@ func SubmitDedupReviewJob(ctx context.Context, deps aijobs.Deps, model string, i
 	// Build function that constructs JSONL rows (one per sub-batch).
 	buildFn := func(i int) (aijobs.BatchRequest, error) {
 		start := i * dedupReviewBatchSize
-		end := start + dedupReviewBatchSize
-		if end > len(inputs) {
-			end = len(inputs)
-		}
+		end := min(start+dedupReviewBatchSize, len(inputs))
 		batch := inputs[start:end]
 
 		batchJSON, err := json.Marshal(batch)
