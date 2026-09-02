@@ -1,5 +1,5 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
 // last-edited: 2026-09-02
 
@@ -189,7 +189,18 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 	// cap0 clamp; this comment additionally documents the actual (larger)
 	// peak so a future reader does not mistake cap0's bound for a ceiling on
 	// len(out).
-	cap0 := min(limit, 4096)
+	//
+	// Spelled as a switch, not `min(limit, 4096)`: CodeQL does not model the
+	// min builtin, so the clamp the dismissal cites would be invisible to it,
+	// and `go fix`'s minmax modernizer folds an if-clamp back into min() (it
+	// did exactly that on #3043). The switch form is one it leaves alone.
+	var cap0 int
+	switch {
+	case limit > 4096:
+		cap0 = 4096
+	default:
+		cap0 = limit
+	}
 	out := make([]BookSummary, 0, cap0)
 	skipped := 0
 
