@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.46.0 -->
+<!-- version: 10.46.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-02 -->
 
@@ -13,6 +13,325 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+## `TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code
+
+`internal/scanner/chapter_persistence_test.go:143-149` pins
+`wantSumOfTracks = 9975.431111` to ±0.001 s. ffprobe 9.0.1 reports the six Odyssey
+MP3 tracks summing to 9975.827 s, so the test fails identically on `main` (Go 1.26)
+and on the Go 1.27 branch — it is not a toolchain regression. MP3 duration on these
+fixtures is an estimate that drifts across ffmpeg releases, so the constant was written
+against one specific ffprobe and the test is silently environment-pinned; if CI passes,
+CI's ffprobe is the version the constant matches.
+
+The property the test actually cares about is "the last chapter ends at the sum of
+track durations, not at the container duration" (the container assertion at :151 already
+uses a 0.01 s band). Derive the expected sum at test time by running the same ffprobe
+over the six files and assert against that, rather than a literal. Widening the
+tolerance would also pass but keeps the test pinned to a number nobody can re-derive.
+
+Surfaced 2026-09-01 while verifying the Go 1.27 toolchain bump.
+
+- [ ] Replace the literal with an ffprobe-derived expected sum; confirm which ffprobe CI installs
+
+- [ ] **Unify `folder_parser.looksLikeAuthorSegment` with `personname.LooksLikePersonName`**
+      — `internal/metadata/folder_parser.go` is the third path→author parser. Its
+      placeholder gap is now closed (PR #3035), but its SHAPE predicate still
+      diverges from the shared one on named input classes:
+      2–5 words rather than 2–4; an ASCII-only `w[0] < 'A' || w[0] > 'Z'`
+      first-letter test that drops every caseless script (CJK, Hebrew, Arabic,
+      Thai) `personname` deliberately keeps; and early `return true` on `","` and
+      `" & "` that skip the shape check entirely.
+      So a Cyrillic or CJK author directory passes the shared predicate and fails
+      this one, while `"Discworld, Mort"` and `"anything & anything"` pass this one
+      and fail the shared one.
+      **Cost, stated up front:** this changes answers on those three classes, so it
+      needs its own differential corpus over real library paths — not a
+      compile-and-green. Consumers to re-verify: `scanner.go:1245`, `scanner.go:1329`,
+      `internal/importer/service.go:208`, plus `folder_parser_test.go`.
+
+- [ ] **Release builds take Go from `go.mod`, not the 1.27.1 pin** — `release-prod.yml` and
+  `prerelease.yml` call `falkcorp/github-common`'s `reusable-release.yml`, which exposes a
+  `go-experiment` input but no `go-version`; `gha-release-go` then resolves
+  `max('1.24', go.mod)` = 1.27.0 while `Makefile`, `.envrc`, both Dockerfiles and the eight
+  CI workflows pin `go1.27.1`. Not a break (1.27.0 satisfies `go 1.27.0`), but the one build
+  path off the pin. Add a `go-version` passthrough to `reusable-release.yml` in
+  `github-common`, then set it to `'1.27.1'` in both release workflows here. Found by the
+  #3039 adversarial review, 2026-09-01.
+
+- [ ] **Add an op that reports undecodable review-hold payloads.** `ListReviewItems`'
+      search path discovers them — an undecodable payload falls back to a raw-text
+      match — but it deliberately does NOT count them, because that count would be
+      a blind instrument: `reviewSearchMatches` returns on the first column hit, so
+      a corrupt payload on a row that matched by summary is never decoded, and the
+      total therefore varies with the search term rather than with the data. See the
+      comment at the search pass in `internal/database/review_store.go`. Corruption
+      is a property of the whole queue and needs a pass that decodes every payload
+      once, unbiased by a needle: report count, kinds affected, and sample IDs.
+
+- [ ] **Consolidate the four `IsPlaceholder(StripEditionSuffix(...))` call sites**
+      — `internal/scanner/scanner.go:1713`, `internal/scanner/scanner.go:3024`,
+      `internal/metadata/metadata.go:733` and `:745` each strip the edition suffix
+      before asking `authorname.IsPlaceholder`. The recorded reason for not putting
+      the strip inside `IsPlaceholder` was that `authorname` had to stay
+      standard-library-only; that stopped being true in PR #3035, which made
+      `authorname` import `personname`. So the consolidation is now UNBLOCKED.
+      All four sites are correct today — this is not a live bug. It is worth doing
+      because the pattern has already produced one omission: `scanner.go:3024`'s own
+      comment records that it "was missed when those were fixed".
+      **Decide first:** `IsPlaceholder` is also asked about values that are not
+      filename parses, where silently stripping a trailing parenthetical would be a
+      surprise. A separate `IsPlaceholderDecorated` may be the better shape than
+      changing `IsPlaceholder` itself.
+
+## `Book.author_name` is declared in TypeScript but the API never sends it
+
+`web/src/services/api.ts` declares `author_name?: string` on the `Book` interface. The Go
+`database.Book` has no such JSON tag — it marshals a nested `author` object — and the dedup
+handler never sets the key. Because the field is optional, every read yields `undefined`
+with no type error, and callers using `?? ''` swallow it silently.
+
+This made the Dupes panel's client-side author search dead code for as long as it existed.
+Found while moving that search server-side; the server now resolves author through the
+author table, so the panel works, but the type still promises a field that never arrives.
+
+- [ ] Decide: populate `author_name` server-side, or drop it from the TS interface
+- [ ] Grep for other readers of `book.author_name` that are silently getting `undefined`
+- [ ] Prefer whichever option makes the absence a compile error rather than an empty string
+
+## Dedup search resolves book IDs with a full `GetAllBooksCore` read
+
+`resolveBookIDsMatching` (`internal/server/handlers/dedup/search.go`) turns a search needle
+into a set of book IDs by reading every book via `GetAllBooksCore(0, 0)`. That routes to
+memdb and does no per-book I/O, but it materializes a full `Book` per row before narrowing
+to `BookCore`, so a search over a ~44K-book library allocates the whole library transiently.
+
+The alternative already on the interface is worse, not better: `GetAllBooksFullFrom`'s memdb
+path lists IDs from memdb and then does a Pebble point read PER BOOK.
+
+What would actually beat both is a store-level projection that matches during the memdb walk
+and returns only the matching IDs — the same argument `ListBookIDs` already makes for itself
+("saves ~50x memory vs GetAllBooksCore(0,0)").
+
+- [ ] Measure the real cost of a dedup search against the production library first
+- [ ] If it warrants the change: add the projection to `BookBulkReader`, implement on
+      `MemStore` + `PebbleStore`, regenerate mocks
+- [ ] Keep the author-name join — the projection has to see author names, not just books
+
+## `internal/personname` silently drops every Georgian author (and the obvious fix is inert)
+
+`personname.LooksLikePersonName("გიორგი ბაქრაძე")` returns **false**, so Georgian
+authors are dropped at all five call sites (scanner ×3, metadata ×2, dedup's
+splitter). Found 2026-09-01 during review of #3029.
+
+**Cause.** The package's central rule is "the first rune must be a letter and must
+NOT be lowercase", chosen over "must be uppercase" because `unicode.IsUpper` is
+false for every caseless script (CJK, Hebrew, Arabic, Thai). That formulation is
+correct for *caseless* scripts and wrong for a **cased script whose default written
+form is the lowercase one**. Georgian Mkhedruli letters are Unicode `Ll` —
+`unicode.IsLower('გ') == true` — because Unicode 11 added Mtavruli capitals, yet
+Mkhedruli is how Georgian is normally written. So every Georgian name looks like a
+title fragment.
+
+Not a regression: main's ASCII byte test dropped Georgian too. But it is precisely
+the failure `internal/personname` was extracted to eliminate, and it was not on the
+package's known-limits list.
+
+**⚠️ The obvious fix does NOT work — measured, do not re-propose it.** The natural
+remedy is "accept a first rune that has no uppercase mapping", i.e. treat
+`unicode.ToUpper(r) == r` as acceptable. Go maps Mkhedruli to Mtavruli:
+
+```
+'გ'  IsLower=true  IsUpper=false  ToUpper='Გ'  ToUpper==r: false
+'ბ'  IsLower=true  IsUpper=false  ToUpper='Ბ'  ToUpper==r: false
+'春'  IsLower=false IsUpper=false  ToUpper='春'  ToUpper==r: true
+```
+
+So that test rejects Georgian exactly as today. Armenian lowercase (`'ա'` →
+`ToUpper='Ա'`) behaves the same way, so Armenian names written in lowercase are in
+the same class.
+
+**What would actually work** needs a decision, which is why this is filed rather
+than fixed: the check has to know that a script's *default* form is lowercase.
+That means a per-script exception (`unicode.Georgian`, and probably
+`unicode.Armenian`, `unicode.Deseret`, `unicode.Adlam`, `unicode.Cherokee`,
+`unicode.Warang_Citi`, `unicode.Osage`, `unicode.Vithkuqi`) rather than a general
+Unicode property, because no property distinguishes "cased script normally written
+lowercase" from "lowercase word in a bicameral script".
+
+- [ ] Decide the exception mechanism, then fix `LooksLikePersonName` and add
+      Georgian and Armenian cases to `internal/personname/personname_test.go`
+      and to the differential corpus.
+- [ ] Until then, record Georgian and lowercase-Armenian in the package doc's
+      known-limits list, which currently implies non-Latin scripts are handled.
+
+### "Last, First" is not used as a discriminator when choosing the author side
+
+`personname.ChooseAuthorSide` picks which half of `"X - Y"` is the author using,
+in order: a multi-name credit list, a leading article, then initials. It does not
+use the strongest signal available for one common shape — **a person may be
+written `"Last, First"`, and a title may not.**
+
+Measured 2026-09-01, `origin/main` and `fix/person-name-unicode` alike:
+
+```
+"Gaiman, Neil - Anansi Boys"    -> author "Anansi Boys"    (want "Gaiman, Neil")
+"Smith, John - Good Omens"      -> author "Good Omens"     (want "Smith, John")
+"King, Stephen - The Stand"     -> author "King, Stephen"  correct, but only
+                                   because the leading article rescues it
+```
+
+Pre-existing, not a regression — both trees answer identically except where the
+article tiebreak happens to fire.
+
+The fix is a fourth discriminator ahead of the tie: a side matching
+`^\S+,\s+\S+$` whose halves are each name-shaped is a person in inverted form.
+Two cautions before writing it:
+
+- It must not fire on a genuine two-author comma credit
+  (`"Neil Gaiman, Terry Pratchett"`), which is why it needs the *whole* string to
+  be one inverted name rather than merely to contain a comma.
+- `NormalizeAuthorName` in `internal/dedup` already un-inverts `"Last, First"`;
+  check whether the discriminator belongs there instead, so the repo does not
+  end up with two answers to "is this an inverted name?" — the same divergence
+  that produced this package.
+
+Related, and now superseded: this was originally filed alongside an accepted
+mutation survivor in `isMultiNameCredit`. **That function has since been removed**
+— it was a multi-CLAUSE test that filed omnibus titles as authors — so the
+survivor and the reasoning attached to it are void. The underlying gap recorded
+here is unaffected and still open: a last-first name (`"Smith, John"`) is not
+used as a discriminator, and `"Smith, John - Good Omens"` is still answered
+wrongly. Its replacement, `looksLikeAmpersandCredit`, was mutation-tested
+separately: 8 mutants, 8 killed, no accepted survivors.
+
+- [ ] **`internal/metadata` and `internal/scanner` filename parsing still disagrees on 1,110 of 40,261 real library paths.**
+      #3029 unified the *orientation decision* (`personname.ChooseAuthorSide`) across
+      all four copies and measured the two packages byte-identical on a 1,232-input
+      corpus. That corpus was synthetic and did not contain the shapes they diverge
+      on. Measured 2026-09-01 against 40,261 real paths pulled from production, the
+      two packages return different authors for 1,110 of them — on `origin/main`
+      (1,110) as well as after the follow-up fix (1,111), so this is pre-existing and
+      not a regression from either PR.
+
+      The divergence is in the code *around* the shared decision, not in the decision
+      itself: track/disc/number prefix stripping, chapter-suffix removal, the
+      directory fallback, and which branch wins when the filename has neither `" - "`
+      nor `"_"`. Examples:
+
+      | filename | `metadata` author | `scanner` author |
+      |---|---|---|
+      | `1-01 Zero History - 001.mp3` | `Zero History` | *(empty)* |
+      | `Class-A Threat - Unknown Author.mp3` | `Class-A Threat` | *(empty)* |
+      | `2.5 - The Impossibles.m4b` | *(empty)* | `The Impossibles` |
+      | `1-01 - A War Of Gifts.mp3` | *(empty)* | `A War Of Gifts` |
+
+      This matters because `internal/metadata` runs FIRST — the scanner only calls its
+      own `extractInfoFromPath` when `Author` is still empty — so wherever the two
+      disagree, metadata's answer is the one that reaches the database, and the
+      scanner copy is dead code for that input.
+
+      Fixing it means unifying the surrounding pipeline the way `ChooseAuthorSide`
+      unified the decision, not adding a fifth copy of a filter. Reproduce with a
+      differential probe: an in-package `_test.go` in each package that calls
+      `extractFromFilename` / `extractInfoFromPath` over a file of real paths and
+      writes `path\ttitle\tauthor`, then diff the two outputs. Do not measure it on a
+      generated corpus — that is exactly what hid it.
+
+### `SplitCompositeAuthorName` has no `" with "` branch
+
+`"Bill Clinton with James Patterson"` returns no split — on `origin/main` and on
+`fix/person-name-unicode` alike. `" with "` is a real co-author credit form on
+audiobook covers, and it is not in the separator list (`/`, `,`, brackets, `;`,
+` and `, ` & `).
+
+What happens instead: the string falls through to `trySplitConcatenatedAuthors`,
+which tries every word boundary. Before #3029 that could place the boundary
+*inside* the phrase and mint a left half containing the word itself —
+`"Volker Kutscher with Bob"` was a measured example, one of 253 such strings.
+#3029 stops those being minted (the shared predicate rejects an interior
+lowercase non-particle), so the current behaviour is a **missed** split rather
+than a wrong one. That is the intended direction, but the credit is still lost.
+
+Fix is to add `" with "` to the separator branches with the same
+`personname.LooksLikePersonName` gate every other branch now uses. Care needed on
+two shapes before doing it:
+
+- `"X with Y"` where `Y` is not a person (`"Coffee with Milk"`) must refuse.
+- Titles legitimately containing " with " must not be split — the branch must gate
+  on both halves being person-shaped, and refuse the whole split otherwise, the
+  way the comma branch does.
+
+Measured 2026-09-01 while running the consumer differential for #3029; out of
+scope there because it is pre-existing on both sides and adding a separator
+changes behaviour the differential was measuring.
+
+## `SearchBooks` compares a NORMALIZED author name against a raw lower-cased query
+
+`PebbleStore.SearchBooks` (`internal/database/pebble_store.go`) builds its author map with
+`util.NormalizeAuthor(a.Name)` but matches against `strings.ToLower(query)`. Any transform
+`NormalizeAuthor` applies beyond lower-casing — punctuation stripping, `Last, First`
+reordering — is applied to one side of the comparison only, so author matches silently
+fail for exactly the names that need normalizing most.
+
+Noticed while adding dedup search (PR for `feat/dedup-server-side-search`), which
+deliberately did NOT touch it: `SearchBooks` is a shared `BookSearchReader` method with
+other callers, and changing its matching changes their results too.
+
+- [ ] Measure how many authors normalize to something other than their lower-cased name
+- [ ] Decide whether the query should be normalized, or the stored side lower-cased only
+- [ ] Check the other `SearchBooks` callers before changing the predicate
+
+Related: `SearchBooks` also does not match `file_path`, which is why dedup search needed its
+own resolver rather than reusing it.
+
+- [ ] **On the `"_"` filename path, a refusal from `ChooseAuthorSide` produces a worse answer than a guess, and the directory fallback can mint a genre folder as an author.**
+      Found reviewing #3031, reproduced against `origin/main`, and deliberately NOT
+      fixed there — every available fix was measured and each costs more than it saves.
+
+      Two shapes, both in `internal/metadata/metadata.go` `extractFromFilename`:
+
+      ```
+      /lib/Sci Fi/Neil Gaiman and Terry Pratchett_Good Omens.mp3
+        main -> Title "Good Omens"                            Artist "Neil Gaiman and Terry Pratchett"
+        HEAD -> Title "Neil Gaiman and Terry Pratchett_Good Omens"  Artist "Sci Fi"
+
+      /lib/Discworld Novels/Mort_Unknown Author.mp3
+        main -> Artist "Unknown Author"     (recognised as the placeholder; still nominated)
+        HEAD -> Artist "Discworld Novels"   (looks real; the nomination gate closes for good)
+      ```
+
+      In the first, the refusal falls through to the raw-filename branch, so BOTH
+      fields are lost and the author becomes an arbitrary parent folder. In the
+      second, clearing the placeholder — correct in itself — lets
+      `extractAuthorFromDirectory` supply a genre folder, which passes
+      `LooksLikePersonName` exactly as a real author does. A junk author row is
+      worse than the placeholder, because the placeholder is at least recognised
+      by `placeholderAuthors.is`.
+
+      **Measured, so that these are not re-proposed:**
+
+      | attempted fix | result on 68,793 real paths |
+      |---|---|
+      | switch the `"_"` path to `PreferRightOnTie` | **681 / 608 wrong-author regressions** — rejected |
+      | restore the multi-clause credit rule | reintroduces the omnibus-title inversion #3031 removes |
+      | make the `"_"` refusal split and keep the last part as the title | wrong for the dominant use — see below |
+
+      The reason the third fails: `"_"` is usually a **colon substitute** in a
+      subtitle, not a Title/Author separator. Of 11,969 real basenames containing
+      `"_"` and no `" - "`, only 850 have an identifiable orientation at all
+      (679 `Title_AUTHOR`, 171 `AUTHOR_Title`); in the rest — `Beyond Uhura_ Star
+      Trek And Other Memories` — the whole string is the title, so keeping the raw
+      filename is correct for the common case.
+
+      Neither shape occurs in the 40,261-path production sample, which is why #3031
+      measured 0 regressions. They are constructible, not hypothetical.
+
+      The real fix is upstream of all of this: `extractAuthorFromDirectory` cannot
+      tell an author folder from a genre folder, and `internal/scanner` documents
+      its own directory fallback as "actively harmful" and deliberately does not
+      open it, while `internal/metadata` does — the two packages disagree. See
+      `todo.d/20260901_metadata_scanner_filename_parsers_still_diverge.md`.
 
 - [ ] **TODO-REVIEW-PUSHDOWN** Push the metadata review lane's filters down to
       the server so the lane can stop fetching its whole result set. Today
