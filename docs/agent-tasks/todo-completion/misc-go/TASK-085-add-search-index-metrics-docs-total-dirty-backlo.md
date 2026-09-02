@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-085-add-search-index-metrics-docs-total-dirty-backlo.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0abf3e85-4ff3-484d-9905-86f14c78ea15 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-085 — Add search-index metrics (docs total, dirty backlog) to /metrics — the search index has zero metrics today (TODO.md L3433)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2758 merged 2026-08-23 (e4c1d4195).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · misc-go subagent · **Why:** Follows an established registration pattern but needs a new gauge specifically for Bleve's DocCount(), read at the right cadence (boot + periodic, not just once) to be useful as a live divergence signal. · **Depends on:** none · **Wave:** 1
 

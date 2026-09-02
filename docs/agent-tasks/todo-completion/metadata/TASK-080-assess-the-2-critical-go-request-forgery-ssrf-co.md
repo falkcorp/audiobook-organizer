@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-080-assess-the-2-critical-go-request-forgery-ssrf-co.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: cad914e8-4852-4440-9408-d6ea5f781e7d -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-080 — Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover-fetch paths (SEC-CODEQL-BACKLOG)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — code-scanning state=open still lists #662 go/request-forgery metadata/cover.go:137 and #645 covers/covers.go:82. Both nolint sites unchanged. No commits on either file since 2026-08-21. Recommendation: keep — REVIEW-CRITICAL; brief v2.0.0 already corrects the inert lgtm[] premise, so work from the rewritten step 3.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · metadata subagent · **Why:** Critical-severity SSRF finding on a path that fetches a URL sourced from third-party metadata-provider responses (untrusted input) — needs careful review of what 'already validated above' / 'validated by caller' actually means before deciding fix vs. dismiss. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

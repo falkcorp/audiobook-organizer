@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-146-n-10-advertised-login-rate-limit-10-10min-does-n.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 610fc300-ac37-4a6c-9803-118373571b93 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-146 — N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min) (ABS-N10)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2734 + follow-up in #2738/#2739. Fixed 2 of the 3 N-10 mismatches; the throttle-counts-failures-not-requests third is still in the audit doc. Recommendation: close; residual is part of the umbrella ABS N-1..N-10 item.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Why:** Two-constant correction, using already-exported values from absauth — fully mechanical, no design judgment needed since the real values are the source of truth. · **Depends on:** none · **Wave:** 3
 

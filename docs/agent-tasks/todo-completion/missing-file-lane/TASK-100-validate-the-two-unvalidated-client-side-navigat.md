@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-100-validate-the-two-unvalidated-client-side-navigat.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 19898d12-34a2-499d-a975-7d8591f89509 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-100 — Validate the two unvalidated client-side navigation sinks (Login.tsx from-state, BookDetail.tsx library_return_url) the way the Go side already does (TODO.md L8177)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2761 merged 2026-08-23 (c00480a91).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** small, well-specified port of an existing Go function into a new TS util plus two call-site wirings · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-135-convert-metadata-batch-apply-cached-from-resumed.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 18179c26-71f8-4bfe-a433-0dc52f327979 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-135 — Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint/resume (TODO.md L4575)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — batch_apply_op.go:97 ResumePolicy: opsregistry.ResumeDrop unchanged; RunItems at :198 has no ResumeFrom/CheckpointEvery; batch_apply_op_test.go absent. Recommendation: keep - memory note confirmed: applies still do not resume at HEAD.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server subagent · **Why:** Mechanical once the template is understood, but requires correctly reasoning about which fields must round-trip through the checkpoint (WriteBack flag, BookIDs, counters) so a resumed run does not silently downgrade its own semantics — the exact failure mode the template's own comment warns about. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

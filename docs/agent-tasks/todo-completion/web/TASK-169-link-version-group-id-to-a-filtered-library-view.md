@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e47f0731-85fb-4358-afe8-feca52adb894 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-169 — Link version_group_id to a filtered library view (now unblocked — the filter works as of commit b0ebccb0) (TODO.md L3168)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — 0 hits for version_group_id in BookDetailVersionGroup.tsx; unblocking filter confirmed at service_filtering.go:412/538 + TestVersionGroupIDFilter_MatchesMembersOnly; b0ebccb0 is an ancestor. Recommendation: keep - depends on TASK-168's ?filters= parsing.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Small, well-scoped link addition now that the backend filter is confirmed working; the main remaining work is confirming BookDetailVersionGroup.tsx already surfaces enough of the group's other members that a link is additive rather than a full new UI section. · **Depends on:** none · **Wave:** 6
 

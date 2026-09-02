@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9fe74bdf-9606-477f-a939-a5c44b59101c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-147 — Align ABS conformance fixtures with the oracle so CompareValues stays green permanently (TODO.md L127)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — TODO item still [ ]; CompareValues:true still at abs_test.go:474 and library_fake_test.go:1294; fake grew 767->1356 lines via unrelated ABS fixes (ccdb23792, 09131f17c), not an oracle re-seed. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** 767-line fixture-seeding file, 12 currently-red tests to diagnose one by one (distinguishing genuine fixture drift from real bugs from deliberate divergences), plus two named open design questions (track title source, author ordering) that need an actual decision before the corresponding tests can be written — this is judgment-heavy, not mechanical field renaming. · **Depends on:** TASK-143, TASK-144, TASK-145, TASK-146 · **Wave:** 4
 

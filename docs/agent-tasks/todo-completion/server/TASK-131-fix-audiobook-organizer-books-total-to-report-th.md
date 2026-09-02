@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d35e5bf0-971c-470b-958b-27a036cdf275 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-131 — Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename it) (TODO.md L3443)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — metrics.go:47-48 still books_total / 'Current total number of books in library'; server_lifecycle.go:506 CountPrimaryBooks -> :515 SetBooks; CountAllBooks only at pebble_store.go:3399. Recommendation: keep - neither the rename nor the CountAllBooks switch landed.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Small, precisely located fix — either swap one function call or add a second gauge; the only judgment needed is which resolution the owner prefers. · **Depends on:** none · **Wave:** 4
 

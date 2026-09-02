@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-030-add-a-compare-and-swap-on-collection-version-to-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5880334b-e2d7-4bc6-8244-a6fa7c43d886 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-030 — Add a compare-and-swap on Collection.Version to PebbleStore.UpdateCollection (TODO.md L4501)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2760 merged 2026-08-23 (102f2e6a0).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** A concurrency/CAS fix in the storage layer with parity needed across PebbleStore and MockStore, plus multiple call sites needing conflict-error translation — mechanical but touches enough files to warrant care. · **Depends on:** none · **Wave:** 1
 

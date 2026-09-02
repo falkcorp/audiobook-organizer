@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-128-fix-enableratelimit-false-not-actually-disabling.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5456542c-1ac0-4bd3-9840-8c86fe5bf0a9 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-128 — Fix EnableRateLimit=false not actually disabling rate limiting (CFG-AUDIT)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2744 merged 2026-08-23 (8a4f10c7a).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Small, localized fix but touches a security-relevant gate on the HTTP server startup path. · **Depends on:** none · **Wave:** 2
 

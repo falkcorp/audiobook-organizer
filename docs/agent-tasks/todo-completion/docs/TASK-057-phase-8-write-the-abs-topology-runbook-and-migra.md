@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-057-phase-8-write-the-abs-topology-runbook-and-migra.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0f67a290-3f24-4857-902d-b361b4d39047 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-057 — Phase 8 — write the ABS topology, runbook, and migration guide (Cloudflare Access ordering, cover/image bypass, client compat matrix) (ABS-SYNC-Phase8)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — docs/reference/abs-sync-topology-runbook.md absent; docs/reference holds only abs-client-network-audit, abs-implementation-status, abs-target-client-contract, abs-upstream-api-reference. Recommendation: keep - flagged 'possibly parked', but the TODO item is unchecked and both prerequisite contract docs exist, so it is writable now, not blocked.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · docs subagent · **Why:** Pure documentation synthesis task pulling together several already-known operational facts (CF Access policy ordering, cover bypass, tunnel JWT, client matrix) into one runbook — no code, but requires care to get the security-critical ordering advice right · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

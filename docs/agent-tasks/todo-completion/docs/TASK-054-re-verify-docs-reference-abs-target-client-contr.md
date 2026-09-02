@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-054-re-verify-docs-reference-abs-target-client-contr.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5d2c5d26-51ac-4b9d-b5c8-826b02e67710 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-054 — Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to stub' list — playlists AND collections are now both falsified (TODO.md L497)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2743 merged 2026-08-23 (5185d64a6).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · docs subagent · **Why:** Requires re-checking each §11 entry (not just the 3 already known-stale) against real app/client behavior per the TODO's own instruction ('re-check every other entry in that list against real app behaviour rather than against the corpus') — a genuine verification pass, not a mechanical text edit, even though the edit itself is small. · **Depends on:** none · **Wave:** 1
 

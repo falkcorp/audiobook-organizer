@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c3644dcb-4cc5-4d87-94fa-028699a28039 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-004 — Add a conformance test asserting the library path and author path classify nil/true/false IsPrimaryVersion identically (TODO.md L3889)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/audiobooks/service_query_isprimary_conformance_test.go absent; 0 commits to it; no IsPrimaryVersion case in the 3 existing conformance test files. Recommendation: keep - cheap regression net over the nil-primary fixes that did land (8486c93f8, fc93d1b88).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** Requires understanding both call paths (library pushdown vs authorID branch + post-filter) well enough to build a fixture that actually exercises the divergent nil handling -- a naive fixture without a nil-flagged row would not catch the bug per the TODO's own warning. · **Depends on:** TASK-003 · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

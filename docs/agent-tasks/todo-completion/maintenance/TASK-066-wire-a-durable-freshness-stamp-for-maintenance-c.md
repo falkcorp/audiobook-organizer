@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 96b8a671-429f-4bcb-8f74-e26a2d0a5eae -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-066 — Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled (TODO.md L606)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — HEAD d2fcef16a: grep 'freshness.Stamp\|ClearStamps' non-test -> 0 hits. All 5 anchors hit (StoreProvider deps.go:188, PebbleStore.DB() :427). No commits on exact_files since 2026-08-21. Recommendation: keep — prerequisite for scheduling chapters-backfill; unchanged since the brief.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** touches 3 files across 2 packages (plugin interface, server wiring, op logic) and must not break the ServerDeps compile-time assertion; needs care around where the *pebble.DB handle is available at server construction time · **Depends on:** none · **Wave:** 1
 

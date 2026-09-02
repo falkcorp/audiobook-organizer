@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8c1da393-4b0b-4e65-8ac9-d004ccc1b808 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-096 — Require every mutating operation to declare and enforce dry_run support at the registry (TODO.md L7435)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -c DryRun registry/types.go -> 0; ValidateOpDef exists registry.go:434 (exported by 73e6815ec 2026-08-20), so the hook point is ready; DryRun *bool still per-op (intro_transcribe.go:90). Recommendation: keep — ValidateOpDef being exported makes this smaller than when the brief was written.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** Cross-cutting registry contract change touching every mutating OperationDef; needs careful design of the shared param-embedding mechanism and a migration plan for existing ops that lack it. · **Depends on:** none · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

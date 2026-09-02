@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-028-guard-author-delete-paths-with-an-unfiltered-aut.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 87dd9ee2-6c19-41a6-8f6b-73d71f96db3e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-028 — Guard author delete paths with an unfiltered author-reference counter (twin of the series-delete fix) (TODO.md L3526)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2787 merged 2026-08-23 (2a789cb31).
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · database subagent · **Why:** touches the database interface layer (memdb + Pebble + capability interface + mocks) and two production delete handlers; on a prod-data delete path, so needs careful review despite following an exact existing template · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

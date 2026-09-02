@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 46c672d7-9597-46c9-b29b-0df51d04916e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-158 — Add a Settings panel section to edit path_aliases (2026-08-20-dual-path-settings-panel.md#1)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — PathAliasesSection.tsx/.test.tsx do not exist; grep -c path_aliases in useSettingsHandlers.ts and PathsSettingsTab.tsx = 0/0; API side present (api.ts:874 PathAlias, :884 path_aliases). Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** New component + multi-file state wiring (Settings.tsx state, useSettingsHandlers.ts payload, new test file); mechanical but touches 4 files that must stay consistent. · **Depends on:** none · **Wave:** 1
 

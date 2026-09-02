@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-078-task-04-build-the-idempotent-sync-id-backfill-ov.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6f2902af-03c7-4da0-9730-3b1a8359dc6d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-078 — TASK-04: build the idempotent sync-ID backfill over the existing library (bounded worker pool required) (ABS-SYNC-TASK-04)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — backfill_sync_id.go ABSENT; no maintenance file pairs backfill with SyncID/SyncItem. docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md exists; RunItems pattern acoustid/backfill.go:125. Recommendation: keep — but it is wave-3 of a multi-task ABS-SYNC lane; sequence after waves 1-2.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** Full-library maintenance op with a mandatory bounded worker pool (CLAUDE.md concurrency rule) touching prod sync identity — needs careful idempotency and review · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

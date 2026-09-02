@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-139-prune-expired-abs-sess-records-on-the-existing-s.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 793c9bad-b007-4071-8da4-8fe10eefda0c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-139 — Prune expired abs_sess: records on the existing session-cleanup schedule (ABS-SYNC)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2737 merged 2026-08-23 (56d4de4fb).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server subagent · **Why:** Mechanical: add one interface method + one call inside an already-existing loop, following an adjacent line's exact pattern · **Depends on:** none · **Wave:** 3
 

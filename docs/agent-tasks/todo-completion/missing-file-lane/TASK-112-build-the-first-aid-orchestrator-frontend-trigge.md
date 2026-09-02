@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-112-build-the-first-aid-orchestrator-frontend-trigge.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7239745d-fe85-44ed-b362-6ada21a14512 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-112 — Build the First Aid orchestrator + frontend trigger button (dry-run by default, no schedule) (TODO.md L8890)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — 'FirstAid\|first-aid\|first_aid' internal --include=*.go -> 0 hits; orchestrator file ABSENT; all 14 roster ops exist. Design note exists in the clone (untracked, so not visible inside the worktree). Recommendation: keep — largest item in this batch; the 14 tier ops it sequences are all built.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** sequencing/orchestration across a dozen-plus existing ops with a convergence (re-investigate after fixers) loop and a new frontend surface — architecturally significant even though most called ops already exist · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

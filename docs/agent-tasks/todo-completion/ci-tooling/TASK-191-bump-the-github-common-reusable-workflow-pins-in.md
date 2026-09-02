@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6b8b31dc-00e9-4bfe-9842-53c943770b81 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-191 — Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first (TODO.md L921)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — Partly landed, in reverse order: PRs #2875/#2889/#2988 bumped prerelease.yml + release-prod.yml to 66924760. 6 workflows still pin d0c3326b; acceptance needs 0. Recommendation: keep but rewrite - the risky release pair the brief wanted done LAST already shipped, so what remains is the low-consequence six (frontend-ci, nightly, nightly-burndown, hard-burndown, security, triage-poll) in one PR.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs with a nightly-run wait between the low- and high-consequence groups, which is process/sequencing work, not pure mechanics · **Depends on:** none · **Wave:** 2
 

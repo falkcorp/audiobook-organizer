@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b89b3487-7436-461f-8bb9-bcca03c8c4c7 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-037 — Omnibus/anthology book_type field — Part 1 of the omnibus-detection-and-dedup spec (TODO.md L10523)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn 'BookType\|book_type' internal/database/ = 0 hits at HEAD; no migration added. Recommendation: keep.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · database subagent · **Why:** schema migration + cross-layer (DB/API/FE) field threading on a prod-data path; needs careful review · **Depends on:** none · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

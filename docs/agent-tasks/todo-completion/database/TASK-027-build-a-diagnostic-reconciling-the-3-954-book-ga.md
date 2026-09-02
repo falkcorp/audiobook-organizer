@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-027-build-a-diagnostic-reconciling-the-3-954-book-ga.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6641cc46-f58b-4614-aa3a-1111b198104c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-027 — Build a diagnostic reconciling the 3,954-book gap between the store's live-book count and the API list endpoint's total (TODO.md L3414)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2752 read-only diagnostic; cause already recorded in the C716 section (Bleve DocCount polluted by stale soft-deleted docs). TODO L7248 checked off.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** Root cause genuinely unknown per the item's own text; requires building a small diagnostic tool and reading its output before any fix can even be scoped — investigative, not mechanical. · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-161-strip-dedup-and-metadata-source-namespaces-from-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1ef0b068-936b-4160-b39d-b5f5bc94e955 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-161 — Strip dedup:* and metadata:source:* namespaces from Browse by Tag widget (TODO.md L1350)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — TagCloud.tsx:120 label={`${t.tag} (${t.count})`} with no filter step; grep 'dedup:\|metadata:source:\|startsWith' TagCloud.tsx = 0 hits; Library.tsx:2223/2244 still passes availableTags raw. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Small, self-contained frontend filter/format change with clear before/after examples given in the TODO item. · **Depends on:** none · **Wave:** 2
 

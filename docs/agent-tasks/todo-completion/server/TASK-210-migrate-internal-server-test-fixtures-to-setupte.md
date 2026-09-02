@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 659efa6d-c9d8-4ffe-8b22-906c2ff8956e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-210 — Migrate internal/server test fixtures to setupTestServerWithStore — server_coverage_phase2_test.go, deluge_integration_test.go, search_reconciler_test.go, maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go (DEC-6)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — server_coverage_phase2_test.go still 4 allowOpDefinitionUpserts+NewServer pairs (75/76,133/134,167/168,222/223); deluge 113,161; search_reconciler 46,242; 4 wrapper fixtures still NewServer. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** server_coverage_phase2_test.go's 4 sites live inside `for _, tt := range ...` subtest loops (confirm with the surrounding braces before editing) and already have their own manual allowOpDefinitionUpserts call that becomes redundant post-migration — a purely mechanical find-replace would leave a harmless but sloppy duplicate call; a Sonnet-tier read of the surrounding ~10 lines per site is warranted. The 4 wrapper-helper files (maintenance/user_tags_authz/playlist/handlers_integration) require deciding whether to migrate the WRAPPER's internals (keep the file's distinct helper name and signature, delegate its body to setupTestServerWithStore) or retire the wrapper and repoint its call sites directly — the wrapper's own return signature (user_tags_authz_test.go's five-tuple return, for instance) makes 'delegate internals, keep signature' the lower-risk choice; document that choice explicitly per file. · **Depends on:** none · **Wave:** 1
 

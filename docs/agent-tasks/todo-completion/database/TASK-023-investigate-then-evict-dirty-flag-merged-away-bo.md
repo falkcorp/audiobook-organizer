@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: fdeeb934-9bfd-4dd7-9127-64317e8ff30e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-023 — Investigate then evict/dirty-flag merged-away book/file IDs from every read cache so losers stop appearing after a merge (MERGE-CACHE-EVICT)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn 'IndexBook\|bleve\|Invalidate\|listCache' internal/merge internal/dedup --include='*.go' = 0 hits; the 4 commits to these files are version-group semantics only. Recommendation: keep - highest leverage of the cache lane; it is the prerequisite TASK-001 defers around, and the 'I merged these and still see two copies' symptom.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · database subagent · **Why:** Correctness-critical, multi-layer (memdb + Bleve + version-group index + a not-yet-located file-level merge path), and requires resolving 4 explicitly unverified questions before the actual fix — not a mechanical diff. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-029-add-getbooksbyseriesidallversions-and-switch-ded.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: bae74679-b5de-4fe3-94e5-c91a80ef0eb6 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-029 — Add GetBooksBySeriesIDAllVersions and switch DedupSeries's merge loop to it before DeleteSeries (TODO.md L3966)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2821 (41641f952) — owner-reserved PR, merged.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · database subagent · **Why:** New store-interface method across MemStore + PebbleStore + the Store interface + MockStore, plus updating the dedup call site -- more surface than part 1 but still a mechanical mirror of an existing, already-reviewed pattern. · **Depends on:** TASK-043 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

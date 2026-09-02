@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-007-wire-scripts-test-check-memory-leaks-py-into-a-c.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 926a8516-ff6a-45b6-bfd7-85a408b24d14 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-007 — Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) (TODO.md L50)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2700 merged 2026-08-22 (a19851ebd).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · ci-tooling subagent · **Why:** One-line addition to an existing CI step, no new logic — just add a second unittest discover invocation (or widen the existing one) pointed at scripts/. · **Depends on:** none · **Wave:** 1
 

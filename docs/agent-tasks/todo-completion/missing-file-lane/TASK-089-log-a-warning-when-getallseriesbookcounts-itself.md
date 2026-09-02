@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-089-log-a-warning-when-getallseriesbookcounts-itself.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 49971e67-a90d-4d9e-87d2-50c1285e3df2 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-089 — Log a warning when GetAllSeriesBookCounts() itself errors in LibrarySeries (TODO.md L5494)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2699 merged 2026-08-22 (1b5df3041).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · missing-file-lane subagent · **Why:** One-line addition to an existing, well-understood error branch. · **Depends on:** none · **Wave:** 1
 

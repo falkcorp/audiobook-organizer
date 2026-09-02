@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-183-write-file-header-for-the-35-current-live-docs-s.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6c71c1ea-5e82-40ff-b9f0-6f8396ce174b -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-183 — Write file-header for the 35 current live docs still missing one (TODO.md L101)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2713 merged 2026-08-22 (8db9e3e60).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Haiku-class · docs subagent · **Why:** Purely mechanical: prepend the standard 4-line header block per CLAUDE.md's format to each of 35 files, no content judgment needed beyond picking today's date and a fresh guid. · **Depends on:** none · **Wave:** 1
 

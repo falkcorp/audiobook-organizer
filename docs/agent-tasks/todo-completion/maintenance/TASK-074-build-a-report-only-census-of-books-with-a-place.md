@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2c0e3e1e-46fc-4085-ae11-880265be483e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-074 — Build a report-only census of books with a placeholder author already baked into their organizer-tree path but resolvable metadata (TODO.md L4144)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — unknown_author_audit.go ABSENT; 'unknown-author-audit\|UnknownAuthorAudit' -> 0 hits. Anchors hit: placeholderAuthor organizer.go:316, HasResolvedAuthor :343, dedup_triage Apply :294. Recommendation: keep — but note #2888/#2923 changed placeholder handling in the scanner; re-measure before building.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** a new whole-library maintenance op with a worker pool, following an existing pattern but requiring correct path-parsing logic (detecting the placeholder baked into FilePath) plus a resolvable-metadata heuristic · **Depends on:** none · **Wave:** 1
 

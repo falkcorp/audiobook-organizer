@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 90097b91-3688-4f5e-8757-7a8e40fb590d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-195 — Add a zero-size bucket to maintenance.missing-file-audit (the delta TASK-074 does not cover) (DEC-13)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — missing_file_audit.go: '.Size()' -> 0 hits; enum still fileUnknown/filePresent/fileMissing/fileUnreadable (:288-291); classification :606; def plugin.go:62. Last commit e26d9cfae 2026-08-19. Recommendation: keep — report-only extension, consistent with the report-only missing-file rule.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** Small, additive extension to an already-well-tested report-only op; no prod-data mutation, no concurrency redesign (reuses the existing worker pool) — straightforward for Sonnet. · **Depends on:** none · **Wave:** 1
 

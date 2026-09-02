@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-162-reformat-metadata-tags-in-browse-by-tag-strip-pr.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5aee0740-4a70-454a-84b6-297332154079 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-162 — Reformat metadata:* tags in Browse by Tag: strip prefix, 'key: value' spacing (TODO.md L1350)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — TagCloud.tsx has exactly one label={} at :120 using the raw tag; no formatting helper; no commits to TagCloud.tsx since 2026-08-21. Recommendation: keep - ship together with TASK-161 (same file, same TODO item).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Pure string-formatting change, but must handle the 3-segment case (metadata:language:en → 2 colons) correctly, not just strip the first prefix. · **Depends on:** none · **Wave:** 1
 

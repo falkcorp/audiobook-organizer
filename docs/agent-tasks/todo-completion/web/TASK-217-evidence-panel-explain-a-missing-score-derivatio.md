@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-217-evidence-panel-explain-a-missing-score-derivatio.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e634a0a5-2617-4428-80e6-6fed9bd20749 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-217 — Evidence panel: explain a missing score derivation in plain language and offer re-search inline (REV-EMPTY-3)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — adapters.ts:119 wording unchanged from the brief's snapshot ('...without a recorded derivation, so its score cannot be explained here'); grep onRefetch CompareSpine.tsx = 0; adapters.test.ts missing. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Touches a shared, documented interface (SpineContext) and its sole real constructor plus two render call sites and a test fixture builder; getting the reachable-vs-unreachable emptyReason branch distinction right (see edge_cases) needs the reasoning spelled out, which is more than a mechanical Haiku pass should be trusted with. · **Depends on:** none · **Wave:** 2
 

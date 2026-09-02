@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-222-enqueueop-dedupe-only-on-byte-equal-params-or-an.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5c487f8b-d81d-4c0e-8659-5c217f75fa83 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-222 — EnqueueOp: dedupe only on byte-equal params (or an explicit opt-in), never silently drop a different request (ENQ-DEDUP-1)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2688 merged 2026-08-22 (656c73574).
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · operations subagent · **Why:** One conditional, but it changes enqueue semantics for ~146 operation definitions across every plugin; getting the default backwards either re-creates the cron pile-up or keeps silently dropping user work. · **Depends on:** none · **Wave:** 4 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

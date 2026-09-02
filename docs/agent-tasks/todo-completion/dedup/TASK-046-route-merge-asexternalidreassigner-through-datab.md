@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-046-route-merge-asexternalidreassigner-through-datab.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 02ac1b2b-45da-4c39-9d22-e41194328161 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-046 — Route merge.AsExternalIDReassigner through database.AsCapability instead of a bare assertion (TODO.md L4698)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — Held 2026-08-23 and has NOT landed: merge/service.go:34 is still a bare assertion, called at L372/L513; no AsCapability in the file. Precedent: PR #2696. Recommendation: keep - still held for owner review, not dropped; either unblock it or close it explicitly rather than leaving it queued.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · dedup subagent · **Why:** One-line body swap copying an existing sibling helper's exact pattern. · **Depends on:** none · **Wave:** 4 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

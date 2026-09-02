@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-116-forward-iscanceled-through-reporterlogger-to-the.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: add63649-dcd6-41e6-94be-c4332d73df67 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-116 — Forward IsCanceled() through reporterLogger to the ops registry's cancellation signal (TODO.md L4586)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — progress.go has 2 reporterLogger methods (UpdateProgress :83, With :100) and no IsCanceled override — brief said 'expect 3' but named only those 2, so 2 is consistent. Guards live: scanner/service.go:232,245; organizer/service.go:980,982. Recommendation: keep — small change, but the brief is right that each guard's exit path must be read first.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · operations subagent · **Why:** The code change itself is a 4-line method override, but the item explicitly requires READING each of the 4 downstream guards' exit behavior first (partial state, half-written aggregates, skipped cleanup) before flipping it live — that review work is the actual size of this task, not the diff. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

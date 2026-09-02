@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5db7ee9f-1ec1-429b-b349-3280e6844bd2 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-035 — Add DeleteNarrator to the store (CRUD building block only) (TODO.md L5271)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn DeleteNarrator internal/database/ = 0 hits at HEAD. Author-side deletes landed (7b4a45f39, 23fa23694); nothing narrator-side. Recommendation: keep - small CRUD building block, and the author-side pattern to mirror now exists.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · database subagent · **Why:** Mechanical CRUD addition with a clear model (DeleteAuthor) to mirror, but touches the memdb dual-write path and the Store interface (multiple implementers to update), so needs care. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

@@ -1,8 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.45.3 -->
-<!-- version: 10.44.3 -->
+<!-- version: 10.46.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-01 -->
+<!-- last-edited: 2026-09-02 -->
 
 # Project TODO — live items only
 
@@ -3700,7 +3699,7 @@ speculatively. Keep the notes: they apply if a general merge is ever wanted, and
 - [ ] Make `PathAliases` the single source for the Windows prefix and have
       `reconcile.TranslateITunesPath` read from it, retiring the duplication
       that `ValidatePathAliases` currently only guards against.
-- [ ] Reset the module-scope `cachedAliasesPromise` in `PathLinks.tsx`
+- [x] Reset the module-scope `cachedAliasesPromise` in `PathLinks.tsx` (done in #2711, TASK-159)
       (and `cachedVarsPromise` in `formatPath.ts`) between tests. Both
       caches persist across a test file, so today every test shares one
       seeded alias set; a future test needing different alias data per
@@ -3767,7 +3766,7 @@ speculatively. Keep the notes: they apply if a general merge is ever wanted, and
       classic branch protection. They all require PR reviews and share a
       `set-auto-merge` check, so they look like a deliberate template rather than
       drift — unlike audiobook-organizer, whose protection was removed 2026-08-20.
-- [ ] Add a scheduled detect-only backstop for `auto-revert.yml`: if `main`'s tip has
+- [x] Add a scheduled detect-only backstop for `auto-revert.yml`: if `main`'s tip has (done in #2748, TASK-006)
       a failed gate run older than 30 minutes and no open auto-revert issue exists,
       file the issue. Covers the case where the `workflow_run` listener never fires
       (runner outage, cancelled run).
@@ -3968,7 +3967,7 @@ computation.
 - [ ] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in
       seconds naming itself, instead of consuming the whole package budget and reporting only
       the package name.
-- [ ] Reduce the wait-bound cost while there — 200–280s for a `-short` run of one package is
+- [x] Reduce the wait-bound cost while there — 200–280s for a `-short` run of one package is (done in #2810, TASK-178)
       most of the coverage gate's budget on its own.
 
 **Not urgent for correctness** — no product bug is implied, and a re-run clears it. It is a
@@ -4010,7 +4009,7 @@ removes the case where a *correct* shutdown loses a race with its own assertion.
 
 **Two further hazards in that test, left alone deliberately (not in scope here):**
 
-- [ ] `syscall.Kill(os.Getpid(), syscall.SIGTERM)` signals the **entire test binary**, not a
+- [x] `syscall.Kill(os.Getpid(), syscall.SIGTERM)` signals the **entire test binary**, not a (done in #2698, TASK-204)
       child. Every test in the package shares that process, so this is a global side effect
       fired from one test. It works today; it is a trap for whoever adds parallelism.
 - [ ] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock
@@ -4026,7 +4025,7 @@ argument for treating this gate's flakiness as a work item rather than a nuisanc
 
 ## Docs / API
 
-- [ ] **The OpenAPI spec still documents 48 endpoints that no router serves.** After the
+- [x] **The OpenAPI spec still documents 48 endpoints that no router serves.** After the (done in #2686, #2745, #2751 — TASK-053/051/052: 20 group-relative duplicates and 15 dead `/maintenance/*` paths deleted; 11 root-level paths kept because they back live routes and were the spec's only definition — filed as a `todo.d` fragment on 2026-08-22)
       2026-08-12 union merge, `docs/api/openapi.json` was diffed against the **real** route
       table (obtained by calling `s.router.Routes()` on the actual router, not by grepping),
       and 48 documented operations have no matching route. They fall into three groups:
@@ -4216,7 +4215,7 @@ is complete".
       used here came from the upstream reference instead. Re-capture against a populated
       library before treating that fixture as an oracle. Same trap as the sessions fixture
       holding 3 items against a page size of 10.
-- [ ] **`docs/reference/abs-target-client-contract.md` §11 lists playlists as "safe to
+- [x] **`docs/reference/abs-target-client-contract.md` §11 lists playlists as "safe to (done in #2743, TASK-054)
       stub", and that guidance is now falsified.** A user opened a playlist in the app and
       got an empty screen, so a client demonstrably calls the surface. The §11 list rests
       on the same fixture corpus that contains zero playlist requests — absence there
@@ -4591,7 +4590,7 @@ by guessing rather than from the planner).
       still produce the empty-directory outcome. Check `len(pathMap)` at the
       call site.
 
-- [ ] **F5 (remainder) — `OrganizeBookDirectory` still cannot tell a resumed
+- [x] **F5 (remainder) — `OrganizeBookDirectory` still cannot tell a resumed (done in #2778, TASK-119 — content hash replaces the size heuristic)
       copy from a stranger.** The unification PR narrowed this: a destination
       that already exists is now adopted only when it is `os.SameFile` with the
       source or byte-identical in size, and an unrelated occupant is warned
@@ -5706,7 +5705,7 @@ step 4 propagates to the server package with no edit there.
   at the call site during the activity-cancellation work (branch
   `fix/activityquery`).
 
-- [ ] **`WipeAllActivity` still does an uncancellable full scan on a request
+- [x] **`WipeAllActivity` still does an uncancellable full scan on a request (done in #2769, TASK-025)
   path.** It calls `scanTierKVs(context.Background(), ...)` per tier, and is
   reachable from `handleWipe`. The activity-cancellation work deliberately left
   the maintenance methods (`Prune`, `WipeAllActivity`, `Summarize`,
@@ -7245,7 +7244,7 @@ batch, ~5,000 per ~2.5 min.
 
 Follow-ups this surfaced:
 
-- [ ] **The store reports 67,824 live books; the API list endpoint reports 63,870.**
+- [x] **The store reports 67,824 live books; the API list endpoint reports 63,870.** (done in #2752, TASK-027 — read-only `reconcile-book-counts` diagnostic; cause was already recorded in the C716 section: Bleve DocCount polluted by stale soft-deleted docs)
       A 3,954-book gap. `ListBookIDs` already excludes `MarkedForDeletion`, so these
       are live rows, and `/api/v1/audiobooks` applies no default filter when
       `library_state` is empty. Paging the endpoint returns exactly 63,870 distinct
@@ -7264,7 +7263,7 @@ Follow-ups this surfaced:
       the index worker and the reconciler, so this is currently latent, not active.
       Consider comparing sets rather than counts, or logging both numbers on every
       boot (the `indexed=`/`books=` pair already does this — keep it).
-- [ ] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric
+- [ ] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric (PARTIAL 2026-09-02: `search_index_docs_total` shipped in #2758, TASK-085; the dirty-backlog gauge and `SearchIndexDroppedCount` export are still missing — TASK-130)
       families and **not one** mentions search, bleve, index, or dirty. This is the
       direct reason a quarter of the library was unfindable for an unknown period with
       nobody noticing — there was no signal to notice. `audiobook_organizer_books_total`
@@ -7348,7 +7347,7 @@ Follow-ups this surfaced:
       the summary (book title resolved from id where present), and sweep
       metafetch's sentence-shaped slog messages onto it.
 
-- [ ] **Metadata-apply activity rows don't NAME the book.** Same screenshot:
+- [x] **Metadata-apply activity rows don't NAME the book.** Same screenshot: (done in #2706, TASK-081)
       "Applied narrator: Alex Kozlowski → Grant Cartwright" with a bare
       "book →" link — the summary must lead with the book title ("The
       Whispering Night: applied narrator …"); a link target is not a
@@ -7813,15 +7812,15 @@ security sweep: `internal/server/handlers/itunes.go:709` still calls
 returning no rows (its cited mechanism: the store treats limit 0 as "nothing",
 `pebble_store.go` search path).
 
-- [ ] First MEASURE, don't assume: confirm what `SearchBooks(q, 0, 0)` returns
+- [x] First MEASURE, don't assume: confirm what `SearchBooks(q, 0, 0)` returns (measured in #2755, TASK-152: `limit=0` means no limit in `PebbleStore.SearchBooks`, so it returned everything)
       today (the store may have changed limit-0 semantics since June). A
       bogus-value + known-good-value probe against a seeded store settles it in
       one test.
-- [ ] If it returns nothing: the iTunes search surface has been silently empty
+- [x] If it returns nothing: the iTunes search surface has been silently empty (moot — it returned everything, not nothing; see #2755)
       — fix with a bounded call (or route through Bleve IDs + iTunes filter,
       as the audit suggested), and add the value-asserting test that would
       have caught a filter answering nothing.
-- [ ] If it returns everything: that is the opposite failure (unbounded
+- [x] If it returns everything: that is the opposite failure (unbounded (done in #2755, TASK-152 — bounded to a 10,000-row over-fetch window with a truncation warning)
       materialization on a handler path) and wants a limit anyway.
 
 - [ ] **Legacy operation rows never leave "pending" — the ops UI shows
@@ -8115,7 +8114,7 @@ audit nobody reopens:
       (`internal/server/bootstrap.go:108,:153`). Decide opt-in/local-only.
 - [ ] **SEC-4 residue** — no CSP header yet (middleware comment defers until a
       nonce/hash strategy is settled).
-- [ ] **SEC-8 residue** — Dockerfile build-dep tarballs (`utfcpp`, `taglib`)
+- [x] **SEC-8 residue** — Dockerfile build-dep tarballs (`utfcpp`, `taglib`) (done in #2692, TASK-011)
       are `curl | tar` with no SHA256 verification; base images are pinned.
 - [ ] **PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over
       a mutable snapshot (same class as the AssignOrphanVGs bug; use
@@ -8210,7 +8209,7 @@ the aggregate-coalescing task; PERF-7 is the BookSig/memdb program.)
   `database.AsSeriesBookRefStore(...).GetAllSeriesBookRefCounts()` like
   `executeSeriesPrune` now does. Same for the single-delete path at line 1007.
 
-- [ ] **Two more series deleters have no cache invalidation and no ref guard**, and
+- [x] **Two more series deleters have no cache invalidation and no ref guard**, and (done in #2782, TASK-044)
   sit in packages with no path to the server's caches:
   `internal/dedup/series_dedup.go` (`DedupSeries`, `MergeSeries`) and
   `internal/maintenance/jobs/cleanup_series.go` (`csUnlinkAndDeleteSeries`,
@@ -8234,7 +8233,7 @@ the aggregate-coalescing task; PERF-7 is the BookSig/memdb program.)
   ~40 of the "near" bucket, and its own apply gate — the repair must be narrower
   than the classifier.
 
-- [ ] **Check `scripts/setup-prometheus-auth.py` for the dead-indentation
+- [x] **Check `scripts/setup-prometheus-auth.py` for the dead-indentation (done in #2694, TASK-012 — confirmed immune; comment added)
       bug found in its server-side shell sibling.** The staged
       `abo-prometheus-auth.sh` (server home dir, patched in place to v1.0.1
       on 2026-08-14) computed a YAML body indent from a whitespace-only
@@ -8251,12 +8250,12 @@ every UpdateBook — so soft-deleting a book refreshes its search doc instead
 of removing it. The trashed book stays searchable until the next boot's
 coverage reconcile (set-based since C715) deletes the stale doc.
 
-- [ ] Make the soft-delete transition enqueue a Bleve DELETE instead: either
+- [x] Make the soft-delete transition enqueue a Bleve DELETE instead: either (done in #2750, TASK-132 — shipped inside TASK-133's PR)
       teach `indexedStore.UpdateBook` to check `MarkedForDeletion` on the
       updated row, or have the soft-delete path call the index delete
       explicitly. Mirror-image: RestoreAudiobook's UpdateBook reindex is
       CORRECT — don't break it.
-- [ ] Regression test: soft-delete an indexed book, assert a title probe
+- [x] Regression test: soft-delete an indexed book, assert a title probe (done in #2750, TASK-133)
       returns nothing WITHOUT a boot reconcile.
 
 ## `?version_group_id=` lists the whole library, and cannot be guarded
@@ -8421,7 +8420,7 @@ book and is most likely to go looking for another by the same author.
       confirms the routes are gone (`RETIRED 2026-08-16` comment) and every caller now reads
       v2, which does not carry the stale `pending` rows.
 
-- [ ] **Cancelling an operation the registry has never heard of reports success.**
+- [x] **Cancelling an operation the registry has never heard of reports success.** (done in #2802, TASK-115)
       `DELETE /operations/v2/<unknown-id>` returns `204 No Content`. The handler
       calls `registry.Cancel(id)`, which returns `nil` for an id with no entry,
       so the route cannot distinguish "asked a running op to stop" from "did
@@ -8445,7 +8444,7 @@ book and is most likely to go looking for another by the same author.
       push worker; collections have no equivalent yet. Either add one, or rename the
       concept so the word stops promising more than it does.
 
-- [ ] **`AddBookToCollection` is read-modify-write with no version check.** Two
+- [x] **`AddBookToCollection` is read-modify-write with no version check.** Two (done in #2760, TASK-030 — CAS on `Collection.Version`)
       concurrent adds to the same collection can lose one, and now that any holder of
       `collections.manage` can edit server-wide rows, concurrent edits are a realistic
       shape rather than a theoretical one. `Collection.Version` already exists and is
@@ -8531,7 +8530,7 @@ book and is most likely to go looking for another by the same author.
       pipeline manager is not itself asserted — see
       `todo.d/20260816-ai-scan-cancel-wiring-unverified.md`.
 
-- [ ] **`/tasks/*` and `/maintenance-window/*` are NOT v1 operations.** Six routes
+- [x] **`/tasks/*` and `/maintenance-window/*` are NOT v1 operations.** Six routes (done in #2719, TASK-155)
       on the legacy operations handler are scheduler *configuration*, not
       operation records. They should not be converted to op-defs or deleted with
       the rest; move them to their own handler so "retire v1 operations" does not
@@ -8646,7 +8645,7 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
 
 **Concurrency / correctness**
 
-- [ ] `internal/database/store.go` — `globalStore` is guarded by `globalStoreMu sync.RWMutex`
+- [x] `internal/database/store.go` — `globalStore` is guarded by `globalStoreMu sync.RWMutex` (done in #2693, TASK-031)
       (`:1217`) but three of five accesses bypass it: `InitializeStore` writes bare (`:1261`),
       `CloseStore` reads bare (`:1275`) and writes bare (`:1276`). `:1280` is a
       `time.Sleep(100 * time.Millisecond)` commented "brief pause to let in-flight goroutines
@@ -8662,7 +8661,7 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
 
 **Capability pattern — the historically-realized defect class**
 
-- [ ] `internal/database/iface_assert.go` — its comment claims compile-time proof that
+- [x] `internal/database/iface_assert.go` — its comment claims compile-time proof that (done in #2685, TASK-032)
       `PebbleStore` satisfies *every* sub-interface. It asserts **36 of 40**. Missing:
       `OAuthIdentityStore`, `MetadataCacheStore`, `RejectedMetadataStore`, `ReviewStore`.
       One line each.
@@ -8704,7 +8703,7 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
       (override-guard count 313 → 402). Guarded by a structural AST test
       (`mock_store_override_test.go`) that fails naming every method still missing a guard,
       with a positive control so a broken parser cannot pass vacuously.
-- [ ] ⚠ `internal/server/organize_service_test.go:34` — vacuous test. It sets `GetAllBooksFunc`;
+- [x] ⚠ `internal/server/organize_service_test.go:34` — vacuous test. It sets `GetAllBooksFunc`; (done in #2753, TASK-137)
       the code under test calls `GetAllBooksCore`, whose func field is unset → `nil, nil`.
       `TestOrganizeService_PerformOrganize_NoBooksToOrganize` asserts only `err == nil` and
       passes against a mock wired to nothing.
@@ -8824,7 +8823,7 @@ directories, not just the `.tmp-rename` glob.
       builder guard are in place. The post-fix observation window is currently
       about zero.
 
-- [ ] **Give the AI parser typed provider errors.** `internal/scanner/ai_failure.go`
+- [x] **Give the AI parser typed provider errors.** `internal/scanner/ai_failure.go` (done in #2756, TASK-124)
       decides whether an AI failure is permanent by substring-matching the error text
       (`insufficient_quota`, `invalid_api_key`, …) because `aiParser.ParseBatch` flattens
       the HTTP status and the provider's error code into a `fmt.Errorf` string several
@@ -9764,13 +9763,13 @@ before anyone is asked to trust a dry run of a repointing job.
       `aria-label`. Note the row already contains a Revert `<Button>` that calls
       `stopPropagation`, so any keyboard handler has to not double-fire there.
 
-- [ ] **Dead `expanded` state in `TagComparison`.** `web/src/components/TagComparison.tsx:69`
+- [x] **Dead `expanded` state in `TagComparison`.** `web/src/components/TagComparison.tsx:69` (done in #2691, TASK-091)
       is `useState(true)` and `setExpanded` is never called, so the `<Collapse in={expanded}>`
       at line 249 is always open. Either drop the state and the `Collapse`, or wire up the
       toggle that was evidently intended (the e2e suite still had a `tag-comparison-toggle`
       testid assertion for it until 2026-08-09).
 
-- [ ] **Delete the unreachable "Bulk Fetch Metadata" dialog and its handler.**
+- [x] **Delete the unreachable "Bulk Fetch Metadata" dialog and its handler.** (done in #2757, TASK-092)
       `web/src/components/library/LibraryDialogs.tsx:920` renders
       `<Dialog open={bulkFetchDialogOpen}>`, but `setBulkFetchDialogOpen(true)` appears
       **nowhere** in `web/src` — the state is initialised to `false` at
@@ -10285,7 +10284,7 @@ before anyone is asked to trust a dry run of a repointing job.
       users previously clicked to browse. Getting from the M4B to the MP3 of the same
       book now means going back to the library and finding the other card.
 
-- [ ] **The version-group summary lost its count and its "you are here" marker.**
+- [x] **The version-group summary lost its count and its "you are here" marker.** (done in #2770, TASK-094)
       `Part of version group with N books.` and `(Current)` appear nowhere in `web/src`.
       All that survives is a bare **"Version Group Linked"** chip
       (`BookDetailHeader.tsx:172`) — it tells you a group exists but not how big it is
@@ -12235,7 +12234,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   Revisit when the app moves to React 19 for its own reasons. Do not take the
   React major *for* this advisory.
 
-- [ ] **Two frontend navigation sinks are unvalidated and safe only by
+- [x] **Two frontend navigation sinks are unvalidated and safe only by (done in #2761, TASK-100)
   accident.** Found 2026-08-06 while auditing the react-router open-redirect
   advisories. Neither is exploitable today. Both rest on an invariant that a
   future change breaks **silently** — nothing fails, nothing warns, the sink just
@@ -14368,7 +14367,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   cause would be invisible. Either exempt the ABS paths in `basicauth.go` or document
   that the two features are mutually exclusive.
 
-- [ ] **ABS-SYNC: prune expired `abs_sess:` records on a schedule.**
+- [x] **ABS-SYNC: prune expired `abs_sess:` records on a schedule.** (done in #2737, TASK-139)
   `PebbleStore.DeleteExpiredABSSessions` exists and is tested but has no caller. Add it
   to the same maintenance sweep that calls `DeleteExpiredSessions` for the browser
   keyspace, or revoked/expired ABS sessions accumulate forever.

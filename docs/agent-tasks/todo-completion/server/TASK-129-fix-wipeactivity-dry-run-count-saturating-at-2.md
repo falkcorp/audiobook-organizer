@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9a834dcd-7168-428e-b196-721739895af4 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-129 — Fix wipeActivity dry-run count saturating at 2 (TODO.md L1957)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — maintenance_fixups.go:445 wipeActivity dry-run still returns svc.Query(Limit:1) total; NOTE comment intact; no count path added; no commit touches it since 08-21. Recommendation: keep - unchanged, still actionable.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Needs either a new dedicated activity-count method across multiple ActivityStorer implementations (pebble, nuts, dual-write, instrumented) or careful reuse of an existing prefix-count primitive against activity's own key scheme — small in isolation but touches an interface with 4 implementations. · **Depends on:** none · **Wave:** 2
 

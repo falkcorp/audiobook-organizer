@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-011-pin-sha256-checksums-for-dockerfile-fetched-utfc.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 31e9b170-ae6f-4119-b7db-f6a60150791d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-011 — Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs (SEC-8)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2692 merged 2026-08-22 (4b5f6af22).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · ci-tooling subagent · **Why:** mechanical: download once, record the known-good sha256, add a verification step — no design decision needed since base images are already pinned by the project's own convention · **Depends on:** none · **Wave:** 1
 

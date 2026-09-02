@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9ae9e63c-aec0-4d1c-a0dd-846f8c07614c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-220 — Journal every duplicate-row deletion to the undo ledger and refuse to apply while a library.scan is active (DUPROW-3)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — CreateOperationChange still decl-only (deps.go:148, 1 hit in internal/plugins); ListActiveOperationsV2 absent from maintenance/deps.go though it exists iface_ops_v2.go:156; library.scan library_core_ops.go:48. Recommendation: keep — this is the safety gate before any apply=true run in prod; do before TASK-219.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** Row deletion on a prod data path with an owner decision still open; the journal must be complete enough to replay a deletion back, the guard must fail closed, and it crosses an interface boundary with an interfacebloat cap that makes the obvious edit illegal. · **Depends on:** none · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

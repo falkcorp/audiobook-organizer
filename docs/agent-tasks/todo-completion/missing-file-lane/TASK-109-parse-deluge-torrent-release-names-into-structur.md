@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f698242b-d514-4731-9c3c-935f52147b3a -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-109 — Parse Deluge torrent release names into structured candidate metadata (author/series/volume/narrator/edition/year) as a scored candidate for the existing matcher (TODO.md L8707)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/deluge/metadata_candidate.go ABSENT; ParseTorrentNameMetadata -> 0 hits; title-only ParseTorrentNameCandidates still discovery.go:334; core.get_torrent_status client.go:200. Recommendation: keep — scored-candidate-only framing is right; do not let it write authoritatively.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** richer structured-metadata parsing than the existing title-only parser, feeding an existing matcher as a scored candidate — real design work on parse confidence, not mechanical · **Depends on:** none · **Wave:** 1
 

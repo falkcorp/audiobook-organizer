@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-221-metafetch-collapse-duplicate-book-file-rows-by-c.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e6f42012-6429-48cf-976b-3a7c64c2c121 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-221 — metafetch: collapse duplicate book_file rows by cleaned path before write/rename (DUPROW-1)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2690 merged 2026-08-22 (03006224e).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · metadata subagent · **Why:** One new pure helper plus four mechanical call-site insertions, but the keeper-choice rule is data-adjacent and must match the existing rankKeeper order. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

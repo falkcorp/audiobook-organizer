@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-213-replace-the-single-file-organizebook-call-in-fil.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 679e2c03-3d44-4d8d-9ddc-e16562e0bdf1 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-213 — Replace the single-file OrganizeBook call in filesystem.go's auto-organize-after-browse block with OrganizeOneBook + counters (ORGANIZE-4TH-COPY)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — filesystem.go:311 still 'newPath, _, err := org.OrganizeBook(dbBook)' in the auto-organize loop; OrganizeOneBook lives at organizer/service.go:1234 and is not called there; filesystem_test.go absent. Recommendation: keep.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** small, well-templated fix (copy an already-proven pattern from two sibling files) but touches a file-organize write path, warranting more care than a pure haiku mechanical edit · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

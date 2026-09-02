@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-051-delete-the-34-group-relative-duplicate-paths-fro.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a244eedf-9bff-4633-9ff2-98ca749867b8 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-051 — Delete the 34 group-relative duplicate paths from docs/api/openapi.json (safe to delete on sight) (TODO.md L296)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2745 merged 2026-08-23 (44cb324e0).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · docs subagent · **Why:** Mechanical JSON-path deletion, but requires care not to delete a path that ALSO happens to be a legitimately root-level route (verify each against the real router table before deleting, per the TODO's own caution that this needs 'individual confirmation'). · **Depends on:** none · **Wave:** 1
 

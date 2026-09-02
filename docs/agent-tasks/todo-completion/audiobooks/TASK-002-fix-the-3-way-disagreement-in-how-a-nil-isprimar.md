@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-002-fix-the-3-way-disagreement-in-how-a-nil-isprimar.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3d0db51d-44cf-4796-a768-e96a65672724 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-002 — Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated (matcher vs. pushdown vs. serialized field) (TODO.md L3348)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2805 merged 2026-08-23 (0e97c8398).
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · audiobooks subagent · **Why:** Root cause is fully located (3 exact call sites); the fix is a mechanical unification of nil semantics, but on a prod-data-adjacent listing/filtering path that needs careful regression testing across both the memdb-pushdown and post-filter query strategies. · **Depends on:** none · **Wave:** 4 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/TASK-123-delete-the-unused-internal-scanner-mocks-generat.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b950b369-c774-4471-903f-4fecbe112415 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-123 — Delete the unused internal/scanner/mocks generated package (TODO.md L4739)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2730 merged 2026-08-22 (4f428d125).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · scanner subagent · **Why:** Delete a directory and one YAML entry; no logic to reason about. · **Depends on:** none · **Wave:** 2
 

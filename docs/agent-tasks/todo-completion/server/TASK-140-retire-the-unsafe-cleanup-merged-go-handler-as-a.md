@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e15ace4d-5514-4c3a-a365-652019b1faed -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-140 — Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal) (TODO.md L10372)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — itl_cleanup.go:53 still calls SafeWriteITL(itlPath,*ops) on the apply path; grep 'no-op\|noop\|disabled\|guard' = 0 hits; no commits to the file since 2026-08-21. Recommendation: keep - unguarded apply path still live.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Small diff, but it is a prod data-loss guard on a route that currently CAN delete real library tracks — precision matters more than size · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

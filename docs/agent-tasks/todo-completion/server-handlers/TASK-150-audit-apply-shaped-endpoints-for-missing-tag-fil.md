@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ca05b348-ed6e-4beb-bf4d-dd3892c76e41 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-150 — Audit apply-shaped endpoints for missing tag/file-I/O writeback (TODO.md L2481)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — docs/audits/2026-08-21-apply-endpoint-fileio-audit.md does not exist at HEAD; all four handler anchors still resolve (organize.go:160, ai.go:592/820, diagnostics.go:443, review/handler.go:137). Recommendation: keep - re-scope: the v2 migration (25227c126, f8c0d43e6, 281955c6f) rewrote several of these handlers since the brief.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** Multi-file investigation across handler packages requiring judgment about which paths mutate on-disk-relevant state; no novel design. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

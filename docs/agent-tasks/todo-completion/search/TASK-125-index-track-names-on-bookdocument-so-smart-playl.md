@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 007f87dc-2353-44fc-81f6-953321fda301 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-125 — Index track names on BookDocument so smart playlists can match them (TODO.md L618)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep TrackNames document.go -> 0 hits; bookMappingVersion still "2" (bleve_index.go:94); AddFieldMappingsAt 25 hits; indexBuilderStore :25; GetBookFiles iface_bookfile.go:20. Recommendation: keep — remember the mapping-version bump forces a full index rebuild; schedule accordingly.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · search subagent · **Why:** touches the index schema (mapping-version bump forces a full library reindex on next restart), a probe-derived narrow interface, and query-time field weighting -- needs care to keep interfacebloat-style narrowness · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-182-record-the-docs-system-vs-top-level-architecture.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c35fabc3-7213-4f5f-9abe-92f71bd1a40e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-182 — Record the docs/system vs top-level architecture classification decision in the docs inventory (TODO.md L101)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — docs/audits/2026-08-11-docs-inventory.md:224 still reads 'out of the classification scope... follow-up pass'; 0 commits to the file since 2026-08-21. Recommendation: keep - ~15 minutes of pure bookkeeping, no code risk.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · docs subagent · **Why:** The classification judgment itself is already made by the docs' own cross-references (verified above); the remaining work is reading each of the 13 files (9 docs/system + 4 docs/architecture) to confirm none is an accidental true duplicate, then writing a short resolution paragraph into the audit doc -- comprehension task, but small and mostly confirmatory. · **Depends on:** none · **Wave:** 1
 

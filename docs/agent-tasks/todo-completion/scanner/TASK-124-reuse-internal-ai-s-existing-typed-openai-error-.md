@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/TASK-124-reuse-internal-ai-s-existing-typed-openai-error-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3fd5deec-0a8c-4b8a-a4de-c474c09db312 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-124 — Reuse internal/ai's existing typed OpenAI error classification in scanner.isPermanentAIFailure instead of re-parsing error text (TODO.md L4852)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2756 merged 2026-08-23 (1ddaa840d).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · scanner subagent · **Why:** Not pure mechanical: requires reasoning about which of ai_failure.go's marker strings become provably redundant once errors.As(*ai.PermanentError) is checked first (400/401/403/404 already covers invalid_api_key/account_deactivated by status code) versus which still need a text fallback (Anthropic-style markers are currently dead code since aiParser is OpenAI-only; Ollama-via-baseURL errors may not always come back as structured *openai.Error and could still need the text fallback) — a judgment call, not a copy-paste. · **Depends on:** none · **Wave:** 1
 

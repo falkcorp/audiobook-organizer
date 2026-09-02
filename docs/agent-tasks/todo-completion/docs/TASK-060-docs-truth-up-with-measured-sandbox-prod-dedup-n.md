@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-060-docs-truth-up-with-measured-sandbox-prod-dedup-n.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 883c302c-8719-4fcc-87fd-f0daf3781e37 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-060 — Docs truth-up with measured sandbox/prod dedup numbers (T13)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2712. PARTIAL by design — TODO L14990 stays open until the T03 sandbox run happens. Recommendation: close the brief; the TODO box is an owner prod action.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · docs subagent · **Why:** mechanical doc-number updates against already-measured values, following a fully pre-written brief · **Depends on:** none · **External blockers:** TODO.md L10831 (prod_run) — not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch · **Wave:** 1
 

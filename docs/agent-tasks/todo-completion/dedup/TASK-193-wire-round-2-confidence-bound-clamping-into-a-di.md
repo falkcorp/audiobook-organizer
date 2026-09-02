@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6b1a5d03-38b0-4c53-b544-03f2621ff390 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-193 — Wire Round-2 confidence-bound clamping into a distinct apply_confidence path; keep the live display score raw (DEC-10)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — Same absence as TASK-192 (apply_confidence = 0 hits repo-wide). Both briefs cite DECISIONS-PENDING row 10 and overlap on compose.go / calibrate_composite.go. Recommendation: merge into TASK-192 - same owner decision, same files, near-duplicate scope; TASK-193's wider exact_files list should become TASK-192's.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · dedup subagent · **Why:** Touches the dedup auto-merge threshold gate (auto_resolve.go) and the live scoring call sites feeding it — a wrong clamp changes which pairs get auto-merged in production; the decision's own text calls for review_critical, and the architecture requires moving clamping logic across a package layering boundary (plugins/dedup -> dedup/unified) without duplicating it, since engine.go/rescore.go live in the lower internal/dedup layer and cannot import internal/plugins/dedup. · **Depends on:** none · **Wave:** 7 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

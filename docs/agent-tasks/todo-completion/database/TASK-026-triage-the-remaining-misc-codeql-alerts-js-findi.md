@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-026-triage-the-remaining-misc-codeql-alerts-js-findi.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 9d660fdc-9cfe-4c0e-aefd-01e22c186ea2 -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-026 — Triage the remaining misc CodeQL alerts: JS findings, uncontrolled-allocation-size FP, and the drifted clear-text-logging FP (SEC-CODEQL-BACKLOG)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2798 merged 2026-08-23 (ef7c32d54).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** A grab-bag of small, mostly-independent findings; each is individually mechanical but re-locating the drifted clear-text-logging alert requires some detective work across the code-scanning API. · **Depends on:** none · **Wave:** 1
 

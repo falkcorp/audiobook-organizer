@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-155-move-tasks-and-maintenance-window-off-the-legacy.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 75709efe-f4b6-4dbc-b02a-26be33978ace -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-155 — Move /tasks/* and /maintenance-window/* off the legacy v1 operations handler into their own scheduler-config handler (TODO.md L4563)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2719 merged 2026-08-22 (09c48386b).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** A mechanical handler-extraction refactor (move 6 methods + their route registrations to a new package, thread the same scheduler-provider dependency) with enough surface area (6 handlers, their tests, and the wiring file) to need care but no novel design. · **Depends on:** none · **Wave:** 1
 

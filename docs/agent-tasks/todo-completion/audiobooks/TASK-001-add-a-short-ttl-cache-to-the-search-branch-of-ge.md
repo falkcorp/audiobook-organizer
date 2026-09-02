@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0b3dce4b-d8f5-4473-a427-8dfde63b9105 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-001 — Add a short-TTL cache to the search branch of GetAudiobooksWithTotal (explicit first-cut, defer full dirty-set wiring) (SEARCH-CACHE)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — service_query.go: searchWithBleve L166 has no cache read/write; listCache hits only L231/264, inside the non-search pushdown branch; no 'search:' key. Recommendation: keep - depends on the same invalidation gap as TASK-023 (MERGE-CACHE-EVICT), which the brief itself flags.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · audiobooks subagent · **Why:** Cache-key composition must be exhaustive (query, limit, offset, UserID-when-per-user-active, sort field/direction, every post-filtering ListFilters value) or it silently serves wrong results across users — needs care enumerating every filter that participates in post-filtering, not just the obvious ones. · **Depends on:** TASK-023 · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

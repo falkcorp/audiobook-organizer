@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-121-make-resolveorganizedfilepath-s-plan-on-faith-fa.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 771bd630-e457-45a5-ae3e-0bf3aa825cb1 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-121 — Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify-before-write (TODO.md L4919)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — resolveOrganizedFilePath now service.go:1339; warns only on the source-exists branch (:1348) — the third 'plan on faith' branch is still silent, no verify-before-write. Callers :1598/:1600. Recommendation: keep — fix (1) and (2) of the audit doc are still unimplemented; the file shifted ~14 lines.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · organize subagent · **Why:** Prod-data path (organize writes book_file rows from this) with a subtle three-way branch and an already-diagnosed but partially-superseded root cause (the segment_title_format bug that dominated the measured 71,954-row population was separately fixed in c54721c7) — needs careful reasoning about what's still live vs. already fixed, not mechanical. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

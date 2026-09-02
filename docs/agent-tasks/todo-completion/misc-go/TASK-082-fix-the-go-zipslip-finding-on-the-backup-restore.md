@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-082-fix-the-go-zipslip-finding-on-the-backup-restore.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0fd14248-8491-4d27-af85-e3cbf501b08a -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-082 — Fix the go/zipslip finding on the backup-restore extraction path (SEC-CODEQL-BACKLOG)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2774 merged 2026-08-23 (694162f24).
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · misc-go subagent · **Why:** Well-understood, mechanical fix pattern (validate extracted path stays within the target directory) on a data-mutating restore path. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

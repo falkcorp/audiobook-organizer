@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-201-wire-per-file-intro-classification-into-the-regr.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9b8bf415-3d5e-479f-aaf8-164e98648df5 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-201 — Wire per-file intro classification into the regroup-shattered-books classifier, outranking runtime (TODO.md L8316)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep ClassifyIntro regroup_shattered_ai.go -> 0 hits; the runtime proxy it must outrank is still the only signal (durationSec :175, DurationSec :183). Recommendation: keep — depends on TASK-200's per-file store being populated; sequence after it.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** changing a signal's RANK in an existing classifier (making intro evidence outrank runtime) risks silently flipping verdicts on the 356 already-measured holds this item must validate against -- needs careful before/after diffing, not just a mechanical signal addition · **Depends on:** TASK-200 · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

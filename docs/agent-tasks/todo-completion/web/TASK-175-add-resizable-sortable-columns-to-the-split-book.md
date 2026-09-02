@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1f5951cc-3a42-41eb-ae78-7de397a6317d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-175 — Add resizable/sortable columns to the split-book dedup candidates table (TODO.md L10660)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep useConfigurableTable DedupSplitBookTab.tsx = 0 hits; CandidateRow at :70, TablePagination at :427 unchanged; only 1b616d5c9 (JSON import safety) touched the file. Recommendation: keep - 173/174/175 are one mechanical sweep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** header-only ConfigurableTable integration plus sorting the already-paginated `candidates` array before `pageSlice` is computed — needs care that sort doesn't fight the existing client-side pagination state · **Depends on:** none · **Wave:** 1
 

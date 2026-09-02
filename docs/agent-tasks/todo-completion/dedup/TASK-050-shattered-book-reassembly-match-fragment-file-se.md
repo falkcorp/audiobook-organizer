@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-050-shattered-book-reassembly-match-fragment-file-se.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 24f61224-ee50-4ba4-bfa0-14ee1c6bcaa2 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-050 — Shattered-book reassembly: match fragment file-sets against the reference corpus via fpidx containment (TODO.md L10750)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep 'AcoustID\|Fingerprint\|fpidx' internal/dedup/split_book_detector.go = 0 hits. PRs #2946/#2947 shipped batched split-book merges, not containment matching. Recommendation: keep - but note #2946's apply path landed first, so the FingerprintConfirmed gate the brief requires is now a retrofit, not a greenfield addition.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · dedup subagent · **Why:** new matching algorithm (set containment over an LSH index) feeding an auto-regroup decision on prod data; must compose correctly with the existing metadata-based detector rather than replace it · **Depends on:** TASK-049 · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-081-prefix-metadata-apply-activity-summaries-with-th.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 27e8675d-16e3-4c22-833a-b6cd258c92e7 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-081 — Prefix metadata-apply activity summaries with the book title and render empty old-value as '(none)' (TODO.md L3517)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2706 merged 2026-08-22 (f6af07a0b).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · metadata subagent · **Why:** single-file, single-function, mechanical string-formatting change with no new types · **Depends on:** none · **Wave:** 1
 

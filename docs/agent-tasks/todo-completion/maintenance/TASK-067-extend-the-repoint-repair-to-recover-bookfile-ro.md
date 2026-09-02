@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-067-extend-the-repoint-repair-to-recover-bookfile-ro.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 80b1e845-1807-4437-827b-d50e174ca069 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-067 — Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape), not just the padded-filename shape (TODO.md L642)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — repoint file last touched ed0939c37 (2026-08-20, pre-brief); grep 'book.FilePath\|GetBookByID' in it -> 0 hits; op ID anchor :132; recoveredViaBook 4 hits in chapters_backfill.go. Recommendation: keep — extends REPOINT only, never deletes; consistent with the report-only/#2614 rule.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** extends an existing production-critical repair op's candidate-derivation strategy; must not change the existing padded-filename candidate path or its RequireSizeMatch safety gate · **Depends on:** TASK-068 · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

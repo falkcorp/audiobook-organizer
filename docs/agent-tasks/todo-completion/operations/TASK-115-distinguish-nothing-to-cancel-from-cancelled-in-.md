@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-115-distinguish-nothing-to-cancel-from-cancelled-in-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: bab633c2-6687-4a4b-b56c-a55adc4d7ea0 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-115 — Distinguish 'nothing to cancel' from 'cancelled' in registry.Cancel so unknown-id cancels 404 instead of lying 204 (TODO.md L4477)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2802 merged 2026-08-23 (3d902dff4).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · operations subagent · **Why:** Touches a shared registry method with 3 call sites across 2 packages, needs a sentinel-error design and careful test updates across both the wired and (currently dead) duplicate handler; not a one-line fix. · **Depends on:** none · **Wave:** 2
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-016-rename-write-back-metadata-config-key-to-auto-wr.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cf02ed90-164e-41f3-b583-cea999c3e15a -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-016 — Rename write_back_metadata config key to auto_write_tags_on_fetch with deprecated-alias migration (TODO.md L1247)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep 'auto_write_tags_on_fetch\|AutoWriteTagsOnFetch' internal/config/ internal/metafetch/ = 0 hits; grep -c write_back_metadata internal/config/config.go = 3. Recommendation: keep.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · config subagent · **Why:** Mechanical rename but with a correctness-critical backward-compat alias (a bug here silently reverts a file-mutation behavior in prod); needs care, not novel design. · **Depends on:** none · **Wave:** 4 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

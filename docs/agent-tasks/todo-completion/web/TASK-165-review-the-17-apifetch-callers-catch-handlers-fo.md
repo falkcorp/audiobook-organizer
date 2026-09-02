@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 48fab227-4013-4104-807f-47b4027c44e3 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-165 — Review the 17 apiFetch-callers' catch handlers for session-expiry messaging (TODO.md L2486)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — isAuthRedirectError used in one non-test product file (useMetadataLane.ts:40,896) + apiFetch.ts:70; none of the 17 named call sites (BookDetail/Library/FileManager/UserMenu) reference it. Recommendation: keep - audit-shaped; consider splitting per-surface if it stalls again.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · web subagent · **Why:** Mechanically similar review across 18 files, but each catch site needs a judgment call on whether the existing message reads sensibly for a session-expiry vs. a genuine failure — not pure mechanical replacement. · **Depends on:** none · **Wave:** 7 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

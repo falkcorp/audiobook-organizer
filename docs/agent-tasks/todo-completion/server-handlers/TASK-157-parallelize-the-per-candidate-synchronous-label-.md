@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 90e73564-73df-47e0-ac1e-7b5b98bcdddb -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-157 — Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster (TODO.md L10521)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — DismissDedupCluster at dedup/handler.go:1223 with the sequential 'for _, cand := range candidates' at :1256; grep errgroup = 0 hits; label_capture.go:92 refreshExampleBreakdown still synchronous. Recommendation: keep.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** concurrency-safety review needed: UpdateCandidateStatus/UpsertLabeledExample must be safe under concurrent per-candidate calls; not a mechanical edit · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

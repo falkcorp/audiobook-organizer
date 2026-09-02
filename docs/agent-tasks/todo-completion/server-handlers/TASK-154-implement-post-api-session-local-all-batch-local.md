@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b84e86d7-8bc6-47b0-8f51-e4ccc70b9d26 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-154 — Implement POST /api/session/local-all (batch local-session sync, accept both body shapes) (TODO.md L4507)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — only r.POST('/api/session/local', h.SessionLocal) at abs/handler.go:585; play.go:364 comment still calls local-all 'the endpoint that actually applies progress'. TASK-153 stub shipped as b52bae9f0. Recommendation: keep - highest-value remaining ABS sync gap.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** Needs a dual-shape JSON decode (object-with-sessions-key vs bare array) plus mapping ABS 'local session' fields onto the existing progressPatchRequest/applyProgressUpdate machinery — more judgment than a pure copy-paste of MediaProgressBatchUpdate. · **Depends on:** none · **Wave:** 2
 

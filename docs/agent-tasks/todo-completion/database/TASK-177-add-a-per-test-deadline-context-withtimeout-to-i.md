@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3994829b-13b0-417d-82c0-e5a1e7c9a036 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-177 — Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers (TODO.md L235)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn 't.Context()' internal/database/*.go = 0; context.WithTimeout in internal/database/*_test.go = 0. 31e6feddf closed the sibling wall-clock bullet, not this one. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** Requires judgment about which of the 12 files' specific .Wait()/<-chan/.Lock() call sites are the actually-risky ones worth wrapping with a bound (not a blind sweep, per L235's own edge_case about over-tight timeouts), plus picking a safe bound per call site. · **Depends on:** none · **Wave:** 1
 

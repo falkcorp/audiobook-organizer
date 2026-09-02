@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-103-build-a-report-only-op-categorizing-the-transcri.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f32dac67-3a5d-44dd-9a66-8b6be3828499 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-103 — Build a report-only op categorizing the transcribe_status vs IntroTranscription drift (79.3% whisper_error-with-transcript sample) (TODO.md L8433)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — transcribe_status_drift_report.go ABSENT; 'transcribe.status.drift\|TranscribeStatusDrift' -> 0 hits; IntroTranscription anchors still in intro_transcribe.go (:44,:59,:66,:230). Recommendation: keep — but the Whisper worker rework (#2943/#2999/#3000/#3001/#3014) may have changed the error rate; the op is exactly what re-measures it.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** a bounded-concurrency read-only scan + TSV report, following an established in-repo pattern (missing_file_repoint.go) closely enough that it's mostly adaptation, not novel design · **Depends on:** none · **Wave:** 1
 

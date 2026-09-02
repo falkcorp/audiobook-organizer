@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e4116724-55c9-4f64-97fa-7577cfe021dd -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-174 — Add resizable/sortable columns to the Activity Log table (TODO.md L10660)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep useConfigurableTable ActivityLog.tsx = 0 hits; raw <TableContainer> at :2091 with hardcoded <TableCell>Time at :2095; no commits since 2026-08-21. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Sonnet-class · web subagent · **Why:** row bodies are heterogeneous (plain/batched/digest) so only the header (resize+visibility) can reuse ConfigurableTable directly; sort must be applied to the pre-render `entries` array by a chosen field before any of the three row-render branches run, which needs care to not break existing digest-expansion state · **Depends on:** none · **Wave:** 1
 

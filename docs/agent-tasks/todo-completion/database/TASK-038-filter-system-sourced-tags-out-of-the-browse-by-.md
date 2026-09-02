@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0c3440bd-1f9a-4a93-b4aa-3e0ece62781d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-038 — Filter system-sourced tags out of the Browse-by-Tag cloud (TODO.md L10526)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — service_tags.go:16-21 ListAllUserTags is still 'return svc.store.ListAllTags()' with no Source filter, though pebble_store_tags.go:44 persists Source. Recommendation: keep, lowest priority of this set - TODO itself classes it 'UX preference, not a bug'.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** requires a new source-aware aggregation over the book_tag: keyspace (not just tag_idx:), touching the Store interface · **Depends on:** none · **Wave:** 1
 

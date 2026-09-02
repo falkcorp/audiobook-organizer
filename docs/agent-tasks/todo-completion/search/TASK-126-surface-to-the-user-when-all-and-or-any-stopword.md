@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 41c8fb54-b9d9-47da-9139-c056378120c4 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-126 — Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query (TODO.md L3369)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — dropStopwordOnlyConjuncts still bleve_translator.go:166 with no dropped-term return; stopword/ignored/discard across handlers + Library.tsx -> 0 hits. No commits since 2026-08-21. Recommendation: keep — behaviour-preserving UX fix; do not change the dropping itself.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · search subagent · **Why:** Requires threading a new signal (which terms were dropped) from the translator through the search handler response and into the UI — a small new data channel, not just a logic tweak. · **Depends on:** none · **Wave:** 1
 

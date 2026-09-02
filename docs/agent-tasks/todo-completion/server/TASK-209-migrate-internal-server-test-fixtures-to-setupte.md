@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d3ad532-83b7-4d90-835d-5794c91235d6 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-209 — Migrate internal/server test fixtures to setupTestServerWithStore — itunes_integration_test.go, indexed_store_test.go, similar_books_test.go, e2e_workflow_test.go (DEC-6)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — NewServer( still at itunes_integration_test.go:56,124,172,222,256; indexed_store_test.go now 6 sites (51,99,153,234,297,334); similar_books_test.go:42,136; e2e_workflow_test.go:49. Recommendation: keep - indexed_store grew from 4 to 6 sites.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Mechanical, but indexed_store_test.go and similar_books_test.go have multiple sites per file (possibly in table-driven subtests) that need per-site defer placement judged correctly. · **Depends on:** none · **Wave:** 3
 

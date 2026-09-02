@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-196-build-an-async-fanned-out-background-operation-f.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 14ed5e5e-3c28-453e-addc-16962a57ca47 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-196 — Build an async, fanned-out background operation for metadata matching -- the bulk dialog is a human-driven one-book-at-a-time loop today (TODO.md L4081)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — metadata_ops_bulk_search_test.go ABSENT; BulkMetadataSearchDialog.tsx still per-currentIndex (:122,:160,:174); searchMetadataForBook still synchronous per book (service_search.go:243). Recommendation: keep.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · metadata subagent · **Why:** new background operation touching an operations-registry op definition, a worker pool with per-request jitter/stagger against external metadata providers with their own rate limits, and a still-usable interactive UI path -- genuine design surface, not a mechanical change · **Depends on:** none · **Wave:** 1
 

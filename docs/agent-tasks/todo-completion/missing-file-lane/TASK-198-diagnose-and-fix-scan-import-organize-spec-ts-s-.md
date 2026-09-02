@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-198-diagnose-and-fix-scan-import-organize-spec-ts-s-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8f116e97-89e3-45e6-a2a4-eff788dc082d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-198 — Diagnose and fix scan-import-organize.spec.ts's 7 stuck-on-'Add Import Path' failures via DOM snapshot (TODO.md L6394)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — web/tests/e2e/scan-import-organize.spec.ts present; 'Add Import Path' PathsSettingsTab.tsx:211; tabFromHash Settings.tsx:102,:168. No commits on those files since 2026-08-21. Recommendation: keep — but record a fresh baseline chromium failure count first; the TODO's '7' is stale by the brief's own instruction.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** requires actually running Playwright and reading a DOM snapshot to diagnose a still-unknown root cause, then applying whichever fix the snapshot points to -- more than mechanical but the investigation is already narrowed to 3 named candidates · **Depends on:** none · **Wave:** 2
 

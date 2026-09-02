@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-119-replace-the-size-equality-heuristic-in-organizeb.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 919f5b2a-f84a-41e1-951d-0ff7479a4d72 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-119 — Replace the size-equality heuristic in OrganizeBookDirectory's destination-adoption check with a content hash (F5)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2778 merged 2026-08-23 (fceaf51fb).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · organize subagent · **Why:** small, localized change but touches a prod-data-path chokepoint (organize/rename) that three callers depend on -- warrants care and the existing regression-test suite must stay green · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

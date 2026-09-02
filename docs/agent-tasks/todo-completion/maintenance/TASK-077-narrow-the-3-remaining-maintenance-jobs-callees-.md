@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-077-narrow-the-3-remaining-maintenance-jobs-callees-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: de83a5ec-08be-4971-a5b5-38ac5b4a578a -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-077 — Narrow the 3 remaining maintenance-jobs callees off maintenance.JobStore (vgFixAuthorDirPath, migrateOne, ddMergeDuplicateBook) (TODO.md L5424)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — All 3 still take maintenance.JobStore: fix_version_groups.go:277, backfill_itunes_positions.go:274, dedup_books.go:329. The 5 narrowed exemplars all hit. No commits since 2026-08-21. Recommendation: keep — mechanical, and the pattern to copy is intact.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** Mechanical interface-narrowing with a clear, already-demonstrated pattern in the same file/package (5 sibling functions already done the exact same way) — low risk, but 3 separate small interfaces across 3 files. · **Depends on:** none · **Wave:** 1
 

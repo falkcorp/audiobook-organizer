@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7b9cb1fa-bcfd-4420-9472-2264dce6ed92 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-039 — Add transcribe_status to the book-summary list projection and a frontend quality filter control (TODO.md L10728)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — store.go: TranscribeStatus at L350/L974 (full Book only); BookSummary (L377+) carries TranscribedTitle but no TranscribeStatus. Library.test.tsx absent. Recommendation: keep - pairs with TASK-005 (same TODO source line, same filter surface); consider shipping them together.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** touches the database summary projection (2 construction sites) plus a new frontend filter control; must not break the memdb round-trip contract · **Depends on:** TASK-005 · **Wave:** 4
 

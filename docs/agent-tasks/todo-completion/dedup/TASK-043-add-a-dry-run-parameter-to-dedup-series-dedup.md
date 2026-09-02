@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-043-add-a-dry-run-parameter-to-dedup-series-dedup.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c2cd094b-8ba2-422f-8fe6-be62dc535a08 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-043 — Add a dry-run parameter to dedup.series-dedup (TODO.md L3966)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2773 merged 2026-08-23 (5ffefdd85).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · dedup subagent · **Why:** Threading a new param through DedupSeries and its call site (internal/server/duplicates_ops.go's dedup.series-dedup op) plus a dry-run-preserves-state test. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-144-n-5-search-narrators-must-omit-numbooks-not-emit.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d32a4de6-524e-4998-844f-3c41a0472678 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-144 — N-5: /search narrators must omit numBooks, not emit 0 (ABS-N5)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2731, completed by #2738 (narrator id half).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Why:** One-line field removal mirroring an existing sibling handler's shape in the same file — fully mechanical once the reference pattern is located. · **Depends on:** none · **Wave:** 2
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4f1b42c4-181d-427b-b83b-01d7f66da643 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-167 — Make the book-detail page's Series field link to a library view filtered by that series, landing at series_index (TODO.md L3161)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — 0 hits for series_id in useLibraryQuery.ts/Library.tsx/BookDetailInfoTab.tsx; BookDetailInfoTab.tsx:228-231 still a plain template string; backend has handler.go:380 series_id. Recommendation: keep - ship with TASK-166 (same file/hook).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Same shape and same new-plumbing requirement as the author link task (todo_line 3156) — new URL-param handling in useLibraryQuery.ts/Library.tsx plus a real <a href>. · **Depends on:** TASK-166 · **Wave:** 4
 

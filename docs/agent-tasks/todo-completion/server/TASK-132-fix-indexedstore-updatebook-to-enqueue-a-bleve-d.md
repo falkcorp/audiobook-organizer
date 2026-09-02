@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-132-fix-indexedstore-updatebook-to-enqueue-a-bleve-d.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 32f7314f-2565-4109-88d1-782c1cc2e1e4 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-132 — Fix indexedStore.UpdateBook to enqueue a Bleve DELETE when the update is a soft-delete transition (TODO.md L4329)
+
+> **Status 2026-09-02:** ✅ DONE — Fixed inside TASK-133 PR #2750 (b5ad85ac8); no own branch.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** small, precise change on a decorator that sits on every book mutation in the app — must not regress the ordinary (non-soft-delete) update path · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

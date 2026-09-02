@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-176-build-a-read-only-census-tool-for-the-41-ungroup.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5733a3cd-ac9e-4d66-8710-312ce53ab5fe -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-176 — Build a read-only census tool for the 41 ungrouped-but-explicitly-non-primary books (TODO.md L3354)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2809 merged 2026-08-23 (144d81f39).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** Small, targeted diagnostic query -- no design decision needed, just running a query and reading the result, but requires careful query construction to isolate exactly the anomalous population. · **Depends on:** none · **Wave:** 1
 

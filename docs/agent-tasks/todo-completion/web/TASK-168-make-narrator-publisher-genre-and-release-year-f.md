@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: fb88ea2f-3ff4-4054-ac78-78e78a2bbb85 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-168 — Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all four have real filters behind them) (TODO.md L3164)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep "searchParams.get('filters')" web/src = 0 hits (prerequisite missing); useLibraryFilters.ts:56-60 reads only author/series/genre/language; backend cases intact (service_filtering.go:324,330,334). Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Unlike author_id/series_id (dedicated int params needing new plumbing), these four go through the EXISTING filters=JSON field-filter mechanism (buildFieldFilters already handles author/series/genre/language as text filters) — narrower, more reuse-driven change. · **Depends on:** none · **Wave:** 5
 

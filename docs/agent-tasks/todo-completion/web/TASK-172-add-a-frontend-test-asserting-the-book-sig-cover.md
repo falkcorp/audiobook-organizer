@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-172-add-a-frontend-test-asserting-the-book-sig-cover.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d33e5aaa-2061-4756-897c-7b21db07af27 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-172 — Add a frontend test asserting the book-sig coverage % badge renders (TODO.md L10586)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2708. Half 2 only (frontend test); half 1 (14K purge visible in dedup UI) is a live-prod verification. Recommendation: close the brief; remaining half is Bucket 3 (prod verification).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · web subagent · **Why:** mechanical: one component render test with two data variants · **Depends on:** none · **Wave:** 1
 

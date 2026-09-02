@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-013-build-a-report-only-scan-for-book-rows-that-may-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 59068f2c-ee61-4138-be18-de90714732be -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-013 — Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename bug (TODO.md L4844)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2797 shipped the report-only scan script. The TODO item (L8819, "investigate book rows") stays open until the script has been run against prod and the result recorded. Recommendation: close the brief; TODO item is an owner prod action.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** Combines a filesystem-pattern reuse (find_bogus_dirs), a live-API paginated book query, and two independent spurious-row heuristics (numeric title, path-segment pattern) into one coherent report — more judgment than a mechanical sweep, but well short of a design question given owner decision #9's report-only precedent. · **Depends on:** none · **Wave:** 1
 

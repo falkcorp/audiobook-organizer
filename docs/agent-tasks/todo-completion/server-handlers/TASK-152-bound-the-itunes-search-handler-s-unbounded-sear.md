@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-152-bound-the-itunes-search-handler-s-unbounded-sear.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e1ebd029-d839-4890-a18d-6a134772a3f3 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-152 — Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0) call (PERF-4)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2755 merged 2026-08-23 (6e9ed9d6d).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** Requires picking a sane bound and wiring a truncation warning without breaking the existing PID post-filter's correctness (a bound that's too small could hide legitimate iTunes-linked matches). · **Depends on:** none · **Wave:** 1
 

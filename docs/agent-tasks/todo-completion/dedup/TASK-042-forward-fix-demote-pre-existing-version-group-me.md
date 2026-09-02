@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-042-forward-fix-demote-pre-existing-version-group-me.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 25c491e7-5edf-4d96-8997-f2d99dc11f95 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-042 — Forward fix: demote pre-existing version-group members when a merge reuses their group ID (VG-DOUBLE-PRIMARY)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2777 merged 2026-08-23 (34ed3e24c).
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · dedup subagent · **Why:** Correctness-critical write-path fix on the merge path; the change itself is a bounded query+demote loop but must not break the existing single-merge-call primary election. · **Depends on:** none · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

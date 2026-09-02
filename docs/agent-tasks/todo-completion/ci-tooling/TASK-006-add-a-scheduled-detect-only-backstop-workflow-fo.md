@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-006-add-a-scheduled-detect-only-backstop-workflow-fo.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 22c0f086-eb22-4508-b640-47f50e85ec30 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-006 — Add a scheduled detect-only backstop workflow for auto-revert.yml (TODO.md L46)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2748 merged 2026-08-23 (bc24f8b84).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** New standalone workflow file with real logic (find the CI run for main's tip, age-check it, dedupe against open issues) — needs careful gh-cli scripting and a dedupe check the existing workflow itself lacks, not pure boilerplate. · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 41904252-ce06-4c9c-880d-67315777c178 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-014 — Remove committed mtls-bridge build artifact and gitignore it (REPO-SIZE-1)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — git ls-files -s mtls-bridge -> '100755 05891c026... 0 mtls-bridge' (still tracked); grep mtls-bridge .gitignore = 0 hits. Recommendation: keep - trivial, and independent of the STOP-FOR-HUMAN history-rewrite decision it sits under.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** git rm + two-line gitignore add + a small size-guard addition to an existing hook script; no ambiguity · **Depends on:** none · **Wave:** 1
 

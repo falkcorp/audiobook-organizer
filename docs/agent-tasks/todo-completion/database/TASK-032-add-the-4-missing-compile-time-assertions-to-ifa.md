@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-032-add-the-4-missing-compile-time-assertions-to-ifa.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 60cf67c1-bca5-4b71-be1d-ab87aa41f172 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-032 — Add the 4 missing compile-time assertions to iface_assert.go (TODO.md L4694)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2685 merged 2026-08-22 (b44c76cdd).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · database subagent · **Why:** 4-line mechanical addition following the file's exact existing pattern. · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cf3d0092-4ea0-4cbe-979c-ad3ee866451c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-062 — internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor (PERF-5)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/itunes/backfill.go:60 still 'offset := 0'; grep GetAllBooksFullFrom backfill.go = 0 hits; 0 commits to the file since 2026-08-21. Recommendation: keep - carry TASK-063 in the same PR.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Why:** loop-restructuring across a function with error-handling nuance (H7 comment about not silently breaking on read failure) that must be preserved · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

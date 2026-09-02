@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d0161dc1-3383-4582-b942-884801664589 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-185 — Report the iTunes listened/in-progress status pipeline's actual wiring gap: PositionSync is fully built but its maintenance op is an unimplemented stub (PLAYBACK-IMPORT)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — docs/audits/2026-08-21-itunes-playback-import-wiring.md absent (docs/audits jumps 2026-08-20 -> 2026-08-25); 0 commits to the path. Recommendation: keep - docs-only, cheap, and the four-stage answer is already sourced inside the brief.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · itunes subagent · **Why:** The hard part of the investigation (tracing 3 packages, finding the exact gap) is already done by this rescope with grep-verified citations; the remaining work is writing it up plus confirming questions 4 (audio-file-embedded progress) and 5 (API/UI surfacing), each independently answerable by grep/read. · **Depends on:** none · **Wave:** 1
 
