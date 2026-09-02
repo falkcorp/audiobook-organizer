@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/rescore_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c1a9f38-7b62-4d0e-9a15-6e3b8c07d24f
 // last-edited: 2026-09-02
 
@@ -61,6 +61,14 @@ type RescoreParams struct {
 	// a second pass is pure duplicate work), and two different ladders never
 	// collapse — the second queues behind the first on the shared
 	// dedup.full-scan key and re-bands the whole backlog again.
+	//
+	// "Still active" is load-bearing and verified, not assumed: the dedupe in
+	// Registry.EnqueueOp compares only against ListActiveOperationsV2() — queued
+	// and running rows, with zombie running rows skipped — so a COMPLETED
+	// re-band is never a dedupe target. Setting a ladder back to a value it
+	// held before therefore queues a fresh pass rather than handing back the
+	// finished op's id. (rescoreDef sets neither DedupeQueuedRuns nor a
+	// Schedule, the two flags that would short-circuit the params comparison.)
 	//
 	// It is NOT the ladder the op scores with. runRescore re-bands under the
 	// engine's CURRENT ladder, which is the persisted truth; if three PUTs
