@@ -1,11 +1,12 @@
 // file: internal/merge/service_unit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8a2c1d-7e4b-4d9a-b6c5-0e1f2a3b4c5d
 // last-edited: 2026-09-02
 
 package merge
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -38,7 +39,13 @@ func TestUnit_MergeBooks_GetBookByID_Error(t *testing.T) {
 
 	_, err := svc.MergeBooks([]string{"book-1", "book-2"}, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "book-1 not found")
+	// A store failure is a store failure, not "the book is gone": the dedup
+	// handler marks a candidate merged on BookNotFoundError, so typing an
+	// I/O error as not-found would retire a live candidate on a flaky read.
+	var notFound *BookNotFoundError
+	assert.False(t, errors.As(err, &notFound), "store error must not be typed as not-found: %v", err)
+	assert.Contains(t, err.Error(), "db connection lost")
+	assert.Contains(t, err.Error(), "book-1")
 }
 
 func TestUnit_MergeBooks_SecondBookNotFound(t *testing.T) {

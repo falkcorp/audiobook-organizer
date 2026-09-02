@@ -1,0 +1,16 @@
+# Mutation table for the dedup merge handler's typed not-found match
+# (fix/merge-audio-route-tiebreak-typed-errors, review round M2).
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/server/handlers/dedup/ \
+#     --table scripts/mutation-tables/dedup-merge-not-found.muts
+
+# Re-admit the substring match alongside the typed one: a store error whose
+# text happens to contain "not found" must NOT retire the candidate as merged.
+D01 substring-not-found-reintroduced | internal/server/handlers/dedup/handler.go | s/if errors\.As\(mergeErr, &notFound\) \{/if errors.As(mergeErr, \&notFound) \x7c\x7c strings.Contains(mergeErr.Error(), "not found") {/
+
+# Drop the typed match entirely: a stale candidate whose books are gone must
+# still be retired as merged (409 already-merged), not surfaced as a 500.
+D02 typed-not-found-never-matches | internal/server/handlers/dedup/handler.go | s/if errors\.As\(mergeErr, &notFound\) \{/if false \&\& errors.As(mergeErr, \&notFound) {/

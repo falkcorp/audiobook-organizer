@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
-// last-edited: 2026-08-21
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -70,9 +70,21 @@ func (de *Engine) MergeJournaled(candidateID int64, aID, bID, keepID, tag string
 		}
 	} else {
 		bookA, errA := de.bookStore.GetBookByID(aID)
+		if errA != nil {
+			return nil, "", fmt.Errorf("merge-journaled: load book %s before merge: %w", aID, errA)
+		}
 		bookB, errB := de.bookStore.GetBookByID(bID)
-		if errA != nil || errB != nil || bookA == nil || bookB == nil {
-			return nil, "", fmt.Errorf("merge-journaled: load books before merge (a=%s b=%s): %v/%v", aID, bID, errA, errB)
+		if errB != nil {
+			return nil, "", fmt.Errorf("merge-journaled: load book %s before merge: %w", bID, errB)
+		}
+		// (nil, nil) is the store's "no such row". Surface it as the same typed
+		// error MergeBooks would, so the handler's stale-candidate branch sees
+		// one shape whether the book vanished before or during the merge.
+		if bookA == nil {
+			return nil, "", fmt.Errorf("merge-journaled: load books before merge: %w", &merge.BookNotFoundError{BookID: aID})
+		}
+		if bookB == nil {
+			return nil, "", fmt.Errorf("merge-journaled: load books before merge: %w", &merge.BookNotFoundError{BookID: bID})
 		}
 		if merge.BookIsBetter(bookB, bookA) {
 			predWinner, predLoser = bID, aID

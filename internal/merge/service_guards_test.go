@@ -1,5 +1,5 @@
 // file: internal/merge/service_guards_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b2e9d4c-1a5f-4e83-9c6b-2d8f0a3e5b17
 // last-edited: 2026-09-02
 
@@ -342,4 +342,113 @@ func TestElectPrimary_SkipsSoftDeleted(t *testing.T) {
 	assert.Equal(t, 1, ElectPrimary([]*database.Book{deleted, live}, files))
 	assert.Equal(t, 0, ElectPrimary([]*database.Book{live, deleted}, files))
 	assert.Equal(t, -1, ElectPrimary([]*database.Book{deleted}, files))
+}
+
+// failingGetStore makes GetBookByID(failID) return a store error — the shape
+// pebble produces for an I/O fault or a corrupt row, as opposed to the
+// (nil, nil) it returns for a missing key.
+type failingGetStore struct {
+	database.Store
+	failID string
+}
+
+func (f *failingGetStore) GetBookByID(id string) (*database.Book, error) {
+	if id == f.failID {
+		return nil, errors.New("injected: sstable block not found")
+	}
+	return f.Store.GetBookByID(id)
+}
+
+// A store failure while loading a participant is a store failure, not
+// BookNotFoundError. Typing it as not-found would let the dedup handler mark a
+// candidate "merged" for a pair that never merged.
+func TestMergeBooks_StoreFailure_IsNotTypedNotFound(t *testing.T) {
+	real := setupTestStore(t)
+	a := seedGuardBook(t, real, "Load A", "mp3", true)
+	b := seedGuardBook(t, real, "Load B", "mp3", true)
+	store := &failingGetStore{Store: real, failID: b.ID}
+
+	var nf *BookNotFoundError
+	_, err := NewService(store).MergeBooks([]string{a.ID, b.ID}, "")
+	require.Error(t, err)
+	assert.False(t, errors.As(err, &nf), "a store error must not be typed as not-found: %v", err)
+	assert.Contains(t, err.Error(), "injected", "the store's own error must be preserved")
+
+	_, err = NewService(store).CombineBooks([]string{a.ID, b.ID}, a.ID, nil)
+	require.Error(t, err)
+	assert.False(t, errors.As(err, &nf), "CombineBooks: a store error must not be typed as not-found: %v", err)
+
+	_, err = NewService(store).CombineBooks([]string{a.ID, b.ID}, b.ID, nil)
+	require.Error(t, err)
+	assert.False(t, errors.As(err, &nf), "CombineBooks (failing survivor): %v", err)
+
+	// Nothing was mutated.
+	assert.False(t, softDeleted(t, real, a.ID))
+	assert.False(t, softDeleted(t, real, b.ID))
+}
+
+// recordingFollower records every sync-identity redirect the merge asked for.
+type recordingFollower struct {
+	redirects [][2]string
+}
+
+func (r *recordingFollower) MintOrGetSyncID(bookID string) (string, error) {
+	return "sync-" + bookID, nil
+}
+func (r *recordingFollower) RecordSyncMerge(loserID, winnerID string) error {
+	r.redirects = append(r.redirects, [2]string{loserID, winnerID})
+	return nil
+}
+
+// A replayed merge leaves the soft-deleted loser's ROW alone but still runs
+// the (idempotent) sync-identity follow for it: a first merge that crashed
+// between SoftDeleteBook and FollowMerge has no other repair path.
+func TestMergeBooks_Replay_StillFollowsSyncIdentityForDeletedLoser(t *testing.T) {
+	store := setupTestStore(t)
+	a := seedGuardBook(t, store, "Follow A", "mp3", true)
+	b := seedGuardBook(t, store, "Follow B", "mp3", true)
+	svc := NewService(store)
+	follower := &recordingFollower{}
+	svc.SetSyncFollower(follower)
+
+	_, err := svc.MergeBooks([]string{a.ID, b.ID}, a.ID)
+	require.NoError(t, err)
+	require.Equal(t, [][2]string{{b.ID, a.ID}}, follower.redirects, "first merge redirects the loser")
+
+	_, err = svc.MergeBooks([]string{b.ID, a.ID}, "")
+	require.NoError(t, err)
+	assert.Equal(t, [][2]string{{b.ID, a.ID}, {b.ID, a.ID}}, follower.redirects,
+		"the replay must re-run the follow for the already-deleted loser")
+}
+
+// Replaying "keep P" where P has no audio route and the already-deleted loser
+// X has one must be accepted: X can never be kept, so its route is not a
+// reason to refuse P.
+func TestMergeBooks_Replay_DeletedLoserRouteDoesNotRefuseKeep(t *testing.T) {
+	store := setupTestStore(t)
+	p := seedGuardBook(t, store, "Keep P", "mp3", false)
+	x := seedPathOnlyBook(t, store, "Deleted X", "mp3")
+
+	// Hand-build the post-merge state: one group, P primary, X a soft-deleted
+	// loser. (MergeBooks itself would refuse this pair fresh — P is a true
+	// stub — which is exactly why the replay has to be seeded.)
+	group := ulid.Make().String()
+	tru, fals := true, false
+	past := time.Now().Add(-24 * time.Hour)
+	p.VersionGroupID, p.IsPrimaryVersion = &group, &tru
+	x.VersionGroupID, x.IsPrimaryVersion = &group, &fals
+	x.MarkedForDeletion, x.MarkedForDeletionAt = &tru, &past
+	_, err := store.UpdateBook(p.ID, p)
+	require.NoError(t, err)
+	_, err = store.UpdateBook(x.ID, x)
+	require.NoError(t, err)
+
+	res, err := NewService(store).MergeBooks([]string{p.ID, x.ID}, p.ID)
+	require.NoError(t, err, "a deleted loser's route must not refuse the existing primary")
+	assert.Equal(t, p.ID, res.PrimaryID)
+
+	after, err := store.GetBookByID(x.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.MarkedForDeletionAt)
+	assert.True(t, after.MarkedForDeletionAt.Equal(past), "replay must not touch the deleted loser's row")
 }
