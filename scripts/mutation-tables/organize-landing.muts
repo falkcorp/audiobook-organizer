@@ -19,7 +19,7 @@ M02 multirow-single-landing-accepted | internal/organizer/service.go | s/\tif !i
 # Rollback scope.
 M03 rollback-removes-whole-directory | internal/organizer/organizer.go | s/\t\tif err := os\.Remove\(p\); err != nil && !errors\.Is\(err, fs\.ErrNotExist\) \{\n\t\t\tleftover = append\(leftover, p\)/\t\tif err := os.RemoveAll(filepath.Dir(p)); err != nil \&\& !errors.Is(err, fs.ErrNotExist) {\n\t\t\tleftover = append(leftover, p)/
 M04 rollback-ignores-containment | internal/organizer/organizer.go | s/\t\tif p == "" \x7c\x7c ensureUnderRoot\(p, root\) != nil \{\n/\t\tif p == "" {\n/
-M05 adopted-single-file-marked-created | internal/organizer/service.go | s/\tif mode != "" \{\n\t\tl\.Created = \[\]string\{newPath\}\n/\tif mode != "" \x7c\x7c true {\n\t\tl.Created = []string{newPath}\n/
+M05 adopted-single-file-marked-created | internal/organizer/organizer.go | s/\tif mode != "" \{\n\t\tl\.Created = \[\]string\{newPath\}\n/\tif mode != "" \x7c\x7c true {\n\t\tl.Created = []string{newPath}\n/
 # Strategy decision.
 M06 multirow-file-path-routed-single | internal/organizer/service.go | s/\tisDir := len\(bookFiles\) > 1\n/\tisDir := len(bookFiles) > 1000\n/
 # Exclusive publish.

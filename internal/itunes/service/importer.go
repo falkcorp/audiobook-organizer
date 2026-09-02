@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.20.2
+// version: 1.21.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-02
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/oklog/ulid/v2"
@@ -1537,7 +1538,8 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 		defer destMu.Unlock()
 
 		oldPath := book.FilePath
-		if err := imp.organizeOneBook(book, log); err != nil {
+		landing, err := imp.organizeOneBook(book, log)
+		if err != nil {
 			recordImportFailure(status, fmt.Sprintf("Failed to organize '%s': %v", book.Title, err))
 			log.Warn("Failed to organize '%s': %v", book.Title, err)
 			return nil
@@ -1545,37 +1547,22 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 
 		book.LibraryState = new("organized")
 		if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
-			if len(files) > 1 {
-				// C-7: a multi-file book got here via organizeMultiFileBook,
-				// which already MOVED each segment on disk and COMMITTED the
-				// matching per-file UpdateBookFile writes. Renaming the target
-				// directory back (the old single-file rollback) would strand
-				// those committed book_files rows pointing at paths that no
-				// longer exist — the segments were moved (and possibly
-				// renamed) individually, so a directory rename cannot restore
-				// them. The organized state on disk + book_files rows is
-				// self-consistent; only THIS Book row (FilePath/LibraryState)
-				// is stale. Don't touch the disk — fail loudly with a
-				// reconcile hint instead.
-				ids := make([]string, 0, len(files))
-				for _, f := range files {
-					ids = append(ids, f.ID)
-				}
-				msg := fmt.Sprintf(
-					"CRITICAL: UpdateBook failed after multi-file organize for '%s' (%s): %v — book row still points at %s but the segments and %d book_files rows moved to %s; reconcile book_file IDs: %s",
-					book.Title, book.ID, err, oldPath, len(files), book.FilePath, strings.Join(ids, ","))
-				log.Error("%s", msg)
-				recordImportFailure(status, msg)
-				return nil
-			}
-			log.Error("Failed to update organized path for '%s': %v — rolling back", book.Title, err)
-			if book.FilePath != oldPath {
-				if rbErr := os.Rename(book.FilePath, oldPath); rbErr != nil {
-					log.Error("CRITICAL: rollback failed for %s: file at %s, DB expects %s", book.ID, book.FilePath, oldPath)
-				} else {
-					book.FilePath = oldPath
-				}
-			}
+			// The book row is what makes the organized copy reachable; without
+			// it the copies under RootDir are orphans and the rows already
+			// repointed at them (multi-file) name files no book leads to. Put
+			// everything back: rows to their source paths, the copies this
+			// organize wrote removed (Created only -- an adopted file was not
+			// ours), FilePath to the source. OrganizeBook copies rather than
+			// moves, so the source is intact and nothing is lost. The
+			// pre-2026-09-02 code did the opposite on both branches: for a
+			// multi-file book it left the rows pointing at the copies and
+			// logged a reconcile hint, and for a single-file book it
+			// os.Rename'd the copy onto the source.
+			imp.rollbackImportedOrganize(book, files, landing, oldPath, log)
+			msg := fmt.Sprintf("Failed to record organized path for '%s' (%s): %v -- rolled back: rows and FilePath restored to %s, %d created cop%s removed",
+				book.Title, book.ID, err, oldPath, len(landing.Created), plural(len(landing.Created), "y", "ies"))
+			log.Error("%s", msg)
+			recordImportFailure(status, msg)
 			return nil
 		}
 
@@ -1714,12 +1701,20 @@ func (a *loggerReporterAdapter) SetCurrentItem(label string) {
 	// one is out of scope here.
 }
 
-func (imp *Importer) organizeOneBook(book *database.Book, log logger.Logger) error {
+// organizeOneBook copies an imported book into the library and repoints the
+// imported book's OWN rows at the landing: its book_file rows (through
+// repointImportedRows) and then, in memory, its FilePath. Unlike
+// PerformOrganize the iTunes import never versions a book -- the imported row
+// IS the book -- so nothing is demoted and no version row is created. The
+// Landing is returned so the caller can undo the copy (rollbackImportedOrganize)
+// when its own UpdateBook fails; FilePath is advanced only after every row
+// repointed, so a failure here leaves the book exactly as it was.
+func (imp *Importer) organizeOneBook(book *database.Book, log logger.Logger) (*organizer.Landing, error) {
 	if book == nil {
-		return fmt.Errorf("book is nil")
+		return nil, fmt.Errorf("book is nil")
 	}
 	if imp.organizerFactory == nil {
-		return fmt.Errorf("organizer not configured")
+		return nil, fmt.Errorf("organizer not configured")
 	}
 
 	org := imp.organizerFactory()
@@ -1737,22 +1732,31 @@ func (imp *Importer) organizeOneBook(book *database.Book, log logger.Logger) err
 		return imp.organizeMultiFileBook(org, book, files, log)
 	}
 
-	newPath, _, err := org.OrganizeBook(book)
+	landing, err := org.OrganizeSingleFile(book)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if newPath != "" && newPath != book.FilePath {
-		book.FilePath = newPath
-		imp.applyOrganizedFileMetadata(book, newPath)
-		log.Info("Organized '%s' to %s", book.Title, newPath)
+	if landing == nil || landing.Path == "" || landing.Path == book.FilePath {
+		return landing, nil
 	}
-	return nil
+	// A single-file book may still own ONE book_file row, and it names the
+	// source. Repoint it too, or the row names a path the book no longer has.
+	if err := imp.repointImportedRows(book, files, importedRowRemap(landing, book.FilePath), log); err != nil {
+		organizer.RemoveCreated(landing, book.ID, log)
+		return nil, err
+	}
+	book.FilePath = landing.Path
+	imp.applyOrganizedFileMetadata(book, landing.Path)
+	log.Info("Organized '%s' to %s", book.Title, landing.Path)
+	return landing, nil
 }
 
 // organizeMultiFileBook routes a merged, multi-file book through
-// OrganizeBookDirectory, then updates the book's FilePath and each
-// BookFile's FilePath to reflect the new organized locations.
-func (imp *Importer) organizeMultiFileBook(org BookOrganizer, book *database.Book, files []database.BookFile, log logger.Logger) error {
+// OrganizeBookDirectory, repoints every BookFile row at its organized path
+// (all or nothing -- see repointImportedRows) and then updates the book's
+// FilePath in memory. If a row cannot be repointed the copies this organize
+// wrote are removed again and the book is left untouched.
+func (imp *Importer) organizeMultiFileBook(org BookOrganizer, book *database.Book, files []database.BookFile, log logger.Logger) (*organizer.Landing, error) {
 	segments := make([]database.BookFile, 0, len(files))
 	for _, f := range files {
 		if f.FilePath == "" {
@@ -1761,29 +1765,108 @@ func (imp *Importer) organizeMultiFileBook(org BookOrganizer, book *database.Boo
 		segments = append(segments, f)
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segments)
+	landing, err := org.OrganizeBookDirectory(book, segments)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if targetDir != "" && targetDir != book.FilePath {
-		book.FilePath = targetDir
-		log.Info("Organized '%s' to %s", book.Title, targetDir)
+	if landing == nil {
+		return nil, fmt.Errorf("organizer returned no landing for '%s' (%s)", book.Title, book.ID)
 	}
 
-	if imp.store != nil {
-		for _, f := range files {
-			newPath, ok := pathMap[f.FilePath]
-			if !ok || newPath == "" || newPath == f.FilePath {
-				continue
-			}
-			updated := f
-			updated.FilePath = newPath
-			if uErr := imp.store.UpdateBookFile(f.ID, &updated); uErr != nil {
-				log.Warn("failed to update book file path for '%s' (file=%s): %v", book.Title, f.ID, uErr)
-			}
+	if err := imp.repointImportedRows(book, files, importedRowRemap(landing, book.FilePath), log); err != nil {
+		organizer.RemoveCreated(landing, book.ID, log)
+		return nil, err
+	}
+	if landing.Path != "" && landing.Path != book.FilePath {
+		book.FilePath = landing.Path
+		log.Info("Organized '%s' to %s", book.Title, landing.Path)
+	}
+	return landing, nil
+}
+
+// importedRowRemap is the source path -> landed path map a Landing implies
+// for the imported book's rows: the directory map for a directory book, and
+// {source: Path} for a single file. Both repointImportedRows and
+// rollbackImportedOrganize derive their row set from it, so the rows that are
+// restored are exactly the rows that were repointed.
+func importedRowRemap(landing *organizer.Landing, sourcePath string) map[string]string {
+	if landing == nil {
+		return nil
+	}
+	if landing.IsDir() {
+		return landing.Files
+	}
+	if landing.Path == "" || sourcePath == "" {
+		return nil
+	}
+	return map[string]string{sourcePath: landing.Path}
+}
+
+// repointImportedRows rewrites each book_file row whose FilePath is a key of
+// remap to the mapped path. It is all-or-nothing: on the first UpdateBookFile
+// failure every row already rewritten is restored to its source path and the
+// error is returned, so the book's rows never end up half at the source and
+// half at the landing.
+func (imp *Importer) repointImportedRows(book *database.Book, files []database.BookFile, remap map[string]string, log logger.Logger) error {
+	if imp.store == nil || len(remap) == 0 {
+		return nil
+	}
+	done := make([]database.BookFile, 0, len(files))
+	for _, f := range files {
+		newPath, ok := remap[f.FilePath]
+		if !ok || newPath == "" || newPath == f.FilePath {
+			continue
 		}
+		updated := f
+		updated.FilePath = newPath
+		if err := imp.store.UpdateBookFile(f.ID, &updated); err != nil {
+			imp.restoreImportedRows(book, done, log)
+			return fmt.Errorf("repoint book_file %s of '%s' to %s: %w", f.ID, book.Title, newPath, err)
+		}
+		done = append(done, f)
 	}
 	return nil
+}
+
+// restoreImportedRows writes each row back exactly as it was before
+// repointImportedRows touched it. A failure here is logged as CRITICAL: the
+// row then names an organized copy that rollback is about to remove.
+func (imp *Importer) restoreImportedRows(book *database.Book, originals []database.BookFile, log logger.Logger) {
+	for i := range originals {
+		f := originals[i]
+		if err := imp.store.UpdateBookFile(f.ID, &f); err != nil {
+			log.Error("CRITICAL: could not restore book_file %s of '%s' (%s) to %s after a failed organize: %v",
+				f.ID, book.Title, book.ID, f.FilePath, err)
+		}
+	}
+}
+
+// rollbackImportedOrganize undoes a successful organizeOneBook whose
+// follow-up UpdateBook failed: the rows repointed at the landing go back to
+// their source paths, the files the landing CREATED are removed, and the
+// in-memory FilePath is reset to the source. files are the rows as read
+// BEFORE the organize, i.e. at their source paths.
+func (imp *Importer) rollbackImportedOrganize(book *database.Book, files []database.BookFile, landing *organizer.Landing, oldPath string, log logger.Logger) {
+	remap := importedRowRemap(landing, oldPath)
+	if imp.store != nil {
+		repointed := make([]database.BookFile, 0, len(files))
+		for _, f := range files {
+			if newPath, ok := remap[f.FilePath]; ok && newPath != "" && newPath != f.FilePath {
+				repointed = append(repointed, f)
+			}
+		}
+		imp.restoreImportedRows(book, repointed, log)
+	}
+	organizer.RemoveCreated(landing, book.ID, log)
+	book.FilePath = oldPath
+}
+
+// plural picks the singular or plural suffix for n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func (imp *Importer) applyOrganizedFileMetadata(book *database.Book, newPath string) {

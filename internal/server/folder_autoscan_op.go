@@ -1,5 +1,5 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
 // last-edited: 2026-09-02
 //
@@ -23,7 +23,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
 
@@ -92,63 +91,26 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("failed to process books: %w", err)
 				}
 
-				// Auto-organize if enabled.
-				if config.AppConfig.AutoOrganize && config.AppConfig.RootDir != "" {
-					org := organizer.NewOrganizer(&config.AppConfig)
-					organized := 0
-					// Counted, not just skipped. "Auto-organize complete: 0
-					// organized" tells an operator nothing about WHY zero, and
-					// a lookup ERROR is not the same thing as a book that has
-					// no DB row — collapsing both into one bare `continue` hid
-					// both.
-					var failed, lookupErrors, notInDB int
-					for _, b := range books {
-						dbBook, err := s.Ops().GetBookByFilePath(b.FilePath)
-						if err != nil {
-							lookupErrors++
-							if lookupErrors <= 10 {
-								_ = progress.Log("warn", fmt.Sprintf("Auto-organize: DB lookup failed for %s: %v", b.FilePath, err), nil)
-							}
-							continue
-						}
-						if dbBook == nil {
-							notInDB++
-							continue
-						}
-						// OrganizeOneBook, not Organizer.OrganizeBook: the
-						// latter is the SINGLE-FILE path and errors on any
-						// book whose file_path is a directory.
-						//
-						// This is the THIRD copy of this loop. #2303 fixed the
-						// same defect in server.go's AutoOrganizeFn (588
-						// production failures in one run) and hoisted the
-						// three-way decision into OrganizeOneBook so it could
-						// not be copied wrong again — but this copy already
-						// existed and was missed, because that change grepped
-						// for the symptom rather than for every caller of
-						// Organizer.OrganizeBook.
-						landing, err := s.organizeService.OrganizeOneBook(org, dbBook, scanLog)
-						if err != nil {
-							_ = progress.Log("warn", fmt.Sprintf("Organize failed for %s: %v", dbBook.Title, err), nil)
-							failed++
-							continue
-						}
-						newPath := landing.Path
-						if newPath != dbBook.FilePath {
-							dbBook.FilePath = newPath
-							scanner.ApplyOrganizedFileMetadata(dbBook, newPath)
-							if _, err := s.Ops().UpdateBook(dbBook.ID, dbBook); err != nil {
-								_ = progress.Log("warn", fmt.Sprintf("Failed to update path for %s: %v", dbBook.Title, err), nil)
-							} else {
-								organized++
-							}
-						}
-					}
-					_ = progress.Log("info", fmt.Sprintf("Auto-organize complete: %d organized, %d failed, %d not in DB, %d lookup errors (of %d scanned)",
-						organized, failed, notInDB, lookupErrors, len(books)), nil)
-				} else if config.AppConfig.AutoOrganize && config.AppConfig.RootDir == "" {
-					_ = progress.Log("warn", "Auto-organize enabled but root_dir not set", nil)
-				}
+				// Auto-organize through the SAME hook the library scan uses.
+				// autoOrganizeScannedBooks resolves the scanned books to IDs,
+				// backfills the single book_file row single-file books need to
+				// pass FilterBooksNeedingOrganization, and hands them to
+				// PerformOrganize, whose CreateOrganizedVersion writes the
+				// version row, the book_file rows at their landed paths, the
+				// version link and the OperationChange rows.
+				//
+				// Until 2026-09-02 this op ran a THIRD copy of the organize
+				// loop instead: OrganizeOneBook (the file operation, no DB
+				// work) followed by a hand-written FilePath repoint. It
+				// discarded landing.Files, so every multi-file book it
+				// organized kept book_file rows naming the pre-organize
+				// paths -- audio in the library, rows pointing at the source.
+				// #2303 rerouted server.go's AutoOrganizeFn through
+				// PerformOrganize for exactly this defect and documented this
+				// copy as the reason; the copy itself was left standing. It
+				// is gone now rather than patched: one row-writing path, no
+				// second implementation to drift.
+				s.autoOrganizeScannedBooks(ctx, books, scanLog)
 			}
 
 			// Trigger dedup check on newly scanned books (non-blocking goroutine).

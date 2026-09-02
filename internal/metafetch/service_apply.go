@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-02
 
@@ -16,11 +16,12 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
+	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
-	"github.com/oklog/ulid/v2"
 )
 
 // renderableCoverURL decides what cover_url to persist during an apply.
@@ -381,7 +382,25 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 // If the book is already in the library, returns it as-is. If the book is in a
 // protected path (iTunes/import), looks for an existing library version or
 // organizes (hard-links) the file(s) to the library and creates a new version record.
-// For multi-file books, all segments are also organized and recreated.
+//
+// The copy is made by the organize service's OrganizeOneBook +
+// CreateOrganizedVersion — the same path "Organize Library" and the post-scan
+// hook use — not by a private re-implementation. Until 2026-09-02 this
+// function carried its own: it called OrganizeBookDirectory / OrganizeBook
+// directly, so it never saw Landing.Created and could not remove the copies it
+// had just written when its own row writes failed; it created the book_file
+// rows one CreateBookFile at a time with each error only logged; and it then
+// demoted the ORIGINAL to non-primary unconditionally, so a failed row write
+// produced a version group whose primary owned no audio while the row that
+// still had the files was marked superseded. CreateOrganizedVersion writes the
+// rows atomically, rolls back the row and the created files on any failure,
+// and leaves the original untouched unless everything landed.
+//
+// Returned records carry the display metadata the caller most recently
+// applied: syncMetadataToLibraryCopy runs on a freshly created copy here, so
+// a caller that forgets to run it (three of the four do) gets Description,
+// Genre and MetadataReviewStatus on the new copy rather than the narrower
+// field set CreateOrganizedVersion clones.
 func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 	if config.AppConfig.RootDir == "" {
 		return book // no library configured
@@ -406,111 +425,62 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 		}
 	}
 
-	// Collect file paths for multi-file books
-	bookFiles, bfErr := mfs.db.GetBookFiles(book.ID)
-	var activeFiles []database.BookFile
-	if bfErr == nil {
-		for _, bf := range bookFiles {
-			if !bf.Missing {
-				activeFiles = append(activeFiles, bf)
-			}
-		}
-	}
-
+	log := logger.New("metafetch-library-copy")
+	orgSvc := mfs.libraryOrganizeService()
 	org := organizer.NewOrganizer(&config.AppConfig)
-	var newBookPath string
-	var pathMap map[string]string
 
-	if len(activeFiles) > 1 {
-		// Multi-file: organize all book files to library directory. Hand over
-		// the full bookFiles slice, not activeFiles -- OrganizeBookDirectory
-		// skips Missing rows for copying but counts them for track numbering,
-		// so passing only the survivors would renumber the book.
-		targetDir, pm, err := org.OrganizeBookDirectory(book, bookFiles)
-		if err != nil {
-			slog.Warn("failed to create library copy for multi-file book", "id", book.ID, "error", err)
-			return nil
-		}
-		pathMap = pm
-		// Use the directory as the book's primary path
-		newBookPath = targetDir
-	} else {
-		// Single-file: organize just the book file
-		p, _, err := org.OrganizeBook(book)
-		if err != nil {
-			slog.Warn("failed to create library copy for", "id", book.ID, "error", err)
-			return nil
-		}
-		newBookPath = p
-	}
-
-	// Create version-linked record for the library copy
-	isPrimary := true
-	isNotPrimary := false
-	organizedState := "organized"
-	versionGroupID := ""
-	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
-		versionGroupID = *book.VersionGroupID
-	} else {
-		versionGroupID = ulid.Make().String()
-	}
-
-	newBook := *book
-	newBook.ID = ulid.Make().String()
-	newBook.FilePath = newBookPath
-	newBook.LibraryState = &organizedState
-	newBook.VersionGroupID = &versionGroupID
-	newBook.IsPrimaryVersion = &isPrimary
-
-	created, err := mfs.db.CreateBook(&newBook)
+	// OrganizeOneBook owns the directory / single-file decision (it reads the
+	// book_file rows and stats FilePath), so this function no longer has a
+	// copy of it that can disagree with the one CreateOrganizedVersion
+	// validates against.
+	landing, err := orgSvc.OrganizeOneBook(org, book, log)
 	if err != nil {
-		slog.Warn("failed to create library book record for", "id", book.ID, "error", err)
+		slog.Warn("failed to create library copy for protected book", "id", book.ID, "error", err)
+		return nil
+	}
+	if landing.InPlace {
+		// Unreachable by construction — an in-place landing is only produced
+		// for a book already under RootDir, and those returned above. If it
+		// ever happens there is no copy to hand back, and versioning an
+		// in-place landing is exactly what CreateOrganizedVersion refuses.
+		slog.Error("library copy: protected book landed in place; refusing to version it", "id", book.ID, "path", landing.Path)
 		return nil
 	}
 
-	// Record the library-copy event so history shows where the copy came from.
-	_ = mfs.db.RecordPathChange(&database.BookPathChange{
-		BookID:     created.ID,
-		OldPath:    book.FilePath,
-		NewPath:    created.FilePath,
-		ChangeType: "library_copy",
-	})
-
-	// Copy book_authors to the new record
-	if authors, err := mfs.db.GetBookAuthors(book.ID); err == nil && len(authors) > 0 {
-		var newAuthors []database.BookAuthor
-		for _, ba := range authors {
-			newAuthors = append(newAuthors, database.BookAuthor{
-				BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role, Position: ba.Position,
-			})
-		}
-		_ = mfs.db.SetBookAuthors(created.ID, newAuthors)
+	// No operation id: this copy is a side effect of a metadata apply or
+	// write-back, not an organize operation the user can undo as such.
+	created, err := orgSvc.CreateOrganizedVersion(book, landing, "", log)
+	if err != nil {
+		// CreateOrganizedVersion has already removed the files it wrote and
+		// the row it created, and has NOT demoted the original.
+		slog.Warn("failed to create library book record for protected book", "id", book.ID, "error", err)
+		return nil
 	}
 
-	// Copy book files with updated file paths for multi-file books
-	if len(activeFiles) > 1 && pathMap != nil {
-		for _, bf := range activeFiles {
-			newBF := bf
-			newBF.ID = ulid.Make().String()
-			newBF.BookID = created.ID
-			if newPath, ok := pathMap[bf.FilePath]; ok {
-				newBF.FilePath = newPath
-				newBF.ITunesPath = ComputeITunesPath(newPath)
-			}
-			if err := mfs.db.CreateBookFile(&newBF); err != nil {
-				slog.Warn("failed to copy book_file for library book", "bookFileID", bf.ID, "newBookID", created.ID, "error", err)
-			}
-		}
-	}
+	mfs.syncMetadataToLibraryCopy(book, created)
 
-	// Demote original to non-primary
-	book.VersionGroupID = &versionGroupID
-	book.IsPrimaryVersion = &isNotPrimary
-	_, _ = mfs.db.UpdateBook(book.ID, book)
-
-	slog.Info("created library copy -> for protected book ( file(s))", "path", newBookPath, "newBookID", created.ID, "originalBookID", book.ID, "file", len(activeFiles))
+	slog.Info("created library copy for protected book", "path", created.FilePath, "newBookID", created.ID, "originalBookID", book.ID)
 	return created
 }
+
+// libraryOrganizeService is the organize service ensureLibraryCopy routes
+// through, built once from this service's own store. It is constructed here
+// rather than injected because every metafetch store already satisfies
+// organizer.Store (Store embeds it), and a second wiring path would be one more
+// place for the two to disagree. ApplyOrganizedFileMetadata and
+// ComputeITunesPath match what audiobooks.NewOrganizeService installs on the
+// production organize service, so a copy made here is indistinguishable from
+// one made by "Organize Library".
+func (mfs *Service) libraryOrganizeService() *organizer.Service {
+	mfs.organizeOnce.Do(func() {
+		svc := organizer.NewService(mfs.db)
+		svc.ApplyOrganizedFileMetadata = scanner.ApplyOrganizedFileMetadata
+		svc.ComputeITunesPath = ComputeITunesPath
+		mfs.organizeSvc = svc
+	})
+	return mfs.organizeSvc
+}
+
 func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMetadata) {
 	fetchedValues := map[string]any{}
 	if meta.Title != "" {

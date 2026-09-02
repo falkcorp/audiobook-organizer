@@ -1,5 +1,5 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
 // last-edited: 2026-09-02
 
@@ -640,7 +640,7 @@ func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
 }
 
 // OrganizeBook returns mode "" when the target already IS this file (here: a
-// hard link to the source, so os.SameFile). organizeSingleFile must then leave
+// hard link to the source, so os.SameFile). OrganizeSingleFile must then leave
 // Created empty, and a rollback of that landing must leave the target alone —
 // it was there before this run.
 func TestOrganizeSingleFile_AdoptedTarget_IsNotCreatedAndSurvivesRollback(t *testing.T) {
@@ -661,7 +661,7 @@ func TestOrganizeSingleFile_AdoptedTarget_IsNotCreatedAndSurvivesRollback(t *tes
 	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o775))
 	require.NoError(t, os.Link(src, target), "pre-existing hard link: the target already IS this file")
 
-	landing, err := organizeSingleFile(org, book)
+	landing, err := org.OrganizeSingleFile(book)
 	require.NoError(t, err)
 	require.Equal(t, target, landing.Path)
 	require.Empty(t, landing.Created, "an adopted target was not created by this run")
@@ -687,7 +687,7 @@ func TestOrganizeSingleFile_FreshCopy_IsCreatedAndRolledBack(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
 	book := &database.Book{ID: "b1", Title: "Title", FilePath: src, Format: "m4b", Author: &database.Author{Name: "Author"}}
 
-	landing, err := organizeSingleFile(NewOrganizer(&config.AppConfig), book)
+	landing, err := NewOrganizer(&config.AppConfig).OrganizeSingleFile(book)
 	require.NoError(t, err)
 	require.Equal(t, []string{landing.Path}, landing.Created)
 

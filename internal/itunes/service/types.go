@@ -1,23 +1,40 @@
 // file: internal/itunes/service/types.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 43dcecba-4cba-4139-bd4c-5047a9a1f0c0
+// last-edited: 2026-09-02
 
 package itunesservice
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import (
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+)
 
 // BookOrganizer is the narrow interface the import pipeline needs from
-// internal/organizer. Injected via Deps.OrganizerFactory so this
-// package never imports internal/config.
+// internal/organizer. Injected via Deps.OrganizerFactory so this package
+// never constructs an Organizer from internal/config itself.
+//
+// Both methods return the *organizer.Landing the real Organizer produces
+// rather than a bare path. The importer commits a landing to the imported
+// book's own rows, and when that write fails it has to undo the copy; only
+// Landing.Created says which files this organize wrote (an adopted file was
+// there first) and Landing.Files says which rows moved. Until 2026-09-02 the
+// directory form returned (dir, pathMap, err) and dropped Created, so a
+// failed row write could neither remove the copies nor tell which ones were
+// ours.
 type BookOrganizer interface {
-	OrganizeBook(book *database.Book) (newPath, sidecar string, err error)
-	// OrganizeBookDirectory organizes a multi-file (merged) book by moving each
-	// of its per-track files into the book's target directory. It takes the
-	// BookFile rows rather than bare paths because the destination filename
-	// comes from the file naming pattern, which needs the track number.
-	// Returns the new target directory and a map of old file path -> new file
-	// path so callers can update per-file records.
-	OrganizeBookDirectory(book *database.Book, files []database.BookFile) (targetDir string, pathMap map[string]string, err error)
+	// OrganizeSingleFile copies a single-file book to its organized path.
+	// Landing.Path is that path; Landing.Created holds it when the copy was
+	// written by this call and is empty when the target was already this file.
+	OrganizeSingleFile(book *database.Book) (*organizer.Landing, error)
+	// OrganizeBookDirectory organizes a multi-file (merged) book by copying
+	// each of its per-track files into the book's target directory. It takes
+	// the BookFile rows rather than bare paths because the destination
+	// filename comes from the file naming pattern, which needs the track
+	// number. Landing.Path is the target directory and Landing.Files maps
+	// each source path to its organized path so callers can repoint per-file
+	// rows.
+	OrganizeBookDirectory(book *database.Book, files []database.BookFile) (*organizer.Landing, error)
 }
 
 // ValidateRequest is the wire type for POST /itunes/validate.

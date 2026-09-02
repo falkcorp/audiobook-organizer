@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.30.2
+// version: 1.31.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-02
 
@@ -961,6 +961,137 @@ func (orgSvc *Service) stampOrganizeMetadata(bookID, operationID string, when ti
 	})
 }
 
+// LandingOutcome is what CommitLanding persisted for one organized book.
+type LandingOutcome int
+
+const (
+	// LandingUnchanged: the landing is the book's current path. The book was
+	// stamped as organized; no row changed its path.
+	LandingUnchanged LandingOutcome = iota
+	// LandingRenamed: an in-place landing. ReOrganizeInPlace already rewrote
+	// the book's own rows; CommitLanding stamped it and recorded the rename.
+	LandingRenamed
+	// LandingVersioned: an out-of-root landing. CreateOrganizedVersion wrote
+	// the version row and its book_file rows at the landed paths and demoted
+	// the original.
+	LandingVersioned
+)
+
+// CommitLanding persists what OrganizeOneBook did for book: it takes the
+// Landing that call returned and writes whatever the database needs to agree
+// with the disk -- the organize stamp for an unchanged or in-place landing, or
+// the organized version row (with its book_file rows) for a landing outside
+// the library root. It records the OperationChange rows for operationID (none
+// when it is empty) on every branch, including the failure of the version
+// write, so an operation's summary and its change log cannot disagree.
+//
+// It is THE row-writing step after OrganizeOneBook, for every caller.
+// organizeBooks, the batch-save op and metafetch's library copy all go
+// through it; until 2026-09-02 each had its own copy of this branch and three
+// of the copies wrote no book_file rows at all -- files moved, rows still
+// naming the source. A caller that needs to act on the outcome (a handler's
+// response, an op's counters) switches on the returned LandingOutcome; the
+// created version row is returned only for LandingVersioned.
+//
+// On a failed version write it returns the error WITHOUT having demoted the
+// original: CreateOrganizedVersion has already removed the row and the files
+// it wrote (Landing.Created), so the book is exactly as it was before the
+// organize.
+func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, operationID string, log logger.Logger) (LandingOutcome, *database.Book, error) {
+	if book == nil {
+		return LandingUnchanged, nil, fmt.Errorf("organize: cannot commit a landing for a nil book")
+	}
+	if landing == nil || landing.Path == "" {
+		return LandingUnchanged, nil, fmt.Errorf("organize: no landing for %s (%s) — nothing to commit", book.Title, book.ID)
+	}
+	oldPath := book.FilePath
+	newPath := landing.Path
+	now := time.Now()
+
+	if oldPath == newPath {
+		if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
+			log.Debug("Organize: failed to stamp book %s: %s", book.ID, updateErr.Error())
+		}
+		if operationID != "" {
+			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+				ID:          ulid.Make().String(),
+				OperationID: operationID,
+				BookID:      book.ID,
+				ChangeType:  "organize_skipped",
+				FieldName:   "file_path",
+				OldValue:    oldPath,
+				NewValue:    oldPath,
+			})
+		}
+		return LandingUnchanged, nil, nil
+	}
+
+	if landing.InPlace {
+		if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
+			log.Debug("Organize: failed to stamp re-organized book %s: %s", book.ID, updateErr.Error())
+		}
+		log.Info("Re-organized %s: %s → %s", book.Title, oldPath, newPath)
+		if operationID != "" {
+			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+				ID:          ulid.Make().String(),
+				OperationID: operationID,
+				BookID:      book.ID,
+				ChangeType:  "organize_rename",
+				FieldName:   "file_path",
+				OldValue:    oldPath,
+				NewValue:    newPath,
+			})
+			oldState := ""
+			if book.LibraryState != nil {
+				oldState = *book.LibraryState
+			}
+			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+				ID:          ulid.Make().String(),
+				OperationID: operationID,
+				BookID:      book.ID,
+				ChangeType:  "metadata_update",
+				FieldName:   "library_state",
+				OldValue:    oldState,
+				NewValue:    "organized",
+			})
+		}
+		return LandingRenamed, nil, nil
+	}
+
+	// Version-aware organize: create a new book record for the organized copy.
+	createdBook, createErr := orgSvc.CreateOrganizedVersion(book, landing, operationID, log)
+	if createErr != nil {
+		// Record the failure against the operation, the same way the
+		// file-operation failure path in organizeBooks does. This used to be
+		// skipped: the op's summary said N failed and the change log held
+		// fewer than N organize_failed rows, and the gap looked like clean
+		// books rather than unrecorded failures.
+		if operationID != "" {
+			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+				ID:          ulid.Make().String(),
+				OperationID: operationID,
+				BookID:      book.ID,
+				ChangeType:  "organize_failed",
+				FieldName:   "file_path",
+				OldValue:    oldPath,
+				NewValue:    createErr.Error(),
+			})
+		}
+		return LandingUnchanged, nil, createErr
+	}
+
+	// Stamp the new organized book record with this operation.
+	createdBook.LastOrganizeOperationID = &operationID
+	createdBook.LastOrganizedAt = &now
+	if _, updateErr := orgSvc.db.UpdateBook(createdBook.ID, createdBook); updateErr != nil {
+		log.Debug("Organize: failed to stamp new book %s: %s", createdBook.ID, updateErr.Error())
+	}
+
+	log.Info("Organized %s: created version %s → %s (original kept at %s)",
+		book.Title, createdBook.ID, newPath, oldPath)
+	return LandingVersioned, createdBook, nil
+}
+
 func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string) *Stats {
 	stats := &Stats{Total: len(booksToOrganize) + len(alreadyCorrect)}
 
@@ -1024,6 +1155,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 				}
 
 				// --- Step 2: DB operations ---
+				var commitErr error
 				if err != nil {
 					log.Warn("Failed to organize %s: %s", book.Title, err.Error())
 					statsMu.Lock()
@@ -1041,117 +1173,34 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 							NewValue:    err.Error(),
 						})
 					}
-				} else if oldPath == newPath {
-					now := time.Now()
-					if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
-						log.Debug("Organize: failed to stamp book %s: %s", book.ID, updateErr.Error())
-					}
-					statsMu.Lock()
-					stats.AlreadyCorrect++
-					statsMu.Unlock()
-
-					if operationID != "" {
-						_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							BookID:      book.ID,
-							ChangeType:  "organize_skipped",
-							FieldName:   "file_path",
-							OldValue:    oldPath,
-							NewValue:    oldPath,
-						})
-					}
-				} else if landing.InPlace {
-					now := time.Now()
-					if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
-						log.Debug("Organize: failed to stamp re-organized book %s: %s", book.ID, updateErr.Error())
-					}
-					log.Info("Re-organized %s: %s → %s", book.Title, oldPath, newPath)
-					statsMu.Lock()
-					stats.ReOrganized++
-					statsMu.Unlock()
-
-					if operationID != "" {
-						_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							BookID:      book.ID,
-							ChangeType:  "organize_rename",
-							FieldName:   "file_path",
-							OldValue:    oldPath,
-							NewValue:    newPath,
-						})
-						oldState := ""
-						if book.LibraryState != nil {
-							oldState = *book.LibraryState
-						}
-						_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-							ID:          ulid.Make().String(),
-							OperationID: operationID,
-							BookID:      book.ID,
-							ChangeType:  "metadata_update",
-							FieldName:   "library_state",
-							OldValue:    oldState,
-							NewValue:    "organized",
-						})
-					}
 				} else {
-					// Version-aware organize: create a new book record for the organized copy
-					createdBook, createErr := orgSvc.CreateOrganizedVersion(&book, landing, operationID, log)
-					if createErr != nil {
-						statsMu.Lock()
-						stats.Failed++
-						statsMu.Unlock()
-
-						// Record the failure against the operation, the same
-						// way the file-operation failure path above does.
-						//
-						// This branch used to increment stats.Failed and jump
-						// straight to the progress label, writing no
-						// OperationChange at all. The consequence is not a
-						// missing log line — CreateOrganizedVersion logs its
-						// own error — it is that the operation's summary and
-						// the operation's change log DISAGREE, with nothing
-						// saying so. Reconciling "the op reports N failed"
-						// against the organize_failed rows silently returns
-						// fewer than N, and the gap looks like clean books
-						// rather than unrecorded failures.
-						if operationID != "" {
-							_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-								ID:          ulid.Make().String(),
-								OperationID: operationID,
-								BookID:      book.ID,
-								ChangeType:  "organize_failed",
-								FieldName:   "file_path",
-								OldValue:    oldPath,
-								NewValue:    createErr.Error(),
-							})
-						}
-						goto progress
-					}
-
-					// Stamp the new organized book record with this operation
-					now := time.Now()
-					createdBook.LastOrganizeOperationID = &operationID
-					createdBook.LastOrganizedAt = &now
-					if _, updateErr := orgSvc.db.UpdateBook(createdBook.ID, createdBook); updateErr != nil {
-						log.Debug("Organize: failed to stamp new book %s: %s", createdBook.ID, updateErr.Error())
-					}
-
-					log.Info("Organized %s: created version %s → %s (original kept at %s)",
-						book.Title, createdBook.ID, newPath, oldPath)
-
+					// One row-writing path for every caller. The
+					// already-correct / in-place / versioned branch lived
+					// inline here until 2026-09-02, and every other caller
+					// of OrganizeOneBook (the batch-save op, the folder
+					// auto-scan, metafetch's library copy) had grown its own
+					// copy of it -- three of them skipping the row writes.
+					var outcome LandingOutcome
+					outcome, _, commitErr = orgSvc.CommitLanding(&book, landing, operationID, log)
 					statsMu.Lock()
-					stats.Organized++
+					switch {
+					case commitErr != nil:
+						stats.Failed++
+					case outcome == LandingUnchanged:
+						stats.AlreadyCorrect++
+					case outcome == LandingRenamed:
+						stats.ReOrganized++
+					default:
+						stats.Organized++
+					}
 					statsMu.Unlock()
 				}
 
 				// --- Step 3: Enqueue iTunes writeback ---
-				if err == nil && oldPath != newPath && orgSvc.writeBackBatcher != nil {
+				if err == nil && commitErr == nil && oldPath != newPath && orgSvc.writeBackBatcher != nil {
 					orgSvc.writeBackBatcher.Enqueue(book.ID)
 				}
 
-			progress:
 				// --- Step 4: Progress reporting ---
 				count := progressCounter.Add(1)
 				if count%50 == 0 || count == int64(len(booksToOrganize)) {
@@ -1272,24 +1321,7 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 	if isDir {
 		return orgSvc.organizeDirectoryBookRows(org, book, bookFiles, log)
 	}
-	return organizeSingleFile(org, book)
-}
-
-// organizeSingleFile wraps Organizer.OrganizeBook in a Landing. OrganizeBook's
-// mode is "" when it wrote nothing — the target was already this file (same
-// inode, or a previous copy this book's row owns) — so Created is populated
-// only when a mode names the transfer that happened. A rollback that removed
-// the target in the mode=="" case would delete the earlier organized copy.
-func organizeSingleFile(org *Organizer, book *database.Book) (*Landing, error) {
-	newPath, mode, err := org.OrganizeBook(book)
-	if err != nil {
-		return nil, err
-	}
-	l := &Landing{Path: newPath}
-	if mode != "" {
-		l.Created = []string{newPath}
-	}
-	return l, nil
+	return org.OrganizeSingleFile(book)
 }
 
 // OrganizeDirectoryBook handles organizing a multi-file book where file_path is a directory.
@@ -1393,7 +1425,6 @@ func resolveOrganizedFilePath(srcPath string, landed map[string]string, log logg
 	return dstPath
 }
 
-// CreateOrganizedVersion creates a new book record for the organized copy and links it to the original.
 // rollbackOrganizedVersion undoes a partially-built organized copy after the
 // per-file copy failed, so the caller can return an error instead of falling
 // through to the version-group handover that demotes the original.
@@ -1438,6 +1469,20 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 		}
 	}
 
+	RemoveCreated(landing, newBookID, log)
+}
+
+// RemoveCreated is the on-disk half of an organize rollback: it removes the
+// files a Landing wrote (Created) and then the landing directory if that left
+// it empty. owner names the book the landing was for, in log lines only.
+//
+// Exported because every caller that commits a landing to its own rows -- the
+// iTunes importer repoints the imported book's rows rather than versioning
+// them -- needs the same rollback when its row write fails, and the rules are
+// not obvious: only Created is removed (an adopted file, or a copy an earlier
+// organize made, is not ours), containment is ensureUnderRoot rather than a
+// prefix test, and with no root configured nothing is removed at all.
+func RemoveCreated(landing *Landing, owner string, log logger.Logger) {
 	if landing == nil || len(landing.Created) == 0 {
 		return
 	}
@@ -1448,7 +1493,7 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 		// disk with no row — the next organize's collision — so this is an
 		// Error naming every one of them, not a silent return.
 		log.Error("organize: rollback cannot remove %d file(s) written for %s because root_dir is unset; left on disk with no row: %s",
-			len(landing.Created), newBookID, strings.Join(landing.Created, ", "))
+			len(landing.Created), owner, strings.Join(landing.Created, ", "))
 		return
 	}
 	dir := ""
@@ -1458,7 +1503,7 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 			// Same guard the files get. Only an EMPTY directory can be
 			// removed, so this is symmetry rather than a live hole, but a
 			// rollback that cannot prove a path is ours must not touch it.
-			log.Error("organize: rollback for %s will not remove directory %s: %v", newBookID, dir, err)
+			log.Error("organize: rollback for %s will not remove directory %s: %v", owner, dir, err)
 			dir = ""
 		}
 	}
@@ -1468,13 +1513,11 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 	// audio; the directory goes only if that left it empty.
 	if leftover := unlinkCreated(landing.Created, root, dir); len(leftover) > 0 {
 		log.Error("organize: rollback for %s could not remove %d file(s), left on disk with no row: %s",
-			newBookID, len(leftover), strings.Join(leftover, ", "))
+			owner, len(leftover), strings.Join(leftover, ", "))
 	}
 }
 
-// landing is what OrganizeOneBook / OrganizeDirectoryBook / OrganizeBook just
-// produced for this book. Rows are pointed at landing.Files, never at a
-// recomputed plan, and a rollback removes landing.Created, never a directory.
+// CreateOrganizedVersion creates a new book record for the organized copy and links it to the original.
 func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
 	if landing == nil || landing.Path == "" {
 		return nil, fmt.Errorf("organize: no landing for %s (%s) — refusing to create an organized version from nothing", book.Title, book.ID)

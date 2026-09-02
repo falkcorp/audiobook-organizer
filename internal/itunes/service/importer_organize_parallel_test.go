@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_organize_parallel_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 3f9a1c7e-2b6d-4a58-9e0f-7c1d5b8a4e2f
 // last-edited: 2026-09-02
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -27,10 +28,10 @@ import (
 //
 // It derives the "destination" purely from book.Title (mirroring
 // organizer.Organizer's real title/author-driven naming pattern) and
-// tracks, per destination key, how many OrganizeBook calls are
+// tracks, per destination key, how many OrganizeSingleFile calls are
 // concurrently in flight. If organizeImportedBooks' per-destination
 // locking were missing or broken, two books sharing a title would be
-// able to run OrganizeBook concurrently and maxInFlight for that key
+// able to run OrganizeSingleFile concurrently and maxInFlight for that key
 // would exceed 1 — exactly the silent-corruption class of bug the
 // lock exists to prevent.
 type concurrencyTrackingOrganizer struct {
@@ -51,7 +52,7 @@ func (o *concurrencyTrackingOrganizer) destFor(book *database.Book) string {
 	return "/organized/" + book.Title + ".m4b"
 }
 
-func (o *concurrencyTrackingOrganizer) OrganizeBook(book *database.Book) (string, string, error) {
+func (o *concurrencyTrackingOrganizer) OrganizeSingleFile(book *database.Book) (*organizer.Landing, error) {
 	key := o.destFor(book)
 
 	o.mu.Lock()
@@ -71,11 +72,11 @@ func (o *concurrencyTrackingOrganizer) OrganizeBook(book *database.Book) (string
 	o.inFlight[key]--
 	o.mu.Unlock()
 
-	return key, "copy", nil
+	return &organizer.Landing{Path: key, Created: []string{key}}, nil
 }
 
-func (o *concurrencyTrackingOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
-	return "", nil, fmt.Errorf("not exercised by this test: all books are single-file")
+func (o *concurrencyTrackingOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (*organizer.Landing, error) {
+	return nil, fmt.Errorf("not exercised by this test: all books are single-file")
 }
 
 func (o *concurrencyTrackingOrganizer) GenerateTargetPath(book *database.Book) (string, error) {
@@ -142,7 +143,7 @@ func buildOrganizeFixture(t *testing.T, n, distinctTitles int) ([]database.Book,
 // against fixtures with colliding titles, and asserts:
 //  1. both runs organize every book (same result set, order-independent);
 //  2. the parallel run's organizer never sees more than one concurrent
-//     OrganizeBook call for the same destination key (the destLocks
+//     OrganizeSingleFile call for the same destination key (the destLocks
 //     collision guard actually serializes colliding books).
 //
 // Run with `go test -race` per the task brief; the concurrent map/int
@@ -167,7 +168,7 @@ func TestOrganizeImportedBooks_ParallelMatchesSerial_NoDestinationRace(t *testin
 
 	require.Equal(t, totalBooks, seqOrg.calls, "sequential run must organize every imported book")
 	for key, max := range seqOrg.maxInFlight {
-		require.LessOrEqualf(t, max, 1, "sequential run must never see concurrent OrganizeBook calls for %s", key)
+		require.LessOrEqualf(t, max, 1, "sequential run must never see concurrent OrganizeSingleFile calls for %s", key)
 	}
 	for _, b := range seqBooks {
 		require.NotNil(t, b.LibraryState)
@@ -190,10 +191,10 @@ func TestOrganizeImportedBooks_ParallelMatchesSerial_NoDestinationRace(t *testin
 
 	// The core correctness assertion: even with Concurrency=8 (>> the
 	// number of distinct destinations), no destination ever had more than
-	// one OrganizeBook call in flight at once.
+	// one OrganizeSingleFile call in flight at once.
 	require.Len(t, parOrg.maxInFlight, distinctTitles, "expected one destination key per distinct title")
 	for key, max := range parOrg.maxInFlight {
-		require.LessOrEqualf(t, max, 1, "destLocks must serialize concurrent OrganizeBook calls for colliding destination %s (data-race / corruption risk otherwise)", key)
+		require.LessOrEqualf(t, max, 1, "destLocks must serialize concurrent OrganizeSingleFile calls for colliding destination %s (data-race / corruption risk otherwise)", key)
 	}
 
 	// Same failure/success counts as the sequential run (order-independent
