@@ -1,7 +1,7 @@
 // file: internal/audioutil/duration.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 03399668-0f87-4d27-b118-8315b574ef23
-// last-edited: 2026-08-31
+// last-edited: 2026-09-02
 
 // Package audioutil holds small, dependency-free helpers shared by the audio
 // processing packages (internal/mediainfo, internal/fingerprint,
@@ -90,7 +90,7 @@ func ProbeDurationSeconds(ctx context.Context, ffprobePath, filePath string) (fl
 	if bin, err := LookupMediaInfo(); err == nil {
 		secs, mierr := probeDurationMediaInfo(ctx, bin, filePath)
 		if mierr == nil {
-			atomic.AddInt64(&mediaInfoHits, 1)
+			mediaInfoHits.Add(1)
 			return secs, nil
 		}
 		noteMediaInfoFallback(filePath, mierr)
@@ -104,13 +104,13 @@ func ProbeDurationSeconds(ctx context.Context, ffprobePath, filePath string) (fl
 // slower than before the change, and have no signal saying so. So: warn once
 // with the concrete reason, then count.
 var (
-	mediaInfoHits      int64
-	mediaInfoFallbacks int64
+	mediaInfoHits      atomic.Int64
+	mediaInfoFallbacks atomic.Int64
 	mediaInfoWarnOnce  sync.Once
 )
 
 func noteMediaInfoFallback(filePath string, err error) {
-	atomic.AddInt64(&mediaInfoFallbacks, 1)
+	mediaInfoFallbacks.Add(1)
 	mediaInfoWarnOnce.Do(func() {
 		slog.Warn("audioutil: mediainfo duration probe failed, falling back to ffprobe "+
 			"(logged once; use DurationProbeStats for totals)",
@@ -122,7 +122,7 @@ func noteMediaInfoFallback(filePath string, err error) {
 // many fell back to ffprobe. Exposed so an op can report the split rather than
 // leaving a systematic mediainfo failure invisible.
 func DurationProbeStats() (mediaInfo, fallback int64) {
-	return atomic.LoadInt64(&mediaInfoHits), atomic.LoadInt64(&mediaInfoFallbacks)
+	return mediaInfoHits.Load(), mediaInfoFallbacks.Load()
 }
 
 // probeDurationFFprobe is the original ffprobe implementation, unchanged. It

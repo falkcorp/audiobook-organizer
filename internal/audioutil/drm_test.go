@@ -1,7 +1,7 @@
 // file: internal/audioutil/drm_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f4be988f-5955-47d8-9379-ed828481fe27
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 package audioutil
 
@@ -58,7 +58,6 @@ func TestDetectDRM_AAXCExtension_Protected(t *testing.T) {
 
 func TestDetectDRM_RealFixtures_NotMisclassified(t *testing.T) {
 	for _, path := range realFixturePaths {
-		path := path
 		t.Run(path, func(t *testing.T) {
 			requireFixture(t, path)
 
