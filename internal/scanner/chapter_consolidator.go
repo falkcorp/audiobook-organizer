@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-07-07
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -72,10 +72,7 @@ func chapterTitlesAreSimilar(a, b string) bool {
 			common++
 		}
 	}
-	longer := len(wa)
-	if len(wb) > longer {
-		longer = len(wb)
-	}
+	longer := max(len(wb), len(wa))
 	return float64(common)/float64(longer) >= 0.80
 }
 

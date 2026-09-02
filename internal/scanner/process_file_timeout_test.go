@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file_timeout_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 60f4711a-799e-4583-8b12-21b77ce2bc3d
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -130,7 +130,7 @@ func TestProcessFileBounded_LateSendDoesNotLeakAGoroutine(t *testing.T) {
 		// Goroutine counts are noisy; take the minimum over a few reads so an
 		// unrelated transient does not decide the result.
 		best := runtime.NumGoroutine()
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			time.Sleep(10 * time.Millisecond)
 			if n := runtime.NumGoroutine(); n < best {
 				best = n

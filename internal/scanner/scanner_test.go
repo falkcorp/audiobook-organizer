@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5c1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -384,14 +384,14 @@ func TestHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("stringPtr", func(t *testing.T) {
-		ptr := stringPtr("test")
+		ptr := new("test")
 		if ptr == nil || *ptr != "test" {
 			t.Error("stringPtr failed")
 		}
 	})
 
 	t.Run("intPtr", func(t *testing.T) {
-		ptr := intPtr(42)
+		ptr := new(42)
 		if ptr == nil || *ptr != 42 {
 			t.Error("intPtr failed")
 		}

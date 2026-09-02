@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_preserve_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2f4c6a8-1d3e-4f50-9a7b-2c6e8d0f1a34
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -15,9 +15,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-func strPtr(s string) *string   { return &s }
-func intP(i int) *int           { return &i }
-func f64Ptr(f float64) *float64 { return &f }
+//go:fix inline
+func strPtr(s string) *string { return new(s) }
 
 // TestSaveBookToDatabase_RescanPreservesEnrichedFields is the load-bearing
 // regression test for the rescan data-loss bug: re-scanning an already-imported
@@ -78,25 +77,25 @@ func TestSaveBookToDatabase_RescanPreservesEnrichedFields(t *testing.T) {
 	// 2) Enrich the row with data no scanner tag carries — the exact set the
 	// old rescan wiped. Persisted via a full-replace UpdateBook, which the
 	// store does NOT protect for these fields.
-	saved.AudibleRatingOverall = f64Ptr(4.7)
-	saved.AudibleRatingCount = intP(1234)
-	saved.GoogleRatingAverage = f64Ptr(4.2)
-	saved.ITunesRating = intP(100)
-	saved.UserRatingOverall = f64Ptr(5.0)
-	saved.IntroTranscription = strPtr("This is Rich Title by Rich Author. Read by Original Narrator.")
-	saved.TranscribedTitle = strPtr("Rich Title")
-	saved.TranscribedAuthor = strPtr("Rich Author")
-	saved.TranscribeStatus = strPtr("ok")
-	saved.MetadataReviewStatus = strPtr("matched")
-	saved.MetadataSource = strPtr("audible")
-	saved.MetadataSourceHash = strPtr("sha256:deadbeef")
-	saved.Genre = strPtr("Fantasy")
-	saved.Bitrate = intP(128)
-	saved.Codec = strPtr("aac")
-	saved.SampleRate = intP(44100)
-	saved.Quality = strPtr("high")
-	saved.ITunesSyncStatus = strPtr("synced")
-	saved.AudibleRuntimeMin = intP(605)
+	saved.AudibleRatingOverall = new(4.7)
+	saved.AudibleRatingCount = new(1234)
+	saved.GoogleRatingAverage = new(4.2)
+	saved.ITunesRating = new(100)
+	saved.UserRatingOverall = new(5.0)
+	saved.IntroTranscription = new("This is Rich Title by Rich Author. Read by Original Narrator.")
+	saved.TranscribedTitle = new("Rich Title")
+	saved.TranscribedAuthor = new("Rich Author")
+	saved.TranscribeStatus = new("ok")
+	saved.MetadataReviewStatus = new("matched")
+	saved.MetadataSource = new("audible")
+	saved.MetadataSourceHash = new("sha256:deadbeef")
+	saved.Genre = new("Fantasy")
+	saved.Bitrate = new(128)
+	saved.Codec = new("aac")
+	saved.SampleRate = new(44100)
+	saved.Quality = new("high")
+	saved.ITunesSyncStatus = new("synced")
+	saved.AudibleRuntimeMin = new(605)
 	if _, err := store.UpdateBook(saved.ID, saved); err != nil {
 		t.Fatalf("enrich UpdateBook failed: %v", err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // NOTE(fable5 T022): Removed tests that used database.DB, database.Initialize,
 // or database.Close (legacy SQLite path removed). TestSaveBookToDatabaseWithoutStore
@@ -129,7 +129,7 @@ func TestComputeFileHashLargeFile(t *testing.T) {
 
 	const chunkSize = 1024 * 1024 // 1MB
 	chunk := make([]byte, chunkSize)
-	for i := 0; i < 150; i++ {
+	for i := range 150 {
 		// Fill with pattern based on position for consistency
 		for j := range chunk {
 			chunk[j] = byte(i + j)
@@ -599,7 +599,7 @@ func TestScanDirectoryParallelMultipleWorkers(t *testing.T) {
 	tmp := t.TempDir()
 
 	// Create multiple subdirectories with files
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		subdir := filepath.Join(tmp, fmt.Sprintf("dir%d", i))
 		if err := os.MkdirAll(subdir, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)

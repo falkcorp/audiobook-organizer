@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -688,7 +688,7 @@ func TestComputeHashFromReaderLargeFile(t *testing.T) {
 
 	const targetSize = 101 * 1024 * 1024 // 101 MB
 	chunk := make([]byte, 1024*1024)     // 1 MB chunks
-	for i := 0; i < 101; i++ {
+	for i := range 101 {
 		for j := range chunk {
 			chunk[j] = byte(i ^ j)
 		}
