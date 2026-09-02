@@ -1,11 +1,12 @@
 // file: internal/merge/service.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package merge
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -95,6 +96,85 @@ func NewService(db Store) *Service {
 	return &Service{db: db, syncFollower: follower}
 }
 
+// SoftDeletedInputError is returned when a merge is asked to include a book
+// that is already soft-deleted, either as a loser or as the forced primary.
+//
+// Why a typed error: the FullScan exact-hash pass and the review lanes call
+// MergeBooks in loops and need to tell "this pair is stale, skip it" from "the
+// store is broken, stop". Before this guard the soft-delete pre-check lived in
+// two of the ~ten callers; a merge that reached here with a soft-deleted
+// primary produced a version group whose only primary was a deleted row, and
+// the purge job then hard-deleted both sides (dedup bug hunt F2/F4).
+type SoftDeletedInputError struct {
+	BookID    string
+	AsPrimary bool
+}
+
+func (e *SoftDeletedInputError) Error() string {
+	role := "loser"
+	if e.AsPrimary {
+		role = "primary"
+	}
+	return fmt.Sprintf("book %s is soft-deleted and cannot be merged as %s", e.BookID, role)
+}
+
+// FilelessPrimaryError is returned when the caller forces a primary that has
+// no book_file rows while another book in the merge does. Keeping the
+// file-less book would leave the version group's only live member with no
+// route to any audio and put the only book that HAS audio on the purge clock
+// (dedup bug hunt F1). The caller's choice is refused rather than silently
+// overridden: a user who picked the file-less entry should see why it lost.
+type FilelessPrimaryError struct {
+	PrimaryID   string
+	FileBearing []string
+}
+
+func (e *FilelessPrimaryError) Error() string {
+	return fmt.Sprintf("primary %s has no files on record but %s do; refusing to keep the file-less book",
+		e.PrimaryID, strings.Join(e.FileBearing, ", "))
+}
+
+// isSoftDeleted reports whether a book row carries the soft-delete flag.
+func isSoftDeleted(b *database.Book) bool {
+	return b.MarkedForDeletion != nil && *b.MarkedForDeletion
+}
+
+// ElectPrimary picks the index of the book to keep, or -1 if no book is
+// eligible. Soft-deleted rows are never eligible. A book with at least one
+// book_file row always beats one with none; inside that tier BookIsBetter
+// decides. filesByID must hold an entry for every book (nil is "no files").
+//
+// The tier is binary on purpose. Counting files would let a twelve-track mp3
+// rip outrank a single-file m4b, which is the opposite of BookIsBetter's
+// format rule; the only fact the tier encodes is "this row can reach audio at
+// all". On-disk existence is deliberately NOT consulted: 41.8% of prod
+// book_file rows had no bytes behind them when this was written, largely from
+// moved and unmounted volumes, and a survivor election must not flip on a
+// mount that is down for the afternoon.
+func ElectPrimary(books []*database.Book, filesByID map[string][]database.BookFile) int {
+	bestIdx := -1
+	for i, b := range books {
+		if isSoftDeleted(b) {
+			// A deleted row is never the survivor. Returns -1 if every book
+			// is soft-deleted.
+			continue
+		}
+		if bestIdx < 0 {
+			bestIdx = i
+			continue
+		}
+		iHas := len(filesByID[b.ID]) > 0
+		bestHas := len(filesByID[books[bestIdx].ID]) > 0
+		switch {
+		case iHas && !bestHas:
+			bestIdx = i
+		case iHas == bestHas && BookIsBetter(b, books[bestIdx]):
+			bestIdx = i
+		}
+	}
+	return bestIdx
+}
+
 // MergeBooks merges a set of books into a single version group.
 //
 // Semantics (confirmed 2026-04-11 after an investigation into
@@ -119,9 +199,14 @@ func NewService(db Store) *Service {
 //     playable until an archive sweep (not yet implemented)
 //     cleans them up.
 //
-// If primaryID is empty, the best book is auto-selected (M4B
-// preferred, then highest bitrate, then largest file).
-// If primaryID is provided, that book is set as the primary.
+// If primaryID is empty, the best book is auto-selected by ElectPrimary
+// (a book with file rows beats one without; then BookIsBetter: organized
+// path, curation, M4B, bitrate, size). If primaryID is provided, that book
+// is set as the primary unless it has no file rows while another does
+// (FilelessPrimaryError). A soft-deleted participant is refused
+// (SoftDeletedInputError) unless it is a loser already in the group this
+// merge resolves to — that is a completed merge being replayed and is a
+// no-op.
 func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, error) {
 	// De-duplicate the incoming ID list before anything else. Every current
 	// caller either de-dupes itself or trusts a request body (e.g. the
@@ -170,27 +255,67 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		books = append(books, book)
 	}
 
-	// Determine primary index
-	bestIdx := 0
+	// Validate an explicit primary before anything costs a file read.
+	bestIdx := -1
 	if primaryID != "" {
-		found := false
 		for i, b := range books {
 			if b.ID == primaryID {
 				bestIdx = i
-				found = true
 				break
 			}
 		}
-		if !found {
+		if bestIdx < 0 {
 			return nil, fmt.Errorf("primary_id %s not in book_ids", primaryID)
 		}
-	} else {
-		// Auto-select best: M4B preferred, then highest bitrate, then largest file
-		for i := 1; i < len(books); i++ {
-			if BookIsBetter(books[i], books[bestIdx]) {
-				bestIdx = i
-			}
+	}
+
+	// Determine the version group ID from the LIVE participants only (reuse if
+	// any live book already has one). A soft-deleted book's group is not
+	// consulted: it is the group of whatever merge already consumed that book,
+	// and letting it pick the group here is exactly how a stale pair pulled a
+	// live book into some unrelated book's version group.
+	versionGroupID := ""
+	reusedGroup := false
+	for _, b := range books {
+		if isSoftDeleted(b) {
+			continue
 		}
+		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			versionGroupID = *b.VersionGroupID
+			reusedGroup = true
+			break
+		}
+	}
+	if versionGroupID == "" {
+		versionGroupID = ulid.Make().String()
+	}
+
+	// Refuse soft-deleted participants. GetBookByID returns soft-deleted rows,
+	// and every stale index in the system (book:hash:, a review candidate
+	// written before a manual merge, a queued op) can hand one in. Merging INTO
+	// one produces a group whose primary is a deleted row; merging one AS a
+	// loser into a DIFFERENT group re-routes its external IDs a second time
+	// and drags the live book into that other group. Neither is ever wanted,
+	// so this is the chokepoint's job, not each caller's.
+	//
+	// The one soft-deleted shape that IS allowed: a loser that already belongs
+	// to the very group this merge resolves to. That is a completed merge being
+	// replayed (a review verdict re-applied, a retried op), and re-running its
+	// per-loser cleanup is idempotent by construction — see
+	// TestMergeBooks_SyncIdentity_IdempotentRemerge. It can never be elected
+	// or forced primary (ElectPrimary skips soft-deleted rows; the explicit
+	// case is refused here).
+	for _, b := range books {
+		if !isSoftDeleted(b) {
+			continue
+		}
+		if b.ID == primaryID {
+			return nil, &SoftDeletedInputError{BookID: b.ID, AsPrimary: true}
+		}
+		if reusedGroup && b.VersionGroupID != nil && *b.VersionGroupID == versionGroupID {
+			continue
+		}
+		return nil, &SoftDeletedInputError{BookID: b.ID}
 	}
 
 	// Refuse to merge a book whose files have not been content-scanned.
@@ -213,6 +338,7 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	// Fail CLOSED on a read error: if we cannot tell whether a book is
 	// provisional, we do not merge it. The alternative silently reintroduces the
 	// hazard on exactly the paths where the store is unhealthy.
+	filesByID := make(map[string][]database.BookFile, len(books))
 	for _, b := range books {
 		files, err := ms.db.GetBookFiles(b.ID)
 		if err != nil {
@@ -223,26 +349,40 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 				"run its deep scan first (a merge decided without a file hash rests on "+
 				"title similarity alone)", b.ID)
 		}
+		filesByID[b.ID] = files
+	}
+
+	// Survivor election is file-aware (see ElectPrimary). An explicit primary
+	// is honored unless it would strand the group's audio: a forced primary
+	// with no book_file rows loses to nothing, so refuse rather than keep a
+	// row that cannot play while the one that can is soft-deleted onto the
+	// purge clock. Merging books that ALL lack file rows is still allowed —
+	// there is no audio to lose, and refusing would make the file-less ghost
+	// class impossible to tidy until it is repaired.
+	if bestIdx < 0 {
+		bestIdx = ElectPrimary(books, filesByID)
+		if bestIdx < 0 {
+			// Unreachable after the guard above (a live participant always
+			// exists once any soft-deleted one was admitted), kept so a future
+			// reordering cannot elect a deleted row.
+			return nil, &SoftDeletedInputError{BookID: books[0].ID, AsPrimary: true}
+		}
+	} else if len(filesByID[books[bestIdx].ID]) == 0 {
+		var fileBearing []string
+		for _, b := range books {
+			if len(filesByID[b.ID]) > 0 {
+				fileBearing = append(fileBearing, b.ID)
+			}
+		}
+		if len(fileBearing) > 0 {
+			return nil, &FilelessPrimaryError{PrimaryID: books[bestIdx].ID, FileBearing: fileBearing}
+		}
 	}
 
 	// Ordering: this runs AFTER the cheap argument checks above (a bad
 	// primary_id should not cost a file read per book) and BEFORE the version
 	// group work below, which is where writes begin. Everything between is pure
 	// computation.
-	// Determine version group ID (reuse if any book already has one)
-	versionGroupID := ""
-	reusedGroup := false
-	for _, b := range books {
-		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
-			versionGroupID = *b.VersionGroupID
-			reusedGroup = true
-			break
-		}
-	}
-	if versionGroupID == "" {
-		versionGroupID = ulid.Make().String()
-	}
-
 	// INVARIANT (VG-DOUBLE-PRIMARY): a version group must never have more than
 	// one is_primary_version=true member. When we REUSE an existing group ID,
 	// ALL current members must be re-evaluated, not just the ones in this
@@ -370,6 +510,7 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	//      library view. Files on disk are left alone for the
 	//      archive sweep to handle later.
 	eidStore := AsExternalIDReassigner(ms.db)
+	var softDeleteErrs []error
 	for _, book := range books {
 		if book.ID == resolvedPrimaryID {
 			continue
@@ -403,12 +544,21 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 			slog.Info("merge queued ITL removals for loser", "count", len(dupPIDs), "id", book.ID)
 		}
 
-		// (d) Soft-delete the loser. If UpdateBook fails inside
-		// SoftDeleteBook it falls back to hard delete, so we
-		// never leave a zombie non-primary row behind.
+		// (d) Soft-delete the loser. A failure here is a real failure of
+		// the merge: the loser is already a non-primary member of the
+		// group, so leaving it live is visible (it shows as an extra
+		// version) but it is NOT silently destroyed — SoftDeleteBook no
+		// longer falls back to a hard delete. Keep going so the other
+		// losers are handled, then report every one that stayed live.
 		if err := SoftDeleteBook(ms.db, book.ID); err != nil {
-			slog.Warn("merge soft-delete", "id", book.ID, "err", err)
+			slog.Error("merge soft-delete failed; loser left live as a non-primary version",
+				"id", book.ID, "primary", resolvedPrimaryID, "err", err)
+			softDeleteErrs = append(softDeleteErrs, fmt.Errorf("soft-delete loser %s: %w", book.ID, err))
 		}
+	}
+	if len(softDeleteErrs) > 0 {
+		return nil, fmt.Errorf("merge into %s applied but %d loser(s) could not be soft-deleted and remain live: %w",
+			resolvedPrimaryID, len(softDeleteErrs), errors.Join(softDeleteErrs...))
 	}
 
 	// --- Sync-identity + progress follow ---
@@ -712,7 +862,14 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) int 
 }
 
 // SoftDeleteBook marks a book as deleted using the MarkedForDeletion flag.
-// If UpdateBook fails, falls back to hard-delete via DeleteBook.
+//
+// It does NOT fall back to a hard delete when the update fails. It used to,
+// on the theory that a zombie non-primary row was worse than no row; but a
+// failing UpdateBook means the store is unhealthy, and answering that by
+// running DeleteBook on the same store turns "a write failed" into "a book
+// and its file rows are gone" — the wrong direction for the one function
+// whose job is to keep the loser recoverable. The caller gets the error and
+// decides.
 func SoftDeleteBook(store BookWriter, bookID string) error {
 	current, err := store.GetBookByID(bookID)
 	if err != nil {
@@ -728,9 +885,7 @@ func SoftDeleteBook(store BookWriter, bookID string) error {
 	current.MarkedForDeletionAt = &now
 
 	if _, upErr := store.UpdateBook(bookID, current); upErr != nil {
-		// Fall back to hard delete.
-		slog.Warn("dedup-books soft-delete failed, falling back to hard delete", "id", bookID, "err", upErr)
-		return store.DeleteBook(bookID)
+		return fmt.Errorf("soft-delete %s: %w", bookID, upErr)
 	}
 	return nil
 }

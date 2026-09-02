@@ -1,5 +1,6 @@
 // file: internal/merge/service_unit_test.go
-// version: 1.1.1
+// version: 1.2.0
+// guid: 3f8a2c1d-7e4b-4d9a-b6c5-0e1f2a3b4c5d
 // last-edited: 2026-09-02
 
 package merge
@@ -152,16 +153,20 @@ func TestUnit_MergeBooks_ExplicitPrimaryOverridesAuto(t *testing.T) {
 
 // ---------- SoftDeleteBook ----------
 
-func TestUnit_SoftDeleteBook_UpdateFails_FallsBackToHardDelete(t *testing.T) {
+// A failed UpdateBook must surface as an error and must NOT fall back to
+// DeleteBook. The mock has no DeleteBook expectation, so any hard-delete
+// attempt fails this test (mockery panics on an unexpected call).
+func TestUnit_SoftDeleteBook_UpdateFails_ReturnsErrorNoHardDelete(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
 	book := newBook("book-1", "A", "mp3", "/tmp/a.mp3")
 	mockStore.EXPECT().GetBookByID("book-1").Return(book, nil)
 	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(nil, fmt.Errorf("update failed"))
-	mockStore.EXPECT().DeleteBook("book-1").Return(nil)
 
 	err := SoftDeleteBook(mockStore, "book-1")
-	assert.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update failed")
+	assert.Contains(t, err.Error(), "book-1")
 }
 
 func TestUnit_SoftDeleteBook_BookAlreadyGone(t *testing.T) {

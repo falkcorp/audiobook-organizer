@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -471,8 +471,10 @@ func ddSoftDeleteBook(store bookSoftDeleter, bookID string) error {
 	current.MarkedForDeletion = &t
 	current.MarkedForDeletionAt = &now
 	if _, upErr := store.UpdateBook(bookID, current); upErr != nil {
-		slog.Warn("dedup-books soft-delete failed for (), falling back to hard delete", "bookID", bookID, "upErr", upErr)
-		return store.DeleteBook(bookID)
+		// No hard-delete fallback: see merge.SoftDeleteBook. A failed
+		// update means the store is unhealthy; deleting the row on the same
+		// store is the one outcome a soft-delete exists to prevent.
+		return fmt.Errorf("soft-delete %s: %w", bookID, upErr)
 	}
 	return nil
 }

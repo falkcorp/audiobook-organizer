@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 package merge
 
@@ -198,7 +198,7 @@ func TestB3_MergeBooks_ReassignExternalIDsError_NonFatal(t *testing.T) {
 	assert.True(t, *l.MarkedForDeletion)
 }
 
-func TestB3_MergeBooks_SoftDeleteError_NonFatal(t *testing.T) {
+func TestB3_MergeBooks_SoftDeleteError_IsReported(t *testing.T) {
 	real := setupTestStore(t)
 	fault := &b3FaultStore{Store: real}
 
@@ -209,19 +209,33 @@ func TestB3_MergeBooks_SoftDeleteError_NonFatal(t *testing.T) {
 	_, err = real.CreateBook(winner)
 	require.NoError(t, err)
 
-	// SoftDeleteBook's own GetBookByID re-fetch fails, so it can't even
-	// attempt the fallback hard delete's read step.
+	// SoftDeleteBook's own GetBookByID re-fetch fails. Until 2026-09-02 this
+	// was warned and swallowed: the merge reported success while the loser
+	// stayed live as a non-primary member of the group, which is the shape
+	// the dedup bug hunt (F1/F4) found on prod. The chokepoint now returns an
+	// error that names the loser so the caller (review lane, FullScan, op)
+	// records a failure instead of a clean merge.
 	fault.failGetBookByIDAfterFirstFor = map[string]bool{loser.ID: true}
 
 	ms := NewService(fault)
 	result, err := ms.MergeBooks([]string{loser.ID, winner.ID}, winner.ID)
-	require.NoError(t, err, "a failed soft-delete must be warned, not fail the whole merge")
-	assert.Equal(t, winner.ID, result.PrimaryID)
+	require.Error(t, err, "a loser that could not be soft-deleted must fail the merge")
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), loser.ID, "the error must name the loser that remains live")
+	assert.Contains(t, err.Error(), "remain live")
 
+	// The group writes had already been applied when the soft-delete failed:
+	// the winner is primary and the loser is a live non-primary. That is the
+	// state the error is warning about, so it must be visible, not rolled back
+	// into a lie.
 	w, err := real.GetBookByID(winner.ID)
 	require.NoError(t, err)
 	require.NotNil(t, w.IsPrimaryVersion)
 	assert.True(t, *w.IsPrimaryVersion, "winner must still be primary")
+	l, err := real.GetBookByID(loser.ID)
+	require.NoError(t, err)
+	require.NotNil(t, l, "the loser must NOT have been hard-deleted as a fallback")
+	assert.False(t, l.MarkedForDeletion != nil && *l.MarkedForDeletion, "the soft-delete did not happen")
 }
 
 // ---------- CombineBooks warn-and-continue / abort branches ----------
