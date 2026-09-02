@@ -1,5 +1,5 @@
 // file: internal/metadata/series_normalize_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-02
 
@@ -35,6 +35,9 @@ func TestStripSeriesContamination(t *testing.T) {
 		wantRule     string
 		wantFlag     bool
 		wantReason   SeriesFlagReason
+		// wantDiscarded is the number removed from the name but deliberately NOT
+		// written into the book's sequence. Only the bracketed shape sets it.
+		wantDiscarded string
 	}{
 		// ── Rule 1: dash-embedded position + title ──
 		{
@@ -161,19 +164,30 @@ func TestStripSeriesContamination(t *testing.T) {
 		},
 
 		// ── Rule 4: bracketed trailing number ──
+		//
+		// 🔑 STRIP THE NAME, DO NOT WRITE THE SEQUENCE. wantPosition is "" on
+		// purpose for both of these, and a non-empty value here is a REGRESSION,
+		// not a better result. Of the 198 bracketed rows the 2026-08-06
+		// maintenance.series-denumber run found, ~180 were shattered-book debris
+		// rather than series positions, so the number is ~90% likely to be wrong.
+		// The owner ruled on 2026-09-02: the bracket goes (their "zero series have
+		// a number in them" rule is about the NAME), the position does not get
+		// written. See SeriesCleanup.DiscardedPosition.
 		{
-			name:         "bracketed padded position",
-			input:        "Dragon Born [04]",
-			wantSeries:   "Dragon Born",
-			wantPosition: "4",
-			wantRule:     RuleBracketed,
+			name:          "bracketed padded position: name stripped, sequence NOT written",
+			input:         "Dragon Born [04]",
+			wantSeries:    "Dragon Born",
+			wantPosition:  "",
+			wantRule:      RuleBracketed,
+			wantDiscarded: "4",
 		},
 		{
-			name:         "parenthesised position",
-			input:        "The Hollows (7)",
-			wantSeries:   "The Hollows",
-			wantPosition: "7",
-			wantRule:     RuleBracketed,
+			name:          "parenthesised position: name stripped, sequence NOT written",
+			input:         "The Hollows (7)",
+			wantSeries:    "The Hollows",
+			wantPosition:  "",
+			wantRule:      RuleBracketed,
+			wantDiscarded: "7",
 		},
 
 		// ── Rule 5: keyword-vouched embedded position ──
@@ -330,6 +344,17 @@ func TestStripSeriesContamination(t *testing.T) {
 			// the per-case expectation above.
 			if got.Flag && got.Name != strings.TrimSpace(tt.input) {
 				t.Errorf("flagged name was rewritten: got %q, want %q", got.Name, tt.input)
+			}
+			if got.DiscardedPosition != tt.wantDiscarded {
+				t.Errorf("discardedPosition: got %q, want %q", got.DiscardedPosition, tt.wantDiscarded)
+			}
+			// 🔑 A discarded position must NEVER also be offered as a position to
+			// write. Asserting the two fields separately above would still pass if
+			// a future edit set both, which is exactly the regression that would
+			// silently re-enable the sequence write on all four call sites.
+			if got.DiscardedPosition != "" && got.Position != "" {
+				t.Errorf("both DiscardedPosition=%q and Position=%q set; a discarded position must not be writable",
+					got.DiscardedPosition, got.Position)
 			}
 		})
 	}

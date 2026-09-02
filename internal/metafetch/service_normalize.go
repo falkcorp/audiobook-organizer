@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_normalize.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: eceba49a-b99f-476f-9d43-fd6fd39a8e24
 // last-edited: 2026-09-02
 
@@ -61,7 +61,8 @@ func NormalizeMetaSeries(meta *metadata.BookMetadata) {
 			// only identity available.
 			slog.Info("series normalize: moved the book position out of the series name",
 				"rule", c.Rule, "series_before", meta.Series, "series_after", c.Name,
-				"position", c.Position, "title", meta.Title, "asin", meta.ASIN)
+				"position", c.Position, "discarded_position", c.DiscardedPosition,
+				"title", meta.Title, "asin", meta.ASIN)
 			meta.Series = c.Name
 			if c.Position != "" && meta.SeriesPosition == "" {
 				meta.SeriesPosition = c.Position

@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-02
 
@@ -2199,7 +2199,7 @@ func (imp *Importer) ensureSeriesID(name string, authorID *int) (*int, int, erro
 		// that made it, so a false positive can be found and overridden.
 		slog.Info("itunes import: moved the book position out of the series name",
 			"rule", c.Rule, "series_before", trimmed, "series_after", c.Name,
-			"position", c.Position)
+			"position", c.Position, "discarded_position", c.DiscardedPosition)
 		name = c.Name
 		if c.Position != "" {
 			if p, err := strconv.Atoi(c.Position); err == nil && p > 0 {
