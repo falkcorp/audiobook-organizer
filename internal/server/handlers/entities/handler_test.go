@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
 // last-edited: 2026-09-02
 
@@ -455,6 +455,58 @@ func TestGetAuthorBooks(t *testing.T) {
 	h.GetAuthorBooks(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, 1, d.enrichCalls)
+}
+
+func TestGetAuthor(t *testing.T) {
+	h, d := newHandler(t)
+	// Two rows on purpose: a getter that returns the first row regardless of id
+	// passes a single-row fixture, which is exactly the bug worth catching.
+	d.authorSeries.EXPECT().ListAuthorsWithCounts().Return(&audiobooks.AuthorWithCountListResponse{
+		Items: []audiobooks.AuthorWithCount{
+			{ID: 4, Name: "Wrong Author", BookCount: 1},
+			{ID: 5, Name: "Right Author", BookCount: 3, FileCount: 9},
+		},
+		Count: 2,
+	}, nil)
+	c, w := newCtx(http.MethodGet, "/authors/5", "", idParam("5"))
+	h.GetAuthor(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Right Author")
+	assert.NotContains(t, w.Body.String(), "Wrong Author")
+}
+
+func TestGetAuthor_NotFound(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorSeries.EXPECT().ListAuthorsWithCounts().Return(&audiobooks.AuthorWithCountListResponse{
+		Items: []audiobooks.AuthorWithCount{{ID: 4, Name: "Someone Else"}},
+		Count: 1,
+	}, nil)
+	c, w := newCtx(http.MethodGet, "/authors/5", "", idParam("5"))
+	h.GetAuthor(c)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestGetAuthor_BadID(t *testing.T) {
+	h, _ := newHandler(t)
+	c, w := newCtx(http.MethodGet, "/authors/abc", "", idParam("abc"))
+	h.GetAuthor(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestGetAuthor_ServesFromTheSameCacheAsTheList(t *testing.T) {
+	h, d := newHandler(t)
+	// No service call is expected: if GetAuthor built its own aggregate instead
+	// of reading the shared cache, the counts it reports could drift from the
+	// ones the Authors list shows.
+	d.authorsCache.Set("all", &audiobooks.AuthorWithCountListResponse{
+		Items: []audiobooks.AuthorWithCount{{ID: 5, Name: "Cached Author", BookCount: 11}},
+		Count: 1,
+	})
+	c, w := newCtx(http.MethodGet, "/authors/5", "", idParam("5"))
+	h.GetAuthor(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Cached Author")
+	assert.Contains(t, w.Body.String(), "11")
 }
 
 func TestGetAuthorAliases(t *testing.T) {
