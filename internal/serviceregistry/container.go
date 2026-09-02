@@ -1,6 +1,6 @@
 // file: internal/serviceregistry/container.go
-// version: 1.2.1
-// last-edited: 2026-08-23
+// version: 1.2.2
+// last-edited: 2026-09-02
 
 package serviceregistry
 
@@ -197,8 +197,8 @@ func (c *Container) Start(ctx context.Context) error {
 		}
 		if err := s.Start(ctx); err != nil {
 			// Stop already-started services in reverse.
-			for i := len(started) - 1; i >= 0; i-- {
-				if stopper, ok := c.built[started[i]].(Stopper); ok {
+			for _, s := range slices.Backward(started) {
+				if stopper, ok := c.built[s].(Stopper); ok {
 					_ = stopper.Stop(ctx)
 				}
 			}
@@ -217,8 +217,8 @@ func (c *Container) Stop(ctx context.Context) error {
 		return nil
 	}
 	var firstErr error
-	for i := len(c.order) - 1; i >= 0; i-- {
-		name := c.order[i]
+	for _, name := range slices.Backward(c.order) {
+
 		instance, ok := c.built[name]
 		if !ok {
 			continue
