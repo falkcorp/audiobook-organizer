@@ -1,7 +1,7 @@
 // file: internal/realtime/events.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 9e8d7f6a-5c4b-3a21-0f9e-8d7c6b5a4392
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package realtime
 
@@ -27,10 +27,10 @@ const (
 
 // Event represents a real-time event to send to clients
 type Event struct {
-	Type      EventType              `json:"type"`
-	ID        string                 `json:"id"`
-	Timestamp time.Time              `json:"timestamp"`
-	Data      map[string]interface{} `json:"data"`
+	Type      EventType      `json:"type"`
+	ID        string         `json:"id"`
+	Timestamp time.Time      `json:"timestamp"`
+	Data      map[string]any `json:"data"`
 }
 
 // Client represents a connected SSE client
@@ -148,7 +148,7 @@ func (h *EventHub) SendOperationProgress(operationID string, current, total int,
 		Type:      EventOperationProgress,
 		ID:        operationID,
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"operation_id": operationID,
 			"current":      current,
 			"total":        total,
@@ -160,12 +160,12 @@ func (h *EventHub) SendOperationProgress(operationID string, current, total int,
 }
 
 // SendOperationStatus sends an operation status change event
-func (h *EventHub) SendOperationStatus(operationID, status string, details map[string]interface{}) {
+func (h *EventHub) SendOperationStatus(operationID, status string, details map[string]any) {
 	event := &Event{
 		Type:      EventOperationStatus,
 		ID:        operationID,
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"operation_id": operationID,
 			"status":       status,
 			"details":      details,
@@ -176,7 +176,7 @@ func (h *EventHub) SendOperationStatus(operationID, status string, details map[s
 
 // SendOperationLog sends an operation log event
 func (h *EventHub) SendOperationLog(operationID, level, message string, details *string) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"operation_id": operationID,
 		"level":        level,
 		"message":      message,
@@ -195,7 +195,7 @@ func (h *EventHub) SendOperationLog(operationID, level, message string, details 
 }
 
 // SendSystemStatus sends a system status event
-func (h *EventHub) SendSystemStatus(data map[string]interface{}) {
+func (h *EventHub) SendSystemStatus(data map[string]any) {
 	event := &Event{
 		Type:      EventSystemStatus,
 		ID:        "",
@@ -239,7 +239,7 @@ func (h *EventHub) HandleSSE(c *gin.Context) {
 		Type:      "connection.established",
 		ID:        "",
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"client_id": clientID,
 		},
 	}
