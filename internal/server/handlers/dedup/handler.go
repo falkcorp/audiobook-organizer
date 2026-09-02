@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-02
 
@@ -42,6 +42,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -1073,6 +1075,15 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 	candidates, total, err := es.ListCandidates(filter)
 	if err != nil {
 		httputil.InternalError(c, "failed to list candidates for bulk merge", err)
+		return
+	}
+	// Fail-safe cap (internal/applycap). An absent body resolves to EVERY
+	// pending book candidate (Limit 100000 above) and MergeBooks each — the
+	// exact "filter matched everything" shape the cap exists for, and the
+	// hardest write in the system to undo. Gate on what the filter actually
+	// resolved, after the list and before the first merge.
+	if ex := applycap.Refuse("dedup/bulk-merge", len(candidates), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
 

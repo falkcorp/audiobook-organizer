@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-09-02
 
@@ -17,8 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -245,6 +247,13 @@ func (h *Handler) BatchUpdateAudiobooks(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
+	// Fail-safe cap (internal/applycap). This is the endpoint the web UI's
+	// bulk edit actually calls (web/src/services/api.ts), so of every gate in
+	// this PR it is the one a "filter matched everything" click reaches first.
+	if ex := applycap.Refuse("audiobooks/batch", len(req.IDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
+		return
+	}
 
 	resp := h.batchService.UpdateAudiobooks(&req)
 
@@ -271,8 +280,11 @@ func (h *Handler) BatchOperations(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "no operations provided")
 		return
 	}
-	if len(req.Operations) > 10000 {
-		httputil.RespondWithBadRequest(c, "max 10000 operations per request")
+	// Fail-safe cap (internal/applycap). The old fixed 10,000 ceiling sat
+	// ABOVE the cap and the operation list includes hard_delete; the cap is
+	// the operator-facing number now, and the code says which one refused.
+	if ex := applycap.Refuse("audiobooks/batch-operations", len(req.Operations), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
 

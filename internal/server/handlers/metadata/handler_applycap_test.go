@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_applycap_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b41e7c93-2a58-4f0d-8c6b-3e9a1d7f5028
 // last-edited: 2026-09-02
 
@@ -84,5 +84,43 @@ func TestBatchUpdateMetadata_ZeroConfigMeansDefaultNotUnlimited(t *testing.T) {
 		map[string]any{"updates": batchUpdates(applycap.Default + 1), "validate": false}, nil)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// /metadata/bulk-fetch lives in the same file as batch-update and ends in the
+// same store.UpdateBook per id — with only_missing=false it OVERWRITES. It was
+// the ungated sibling of the gated route until the #3045 adversarial review.
+func bulkFetchIDs(n int) []string {
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, "b"+strconv.Itoa(i))
+	}
+	return out
+}
+
+func TestBulkFetchMetadata_RefusesOverTheBulkApplyCap(t *testing.T) {
+	withBulkApplyCap(t, 3)
+	h, _ := newHandler(t) // no store/fetcher expectations: any call fails the test
+	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+		map[string]any{"book_ids": bulkFetchIDs(4), "only_missing": false}, nil)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
+	}
+	for _, want := range []string{"BULK_APPLY_CAP_EXCEEDED", "4 items", "cap is 3"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("response missing %q: %s", want, w.Body.String())
+		}
+	}
+}
+
+func TestBulkFetchMetadata_AllowsExactlyTheBulkApplyCap(t *testing.T) {
+	withBulkApplyCap(t, 3)
+	h, d := newHandler(t)
+	// Each id reaches the store once; not-found keeps the per-item work short.
+	d.store.EXPECT().GetBookByID(mock.Anything).Return(nil, errors.New("not found")).Times(3)
+	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+		map[string]any{"book_ids": bulkFetchIDs(3)}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
