@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-09-02
 //
@@ -937,19 +937,12 @@ func executeSeriesNormalizeCore(
 // plain range loop. The partition is disjoint BY CONSTRUCTION -- map keys are
 // book IDs, so no two workers can ever touch the same row -- which is what makes
 // it safe to parallelise a full-column-replacement write.
-// TODO(field-locks): route this write through the user field-lock guard once
-// PR #3054 (branch fix/metadata-field-locks-honored) lands on main. That branch
-// adds internal/database/metadata_field_locks.go, whose FieldKeySeriesName and
-// FieldKeySeriesPosition are exactly the two fields this pass rewrites, and
-// whose database.ApplyRespectingLocks(reader, book, mutate) is the guard to
-// call: it applies the mutation and reports back which columns it refused.
-// Until then this pass will happily overwrite a series_position the user locked
-// by hand -- which is the same "I'll manually override" case the owner asked
-// for. The join is a one-line swap of the UpdateBook call below for
-// ApplyRespectingLocks, plus surfacing its refused-column list into the
-// activity log. Deliberately NOT stubbed here: the guard's reader interface
-// does not exist on this branch, and inventing a local copy would leave two
-// definitions to reconcile at merge time.
+// The write goes through database.ApplyRespectingLocks (#3054): series_name and
+// series_position are both user-lockable, and this pass rewrites exactly those
+// two. A user who locked series_position by hand is the "when we find one I'll
+// manually override" case the owner described, so the normalizer must not
+// overwrite it. ApplyRespectingLocks reports which columns it refused, and each
+// refusal is logged rather than swallowed.
 func writeStrippedSeriesPositions(
 	ctx context.Context,
 	store maintenanceStore,
@@ -995,7 +988,20 @@ func writeStrippedSeriesPositions(
 				return nil // Already has one; never overwrite it.
 			}
 			p := pos
-			book.SeriesSequence = &p
+			refused, lockErr := database.ApplyRespectingLocks(store, book, func(b *database.Book) {
+				b.SeriesSequence = &p
+			})
+			if lockErr != nil {
+				note("LoadFieldLocks(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, lockErr, pos)
+				return nil
+			}
+			if len(refused) > 0 {
+				// Not an error: the user locked it deliberately. Logged so the
+				// number is not simply gone without explanation.
+				logging.Info(gctx, "series normalize: declined to record a stripped position on a locked field",
+					"book_id", bookID, "series_sequence", pos, "locked_fields", strings.Join(refused, ","))
+				return nil
+			}
 			if _, err := store.UpdateBook(bookID, book); err != nil {
 				note("UpdateBook(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, err, pos)
 				return nil
