@@ -1,7 +1,7 @@
 // file: internal/oauth/cfaccess.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3a7e0c92-8b41-4d56-9f08-1c6b2a5d7e39
-// last-edited: 2026-08-02
+// last-edited: 2026-09-02
 
 package oauth
 
@@ -57,8 +57,7 @@ func (e *NonIdentityAssertionError) Unwrap() error { return ErrNonIdentityAssert
 // CFAssertionCommonName recovers the service-token common_name from an error
 // returned by Verify, or "" when the error is not a non-identity assertion.
 func CFAssertionCommonName(err error) string {
-	var nie *NonIdentityAssertionError
-	if errors.As(err, &nie) {
+	if nie, ok := errors.AsType[*NonIdentityAssertionError](err); ok {
 		return nie.CommonName
 	}
 	return ""
