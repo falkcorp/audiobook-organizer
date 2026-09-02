@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package ai
 
@@ -240,7 +240,7 @@ func TestParseBatch_BatchSizeLimit(t *testing.T) {
 
 	// Create 25 filenames
 	filenames := make([]string, 25)
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		filenames[i] = "test.mp3"
 	}
 
@@ -386,7 +386,7 @@ func TestParseBatch_ExactlyMaxSize(t *testing.T) {
 
 	// Create exactly 20 filenames (the max batch size)
 	filenames := make([]string, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		filenames[i] = fmt.Sprintf("Book%d - Author%d.mp3", i+1, i+1)
 	}
 
@@ -405,7 +405,7 @@ func TestParseBatch_OverMaxSize(t *testing.T) {
 
 	// Create 25 filenames (over the max of 20)
 	filenames := make([]string, 25)
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		filenames[i] = fmt.Sprintf("Book%d - Author%d.mp3", i+1, i+1)
 	}
 
@@ -620,7 +620,7 @@ func TestParseBatch_LargeInputTruncation(t *testing.T) {
 
 	// Create 100 filenames (way over the max of 20)
 	filenames := make([]string, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		filenames[i] = fmt.Sprintf("Book%d.mp3", i+1)
 	}
 
@@ -1766,8 +1766,8 @@ func TestOpenAIParser_UsesConfiguredModels(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				var req struct {
-					Model    string                   `json:"model"`
-					Messages []map[string]interface{} `json:"messages"`
+					Model    string           `json:"model"`
+					Messages []map[string]any `json:"messages"`
 				}
 				_ = json.Unmarshal(body, &req)
 				capturedModel = req.Model

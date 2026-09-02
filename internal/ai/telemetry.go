@@ -1,7 +1,7 @@
 // file: internal/ai/telemetry.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c3d4e5f6-a7b8-0004-cdef-000000000004
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package ai
 
@@ -26,7 +26,7 @@ var aiTracer = otel.Tracer("audiobook-organizer/ai")
 //	  },
 //	  attribute.String("filename", filename),
 //	)
-func WithOpenAISpan(ctx context.Context, opName string, fn func(context.Context) (interface{}, error), attrs ...attribute.KeyValue) (interface{}, error) {
+func WithOpenAISpan(ctx context.Context, opName string, fn func(context.Context) (any, error), attrs ...attribute.KeyValue) (any, error) {
 	_, span := aiTracer.Start(ctx, opName, trace.WithAttributes(attrs...))
 	defer span.End()
 
