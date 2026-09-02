@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package fileops
 
@@ -278,7 +278,7 @@ func (op *FileOperation) cleanupOldBackups() error {
 
 	// Remove oldest backups
 	toRemove := len(matches) - op.config.MaxBackups
-	for i := 0; i < toRemove; i++ {
+	for i := range toRemove {
 		if err := os.Remove(matches[i]); err != nil {
 			slog.Warn("failed to remove old backup", "path", matches[i], "error", err)
 		}
