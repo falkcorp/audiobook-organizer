@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -29,9 +29,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -574,6 +578,18 @@ type seriesNormalizeAction struct {
 	Action        string `json:"action"` // "rename", "merge_into", "flag"
 	MergeTargetID *int   `json:"merge_target_id,omitempty"`
 	BookCount     int    `json:"book_count"`
+	// Rule names the pattern that matched, so an operator reading the preview
+	// can tell a keyword-vouched strip from a bare-number one.
+	Rule string `json:"rule,omitempty"`
+	// FlagReason distinguishes the TWO populations that now share Action:"flag".
+	// It used to mean only "the series name is the book's title"; it now also
+	// means "there is a number here but stripping it would produce garbage".
+	// Those need different handling, so the preview must not merge them.
+	FlagReason string `json:"flag_reason,omitempty"`
+	// CandidateName/CandidatePosition show what an un-vouched flag DECLINED to
+	// do, so the operator can approve it by hand instead of guessing.
+	CandidateName     string `json:"candidate_name,omitempty"`
+	CandidatePosition string `json:"candidate_position,omitempty"`
 }
 
 // seriesNormalizePreviewResult is the response body for the dry-run preview endpoint.
@@ -609,16 +625,21 @@ func computeSeriesNormalizeActions(store seriesMergeStore) ([]seriesNormalizeAct
 	var actions []seriesNormalizeAction
 
 	for _, s := range allSeries {
-		cleaned, pos, flagged := metadata.StripSeriesContamination(s.Name, "")
+		c := metadata.StripSeriesContamination(s.Name, "")
+		cleaned, pos := c.Name, c.Position
 
-		if flagged {
+		if c.Flag {
 			books, _ := store.GetBooksBySeriesIDCore(s.ID)
 			actions = append(actions, seriesNormalizeAction{
-				SeriesID:  s.ID,
-				OldName:   s.Name,
-				NewName:   s.Name,
-				Action:    "flag",
-				BookCount: len(books),
+				SeriesID:          s.ID,
+				OldName:           s.Name,
+				NewName:           s.Name,
+				Action:            "flag",
+				BookCount:         len(books),
+				Rule:              c.Rule,
+				FlagReason:        string(c.FlagReason),
+				CandidateName:     c.CandidateName,
+				CandidatePosition: c.CandidatePosition,
 			})
 			continue
 		}
@@ -643,6 +664,7 @@ func computeSeriesNormalizeActions(store seriesMergeStore) ([]seriesNormalizeAct
 				Action:        "merge_into",
 				MergeTargetID: &existingID,
 				BookCount:     len(books),
+				Rule:          c.Rule,
 			})
 		} else {
 			canonical[key] = s.ID
@@ -653,6 +675,7 @@ func computeSeriesNormalizeActions(store seriesMergeStore) ([]seriesNormalizeAct
 				NewPosition: pos,
 				Action:      "rename",
 				BookCount:   len(books),
+				Rule:        c.Rule,
 			})
 		}
 	}
@@ -788,6 +811,16 @@ func executeSeriesNormalizeCore(
 	// op has never touched — a production-data decision, not a bug fix. Filed as
 	// SERIES-NORMALIZE-WRITEBACK-SPLIT in todo.d.
 	seen := make(map[string]bool)
+	// positionByBook records the number this pass is about to DELETE from each
+	// series name, keyed by the book it belongs to.
+	//
+	// 🔑 This map is the whole reason the pass is not data loss. Renaming
+	// "Discworld 05" to "Discworld" without recording the 5 anywhere destroys
+	// the only statement of where that book sits in its series -- and the old
+	// code did exactly that: it computed NewPosition, serialized it into the
+	// dry-run preview, and then threw it away on apply. A book belongs to one
+	// series, so the keys are disjoint and first-wins is not a real tie.
+	positionByBook := make(map[string]int)
 	for _, a := range actions {
 		if a.Action == "flag" {
 			continue
@@ -803,10 +836,21 @@ func executeSeriesNormalizeCore(
 				a.SeriesID, bErr))
 			continue
 		}
+		pos := 0
+		if a.NewPosition != "" {
+			if p, cErr := strconv.Atoi(a.NewPosition); cErr == nil && p > 0 {
+				pos = p
+			}
+		}
 		for _, b := range books {
 			if !seen[b.ID] {
 				seen[b.ID] = true
 				affectedBookIDs = append(affectedBookIDs, b.ID)
+			}
+			if pos > 0 {
+				if _, dup := positionByBook[b.ID]; !dup {
+					positionByBook[b.ID] = pos
+				}
 			}
 		}
 	}
@@ -837,6 +881,16 @@ func executeSeriesNormalizeCore(
 		}
 	}
 
+	// Third pass: move the stripped number into the book's series_sequence.
+	//
+	// Ordering is load-bearing. This runs AFTER the rename and merge passes and
+	// re-reads every row, because mergeSeriesGroupHelper WRITES book rows
+	// (it repoints SeriesID). A sequence written before it, from a row read
+	// before it, would be clobbered by that full-column replacement.
+	if pErr := writeStrippedSeriesPositions(ctx, store, positionByBook); pErr != nil {
+		errs = append(errs, pErr.Error())
+	}
+
 	for _, id := range affectedBookIDs {
 		enqueueWriteBack(id)
 	}
@@ -845,4 +899,85 @@ func executeSeriesNormalizeCore(
 		return affectedBookIDs, fmt.Errorf("series normalize errors: %s", strings.Join(errs, "; "))
 	}
 	return affectedBookIDs, nil
+}
+
+// writeStrippedSeriesPositions records, on each book, the position that the
+// normalize pass removed from its series NAME -- but only where the book has no
+// sequence of its own yet.
+//
+// An existing non-zero sequence is never overwritten. It came from the file's
+// own tags or from a metadata provider's dedicated field, both of which know
+// more than a number recovered from the tail of a string.
+//
+// Concurrency: one DB read + at most one write per affected book, over a
+// collection that is library-scale on a full run (7,814 contaminated series rows
+// in production), so it is a bounded worker pool per CLAUDE.md rather than a
+// plain range loop. The partition is disjoint BY CONSTRUCTION -- map keys are
+// book IDs, so no two workers can ever touch the same row -- which is what makes
+// it safe to parallelise a full-column-replacement write.
+func writeStrippedSeriesPositions(
+	ctx context.Context,
+	store maintenanceStore,
+	positionByBook map[string]int,
+) error {
+	if len(positionByBook) == 0 {
+		return nil
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.NumCPU())
+
+	var mu sync.Mutex
+	var errs []string
+	note := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		// Capped so one systematically broken store cannot build a
+		// multi-megabyte error string out of every book in the library.
+		if len(errs) < 20 {
+			errs = append(errs, fmt.Sprintf(format, args...))
+		}
+	}
+
+	for bookID, pos := range positionByBook {
+		g.Go(func() error {
+			if gctx.Err() != nil {
+				return gctx.Err()
+			}
+			// Full row, not the Core projection: UpdateBook does a full column
+			// replacement, so handing it a reduced struct blanks every field the
+			// projection dropped.
+			book, err := store.GetBookByID(bookID)
+			if err != nil {
+				note("GetBookByID(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, err, pos)
+				return nil
+			}
+			if book == nil {
+				note("GetBookByID(%s): no such book -- the position %d stripped from its series name was NOT recorded", bookID, pos)
+				return nil
+			}
+			if book.SeriesSequence != nil && *book.SeriesSequence > 0 {
+				return nil // Already has one; never overwrite it.
+			}
+			p := pos
+			book.SeriesSequence = &p
+			if _, err := store.UpdateBook(bookID, book); err != nil {
+				note("UpdateBook(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, err, pos)
+				return nil
+			}
+			// A silent rewrite of user-visible data is the pattern this repo keeps
+			// getting burned by, so the move is logged per book.
+			logging.Info(gctx, "series normalize: recorded the position stripped from the series name",
+				"book_id", bookID, "series_sequence", pos)
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("series position write-back canceled: %w", err)
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("series position write-back: %s", strings.Join(errs, "; "))
+	}
+	return nil
 }

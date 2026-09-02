@@ -2481,9 +2481,15 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		if err != nil {
 			return err
 		}
-		seriesID, err := resolveSeriesID(book.Series, authorID)
+		seriesID, seriesPos, err := resolveSeriesID(book.Series, authorID)
 		if err != nil {
 			return err
+		}
+		// The position stripped out of the series name is only information while
+		// something records it. book.Position (from the file tags) wins when it
+		// is set; the stripped number fills the gap when it is not.
+		if seriesPos > 0 && book.Position <= 0 {
+			book.Position = seriesPos
 		}
 
 		// Attempt Work association (normalize title + author).
@@ -3077,41 +3083,68 @@ func resolveAuthorID(authorName string) (*int, error) {
 	return &author.ID, nil
 }
 
-func resolveSeriesID(seriesName string, authorID *int) (*int, error) {
+// resolveSeriesID resolves (get-or-create) the series row for seriesName and
+// returns its ID plus the book POSITION that was lifted out of the name, 0 when
+// none was found.
+//
+// 🔑 The position is returned rather than discarded, and that is the whole point
+// of the second return value. It used to be dropped on the floor here -- the
+// comment said "the scanner does not set SeriesSequence", which was true of this
+// function but not of its callers, both of which have the book in hand and both
+// of which write SeriesSequence from other sources. So the number that said
+// where the book sat in its series was deleted from the name and recorded
+// nowhere. Callers MUST write it into the book's sequence when the book has none
+// yet, and must not overwrite one it already has.
+func resolveSeriesID(seriesName string, authorID *int) (*int, int, error) {
 	trimmed := strings.TrimSpace(seriesName)
 	if trimmed == "" {
-		return nil, nil
+		return nil, 0, nil
 	}
 
-	// Strip any embedded title/position contamination from the series name.
-	// Position info is discarded here; the scanner does not set SeriesSequence.
-	if cleaned, _, flagged := metadata.StripSeriesContamination(trimmed, ""); !flagged && cleaned != "" {
-		trimmed = cleaned
+	position := 0
+	c := metadata.StripSeriesContamination(trimmed, "")
+	switch {
+	case c.Flag:
+		logging.Info(context.Background(),
+			"scanner: left a series name alone for review",
+			"series", trimmed, "reason", string(c.FlagReason),
+			"candidate_series", c.CandidateName, "candidate_position", c.CandidatePosition)
+	case c.Name != "" && c.Changed(trimmed):
+		logging.Info(context.Background(),
+			"scanner: moved the book position out of the series name",
+			"rule", c.Rule, "series_before", trimmed, "series_after", c.Name,
+			"position", c.Position)
+		trimmed = c.Name
+		if c.Position != "" {
+			if p, err := strconv.Atoi(c.Position); err == nil && p > 0 {
+				position = p
+			}
+		}
 	}
 
 	series, err := getStore().GetSeriesByName(trimmed, authorID)
 	if err != nil {
-		return nil, fmt.Errorf("series lookup failed: %w", err)
+		return nil, 0, fmt.Errorf("series lookup failed: %w", err)
 	}
 	if series != nil {
-		return &series.ID, nil
+		return &series.ID, position, nil
 	}
 
 	series, err = getStore().CreateSeries(trimmed, authorID)
 	if err != nil {
 		if !isUniqueConstraintError(err) {
-			return nil, fmt.Errorf("series create failed: %w", err)
+			return nil, 0, fmt.Errorf("series create failed: %w", err)
 		}
 		// Concurrent create: re-fetch existing record.
 		series, err = getStore().GetSeriesByName(trimmed, authorID)
 		if err != nil {
-			return nil, fmt.Errorf("series lookup after conflict failed: %w", err)
+			return nil, 0, fmt.Errorf("series lookup after conflict failed: %w", err)
 		}
 		if series == nil {
-			return nil, fmt.Errorf("series conflict detected but series not found: %s", trimmed)
+			return nil, 0, fmt.Errorf("series conflict detected but series not found: %s", trimmed)
 		}
 	}
-	return &series.ID, nil
+	return &series.ID, position, nil
 }
 
 func isUniqueConstraintError(err error) bool {
