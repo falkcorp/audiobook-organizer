@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-02
 
@@ -119,11 +119,12 @@ func (e *SoftDeletedInputError) Error() string {
 }
 
 // FilelessPrimaryError is returned when the caller forces a primary that has
-// no book_file rows while another book in the merge does. Keeping the
-// file-less book would leave the version group's only live member with no
-// route to any audio and put the only book that HAS audio on the purge clock
-// (dedup bug hunt F1). The caller's choice is refused rather than silently
-// overridden: a user who picked the file-less entry should see why it lost.
+// no audio route (HasAudioRoute: no book_file rows AND an empty FilePath)
+// while another book in the merge has one. Keeping the file-less book would
+// leave the version group's only live member with no route to any audio and
+// put the only book that HAS audio on the purge clock (dedup bug hunt F1).
+// The caller's choice is refused rather than silently overridden: a user who
+// picked the file-less entry should see why it lost.
 type FilelessPrimaryError struct {
 	PrimaryID   string
 	FileBearing []string
@@ -134,27 +135,52 @@ func (e *FilelessPrimaryError) Error() string {
 		e.PrimaryID, strings.Join(e.FileBearing, ", "))
 }
 
-// isSoftDeleted reports whether a book row carries the soft-delete flag.
-func isSoftDeleted(b *database.Book) bool {
-	return b.MarkedForDeletion != nil && *b.MarkedForDeletion
+// BookNotFoundError is returned when a merge names a book that the store
+// cannot load. Callers used to detect this by substring-matching "not found"
+// on the error text (three HTTP handlers did); a typed error lets them use
+// errors.As and stops a rename of the message from silently turning a 409/404
+// into a 500.
+type BookNotFoundError struct {
+	BookID string
+}
+
+func (e *BookNotFoundError) Error() string {
+	return fmt.Sprintf("book %s not found", e.BookID)
+}
+
+// HasAudioRoute reports whether a book row can reach audio at all: it has at
+// least one book_file row, or its own FilePath names a file. Both are routes
+// the rest of the codebase actually plays through — audio_sample, the M3U
+// export, organize and the purge all read book.FilePath for single-file
+// books — so a row with a FilePath and no book_file rows is NOT file-less.
+// 12,525 prod books (20.4%, census 2026-08-25) have exactly that shape
+// because chapter consolidation was disabled when they were scanned; an
+// earlier version of this tier called them file-less and demoted every one
+// of them below any duplicate that happened to have rows, including iTunes
+// ghosts.
+//
+// On-disk existence is deliberately NOT consulted: 41.8% of prod book_file
+// rows had no bytes behind them when this was written, largely from moved
+// and unmounted volumes, and a survivor election must not flip on a mount
+// that is down for the afternoon.
+func HasAudioRoute(b *database.Book, files []database.BookFile) bool {
+	return len(files) > 0 || b.FilePath != ""
 }
 
 // ElectPrimary picks the index of the book to keep, or -1 if no book is
-// eligible. Soft-deleted rows are never eligible. A book with at least one
-// book_file row always beats one with none; inside that tier BookIsBetter
-// decides. filesByID must hold an entry for every book (nil is "no files").
+// eligible. Soft-deleted rows are never eligible. A book with an audio route
+// (HasAudioRoute) always beats one with none; inside that tier BookIsBetter
+// decides, and an exact tie is broken deterministically (see preferOnTie).
+// filesByID must hold an entry for every book (nil is "no files").
 //
 // The tier is binary on purpose. Counting files would let a twelve-track mp3
 // rip outrank a single-file m4b, which is the opposite of BookIsBetter's
 // format rule; the only fact the tier encodes is "this row can reach audio at
-// all". On-disk existence is deliberately NOT consulted: 41.8% of prod
-// book_file rows had no bytes behind them when this was written, largely from
-// moved and unmounted volumes, and a survivor election must not flip on a
-// mount that is down for the afternoon.
+// all".
 func ElectPrimary(books []*database.Book, filesByID map[string][]database.BookFile) int {
 	bestIdx := -1
 	for i, b := range books {
-		if isSoftDeleted(b) {
+		if b.IsSoftDeleted() {
 			// A deleted row is never the survivor. Returns -1 if every book
 			// is soft-deleted.
 			continue
@@ -163,16 +189,41 @@ func ElectPrimary(books []*database.Book, filesByID map[string][]database.BookFi
 			bestIdx = i
 			continue
 		}
-		iHas := len(filesByID[b.ID]) > 0
-		bestHas := len(filesByID[books[bestIdx].ID]) > 0
+		iHas := HasAudioRoute(b, filesByID[b.ID])
+		bestHas := HasAudioRoute(books[bestIdx], filesByID[books[bestIdx].ID])
 		switch {
 		case iHas && !bestHas:
 			bestIdx = i
-		case iHas == bestHas && BookIsBetter(b, books[bestIdx]):
+		case iHas == bestHas && preferOnTie(b, books[bestIdx]):
 			bestIdx = i
 		}
 	}
 	return bestIdx
+}
+
+// preferOnTie reports whether a should be elected over b. BookIsBetter
+// decides when it has an opinion; when it has none in either direction (exact
+// duplicates tie on every rule — same bytes means same size, bitrate and
+// format) the election must not fall back to argument order, because the
+// engine passes [scanned, owner] in scan order and a merge that failed after
+// its version-group writes is retried with the pair reversed. Argument-order
+// ties flipped the primary on that rerun (measured: c primary, rerun → d
+// primary, c soft-deleted). So a tie prefers the book that is already the
+// group's primary, then the older ULID — the earlier import is the one more
+// likely to have been curated.
+func preferOnTie(a, b *database.Book) bool {
+	if BookIsBetter(a, b) {
+		return true
+	}
+	if BookIsBetter(b, a) {
+		return false
+	}
+	aPrim := a.IsPrimaryVersion != nil && *a.IsPrimaryVersion
+	bPrim := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
+	if aPrim != bPrim {
+		return aPrim
+	}
+	return a.ID < b.ID
 }
 
 // MergeBooks merges a set of books into a single version group.
@@ -200,13 +251,15 @@ func ElectPrimary(books []*database.Book, filesByID map[string][]database.BookFi
 //     cleans them up.
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
-// (a book with file rows beats one without; then BookIsBetter: organized
-// path, curation, M4B, bitrate, size). If primaryID is provided, that book
-// is set as the primary unless it has no file rows while another does
-// (FilelessPrimaryError). A soft-deleted participant is refused
-// (SoftDeletedInputError) unless it is a loser already in the group this
-// merge resolves to — that is a completed merge being replayed and is a
-// no-op.
+// (a book with an audio route beats one without; then BookIsBetter:
+// organized path, curation, M4B, bitrate, size; then a deterministic
+// tie-break). If primaryID is provided, that book is set as the primary
+// unless it has no audio route while another does (FilelessPrimaryError). A
+// soft-deleted participant is refused (SoftDeletedInputError) unless it is a
+// loser already in the group this merge resolves to — that is a completed
+// merge being replayed, and the replayed loser is left exactly as it is: no
+// external-ID reroute, no ITL removals, no second soft-delete, no sync
+// follow. A book the store cannot load is BookNotFoundError.
 func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, error) {
 	// De-duplicate the incoming ID list before anything else. Every current
 	// caller either de-dupes itself or trusts a request body (e.g. the
@@ -250,7 +303,7 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	for _, id := range bookIDs {
 		book, err := ms.db.GetBookByID(id)
 		if err != nil || book == nil {
-			return nil, fmt.Errorf("book %s not found", id)
+			return nil, &BookNotFoundError{BookID: id}
 		}
 		books = append(books, book)
 	}
@@ -277,7 +330,7 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	versionGroupID := ""
 	reusedGroup := false
 	for _, b := range books {
-		if isSoftDeleted(b) {
+		if b.IsSoftDeleted() {
 			continue
 		}
 		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
@@ -300,13 +353,15 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	//
 	// The one soft-deleted shape that IS allowed: a loser that already belongs
 	// to the very group this merge resolves to. That is a completed merge being
-	// replayed (a review verdict re-applied, a retried op), and re-running its
-	// per-loser cleanup is idempotent by construction — see
-	// TestMergeBooks_SyncIdentity_IdempotentRemerge. It can never be elected
-	// or forced primary (ElectPrimary skips soft-deleted rows; the explicit
-	// case is refused here).
+	// replayed (a review verdict re-applied, a retried op) — or a version the
+	// USER deleted from a group whose live members are now being merged. Either
+	// way the per-loser cleanup below is skipped for it (see the loop): the
+	// first case already ran it, and the second must not have its external IDs
+	// stripped and its 30-day purge clock restarted by a merge it is not part
+	// of. It can never be elected or forced primary (ElectPrimary skips
+	// soft-deleted rows; the explicit case is refused here).
 	for _, b := range books {
-		if !isSoftDeleted(b) {
+		if !b.IsSoftDeleted() {
 			continue
 		}
 		if b.ID == primaryID {
@@ -364,13 +419,17 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		if bestIdx < 0 {
 			// Unreachable after the guard above (a live participant always
 			// exists once any soft-deleted one was admitted), kept so a future
-			// reordering cannot elect a deleted row.
-			return nil, &SoftDeletedInputError{BookID: books[0].ID, AsPrimary: true}
+			// reordering cannot elect a deleted row. Deliberately NOT a
+			// SoftDeletedInputError: books[0] may be live, so that message
+			// would be false about it, and the engine treats that type as a
+			// benign "stale pair, skip" — an invariant break must not be
+			// downgraded to a skipped scan item.
+			return nil, fmt.Errorf("no live participant eligible as primary (ids=%v)", bookIDs)
 		}
-	} else if len(filesByID[books[bestIdx].ID]) == 0 {
+	} else if !HasAudioRoute(books[bestIdx], filesByID[books[bestIdx].ID]) {
 		var fileBearing []string
 		for _, b := range books {
-			if len(filesByID[b.ID]) > 0 {
+			if HasAudioRoute(b, filesByID[b.ID]) {
 				fileBearing = append(fileBearing, b.ID)
 			}
 		}
@@ -515,6 +574,16 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		if book.ID == resolvedPrimaryID {
 			continue
 		}
+		// Admitted soft-deleted loser (see the guard above): already merged
+		// away, or deleted by the user. Nothing below is a no-op for it —
+		// ReassignExternalIDs strips the IDs a RestoreAudiobook would bring
+		// back, EnqueueRemove queues ITL deletes a second time, and
+		// SoftDeleteBook resets MarkedForDeletionAt, restarting its 30-day
+		// retention. Leave it exactly as it is.
+		if book.IsSoftDeleted() {
+			slog.Debug("merge: loser already soft-deleted; cleanup skipped", "id", book.ID, "primary", resolvedPrimaryID)
+			continue
+		}
 
 		// (a) Collect PIDs before reassignment.
 		var dupPIDs []string
@@ -576,9 +645,12 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	// book's ID) and losers are only soft-deleted, so the winner's reverse
 	// index needs no repoint: this is a loser-only redirect. Kept as its own
 	// separately-testable step rather than folded into the loop above.
+	// Already-soft-deleted losers are excluded for the same reason they skip
+	// the cleanup loop: their identity was followed by the merge that deleted
+	// them, or was never part of one.
 	losers := make([]string, 0, len(books)-1)
 	for _, book := range books {
-		if book.ID != resolvedPrimaryID {
+		if book.ID != resolvedPrimaryID && !book.IsSoftDeleted() {
 			losers = append(losers, book.ID)
 		}
 	}
@@ -641,7 +713,7 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 
 	survivor, err := ms.db.GetBookByID(primaryID)
 	if err != nil || survivor == nil {
-		return nil, fmt.Errorf("primary book %s not found", primaryID)
+		return nil, &BookNotFoundError{BookID: primaryID}
 	}
 	// Validate all IDs up front so a bad ID aborts before any mutation.
 	seen := map[string]bool{}
@@ -652,7 +724,7 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 		seen[id] = true
 		b, err := ms.db.GetBookByID(id)
 		if err != nil || b == nil {
-			return nil, fmt.Errorf("book %s not found", id)
+			return nil, &BookNotFoundError{BookID: id}
 		}
 	}
 	if !seen[primaryID] {

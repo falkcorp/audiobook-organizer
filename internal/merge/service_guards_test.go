@@ -1,5 +1,5 @@
 // file: internal/merge/service_guards_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b2e9d4c-1a5f-4e83-9c6b-2d8f0a3e5b17
 // last-edited: 2026-09-02
 
@@ -8,6 +8,7 @@ package merge
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/oklog/ulid/v2"
@@ -28,9 +29,16 @@ import (
 //	F4  a soft-deleted row outside the resolved group is refused as either
 //	    role, and MergeBooks fails when a loser cannot be soft-deleted.
 
+// seedGuardBook seeds either a book with one book_file row (withFile) or a
+// TRUE stub: no rows AND an empty FilePath. The stub shape matters — a book
+// with a FilePath and no rows is the 12,525-book P0 class and HAS an audio
+// route; see seedPathOnlyBook.
 func seedGuardBook(t *testing.T, store database.Store, title, format string, withFile bool) *database.Book {
 	t.Helper()
-	b := &database.Book{ID: ulid.Make().String(), Title: title, Format: format, FilePath: "/lib/" + title + "." + format}
+	b := &database.Book{ID: ulid.Make().String(), Title: title, Format: format}
+	if withFile {
+		b.FilePath = "/lib/" + title + "." + format
+	}
 	_, err := store.CreateBook(b)
 	require.NoError(t, err)
 	if withFile {
@@ -38,6 +46,17 @@ func seedGuardBook(t *testing.T, store database.Store, title, format string, wit
 			ID: ulid.Make().String(), BookID: b.ID, FilePath: b.FilePath, Format: format,
 		}))
 	}
+	return b
+}
+
+// seedPathOnlyBook seeds the P0 shape: book.FilePath set, zero book_file rows.
+// 20.4% of prod books look like this (chapter consolidation was disabled when
+// they were scanned, so createBookFilesForBook never ran).
+func seedPathOnlyBook(t *testing.T, store database.Store, title, format string) *database.Book {
+	t.Helper()
+	b := &database.Book{ID: ulid.Make().String(), Title: title, Format: format, FilePath: "/lib/" + title + "." + format}
+	_, err := store.CreateBook(b)
+	require.NoError(t, err)
 	return b
 }
 
@@ -113,6 +132,115 @@ func TestMergeBooks_AllFileless_ExplicitPrimaryHonored(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, a.ID, res.PrimaryID)
 	assert.True(t, softDeleted(t, store, b.ID))
+}
+
+// F1 / P0 class: a book whose only audio route is book.FilePath (no rows) is
+// NOT file-less. It must beat a true stub, must be accepted as an explicit
+// primary, and must not lose to a row-bearing iTunes ghost on the tier alone.
+// The first cut of this tier counted rows only and would have demoted every
+// one of the 12,525 P0 books below any duplicate that had rows.
+func TestMergeBooks_Election_PathOnlyBookHasAnAudioRoute(t *testing.T) {
+	store := setupTestStore(t)
+	stub := seedGuardBook(t, store, "P0 Stub", "m4b", false)
+	pathOnly := seedPathOnlyBook(t, store, "P0 Path Only", "mp3")
+
+	res, err := NewService(store).MergeBooks([]string{stub.ID, pathOnly.ID}, "")
+	require.NoError(t, err)
+	assert.Equal(t, pathOnly.ID, res.PrimaryID, "a FilePath is an audio route; the stub must lose")
+	assert.True(t, softDeleted(t, store, stub.ID))
+	assert.False(t, softDeleted(t, store, pathOnly.ID))
+}
+
+func TestMergeBooks_ExplicitPathOnlyPrimary_Accepted(t *testing.T) {
+	store := setupTestStore(t)
+	pathOnly := seedPathOnlyBook(t, store, "P0 Keep Me", "m4b")
+	withRow := seedGuardBook(t, store, "P0 Row Bearing", "mp3", true)
+
+	res, err := NewService(store).MergeBooks([]string{pathOnly.ID, withRow.ID}, pathOnly.ID)
+	require.NoError(t, err, "a path-only book has an audio route and may be kept")
+	assert.Equal(t, pathOnly.ID, res.PrimaryID)
+	assert.True(t, softDeleted(t, store, withRow.ID))
+}
+
+// Within the has-route tier a path-only m4b still beats a row-bearing mp3 on
+// BookIsBetter's format rule: the tier is binary, not a row count.
+func TestMergeBooks_Election_TierIsBinaryNotARowCount(t *testing.T) {
+	store := setupTestStore(t)
+	withRow := seedGuardBook(t, store, "Binary MP3", "mp3", true)
+	pathOnly := seedPathOnlyBook(t, store, "Binary M4B", "m4b")
+
+	res, err := NewService(store).MergeBooks([]string{withRow.ID, pathOnly.ID}, "")
+	require.NoError(t, err)
+	assert.Equal(t, pathOnly.ID, res.PrimaryID)
+}
+
+// F2 replay must be a true no-op: the already-soft-deleted loser keeps its
+// MarkedForDeletionAt (its 30-day purge clock is not restarted) and its
+// external IDs are not re-pointed a second time. Before this the cleanup
+// loop ran for every non-primary participant, deleted or not.
+func TestMergeBooks_Replay_LeavesSoftDeletedLoserUntouched(t *testing.T) {
+	store := setupTestStore(t)
+	a := seedGuardBook(t, store, "Untouched A", "mp3", true)
+	b := seedGuardBook(t, store, "Untouched B", "mp3", true)
+	svc := NewService(store)
+
+	res, err := svc.MergeBooks([]string{a.ID, b.ID}, a.ID)
+	require.NoError(t, err)
+	require.Equal(t, a.ID, res.PrimaryID)
+
+	before, err := store.GetBookByID(b.ID)
+	require.NoError(t, err)
+	require.NotNil(t, before.MarkedForDeletionAt, "loser must carry a soft-delete timestamp")
+	stamp := *before.MarkedForDeletionAt
+	// Move the stamp into the past so a rewrite would be observable even
+	// inside one wall-clock second.
+	past := stamp.Add(-48 * time.Hour)
+	before.MarkedForDeletionAt = &past
+	_, err = store.UpdateBook(before.ID, before)
+	require.NoError(t, err)
+
+	res, err = svc.MergeBooks([]string{b.ID, a.ID}, "")
+	require.NoError(t, err)
+	assert.Equal(t, a.ID, res.PrimaryID)
+
+	after, err := store.GetBookByID(b.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.MarkedForDeletionAt)
+	assert.True(t, after.MarkedForDeletionAt.Equal(past), "replay reset the purge clock: %v -> %v", past, *after.MarkedForDeletionAt)
+}
+
+// Exact duplicates tie on every BookIsBetter rule. The election must then be
+// order-independent: a merge retried with the pair reversed (the engine's
+// scan order is arbitrary) must elect the same primary, or the rerun soft-
+// deletes yesterday's survivor. Ties prefer the current primary, then the
+// older ULID.
+func TestElectPrimary_TieIsOrderIndependent(t *testing.T) {
+	older := &database.Book{ID: "01AAAAAAAAAAAAAAAAAAAAAAAA", Format: "mp3", FilePath: "/x/a.mp3"}
+	newer := &database.Book{ID: "01BBBBBBBBBBBBBBBBBBBBBBBB", Format: "mp3", FilePath: "/x/b.mp3"}
+	files := map[string][]database.BookFile{}
+
+	assert.Equal(t, 0, ElectPrimary([]*database.Book{older, newer}, files))
+	assert.Equal(t, 1, ElectPrimary([]*database.Book{newer, older}, files), "reversed order must still elect the older ULID")
+
+	yes := true
+	newer.IsPrimaryVersion = &yes
+	assert.Equal(t, 1, ElectPrimary([]*database.Book{older, newer}, files), "an existing primary wins a tie over age")
+	assert.Equal(t, 0, ElectPrimary([]*database.Book{newer, older}, files))
+}
+
+// A book the store cannot load is a typed error so HTTP handlers can map it
+// without substring-matching the message.
+func TestMergeBooks_MissingBook_IsTypedNotFound(t *testing.T) {
+	store := setupTestStore(t)
+	a := seedGuardBook(t, store, "Present", "mp3", true)
+
+	_, err := NewService(store).MergeBooks([]string{a.ID, "01ZZZZZZZZZZZZZZZZZZZZZZZZ"}, "")
+	var nf *BookNotFoundError
+	require.True(t, errors.As(err, &nf), "want BookNotFoundError, got %T: %v", err, err)
+	assert.Equal(t, "01ZZZZZZZZZZZZZZZZZZZZZZZZ", nf.BookID)
+
+	_, err = NewService(store).CombineBooks([]string{a.ID, "01ZZZZZZZZZZZZZZZZZZZZZZZZ"}, "01ZZZZZZZZZZZZZZZZZZZZZZZZ", nil)
+	require.True(t, errors.As(err, &nf), "CombineBooks: want BookNotFoundError, got %T: %v", err, err)
 }
 
 // F2: after a manual "keep A", replaying the same pair — in either order and

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -250,11 +251,43 @@ func TestMergeBookDuplicatesAsVersions_TooFew(t *testing.T) {
 
 func TestMergeBookDuplicatesAsVersions_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, errString("book not found"))
+	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.BookNotFoundError{BookID: "b"})
 	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
 		map[string]any{"book_ids": []string{"a", "b"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "b") {
+		t.Fatalf("404 must name the missing book, got %s", w.Body.String())
+	}
+}
+
+// A "not found" that is only a substring of some other error's text is NOT a
+// 404: the handler maps the typed error, not the wording. Before 2026-09-02 a
+// store failure mentioning a not-found index would have been reported as a
+// missing book.
+func TestMergeBookDuplicatesAsVersions_UntypedNotFoundTextIs500(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, errString("index shard not found while loading"))
+	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+		map[string]any{"book_ids": []string{"a", "b"}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The service refusing the merge because a participant is soft-deleted is the
+// caller's problem to see, not a server fault: 409 with the service's reason.
+func TestMergeBookDuplicatesAsVersions_SoftDeletedInputIs409(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.SoftDeletedInputError{BookID: "b", AsPrimary: true})
+	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+		map[string]any{"book_ids": []string{"a", "b"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "b") {
+		t.Fatalf("409 must carry the service's reason naming the book, got %s", w.Body.String())
 	}
 }
 
@@ -284,11 +317,28 @@ func TestCombineBooks_TooFew(t *testing.T) {
 
 func TestCombineBooks_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, errString("book not found"))
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.BookNotFoundError{BookID: "a"})
 	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
 		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The user picked a keep_id with no audio route while a merged book has one.
+// The service refuses; the user must see WHY their pick lost, so this is a
+// 409 carrying the service's message, not a generic 500.
+func TestCombineBooks_FilelessPrimaryIs409WithReason(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).
+		Return(nil, &merge.FilelessPrimaryError{PrimaryID: "a", FileBearing: []string{"b"}})
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "refusing to keep the file-less book") {
+		t.Fatalf("409 must carry the service's reason, got %s", w.Body.String())
 	}
 }
 
