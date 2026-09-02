@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Package dataset builds labeled dedup examples and runs deterministic catchers
 // over them. Pure: a store interface in, a database.LabeledExample out, no
@@ -385,7 +385,7 @@ func containmentGridStarts(maxStart int) []int {
 // directly against another signature's full fixed-length representation.
 func resampleNearest(src []uint32, start, length, targetLen int) []uint32 {
 	out := make([]uint32, targetLen)
-	for i := 0; i < targetLen; i++ {
+	for i := range targetLen {
 		idx := start + i*length/targetLen
 		if idx >= start+length {
 			idx = start + length - 1

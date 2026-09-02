@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_part_vs_whole_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d3a9f21-4b7c-4e58-9a01-2f5c8d6e7b34
-// last-edited: 2026-07-11
+// last-edited: 2026-09-02
 
 // Regression guard for CONS-15: upsertExactCandidate must reject a pair where
 // one side is a single-file book whose duration is a small fraction of the
@@ -32,7 +32,7 @@ func TestUpsertExactCandidate_PartVsWholeGuard(t *testing.T) {
 		case "B":
 			// Ten files totalling far more than A's single file.
 			files := make([]database.BookFile, 0, 10)
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				files = append(files, database.BookFile{ID: "FB" + string(rune('0'+i)), BookID: "B", Duration: 3600})
 			}
 			return files, nil

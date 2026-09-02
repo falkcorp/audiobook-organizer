@@ -1,11 +1,12 @@
 // file: internal/dedup/boilerplate.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2349d60e-e5e8-4c03-b3a7-0123a0b0bf36
-// last-edited: 2026-07-12
+// last-edited: 2026-09-02
 
 package dedup
 
 import (
+	"slices"
 	"strings"
 	"sync"
 
@@ -80,10 +81,8 @@ func isBoilerplateTitle(title string) bool {
 	if normalized == "" {
 		return false
 	}
-	for _, pattern := range effectiveTitlePatterns {
-		if normalized == pattern {
-			return true
-		}
+	if slices.Contains(effectiveTitlePatterns, normalized) {
+		return true
 	}
 	for _, pattern := range effectivePrefixPatterns {
 		if strings.HasPrefix(normalized, pattern+" ") {

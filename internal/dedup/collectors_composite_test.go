@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_composite_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -157,8 +157,8 @@ func TestCompositeScore_SuppressedPairLabeled(t *testing.T) {
 // CollectExactFileHash emits a SigExactFile signal when two books share a
 // file hash.
 func TestCollectExactFileHash_EmitsSignalForSharedHash(t *testing.T) {
-	bookA := &database.Book{ID: "BOOK_A", FileHash: strPtr("abc123")}
-	bookB := &database.Book{ID: "BOOK_B", FileHash: strPtr("abc123")}
+	bookA := &database.Book{ID: "BOOK_A", FileHash: new("abc123")}
+	bookB := &database.Book{ID: "BOOK_B", FileHash: new("abc123")}
 
 	mock := &database.MockStore{}
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) {
@@ -182,7 +182,7 @@ func TestCollectExactFileHash_EmitsSignalForSharedHash(t *testing.T) {
 // TestCollectExactFileHash_SelfMatchSuppressed verifies that a book's own hash
 // does not produce a self-match signal.
 func TestCollectExactFileHash_SelfMatchSuppressed(t *testing.T) {
-	bookA := &database.Book{ID: "BOOK_A", FileHash: strPtr("abc123")}
+	bookA := &database.Book{ID: "BOOK_A", FileHash: new("abc123")}
 
 	mock := &database.MockStore{}
 	mock.GetBookByFileHashFunc = func(hash string) (*database.Book, error) {

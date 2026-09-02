@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -121,10 +121,7 @@ func enrichSeries(store Store, seriesList []database.Series, authorNameMap map[i
 		}
 		sw := SeriesWithBooks{Series: s, AuthorName: authorName}
 		if books, err := store.GetBooksBySeriesIDCore(s.ID); err == nil {
-			limit := 5
-			if len(books) < limit {
-				limit = len(books)
-			}
+			limit := min(len(books), 5)
 			for _, b := range books[:limit] {
 				cover := ""
 				if b.CoverURL != nil {

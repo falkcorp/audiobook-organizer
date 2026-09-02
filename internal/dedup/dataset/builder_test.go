@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
-// last-edited: 2026-07-11
+// last-edited: 2026-09-02
 
 package dataset
 
@@ -20,7 +20,7 @@ import (
 func makeTestSig(seed uint32) string {
 	const n = 4096
 	buf := make([]byte, n*4)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		binary.LittleEndian.PutUint32(buf[i*4:], seed)
 	}
 	return base64.StdEncoding.EncodeToString(buf)

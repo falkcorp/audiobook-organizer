@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.10.0
+// version: 2.10.1
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -158,8 +158,8 @@ func TestEngine_ExactMatch_FileHash(t *testing.T) {
 	engine.AutoMergeEnabled = false
 
 	authorID := 1
-	bookA := &database.Book{ID: "BOOK_A", Title: "My Great Book", AuthorID: &authorID, FileHash: strPtr("hash123")}
-	bookB := &database.Book{ID: "BOOK_B", Title: "My Great Book", AuthorID: &authorID, FileHash: strPtr("hash123")}
+	bookA := &database.Book{ID: "BOOK_A", Title: "My Great Book", AuthorID: &authorID, FileHash: new("hash123")}
+	bookB := &database.Book{ID: "BOOK_B", Title: "My Great Book", AuthorID: &authorID, FileHash: new("hash123")}
 
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		switch id {
@@ -227,8 +227,8 @@ func TestEngine_ExactMatch_FileHash_AutoMerge(t *testing.T) {
 	engine.AutoMergeEnabled = true
 
 	authorID := 1
-	bookA := &database.Book{ID: "BOOK_A", Title: "Same Title", AuthorID: &authorID, FileHash: strPtr("hash999")}
-	bookB := &database.Book{ID: "BOOK_B", Title: "Same Title", AuthorID: &authorID, FileHash: strPtr("hash999")}
+	bookA := &database.Book{ID: "BOOK_A", Title: "Same Title", AuthorID: &authorID, FileHash: new("hash999")}
+	bookB := &database.Book{ID: "BOOK_B", Title: "Same Title", AuthorID: &authorID, FileHash: new("hash999")}
 
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		switch id {
@@ -417,8 +417,8 @@ func TestEngine_ExactMatch_ISBN(t *testing.T) {
 
 	authorID := 1
 	sz := func(v int64) *int64 { return &v }
-	bookA := &database.Book{ID: "BOOK_A", Title: "Title A", AuthorID: &authorID, ISBN13: strPtr("9780134685991"), FileSize: sz(300_000_000)}
-	bookB := &database.Book{ID: "BOOK_B", Title: "Title B", AuthorID: &authorID, ISBN13: strPtr("9780134685991"), FileSize: sz(300_000_000)}
+	bookA := &database.Book{ID: "BOOK_A", Title: "Title A", AuthorID: &authorID, ISBN13: new("9780134685991"), FileSize: sz(300_000_000)}
+	bookB := &database.Book{ID: "BOOK_B", Title: "Title B", AuthorID: &authorID, ISBN13: new("9780134685991"), FileSize: sz(300_000_000)}
 
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		if id == "BOOK_A" {
@@ -553,7 +553,7 @@ func TestEngine_FullScan_BatchesEmbeddings(t *testing.T) {
 	// 150 books → with chunk size 64 we expect 3 batch calls (64+64+22).
 	const numBooks = 150
 	books := make([]database.Book, numBooks)
-	for i := 0; i < numBooks; i++ {
+	for i := range numBooks {
 		title := "Book " + strconv.Itoa(i)
 		primary := true
 		books[i] = database.Book{
@@ -808,10 +808,10 @@ func TestBuildPairInput_Book(t *testing.T) {
 		switch id {
 		case "BOOK_A":
 			return &database.Book{ID: "BOOK_A", Title: "Dune", AuthorID: &authorID,
-				Narrator: strPtr("Scott Brick"), ISBN13: strPtr("9780441013593")}, nil
+				Narrator: new("Scott Brick"), ISBN13: new("9780441013593")}, nil
 		case "BOOK_B":
 			return &database.Book{ID: "BOOK_B", Title: "Dune (Unabridged)", AuthorID: &authorID,
-				ASIN: strPtr("B002V1OHSU")}, nil
+				ASIN: new("B002V1OHSU")}, nil
 		}
 		return nil, nil
 	}

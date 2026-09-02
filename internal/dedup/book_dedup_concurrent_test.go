@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_concurrent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f2c7b41-6d38-4e05-a1b9-3c7e0d2f5a64
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -27,22 +27,22 @@ import (
 // lock keeps at most one goroutine inside at a time -> maxActive == 1.
 type dedupSerializeProbe struct {
 	database.Store
-	active    int32
-	maxActive int32
+	active    atomic.Int32
+	maxActive atomic.Int32
 }
 
 func (p *dedupSerializeProbe) enter() {
-	n := atomic.AddInt32(&p.active, 1)
+	n := p.active.Add(1)
 	for {
-		m := atomic.LoadInt32(&p.maxActive)
-		if n <= m || atomic.CompareAndSwapInt32(&p.maxActive, m, n) {
+		m := p.maxActive.Load()
+		if n <= m || p.maxActive.CompareAndSwap(m, n) {
 			break
 		}
 	}
 	time.Sleep(500 * time.Microsecond)
 }
 
-func (p *dedupSerializeProbe) leave() { atomic.AddInt32(&p.active, -1) }
+func (p *dedupSerializeProbe) leave() { p.active.Add(-1) }
 
 func (p *dedupSerializeProbe) GetBookByID(id string) (*database.Book, error) {
 	p.enter()
@@ -106,7 +106,7 @@ func TestDedupMergeBooks_SharesLockWithMergeService(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		i := i
 		go func() {
 			defer wg.Done()
@@ -122,7 +122,7 @@ func TestDedupMergeBooks_SharesLockWithMergeService(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := atomic.LoadInt32(&probe.maxActive); got != 1 {
+	if got := probe.maxActive.Load(); got != 1 {
 		t.Fatalf("dedup.MergeBooks did NOT share the merge lock: maxActive=%d, want 1 "+
 			"(a dedup merge overlapped a merge.Service merge on the shared probe)", got)
 	}

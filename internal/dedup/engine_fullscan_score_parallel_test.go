@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_fullscan_score_parallel_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e5b9f24-4a3d-4b8e-9c2a-1d6f8e0b3a57
-// last-edited: 2026-07-05
+// last-edited: 2026-09-02
 
 // Regression test for CONC-2: FullScan's unified-scoring second pass is now
 // sharded across a bounded worker pool (registry.RunItems) instead of running
@@ -35,7 +35,7 @@ func fullScanScoreFixtureBooks(n int) []database.Book {
 	isbn := "9780000000042"
 	dur := 3600
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books[i] = database.Book{
 			ID:       fmt.Sprintf("SB%03d", i),
 			Title:    "The Same Scored Book",

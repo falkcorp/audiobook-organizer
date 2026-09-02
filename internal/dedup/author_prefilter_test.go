@@ -1,7 +1,7 @@
 // file: internal/dedup/author_prefilter_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f9c21ad-7e40-4b62-9c85-1d6a0f3b8e74
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -111,7 +111,7 @@ func TestJaroWinklerBelowThresholdIsSoundUnderFuzz(t *testing.T) {
 	}
 
 	skipped := 0
-	for iter := 0; iter < 200000; iter++ {
+	for range 200000 {
 		a := randName()
 		b := a
 		// Half the time perturb a copy, so the corpus is dense near the

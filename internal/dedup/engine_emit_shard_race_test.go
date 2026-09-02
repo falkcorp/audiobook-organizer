@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_emit_shard_race_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7e1f2a93-4b6c-4d5e-8f01-2a3b4c5d6e7f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Race/invariant tests for CONC-3 (INIT-2 T5): the full-scan emit() no longer
 // runs under one global mutex. Per-pair "already handled" state is sharded
@@ -65,7 +65,7 @@ func TestAcoustidEmitShards_MarkSamePairClaimedOnce(t *testing.T) {
 	var start sync.WaitGroup
 	start.Add(1) // gate so every goroutine contends at once
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		wg.Go(func() {
 			start.Wait()
 			if shards.mark(key) {
@@ -99,9 +99,9 @@ func TestAcoustidEmitShards_DistinctPairsNoLoss(t *testing.T) {
 	trues := make([]atomic.Int64, numKeys)
 
 	var wg sync.WaitGroup
-	for i := 0; i < numKeys; i++ {
+	for i := range numKeys {
 		keys[i] = fmt.Sprintf("A%04d:B%04d", i, i)
-		for g := 0; g < perKey; g++ {
+		for range perKey {
 			idx := i
 			wg.Go(func() {
 				if shards.mark(keys[idx]) {
@@ -112,7 +112,7 @@ func TestAcoustidEmitShards_DistinctPairsNoLoss(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < numKeys; i++ {
+	for i := range numKeys {
 		if got := trues[i].Load(); got != 1 {
 			t.Fatalf("key %s claimed %d times, want exactly 1 (lost or duplicated emission)", keys[i], got)
 		}

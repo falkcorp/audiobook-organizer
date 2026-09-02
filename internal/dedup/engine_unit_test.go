@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_unit_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f1a2b3c4-d5e6-7890-abcd-1234567890ab
-// last-edited: 2026-07-05
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -150,7 +150,7 @@ func TestCheckBook_FileHashCheckError_ContinuesGracefully(t *testing.T) {
 		ID:       "BOOK_1",
 		Title:    "Test Book",
 		AuthorID: &authorID,
-		FileHash: strPtr("somehash"),
+		FileHash: new("somehash"),
 	}
 
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {

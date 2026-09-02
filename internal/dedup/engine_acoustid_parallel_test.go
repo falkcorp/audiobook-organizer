@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_acoustid_parallel_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d3b6f1a-2c47-4e8b-9a0d-5f61c8e0a3b2
-// last-edited: 2026-07-11
+// last-edited: 2026-09-02
 
 // Regression tests for CONC-3: AcoustIDScan's per-book loop is sharded across
 // a bounded worker pool (registry.RunItems) instead of running
@@ -75,7 +75,7 @@ func TestParallelAcoustIDScan_SameCandidatesAsSerial(t *testing.T) {
 	}}
 
 	var wantMatches []string // satellite book IDs expected to pair with HUB
-	for i := 0; i < numSatellites; i++ {
+	for i := range numSatellites {
 		id := fmt.Sprintf("book-%02d", i)
 		books = append(books, database.Book{ID: id, Title: fmt.Sprintf("Real Book %02d", i)})
 		filesByBook[id] = []database.BookFile{{
