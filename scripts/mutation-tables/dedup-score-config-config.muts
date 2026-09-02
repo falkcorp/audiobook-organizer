@@ -37,4 +37,9 @@ M03 roll the saved ladder back when the engine hand-off fails | internal/config/
 # A mutation that hangs is not a mutation; keep this one lock-free.
 M04 apply the rotated secrets to the LIVE config before validation | internal/config/update_service.go | s/\t\tapplySecretUpdates\(candidate, payload\)/\t\tapplySecretUpdates(c, payload)/
 
-M05 accept a config that fails Validate | internal/config/update_service.go | s/\t\tif candidateErr != nil && priorCheck\.Validate\(\) == nil \{/\t\tif false {/
+# M05 inverts the prior-validity clause rather than deleting the branch: `if
+# false` leaves candidateErr and priorCheck declared-and-unused, which is a
+# BUILD FAILURE, not a result. Inverting keeps both in use and still means
+# "accept a config that fails Validate" whenever the stored config was valid,
+# which is the case the test drives.
+M05 accept a config that fails Validate | internal/config/update_service.go | s/if candidateErr != nil && priorCheck\.Validate\(\) == nil \{/if candidateErr != nil && priorCheck.Validate() != nil {/
