@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -361,7 +361,8 @@ func TestHandler_SetUserPreference_StoreError(t *testing.T) {
 func TestHandler_DeleteUserPreference_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().SetUserPreference("theme", "").Return(nil)
+	// The handler deletes the row now; it used to write "" and leave a tombstone.
+	mockStore.EXPECT().DeleteUserPreference("theme").Return(nil)
 
 	router.DELETE("/preferences/:key", newSystemHandler(srv).DeleteUserPreference)
 

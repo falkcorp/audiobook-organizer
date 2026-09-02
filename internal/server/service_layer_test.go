@@ -1,5 +1,5 @@
 // file: internal/server/service_layer_test.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-09-02
 
@@ -729,6 +729,11 @@ func TestConfigUpdateService_ApplyUpdates_FieldTypes(t *testing.T) {
 // TestMetadataStateService_UpdateFetchedMetadata tests UpdateFetchedMetadata method
 func TestMetadataStateService_UpdateFetchedMetadata(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
+	// Every save now retires the pre-migration user-preference blob, so an
+	// unlock cannot be undone by the next read falling back to it. Whether a
+	// given case reaches the delete depends on how far the save gets, so this
+	// is Maybe rather than an ordered expectation.
+	mockStore.EXPECT().DeleteUserPreference(mock.Anything).Return(nil).Maybe()
 	svc := metafetch.NewMetadataStateService(mockStore)
 
 	bookID := "01HXZABC123456789"
