@@ -1,7 +1,7 @@
 // file: internal/matcher/fuzzy_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package matcher
 
@@ -263,7 +263,7 @@ func TestNormalize(t *testing.T) {
 func TestSimilarityStaysInUnitRange(t *testing.T) {
 	alphabets := []string{"abc", "aé東", "ΣİǄ", "Достй", ""}
 	r := rand.New(rand.NewSource(7))
-	for i := 0; i < 100000; i++ {
+	for range 100000 {
 		mk := func() string {
 			al := []rune(alphabets[r.Intn(len(alphabets))])
 			if len(al) == 0 {
