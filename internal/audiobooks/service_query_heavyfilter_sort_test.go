@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_heavyfilter_sort_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ea41b5f4-dba5-4cb7-b067-2498e7aa707c
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 package audiobooks
 
@@ -147,7 +147,7 @@ func TestB1HeavyFilterNonTitleSort_PaginatesAfterSort(t *testing.T) {
 	ps.WaitForWarmup()
 
 	rows := make([]b1lfSeedBook, 0, 12)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		rows = append(rows, b1lfSeedBook{
 			title:    string(rune('a'+i)) + "-book",
 			language: "en",

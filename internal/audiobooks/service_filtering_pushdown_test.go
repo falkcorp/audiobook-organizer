@@ -1,12 +1,13 @@
 // file: internal/audiobooks/service_filtering_pushdown_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c9e7a41-2b5d-4f80-9c16-8a2e5d0b1f7c
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package audiobooks
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -51,7 +52,7 @@ func seedPushdownBooks(t *testing.T, ps *database.PebbleStore) []pushdownFixture
 	fpStatuses := []string{"none", "partial", "complete"}
 
 	fixtures := make([]pushdownFixture, 0, 51)
-	for i := 0; i < 51; i++ {
+	for i := range 51 {
 		f := pushdownFixture{
 			title:// spread titles so a title sort would reorder vs ID order
 			string(rune('a'+(i%26))) + "-book",
@@ -221,7 +222,7 @@ func TestLibraryStatePushdownParity(t *testing.T) {
 		},
 		{
 			name:   "coverage min=50",
-			filter: ListFilters{CoveragePercentMin: pdIntPtr(50)},
+			filter: ListFilters{CoveragePercentMin: new(50)},
 			match:  func(f pushdownFixture) bool { return f.coverage >= 50 },
 		},
 	}
@@ -255,7 +256,7 @@ func TestLibraryStatePushdownParity_MatchEverythingAndEmpty(t *testing.T) {
 	// Anti-over-suppression: coverage>=0 matches every book — the full library
 	// must come back, not a narrowed subset.
 	got, err := svc.GetAudiobooks(context.Background(), 1000, 0, "", nil, nil,
-		ListFilters{CoveragePercentMin: pdIntPtr(0)})
+		ListFilters{CoveragePercentMin: new(0)})
 	require.NoError(t, err)
 	require.Len(t, got, len(fixtures), "match-everything filter must return the full library")
 
@@ -394,12 +395,7 @@ func TestPushdownParityFingerprintAndSort(t *testing.T) {
 }
 
 func pdHasTag(f pushdownFixture, tag string) bool {
-	for _, t := range f.tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.tags, tag)
 }
 
 func pdComboName(limit, offset int) string {
@@ -423,10 +419,8 @@ func pdItoa(n int) string {
 	if neg {
 		b.WriteByte('-')
 	}
-	for i := len(digits) - 1; i >= 0; i-- {
-		b.WriteByte(digits[i])
+	for _, digit := range slices.Backward(digits) {
+		b.WriteByte(digit)
 	}
 	return b.String()
 }
-
-func pdIntPtr(v int) *int { return &v }

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-08-14
+// last-edited: 2026-09-02
 
 package audiobooks
 
@@ -505,9 +505,9 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	}
 
 	// Restore to imported state so the UI can re-process if needed
-	book.MarkedForDeletion = boolPtr(false)
+	book.MarkedForDeletion = new(false)
 	book.MarkedForDeletionAt = nil
-	book.LibraryState = stringPtr("imported")
+	book.LibraryState = new("imported")
 
 	updated, err := svc.store.UpdateBook(id, book)
 	if err != nil {

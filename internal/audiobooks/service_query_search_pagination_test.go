@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_pagination_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b1c4f27-9d3e-4a60-b5c8-1e70a2f43d96
-// last-edited: 2026-08-12
+// last-edited: 2026-09-02
 
 // Regression tests for search + post-filter pagination.
 //
@@ -40,7 +40,7 @@ import (
 // and the assertions below stay legible when a case fails.
 func paginationTestBookIDs(n int) []string {
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ids = append(ids, fmt.Sprintf("bk%02d", i))
 	}
 	return ids
@@ -124,10 +124,7 @@ func TestSearchCountDoesNotTrackLimit(t *testing.T) {
 			assert.Equal(t, total, gotTotal,
 				"count tracked the limit instead of reporting the match total")
 
-			wantPage := limit
-			if wantPage > total {
-				wantPage = total
-			}
+			wantPage := min(limit, total)
 			assert.Len(t, got, wantPage, "page length should still honour limit")
 		})
 	}

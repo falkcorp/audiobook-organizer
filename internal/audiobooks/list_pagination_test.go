@@ -1,7 +1,7 @@
 // file: internal/audiobooks/list_pagination_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c1e9b42-3a6d-4f01-9d8e-2b5c6a7e1f04
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package audiobooks
 
@@ -31,7 +31,7 @@ func seedPaginationStore(t *testing.T, n int) (*AudiobookService, []string) {
 
 	primary := true
 	wantTitles := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		title := fmt.Sprintf("Book %04d", i)
 		wantTitles = append(wantTitles, title)
 		_, err := ps.CreateBook(&database.Book{
@@ -141,7 +141,7 @@ func TestGetAudiobooks_ExcludeQuarantined(t *testing.T) {
 
 	primary := true
 	quarantined := 0
-	for i := 0; i < total; i++ {
+	for i := range total {
 		b := &database.Book{
 			Title:            fmt.Sprintf("Book %04d", i),
 			IsPrimaryVersion: &primary,
@@ -223,8 +223,8 @@ func TestSummariesPushdown_ReachesThroughMultiLevelDecorator(t *testing.T) {
 		store database.Store
 	}{
 		{"one level", unwrapStore{Store: inner}},
-		{"two levels", unwrapStore{Store: unwrapStore{Store: inner}}},
-		{"three levels", unwrapStore{Store: unwrapStore{Store: unwrapStore{Store: inner}}}},
+		{"two levels", unwrapStore{Store: inner}},
+		{"three levels", unwrapStore{Store: inner}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := NewAudiobookService(tc.store)

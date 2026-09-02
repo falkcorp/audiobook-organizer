@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package audiobooks
 
@@ -201,8 +201,8 @@ func TestAudiobookService_GetAudiobooks_BySeriesID(t *testing.T) {
 func TestAudiobookService_GetAudiobooks_ByAuthorID_IsPrimaryVersionNilCountsAsPrimary(t *testing.T) {
 	authorID := 99
 	booksCore := []database.BookCore{
-		{ID: "explicit-true", IsPrimaryVersion: boolPtr(true)},
-		{ID: "explicit-false", IsPrimaryVersion: boolPtr(false)},
+		{ID: "explicit-true", IsPrimaryVersion: new(true)},
+		{ID: "explicit-false", IsPrimaryVersion: new(false)},
 		{ID: "nil-flag", IsPrimaryVersion: nil},
 	}
 
@@ -353,7 +353,7 @@ func TestAudiobookService_DeleteAudiobook_SoftDeleteAlreadyDeleted(t *testing.T)
 
 	alreadyDeleted := &database.Book{
 		ID:                "sd-1",
-		MarkedForDeletion: boolPtr(true),
+		MarkedForDeletion: new(true),
 	}
 	mockStore.EXPECT().GetBookByID("sd-1").Return(alreadyDeleted, nil)
 
@@ -398,13 +398,13 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 
 	deleted := &database.Book{
 		ID:                "r-1",
-		MarkedForDeletion: boolPtr(true),
-		LibraryState:      stringPtr("deleted"),
+		MarkedForDeletion: new(true),
+		LibraryState:      new("deleted"),
 	}
 	restored := &database.Book{
 		ID:                "r-1",
-		MarkedForDeletion: boolPtr(false),
-		LibraryState:      stringPtr("imported"),
+		MarkedForDeletion: new(false),
+		LibraryState:      new("imported"),
 	}
 	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil)
 	mockStore.EXPECT().UpdateBook("r-1", mock.AnythingOfType("*database.Book")).Return(restored, nil)
@@ -551,8 +551,8 @@ func TestAudiobookService_CountAudiobooksFiltered_WithPrimaryFilter(t *testing.T
 	// the memdb walker / list path), so both id=1 (explicit true) and
 	// id=3 (nil) match.
 	summaries := []database.BookSummary{
-		{ID: "1", IsPrimaryVersion: boolPtr(true)},
-		{ID: "2", IsPrimaryVersion: boolPtr(false)},
+		{ID: "1", IsPrimaryVersion: new(true)},
+		{ID: "2", IsPrimaryVersion: new(false)},
 		{ID: "3", IsPrimaryVersion: nil},
 	}
 	mockStore.EXPECT().GetAllBookSummaries(0, 0).Return(summaries, nil)
@@ -734,12 +734,10 @@ func TestAudiobookService_GetAudiobooks_PerUserNoUserID(t *testing.T) {
 
 // --- numericCompare / user_rating_* field filters ---
 
-func float64Ptr(v float64) *float64 { return &v }
-
 // TestNumericCompare_Operators verifies every comparison operator against a
 // known book field value of 4.0.
 func TestNumericCompare_Operators(t *testing.T) {
-	val := float64Ptr(4.0)
+	val := new(4.0)
 	tests := []struct {
 		expr string
 		want bool
@@ -784,7 +782,7 @@ func TestNumericCompare_NilField(t *testing.T) {
 
 // TestNumericCompare_InvalidExpr ensures an unparseable expression returns false.
 func TestNumericCompare_InvalidExpr(t *testing.T) {
-	val := float64Ptr(3.0)
+	val := new(3.0)
 	assert.False(t, numericCompare(val, ">abc"))
 	assert.False(t, numericCompare(val, ">="))
 }
@@ -792,9 +790,9 @@ func TestNumericCompare_InvalidExpr(t *testing.T) {
 // TestFieldMatchesValue_UserRatingFields checks that fieldMatchesValue routes
 // user_rating_* fields through numeric comparison correctly.
 func TestFieldMatchesValue_UserRatingFields(t *testing.T) {
-	overall := float64Ptr(4.5)
-	story := float64Ptr(3.0)
-	perf := float64Ptr(5.0)
+	overall := new(4.5)
+	story := new(3.0)
+	perf := new(5.0)
 
 	book := database.Book{
 		UserRatingOverall:     overall,
@@ -840,8 +838,8 @@ func TestGetAudiobooks_UserRatingFilter(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 
 	summaries := []database.BookSummary{
-		{ID: "high", Title: "High Priority", Narrator: stringPtr("Aaron Narrator")},
-		{ID: "low", Title: "Low Priority", Narrator: stringPtr("Zoe Narrator")},
+		{ID: "high", Title: "High Priority", Narrator: new("Aaron Narrator")},
+		{ID: "low", Title: "Low Priority", Narrator: new("Zoe Narrator")},
 		{ID: "none", Title: "No Narrator"},
 	}
 	mockStore.EXPECT().GetAllBookSummaries(0, 0).Return(summaries, nil)
@@ -865,9 +863,9 @@ func TestGetAudiobooks_UserRatingFilter_LessThan(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 
 	summaries := []database.BookSummary{
-		{ID: "b1", Narrator: stringPtr("Aaron Adams")},
-		{ID: "b2", Narrator: stringPtr("Bob Bradley")},
-		{ID: "b3", Narrator: stringPtr("Charlie Chen")},
+		{ID: "b1", Narrator: new("Aaron Adams")},
+		{ID: "b2", Narrator: new("Bob Bradley")},
+		{ID: "b3", Narrator: new("Charlie Chen")},
 	}
 	mockStore.EXPECT().GetAllBookSummaries(0, 0).Return(summaries, nil)
 
