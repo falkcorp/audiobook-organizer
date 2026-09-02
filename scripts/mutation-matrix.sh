@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: scripts/mutation-matrix.sh
-# version: 1.4.0
+# version: 1.5.0
 # guid: 7f3b6d21-4c98-4e07-b153-2a86f0e9c47d
-# last-edited: 2026-08-30
+# last-edited: 2026-09-02
 #
 # Runs a HAND-AUTHORED table of semantic mutations against one package and
 # reports, per mutation, whether the test suite caught it.
@@ -264,7 +264,22 @@ killed=0; survived=0; notapplied=0; buildfail=0; total=0
 # M18 had never once run, and M18 is the entry documented as an EXPECTED
 # equivalent survivor. A survivor that is simply ABSENT from the report reads
 # exactly like "confirmed survived, do not chase".
-while IFS='|' read -r name file expr || [[ -n "${name:-}${file:-}${expr:-}" ]]; do
+# ── Guard 6: process EVERY entry, or say so ───────────────────────────────────
+#
+# The loop below used to read the table on stdin, which every child process it
+# spawned inherited. `go test` reads stdin, so it ATE the remaining table: a
+# 5-mutation table silently reported 3 results, no summary, exit 0. Nothing in
+# guards 1-5 can see that, because each mutation that DID run ran correctly --
+# the lie is in the ones that never ran at all, and a short list looks exactly
+# like a short table.
+#
+# Two changes keep it fixed: the table is now read on fd 3 (children inherit
+# stdin, not fd 3), and the expected entry count is computed here and checked
+# against the processed count at the end.
+expected_entries="$(grep -cE '^[[:space:]]*[^#[:space:]].*\|' "$TABLE" || true)"
+: "${expected_entries:=0}"
+
+while IFS='|' read -r name file expr <&3 || [[ -n "${name:-}${file:-}${expr:-}" ]]; do
     name="$(echo "${name:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     file="$(echo "${file:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     # NO `\x7c` -> `|` rewrite here. perl reads `\x7c` as a literal pipe itself,
@@ -334,7 +349,12 @@ while IFS='|' read -r name file expr || [[ -n "${name:-}${file:-}${expr:-}" ]]; 
     fi
 
     git checkout -- "$file"
-done < "$TABLE"
+done 3< "$TABLE"
+
+if [[ "$total" -ne "$expected_entries" ]]; then
+    emit "TRUNCATED  | processed $total of $expected_entries table entries -- this run is NOT a measurement. See guard 6."
+    exit 1
+fi
 
 scored=$((killed + survived))
 emit ""
