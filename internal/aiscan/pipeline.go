@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.0.0
+// version: 4.0.1
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 package aiscan
 
@@ -407,10 +407,7 @@ func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, done <-c
 // phaseProgressPct maps completed phase count to a percentage, capped below 100
 // so the bar never claims completion before the scan actually finishes.
 func phaseProgressPct(completed int) int {
-	pct := completed * 20
-	if pct > 90 {
-		pct = 90
-	}
+	pct := min(completed*20, 90)
 	return pct
 }
 
@@ -678,10 +675,7 @@ func (pm *PipelineManager) runFullScanRealtime(ctx context.Context, scanID int, 
 	var allDiscoveries []ai.AuthorDiscoverySuggestion
 
 	for start := 0; start < len(inputs); start += chunkSize {
-		end := start + chunkSize
-		if end > len(inputs) {
-			end = len(inputs)
-		}
+		end := min(start+chunkSize, len(inputs))
 		chunk := inputs[start:end]
 
 		discoveries, err := pm.parser.DiscoverAuthorDuplicates(ctx, chunk)
