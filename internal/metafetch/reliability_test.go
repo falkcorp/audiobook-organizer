@@ -1,7 +1,7 @@
 // file: internal/metafetch/reliability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b8c1d2e-3f5a-4c6b-8d7e-9a0b1c2d3e4f
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 //
 // Regression tests for the metadata-reliability fixes:
 //   - Bug 3: BuildSourceChain memoizes the chain so the per-source circuit
@@ -72,7 +72,7 @@ func TestBuildSourceChain_MemoizedAndBreakerPersists(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *metadata.ProtectedSource, got %T", c1[0])
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		ps.Breaker().RecordFailure()
 	}
 	if got := ps.Breaker().StateName(); got != "open" {
@@ -133,7 +133,7 @@ func TestSearchMetadataForBook_LimiterGatesPerRequest(t *testing.T) {
 
 	var calls int64
 	sources := make([]metadata.MetadataSource, 0, nSources)
-	for i := 0; i < nSources; i++ {
+	for range nSources {
 		sources = append(sources, &countingSource{name: "src", calls: &calls})
 	}
 

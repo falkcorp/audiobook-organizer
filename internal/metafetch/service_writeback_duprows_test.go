@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback_duprows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c65b832-5fea-41f4-9b1e-551dd05d7eb8
-// last-edited: 2026-08-21
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -29,12 +29,12 @@ func TestDedupeBookFilesByPath_CollapsesExactDuplicates(t *testing.T) {
 		// only collapsed ADJACENT duplicates would still fail this.
 		var in []database.BookFile
 		var wantPaths []string
-		for i := 0; i < 21; i++ {
+		for i := range 21 {
 			p := fmt.Sprintf("/mnt/bigdata/books/Book/%02d.m4b", i)
 			wantPaths = append(wantPaths, p)
 			in = append(in, database.BookFile{ID: fmt.Sprintf("a%02d", i), FilePath: p})
 		}
-		for i := 0; i < 21; i++ {
+		for i := range 21 {
 			in = append(in, database.BookFile{
 				ID:       fmt.Sprintf("b%02d", i),
 				FilePath: fmt.Sprintf("/mnt/bigdata/books/Book/%02d.m4b", i),
@@ -147,7 +147,7 @@ func TestDedupeBookFilesByPath_NormalizesPathBeforeComparing(t *testing.T) {
 // other assertion in this file.
 func TestDedupeBookFilesByPath_DistinctPathsAllSurvive(t *testing.T) {
 	in := make([]database.BookFile, 0, 21)
-	for i := 0; i < 21; i++ {
+	for i := range 21 {
 		in = append(in, database.BookFile{
 			ID:       fmt.Sprintf("f%02d", i),
 			FilePath: fmt.Sprintf("/mnt/bigdata/books/Book/%02d.m4b", i),

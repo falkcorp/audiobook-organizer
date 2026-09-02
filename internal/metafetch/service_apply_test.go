@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -108,7 +108,7 @@ func TestRecordChangeHistory_SummaryLeadsWithBookTitle(t *testing.T) {
 	book := &database.Book{
 		ID:       "01J0BOOKID000000000000000",
 		Title:    "The Whispering Night",
-		Narrator: stringPtr("Alex Kozlowski"),
+		Narrator: new("Alex Kozlowski"),
 	}
 	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
 
@@ -147,7 +147,7 @@ func TestRecordChangeHistory_EmptyTitleFallsBackToID(t *testing.T) {
 	book := &database.Book{
 		ID:       "01J0BOOKID000000000000000",
 		Title:    "",
-		Narrator: stringPtr("Alex Kozlowski"),
+		Narrator: new("Alex Kozlowski"),
 	}
 	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
 

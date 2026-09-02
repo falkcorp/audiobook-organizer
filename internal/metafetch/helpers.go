@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -20,14 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
-
-func stringPtr(s string) *string {
-	return &s
-}
-
-func intPtrHelper(i int) *int {
-	return &i
-}
 
 func stripChapterFromTitle(title string) string {
 	cleaned := title

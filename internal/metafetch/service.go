@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.10.0
+// version: 5.10.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -483,7 +483,7 @@ func looksLikeASIN(s string) bool {
 func extractASIN(s string) string {
 	s = strings.TrimSpace(s)
 	// Split on whitespace and check each token
-	for _, word := range strings.Fields(s) {
+	for word := range strings.FieldsSeq(s) {
 		word = strings.Trim(word, ",.;:!?()[]{}\"'")
 		if looksLikeASIN(word) {
 			return word

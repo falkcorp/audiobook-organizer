@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-08-21
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -25,7 +25,7 @@ import (
 // that "a write failed" — not whether it was trying to set one field or twenty,
 // which is the difference between a benign retry and a book about to be
 // rewritten wholesale.
-func sortedKeys(m map[string]interface{}) []string {
+func sortedKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -151,8 +151,8 @@ func MetadataLanguageTag(lang string) string {
 // Includes all available metadata fields — standard and custom tags.
 func (mfs *Service) BuildTagMap(
 	albumTitle, trackTitle, artist, narrator string, year int, track string,
-) map[string]interface{} {
-	tagMap := make(map[string]interface{})
+) map[string]any {
+	tagMap := make(map[string]any)
 	tagMap["title"] = trackTitle
 	tagMap["album"] = albumTitle
 	if artist != "" {
@@ -216,7 +216,7 @@ func chapterTitleFor(currentTitle, generated, bookTitle string) string {
 // including custom tags for fields that don't have standard audio tag equivalents.
 func (mfs *Service) BuildFullTagMap(
 	book *database.Book, albumTitle, trackTitle, artist, narrator string, year int, track string,
-) map[string]interface{} {
+) map[string]any {
 	tagMap := mfs.BuildTagMap(albumTitle, trackTitle, artist, narrator, year, track)
 
 	// Add fields that have standard or custom tag equivalents
@@ -281,7 +281,7 @@ func (mfs *Service) BuildFullTagMap(
 // so that unchanged custom tags don't force a full write-back and inflate
 // copy-on-write (.bak-*) churn. Each tag name in the tagMap (e.g. "book_id")
 // maps 1:1 to a Metadata field and is enumerated below per metadata/custom_tags.go.
-func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[string]interface{} {
+func FilterUnchangedTags(filePath string, tagMap map[string]any) map[string]any {
 	current, err := metadata.ExtractMetadata(filePath, nil)
 	if err != nil {
 		// Can't read current tags — write everything to be safe
@@ -299,7 +299,7 @@ func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[str
 // untouched, and the comparison below never ran. Those tests passed no matter
 // what the mapping did — one of them even asserted that "track" survives,
 // pinning the bug in place as if it were intended behavior.
-func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[string]interface{}) map[string]interface{} {
+func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[string]any) map[string]any {
 	// Build a map of known tag names to their current values. Every custom tag
 	// key emitted by the writer (via metadata/taglib_tagmap.go buildWriteTagMap)
 	// must have an entry here, mapping the input key to the corresponding
@@ -372,7 +372,7 @@ func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[st
 		currentVals["isbn13"] = current.ISBN13
 	}
 
-	filtered := make(map[string]interface{}, len(tagMap))
+	filtered := make(map[string]any, len(tagMap))
 	for k, v := range tagMap {
 		cur, ok := currentVals[k]
 		if !ok {

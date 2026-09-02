@@ -1,13 +1,14 @@
 // file: internal/metafetch/audio_files_in_dir_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: aead375c-cb1f-492f-893a-1fbd5d6ae32a
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package metafetch
 
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -31,12 +32,7 @@ func baseNames(paths []string) []string {
 }
 
 func contains(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(hay, needle)
 }
 
 // The old implementation globbed a private 8-pattern list. Every assertion
