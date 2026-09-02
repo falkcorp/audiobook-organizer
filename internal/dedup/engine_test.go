@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_test.go
-// version: 2.10.1
+// version: 2.10.2
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
 // last-edited: 2026-09-02
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
@@ -64,7 +65,10 @@ func setupTestEngine(t *testing.T) (*Engine, *database.MockStore, *database.Embe
 		return cores, nil
 	}
 	ms := merge.NewService(mock)
-	engine := NewEngine(es, mock, nil, nil, ms)
+	engine, err := NewEngine(es, mock, nil, nil, ms, unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
 
 	return engine, mock, es
 }

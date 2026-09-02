@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.71.0
+// version: 1.72.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-02
 
@@ -109,10 +109,22 @@ type Engine struct {
 	// Unified scoring fields (T014).
 	//
 	// scoreConfig holds per-signal calibration and band thresholds for
-	// unified.ComposeScore.  Loaded once at startup by LoadScoreConfig or
-	// set directly in tests.  Zero value falls back to
-	// unified.DefaultScoreConfig() on first use.
-	scoreConfig *unified.ScoreConfig
+	// unified.ComposeScore. It is REQUIRED at construction (NewEngine takes
+	// it and validates it) and replaced at runtime only through
+	// SetScoreConfig — the calibrate-composite op's apply path calls that
+	// after persisting new bands so the live engine and the config blob
+	// never disagree.
+	//
+	// WHY no lazy default: until 2026-09-02 this was a nil-able pointer that
+	// fell back to unified.DefaultScoreConfig() on first use, and nothing in
+	// production ever set it — so every configured or calibrated band
+	// threshold was silently ignored in favour of the compiled-in 97/90/75/60.
+	// A required value with no fallback is what makes that impossible again.
+	//
+	// scoreMu guards scoreConfig: SetScoreConfig runs on the op worker
+	// goroutine while CheckBook/FullScan/rescore read it concurrently.
+	scoreMu     sync.RWMutex
+	scoreConfig unified.ScoreConfig
 
 	// acoustidBookFileStore is the narrow interface used by T013's
 	// CollectExactAcoustID; set via SetAcoustIDBookFileStore.
@@ -149,13 +161,18 @@ func NewEngine(
 	embedClient *ai.EmbeddingClient,
 	llmParser *ai.OpenAIParser,
 	mergeService *merge.Service,
-) *Engine {
+	scoreCfg unified.ScoreConfig,
+) (*Engine, error) {
+	if err := scoreCfg.Validate(); err != nil {
+		return nil, fmt.Errorf("dedup: invalid score config: %w", err)
+	}
 	return &Engine{
 		embedStore:          embedStore,
 		bookStore:           bookStore,
 		embedClient:         embedClient,
 		llmParser:           llmParser,
 		mergeService:        mergeService,
+		scoreConfig:         scoreCfg.Clone(),
 		BookHighThreshold:   0.95,
 		BookLowThreshold:    0.85,
 		AuthorHighThreshold: 0.92,
@@ -166,7 +183,7 @@ func NewEngine(
 		LLMAuthorLow:        0.75,
 		LLMAuthorHigh:       0.85,
 		LLMMaxPairsPerRun:   200,
-	}
+	}, nil
 }
 
 // SetAIJobsStore configures the aijobs store for async batch submissions.
@@ -283,22 +300,33 @@ func (de *Engine) embeddingsEnabled() bool {
 	return de.embedClient != nil && config.AppConfig.Dedup.EmbeddingsEnabled
 }
 
-// SetScoreConfig overrides the unified scoring calibration.  Call this before
-// any CheckBook/FullScan if you need non-default thresholds (tests, A/B).
-// Pass a nil pointer to revert to DefaultScoreConfig.
-func (de *Engine) SetScoreConfig(cfg *unified.ScoreConfig) {
-	de.scoreConfig = cfg
+// SetScoreConfig replaces the live unified scoring calibration. It is the
+// runtime half of the single config channel: NewEngine loads the config at
+// startup, and dedup.calibrate-composite's apply path calls this after it
+// has persisted new band thresholds so the running engine scores on the
+// same values the config blob now holds. Rejects (and keeps the previous
+// config on) an invalid ScoreConfig — there is deliberately no "revert to
+// defaults" input.
+func (de *Engine) SetScoreConfig(cfg unified.ScoreConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("dedup: invalid score config: %w", err)
+	}
+	de.scoreMu.Lock()
+	de.scoreConfig = cfg.Clone()
+	de.scoreMu.Unlock()
+	return nil
 }
 
-// getScoreConfig returns the active ScoreConfig, initialising from
-// unified.DefaultScoreConfig if none has been set.  WHY a pointer: we want
-// the zero value of the Engine (before any setter call) to still work; lazy
-// init here avoids a required setup step at NewEngine call sites.
-func (de *Engine) getScoreConfig() unified.ScoreConfig {
-	if de.scoreConfig != nil {
-		return *de.scoreConfig
-	}
-	return unified.DefaultScoreConfig()
+// ScoreConfig returns a copy of the ScoreConfig the engine is scoring with
+// right now. Every unified scoring site in this package (CheckBook's
+// runUnifiedScoringForBook, the whole-backlog rescore, ScorePairsForBook)
+// reads through here, so it is also the baseline the calibrate op sweeps
+// around — what it reports as "production" IS what production runs. The
+// returned value is a Clone: mutating it does not affect the engine.
+func (de *Engine) ScoreConfig() unified.ScoreConfig {
+	de.scoreMu.RLock()
+	defer de.scoreMu.RUnlock()
+	return de.scoreConfig.Clone()
 }
 
 // HydrateStats is the full per-bucket accounting for one HydrateChromem run.
@@ -799,7 +827,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		return nil
 	}
 
-	cfg := de.getScoreConfig()
+	cfg := de.ScoreConfig()
 	embCfg := DefaultEmbeddingCollectorConfig()
 	// DEDUP-2/3: resolve the active embedding model's per-model thresholds
 	// (falls back to the engine's BookHighThreshold/BookLowThreshold fields for
@@ -3297,7 +3325,7 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 		)
 	}
 
-	cfg := de.getScoreConfig()
+	cfg := de.ScoreConfig()
 	result := RescoreResult{
 		Applied:    apply,
 		BandDeltas: make(map[string]int),

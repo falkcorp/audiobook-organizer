@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 84155b4f-53cc-4c81-be5e-7575dd040725
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Tests for the dedup.drain-stale op wrapper (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
@@ -28,7 +29,8 @@ import (
 // buildPluginWithEngine wires a Plugin with a real engine over the given stores.
 func buildPluginWithEngine(t *testing.T, es *database.EmbeddingStore, ms *database.MockStore) *Plugin {
 	t.Helper()
-	eng := dedupengine.NewEngine(es, ms, nil, nil, merge.NewService(ms))
+	eng, err := dedupengine.NewEngine(es, ms, nil, nil, merge.NewService(ms), unified.DefaultScoreConfig())
+	require.NoError(t, err)
 	return &Plugin{engine: eng, store: ms, embeddingStore: es}
 }
 

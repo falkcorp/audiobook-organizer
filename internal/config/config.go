@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.99.0
+// version: 1.99.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-02
 
@@ -237,9 +237,12 @@ type DedupSignalConfig struct {
 	// scoring — unified.ComposeScore reads each Signal's Confidence directly
 	// and does not clamp it against these bounds (see
 	// docs/plans/DECISIONS-PENDING.md row 10 for the open decision on
-	// whether ComposeScore should start doing so). This field is currently
-	// consumed only by unified.LoadScoreConfig (so it round-trips correctly)
-	// and is available for a human-reviewed follow-up to wire into scoring.
+	// whether ComposeScore should start doing so). Since 2026-09-02 this map
+	// DOES reach the live engine's ScoreConfig.Signals (via
+	// internal/dedup.LoadScoreConfig → dedup.NewEngine / Engine.SetScoreConfig,
+	// the same channel the band_*_min fields use), so once ComposeScore starts
+	// clamping there is nothing left to wire — but until then the bounds are
+	// carried, not applied.
 	Confidence map[string]DedupKindConfidence `json:"confidence,omitempty" mapstructure:"confidence"`
 }
 
@@ -1873,7 +1876,10 @@ func InitConfig() {
 	viper.BindEnv("metadata_scoring.write_back_workers", "METADATA_SCORING_WRITE_BACK_WORKERS")                             //nolint:errcheck
 
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
-	// These are consumed by internal/dedup/unified.LoadScoreConfig via Viper.
+	// Read by internal/dedup/unified.LoadScoreConfig via Viper as the layer
+	// under the persisted dedup.signals block; internal/dedup.LoadScoreConfig
+	// hands the merged result to the live engine (registry_wire.go at startup,
+	// dedup.calibrate-composite apply at runtime).
 	// Overridable per-kind in config.yaml under dedup.signals.<kind>.*
 	viper.SetDefault("dedup.signals.band_certain_min", 97.0)
 	viper.SetDefault("dedup.signals.band_high_min", 90.0)

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-49c0-b1d2-e3f4a5b6c7d8
-// last-edited: 2026-07-07
+// last-edited: 2026-09-02
 
 // Tests for the dedup.full-scan op's dual-phase progress reporting.
 //
@@ -23,6 +23,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/stretchr/testify/require"
 )
@@ -86,12 +87,13 @@ func fullScanMockStore(n int) *database.MockStore {
 func TestRunFullScan_ReportsBothPhasesDistinctly(t *testing.T) {
 	es := newTestEmbeddingStorePurge(t)
 	ms := fullScanMockStore(25) // > 10 so the every-10th cadence fires mid-scan
-	eng := dedupengine.NewEngine(es, ms, nil, nil, merge.NewService(ms))
+	eng, err := dedupengine.NewEngine(es, ms, nil, nil, merge.NewService(ms), unified.DefaultScoreConfig())
+	require.NoError(t, err)
 
 	p := &Plugin{engine: eng, store: ms, embeddingStore: es}
 	reporter := &recordingReporter{}
 
-	err := p.runFullScan(context.Background(), nil, reporter)
+	err = p.runFullScan(context.Background(), nil, reporter)
 	require.NoError(t, err)
 
 	var scanMsgs, scoreMsgs []string
@@ -158,12 +160,13 @@ func TestRunFullScan_ReportsBothPhasesDistinctly(t *testing.T) {
 func TestRunFullScan_EmptyLibraryStillReportsBothTrackers(t *testing.T) {
 	es := newTestEmbeddingStorePurge(t)
 	ms := fullScanMockStore(0)
-	eng := dedupengine.NewEngine(es, ms, nil, nil, merge.NewService(ms))
+	eng, err := dedupengine.NewEngine(es, ms, nil, nil, merge.NewService(ms), unified.DefaultScoreConfig())
+	require.NoError(t, err)
 
 	p := &Plugin{engine: eng, store: ms, embeddingStore: es}
 	reporter := &recordingReporter{}
 
-	err := p.runFullScan(context.Background(), nil, reporter)
+	err = p.runFullScan(context.Background(), nil, reporter)
 	require.NoError(t, err)
 
 	foundOverallComplete := false

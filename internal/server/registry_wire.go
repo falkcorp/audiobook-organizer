@@ -1,10 +1,12 @@
 // file: internal/server/registry_wire.go
-// version: 1.24.0
-// last-edited: 2026-08-30
+// version: 1.25.0
+// guid: e2c1977d-0023-498f-81bd-76e9912eec89
+// last-edited: 2026-09-02
 
 package server
 
 import (
+	"fmt"
 	"log/slog"
 	"path/filepath"
 
@@ -16,7 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -200,30 +201,26 @@ func init() {
 			}
 			store := serviceregistry.Get[dedup.Store](c, serviceregistry.KeyStore)
 			mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
-			engine := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc)
+			// The unified scorer's bands + per-kind confidence bounds come from
+			// the persisted dedup.signals settings (config.yaml + DB blob) and
+			// are handed to the engine HERE, at construction. An invalid config
+			// fails the build — and so server startup — loudly. Until 2026-09-02
+			// this block wrote the same values into two unified package globals
+			// that the engine never read, so every configured band threshold
+			// was inert and scoring ran on the compiled-in 97/90/75/60.
+			scoreCfg, err := dedup.LoadScoreConfig(cfg.Dedup.Signals)
+			if err != nil {
+				return nil, fmt.Errorf("dedup engine: dedup.signals score config rejected — fix config.yaml / the persisted settings, refusing to start on defaults: %w", err)
+			}
+			engine, err := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc, scoreCfg)
+			if err != nil {
+				return nil, fmt.Errorf("dedup engine: %w", err)
+			}
 			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
 			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
 			engine.AuthorHighThreshold = cfg.Dedup.AuthorHighThreshold
 			engine.AuthorLowThreshold = cfg.Dedup.AuthorLowThreshold
 			engine.AutoMergeEnabled = cfg.Dedup.AutoMergeEnabled
-			// Inject DB-persisted band thresholds into the unified scoring package
-			// to break the unified→config circular import.
-			sigs := cfg.Dedup.Signals
-			unified.SetBandThresholds(sigs.BandCertainMin, sigs.BandHighMin, sigs.BandMediumMin, sigs.BandReviewMin)
-			// Same wiring for per-kind confidence bound overrides (INIT-1 T05
-			// follow-up, TODO item 6): sigs.Confidence is the DB-persisted map,
-			// converted to unified's own override type so this package never
-			// needs to import internal/config. A nil/empty map is a no-op.
-			if len(sigs.Confidence) > 0 {
-				confOverrides := make(map[string]unified.KindConfidenceOverride, len(sigs.Confidence))
-				for kind, kc := range sigs.Confidence {
-					confOverrides[kind] = unified.KindConfidenceOverride{
-						MinConfidence: kc.MinConfidence,
-						MaxConfidence: kc.MaxConfidence,
-					}
-				}
-				unified.SetKindConfidenceOverrides(confOverrides)
-			}
 			return engine, nil
 		},
 	})

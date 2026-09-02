@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/embed_scan_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6a1d9c3e-4b7f-4a2d-9e6c-8f1b2c3d4e5f
 // last-edited: 2026-09-02
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/stretchr/testify/require"
 )
@@ -83,7 +84,8 @@ func newEmbedScanFixture(t *testing.T, n int) (*Plugin, *database.MockStore, *da
 		return out, nil
 	})
 
-	engine := dedupengine.NewEngine(es, mock, client, nil, ms)
+	engine, err := dedupengine.NewEngine(es, mock, client, nil, ms, unified.DefaultScoreConfig())
+	require.NoError(t, err)
 	p := &Plugin{engine: engine, store: mock, embeddingStore: es}
 	return p, mock, es, books
 }

@@ -1,14 +1,14 @@
 // file: internal/dedup/unified/config.go
-// version: 1.2.0
+// version: 2.0.0
 // guid: d8a383db-5083-4257-be54-686ac2e72d32
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 package unified
 
 import (
 	"errors"
 	"fmt"
-	"sync"
+	"maps"
 
 	"github.com/spf13/viper"
 )
@@ -149,67 +149,47 @@ func DefaultScoreConfig() ScoreConfig {
 	}
 }
 
-// bandOverride holds DB-persisted band thresholds injected by the caller
-// (engine or server init) to avoid a circular import between unified→config.
-// Protected by bandMu; zero values mean "use Viper / defaults".
-var (
-	bandMu       sync.RWMutex
-	bandOverride struct {
-		certainMin, highMin, mediumMin, reviewMin float64
-	}
-)
-
-// SetBandThresholds injects DB-persisted band thresholds into LoadScoreConfig.
-// Called by the dedup engine after AppConfig is loaded from the database.
-// Values of 0 are ignored (treated as "not set").
-func SetBandThresholds(certainMin, highMin, mediumMin, reviewMin float64) {
-	bandMu.Lock()
-	defer bandMu.Unlock()
-	bandOverride.certainMin = certainMin
-	bandOverride.highMin = highMin
-	bandOverride.mediumMin = mediumMin
-	bandOverride.reviewMin = reviewMin
-}
-
 // KindConfidenceOverride is a per-signal-kind confidence-bound override
 // value. It mirrors config.DedupKindConfidence's two fields without this
-// package importing internal/config — the same unified→config circular
-// import SetBandThresholds/bandOverride already avoid for band thresholds.
-// Zero on either field means "not set" for that bound.
+// package importing internal/config (unified→config would be a circular
+// import). Zero on either field means "not set" for that bound.
 type KindConfidenceOverride struct {
 	MinConfidence float64
 	MaxConfidence float64
 }
 
-// confidenceMu guards confidenceOverride, the DB-persisted per-kind
-// confidence-bound overrides (INIT-1 T05 follow-up, TODO item 6).
-var (
-	confidenceMu       sync.RWMutex
-	confidenceOverride map[string]KindConfidenceOverride
-)
-
-// SetKindConfidenceOverrides injects DB-persisted per-kind confidence bound
-// overrides into LoadScoreConfig, mirroring SetBandThresholds. Called by
-// server init (registry_wire.go) after AppConfig is loaded from the
-// database, from config.DedupConfig.Signals.Confidence.
+// ScoreOverrides carries the DB-persisted (config-blob) scoring values the
+// caller wants layered on top of Viper and the compiled-in defaults. It is
+// the ONLY way persisted values reach LoadScoreConfig.
 //
-// A kind absent from overrides — or present with a field left at its zero
-// value — is treated as "not set" for that bound and LoadScoreConfig falls
-// back to the Viper / DefaultScoreConfig value for it instead, so passing a
-// nil or empty map is a complete no-op and existing behaviour is unchanged.
-func SetKindConfidenceOverrides(overrides map[string]KindConfidenceOverride) {
-	confidenceMu.Lock()
-	defer confidenceMu.Unlock()
-	confidenceOverride = overrides
+// WHY an explicit parameter and not package-level setters: until 2026-09-02
+// these values were injected through two package globals (SetBandThresholds /
+// SetKindConfidenceOverrides) that registry_wire.go wrote at startup and that
+// only LoadScoreConfig read — and the live dedup engine never called
+// LoadScoreConfig, so config.yaml `dedup.signals.*`, the persisted calibrated
+// bands, and the calibrate op's apply=true output were all inert while the
+// engine scored on the hard-coded 97/90/75/60. Passing the overrides in the
+// call makes the dependency visible at the ONE place the engine is built and
+// removes the second, disconnected way of configuring scoring.
+//
+// A band field at zero, and a confidence entry with a bound at zero, mean
+// "not set" — that value falls through to Viper / DefaultScoreConfig.
+type ScoreOverrides struct {
+	BandCertainMin float64
+	BandHighMin    float64
+	BandMediumMin  float64
+	BandReviewMin  float64
+	// Confidence is keyed by SignalKind string (e.g. "embedding_medium").
+	Confidence map[string]KindConfidenceOverride
 }
 
-// LoadScoreConfig reads overrides from injected band thresholds (DB-persisted,
-// set via SetBandThresholds), injected per-kind confidence bounds
-// (DB-persisted, set via SetKindConfidenceOverrides), and Viper (config.yaml
-// dedup.signals.*) on top of DefaultScoreConfig.
-// Precedence (highest → lowest): SetBandThresholds/SetKindConfidenceOverrides > Viper > defaults.
-// Returns an error if the resulting config fails Validate.
-func LoadScoreConfig() (ScoreConfig, error) {
+// LoadScoreConfig builds the effective ScoreConfig from, in ascending
+// precedence, DefaultScoreConfig, Viper (config.yaml dedup.signals.*), and
+// the caller-supplied DB-persisted overrides. Returns an error if the
+// resulting config fails Validate — callers must treat that as fatal, never
+// fall back to defaults (an invalid persisted config would otherwise
+// silently revert auto-resolve to the compiled-in bands).
+func LoadScoreConfig(ov ScoreOverrides) (ScoreConfig, error) {
 	cfg := DefaultScoreConfig()
 
 	// Merge band thresholds if overridden via Viper (config.yaml / env vars).
@@ -226,22 +206,19 @@ func LoadScoreConfig() (ScoreConfig, error) {
 		cfg.BandReviewMin = viper.GetFloat64("dedup.signals.band_review_min")
 	}
 
-	// Override with DB-persisted values injected via SetBandThresholds.
-	// Non-zero check: zero values indicate "not set".
-	bandMu.RLock()
-	ov := bandOverride
-	bandMu.RUnlock()
-	if ov.certainMin > 0 {
-		cfg.BandCertainMin = ov.certainMin
+	// Override with DB-persisted band values. Non-zero check: zero values
+	// indicate "not set".
+	if ov.BandCertainMin > 0 {
+		cfg.BandCertainMin = ov.BandCertainMin
 	}
-	if ov.highMin > 0 {
-		cfg.BandHighMin = ov.highMin
+	if ov.BandHighMin > 0 {
+		cfg.BandHighMin = ov.BandHighMin
 	}
-	if ov.mediumMin > 0 {
-		cfg.BandMediumMin = ov.mediumMin
+	if ov.BandMediumMin > 0 {
+		cfg.BandMediumMin = ov.BandMediumMin
 	}
-	if ov.reviewMin > 0 {
-		cfg.BandReviewMin = ov.reviewMin
+	if ov.BandReviewMin > 0 {
+		cfg.BandReviewMin = ov.BandReviewMin
 	}
 
 	// Merge per-kind overrides.
@@ -280,19 +257,16 @@ func LoadScoreConfig() (ScoreConfig, error) {
 	// only the non-zero bound(s) in an entry are applied. A kind not present
 	// in cfg.Signals (shouldn't happen — DefaultScoreConfig seeds every kind)
 	// is skipped rather than creating a partial entry.
-	confidenceMu.RLock()
-	confOverrides := confidenceOverride
-	confidenceMu.RUnlock()
-	for kindStr, ov := range confOverrides {
+	for kindStr, kov := range ov.Confidence {
 		kc, ok := cfg.Signals[kindStr]
 		if !ok {
 			continue
 		}
-		if ov.MinConfidence > 0 {
-			kc.MinConfidence = ov.MinConfidence
+		if kov.MinConfidence > 0 {
+			kc.MinConfidence = kov.MinConfidence
 		}
-		if ov.MaxConfidence > 0 {
-			kc.MaxConfidence = ov.MaxConfidence
+		if kov.MaxConfidence > 0 {
+			kc.MaxConfidence = kov.MaxConfidence
 		}
 		cfg.Signals[kindStr] = kc
 	}
@@ -301,6 +275,18 @@ func LoadScoreConfig() (ScoreConfig, error) {
 		return ScoreConfig{}, err
 	}
 	return cfg, nil
+}
+
+// Clone deep-copies the ScoreConfig, including its Signals map, so the
+// copy never aliases the receiver's per-kind entries. The engine stores and
+// hands out clones so a caller mutating a returned config (the calibrate
+// op's coordinate-wise sweep variants) cannot change live scoring by
+// accident.
+func (c ScoreConfig) Clone() ScoreConfig {
+	out := c
+	out.Signals = make(map[string]KindConfig, len(c.Signals))
+	maps.Copy(out.Signals, c.Signals)
+	return out
 }
 
 // Validate returns an error if the ScoreConfig contains out-of-range values.
