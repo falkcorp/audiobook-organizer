@@ -1,7 +1,7 @@
 // file: internal/syncapi/progress/bookmarks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5666fa81-dccd-4eb3-b60f-b3050aa10c55
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 package progress
 
@@ -52,10 +52,7 @@ func ParseTimeSec(raw string) (float64, error) {
 // the storage layer -- the type-level distinction is erased here, not at
 // the JSON boundary.
 func CanonicalTimeKey(timeSec float64) string {
-	ms := int64(math.Round(timeSec * 1000))
-	if ms < 0 {
-		ms = 0
-	}
+	ms := max(int64(math.Round(timeSec*1000)), 0)
 	// Zero-padded to 16 digits: comfortably wider than any realistic audio
 	// duration in milliseconds (16 digits covers ~317,000 years), so
 	// lexicographic string ordering always matches numeric ordering.
