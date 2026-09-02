@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -139,7 +139,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	slog.Info("bulk-fetch-metadata books total, already cached, to fetch", "opID", opID, "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
 
 	reporter.SetTotal(totalBooks)
-	for i := 0; i < alreadyDone; i++ {
+	for range alreadyDone {
 		reporter.Increment()
 	}
 

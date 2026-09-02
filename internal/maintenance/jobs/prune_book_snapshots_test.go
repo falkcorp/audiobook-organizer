@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/prune_book_snapshots_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8bb33b18-e9eb-4210-87e4-f87bb86bf4ae
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package jobs_test
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 
@@ -64,9 +65,7 @@ func (r *pruneRecorder) snapshot() map[string]int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := map[string]int{}
-	for k, v := range r.pruned {
-		out[k] = v
-	}
+	maps.Copy(out, r.pruned)
 	return out
 }
 

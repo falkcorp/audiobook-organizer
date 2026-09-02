@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -130,10 +130,7 @@ func newDeleteTracker(ops []database.Operation) *mockDeleteTracker {
 		// full listing into one that sees nothing.
 		end := total
 		if limit > 0 {
-			end = offset + limit
-			if end > total {
-				end = total
-			}
+			end = min(offset+limit, total)
 		}
 		return ops[offset:end], total, nil
 	}

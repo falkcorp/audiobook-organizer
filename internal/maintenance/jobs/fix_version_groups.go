@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -192,7 +192,7 @@ func vgCoreTitlesMatch(a, b string) bool {
 
 func vgLongWords(s string) map[string]bool {
 	set := make(map[string]bool)
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		w = strings.Trim(w, ".,;:!?\"'")
 		if len([]rune(w)) >= 4 {
 			set[w] = true
