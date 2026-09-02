@@ -1,7 +1,7 @@
 // file: internal/scanner/override_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 70a71534-36fa-4d6c-9c4a-acf8dc2de6e8
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -31,26 +31,26 @@ func (f *fakeFieldStateStore) GetMetadataFieldStates(bookID string) ([]database.
 func curated() *database.Book {
 	return &database.Book{
 		Title:          "Curated Title",
-		AuthorID:       intPtr(11),
-		SeriesID:       intPtr(21),
-		SeriesSequence: intPtr(3),
-		Narrator:       strPtr("Curated Narrator"),
-		Language:       strPtr("en"),
-		Publisher:      strPtr("Curated Publisher"),
-		ASIN:           strPtr("CURATEDASIN"),
+		AuthorID:       new(11),
+		SeriesID:       new(21),
+		SeriesSequence: new(3),
+		Narrator:       new("Curated Narrator"),
+		Language:       new("en"),
+		Publisher:      new("Curated Publisher"),
+		ASIN:           new("CURATEDASIN"),
 	}
 }
 
 func scannedTags() *database.Book {
 	return &database.Book{
 		Title:          "Junk Tag Title",
-		AuthorID:       intPtr(99),
-		SeriesID:       intPtr(98),
-		SeriesSequence: intPtr(7),
-		Narrator:       strPtr("Junk Narrator"),
-		Language:       strPtr("de"),
-		Publisher:      strPtr("Junk Publisher"),
-		ASIN:           strPtr("JUNKASIN"),
+		AuthorID:       new(99),
+		SeriesID:       new(98),
+		SeriesSequence: new(7),
+		Narrator:       new("Junk Narrator"),
+		Language:       new("de"),
+		Publisher:      new("Junk Publisher"),
+		ASIN:           new("JUNKASIN"),
 	}
 }
 
@@ -115,7 +115,7 @@ func TestApplyScannerFields_LockedFieldSurvivesRescan(t *testing.T) {
 // An explicit override with no lock is equally the user's word.
 func TestApplyScannerFields_OverrideValueAloneProtects(t *testing.T) {
 	store := &fakeFieldStateStore{states: []database.MetadataFieldState{
-		{Field: "title", OverrideValue: strPtr(`"Curated Title"`)},
+		{Field: "title", OverrideValue: new(`"Curated Title"`)},
 	}}
 	locked, _ := lockedFieldsForBook(store, "book-1")
 	got := curated()
@@ -153,7 +153,7 @@ func TestApplyScannerFields_UnlockedFieldsStillOverlaid(t *testing.T) {
 // to re-tagging. This pins the HasUserOverride-only choice.
 func TestApplyScannerFields_FetchedValueAloneDoesNotBlock(t *testing.T) {
 	store := &fakeFieldStateStore{states: []database.MetadataFieldState{
-		{Field: "title", FetchedValue: strPtr(`"From A Provider"`)},
+		{Field: "title", FetchedValue: new(`"From A Provider"`)},
 	}}
 	locked, ok := lockedFieldsForBook(store, "book-1")
 	if !ok {

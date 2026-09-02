@@ -1,7 +1,7 @@
 // file: internal/scanner/unknown_author_gate_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 3d9a5f71-2e84-4c06-b1f3-6a05e97c2db4
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -176,7 +176,7 @@ func TestPlaceholderAuthorsCachesAndIsConcurrencySafe(t *testing.T) {
 
 	oracle := newPlaceholderAuthors()
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		wg.Go(func() {
 			if i%2 == 0 {
 				require.True(t, oracle.is(ph.ID))

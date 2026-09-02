@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_save_target_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ade87d70-9dc4-4aee-9538-449a631e678d
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -32,8 +32,8 @@ func saveAI(id string, b *Book) error {
 	return err
 }
 
-func ptrBool(b bool) *bool    { return &b }
-func ptrStr(s string) *string { return &s }
+//go:fix inline
+func ptrStr(s string) *string { return new(s) }
 
 // TestSaveAIFieldsWritesToThePrimaryNotTheDemotedSource is the case the queued
 // operation created and the unit tests could not see.
@@ -53,7 +53,7 @@ func TestSaveAIFieldsWritesToThePrimaryNotTheDemotedSource(t *testing.T) {
 		FilePath:         "/import/staging/book.m4b",
 		Title:            "A Book",
 		VersionGroupID:   ptrStr(group),
-		IsPrimaryVersion: ptrBool(false),
+		IsPrimaryVersion: new(false),
 	})
 	require.NoError(t, err)
 
@@ -61,7 +61,7 @@ func TestSaveAIFieldsWritesToThePrimaryNotTheDemotedSource(t *testing.T) {
 		FilePath:         "/library/Author/A Book/book.m4b",
 		Title:            "A Book",
 		VersionGroupID:   ptrStr(group),
-		IsPrimaryVersion: ptrBool(true),
+		IsPrimaryVersion: new(true),
 	})
 	require.NoError(t, err)
 
@@ -94,7 +94,7 @@ func TestSaveAIFieldsWritesToTheRowItselfWhenItIsPrimary(t *testing.T) {
 	row, err := store.CreateBook(&database.Book{
 		FilePath:         "/library/Author/Solo/solo.m4b",
 		Title:            "Solo",
-		IsPrimaryVersion: ptrBool(true),
+		IsPrimaryVersion: new(true),
 	})
 	require.NoError(t, err)
 
@@ -122,7 +122,7 @@ func TestSaveAIFieldsNeverOverwritesAnExistingValue(t *testing.T) {
 	row, err := store.CreateBook(&database.Book{
 		FilePath: "/library/Author/Known/known.m4b",
 		Title:    "The Real Title",
-		Narrator: ptrStr("The Real Narrator"),
+		Narrator: new("The Real Narrator"),
 	})
 	require.NoError(t, err)
 
@@ -169,11 +169,11 @@ func TestPrimaryVersionOfSelectsByFlagNotByPosition(t *testing.T) {
 	const group = "vg"
 	// The primary is deliberately LAST.
 	members := []database.Book{
-		{ID: "decoy-1", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(false)},
+		{ID: "decoy-1", VersionGroupID: ptrStr(group), IsPrimaryVersion: new(false)},
 		{ID: "decoy-2", VersionGroupID: ptrStr(group)}, // nil flag, not false
-		{ID: "the-primary", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(true)},
+		{ID: "the-primary", VersionGroupID: ptrStr(group), IsPrimaryVersion: new(true)},
 	}
-	row := &database.Book{ID: "decoy-1", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(false)}
+	row := &database.Book{ID: "decoy-1", VersionGroupID: ptrStr(group), IsPrimaryVersion: new(false)}
 
 	got, err := primaryVersionOf(fakeGroupLookup{members: members}, row)
 
@@ -189,13 +189,13 @@ func TestPrimaryVersionOfSelectsByFlagNotByPosition(t *testing.T) {
 func TestPrimaryVersionOfFailsOpen(t *testing.T) {
 	const group = "vg"
 	noPrimary := []database.Book{
-		{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(false)},
+		{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: new(false)},
 		{ID: "b", VersionGroupID: ptrStr(group)},
 	}
 
 	got, err := primaryVersionOf(
 		fakeGroupLookup{members: noPrimary},
-		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(false)})
+		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: new(false)})
 	require.NoError(t, err)
 	require.Nil(t, got, "a group with no primary must leave the write where it was")
 
@@ -211,11 +211,11 @@ func TestPrimaryVersionOfFailsOpen(t *testing.T) {
 	// caller already did, so redirecting to it would swap the caller's fresh row
 	// for a second copy and write that instead.
 	staleGroup := []database.Book{
-		{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(true), Title: "stale copy"},
+		{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: new(true), Title: "stale copy"},
 	}
 	got, err = primaryVersionOf(
 		fakeGroupLookup{members: staleGroup},
-		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: ptrBool(true), Title: "fresh"})
+		&database.Book{ID: "a", VersionGroupID: ptrStr(group), IsPrimaryVersion: new(true), Title: "fresh"})
 	require.NoError(t, err)
 	require.Nil(t, got, "a row that is already primary must not be redirected to a re-read copy of itself")
 }
@@ -229,7 +229,7 @@ func TestPrimaryVersionOfSurfacesAReadFailure(t *testing.T) {
 	boom := errors.New("pebble is unhappy")
 	got, err := primaryVersionOf(
 		fakeGroupLookup{err: boom},
-		&database.Book{ID: "a", VersionGroupID: ptrStr("vg"), IsPrimaryVersion: ptrBool(false)})
+		&database.Book{ID: "a", VersionGroupID: new("vg"), IsPrimaryVersion: new(false)})
 
 	require.ErrorIs(t, err, boom, "a group read failure must be reported, not swallowed")
 	require.Nil(t, got, "and it must still fail OPEN, leaving the caller its own row")

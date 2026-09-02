@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.80.0
+// version: 1.80.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -131,7 +132,7 @@ var (
 // warnSampled increments c and logs at Warn on the first occurrence and every
 // 1000th after — bounded noise on a mass store failure without ever being
 // fully silent. Returns the new count.
-func warnSampled(c *atomic.Int64, log logger.Logger, format string, args ...interface{}) int64 {
+func warnSampled(c *atomic.Int64, log logger.Logger, format string, args ...any) int64 {
 	n := c.Add(1)
 	if n == 1 || n%1000 == 0 {
 		if log == nil {
@@ -999,11 +1000,8 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 					continue
 				}
 				ext := strings.ToLower(filepath.Ext(path))
-				for _, supportedExt := range config.AppConfig.SupportedExtensions {
-					if ext == supportedExt {
-						audioFiles = append(audioFiles, path)
-						break
-					}
+				if slices.Contains(config.AppConfig.SupportedExtensions, ext) {
+					audioFiles = append(audioFiles, path)
 				}
 			}
 
@@ -2135,8 +2133,8 @@ func parseCueFile(cuePath string) (title string, files []string) {
 		return "", nil
 	}
 	dir := filepath.Dir(cuePath)
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(data), "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		// Extract TITLE from top-level TITLE "..."
 		if strings.HasPrefix(strings.ToUpper(line), "TITLE ") && title == "" {
@@ -2164,7 +2162,7 @@ func parseM3UFile(m3uPath string) []string {
 	}
 	dir := filepath.Dir(m3uPath)
 	var files []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -2366,10 +2364,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 	}
 
 	// Sample up to 3 files to quickly check if directory is a single-album book
-	sampleSize := 3
-	if sampleSize > len(files) {
-		sampleSize = len(files)
-	}
+	sampleSize := min(3, len(files))
 
 	var firstAlbum string
 	allSame := true
@@ -2597,8 +2592,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			FileSize:          fileSize,
 			OriginalFileHash:  originalFileHash,
 			OrganizedFileHash: organizedFileHash,
-			LibraryState:      stringPtr(ls),
-			Quantity:          intPtr(1),
+			LibraryState:      new(ls),
+			Quantity:          new(1),
 			SourceImportPath:  nullablePtr(book.SourceImportPath),
 		}
 
@@ -2965,14 +2960,6 @@ func getFileSize(filePath string) (int64, error) {
 func stringPtrValue(s string) *string {
 	copy := s
 	return &copy
-}
-
-func stringPtr(s string) *string {
-	return &s
-}
-
-func intPtr(i int) *int {
-	return &i
 }
 
 func nullablePtr(s string) *string {

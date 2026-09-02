@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_failure.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f2c05d1-47ab-4e93-b60f-1d9a7e3c5482
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -80,8 +80,7 @@ func isPermanentAIFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	var permErr *ai.PermanentError
-	if errors.As(err, &permErr) {
+	if _, ok := errors.AsType[*ai.PermanentError](err); ok {
 		return true
 	}
 	msg := err.Error()

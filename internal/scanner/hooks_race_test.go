@@ -1,7 +1,7 @@
 // file: internal/scanner/hooks_race_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c4e1a70-6b83-4d52-bf19-0a7c35d8e264
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 
 // Pins the scanHooks global as safe for concurrent use.
 //
@@ -35,12 +35,12 @@ func TestScanHooksConcurrentSetAndRead(t *testing.T) {
 	const iterations = 500
 
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Add(2)
 		// Writers: the teardown path, installing and clearing hooks.
 		go func() {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				if j%2 == 0 {
 					SetScanHooks(noopScanHooks{})
 				} else {
@@ -54,7 +54,7 @@ func TestScanHooksConcurrentSetAndRead(t *testing.T) {
 		// even with the lock.
 		go func() {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				if hooks := currentScanHooks(); hooks != nil {
 					hooks.OnBookScanned("book-1", "Title")
 					hooks.OnImportDedup("book-1")

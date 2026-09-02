@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // Package scanner provides file scanning and processing utilities for the
 // audiobook organizer. ProcessFile is the single-pass entry point that opens
@@ -380,7 +380,7 @@ func synthesizeMultiFileChapters(ctx context.Context, files []database.BookFile,
 // from the sampled chapterStoreAssertErrCount wiring warning, since these
 // are per-book data-path failures worth seeing individually, not a
 // high-frequency wiring mismatch that needs sampling. scanLog is nil-safe.
-func logChapterWarn(scanLog logger.Logger, format string, args ...interface{}) {
+func logChapterWarn(scanLog logger.Logger, format string, args ...any) {
 	if scanLog != nil {
 		scanLog.Warn(format, args...)
 		return

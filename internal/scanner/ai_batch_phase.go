@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -83,10 +83,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	aiGroup.SetLimit(aiBatchWorkers)
 
 	for start := 0; start < len(candidates); start += batchSize {
-		end := start + batchSize
-		if end > len(candidates) {
-			end = len(candidates)
-		}
+		end := min(start+batchSize, len(candidates))
 		start, end := start, end
 		batch := candidates[start:end]
 
