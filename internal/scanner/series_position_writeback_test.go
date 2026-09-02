@@ -82,7 +82,6 @@ func TestScanner_StoresSeriesNameWithoutNumberAndRecordsPosition(t *testing.T) {
 		{"hash suffix", "Nameless Sovereign #5", "Nameless Sovereign", 5},
 		{"comma Book N", "Adeptus Mechanicus, Book 1", "Adeptus Mechanicus", 1},
 		{"bare trailing number", "Discworld 05", "Discworld", 5},
-		{"bracketed", "Dragon Born [04]", "Dragon Born", 4},
 		{"embedded keyword", "Vampire Hunter D: Vol 09: The Rose Princess", "Vampire Hunter D", 9},
 	}
 	for _, tt := range tests {
@@ -103,6 +102,25 @@ func TestScanner_StoresSeriesNameWithoutNumberAndRecordsPosition(t *testing.T) {
 				t.Errorf("series_sequence: got %d, want %d", *saved.SeriesSequence, tt.wantSeq)
 			}
 		})
+	}
+}
+
+// The bracketed shape strips the NAME but writes NO sequence -- see the owner's
+// 2026-09-02 ruling in metadata.SeriesCleanup.DiscardedPosition.
+//
+// 🔑 Both halves are asserted. Checking only the name would let a reintroduced
+// sequence write pass unnoticed.
+func TestScanner_BracketedStripsTheNameButWritesNoSequence(t *testing.T) {
+	saved, seriesName := scanOneBook(t, &Book{
+		Title:  "A Book",
+		Author: "An Author",
+		Series: "Dragon Born [04]",
+	})
+	if seriesName != "Dragon Born" {
+		t.Errorf("stored series name: got %q, want %q", seriesName, "Dragon Born")
+	}
+	if saved.SeriesSequence != nil {
+		t.Errorf("series_sequence: got %d, want nil; a bracketed number must not be written", *saved.SeriesSequence)
 	}
 }
 

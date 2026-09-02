@@ -43,10 +43,16 @@ func TestNormalizeMetaSeries_MovesPositionIntoSeriesPosition(t *testing.T) {
 			wantPosition: "5",
 		},
 		{
-			name:         "bracketed number moves into SeriesPosition",
+			// 🔑 The bracketed shape strips the NAME and writes NO position, by the
+			// owner's 2026-09-02 ruling. wantPosition "" is the assertion, not an
+			// omission: ~180 of 198 bracketed rows measured on 2026-08-06 were
+			// shattered-book debris rather than positions. Both halves are checked
+			// by the loop below -- a name-only assertion would still pass if the
+			// position write came back.
+			name:         "bracketed number is stripped from the name but NOT written as a position",
 			meta:         metadata.BookMetadata{Title: "Blood Bond", Series: "Dragon Born [04]"},
 			wantSeries:   "Dragon Born",
-			wantPosition: "4",
+			wantPosition: "",
 		},
 		{
 			name:         "embedded keyword position moves into SeriesPosition",

@@ -55,8 +55,6 @@ func TestITunesImport_StoresSeriesNameWithoutNumberAndRecordsPosition(t *testing
 	}{
 		{"hash suffix", "Nameless Sovereign #5", "Nameless Sovereign", 5},
 		{"bare trailing number", "Discworld 05", "Discworld", 5},
-		{"bracketed", "Dragon Born [04]", "Dragon Born", 4},
-		{"parenthesised", "The Hollows (7)", "The Hollows", 7},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,6 +63,28 @@ func TestITunesImport_StoresSeriesNameWithoutNumberAndRecordsPosition(t *testing
 			require.NotNil(t, book.SeriesSequence,
 				"series_sequence was not recorded; the number stripped from %q was DELETED", tt.album)
 			require.Equal(t, tt.wantSeq, *book.SeriesSequence)
+		})
+	}
+}
+
+// The bracketed shape is the one exception to "it is a move, not a delete": the
+// number comes OUT of the name and is deliberately NOT written into the sequence.
+//
+// 🔑 This asserts BOTH halves. A test that only checked the name would still pass
+// if the sequence write were reintroduced, and that is the whole regression this
+// guards: ~180 of the 198 bracketed rows measured on 2026-08-06 were
+// shattered-book debris, so the number is ~90% likely to be a wrong position.
+// An empty sequence is visible and recoverable; a wrong one is not.
+func TestITunesImport_BracketedStripsTheNameButWritesNoSequence(t *testing.T) {
+	for _, tc := range []struct{ album, wantSeries string }{
+		{"Dragon Born [04]", "Dragon Born"},
+		{"The Hollows (7)", "The Hollows"},
+	} {
+		t.Run(tc.album, func(t *testing.T) {
+			book, created := assignSeriesFromAlbum(t, tc.album, &database.Book{Title: "A Book"})
+			require.Equal(t, tc.wantSeries, created, "the bracketed number must be removed from the series name")
+			require.Nil(t, book.SeriesSequence,
+				"a bracketed number must NOT be written into series_sequence; it is ~90%% likely to be shattered-book debris")
 		})
 	}
 }

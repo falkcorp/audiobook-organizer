@@ -1,5 +1,5 @@
 // file: internal/server/series_position_writeback_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1e6f4a92-8c07-4d31-b5a8-72c9e0d3f416
 // last-edited: 2026-09-02
 
@@ -24,11 +24,17 @@ type normalizeFixture struct {
 	mu    sync.Mutex
 	store *database.MockStore
 	books map[string]*database.Book
+	// renames records what UpdateSeriesName was actually asked to store. It used
+	// to be a no-op returning nil, which made the NAME half of every assertion
+	// invisible -- fine while every case also wrote a sequence, but the bracketed
+	// shape writes ONLY the name, so without this the test could not tell a
+	// correct strip from no strip at all.
+	renames map[int]string
 }
 
 func newNormalizeFixture(t *testing.T, series []database.Series, books map[string]*database.Book) *normalizeFixture {
 	t.Helper()
-	f := &normalizeFixture{store: &database.MockStore{}, books: books}
+	f := &normalizeFixture{store: &database.MockStore{}, books: books, renames: map[int]string{}}
 
 	f.store.GetAllSeriesFunc = func() ([]database.Series, error) { return series, nil }
 	// 🔑 These two MUST return different sets, and the difference is the point.
@@ -58,7 +64,12 @@ func newNormalizeFixture(t *testing.T, series []database.Series, books map[strin
 	f.store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
 		return bySeries(id, false), nil
 	}
-	f.store.UpdateSeriesNameFunc = func(int, string) error { return nil }
+	f.store.UpdateSeriesNameFunc = func(id int, name string) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.renames[id] = name
+		return nil
+	}
 	f.store.DeleteSeriesFunc = func(int) error { return nil }
 	f.store.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		f.mu.Lock()
@@ -87,6 +98,14 @@ func (f *normalizeFixture) run(t *testing.T) {
 	}
 }
 
+// renamedTo returns the name UpdateSeriesName stored for a series, and "" when
+// the series was never renamed.
+func (f *normalizeFixture) renamedTo(id int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.renames[id]
+}
+
 func (f *normalizeFixture) seq(t *testing.T, id string) *int {
 	t.Helper()
 	f.mu.Lock()
@@ -111,12 +130,10 @@ func TestExecuteSeriesNormalize_WritesStrippedPositionIntoSequence(t *testing.T)
 		[]database.Series{
 			{ID: 1, Name: "Discworld 05", AuthorID: &authorID},
 			{ID: 2, Name: "Nameless Sovereign #5", AuthorID: &authorID},
-			{ID: 3, Name: "Dragon Born [04]", AuthorID: &authorID},
 		},
 		map[string]*database.Book{
 			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
 			"book-2": {ID: "book-2", Title: "The Fifth", SeriesID: seriesID(2)},
-			"book-3": {ID: "book-3", Title: "Blood Bond", SeriesID: seriesID(3)},
 			// A NON-PRIMARY version of book-1. The rename de-numbers the series
 			// row that this book points at too, so if the write-back is built
 			// from the primary-filtered listing, this row loses the 5 with
@@ -133,7 +150,7 @@ func TestExecuteSeriesNormalize_WritesStrippedPositionIntoSequence(t *testing.T)
 	for _, tc := range []struct {
 		id   string
 		want int
-	}{{"book-1", 5}, {"book-1b", 5}, {"book-2", 5}, {"book-3", 4}} {
+	}{{"book-1", 5}, {"book-1b", 5}, {"book-2", 5}} {
 		got := f.seq(t, tc.id)
 		if got == nil {
 			t.Errorf("%s: series_sequence was not written; the stripped number was DELETED", tc.id)
@@ -142,6 +159,31 @@ func TestExecuteSeriesNormalize_WritesStrippedPositionIntoSequence(t *testing.T)
 		if *got != tc.want {
 			t.Errorf("%s: series_sequence = %d, want %d", tc.id, *got, tc.want)
 		}
+	}
+}
+
+// The bracketed shape renames the SERIES ROW but writes NO sequence on any book
+// behind it, by the owner's 2026-09-02 ruling.
+//
+// 🔑 Both halves are asserted, and they are genuinely independent here: the name
+// comes from what UpdateSeriesName was asked to store, the sequence from the book
+// rows. Asserting only the nil sequence would also pass if the normalize pass had
+// skipped the row entirely, which is the opposite bug.
+func TestExecuteSeriesNormalize_BracketedRenamesSeriesButWritesNoSequence(t *testing.T) {
+	authorID := 1
+	f := newNormalizeFixture(t,
+		[]database.Series{{ID: 3, Name: "Dragon Born [04]", AuthorID: &authorID}},
+		map[string]*database.Book{
+			"book-3": {ID: "book-3", Title: "Blood Bond", SeriesID: seriesID(3)},
+		})
+
+	f.run(t)
+
+	if got := f.renamedTo(3); got != "Dragon Born" {
+		t.Errorf("series name: got %q, want %q -- the bracketed number must come out of the name", got, "Dragon Born")
+	}
+	if got := f.seq(t, "book-3"); got != nil {
+		t.Errorf("series_sequence = %d, want nil; a bracketed number is ~90%% likely to be shattered-book debris and must not be written", *got)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/metadata/series_normalize.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-02
 
@@ -88,6 +88,20 @@ type SeriesCleanup struct {
 	// choice, not just a name with a question mark on it.
 	CandidateName     string
 	CandidatePosition string
+	// DiscardedPosition is a number that was removed from Name and deliberately
+	// NOT written into the book's sequence. Today only ShapeBracketed sets it.
+	//
+	// 🔑 This is the ONE place the "it is a move, not a delete" contract above is
+	// broken on purpose, by the owner's ruling on 2026-09-02. The evidence: of the
+	// 198 bracketed rows the 2026-08-06 maintenance.series-denumber run found,
+	// roughly 180 were shattered-book debris ("Title [02]" fragments of one book
+	// split across rows), not series positions — which is why that plugin declines
+	// to apply them. The owner's "zero series have a number in them" rule is about
+	// the NAME, so the bracket still goes; but a position ~90% likely to be wrong
+	// should not be written. An empty sequence is visible and recoverable, a wrong
+	// one is not. The ~10% that really are positions lose the number, and that is
+	// accepted. It is logged here so the value is not silently gone.
+	DiscardedPosition string
 }
 
 // Changed reports whether the series name should be rewritten in the store.
@@ -139,7 +153,10 @@ func (c SeriesCleanup) Changed(original string) bool {
 //  1. Dash-embedded position+title: "Series - 1 - Title" → "Series", "1"
 //  2. Trailing keyword position:    "Nameless Sovereign #5" → "Nameless Sovereign", "5"
 //  3. Trailing bare number:         "Discworld 05" → "Discworld", "5"
-//  4. Bracketed trailing number:    "Dragon Born [04]" → "Dragon Born", "4"
+//  4. Bracketed trailing number:    "Dragon Born [04]" → "Dragon Born", NO position
+//     (the number is removed from the name and DELIBERATELY not written into the
+//     book's sequence — see SeriesCleanup.DiscardedPosition for the measurement
+//     and the ruling behind that)
 //  5. Keyword-vouched embedded:     "Evil Genius: Book 4: Becoming…" → "Evil Genius", "4"
 //  6. Un-vouched embedded/leading:  unchanged, Flag=true
 //  7. Trailing ordinal word:        "Series One" → "Series", "1"
@@ -168,6 +185,17 @@ func StripSeriesContamination(name, title string) SeriesCleanup {
 			// Leaving a disc tag in the series field is the lesser damage.
 			if IsJunkSeriesBase(sp.Base) {
 				return SeriesCleanup{Name: name}
+			}
+			if sp.Shape == ShapeBracketed {
+				// Strip the NAME, do not write the sequence. See DiscardedPosition
+				// for the measured reason and whose call it was. Position stays ""
+				// so that every write path's `Position != ""` gate declines on its
+				// own — do NOT "fix" this by populating Position.
+				return SeriesCleanup{
+					Name:              sp.Base,
+					Rule:              RuleBracketed,
+					DiscardedPosition: strconv.Itoa(sp.Position),
+				}
 			}
 			return SeriesCleanup{
 				Name:     sp.Base,

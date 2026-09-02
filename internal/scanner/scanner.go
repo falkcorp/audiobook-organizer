@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.81.0
+// version: 1.82.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-02
 
@@ -3113,7 +3113,7 @@ func resolveSeriesID(seriesName string, authorID *int) (*int, int, error) {
 		logging.Info(context.Background(),
 			"scanner: moved the book position out of the series name",
 			"rule", c.Rule, "series_before", trimmed, "series_after", c.Name,
-			"position", c.Position)
+			"position", c.Position, "discarded_position", c.DiscardedPosition)
 		trimmed = c.Name
 		if c.Position != "" {
 			if p, err := strconv.Atoi(c.Position); err == nil && p > 0 {
