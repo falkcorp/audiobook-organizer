@@ -303,6 +303,57 @@ func (_c *MockSystemStore_DeleteSetting_Call) RunAndReturn(run func(key string) 
 	return _c
 }
 
+// DeleteUserPreference provides a mock function for the type MockSystemStore
+func (_mock *MockSystemStore) DeleteUserPreference(key string) error {
+	ret := _mock.Called(key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteUserPreference")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(key)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockSystemStore_DeleteUserPreference_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteUserPreference'
+type MockSystemStore_DeleteUserPreference_Call struct {
+	*mock.Call
+}
+
+// DeleteUserPreference is a helper method to define mock.On call
+//   - key string
+func (_e *MockSystemStore_Expecter) DeleteUserPreference(key any) *MockSystemStore_DeleteUserPreference_Call {
+	return &MockSystemStore_DeleteUserPreference_Call{Call: _e.mock.On("DeleteUserPreference", key)}
+}
+
+func (_c *MockSystemStore_DeleteUserPreference_Call) Run(run func(key string)) *MockSystemStore_DeleteUserPreference_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockSystemStore_DeleteUserPreference_Call) Return(err error) *MockSystemStore_DeleteUserPreference_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockSystemStore_DeleteUserPreference_Call) RunAndReturn(run func(key string) error) *MockSystemStore_DeleteUserPreference_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAllAuthors provides a mock function for the type MockSystemStore
 func (_mock *MockSystemStore) GetAllAuthors() ([]database.Author, error) {
 	ret := _mock.Called()

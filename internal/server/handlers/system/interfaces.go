@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -72,6 +72,10 @@ type SystemUserPreferenceStore interface {
 	// user preferences
 	GetUserPreference(key string) (*database.UserPreference, error) // UserPreferenceStore
 	SetUserPreference(key, value string) error                      // UserPreferenceStore
+	// DeleteUserPreference removes the row. Until 2026-09-02 the DELETE handler
+	// "deleted" by writing "", which left a tombstone that reads back as an
+	// existing preference forever.
+	DeleteUserPreference(key string) error // UserPreferenceStore
 }
 
 // SystemStore is the narrow database.Store subset the system handlers require.

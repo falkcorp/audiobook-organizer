@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-09-02
 
@@ -852,16 +852,17 @@ func (h *Handler) SetUserPreference(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"key": key, "value": body.Value})
 }
 
-// DeleteUserPreference removes a user preference by setting it to empty.
-// Implements DELETE /preferences/:key.
+// DeleteUserPreference removes a user preference. Implements DELETE
+// /preferences/:key. It deletes the row rather than writing "" — an empty
+// value is a value, and a tombstone is indistinguishable from a preference
+// the user really set to blank.
 func (h *Handler) DeleteUserPreference(c *gin.Context) {
 	key := c.Param("key")
 	if key == "" {
 		httputil.RespondWithBadRequest(c, "key is required")
 		return
 	}
-	// Set to empty string to "delete" (store doesn't have a delete method)
-	if err := h.resolveStore().SetUserPreference(key, ""); err != nil {
+	if err := h.resolveStore().DeleteUserPreference(key); err != nil {
 		httputil.RespondWithInternalError(c, "failed to delete preference")
 		return
 	}
