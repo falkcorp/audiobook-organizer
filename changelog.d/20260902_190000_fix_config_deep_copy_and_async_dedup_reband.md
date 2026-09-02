@@ -57,4 +57,6 @@ so that subtraction credited rows the store never saw.
 **After deploying**, run `POST /api/v1/dedup/rescore {"apply":true}` once.
 27,123 of the 27,439 pending candidates are exact-layer rows, which a scan
 never re-bands (they are protected on upsert), so a ladder change reaches them
-only through a rescore.
+only through a rescore. Run it while no dedup scan is in flight: unlike the
+re-band the config save now queues, this endpoint does the work inline in the
+request and does not take the scan's concurrency key.
