@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-02-organizing-two-books-into-one-path-executive-summary.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 3.0.0 -->
 <!-- guid: 6d2f8b41-3a9e-4c57-b8e1-9f0c2d7a5e63 -->
 <!-- last-edited: 2026-09-02 -->
 
@@ -33,14 +33,24 @@
   book or a many-file book?" decision, and they had drifted apart — one of them sent
   every multi-chapter book whose record points at its first chapter down the one-file
   path. There is now one decision, used everywhere.
-- When some of a book's files could not be placed, that is now reported: a "partial"
-  count, a note in the operation history listing the files, and the list in the response
-  the UI receives. Before, it was a success.
+- A multi-chapter book is placed whole or not at all. Review of the first version of this
+  change found a gap: if only *some* of a book's chapters made it into the destination
+  folder (because another book had already claimed the rest), the book was still recorded
+  as living in that folder — a folder it now shared. The next time either book was
+  renamed, the whole folder moved with it, taking the other book's chapters along. Now,
+  if any chapter cannot be placed, the ones that were are removed again and the book is
+  reported as failed with the reason for each file. A chapter the library already knows
+  is missing is simply left out; a chapter that has vanished without the library noticing
+  fails the book until a scan records it.
+- Recovering a half-finished rename now checks the parked file's size against what the
+  library recorded for that chapter before adopting it. A parked file of the wrong size,
+  or one with no recorded size to check against, is left where it is and reported, rather
+  than published under the chapter's name.
 - This closes the door; it does not look for files already damaged by it. A mixed file
   has the right name and size, so only a content check could tell, and none has been run.
 - Every safety check was tested by removing it and confirming a test fails. The tests
   deliberately plant the *other* book's file at the contested location first, because an
-  empty folder cannot show a replacement. Twelve such removals were tried; the results
+  empty folder cannot show a replacement. Sixteen such removals were tried; the results
   are in the pull request.
 
 ## What this does not cover
