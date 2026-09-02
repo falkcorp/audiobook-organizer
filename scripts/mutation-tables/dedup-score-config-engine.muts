@@ -1,0 +1,31 @@
+# Mutation table for PR #3058's engine half: the batched, honestly-counted
+# whole-backlog re-band (D4/D6).
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/dedup/ \
+#     --table scripts/mutation-tables/dedup-score-config-engine.muts
+#
+# WHAT THIS TABLE IS FOR. Rescore returns a RescoreResult that callers turn
+# into an operator-facing claim ("re-banded N of M rows"). Every mutation below
+# makes that claim WRONG while leaving the function returning a nil error and a
+# plausible-looking struct — the repo's recurring defect shape. None of them
+# change whether rows come back at all, which is all a naive fixture checks.
+#
+# M02 is the one that already caught a blind test: the first version of
+# TestRescore_CancelledMidPassDoesNotClaimBufferedRows cancelled its context
+# BEFORE the loop, so the pass stopped at row 1 with an EMPTY buffer and its
+# Written+WriteErrors==Changed assertion held as 0+0==0 no matter what the
+# production code did. M02 survived. The test now cancels at a known row with
+# rows buffered. If M02 ever survives again, that fixture has regressed.
+
+M01 drop the single final Sync so the pass is durable only by luck | internal/dedup/engine.go | s/if err := de\.rescoreStore\(\)\.SyncCandidateWrites\(\); err != nil \{/if err := error(nil); err != nil {/
+
+M02 a cancelled pass silently forgets the rows abandoned in its buffer | internal/dedup/engine.go | s/\t\t\tresult\.WriteErrors \+= len\(pending\)\n\t\t\treturn result, err/\t\t\treturn result, err/
+
+M03 report written rows by subtraction instead of what the store confirmed | internal/dedup/engine.go | s/\t\tresult\.Written \+= applied/\t\t_ = applied/
+
+M04 count a failed batch as if every row in it landed | internal/dedup/engine.go | s/\t\t\tresult\.WriteErrors \+= len\(pending\)\n\t\t\tlogging\.Warn\(ctx, "dedup rescore: candidate score batch failed"/\t\t\tlogging.Warn(ctx, "dedup rescore: candidate score batch failed"/
+
+M05 treat per-row write refusals as successes | internal/dedup/engine.go | s/\t\t\tresult\.WriteErrors \+= len\(failed\)/\t\t\t_ = failed/

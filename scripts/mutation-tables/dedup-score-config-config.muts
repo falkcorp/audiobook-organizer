@@ -1,0 +1,31 @@
+# Mutation table for PR #3058's config half: the deep-copy-on-PUT fix (D1) and
+# the "a validated ladder never rolls back" rule (D2).
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/config/ \
+#     --table scripts/mutation-tables/dedup-score-config-config.muts
+#
+# WHAT THIS TABLE IS FOR. Both defects here are invisible to a passing request:
+# the PUT that causes the damage returns a correct-looking 400, and the damage
+# shows up on a LATER, unrelated request. So the mutations aim at the two
+# lines that decide whether a rejected payload can touch live state, not at
+# whether a good payload is applied — every existing test already notices that.
+#
+# M02 IS A KNOWN EQUIVALENT MUTANT and is expected to SURVIVE. See its note.
+
+M01 unmarshal the payload into the LIVE config again | internal/config/update_service.go | s/candidate := c\.Clone\(\)/candidate := c/
+
+# M02: the rollback target is a deep copy. This SURVIVES, and the code is still
+# right. Because the payload is applied to `candidate` and swapped in wholesale
+# (`*c = *candidate`), the live config's maps are REPLACED rather than mutated,
+# so a shallow `prior` restores correctly TODAY. The clone is kept because the
+# shallow form is correct only while nothing mutates *c in place between the
+# swap and the save — an invariant no test enforces and which the pre-#3052
+# code had already violated once. One reflection walk per config PUT is not
+# worth re-arming that. Confirm it stays survived; do NOT chase it with a test
+# asserting an implementation detail, and do NOT "fix" it by dropping the clone.
+M02 KNOWN-SURVIVOR rollback target becomes a shallow copy | internal/config/update_service.go | s/prior = c\.Clone\(\)/shallow := *c; prior = &shallow/
+
+M03 roll the saved ladder back when the engine hand-off fails | internal/config/update_service.go | s/\t\t\t\tslog\.Error\("config saved but dedup score ladder hand-off failed/\t\t\t\tMutate(func(c *Config) { *c = *prior })\n\t\t\t\tslog.Error("config saved but dedup score ladder hand-off failed/
