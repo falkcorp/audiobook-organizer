@@ -1,12 +1,13 @@
 // file: internal/logger/operation.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7b3f9c1a-4e2d-4a8b-9c5e-1d2f3a4b5c6d
-// last-edited: 2026-06-17
+// last-edited: 2026-09-02
 
 package logger
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 )
@@ -14,7 +15,7 @@ import (
 // OperationStore is the subset of database.Store needed by OperationLogger.
 type OperationStore interface {
 	AddOperationLog(operationID, level, message string, details *string) error
-	CreateOperationChange(change interface{}) error
+	CreateOperationChange(change any) error
 	UpdateOperationProgress(id string, current, total int, message string) error
 }
 
@@ -114,9 +115,7 @@ func (l *OperationLogger) ChangeCounters() map[string]int {
 	l.shared.mu.Lock()
 	defer l.shared.mu.Unlock()
 	cp := make(map[string]int, len(l.shared.counters))
-	for k, v := range l.shared.counters {
-		cp[k] = v
-	}
+	maps.Copy(cp, l.shared.counters)
 	return cp
 }
 
