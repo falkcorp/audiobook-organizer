@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-02
 
@@ -286,8 +286,75 @@ func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookM
 // the library copy so that both DB records stay in sync. This is needed because
 // ApplyMetadataCandidate only updates the original book's DB record, leaving
 // the library copy with stale metadata.
+//
+// FIELD LOCKS. The library copy is a SEPARATE book row with its own id, so it
+// carries its OWN lock rows -- a user who edited the copy locked the copy, not
+// the original. Copying the original's columns over it wholesale is a write to
+// the copy like any other and goes through the same chokepoint. Without this,
+// a fetch that the original's locks correctly refused could still land on the
+// copy by the back door, and the two rows would then disagree about a field
+// the user had locked.
+//
+// Fails closed: an unreadable lock set skips the whole sync rather than
+// overwriting the copy blind. The copy stays stale, which the next successful
+// apply fixes; an overwritten user edit is not recoverable.
 func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) {
-	// Sync display/metadata fields — preserve library copy's file/path/version fields
+	restored, lockErr := database.ApplyRespectingLocks(mfs.db, libCopy, func(b *database.Book) {
+		mfs.copyMetadataColumns(original, b)
+	})
+	if lockErr != nil {
+		slog.Warn("not syncing metadata to the library copy: its field locks are unreadable",
+			"libCopyID", libCopy.ID, "error", lockErr)
+		return
+	}
+	lockedOnCopy := map[string]bool{}
+	for _, key := range restored {
+		lockedOnCopy[key] = true
+	}
+	if len(restored) > 0 {
+		slog.Info("library-copy sync left the copy's user-locked fields alone",
+			"libCopyID", libCopy.ID, "fields", restored)
+	}
+
+	if _, err := mfs.db.UpdateBook(libCopy.ID, libCopy); err != nil {
+		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
+	} else {
+		slog.Info("synced metadata from to library copy", "originalID", original.ID, "libCopyID", libCopy.ID)
+	}
+
+	// Author/narrator associations are the join-table spelling of the
+	// author_name / narrator columns, so the same lock governs them. Copying
+	// the original's rows over a locked copy would undo through the join table
+	// exactly what the guard above just preserved on the column.
+	if !lockedOnCopy[database.FieldKeyAuthorName] {
+		if authors, err := mfs.db.GetBookAuthors(original.ID); err == nil && len(authors) > 0 {
+			var newAuthors []database.BookAuthor
+			for _, ba := range authors {
+				newAuthors = append(newAuthors, database.BookAuthor{
+					BookID: libCopy.ID, AuthorID: ba.AuthorID, Role: ba.Role, Position: ba.Position,
+				})
+			}
+			_ = mfs.db.SetBookAuthors(libCopy.ID, newAuthors)
+		}
+	}
+
+	if !lockedOnCopy[database.FieldKeyNarrator] {
+		if narrators, err := mfs.db.GetBookNarrators(original.ID); err == nil && len(narrators) > 0 {
+			var newNarrators []database.BookNarrator
+			for _, bn := range narrators {
+				newNarrators = append(newNarrators, database.BookNarrator{
+					BookID: libCopy.ID, NarratorID: bn.NarratorID, Role: bn.Role, Position: bn.Position,
+				})
+			}
+			_ = mfs.db.SetBookNarrators(libCopy.ID, newNarrators)
+		}
+	}
+}
+
+// copyMetadataColumns is the field list syncMetadataToLibraryCopy copies. Split
+// out so the whole copy can be handed to the lock guard as one mutation.
+// Preserves the library copy's own file/path/version fields by omitting them.
+func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 	libCopy.Title = original.Title
 	libCopy.AuthorID = original.AuthorID
 	libCopy.Narrator = original.Narrator
@@ -308,34 +375,6 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 	libCopy.GoogleBooksID = original.GoogleBooksID
 	libCopy.CoverURL = original.CoverURL
 	libCopy.MetadataReviewStatus = original.MetadataReviewStatus
-
-	if _, err := mfs.db.UpdateBook(libCopy.ID, libCopy); err != nil {
-		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
-	} else {
-		slog.Info("synced metadata from to library copy", "originalID", original.ID, "libCopyID", libCopy.ID)
-	}
-
-	// Also sync author associations
-	if authors, err := mfs.db.GetBookAuthors(original.ID); err == nil && len(authors) > 0 {
-		var newAuthors []database.BookAuthor
-		for _, ba := range authors {
-			newAuthors = append(newAuthors, database.BookAuthor{
-				BookID: libCopy.ID, AuthorID: ba.AuthorID, Role: ba.Role, Position: ba.Position,
-			})
-		}
-		_ = mfs.db.SetBookAuthors(libCopy.ID, newAuthors)
-	}
-
-	// Sync narrator associations
-	if narrators, err := mfs.db.GetBookNarrators(original.ID); err == nil && len(narrators) > 0 {
-		var newNarrators []database.BookNarrator
-		for _, bn := range narrators {
-			newNarrators = append(newNarrators, database.BookNarrator{
-				BookID: libCopy.ID, NarratorID: bn.NarratorID, Role: bn.Role, Position: bn.Position,
-			})
-		}
-		_ = mfs.db.SetBookNarrators(libCopy.ID, newNarrators)
-	}
 }
 
 // ensureLibraryCopy returns a book record with files in the library folder.
