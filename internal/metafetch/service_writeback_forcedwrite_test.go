@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback_forcedwrite_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b91d2c7-3a48-4e60-9f15-8c27a04be3d1
-// last-edited: 2026-08-16
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -65,7 +65,7 @@ func TestWriteBack_SecondPassIsANoOp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := makeTestAudioFormat(t, tc.file, tc.codec)
 
-			tagMap := map[string]interface{}{
+			tagMap := map[string]any{
 				"title":        "01 - The Long Way Home",
 				"album":        "The Long Way Home",
 				"artist":       "Test Author",
@@ -108,7 +108,7 @@ func TestWriteBack_SecondPassIsANoOp(t *testing.T) {
 func TestWriteBack_ChangedValueStillWrites(t *testing.T) {
 	path := makeTestAudioFormat(t, "changed.m4a", "aac")
 
-	initial := map[string]interface{}{
+	initial := map[string]any{
 		"title":     "01 - The Long Way Home",
 		"album":     "The Long Way Home",
 		"publisher": "Podium Audio",
@@ -118,7 +118,7 @@ func TestWriteBack_ChangedValueStillWrites(t *testing.T) {
 	}, fileops.WriteTagsSafeOptions{})
 	require.NoError(t, err)
 
-	changed := map[string]interface{}{
+	changed := map[string]any{
 		"title":     "01 - The Long Way Home",
 		"album":     "The Long Way Home",
 		"publisher": "Tantor Audio", // genuinely different

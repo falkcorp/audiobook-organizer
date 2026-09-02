@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring_breakdown_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4d7f21-5e83-4c06-b1d7-3f8092ac5e14
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -178,8 +178,6 @@ func TestBreakdown_EmptyIsNotConsistent(t *testing.T) {
 // fails, the evidence panel would present a derivation of a number the pipeline
 // did not use.
 
-func intPtr(v int) *int { return &v }
-
 func assertBreakdownExplainsScore(t *testing.T, c MetadataCandidate) {
 	t.Helper()
 	if c.ScoreBreakdown == nil {
@@ -229,7 +227,7 @@ func TestSearchPath_BreakdownExplainsEveryCandidateScore(t *testing.T) {
 		},
 		{
 			name: "duration comparison, matching and diverging",
-			book: &database.Book{ID: "b3", Title: "Mistborn", Duration: intPtr(86400)},
+			book: &database.Book{ID: "b3", Title: "Mistborn", Duration: new(86400)},
 			results: []metadata.BookMetadata{
 				{Title: "Mistborn", Author: "Brandon Sanderson", DurationSec: 86000},
 				{Title: "Mistborn", Author: "Brandon Sanderson", DurationSec: 3600},

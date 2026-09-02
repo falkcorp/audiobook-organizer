@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_normalize.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: eceba49a-b99f-476f-9d43-fd6fd39a8e24
-// last-edited: 2026-05-01
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -120,7 +120,7 @@ func ParseSeriesFromTitle(s string) (series, position, title string) {
 func SignificantWords(s string) map[string]bool {
 	words := map[string]bool{}
 	var allWords []string
-	for _, w := range strings.Fields(strings.ToLower(s)) {
+	for w := range strings.FieldsSeq(strings.ToLower(s)) {
 		// Strip leading/trailing punctuation (apostrophes, commas, etc.)
 		w = strings.Trim(w, ".,;:!?\"'()")
 		if w == "" {
@@ -168,8 +168,8 @@ func normalizeSeriesNumber(pos string) string {
 	m := seriesNumRe.FindStringSubmatch(pos)
 	if len(m) >= 2 {
 		// Normalize "8.0" → "8"
-		if strings.HasSuffix(m[1], ".0") {
-			return strings.TrimSuffix(m[1], ".0")
+		if before, ok := strings.CutSuffix(m[1], ".0"); ok {
+			return before
 		}
 		return m[1]
 	}

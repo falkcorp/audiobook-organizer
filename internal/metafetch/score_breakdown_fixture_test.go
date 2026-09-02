@@ -1,7 +1,7 @@
 // file: internal/metafetch/score_breakdown_fixture_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1f8c05-42d7-4b93-8e10-9c5b3f7a2e64
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -45,7 +45,7 @@ var updateFixture = os.Getenv("UPDATE_FIXTURE") != ""
 const fixtureRelPath = "../../web/src/components/review/evidence/__fixtures__/score_breakdown.json"
 
 func TestScoreBreakdownFixture_MatchesTheShippedWireFormat(t *testing.T) {
-	book := &database.Book{ID: "fixture", Title: "Mistborn", Duration: intPtr(86400)}
+	book := &database.Book{ID: "fixture", Title: "Mistborn", Duration: new(86400)}
 	svc := NewService(&database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) { return book, nil },
 	})

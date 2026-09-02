@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,10 +29,8 @@ func IsGarbageValue(s string) bool {
 	lower := strings.ToLower(strings.TrimSpace(s))
 	garbage := []string{"unknown", "narrator", "various", "n/a", "none", "null", "undefined", "",
 		"test", "untitled", "no title", "no author", "various authors", "various artists"}
-	for _, g := range garbage {
-		if lower == g {
-			return true
-		}
+	if slices.Contains(garbage, lower) {
+		return true
 	}
 	// Reject HTML fragments or error messages that may leak from Wikipedia/API errors
 	// Use anchored checks to avoid matching legitimate titles/authors containing "error" as a substring

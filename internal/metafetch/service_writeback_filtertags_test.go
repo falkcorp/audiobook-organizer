@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback_filtertags_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1d9a04-2b6e-4f38-9d51-0a8e3b7c62f4
-// last-edited: 2026-08-15
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -39,7 +39,7 @@ func TestFilterTagsAgainst_MultiFileBookCanSkip(t *testing.T) {
 	}
 
 	// Exactly what the multi-file branch builds when nothing has changed.
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"title":  "01 - Test Book",
 		"album":  "Test Book",
 		"artist": "Test Author",
@@ -114,7 +114,7 @@ func TestFilterTagsAgainst_TrackMatching(t *testing.T) {
 				TrackNumber: tt.trackNumber,
 				TrackTotal:  tt.trackTotal,
 			}
-			filtered := filterTagsAgainst("/tmp/test.m4b", current, map[string]interface{}{"track": tt.desired})
+			filtered := filterTagsAgainst("/tmp/test.m4b", current, map[string]any{"track": tt.desired})
 
 			if tt.wantWritten {
 				assert.Contains(t, filtered, "track", tt.why)
@@ -210,7 +210,7 @@ func TestFilterTagsAgainst_ChangedValuesStillWritten(t *testing.T) {
 		TrackTotal:  12,
 	}
 
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		"title":  "01 - New Title",
 		"album":  "New Album",
 		"artist": "Old Author", // unchanged — must be dropped
@@ -219,7 +219,7 @@ func TestFilterTagsAgainst_ChangedValuesStillWritten(t *testing.T) {
 
 	filtered := filterTagsAgainst("/tmp/test.m4b", current, tagMap)
 
-	assert.Equal(t, map[string]interface{}{
+	assert.Equal(t, map[string]any{
 		"title": "01 - New Title",
 		"album": "New Album",
 	}, filtered, "only genuinely changed fields may survive the filter")
