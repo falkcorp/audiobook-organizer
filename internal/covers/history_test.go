@@ -1,13 +1,14 @@
 // file: internal/covers/history_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f6a7b8c9-0123-def0-1234-56789abcdef0
-// last-edited: 2026-05-11
+// last-edited: 2026-09-02
 
 package covers
 
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -180,10 +181,5 @@ func TestRestoreCoverFileNotFound(t *testing.T) {
 
 // Helper function
 func contains(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, target)
 }
