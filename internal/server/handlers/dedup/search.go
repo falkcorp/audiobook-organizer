@@ -28,8 +28,13 @@ import (
 // The TypeScript Book interface declares author_name?: string and OTHER
 // endpoints do populate it (the audiobooks service, and enrichedBookResponse in
 // server.go), but this one returns the bare database.Book from GetBookByID,
-// which populates neither author_name nor the joined `author` object. The optional `?` meant that read produced undefined,
-// `?? ”` swallowed it, and author search silently matched nothing. So this
+// which populates neither author_name nor the joined `author` object. The
+// optional `?` meant that read produced undefined, the nullish-coalescing
+// fallback replaced it with a blank, and author search silently matched
+// nothing. (Written without a literal empty-string pair on purpose: gofmt's
+// doc-comment formatter rewrites two straight quotes into a typographic one,
+// which is how a stray non-ASCII byte got into this comment the first time.)
+// So this
 // resolver implements what the UI intended -- title, author, path -- rather
 // than replicating a haystack with two dead entries.
 //
