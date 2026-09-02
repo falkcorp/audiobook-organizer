@@ -29,7 +29,7 @@ import (
 // endpoints do populate it (the audiobooks service, and enrichedBookResponse in
 // server.go), but this one returns the bare database.Book from GetBookByID,
 // which populates neither author_name nor the joined `author` object. The optional `?` meant that read produced undefined,
-// `?? ''` swallowed it, and author search silently matched nothing. So this
+// `?? ”` swallowed it, and author search silently matched nothing. So this
 // resolver implements what the UI intended -- title, author, path -- rather
 // than replicating a haystack with two dead entries.
 //
