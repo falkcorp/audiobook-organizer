@@ -341,7 +341,7 @@ func (c *OpenLibraryClient) GetBookByISBN(ctx context.Context, isbn string) (*Bo
 	}
 
 	// Parse response
-	var book map[string]interface{}
+	var book map[string]any
 	if err := json.UnmarshalRead(resp.Body, &book); err != nil {
 		return nil, fmt.Errorf("failed to decode book response: %w", err)
 	}
@@ -364,14 +364,14 @@ func (c *OpenLibraryClient) GetBookByISBN(ctx context.Context, isbn string) (*Bo
 		}
 	}
 
-	if publishers, ok := book["publishers"].([]interface{}); ok && len(publishers) > 0 {
+	if publishers, ok := book["publishers"].([]any); ok && len(publishers) > 0 {
 		if pub, ok := publishers[0].(string); ok {
 			metadata.Publisher = pub
 		}
 	}
 
 	// Get cover URL if available
-	if covers, ok := book["covers"].([]interface{}); ok && len(covers) > 0 {
+	if covers, ok := book["covers"].([]any); ok && len(covers) > 0 {
 		if coverID, ok := covers[0].(float64); ok {
 			metadata.CoverURL = fmt.Sprintf("https://covers.openlibrary.org/b/id/%d-L.jpg", int(coverID))
 		}

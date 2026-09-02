@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -306,10 +307,8 @@ func tryParseAuthorSegment(seg string, fm *FolderMetadata) bool {
 	// Skip segments that look like file listing noise.
 	lower := strings.ToLower(seg)
 	noiseWords := []string{"audiobooks", "audio books", "books", "library", "collection", "ebooks"}
-	for _, nw := range noiseWords {
-		if lower == nw {
-			return false
-		}
+	if slices.Contains(noiseWords, lower) {
+		return false
 	}
 
 	// If segment contains " - ", the first part is likely the author in "Author - Title" patterns.
@@ -419,8 +418,8 @@ func splitMultipleAuthors(s string) []string {
 	})
 	// Split on " & " first, then " and " (case-insensitive), then ";".
 	var parts []string
-	for _, chunk := range strings.Split(s, " & ") {
-		for _, sub := range strings.Split(chunk, ";") {
+	for chunk := range strings.SplitSeq(s, " & ") {
+		for sub := range strings.SplitSeq(chunk, ";") {
 			sub = strings.ReplaceAll(sub, sentinel, ";")
 			trimmed := strings.TrimSpace(sub)
 			if trimmed != "" {

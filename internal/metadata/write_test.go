@@ -28,7 +28,7 @@ func createFakeTool(t *testing.T, dir, name string) {
 func TestWriteMetadataToFile_UnsupportedFormat(t *testing.T) {
 	// Arrange
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":  "Test Book",
 		"artist": "Test Author",
 	}
@@ -56,7 +56,7 @@ func TestWriteM4BMetadata_ToolNotFound(t *testing.T) {
 
 	// Arrange
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":  "Test Book",
 		"artist": "Test Author",
 	}
@@ -81,7 +81,7 @@ func TestWriteMP3Metadata_ToolNotFound(t *testing.T) {
 
 	// Arrange
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":  "Test Book",
 		"artist": "Test Author",
 	}
@@ -106,7 +106,7 @@ func TestWriteFLACMetadata_ToolNotFound(t *testing.T) {
 
 	// Arrange
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":  "Test Book",
 		"artist": "Test Author",
 	}
@@ -135,7 +135,7 @@ func TestWriteMP3Metadata_FakeToolSuccess(t *testing.T) {
 	}
 
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":    "Test Book",
 		"artist":   "Test Author",
 		"album":    "Test Album",
@@ -164,7 +164,7 @@ func TestWriteFLACMetadata_FakeToolSuccess(t *testing.T) {
 	}
 
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":    "Test Book",
 		"artist":   "Test Author",
 		"album":    "Test Album",
@@ -205,7 +205,7 @@ func TestWriteMetadata_IntegrationM4B(t *testing.T) {
 	// Arrange
 	config := fileops.DefaultConfig()
 	config.PreserveOriginal = true // Keep backup for verification
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title":    "Test Audiobook",
 		"artist":   "Test Author",
 		"album":    "Test Album",
@@ -260,7 +260,7 @@ func TestWriteMetadata_BackupRestore(t *testing.T) {
 
 	// Arrange - use invalid metadata to trigger failure
 	config := fileops.DefaultConfig()
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"title": "Test", // AtomicParsley will fail on non-M4B file
 	}
 

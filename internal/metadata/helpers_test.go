@@ -544,7 +544,7 @@ func TestExtractFromFilename_WithDirectory(t *testing.T) {
 func TestNormalizeRawTagValue(t *testing.T) {
 	tests := []struct {
 		name     string
-		value    interface{}
+		value    any
 		expected string
 	}{
 		{
@@ -675,7 +675,7 @@ func TestGetRawString_NilMap(t *testing.T) {
 }
 
 func TestGetRawString_CaseInsensitiveComm(t *testing.T) {
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		"COMM": &tag.Comm{Description: "narrator", Text: "Test Narrator"},
 	}
 
@@ -686,7 +686,7 @@ func TestGetRawString_CaseInsensitiveComm(t *testing.T) {
 }
 
 func TestGetRawString_CommValueType(t *testing.T) {
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		"COMM": tag.Comm{Description: "narrator", Text: "Test Narrator"},
 	}
 

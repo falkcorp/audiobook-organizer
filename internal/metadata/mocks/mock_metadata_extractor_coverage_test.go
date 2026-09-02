@@ -1,3 +1,8 @@
+// file: internal/metadata/mocks/mock_metadata_extractor_coverage_test.go
+// version: 1.1.0
+// guid: a1370ec4-a370-4039-b5d3-738ac582e206
+// last-edited: 2026-09-02
+
 package mocks
 
 import (
@@ -11,14 +16,13 @@ import (
 func TestMockMetadataExtractor_Coverage(t *testing.T) {
 	m := NewMockMetadataExtractor(t)
 	exp := m.EXPECT()
-	ifaceType := reflect.TypeOf((*metadata.MetadataExtractor)(nil)).Elem()
+	ifaceType := reflect.TypeFor[metadata.MetadataExtractor]()
 
-	for i := 0; i < ifaceType.NumMethod(); i++ {
-		method := ifaceType.Method(i)
+	for method := range ifaceType.Methods() {
 		name := method.Name
 
 		matcherArgs := make([]reflect.Value, 0, method.Type.NumIn())
-		for j := 0; j < method.Type.NumIn(); j++ {
+		for range method.Type.Ins() {
 			matcherArgs = append(matcherArgs, reflect.ValueOf(mock.Anything))
 		}
 
@@ -44,8 +48,8 @@ func TestMockMetadataExtractor_Coverage(t *testing.T) {
 			t.Fatalf("EXPECT().%s missing Return(...)", name)
 		}
 		returnArgs := make([]reflect.Value, 0, method.Type.NumOut())
-		for j := 0; j < method.Type.NumOut(); j++ {
-			returnArgs = append(returnArgs, reflect.Zero(method.Type.Out(j)))
+		for out := range method.Type.Outs() {
+			returnArgs = append(returnArgs, reflect.Zero(out))
 		}
 		returnMethod.Call(returnArgs)
 
@@ -54,8 +58,8 @@ func TestMockMetadataExtractor_Coverage(t *testing.T) {
 			t.Fatalf("MockMetadataExtractor missing method %s", name)
 		}
 		callArgs := make([]reflect.Value, 0, method.Type.NumIn())
-		for j := 0; j < method.Type.NumIn(); j++ {
-			callArgs = append(callArgs, reflect.Zero(method.Type.In(j)))
+		for in := range method.Type.Ins() {
+			callArgs = append(callArgs, reflect.Zero(in))
 		}
 		_ = methodVal.Call(callArgs)
 	}

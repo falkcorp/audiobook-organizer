@@ -20,9 +20,9 @@ import (
 // requests and timing them proves the pacing happens.
 
 func TestThrottled_PacesRequests(t *testing.T) {
-	var hits int32
+	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
+		hits.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -35,7 +35,7 @@ func TestThrottled_PacesRequests(t *testing.T) {
 	}}
 
 	start := time.Now()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		resp, err := c.Get(srv.URL)
 		if err != nil {
 			t.Fatalf("request %d: %v", i, err)
@@ -44,7 +44,7 @@ func TestThrottled_PacesRequests(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	if got := atomic.LoadInt32(&hits); got != 3 {
+	if got := hits.Load(); got != 3 {
 		t.Fatalf("server saw %d requests, want 3", got)
 	}
 	// Burst 1 covers the first; the next two each wait ~100ms.
@@ -54,9 +54,9 @@ func TestThrottled_PacesRequests(t *testing.T) {
 }
 
 func TestThrottled_RetriesOn429AndHonorsRetryAfter(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&attempts, 1) == 1 {
+		if attempts.Add(1) == 1 {
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte("slow down"))
@@ -84,7 +84,7 @@ func TestThrottled_RetriesOn429AndHonorsRetryAfter(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("final status = %d, want 200 (the retry should have succeeded)", resp.StatusCode)
 	}
-	if got := atomic.LoadInt32(&attempts); got != 2 {
+	if got := attempts.Load(); got != 2 {
 		t.Fatalf("server saw %d attempts, want 2 (one 429 + one retry)", got)
 	}
 	if elapsed < 900*time.Millisecond {
@@ -93,9 +93,9 @@ func TestThrottled_RetriesOn429AndHonorsRetryAfter(t *testing.T) {
 }
 
 func TestThrottled_GivesUpAfterMaxRetries(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&attempts, 1)
+		attempts.Add(1)
 		w.Header().Set("Retry-After", "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
@@ -115,7 +115,7 @@ func TestThrottled_GivesUpAfterMaxRetries(t *testing.T) {
 	defer resp.Body.Close()
 
 	// maxRetries=2 means the initial attempt plus 2 retries.
-	if got := atomic.LoadInt32(&attempts); got != 3 {
+	if got := attempts.Load(); got != 3 {
 		t.Fatalf("server saw %d attempts, want 3 (initial + 2 retries)", got)
 	}
 	if resp.StatusCode != http.StatusTooManyRequests {

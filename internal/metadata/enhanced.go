@@ -56,9 +56,9 @@ func (inertMetadataReporter) SetCurrentItem(label string) {}
 
 // MetadataUpdate represents a metadata update operation
 type MetadataUpdate struct {
-	BookID   string                 `json:"book_id" binding:"required"`
-	Updates  map[string]interface{} `json:"updates" binding:"required"`
-	Validate bool                   `json:"validate"`
+	BookID   string         `json:"book_id" binding:"required"`
+	Updates  map[string]any `json:"updates" binding:"required"`
+	Validate bool           `json:"validate"`
 }
 
 // ValidationRule defines a validation constraint
@@ -68,7 +68,7 @@ type ValidationRule struct {
 	MinLength       int
 	MaxLength       int
 	AllowedValues   []string
-	CustomValidator func(interface{}) error
+	CustomValidator func(any) error
 }
 
 // ErrTaglibUnavailable is returned when native taglib writing is not compiled in.
@@ -109,7 +109,7 @@ func DefaultValidationRules() map[string]ValidationRule {
 		"publishDate": {
 			Field:    "publishDate",
 			Required: false,
-			CustomValidator: func(v interface{}) error {
+			CustomValidator: func(v any) error {
 				str, ok := v.(string)
 				if !ok {
 					return fmt.Errorf("publishDate must be a string")
@@ -126,7 +126,7 @@ func DefaultValidationRules() map[string]ValidationRule {
 }
 
 // ValidateMetadata validates metadata updates against rules
-func ValidateMetadata(updates map[string]interface{}, rules map[string]ValidationRule) []error {
+func ValidateMetadata(updates map[string]any, rules map[string]ValidationRule) []error {
 	var errors []error
 
 	for field, value := range updates {
@@ -356,7 +356,7 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 //
 // Do NOT call this on a live library file — it has no atomic-rename safety net.
 // Use WriteMetadataToFile for that.
-func WriteMetadataToFileInPlace(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+func WriteMetadataToFileInPlace(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	if taglibAvailable {
 		if err := writeMetadataWithTaglibInPlace(filePath, metadata, config); err == nil {
 			return nil
@@ -367,7 +367,7 @@ func WriteMetadataToFileInPlace(filePath string, metadata map[string]interface{}
 	return writeMetadataViaCLI(filePath, metadata, config)
 }
 
-func WriteMetadataToFile(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+func WriteMetadataToFile(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	// Attempt native writer first if compiled in.
 	// Upstream taglib v0.11.1+ writes custom freeform atoms natively for MP4.
 	// Do NOT run ffmpeg after taglib — ffmpeg's -map_metadata strips freeform atoms.
@@ -384,7 +384,7 @@ func WriteMetadataToFile(filePath string, metadata map[string]interface{}, confi
 // writeMetadataViaCLI dispatches to the per-container ffmpeg/CLI writers. Shared
 // by WriteMetadataToFile and WriteMetadataToFileInPlace so the format dispatch
 // exists once.
-func writeMetadataViaCLI(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+func writeMetadataViaCLI(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	switch strings.ToLower(filepath.Ext(filePath)) {
 	case ".m4b", ".m4a":
 		return writeM4BMetadata(filePath, metadata, config)
@@ -399,14 +399,14 @@ func writeMetadataViaCLI(filePath string, metadata map[string]interface{}, confi
 
 // WriteM4BCustomTags writes custom tags to M4B/M4A files using ffmpeg.
 // Exported so it can be called separately from the main write path.
-func WriteM4BCustomTags(filePath string, metadata map[string]interface{}) error {
+func WriteM4BCustomTags(filePath string, metadata map[string]any) error {
 	return writeM4BCustomTagsWithFFmpeg(filePath, metadata)
 }
 
 // writeM4BCustomTagsWithFFmpeg writes custom/freeform tags to M4B files using ffmpeg.
 // TagLib handles standard MP4 atoms but silently drops custom tags.
 // ffmpeg can write arbitrary metadata including custom fields.
-func writeM4BCustomTagsWithFFmpeg(filePath string, metadata map[string]interface{}) error {
+func writeM4BCustomTagsWithFFmpeg(filePath string, metadata map[string]any) error {
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return fmt.Errorf("ffmpeg not found: %w", err)
@@ -487,18 +487,11 @@ func writeM4BCustomTagsWithFFmpeg(filePath string, metadata map[string]interface
 	return nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // writeM4BMetadata writes metadata to M4B/M4A files using AtomicParsley.
 // This is the CLI fallback path; the native taglib writer is preferred and
 // handles all fields. AtomicParsley supports standard MP4 atoms and custom
 // reverse-DNS atoms (--rDNSatom) for extended metadata.
-func writeM4BMetadata(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+func writeM4BMetadata(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	// Check if AtomicParsley is available
 	if _, err := exec.LookPath("AtomicParsley"); err != nil {
 		return fmt.Errorf("AtomicParsley not found in PATH (install: brew install atomicparsley): %w", err)
@@ -606,7 +599,7 @@ func writeM4BMetadata(filePath string, metadata map[string]interface{}, config f
 }
 
 // writeMP3Metadata writes metadata to MP3 files using eyeD3
-func writeMP3Metadata(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+func writeMP3Metadata(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	// Check if eyeD3 is available
 	if _, err := exec.LookPath("eyeD3"); err != nil {
 		return fmt.Errorf("eyeD3 not found in PATH (install: pip install eyeD3): %w", err)
@@ -675,7 +668,7 @@ func writeMP3Metadata(filePath string, metadata map[string]interface{}, config f
 }
 
 // writeFLACMetadata writes metadata to FLAC files using metaflac
-func writeFLACMetadata(filePath string, metadata map[string]interface{}, config fileops.OperationConfig) error {
+func writeFLACMetadata(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
 	// Check if metaflac is available
 	if _, err := exec.LookPath("metaflac"); err != nil {
 		return fmt.Errorf("metaflac not found in PATH (install: brew install flac): %w", err)
@@ -789,12 +782,12 @@ func jsonEncodeIDPtr(id *int) string {
 }
 
 // ExportMetadata exports book metadata to a structured format
-func ExportMetadata(books []database.BookCore) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
+func ExportMetadata(books []database.BookCore) (map[string]any, error) {
+	result := make(map[string]any)
 
-	bookData := make([]map[string]interface{}, 0, len(books))
+	bookData := make([]map[string]any, 0, len(books))
 	for _, book := range books {
-		bookData = append(bookData, map[string]interface{}{
+		bookData = append(bookData, map[string]any{
 			"id":              book.ID,
 			"title":           book.Title,
 			"author_id":       book.AuthorID,
@@ -835,8 +828,8 @@ type importMetadataStore interface {
 // via memSync, which serializes on hashicorp/go-memdb's Txn(true) exclusive
 // writer lock — concurrent CreateBook calls cannot race or corrupt state at
 // this concurrency.
-func ImportMetadata(data map[string]interface{}, store importMetadataStore, validate bool) (int, []error) {
-	booksData, ok := data["books"].([]interface{})
+func ImportMetadata(data map[string]any, store importMetadataStore, validate bool) (int, []error) {
+	booksData, ok := data["books"].([]any)
 	if !ok {
 		return 0, []error{fmt.Errorf("invalid data format: books field missing or invalid")}
 	}
@@ -855,7 +848,7 @@ func ImportMetadata(data map[string]interface{}, store importMetadataStore, vali
 	}
 
 	_ = registry.RunItems(context.Background(), inertMetadataReporter{}, indices, func(_ context.Context, i int) error {
-		bookData, ok := booksData[i].(map[string]interface{})
+		bookData, ok := booksData[i].(map[string]any)
 		if !ok {
 			mu.Lock()
 			errs = append(errs, fmt.Errorf("book %d: invalid book data format", i))
@@ -904,14 +897,14 @@ func ImportMetadata(data map[string]interface{}, store importMetadataStore, vali
 }
 
 // Helper functions for type-safe field extraction
-func getStringField(data map[string]interface{}, field string) string {
+func getStringField(data map[string]any, field string) string {
 	if val, ok := data[field].(string); ok {
 		return val
 	}
 	return ""
 }
 
-func getIntField(data map[string]interface{}, field string) int {
+func getIntField(data map[string]any, field string) int {
 	if val, ok := data[field].(float64); ok {
 		return int(val)
 	}
@@ -921,7 +914,7 @@ func getIntField(data map[string]interface{}, field string) int {
 	return 0
 }
 
-func getIntPtrField(data map[string]interface{}, field string) *int {
+func getIntPtrField(data map[string]any, field string) *int {
 	if val, ok := data[field].(float64); ok {
 		intVal := int(val)
 		return &intVal
