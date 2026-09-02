@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator_prop_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: bcc094f5-1645-44d3-be21-3087888fdaea
 
 // Property-based tests for the smart-playlist evaluator.
@@ -15,6 +15,7 @@
 // PerUserFilterIsolation is the exception — it asserts len(aliceGot)==n for
 // THIS iteration's books only, which breaks when alice state from prior
 // iterations lingers. That test uses per-iteration fixtures with rt.Cleanup.
+// last-edited: 2026-09-02
 
 package playlist
 
@@ -53,7 +54,7 @@ func openPropFixture(t *testing.T) (*database.PebbleStore, *search.BleveIndex) {
 func seedBooks(rt *rapid.T, store *database.PebbleStore, idx *search.BleveIndex, n int) []string {
 	ids := make([]string, 0, n)
 	docs := make([]search.BookDocument, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		b := rapidgen.Book(rt)
 		created, err := store.CreateBook(b)
 		if err != nil {
