@@ -1,7 +1,7 @@
 // file: internal/plugin/registry.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 73ed97c1-8466-4a1b-bc07-cb81ce34c502
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package plugin
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -94,11 +95,8 @@ func (r *Registry) ByCapability(cap Capability) []Plugin {
 		if !r.enabled[id] {
 			continue
 		}
-		for _, c := range p.Capabilities() {
-			if c == cap {
-				out = append(out, p)
-				break
-			}
+		if slices.Contains(p.Capabilities(), cap) {
+			out = append(out, p)
 		}
 	}
 	return out
@@ -148,8 +146,8 @@ func (r *Registry) ShutdownAll(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for i := len(r.initOrder) - 1; i >= 0; i-- {
-		id := r.initOrder[i]
+	for _, id := range slices.Backward(r.initOrder) {
+
 		if p, ok := r.plugins[id]; ok {
 			if err := p.Shutdown(ctx); err != nil {
 				slog.Warn("plugin shutdown error", "id", id, "err", err)
