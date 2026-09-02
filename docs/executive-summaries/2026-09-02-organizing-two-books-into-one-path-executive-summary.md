@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-02-organizing-two-books-into-one-path-executive-summary.md -->
-<!-- version: 3.1.0 -->
+<!-- version: 3.2.0 -->
 <!-- guid: 6d2f8b41-3a9e-4c57-b8e1-9f0c2d7a5e63 -->
 <!-- last-edited: 2026-09-02 -->
 
 # Organizing two books into one path
 
-**Pull requests:** [#3046](https://github.com/falkcorp/audiobook-organizer/pull/3046), and the follow-on that closes the four callers named in its review.
+**Pull requests:** [#3046](https://github.com/falkcorp/audiobook-organizer/pull/3046) and [#3059](https://github.com/falkcorp/audiobook-organizer/pull/3059), the follow-on that closes the four callers named in its review.
 
 ## Executive Summary
 
@@ -83,7 +83,7 @@ them damaging each other's files, it does not merge them. That is the dedup lane
 On filesystems that do not support hard links (some network shares, exFAT), the move
 falls back to the old rename with its tiny race window and says so in the log.
 
-Also not covered by the follow-on: the records this defect already wrote. Every fix above
+Also not covered by [#3059](https://github.com/falkcorp/audiobook-organizer/pull/3059): the records this defect already wrote. Every fix above
 stops new books from being organized into a mismatched state; none of them goes looking
 for books organized wrongly in the past. Finding those needs a separate pass that compares
 each book's file records against what is actually on disk, and none has been run.
