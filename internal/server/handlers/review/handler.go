@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-09-02
 
@@ -60,6 +60,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -102,6 +103,12 @@ type Handler struct {
 	// treated as disabled (fail-safe: never auto-apply unless explicitly turned on).
 	applyEnabled func() bool
 
+	// applyCap returns the configured bulk apply ceiling (config
+	// bulk_apply_max_items) for the fail-safe in internal/applycap. Injected like
+	// applyEnabled so this package stays decoupled from the global config. A nil
+	// func or a value ≤0 yields applycap.Default — never unlimited.
+	applyCap func() int
+
 	// applyHandlers maps a CHOSEN ACTION (an itunesservice.Action* string) to the
 	// code that carries it out. Empty in A1; populated by producers (e.g. B2's
 	// regroup) via RegisterApplyHandler. Guarded by mu because registration may
@@ -116,13 +123,36 @@ type Handler struct {
 
 // New constructs a review Handler. applyEnabled is the global apply gate (see the
 // field doc); pass nil to keep the queue review-only (apply handlers registered but
-// never executed).
-func New(store database.ReviewStore, applyEnabled func() bool) *Handler {
+// never executed). applyCap supplies the bulk apply ceiling; nil means
+// applycap.Default.
+func New(store database.ReviewStore, applyEnabled func() bool, applyCap func() int) *Handler {
 	return &Handler{
 		store:         store,
 		applyEnabled:  applyEnabled,
+		applyCap:      applyCap,
 		applyHandlers: make(map[string]ApplyFunc),
 	}
+}
+
+// configuredApplyCap returns the raw configured ceiling (0 when no gate was
+// injected); applycap.Effective turns that into the enforced value.
+func (h *Handler) configuredApplyCap() int {
+	if h.applyCap == nil {
+		return 0
+	}
+	return h.applyCap()
+}
+
+// refuseIfOverCap answers with 422 BULK_APPLY_CAP_EXCEEDED and returns true when
+// a bulk action targeting n items exceeds the fail-safe cap. Nothing has been
+// written when it fires — callers check BEFORE the first store mutation.
+func (h *Handler) refuseIfOverCap(c *gin.Context, op string, n int) bool {
+	ex := applycap.Refuse(op, n, h.configuredApplyCap())
+	if ex == nil {
+		return false
+	}
+	httputil.RespondWithApplyCapExceeded(c, ex)
+	return true
 }
 
 // applyGloballyEnabled reports whether the apply "big switch" is on. A nil gate is
@@ -550,6 +580,15 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 		for _, it := range items {
 			ids = append(ids, it.ID)
 		}
+	}
+
+	// Fail-safe cap (internal/applycap) on the MATERIALIZED target list — a
+	// kind-scoped request resolves to "every pending hold of that kind", which
+	// is exactly the "whole list" shape the cap exists to refuse. Both actions
+	// are capped: an accidental bulk reject of a whole queue is as much a
+	// cleanup as an accidental bulk approve.
+	if h.refuseIfOverCap(c, "review/bulk "+req.Action, len(ids)) {
+		return
 	}
 
 	result := bulkResult{Action: req.Action}

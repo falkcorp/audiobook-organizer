@@ -69,7 +69,7 @@ type counters struct {
 // real actions, mirroring wire_handlers.go.
 func newActionHandler(s *database.PebbleStore, applyOn bool) (*reviewhandler.Handler, *counters) {
 	c := &counters{}
-	h := reviewhandler.New(s, func() bool { return applyOn })
+	h := reviewhandler.New(s, func() bool { return applyOn }, nil)
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		c.combine++
 		return nil
@@ -268,7 +268,7 @@ func TestApprove_DuplicateOf_DispatchesToApplyHandler(t *testing.T) {
 func TestApprove_DuplicateOf_NoHandlerDoesNotMarkApplied(t *testing.T) {
 	s := newTestStore(t)
 	it := seedAction(t, s, "regroup.ambiguous", "a2", itunesservice.ActionCombine)
-	h := reviewhandler.New(s, func() bool { return true }) // no handlers registered at all
+	h := reviewhandler.New(s, func() bool { return true }, nil) // no handlers registered at all
 
 	approveBody(t, h, it.ID, itunesservice.ActionDuplicateOf)
 

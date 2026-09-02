@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -26,6 +26,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -88,6 +90,12 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 	}
 	if limit <= 0 {
 		limit = 200
+	}
+	// Fail-safe cap (internal/applycap): `limit` bounds how many books this run
+	// may re-fetch AND apply. Callers pass 200 today; a caller asking for more
+	// than the cap is refused up front rather than applying the first cap-many.
+	if err := applycap.Check("metadata.upgrade", limit, config.AppConfig.BulkApplyMaxItems); err != nil {
+		return nil, err
 	}
 
 	result := &UpgradeResult{}

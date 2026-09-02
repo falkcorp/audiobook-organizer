@@ -1,7 +1,7 @@
 // file: internal/httputil/respond.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-14
+// last-edited: 2026-09-02
 
 // Package httputil provides shared HTTP response helpers for all packages
 // that handle gin HTTP requests (server, middleware, itunes/service, etc).
@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 )
 
@@ -52,6 +53,15 @@ func RespondWithNotFound(c *gin.Context, resourceType string, id string) {
 // RespondWithInternalError sends a 500 Internal Server Error response.
 func RespondWithInternalError(c *gin.Context, message string) {
 	RespondWithError(c, http.StatusInternalServerError, message, "INTERNAL_ERROR")
+}
+
+// RespondWithApplyCapExceeded answers a bulk apply that was refused by the
+// fail-safe cap (internal/applycap). 422 rather than 400: the body was
+// well-formed, the server declined to carry it out. The code is stable so the
+// UI can recognise the refusal and say "raise bulk_apply_max_items" instead of
+// showing a generic failure. Nothing has been written when this is sent.
+func RespondWithApplyCapExceeded(c *gin.Context, err *applycap.ExceededError) {
+	RespondWithError(c, http.StatusUnprocessableEntity, err.Error(), "BULK_APPLY_CAP_EXCEEDED")
 }
 
 // RespondWithConflict sends a 409 Conflict error response.

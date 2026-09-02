@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-02
 
@@ -18,6 +18,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -459,6 +461,14 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	}
 
 	shouldWriteBack := body.WriteBack == nil || *body.WriteBack
+
+	// Fail-safe cap (internal/applycap): refuse before enqueueing so the caller
+	// gets a 422 now instead of an op that fails a moment later. The op's Run
+	// re-checks, because it can be reached without this handler.
+	if ex := applycap.Refuse("batch-apply-cached", len(body.BookIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
+		return
+	}
 
 	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", map[string]any{
 		"book_ids":   body.BookIDs,

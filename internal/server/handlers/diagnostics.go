@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-09-02
 
@@ -23,6 +23,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
@@ -447,6 +448,13 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+
+	// Fail-safe cap (internal/applycap): approved suggestions become merges and
+	// deletes — refuse an implausibly large approval set before touching any.
+	if ex := applycap.Refuse("diagnostics/apply-suggestions", len(req.ApprovedSuggestionIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
 

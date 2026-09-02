@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -109,6 +111,14 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 
 	var scanned, eligible, applied int
 
+	// Fail-safe cap (internal/applycap). This op walks the WHOLE library and
+	// decides per book, so its target set is unknowable up front — a running
+	// counter is the only place the cap can live. The (cap+1)th apply aborts
+	// the op with an error (RunItems' default ErrModeFail cancels the rest);
+	// everything admitted before it stays applied, and the checkpoint lets a
+	// deliberate re-dispatch continue from there under a fresh cap.
+	capCounter := applycap.NewCounter("maintenance.auto-match-transcribed", config.AppConfig.BulkApplyMaxItems)
+
 	// lastID tracks the most-recently visited book for checkpoint writes.
 	lastID := params.LastBookID
 
@@ -181,6 +191,11 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			return nil // no mutation in dry-run
 		}
 
+		if capErr := capCounter.Admit(); capErr != nil {
+			log.Error("auto-match-transcribed: bulk apply cap reached, stopping",
+				"applied", applied, "cap", capCounter.Cap(), "next_book_id", id)
+			return capErr
+		}
 		if applyErr := p.deps.ApplyTranscriptionCandidate(ctx, id, candTitle, candAuthor); applyErr != nil {
 			log.Warn("auto-match-transcribed: apply failed",
 				"book_id", id, "candidate", candTitle, "err", applyErr)

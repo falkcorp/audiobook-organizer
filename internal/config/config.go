@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.98.1
+// version: 1.99.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-02
 
@@ -935,6 +935,14 @@ type Config struct {
 	// handlers, not just regroup.
 	ReviewApplyEnabled bool `json:"review_apply_enabled"`
 
+	// BulkApplyMaxItems is the fail-safe ceiling on how many books ONE bulk apply
+	// (metadata review apply, review-queue bulk approve/replay, auto-match,
+	// batch update, reconcile apply, diagnostics suggestions) may touch. Exceeding
+	// it is a refusal with zero writes, never a truncation. Zero or negative means
+	// "unset" and falls back to applycap.Default (5,000) — it can never mean
+	// unlimited. See internal/applycap.
+	BulkApplyMaxItems int `json:"bulk_apply_max_items"`
+
 	// Basic HTTP auth (lightweight single-user alternative)
 	BasicAuthEnabled  bool   `json:"basic_auth_enabled"`
 	BasicAuthUsername string `json:"basic_auth_username"`
@@ -1525,6 +1533,8 @@ func InitConfig() {
 	viper.SetDefault("upload_body_limit_mb", 10)
 	viper.SetDefault("enable_auth", true)
 	viper.SetDefault("enable_rate_limit", true)
+	// Fail-safe ceiling for one bulk apply; see Config.BulkApplyMaxItems.
+	viper.SetDefault("bulk_apply_max_items", 5000)
 	viper.SetDefault("basic_auth_enabled", false)
 	viper.SetDefault("basic_auth_username", "")
 	viper.SetDefault("basic_auth_password", "")
@@ -1974,6 +1984,7 @@ func InitConfig() {
 			EnableAuth:                       viper.GetBool("enable_auth"),
 			EnableRateLimit:                  viper.GetBool("enable_rate_limit"),
 			ReviewApplyEnabled:               viper.GetBool("review_apply_enabled"),
+			BulkApplyMaxItems:                viper.GetInt("bulk_apply_max_items"),
 			BasicAuthEnabled:                 viper.GetBool("basic_auth_enabled"),
 			BasicAuthUsername:                viper.GetString("basic_auth_username"),
 			BasicAuthPassword:                viper.GetString("basic_auth_password"),
@@ -2658,6 +2669,7 @@ func ResetToDefaults() {
 			EnableAuth:                       true,
 			EnableRateLimit:                  true,
 			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled
+			BulkApplyMaxItems:                5000,
 			BasicAuthEnabled:                 false,
 			BasicAuthUsername:                "",
 			BasicAuthPassword:                "",

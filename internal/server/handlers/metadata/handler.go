@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-02
 
@@ -58,6 +58,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -274,6 +275,14 @@ func (h *Handler) batchUpdateMetadataImpl(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+
+	// Fail-safe cap (internal/applycap). This path writes straight through
+	// store.UpdateBook with no candidate gating, so it is the cheapest way to
+	// rewrite the whole library by mistake. Refusal, not truncation.
+	if ex := applycap.Refuse("metadata/batch-update", len(req.Updates), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
 

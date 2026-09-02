@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/replay.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d807d92-72d8-4df6-9da1-80123d2bf6b4
-// last-edited: 2026-08-06
+// last-edited: 2026-09-02
 
 package reviewhandler
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -136,6 +137,7 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 			"would_replay":   len(replayable),
 			"skipped":        noHandler,
 			"apply_enabled":  h.applyGloballyEnabled(),
+			"apply_cap":      applycap.Effective(h.configuredApplyCap()),
 			"note":           "dry run — nothing applied. Pass {\"apply\": true} to execute.",
 		})
 		return
@@ -147,6 +149,13 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 	if !h.applyGloballyEnabled() {
 		httputil.RespondWithError(c, http.StatusConflict, "REVIEW_APPLY_DISABLED",
 			"review apply is globally disabled; enable review_apply_enabled before replaying approved items")
+		return
+	}
+
+	// Fail-safe cap (internal/applycap): the dry run above reports the cap so an
+	// operator can pass a `limit` under it; an over-cap live replay is refused
+	// before the first apply handler runs.
+	if h.refuseIfOverCap(c, "review/replay-approved", len(replayable)) {
 		return
 	}
 

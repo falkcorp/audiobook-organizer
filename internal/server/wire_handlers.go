@@ -628,7 +628,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// records the decision but never executes its apply handler — everything stays
 	// visible in the review pane. Read at approve time so a config change takes effect
 	// without re-wiring.
-	reviewH := reviewhandler.New(s.storeForWiring(), func() bool { return config.AppConfig.ReviewApplyEnabled })
+	reviewH := reviewhandler.New(s.storeForWiring(),
+		func() bool { return config.AppConfig.ReviewApplyEnabled },
+		func() int { return config.AppConfig.BulkApplyMaxItems })
 
 	// Register the regroup APPLY handlers (PR-B2) so approving a hold in the review
 	// UI performs the real action.

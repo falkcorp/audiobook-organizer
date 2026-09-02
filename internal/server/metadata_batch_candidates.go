@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.0.1
+// version: 4.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-02
 //
@@ -20,6 +20,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -484,6 +486,12 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	}
 	if len(req.BookIDs) == 0 {
 		httputil.RespondWithBadRequest(c, "book_ids must not be empty")
+		return
+	}
+	// Fail-safe cap (internal/applycap): refuse an implausibly large selection
+	// before a single candidate is applied. Refusal, not truncation.
+	if ex := applycap.Refuse("batch-apply-candidates", len(req.BookIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
 
