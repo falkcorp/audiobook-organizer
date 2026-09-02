@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.99.1
+// version: 1.100.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-02
 
@@ -238,11 +238,14 @@ type DedupSignalConfig struct {
 	// and does not clamp it against these bounds (see
 	// docs/plans/DECISIONS-PENDING.md row 10 for the open decision on
 	// whether ComposeScore should start doing so). Since 2026-09-02 this map
-	// DOES reach the live engine's ScoreConfig.Signals (via
-	// internal/dedup.LoadScoreConfig → dedup.NewEngine / Engine.SetScoreConfig,
-	// the same channel the band_*_min fields use), so once ComposeScore starts
-	// clamping there is nothing left to wire — but until then the bounds are
-	// carried, not applied.
+	// DOES reach the live engine's ScoreConfig.Signals — via
+	// DedupSignalConfig.ScoreConfig (dedup_score_config.go) → dedup.NewEngine
+	// at startup, and → Engine.ReloadScoreConfig through the UpdateService's
+	// dedup-score sink on every PUT /api/v1/config and calibrate apply — the
+	// same channel the band_*_min fields use. So once ComposeScore starts
+	// clamping there is nothing left to wire; until then the bounds are
+	// carried, not applied. A kind name not seeded by DefaultScoreConfig is
+	// REJECTED (400 on PUT, refused at startup), not skipped.
 	Confidence map[string]DedupKindConfidence `json:"confidence,omitempty" mapstructure:"confidence"`
 }
 
@@ -1877,9 +1880,10 @@ func InitConfig() {
 
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
 	// Read by internal/dedup/unified.LoadScoreConfig via Viper as the layer
-	// under the persisted dedup.signals block; internal/dedup.LoadScoreConfig
-	// hands the merged result to the live engine (registry_wire.go at startup,
-	// dedup.calibrate-composite apply at runtime).
+	// under the persisted dedup.signals block; DedupSignalConfig.ScoreConfig
+	// (dedup_score_config.go) hands the merged result to the live engine
+	// (registry_wire.go at startup; the UpdateService dedup-score sink on
+	// PUT /api/v1/config and dedup.calibrate-composite apply at runtime).
 	// Overridable per-kind in config.yaml under dedup.signals.<kind>.*
 	viper.SetDefault("dedup.signals.band_certain_min", 97.0)
 	viper.SetDefault("dedup.signals.band_high_min", 90.0)
@@ -2604,6 +2608,22 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("supported extension %q must start with '.'", ext))
 			break
 		}
+	}
+
+	// Dedup score ladder. This is the same conversion registry_wire.go runs
+	// to build the engine, so a ladder that fails here is exactly one that
+	// would refuse to start. The message has to name where the value LIVES,
+	// because it is not necessarily config.yaml: the effective dedup.signals
+	// is config.yaml overlaid by the settings blob persisted in the database
+	// (written by PUT /api/v1/config — the Settings → Dedup page — and by the
+	// dedup.calibrate-composite apply op), and the blob wins. An operator
+	// told to "fix config.yaml" for a value the UI persisted cannot repair it
+	// by editing config.yaml; they need to know to re-PUT a valid ladder (the
+	// UpdateService now rejects an invalid one with 400 before persisting, so
+	// this path is reached only by blobs written before that guard existed,
+	// or by a config.yaml edit).
+	if _, err := c.Dedup.Signals.ScoreConfig(); err != nil {
+		errs = append(errs, fmt.Sprintf("%v (effective value = config.yaml dedup.signals overlaid by the settings blob persisted in the database via PUT /api/v1/config / Settings → Dedup / calibrate-composite apply — the persisted blob wins, so re-save a valid ladder there, or delete the blob's dedup.signals keys, if config.yaml already looks right)", err))
 	}
 
 	if len(errs) > 0 {

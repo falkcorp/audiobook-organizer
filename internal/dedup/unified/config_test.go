@@ -1,11 +1,12 @@
 // file: internal/dedup/unified/config_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4f7a2c9b-8e3d-4b6f-a1c5-9e7b3d2f6a8c
 // last-edited: 2026-09-02
 
 package unified
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -401,22 +402,69 @@ func TestLoadScoreConfig_ConfidenceOverride_PrecedenceOverViper(t *testing.T) {
 	}
 }
 
-// TestLoadScoreConfig_ConfidenceOverride_UnknownKindIsSkipped verifies that
-// an override for a kind string not present in cfg.Signals (shouldn't happen
-// in practice — DefaultScoreConfig seeds every known kind — but a stale/typo'd
-// persisted key must fail closed, not panic or create a partial entry) is
-// silently ignored rather than propagated.
-func TestLoadScoreConfig_ConfidenceOverride_UnknownKindIsSkipped(t *testing.T) {
+// TestLoadScoreConfig_ConfidenceOverride_UnknownKindIsAnError verifies that
+// an override for a kind string DefaultScoreConfig does not seed is rejected,
+// naming the kind. The map is operator-written from the calibrate op's
+// advisory output; a typo'd kind used to be silently skipped, so the operator
+// saw "saved" while the bound never took effect.
+func TestLoadScoreConfig_ConfidenceOverride_UnknownKindIsAnError(t *testing.T) {
 	resetViper(t)
 
-	cfg, err := LoadScoreConfig(ScoreOverrides{Confidence: map[string]KindConfidenceOverride{
+	_, err := LoadScoreConfig(ScoreOverrides{Confidence: map[string]KindConfidenceOverride{
 		"not_a_real_signal_kind": {MinConfidence: 0.5, MaxConfidence: 0.9},
 	}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected an error for an unknown confidence kind, got nil")
 	}
-	if _, ok := cfg.Signals["not_a_real_signal_kind"]; ok {
-		t.Error("unknown kind should not be created in cfg.Signals")
+	if !strings.Contains(err.Error(), "not_a_real_signal_kind") {
+		t.Errorf("error should name the unknown kind, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), string(SigEmbedMedium)) {
+		t.Errorf("error should list the known kinds so the typo is findable, got: %v", err)
+	}
+}
+
+// TestValidate_CertainAboveScoreCapIsAnError: ComposeScore caps scores at
+// 100, so band_certain_min = 100.5 would validate as a strictly-decreasing
+// ladder while making CERTAIN (and auto-resolve) silently unreachable.
+func TestValidate_CertainAboveScoreCapIsAnError(t *testing.T) {
+	cfg := DefaultScoreConfig()
+	cfg.BandCertainMin = 100.5
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected band_certain_min > 100 to be rejected")
+	}
+	if !strings.Contains(err.Error(), "100") {
+		t.Errorf("error should mention the 100 cap, got: %v", err)
+	}
+	// Exactly 100 is a legal (if strict) floor: a score of 100 can reach it.
+	cfg.BandCertainMin = 100
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("band_certain_min = 100 must be accepted, got: %v", err)
+	}
+}
+
+// TestLoadScoreConfig_NegativeBandOverrideIsRejectedNotIgnored: a negative
+// persisted band used to fall through the `> 0` "not set" check and silently
+// take the default. Only an exact zero means "not set"; anything else must
+// reach Validate.
+func TestLoadScoreConfig_NegativeBandOverrideIsRejectedNotIgnored(t *testing.T) {
+	resetViper(t)
+
+	_, err := LoadScoreConfig(ScoreOverrides{BandReviewMin: -5})
+	if err == nil {
+		t.Fatal("a negative band_review_min override must be rejected, not treated as unset")
+	}
+	if !strings.Contains(err.Error(), "band_review_min") {
+		t.Errorf("error should name band_review_min, got: %v", err)
+	}
+
+	// Same for confidence bounds: a negative bound is an override, not "unset".
+	_, err = LoadScoreConfig(ScoreOverrides{Confidence: map[string]KindConfidenceOverride{
+		string(SigEmbedMedium): {MinConfidence: -0.1},
+	}})
+	if err == nil {
+		t.Fatal("a negative min_confidence override must be rejected, not treated as unset")
 	}
 }
 

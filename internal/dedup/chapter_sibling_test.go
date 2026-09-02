@@ -1,7 +1,7 @@
 // file: internal/dedup/chapter_sibling_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3a8c7d1-4b62-4f90-9a05-7c2e1d8b6f54
-// last-edited: 2026-06-21
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -142,7 +142,7 @@ func TestUnifiedPass_DeletesSuppressedChapterSiblingCandidate(t *testing.T) {
 		t.Fatalf("setup: expected 1 seeded candidate")
 	}
 
-	if err := engine.runUnifiedScoringForBook(context.Background(), a, "Author"); err != nil {
+	if err := engine.runUnifiedScoringForBook(context.Background(), a, "Author", engine.ScoreConfig()); err != nil {
 		t.Fatalf("runUnifiedScoringForBook: %v", err)
 	}
 	if cands := pendingCandidates(t, es); len(cands) != 0 {
