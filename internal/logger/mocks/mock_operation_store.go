@@ -105,7 +105,7 @@ func (_c *MockOperationStore_AddOperationLog_Call) RunAndReturn(run func(operati
 }
 
 // CreateOperationChange provides a mock function for the type MockOperationStore
-func (_mock *MockOperationStore) CreateOperationChange(change interface{}) error {
+func (_mock *MockOperationStore) CreateOperationChange(change any) error {
 	ret := _mock.Called(change)
 
 	if len(ret) == 0 {
@@ -113,7 +113,7 @@ func (_mock *MockOperationStore) CreateOperationChange(change interface{}) error
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(interface{}) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(any) error); ok {
 		r0 = returnFunc(change)
 	} else {
 		r0 = ret.Error(0)
@@ -127,16 +127,16 @@ type MockOperationStore_CreateOperationChange_Call struct {
 }
 
 // CreateOperationChange is a helper method to define mock.On call
-//   - change interface{}
+//   - change any
 func (_e *MockOperationStore_Expecter) CreateOperationChange(change any) *MockOperationStore_CreateOperationChange_Call {
 	return &MockOperationStore_CreateOperationChange_Call{Call: _e.mock.On("CreateOperationChange", change)}
 }
 
-func (_c *MockOperationStore_CreateOperationChange_Call) Run(run func(change interface{})) *MockOperationStore_CreateOperationChange_Call {
+func (_c *MockOperationStore_CreateOperationChange_Call) Run(run func(change any)) *MockOperationStore_CreateOperationChange_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 interface{}
+		var arg0 any
 		if args[0] != nil {
-			arg0 = args[0].(interface{})
+			arg0 = args[0].(any)
 		}
 		run(
 			arg0,
@@ -150,7 +150,7 @@ func (_c *MockOperationStore_CreateOperationChange_Call) Return(err error) *Mock
 	return _c
 }
 
-func (_c *MockOperationStore_CreateOperationChange_Call) RunAndReturn(run func(change interface{}) error) *MockOperationStore_CreateOperationChange_Call {
+func (_c *MockOperationStore_CreateOperationChange_Call) RunAndReturn(run func(change any) error) *MockOperationStore_CreateOperationChange_Call {
 	_c.Call.Return(run)
 	return _c
 }
