@@ -1,6 +1,7 @@
 // file: internal/transcode/transcode_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
+// last-edited: 2026-09-02
 
 package transcode
 
@@ -131,7 +132,7 @@ func TestCollectInputFiles_SingleFile(t *testing.T) {
 func TestCollectInputFiles_Segments(t *testing.T) {
 	// Create temp files
 	var tmpFiles []string
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		tmp, err := os.CreateTemp("", "test-seg-*.mp3")
 		if err != nil {
 			t.Fatal(err)
