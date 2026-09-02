@@ -670,6 +670,44 @@ func TestOrganizeSingleFile_FreshCopy_IsCreatedAndRolledBack(t *testing.T) {
 
 // ENOSYS (FUSE / network filesystems with no link(2)) and EOPNOTSUPP (distinct
 // from ENOTSUP on Darwin) both mean "this filesystem does not do hard links".
+// The `symlink` organization strategy leaves a symlink in the library; a later
+// metadata fix moves it with moveExclusive. The LINK is the library entry, so
+// the move must rename the link itself — not follow it (Darwin link(2)) or
+// refuse it as "not a regular file" (the 2026-09-02 regression). Mutant M16.
+func TestMoveExclusive_SymlinkSource_MovesTheLinkItself(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "downloads", "book.m4b")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("audio"), 0o644))
+	src := filepath.Join(dir, "lib", "Old Title.m4b")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.Symlink(target, src))
+	dst := filepath.Join(dir, "lib", "New Title.m4b")
+
+	require.NoError(t, moveExclusive(src, dst))
+
+	info, err := os.Lstat(dst)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&fs.ModeSymlink, "the destination must be the moved LINK, not a copy of its target")
+	got, err := os.Readlink(dst)
+	require.NoError(t, err)
+	require.Equal(t, target, got)
+	_, err = os.Lstat(src)
+	require.True(t, errors.Is(err, fs.ErrNotExist), "the old link must be gone")
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, "audio", string(data), "the link target is untouched")
+
+	// And a dangling symlink moves the same way — the library entry exists even
+	// when what it points at does not.
+	require.NoError(t, os.Remove(target))
+	dst2 := filepath.Join(dir, "lib", "Newer Title.m4b")
+	require.NoError(t, moveExclusive(dst, dst2))
+	info, err = os.Lstat(dst2)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&fs.ModeSymlink)
+}
+
 func TestLinkUnsupported_ENOSYSAndEOPNOTSUPP(t *testing.T) {
 	wrap := func(e syscall.Errno) error { return &os.LinkError{Op: "link", Old: "a", New: "b", Err: e} }
 	require.True(t, linkUnsupported(wrap(syscall.ENOSYS)))
