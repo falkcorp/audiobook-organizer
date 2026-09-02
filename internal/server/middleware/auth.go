@@ -1,13 +1,14 @@
 // file: internal/server/middleware/auth.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 
 package middleware
 
 import (
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -348,11 +349,9 @@ func RequireAdmin() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		for _, role := range user.Roles {
-			if role == "admin" {
-				c.Next()
-				return
-			}
+		if slices.Contains(user.Roles, "admin") {
+			c.Next()
+			return
 		}
 		httputil.RespondWithForbidden(c, "admin role required")
 		c.Abort()

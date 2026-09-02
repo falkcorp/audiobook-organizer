@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 package handlers
 
@@ -146,7 +146,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	}
 
 	if v := c.Query("tags"); v != "" {
-		for _, tag := range strings.Split(v, ",") {
+		for tag := range strings.SplitSeq(v, ",") {
 			tag = strings.TrimSpace(tag)
 			if tag != "" {
 				filter.Tags = append(filter.Tags, tag)
@@ -157,7 +157,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	filter.Search = c.Query("search")
 	filter.Source = c.Query("source")
 	if v := c.Query("exclude_sources"); v != "" {
-		for _, src := range strings.Split(v, ",") {
+		for src := range strings.SplitSeq(v, ",") {
 			src = strings.TrimSpace(src)
 			if src != "" {
 				filter.ExcludeSources = append(filter.ExcludeSources, src)
@@ -165,7 +165,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		}
 	}
 	if v := c.Query("exclude_tiers"); v != "" {
-		for _, tier := range strings.Split(v, ",") {
+		for tier := range strings.SplitSeq(v, ",") {
 			tier = strings.TrimSpace(tier)
 			if tier != "" {
 				filter.ExcludeTiers = append(filter.ExcludeTiers, tier)
@@ -173,7 +173,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		}
 	}
 	if v := c.Query("exclude_tags"); v != "" {
-		for _, tag := range strings.Split(v, ",") {
+		for tag := range strings.SplitSeq(v, ",") {
 			tag = strings.TrimSpace(tag)
 			if tag != "" {
 				filter.ExcludeTags = append(filter.ExcludeTags, tag)

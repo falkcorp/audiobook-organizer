@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -272,7 +272,6 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	var cg errgroup.Group
 	cg.SetLimit(reviewListConcurrency)
 	for i := range prepared {
-		i := i
 		cg.Go(func() error {
 			entry, _, cerr := h.svc.GetCachedCandidates(prepared[i].sum.BookID)
 			if cerr == nil {
@@ -340,16 +339,10 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		}
 	}
 
-	start := offset
-	if start > len(reviewable) {
-		start = len(reviewable)
-	}
+	start := min(offset, len(reviewable))
 	end := len(reviewable)
 	if limit > 0 {
-		end = start + limit
-		if end > len(reviewable) {
-			end = len(reviewable)
-		}
+		end = min(start+limit, len(reviewable))
 	}
 	page := reviewable[start:end]
 

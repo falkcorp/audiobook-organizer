@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops_fastpath_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d6c8a2e-9f3b-4a1d-8e5c-2b6f4a9d1c3e
-// last-edited: 2026-07-01
+// last-edited: 2026-09-02
 
 // Package server tests for TASK-02 (MAYDEPLOY-H5): runBulkMetadataFetchForBookIDs
 // should resolve authors per-book via GetAuthorByID when len(bookIDs) < 100,
@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -82,12 +83,7 @@ func newFastpathMockStore(books map[string]*database.Book, authors map[int]*data
 }
 
 func containsInt(haystack []int, needle int) bool {
-	for _, v := range haystack {
-		if v == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 func TestRunBulkMetadataFetchForBookIDs_FastPath_UnderThreshold(t *testing.T) {
@@ -142,7 +138,7 @@ func TestRunBulkMetadataFetchForBookIDs_MapPath_AtThreshold(t *testing.T) {
 	books := make(map[string]*database.Book, n)
 	authors := make(map[int]*database.Author, n)
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("book-%03d", i)
 		authorID := i
 		authors[authorID] = &database.Author{ID: authorID, Name: fmt.Sprintf("Author %03d", i)}

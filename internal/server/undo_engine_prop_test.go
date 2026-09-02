@@ -1,6 +1,6 @@
 // file: internal/server/undo_engine_prop_test.go
-// version: 1.3.0
-// last-edited: 2026-08-15
+// version: 1.3.1
+// last-edited: 2026-09-02
 // guid: 1ff3d071-4c60-4bb0-92ed-d197fe8ad9d0
 //
 // Property-based tests for the undo engine (plan 4.5 task 8).
@@ -66,7 +66,7 @@ func TestProp_UndoIdempotent(t *testing.T) {
 		opID := "op-" + rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(rt, "op_id")
 		n := rapid.IntRange(1, 6).Draw(rt, "n_changes")
 
-		for i := 0; i < n; i++ {
+		for range n {
 			change := rapidgen.OperationChange(rt, opID, "book-"+rapid.StringMatching(`[a-z0-9]{4,10}`).Draw(rt, "book_id"))
 			if err := store.CreateOperationChange(change); err != nil {
 				t.Fatalf("create change: %v", err)

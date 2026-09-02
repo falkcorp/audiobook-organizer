@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_unsupported_sort_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 2a9f4d13-8b07-4e56-91c2-5d3e08a7f6b4
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 package abs
 
@@ -126,7 +126,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 		buf, restore := busCapture(t)
 		defer restore()
 
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			absItemFilter(busCtx("sort=media.metadata.fileBirthtime"))
 		}
 		// A DIFFERENT unsupported sort inside the same window is suppressed
@@ -215,7 +215,7 @@ func TestUnsupportedSortLimiterIsConcurrencySafe(t *testing.T) {
 	ready.Add(workers)
 	wg.Add(workers)
 	start := make(chan struct{})
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		go func(i int) {
 			defer wg.Done()
 			ready.Done()

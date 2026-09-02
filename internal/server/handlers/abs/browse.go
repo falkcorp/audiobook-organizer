@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-27
+// last-edited: 2026-09-02
 
 package abs
 
@@ -771,14 +771,8 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 	limit := queryInt(c, "limit", 0)
 	page := queryInt(c, "page", 0)
 	if limit > 0 {
-		start := page * limit
-		if start > total {
-			start = total
-		}
-		end := start + limit
-		if end > total {
-			end = total
-		}
+		start := min(page*limit, total)
+		end := min(start+limit, total)
 		series = series[start:end]
 	}
 
@@ -1582,10 +1576,7 @@ func pageSlice(items []authorDTO, limit, page int) []authorDTO {
 	if start >= len(items) {
 		return []authorDTO{}
 	}
-	end := start + limit
-	if end > len(items) {
-		end = len(items)
-	}
+	end := min(start+limit, len(items))
 	return items[start:end]
 }
 
@@ -2155,10 +2146,7 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 		if err == nil {
 			database.SortBooks(all, sortField, c.Query("desc") != "1")
 			if p.Offset < len(all) {
-				hi := end
-				if hi > len(all) {
-					hi = len(all)
-				}
+				hi := min(end, len(all))
 				all = all[p.Offset:hi]
 			} else {
 				all = nil

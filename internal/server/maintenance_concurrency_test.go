@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_concurrency_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 14d07753-3a82-4678-8982-e488eef8a7e3
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package server
 
@@ -108,8 +108,7 @@ func TestMaintenanceJobDeclaredKeyWins(t *testing.T) {
 // (ConcurrencyKey back to policy.ConcurrencyKey, i.e. ""), maxOverlap reaches 2
 // and this test fails.
 func TestMaintenanceJobEnqueuedTwiceRunsSequentially(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newOpsFake(t)
 	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 4, nil)

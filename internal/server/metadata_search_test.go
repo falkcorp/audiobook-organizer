@@ -1,6 +1,7 @@
 // file: internal/server/metadata_search_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
+// last-edited: 2026-09-02
 
 package server
 
@@ -43,7 +44,7 @@ func TestSearchMetadata_ReturnsResults(t *testing.T) {
 	// configured and this would return 200 with results.
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Contains(t, resp["error"], "no metadata sources enabled")

@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-08-15
+// last-edited: 2026-09-02
 
 package server
 
@@ -184,7 +184,7 @@ func TestHandleHardDeleteVersion(t *testing.T) {
 	}
 
 	var envelope struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &envelope)
 	if envelope.Data["deleted"] != ver.ID {

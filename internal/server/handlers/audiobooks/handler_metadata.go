@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -40,10 +40,7 @@ func (h *Handler) GetBookMetadataHistory(c *gin.Context) {
 	limit := 100
 	if l := c.Query("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-			if limit > maxHistoryLimit {
-				limit = maxHistoryLimit
-			}
+			limit = min(parsed, maxHistoryLimit)
 		}
 	}
 	records, err := store.GetBookChangeHistory(id, limit)
@@ -82,10 +79,7 @@ func (h *Handler) GetFieldMetadataHistory(c *gin.Context) {
 	limit := 50
 	if l := c.Query("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-			if limit > maxHistoryLimit {
-				limit = maxHistoryLimit
-			}
+			limit = min(parsed, maxHistoryLimit)
 		}
 	}
 	records, err := store.GetMetadataChangeHistory(id, field, limit)

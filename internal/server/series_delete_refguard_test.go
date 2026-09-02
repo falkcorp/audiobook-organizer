@@ -1,7 +1,7 @@
 // file: internal/server/series_delete_refguard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b6c1e07-9a34-4d82-bf16-0c72e9a35d84
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package server
 
@@ -47,11 +47,11 @@ func TestBulkDeleteSeries_KeepsSeriesWhoseOnlyBookIsTrashed(t *testing.T) {
 		Title:             "Trashed Book",
 		SeriesID:          &trashedOnly.ID,
 		FilePath:          "/tmp/refguard-trashed.m4b",
-		MarkedForDeletion: boolPtr(true),
+		MarkedForDeletion: new(true),
 	})
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{trashedOnly.ID, genuinelyEmpty.ID},
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -89,11 +89,11 @@ func TestBulkDeleteSeries_KeepsSeriesWhoseOnlyBookIsNonPrimary(t *testing.T) {
 		Title:            "Alternate Version",
 		SeriesID:         &nonPrimaryOnly.ID,
 		FilePath:         "/tmp/refguard-nonprimary.m4b",
-		IsPrimaryVersion: boolPtr(false),
+		IsPrimaryVersion: new(false),
 	})
 	require.NoError(t, err)
 
-	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]interface{}{
+	w := postJSON(server, "/api/v1/series/bulk-delete", map[string]any{
 		"ids": []int{nonPrimaryOnly.ID},
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -124,7 +124,7 @@ func TestDeleteEmptySeries_KeepsSeriesWhoseOnlyBookIsTrashed(t *testing.T) {
 		Title:             "Trashed Book Two",
 		SeriesID:          &series.ID,
 		FilePath:          "/tmp/refguard-single-trashed.m4b",
-		MarkedForDeletion: boolPtr(true),
+		MarkedForDeletion: new(true),
 	})
 	require.NoError(t, err)
 

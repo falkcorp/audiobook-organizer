@@ -1,6 +1,7 @@
 // file: internal/server/metadata_history_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
+// last-edited: 2026-09-02
 
 package server
 
@@ -149,7 +150,7 @@ func TestUndoMetadataChange_Handler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var wrapper struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &wrapper)
 	require.NoError(t, err)
@@ -175,7 +176,7 @@ func TestUndoMetadataChange_NoHistory(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	errMsg, _ := resp["error"].(string)

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a9c1f27-8b3e-4d05-9a61-2f7c0d3e6b58
-// last-edited: 2026-08-15
+// last-edited: 2026-09-02
 
 // F6 regression test: the dedup.book-merge op (POST /audiobooks/merge) was
 // rerouted from the legacy dedup.MergeBooks hard-delete path to
@@ -25,8 +25,6 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 )
 
-func t10IntPtr(v int) *int { return &v }
-
 func TestApplyBookMergeReroute_SoftDeletesAndReassignsExternalIDs(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
 	if err != nil {
@@ -46,7 +44,7 @@ func TestApplyBookMergeReroute_SoftDeletesAndReassignsExternalIDs(t *testing.T) 
 	}
 	if _, err := store.CreateBook(&database.Book{
 		ID: loserID, Title: "Loser", Format: "mp3", FilePath: "/tmp/" + loserID + ".mp3",
-		ITunesRating: t10IntPtr(80), ITunesPlayCount: t10IntPtr(5),
+		ITunesRating: new(80), ITunesPlayCount: new(5),
 	}); err != nil {
 		t.Fatalf("CreateBook loser: %v", err)
 	}

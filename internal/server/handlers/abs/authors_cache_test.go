@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authors_cache_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b90d248-1f37-4c05-a3e8-71d24f9068ba
-// last-edited: 2026-08-03
+// last-edited: 2026-09-02
 
 package abs_test
 
@@ -56,7 +56,7 @@ func TestAuthors_CachedListStillServesCorrectPages(t *testing.T) {
 
 	// Page through with limit=1 and confirm we see each author exactly once, in order.
 	var seen []string
-	for page := 0; page < len(full); page++ {
+	for page := range full {
 		_, body, _ := w.req(t, http.MethodGet,
 			"/api/libraries/"+w.libraryID()+"/authors?limit=1&page="+itoa(page), nil)
 		results := requireArray(t, body, "results")

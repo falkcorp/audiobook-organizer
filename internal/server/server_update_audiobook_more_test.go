@@ -1,7 +1,7 @@
 // file: internal/server/server_update_audiobook_more_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9c8b7a6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package server
 
@@ -68,7 +68,7 @@ func TestUpdateAudiobook_CreatesAuthorSeries_AndUpdatesOverrideState(t *testing.
 	created, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "Original", FilePath: tempFile, Format: "m4b"})
 	require.NoError(t, err)
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"author_name":            "Author X",
 		"series_name":            "Series Y",
 		"narrator":               "Narrator Z",
@@ -77,7 +77,7 @@ func TestUpdateAudiobook_CreatesAuthorSeries_AndUpdatesOverrideState(t *testing.
 		"audiobook_release_year": 2024,
 		"isbn10":                 "1234567890",
 		"isbn13":                 "9999999999999",
-		"overrides": map[string]map[string]interface{}{
+		"overrides": map[string]map[string]any{
 			"title": {
 				"value":         "Override Title",
 				"locked":        true,

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -36,6 +36,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -341,16 +342,10 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// the requested page here.
 	if bothUnmatched {
 		total = len(items)
-		start := offset
-		if start > len(items) {
-			start = len(items)
-		}
+		start := min(offset, len(items))
 		end := len(items)
 		if limit > 0 {
-			end = start + limit
-			if end > len(items) {
-				end = len(items)
-			}
+			end = min(start+limit, len(items))
 		}
 		items = items[start:end]
 	}
@@ -1155,13 +1150,7 @@ func (h *Handler) MergeDedupCluster(c *gin.Context) {
 	// If primary_book_id is set, it must be one of the books in the
 	// cluster. Empty means "let bookIsBetter auto-pick".
 	if body.PrimaryBookID != "" {
-		found := false
-		for _, id := range body.BookIDs {
-			if id == body.PrimaryBookID {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(body.BookIDs, body.PrimaryBookID)
 		if !found {
 			httputil.RespondWithBadRequest(c, "primary_book_id must be one of book_ids")
 			return
@@ -1445,7 +1434,7 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 	// side, after which the snapshot can no longer load that book. Best-effort.
 	labelExample := h.snapshotCandidateExample(candidate)
 
-	var result interface{}
+	var result any
 	if candidate.EntityType == "book" && h.mergeService != nil {
 		// Refuse rather than merge irreversibly. Merging through
 		// MergeService.MergeBooks writes no journal entry, so there would be

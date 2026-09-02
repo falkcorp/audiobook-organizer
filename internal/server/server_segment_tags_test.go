@@ -1,6 +1,7 @@
 // file: internal/server/server_segment_tags_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a7b8c9d0-e1f2-3456-7890-abcdef123456
+// last-edited: 2026-09-02
 
 package server
 
@@ -27,7 +28,7 @@ func TestGetSegmentTags_BookNotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp["error"], "not found")
 }
@@ -50,7 +51,7 @@ func TestGetSegmentTags_SegmentNotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp["error"], "segment not found")
 }
@@ -87,9 +88,9 @@ func TestGetSegmentTags_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	resp = resp["data"].(map[string]interface{})
+	resp = resp["data"].(map[string]any)
 
 	// File doesn't exist on disk, so we expect a tags_read_error
 	assert.NotEmpty(t, resp["tags_read_error"], "expected tags_read_error since file doesn't exist")

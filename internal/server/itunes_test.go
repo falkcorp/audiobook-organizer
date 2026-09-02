@@ -1,6 +1,7 @@
 // file: internal/server/itunes_test.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 57e871fa-41b4-4fe6-9ed6-457ae78f0a07
+// last-edited: 2026-09-02
 
 package server
 
@@ -31,7 +32,7 @@ func TestValidateITunesLibrary(t *testing.T) {
 		t.Skipf("iTunes test library not found at %s", libPath)
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"library_path": libPath,
 	}
 	body := marshal(t, payload)
@@ -87,7 +88,7 @@ func TestITunesSyncForceFlag_NoChanges(t *testing.T) {
 		t.Fatalf("failed to save fingerprint: %v", err)
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"library_path": libPath,
 		"force":        false,
 	}
@@ -103,7 +104,7 @@ func TestITunesSyncForceFlag_NoChanges(t *testing.T) {
 	}
 
 	var wrapper struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &wrapper); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
@@ -141,7 +142,7 @@ func TestITunesSyncForceFlag_Bypass(t *testing.T) {
 		t.Fatalf("failed to save fingerprint: %v", err)
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"library_path": libPath,
 		"force":        true,
 	}
@@ -157,7 +158,7 @@ func TestITunesSyncForceFlag_Bypass(t *testing.T) {
 	}
 
 	var wrapper struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &wrapper); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
@@ -173,7 +174,7 @@ func TestITunesSyncForceFlag_Bypass(t *testing.T) {
 	}
 }
 
-func marshal(t *testing.T, v interface{}) []byte {
+func marshal(t *testing.T, v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("json.Marshal failed: %v", err)

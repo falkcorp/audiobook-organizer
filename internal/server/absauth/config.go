@@ -1,7 +1,7 @@
 // file: internal/server/absauth/config.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c2f0a951-7b34-46de-8a07-1d59b3e6c8f2
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 // Package absauth is the pure auth core for the Audiobookshelf-compatible API
 // (design spec §3). It owns the resolved configuration, access-token (JWT) minting
@@ -189,7 +189,7 @@ func parseModes(raw string) (Modes, error) {
 		return Modes{CF: true, JWT: true}, nil
 	}
 	var m Modes
-	for _, part := range strings.Split(raw, ",") {
+	for part := range strings.SplitSeq(raw, ",") {
 		switch strings.ToLower(strings.TrimSpace(part)) {
 		case modeCF:
 			m.CF = true

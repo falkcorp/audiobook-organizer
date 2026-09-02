@@ -1,7 +1,7 @@
 // file: internal/server/import_collision.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4b2c3d1e-5f6a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-05-11
+// last-edited: 2026-09-02
 //
 // HTTP handler for import-time collision preview. Delegates to
 // internal/importer for the core collision detection logic.
@@ -37,9 +37,9 @@ func (s *Server) handleImportCollisionPreview(c *gin.Context) {
 	)
 
 	httputil.RespondWithOK(c, struct {
-		Collisions   interface{} `json:"collisions"`
-		Count        int         `json:"count"`
-		HasCollision bool        `json:"has_collision"`
+		Collisions   any  `json:"collisions"`
+		Count        int  `json:"count"`
+		HasCollision bool `json:"has_collision"`
 	}{
 		Collisions:   result.Collisions,
 		Count:        result.Count,

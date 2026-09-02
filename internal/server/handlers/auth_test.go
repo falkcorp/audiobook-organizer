@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d5e6f7a8-b9c0-1234-5678-90abcdef0123
-// last-edited: 2026-06-09
+// last-edited: 2026-09-02
 
 package handlers_test
 
@@ -179,7 +179,7 @@ func TestAuthHandler_Login_PerIPThrottle(t *testing.T) {
 
 	h := handlers.NewAuthHandler(store, true)
 
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		c, w := newAuthCtx("POST", "/auth/login", map[string]any{
 			"username": "ghost", "password": "wrong",
 		})
@@ -211,7 +211,7 @@ func TestAuthHandler_Login_SoftCounterDoesNotLock(t *testing.T) {
 	h.SetFailureDelay(func(time.Duration) {}) // no-op: keeps test fast and deterministic
 
 	// 7 wrong attempts (past the soft threshold of 5) — adds small delays, no lock.
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		c, _ := newAuthCtx("POST", "/auth/login", map[string]any{
 			"username": "alice", "password": "wrong",
 		})
@@ -241,7 +241,7 @@ func TestAuthHandler_Login_DifferentIPNotThrottled(t *testing.T) {
 	h := handlers.NewAuthHandler(store, true)
 
 	// Attacker burns the budget from one IP (unknown user → sleep-free).
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		c, _ := newAuthCtx("POST", "/auth/login", map[string]any{
 			"username": "ghost", "password": "wrong",
 		})

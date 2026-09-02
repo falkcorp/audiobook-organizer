@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/bare_filter_param_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a9e2c68-4b71-4d03-9e85-1c6f0a37b2d9
-// last-edited: 2026-08-14
+// last-edited: 2026-09-02
 
 package audiobookshandler
 
@@ -193,7 +193,7 @@ func TestFirstBareFilterFieldParam_Deterministic(t *testing.T) {
 	q := url.Values{"title": {"a"}, "genre": {"b"}, "narrator": {"c"}}.Encode()
 	first, bare := firstBareFilterFieldParam(queryCtx(t, q))
 	require.True(t, bare)
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		got, ok := firstBareFilterFieldParam(queryCtx(t, q))
 		require.True(t, ok)
 		require.Equal(t, first, got, "reported field must be stable across calls")

@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package server
 
@@ -1309,19 +1309,19 @@ func TestCoverageResetLibrarySizeCache(t *testing.T) {
 
 func TestCoverageHelperFunctions(t *testing.T) {
 	t.Run("stringPtr", func(t *testing.T) {
-		p := stringPtr("hello")
+		p := new("hello")
 		require.NotNil(t, p)
 		assert.Equal(t, "hello", *p)
 	})
 
 	t.Run("intPtrHelper", func(t *testing.T) {
-		p := intPtrHelper(42)
+		p := new(42)
 		require.NotNil(t, p)
 		assert.Equal(t, 42, *p)
 	})
 
 	t.Run("boolPtr", func(t *testing.T) {
-		p := boolPtr(true)
+		p := new(true)
 		require.NotNil(t, p)
 		assert.True(t, *p)
 	})

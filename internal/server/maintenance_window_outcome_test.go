@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_window_outcome_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d81b3a7-2c64-4e19-9f70-6b2a8e15c3df
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package server
 
@@ -11,8 +11,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
-
-func ptr(s string) *string { return &s }
 
 // TestClassifyTaskOutcomeNilRowIsAborted is the regression test for the SECOND
 // nil dereference in the maintenance window.
@@ -73,14 +71,14 @@ func TestClassifyTaskOutcomeDetailPrefersErrorMessage(t *testing.T) {
 	_, detail := classifyTaskOutcome(&database.OperationV2Row{
 		Status:          "failed",
 		ProgressMessage: "processed 40/100",
-		ErrorMessage:    ptr("disk full"),
+		ErrorMessage:    new("disk full"),
 	})
 	require.Equal(t, "disk full", detail)
 
 	_, detail = classifyTaskOutcome(&database.OperationV2Row{
 		Status:          "completed",
 		ProgressMessage: "processed 100/100",
-		ErrorMessage:    ptr(""),
+		ErrorMessage:    new(""),
 	})
 	require.Equal(t, "processed 100/100", detail, "an empty error must not blank the detail")
 }

@@ -1,7 +1,7 @@
 // file: internal/server/server_versions_and_work_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3a4b5c6d-7e8f-9012-a345-678901234567
-// last-edited: 2026-04-30
+// last-edited: 2026-09-02
 
 package server
 
@@ -105,7 +105,7 @@ func TestWorkEndpoints_WithMockStore(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var statsWrapper struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &statsWrapper))
 	statsResp := statsWrapper.Data

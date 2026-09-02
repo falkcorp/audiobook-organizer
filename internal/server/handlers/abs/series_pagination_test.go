@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/series_pagination_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c4a17e5-62b8-4d03-a7f1-3e58b0d94c27
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package abs_test
 
@@ -127,7 +127,7 @@ func TestLibrarySeries_PagesPartitionTheSeriesSet(t *testing.T) {
 	const limit = 2
 	seen := map[string]int{}
 	var walked []string
-	for page := 0; page < 5; page++ { // 4 real pages + 1 past the end
+	for page := range 5 { // 4 real pages + 1 past the end
 		names, pageTotal := absPgFetch(t, h, tok, fmt.Sprintf("limit=%d&page=%d", limit, page))
 
 		// Total must be the FULL count on every page. If it were len(results) the

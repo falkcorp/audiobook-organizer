@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package server
 
@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"net/http"
 	"os"
@@ -415,10 +416,8 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 			if role == nil {
 				continue
 			}
-			for _, perm := range role.Permissions {
-				if perm == auth.PermUsersManage {
-					return u, "", nil
-				}
+			if slices.Contains(role.Permissions, auth.PermUsersManage) {
+				return u, "", nil
 			}
 		}
 	}

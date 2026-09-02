@@ -1,6 +1,6 @@
 // file: internal/server/user_handlers_test.go
-// version: 1.1.0
-// last-edited: 2026-08-15
+// version: 1.1.1
+// last-edited: 2026-09-02
 
 package server
 
@@ -49,8 +49,8 @@ func TestHandleListUsers_Empty(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			Users []map[string]interface{} `json:"users"`
-			Count int                      `json:"count"`
+			Users []map[string]any `json:"users"`
+			Count int              `json:"count"`
 		} `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
@@ -75,8 +75,8 @@ func TestHandleListUsers_WithUsers(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			Users []map[string]interface{} `json:"users"`
-			Count int                      `json:"count"`
+			Users []map[string]any `json:"users"`
+			Count int              `json:"count"`
 		} `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
@@ -100,7 +100,7 @@ func TestHandleCreateInvite(t *testing.T) {
 		ID: "editor", Name: "editor", Permissions: []string{"library.view"},
 	})
 
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"username": "newuser",
 		"role_id":  "editor",
 	})

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 package handlers
 
@@ -744,10 +744,7 @@ func (h *ITunesHandler) ListBooks(c *gin.Context) {
 	if offset >= len(filtered) {
 		filtered = nil
 	} else {
-		end := offset + limit
-		if end > len(filtered) {
-			end = len(filtered)
-		}
+		end := min(offset+limit, len(filtered))
 		filtered = filtered[offset:end]
 	}
 

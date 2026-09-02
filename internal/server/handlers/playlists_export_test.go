@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists_export_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a78e2cb9-f69e-40d6-9608-2bd148462654
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package handlers_test
 
@@ -23,8 +23,6 @@ func exportBook(id, title, path string, dur *int) *database.Book {
 	return &database.Book{ID: id, Title: title, FilePath: path, Duration: dur}
 }
 
-func intp(n int) *int { return &n }
-
 // callExport runs ExportPlaylistM3U for pl as userA and returns the recorder.
 func callExport(t *testing.T, store *handlersmocks.MockPlaylistStore) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
@@ -44,8 +42,8 @@ func TestExportPlaylistM3U_EmitsExtinfPairs(t *testing.T) {
 		ID: "pl-1", Name: "Road Trip", Type: database.UserPlaylistTypeStatic,
 		BookIDs: []string{"b1", "b2"},
 	}, nil)
-	store.EXPECT().GetBookByID("b1").Return(exportBook("b1", "First Book", "/lib/first.m4b", intp(3600)), nil)
-	store.EXPECT().GetBookByID("b2").Return(exportBook("b2", "Second Book", "/lib/second.m4b", intp(120)), nil)
+	store.EXPECT().GetBookByID("b1").Return(exportBook("b1", "First Book", "/lib/first.m4b", new(3600)), nil)
+	store.EXPECT().GetBookByID("b2").Return(exportBook("b2", "Second Book", "/lib/second.m4b", new(120)), nil)
 
 	_, w := callExport(t, store)
 
@@ -111,7 +109,7 @@ func TestExportPlaylistM3U_TitleWithCommaAndNewline(t *testing.T) {
 		BookIDs: []string{"b1"},
 	}, nil)
 	store.EXPECT().GetBookByID("b1").Return(
-		exportBook("b1", "Hello, World\n#EXTINF:1,forged\n/etc/passwd", "/lib/x.m4b", intp(10)), nil)
+		exportBook("b1", "Hello, World\n#EXTINF:1,forged\n/etc/passwd", "/lib/x.m4b", new(10)), nil)
 
 	_, w := callExport(t, store)
 
@@ -123,7 +121,7 @@ func TestExportPlaylistM3U_TitleWithCommaAndNewline(t *testing.T) {
 	// second entry. Counting the substring would measure the wrong thing --
 	// what matters is that no new LINE was forged.
 	var extinfLines, total int
-	for _, ln := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
+	for ln := range strings.SplitSeq(strings.TrimSuffix(body, "\n"), "\n") {
 		total++
 		if strings.HasPrefix(ln, "#EXTINF:") {
 			extinfLines++
@@ -143,7 +141,7 @@ func TestExportPlaylistM3U_NonASCIITitleIsUTF8(t *testing.T) {
 		BookIDs: []string{"b1"},
 	}, nil)
 	store.EXPECT().GetBookByID("b1").Return(
-		exportBook("b1", "Sōsuke no Bōken — Ünïcode", "/lib/ünï.m4b", intp(5)), nil)
+		exportBook("b1", "Sōsuke no Bōken — Ünïcode", "/lib/ünï.m4b", new(5)), nil)
 
 	_, w := callExport(t, store)
 
@@ -172,8 +170,8 @@ func TestExportPlaylistM3U_EmptyAndStaleEntries(t *testing.T) {
 			BookIDs: []string{"gone", "nopath", "good"},
 		}, nil)
 		store.EXPECT().GetBookByID("gone").Return(nil, nil)
-		store.EXPECT().GetBookByID("nopath").Return(exportBook("nopath", "No Path", "", intp(1)), nil)
-		store.EXPECT().GetBookByID("good").Return(exportBook("good", "Good", "/lib/g.m4b", intp(7)), nil)
+		store.EXPECT().GetBookByID("nopath").Return(exportBook("nopath", "No Path", "", new(1)), nil)
+		store.EXPECT().GetBookByID("good").Return(exportBook("good", "Good", "/lib/g.m4b", new(7)), nil)
 
 		_, w := callExport(t, store)
 
@@ -193,7 +191,7 @@ func TestExportPlaylistM3U_SmartUsesMaterializedIDs(t *testing.T) {
 		BookIDs:             []string{"ignored"},
 		MaterializedBookIDs: []string{"m1"},
 	}, nil)
-	store.EXPECT().GetBookByID("m1").Return(exportBook("m1", "Materialized", "/lib/m.m4b", intp(9)), nil)
+	store.EXPECT().GetBookByID("m1").Return(exportBook("m1", "Materialized", "/lib/m.m4b", new(9)), nil)
 
 	_, w := callExport(t, store)
 

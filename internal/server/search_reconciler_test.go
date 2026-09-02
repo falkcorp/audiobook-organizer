@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a1e7c40-2b83-4f16-90ad-6c4b1f2e8d55
-// last-edited: 2026-08-15
+// last-edited: 2026-09-02
 //
 // Tests for search-index reconciliation after a dropped index event.
 //
@@ -211,7 +211,7 @@ func TestReconciler_DrainsRepeatedDropsOfOneBookOnce(t *testing.T) {
 
 	// A book updated repeatedly during a bulk op drops many times; the set
 	// must coalesce so the backlog figure is not inflated.
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		srv.enqueueIndex("hot-1", false)
 	}
 

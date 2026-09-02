@@ -1,7 +1,7 @@
 // file: internal/server/server_handlers_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-05-08
+// last-edited: 2026-09-02
 
 package server
 
@@ -112,7 +112,7 @@ func TestListAudiobooksWithPagination(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create multiple books
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		filePath := filepath.Join(tempDir, "book"+string(rune(i))+".m4b")
 		os.WriteFile(filePath, []byte("audio"), 0o644)
 

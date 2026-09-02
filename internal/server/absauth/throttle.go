@@ -1,7 +1,7 @@
 // file: internal/server/absauth/throttle.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f9a1c86-2d57-4e0b-b843-9c60e5a7f218
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 package absauth
 
@@ -130,10 +130,7 @@ func (t *Throttle) RecordFailure(accountID, ip string) time.Duration {
 	if n <= SoftThreshold {
 		return 0
 	}
-	d := time.Duration(n-SoftThreshold) * SoftStep
-	if d > SoftMaxDelay {
-		d = SoftMaxDelay
-	}
+	d := min(time.Duration(n-SoftThreshold)*SoftStep, SoftMaxDelay)
 	return d
 }
 

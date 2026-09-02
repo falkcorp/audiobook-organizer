@@ -1,7 +1,7 @@
 // file: internal/server/server_ai_integration_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6d5c4b3a-2918-1706-f5e4-d3c2b1a09f8e
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package server
 
@@ -38,15 +38,15 @@ func TestAIEndpoints_WithStubbedOpenAI(t *testing.T) {
 			return
 		}
 
-		resp := map[string]interface{}{
+		resp := map[string]any{
 			"id":      "chatcmpl-test",
 			"object":  "chat.completion",
 			"created": 1,
 			"model":   "gpt-4o-mini",
-			"choices": []map[string]interface{}{
+			"choices": []map[string]any{
 				{
 					"index": 0,
-					"message": map[string]interface{}{
+					"message": map[string]any{
 						"role":    "assistant",
 						"content": `{"title":"The Hobbit","author":"J.R.R. Tolkien","series":"Middle Earth","series_number":1,"narrator":"Rob Inglis","publisher":"Random House","year":1937,"confidence":"high"}`,
 					},
@@ -79,7 +79,7 @@ func TestAIEndpoints_WithStubbedOpenAI(t *testing.T) {
 	// Response is wrapped in {"data": ...}
 	var parseResp struct {
 		Data struct {
-			Metadata map[string]interface{} `json:"metadata"`
+			Metadata map[string]any `json:"metadata"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &parseResp))
@@ -115,9 +115,9 @@ func TestAIEndpoints_WithStubbedOpenAI(t *testing.T) {
 	// Response is wrapped in {"data": ...}
 	var parseABResp struct {
 		Data struct {
-			Message    string                 `json:"message"`
-			Book       map[string]interface{} `json:"book"`
-			Confidence string                 `json:"confidence"`
+			Message    string         `json:"message"`
+			Book       map[string]any `json:"book"`
+			Confidence string         `json:"confidence"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &parseABResp))

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authorize_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f6c8d31-94b7-4e05-a8c2-51db307ea9f6
-// last-edited: 2026-08-01
+// last-edited: 2026-09-02
 
 package abs_test
 
@@ -109,7 +109,7 @@ func TestAuthorizeDoesNotMintANewSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if w, _ := h.do(t, request{method: http.MethodPost, path: "/api/authorize",
 			headers: map[string]string{"Authorization": "Bearer " + access}}); w.Code != http.StatusOK {
 			t.Fatalf("call %d: got %d", i, w.Code)

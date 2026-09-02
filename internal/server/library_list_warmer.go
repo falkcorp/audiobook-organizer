@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
@@ -111,17 +112,17 @@ func buildListCacheRawQuery(limit, offset int, f audiobookspkg.ListFilters) stri
 	if f.IsPrimaryVersion != nil && *f.IsPrimaryVersion {
 		add("is_primary_version", "true")
 	}
-	out := ""
+	var out strings.Builder
 	for i, p := range parts {
 		if i > 0 {
-			out += "&"
+			out.WriteString("&")
 		}
-		out += p
+		out.WriteString(p)
 	}
-	return out
+	return out.String()
 }
 
-func typeName(v interface{}) string { return fmt.Sprintf("%T", v) }
+func typeName(v any) string { return fmt.Sprintf("%T", v) }
 
 // qry is one cache-warming target. Hoisted to package scope so both the
 // eager phase (warmAudiobookListCache) and the background trickle

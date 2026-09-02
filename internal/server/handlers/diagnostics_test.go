@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package handlers_test
 
@@ -42,8 +42,6 @@ func newDiagCtx(method, path, body string, params gin.Params) (*gin.Context, *ht
 	c.Params = params
 	return c, w
 }
-
-func diagStrPtr(s string) *string { return &s }
 
 // ── StartExport ───────────────────────────────────────────────────────────
 
@@ -330,7 +328,7 @@ func TestDiagnosticsHandler_GetAIResults_ReadsTheV2Row(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	rd := `{"suggestions":[{"id":"s1","action":"merge_versions"}],"raw_responses":[{"custom_id":"c1"}]}`
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: new(rd)}, nil)
 	store.AssertNotCalled(t, "GetOperationByID", mock.Anything)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
@@ -413,7 +411,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersions(t *testing.T) {
 
 	rd := `{"suggestions":[{"id":"s1","action":"merge_versions","book_ids":["b1","b2"],"primary_id":"b1"}]}`
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: new(rd)}, nil)
 	mergeSvc.EXPECT().MergeBooks([]string{"b1", "b2"}, "b1").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, mergeSvc, nil, nil, nil)

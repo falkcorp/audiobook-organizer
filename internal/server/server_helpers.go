@@ -1,7 +1,7 @@
 // file: internal/server/server_helpers.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8a40b808-2bf2-4a35-893c-ad5e3351dbae
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package server
 
@@ -39,19 +39,6 @@ func resetLibrarySizeCache() {
 	cachedLibrarySize = 0
 	cachedImportSize = 0
 	cachedSizeComputedAt = time.Time{}
-}
-
-// Helper functions for pointer conversions
-func stringPtr(s string) *string {
-	return &s
-}
-
-func intPtrHelper(i int) *int {
-	return &i
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }
 
 func stringVal(p *string) any {

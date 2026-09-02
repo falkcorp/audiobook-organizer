@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -324,8 +324,7 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 
 	id := c.Param("id")
 	updated, chosen, note, err := h.approveOne(c.Request.Context(), id, strings.TrimSpace(req.Action))
-	var rej *actionRejection
-	if errors.As(err, &rej) {
+	if rej, ok := errors.AsType[*actionRejection](err); ok {
 		httputil.RespondWithError(c, rej.status, rej.msg, rej.code)
 		return
 	}
@@ -564,8 +563,7 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 			// item and the batch continues. Aborting the whole batch on one
 			// insufficient-evidence hold would make bulk approve useless on a queue
 			// where 70 of 356 holds are exactly that.
-			var rej *actionRejection
-			if errors.As(err, &rej) {
+			if rej, ok := errors.AsType[*actionRejection](err); ok {
 				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Action: chosen, Reason: rej.msg})
 				continue
 			}

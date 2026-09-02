@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.34.0
+// version: 3.34.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package server
 
@@ -1417,10 +1417,7 @@ func (s *Server) setupRoutes() {
 	apiRateLimiter := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
 	if config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
 		rpm := config.AppConfig.APIRateLimitPerMinute
-		burst := rpm / 5
-		if burst < 10 {
-			burst = 10
-		}
+		burst := max(rpm/5, 10)
 		apiRateLimiter = servermiddleware.NewIPRateLimiter(rpm, burst).Middleware()
 	}
 	bodyLimitMiddleware := servermiddleware.MaxRequestBodySize(jsonLimitBytes, uploadLimitBytes)

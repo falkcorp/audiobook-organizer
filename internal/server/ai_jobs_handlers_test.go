@@ -1,7 +1,7 @@
 // file: internal/server/ai_jobs_handlers_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 136d5ad0-d226-471a-8c2c-64992ba3882d
-// last-edited: 2026-08-15
+// last-edited: 2026-09-02
 
 // NOTE(fable5 T022): Ported from SQLiteStore to PebbleStore.
 
@@ -120,7 +120,7 @@ func TestListAIJobsHandler_Pagination(t *testing.T) {
 
 	// Insert 5 test jobs
 	now := time.Now()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := "j" + string(rune('1'+i))
 		require.NoError(t, store.CreateAIJob(database.AIJob{
 			ID: id, Type: "dedup_review", CustomIDPrefix: "x", Status: "completed",

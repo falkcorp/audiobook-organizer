@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
-// last-edited: 2026-08-02
+// last-edited: 2026-09-02
 
 package abs
 
@@ -151,7 +151,7 @@ func oidcRedirectAllowed(uri string) bool {
 	allowed := defaultOIDCRedirectURIs
 	if raw := strings.TrimSpace(os.Getenv(OIDCRedirectURIsEnvVar)); raw != "" {
 		allowed = nil
-		for _, part := range strings.Split(raw, ",") {
+		for part := range strings.SplitSeq(raw, ",") {
 			if p := strings.TrimSpace(part); p != "" {
 				allowed = append(allowed, p)
 			}

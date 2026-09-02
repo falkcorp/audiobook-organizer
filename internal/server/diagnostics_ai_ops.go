@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_ai_ops.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c8f2a91-3d6e-4b07-9e14-8a2f7c0d3b56
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 // diagnostics_ai_ops registers the diagnostics.ai-analyze OperationDef, which
 // replaces the bare goroutine in handlers.SubmitAI that used to mint a legacy
@@ -118,7 +118,7 @@ func (s *Server) RegisterDiagnosticsAIOp(reg *opsregistry.Registry) error {
 			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Batch %s submitted with %d request(s) — polling for completion", batchID, requestCount))
 			_ = reporter.UpdateProgress(80, 100, fmt.Sprintf("Batch %s submitted, awaiting completion", batchID))
 
-			for i := 0; i < diagAIMaxPolls; i++ {
+			for i := range diagAIMaxPolls {
 				if reporter.IsCanceled() {
 					// Best-effort: the batch keeps costing money on OpenAI's side
 					// if it is left running after the op is gone.

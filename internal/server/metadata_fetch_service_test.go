@@ -1,7 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.1
+// version: 4.4.2
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package server
 
@@ -197,11 +197,11 @@ func TestMetadataFetchService_TitleStrippingFallback(t *testing.T) {
 	}
 	mfs := metafetch.NewService(mockDB)
 
-	var searchCount int32
+	var searchCount atomic.Int32
 	src := &mockMetadataSource{
 		name: "TestSource",
 		searchByTitleFunc: func(title string) ([]metadata.BookMetadata, error) {
-			atomic.AddInt32(&searchCount, 1)
+			searchCount.Add(1)
 			// Only the stripped title search succeeds (title-only, no author in query)
 			if title == "The Hobbit" {
 				return []metadata.BookMetadata{{Title: "The Hobbit", Author: "Tolkien"}}, nil
@@ -219,7 +219,7 @@ func TestMetadataFetchService_TitleStrippingFallback(t *testing.T) {
 		t.Fatal("expected non-nil response")
 	}
 
-	count := atomic.LoadInt32(&searchCount)
+	count := searchCount.Load()
 	if count < 1 {
 		t.Errorf("expected at least 1 search call (stripped title), got %d", count)
 	}
@@ -1213,7 +1213,7 @@ func TestSearchMetadataForBook_ResultLimitCap50(t *testing.T) {
 		name: "BigSource",
 		searchByTitleFunc: func(title string) ([]metadata.BookMetadata, error) {
 			var results []metadata.BookMetadata
-			for i := 0; i < 60; i++ {
+			for i := range 60 {
 				results = append(results, metadata.BookMetadata{
 					Title:    fmt.Sprintf("Test Book %d", i),
 					Author:   fmt.Sprintf("Author %d", i),

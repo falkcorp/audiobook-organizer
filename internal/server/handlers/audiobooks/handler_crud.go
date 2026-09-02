@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-06-23
+// last-edited: 2026-09-02
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -127,7 +127,7 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 
 	// Write updated metadata back to the audio file
 	if updatedBook.FilePath != "" {
-		tagMap := make(map[string]interface{})
+		tagMap := make(map[string]any)
 		if v, ok := payload["title"].(string); ok && v != "" {
 			tagMap["title"] = v
 		}

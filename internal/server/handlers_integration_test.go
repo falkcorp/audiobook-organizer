@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-21
+// last-edited: 2026-09-02
 
 package server
 
@@ -500,7 +500,7 @@ func TestBatchUpdateAudiobooks_Empty(t *testing.T) {
 
 	req := &batch.BatchUpdateRequest{
 		IDs:     []string{},
-		Updates: map[string]interface{}{},
+		Updates: map[string]any{},
 	}
 	body, _ := json.Marshal(req)
 

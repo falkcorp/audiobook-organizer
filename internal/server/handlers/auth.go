@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 
 package handlers
 
@@ -192,10 +192,7 @@ func (h *AuthHandler) recordFailure(userID, ip string) time.Duration {
 	if count <= accountSoftThreshold {
 		return 0
 	}
-	d := time.Duration(count-accountSoftThreshold) * accountSoftStep
-	if d > accountSoftMaxDelay {
-		d = accountSoftMaxDelay
-	}
+	d := min(time.Duration(count-accountSoftThreshold)*accountSoftStep, accountSoftMaxDelay)
 	return d
 }
 
@@ -252,10 +249,7 @@ func setSessionCookie(c *gin.Context, token string, expiresAt time.Time) {
 	if c == nil {
 		return
 	}
-	maxAge := int(time.Until(expiresAt).Seconds())
-	if maxAge < 0 {
-		maxAge = 0
-	}
+	maxAge := max(int(time.Until(expiresAt).Seconds()), 0)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     servermiddleware.SessionCookieName,
 		Value:    token,

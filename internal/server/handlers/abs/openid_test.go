@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
-// last-edited: 2026-08-01
+// last-edited: 2026-09-02
 
 package abs
 
@@ -44,12 +44,12 @@ func TestOIDCCodeStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
 	store := &oidcCodeStore{codes: map[string]oidcPendingCode{}}
 	now := time.Now()
 	const n = 50
-	for i := 0; i < n; i++ {
+	for i := range n {
 		store.put("race", oidcPendingCode{UserID: "u1", ExpiresAt: now.Add(time.Minute)}, now)
 
 		results := make(chan bool, 2)
 		start := make(chan struct{})
-		for j := 0; j < 2; j++ {
+		for range 2 {
 			go func() {
 				<-start
 				_, ok := store.take("race")
@@ -58,7 +58,7 @@ func TestOIDCCodeStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
 		}
 		close(start)
 		wins := 0
-		for j := 0; j < 2; j++ {
+		for range 2 {
 			if <-results {
 				wins++
 			}
