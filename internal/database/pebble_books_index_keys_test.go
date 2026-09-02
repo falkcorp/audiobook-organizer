@@ -1,7 +1,7 @@
 // file: internal/database/pebble_books_index_keys_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d9c1f47-8a2e-4b06-9d51-7c4e2a8f60b3
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package database
 
@@ -35,7 +35,7 @@ func TestGetAllBooksFullFrom_SkipsSecondaryIndexKeys(t *testing.T) {
 	store.WaitForWarmup()
 
 	const total = 5
-	for i := 0; i < total; i++ {
+	for i := range total {
 		_, err := store.CreateBook(&Book{
 			Title:    fmt.Sprintf("Book %03d", i),
 			FilePath: fmt.Sprintf("/tmp/book_%03d.m4b", i),

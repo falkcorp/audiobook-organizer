@@ -1,7 +1,7 @@
 // file: internal/database/store_global_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1e3a2b-4d5f-4a6b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 package database
 
@@ -35,7 +35,7 @@ func TestGlobalStoreConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines * 3)
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		// Writer: mimics InitializeStore setting a new store.
 		go func() {
 			defer wg.Done()

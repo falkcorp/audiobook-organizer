@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_bounded_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7f2a1c5e-9b34-4d61-8a70-2c6e5b91d403
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 // Package database — regression suite for the BOUNDED activity query path.
 //
@@ -41,7 +41,7 @@ func seedActivityEntries(t *testing.T, s *PebbleActivityStore, n int, tiers ...s
 	}
 	base := time.Now().UTC().Add(-time.Duration(n) * time.Second)
 	var newest time.Time
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ts := base.Add(time.Duration(i) * time.Second)
 		newest = ts
 		_, err := s.Record(ActivityEntry{
@@ -145,7 +145,7 @@ func TestPebbleActivityStore_QueryDigestSortsLast(t *testing.T) {
 	base := time.Now().UTC().Add(-time.Hour)
 	// Digest entries are written NEWEST so a naive global timestamp sort would
 	// put them first — only the two-group order keeps them last.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Timestamp: base.Add(time.Duration(i) * time.Minute),
 			Tier:      "change", Type: "seeded", Level: "info", Source: "s",
@@ -153,7 +153,7 @@ func TestPebbleActivityStore_QueryDigestSortsLast(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := s.Record(ActivityEntry{
 			Timestamp: base.Add(time.Duration(30+i) * time.Minute),
 			Tier:      "digest", Type: "daily_digest", Level: "info", Source: "compaction",

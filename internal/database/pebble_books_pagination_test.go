@@ -1,7 +1,7 @@
 // file: internal/database/pebble_books_pagination_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f2a9c14-3b6d-4e81-9a2c-0d5f1e8b4a37
-// last-edited: 2026-07-05
+// last-edited: 2026-09-02
 
 package database
 
@@ -29,7 +29,7 @@ func TestGetAllBooksFullFrom_PaginatesPastDoubleLimit(t *testing.T) {
 	const total = 55
 	const pageSize = 10 // old cap was pageSize*2 = 20; 55 books exposes the bug
 
-	for i := 0; i < total; i++ {
+	for i := range total {
 		b := &Book{
 			Title:    fmt.Sprintf("Book %03d", i),
 			FilePath: fmt.Sprintf("/tmp/book_%03d.m4b", i),
@@ -77,7 +77,7 @@ func TestGetAllBooksFullFrom_UnknownCursorEndsIteration(t *testing.T) {
 	store := setupTestPebbleStore(t)
 	store.WaitForWarmup()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		b := &Book{Title: fmt.Sprintf("B%d", i), FilePath: fmt.Sprintf("/tmp/b%d.m4b", i)}
 		created, err := store.CreateBook(b)
 		require.NoError(t, err)

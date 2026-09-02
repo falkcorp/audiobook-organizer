@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup_counts_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b1e4c92-5d3a-4f18-9e26-1a0c8b7d4f35
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 package database
 
@@ -36,7 +36,7 @@ func TestWarmupCounts_CountRowsNotPebbleKeys(t *testing.T) {
 	store.WaitForWarmup()
 
 	const totalBooks = 4
-	for i := 0; i < totalBooks; i++ {
+	for i := range totalBooks {
 		hash := fmt.Sprintf("hash%03d", i)
 		orig := fmt.Sprintf("orighash%03d", i)
 		organized := fmt.Sprintf("orghash%03d", i)

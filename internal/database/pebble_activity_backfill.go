@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_backfill.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a7b8c9d0-e1f2-0007-0123-000000000007
 
 // Package database — NutsDB → PebbleDB activity backfill.
@@ -15,6 +15,8 @@
 // The backfill is resumable: if interrupted, the next run rescans NutsDB from scratch
 // and re-writes already-copied entries — since Set is idempotent this is safe and
 // merely redundant work.
+// last-edited: 2026-09-02
+
 package database
 
 import (
@@ -102,10 +104,7 @@ func BackfillNutsActivityToPebble(
 			default:
 			}
 
-			end := i + 500
-			if end > len(kvs) {
-				end = len(kvs)
-			}
+			end := min(i+500, len(kvs))
 			batch := kvs[i:end]
 
 			if dryRun {

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_pushdown_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e9eb1e1-29af-4a5d-8cd9-2be21b5aad0c
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Package database — differential suite for the activity secondary-index limit
 // pushdown.
@@ -44,7 +44,7 @@ func seedOpEntries(t *testing.T, s *PebbleActivityStore, opID string, n int) {
 	t.Helper()
 	tiers := []string{"change", "info", "debug", "batch"}
 	base := time.Now().UTC().Add(-time.Duration(n) * time.Second)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		_, err := s.Record(ActivityEntry{
 			Timestamp:   base.Add(time.Duration(i) * time.Second),
 			Tier:        tiers[i%len(tiers)],
@@ -175,7 +175,7 @@ func TestIndexPushdownOrphanedRefDoesNotConsumeAPageSlot(t *testing.T) {
 
 	keys := indexRefKeys(t, s, prefix)
 	require.Len(t, keys, seeded)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		orphanPrimaryRow(t, s, keys[i]) // the three newest
 	}
 
@@ -202,7 +202,7 @@ func TestIndexPushdownOrphansScatteredThroughoutAgreeWithFullPath(t *testing.T) 
 	keys := indexRefKeys(t, s, prefix)
 	require.Len(t, keys, seeded)
 	orphaned := 0
-	for i := 0; i < len(keys); i++ {
+	for i := range keys {
 		if i%3 == 0 { // 0, 3, 6, ... — includes the newest and the oldest
 			orphanPrimaryRow(t, s, keys[i])
 			orphaned++
@@ -384,7 +384,7 @@ func TestIndexPushdownEligibilityRefusesUndecidableFilters(t *testing.T) {
 		// teaching either path to apply a time bound does not change it. This
 		// would have stayed green while the two paths diverged on `total`.
 		// TestIndexPushdownTimeBoundsDoNotDivergeBetweenPaths is the real control.
-		"since_until": {OperationID: "op-x", Limit: 10, Since: timePtr(time.Now()), Until: timePtr(time.Now())},
+		"since_until": {OperationID: "op-x", Limit: 10, Since: new(time.Now()), Until: new(time.Now())},
 	}
 	for name, f := range accepted {
 		t.Run("accepted/"+name, func(t *testing.T) {
@@ -427,10 +427,10 @@ func TestIndexPushdownTimeBoundsDoNotDivergeBetweenPaths(t *testing.T) {
 
 	now := time.Now()
 	for name, f := range map[string]ActivityFilter{
-		"since well before the rows": {OperationID: opID, Limit: 10, Since: timePtr(now.Add(-24 * time.Hour))},
-		"since after every row":      {OperationID: opID, Limit: 10, Since: timePtr(now.Add(24 * time.Hour))},
-		"until before every row":     {OperationID: opID, Limit: 10, Until: timePtr(now.Add(-24 * time.Hour))},
-		"both bounds, mid-page":      {OperationID: opID, Limit: 5, Offset: 10, Since: timePtr(now.Add(-time.Hour)), Until: timePtr(now.Add(time.Hour))},
+		"since well before the rows": {OperationID: opID, Limit: 10, Since: new(now.Add(-24 * time.Hour))},
+		"since after every row":      {OperationID: opID, Limit: 10, Since: new(now.Add(24 * time.Hour))},
+		"until before every row":     {OperationID: opID, Limit: 10, Until: new(now.Add(-24 * time.Hour))},
+		"both bounds, mid-page":      {OperationID: opID, Limit: 5, Offset: 10, Since: new(now.Add(-time.Hour)), Until: new(now.Add(time.Hour))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			assertPathsAgree(t, s, prefix, f)
@@ -753,5 +753,3 @@ func TestIndexKeyOrderIsChronological(t *testing.T) {
 	assert.Negative(t, bytes.Compare(earlyKey, lateKey),
 		"a later timestamp must sort strictly after an earlier one across a digit-count boundary")
 }
-
-func timePtr(t time.Time) *time.Time { return &t }

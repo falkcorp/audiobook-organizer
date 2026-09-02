@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_search_dirty_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b3960a75-0209-4970-a35e-e139faf95d0b
-// last-edited: 2026-08-09
+// last-edited: 2026-09-02
 //
 // Tests for the search-index reconciliation dirty set.
 //
@@ -85,7 +85,7 @@ func TestSearchIndexDirty_MarkIsIdempotent(t *testing.T) {
 	// A book dropped repeatedly during a bulk operation must occupy exactly
 	// one slot; otherwise the backlog figure that drives the adaptive batch
 	// size would be inflated by duplicates.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if err := s.MarkSearchIndexDirty("same-book"); err != nil {
 			t.Fatalf("mark %d: %v", i, err)
 		}
@@ -99,7 +99,7 @@ func TestSearchIndexDirty_LimitBoundsTheBatch(t *testing.T) {
 	s := newDirtyTestStore(t)
 
 	const total = 2500
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if err := s.MarkSearchIndexDirty(fmt.Sprintf("book-%05d", i)); err != nil {
 			t.Fatalf("mark %d: %v", i, err)
 		}

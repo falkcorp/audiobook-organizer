@@ -1,6 +1,7 @@
 // file: internal/database/metadata_history_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
+// last-edited: 2026-09-02
 
 package database
 
@@ -80,7 +81,7 @@ func TestGetMetadataChangeHistory_OrderedByNewest(t *testing.T) {
 	defer cleanup()
 
 	base := time.Now().Add(-3 * time.Hour)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		val := `"value` + string(rune('A'+i)) + `"`
 		record := &MetadataChangeRecord{
 			BookID:     "book-order",
@@ -197,7 +198,7 @@ func TestGetBookChangeHistory_LimitRespected(t *testing.T) {
 	defer cleanup()
 
 	now := time.Now()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		val := `"val` + string(rune('0'+i)) + `"`
 		record := &MetadataChangeRecord{
 			BookID:     "book-limit",

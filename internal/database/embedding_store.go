@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.15.0
-// last-edited: 2026-09-01
+// version: 2.15.1
+// last-edited: 2026-09-02
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -1126,14 +1126,8 @@ func paginateCandidates(all []DedupCandidate, f CandidateFilter) ([]DedupCandida
 	if limit <= 0 {
 		limit = 50
 	}
-	start := f.Offset
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
+	start := min(f.Offset, total)
+	end := min(start+limit, total)
 	return all[start:end], total
 }
 

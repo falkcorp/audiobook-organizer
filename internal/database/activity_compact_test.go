@@ -1,7 +1,7 @@
 // file: internal/database/activity_compact_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-21
+// last-edited: 2026-09-02
 
 package database
 
@@ -43,7 +43,7 @@ func TestCompactByDay_BasicCompaction(t *testing.T) {
 	olderThan := time.Date(2025, 6, 12, 0, 0, 0, 0, time.UTC)
 
 	// 3 change-tier entries on day 1
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "metadata_applied",
@@ -58,7 +58,7 @@ func TestCompactByDay_BasicCompaction(t *testing.T) {
 	}
 
 	// 2 change-tier entries on day 2
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "tag_written",
@@ -224,7 +224,7 @@ func TestCompactByDay_TruncatesLargeDays(t *testing.T) {
 	day := time.Date(2025, 3, 20, 6, 0, 0, 0, time.UTC)
 	olderThan := time.Date(2025, 3, 21, 0, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 600; i++ {
+	for i := range 600 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "debug",
 			Type:      "tag_written",
@@ -279,7 +279,7 @@ func TestCompactByDay_MergesIntoExistingDigest(t *testing.T) {
 	// olderThan is set so every run compacts everything written so far.
 	initialCutoff := time.Date(2025, 5, 15, 12, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "metadata_applied",
@@ -301,7 +301,7 @@ func TestCompactByDay_MergesIntoExistingDigest(t *testing.T) {
 	// Late-arriving entries: 5 more entries for the SAME day, written
 	// AFTER the first compact ran (e.g. background imports, crash recovery).
 	lateDay := time.Date(2025, 5, 15, 11, 0, 0, 0, time.UTC)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "tag_written",
@@ -351,7 +351,7 @@ func TestCompactByDay_DigestItemTimestampAndTags(t *testing.T) {
 	olderThan := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
 
 	// Insert 3 entries with explicit timestamps and tags, 1 minute apart.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "metadata_applied",
@@ -406,7 +406,7 @@ func TestNutsActivityStore_RecompactDigests(t *testing.T) {
 	day := time.Date(2025, 3, 10, 0, 0, 0, 0, time.UTC)
 
 	// Insert 3 entries with legacy-style types that should be re-derived.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "system_log", // legacy type — should be re-derived
@@ -475,7 +475,7 @@ func TestSummarize_GroupsByDay(t *testing.T) {
 	day1 := time.Date(2025, 6, 1, 10, 0, 0, 0, time.UTC)
 	day2 := time.Date(2025, 6, 5, 10, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "scan_progress",
@@ -486,7 +486,7 @@ func TestSummarize_GroupsByDay(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "scan_progress",
@@ -527,7 +527,7 @@ func TestPebbleActivityStore_Summarize_GroupsByDay(t *testing.T) {
 	day1 := time.Date(2025, 6, 1, 10, 0, 0, 0, time.UTC)
 	day2 := time.Date(2025, 6, 5, 10, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "scan_progress",
@@ -538,7 +538,7 @@ func TestPebbleActivityStore_Summarize_GroupsByDay(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := s.Record(ActivityEntry{
 			Tier:      "change",
 			Type:      "scan_progress",

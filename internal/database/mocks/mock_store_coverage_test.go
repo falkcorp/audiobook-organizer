@@ -1,3 +1,8 @@
+// file: internal/database/mocks/mock_store_coverage_test.go
+// version: 1.1.0
+// guid: ad8d5c0c-9622-4c23-bd98-c94cbbb11298
+// last-edited: 2026-09-02
+
 package mocks
 
 import (
@@ -11,15 +16,14 @@ import (
 func TestMockStore_Coverage(t *testing.T) {
 	m := NewMockStore(t)
 	exp := m.EXPECT()
-	storeType := reflect.TypeOf((*database.Store)(nil)).Elem()
+	storeType := reflect.TypeFor[database.Store]()
 
-	for i := 0; i < storeType.NumMethod(); i++ {
-		method := storeType.Method(i)
+	for method := range storeType.Methods() {
 		name := method.Name
 
 		// Build expectation via typed expecter methods.
 		matcherArgs := make([]reflect.Value, 0, method.Type.NumIn())
-		for j := 0; j < method.Type.NumIn(); j++ {
+		for range method.Type.Ins() {
 			matcherArgs = append(matcherArgs, reflect.ValueOf(mock.Anything))
 		}
 
@@ -48,8 +52,8 @@ func TestMockStore_Coverage(t *testing.T) {
 			t.Fatalf("EXPECT().%s missing Return(...)", name)
 		}
 		returnArgs := make([]reflect.Value, 0, method.Type.NumOut())
-		for j := 0; j < method.Type.NumOut(); j++ {
-			returnArgs = append(returnArgs, reflect.Zero(method.Type.Out(j)))
+		for out := range method.Type.Outs() {
+			returnArgs = append(returnArgs, reflect.Zero(out))
 		}
 		returnMethod.Call(returnArgs)
 
@@ -59,8 +63,8 @@ func TestMockStore_Coverage(t *testing.T) {
 			t.Fatalf("MockStore missing method %s", name)
 		}
 		callArgs := make([]reflect.Value, 0, method.Type.NumIn())
-		for j := 0; j < method.Type.NumIn(); j++ {
-			callArgs = append(callArgs, reflect.Zero(method.Type.In(j)))
+		for in := range method.Type.Ins() {
+			callArgs = append(callArgs, reflect.Zero(in))
 		}
 		_ = methodVal.Call(callArgs)
 	}

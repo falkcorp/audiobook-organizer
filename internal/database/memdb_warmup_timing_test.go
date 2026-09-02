@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup_timing_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4d1e73-5f26-4a90-b8e1-7d0a3c5f2b64
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package database
 
@@ -31,7 +31,7 @@ func TestWarmupDurations_EveryWarmedTableIsAttributed(t *testing.T) {
 
 	// Seed a little of everything the warmup scans so no phase is trivially
 	// empty. Books carry the indexes that matter most.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		hash := fmt.Sprintf("timinghash%03d", i)
 		_, err := store.CreateBook(&Book{
 			Title:    fmt.Sprintf("Timing Book %03d", i),

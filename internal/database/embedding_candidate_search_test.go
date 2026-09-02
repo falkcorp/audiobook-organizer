@@ -1,7 +1,7 @@
 // file: internal/database/embedding_candidate_search_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1f4a9e-2b83-4d15-9e6a-0f8c3d7b45a2
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package database
 
@@ -38,13 +38,13 @@ func seedSearchCandidatesIndexed(t *testing.T, indexed bool) *EmbeddingStore {
 	store := newTestEmbeddingStore(t)
 	for _, c := range []DedupCandidate{
 		{EntityType: "book", EntityAID: "alpha-a", EntityBID: "alpha-b",
-			Layer: "embedding", Band: "CERTAIN", Similarity: floatPtr(0.99), Status: "pending"},
+			Layer: "embedding", Band: "CERTAIN", Similarity: new(0.99), Status: "pending"},
 		{EntityType: "book", EntityAID: "beta-a", EntityBID: "beta-b",
-			Layer: "fingerprint", Band: "HIGH", Similarity: floatPtr(0.90), Status: "pending"},
+			Layer: "fingerprint", Band: "HIGH", Similarity: new(0.90), Status: "pending"},
 		{EntityType: "book", EntityAID: "gamma-a", EntityBID: "gamma-b",
-			Layer: "fingerprint", Band: "MEDIUM", Similarity: floatPtr(0.80), Status: "pending"},
+			Layer: "fingerprint", Band: "MEDIUM", Similarity: new(0.80), Status: "pending"},
 		{EntityType: "book", EntityAID: "delta-a", EntityBID: "delta-b",
-			Layer: "embedding", Band: "REVIEW", Similarity: floatPtr(0.70), Status: "pending"},
+			Layer: "embedding", Band: "REVIEW", Similarity: new(0.70), Status: "pending"},
 	} {
 		require.NoError(t, store.UpsertCandidate(c))
 	}

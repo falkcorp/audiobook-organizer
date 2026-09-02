@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"math/rand"
 	"os"
@@ -254,10 +255,7 @@ func (s *HNSWEmbeddingStore) FindSimilar(
 	// Over-fetch so the metadata filter has enough survivors. Cap at graph size,
 	// and at EfSearch: the search beam can't return more good neighbors than its
 	// width, so requesting k > EfSearch would silently degrade recall.
-	k := maxResults * hnswOverFetchFactor
-	if k > hnswEfSearch {
-		k = hnswEfSearch
-	}
+	k := min(maxResults*hnswOverFetchFactor, hnswEfSearch)
 	if k > g.Len() {
 		k = g.Len()
 	}
@@ -326,9 +324,7 @@ func copyMeta(m map[string]string) map[string]string {
 		return nil
 	}
 	cp := make(map[string]string, len(m))
-	for k, v := range m {
-		cp[k] = v
-	}
+	maps.Copy(cp, m)
 	return cp
 }
 

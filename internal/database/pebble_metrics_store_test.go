@@ -1,6 +1,7 @@
 // file: internal/database/pebble_metrics_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d0e1f2a3-b4c5-0011-4567-000000000011
+// last-edited: 2026-09-02
 
 package database
 
@@ -81,7 +82,7 @@ func TestPebbleMetricsStore_PruneCacheStatsHistory(t *testing.T) {
 	cutoff := time.Now().UTC().Add(-1 * time.Hour)
 
 	// 3 old snapshots.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := s.RecordCacheStatsSnapshots([]CacheStatsSnapshot{
 			{CacheName: "authors", Timestamp: cutoff.Add(-time.Duration(i+1) * time.Minute), Hits: int64(i)},
 		})

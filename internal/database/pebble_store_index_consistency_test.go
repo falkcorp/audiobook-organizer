@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_index_consistency_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f7a9c21-6b4d-4e8f-a1c2-5d6e7f8091ab
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package database
 
@@ -12,8 +12,6 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 )
-
-func boolPtr(b bool) *bool { return &b }
 
 // TestWorkIndexExcludesSoftDeleted covers Bug 1 for the work index: an
 // UpdateBook that sets MarkedForDeletion without changing WorkID must not leave
@@ -27,7 +25,7 @@ func TestWorkIndexExcludesSoftDeleted(t *testing.T) {
 	book := &Book{
 		Title:    "Work Book",
 		FilePath: "/test/work/soft.mp3",
-		WorkID:   strPtr(workID),
+		WorkID:   new(workID),
 	}
 	created, err := store.CreateBook(book)
 	if err != nil {
@@ -40,7 +38,7 @@ func TestWorkIndexExcludesSoftDeleted(t *testing.T) {
 
 	// Soft-delete via UpdateBook, same WorkID (mirrors SoftDeleteBook).
 	upd := *created
-	upd.MarkedForDeletion = boolPtr(true)
+	upd.MarkedForDeletion = new(true)
 	if _, err := store.UpdateBook(created.ID, &upd); err != nil {
 		t.Fatalf("UpdateBook soft-delete: %v", err)
 	}
@@ -62,8 +60,8 @@ func TestVersionGroupIndexExcludesSoftDeleted(t *testing.T) {
 	defer cleanup()
 
 	vg := "VG0000000000000000000000BB"
-	live := &Book{Title: "Live", FilePath: "/test/vg/live.mp3", VersionGroupID: strPtr(vg)}
-	doomed := &Book{Title: "Doomed", FilePath: "/test/vg/doomed.mp3", VersionGroupID: strPtr(vg)}
+	live := &Book{Title: "Live", FilePath: "/test/vg/live.mp3", VersionGroupID: new(vg)}
+	doomed := &Book{Title: "Doomed", FilePath: "/test/vg/doomed.mp3", VersionGroupID: new(vg)}
 	if _, err := store.CreateBook(live); err != nil {
 		t.Fatalf("CreateBook live: %v", err)
 	}
@@ -77,7 +75,7 @@ func TestVersionGroupIndexExcludesSoftDeleted(t *testing.T) {
 	}
 
 	upd := *createdDoomed
-	upd.MarkedForDeletion = boolPtr(true)
+	upd.MarkedForDeletion = new(true)
 	if _, err := store.UpdateBook(createdDoomed.ID, &upd); err != nil {
 		t.Fatalf("UpdateBook soft-delete: %v", err)
 	}
@@ -102,7 +100,7 @@ func TestWorkIndexReflectsMetadataEdit(t *testing.T) {
 	created, err := store.CreateBook(&Book{
 		Title:    "Old Title",
 		FilePath: "/test/work/edit.mp3",
-		WorkID:   strPtr(workID),
+		WorkID:   new(workID),
 	})
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
@@ -133,7 +131,7 @@ func TestDeleteBookRemovesWorkIndexRow(t *testing.T) {
 	created, err := store.CreateBook(&Book{
 		Title:    "To Delete",
 		FilePath: "/test/work/delete.mp3",
-		WorkID:   strPtr(workID),
+		WorkID:   new(workID),
 	})
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
@@ -181,7 +179,7 @@ func TestCreateNarratorConcurrent(t *testing.T) {
 	ids := make([]int, n)
 	errs := make([]error, n)
 	start := make(chan struct{})
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

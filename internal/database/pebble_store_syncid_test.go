@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 // Tests for the sync_item:/sync_item:book: keyspace (durable ABS libraryItemId
 // identity). Covers: mint-on-first-encounter idempotency, distinct IDs per book,
@@ -266,7 +266,7 @@ func TestSyncID_ConcurrentMintRace_SingleWinner(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		i := i
 		go func() {
 			defer wg.Done()

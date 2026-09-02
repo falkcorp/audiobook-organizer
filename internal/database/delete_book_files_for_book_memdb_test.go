@@ -1,7 +1,7 @@
 // file: internal/database/delete_book_files_for_book_memdb_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b81f6d4-9e07-4a53-b2c9-e15a08d47f36
-// last-edited: 2026-08-14
+// last-edited: 2026-09-02
 
 package database
 
@@ -40,7 +40,7 @@ func TestDeleteBookFilesForBook_RemovesMemdbRows(t *testing.T) {
 	// UpdateBook (pebble_store_book_aggregates.go:131), no resync happens, and
 	// the missing memdb delete is observable — the only path where it bites,
 	// and exactly the shape the 2026-08-04 canary hit in production.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		require.NoError(t, store.CreateBookFile(&BookFile{
 			BookID:   book.ID,
 			FilePath: fmt.Sprintf("/lib/doomed/part-%d.mp3", i),

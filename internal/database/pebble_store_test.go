@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-07-07
+// last-edited: 2026-09-02
 
 package database
 
@@ -255,7 +255,7 @@ func TestPebbleGetAllBooks(t *testing.T) {
 	defer cleanup()
 
 	// Create multiple books
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		book := &Book{
 			Title:    "Book " + string(rune('A'+i)),
 			FilePath: "/test/path/book" + string(rune('A'+i)) + ".mp3",
@@ -297,7 +297,7 @@ func TestPebbleGetBooksBySeriesIDCore(t *testing.T) {
 	}
 
 	// Create books in series
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		seq := i + 1
 		book := &Book{
 			Title:          "Series Book " + string(rune('A'+i)),
@@ -343,7 +343,7 @@ func TestPebbleGetBooksByAuthorIDCore(t *testing.T) {
 	}
 
 	// Create books by author
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		book := &Book{
 			Title:    "Author Book " + string(rune('A'+i)),
 			FilePath: "/test/author/book" + string(rune('A'+i)) + ".mp3",
@@ -629,7 +629,7 @@ func TestSearchBooksUnlimited(t *testing.T) {
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, err := store.CreateBook(&Book{
 			Title:    "Unlimited Test Book " + string(rune('A'+i)),
 			FilePath: "/test/unlimited/book" + string(rune('A'+i)) + ".mp3",
@@ -661,7 +661,7 @@ func TestPebbleCountPrimaryBooks(t *testing.T) {
 	}
 
 	// Create books
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		book := &Book{
 			Title:    "Count Book " + string(rune('A'+i)),
 			FilePath: "/test/count/book" + string(rune('A'+i)) + ".mp3",
@@ -1349,10 +1349,10 @@ func BenchmarkGetAllSeriesBookCounts_Pebble(b *testing.B) {
 	author, _ := store.CreateAuthor("Test Author")
 
 	// Create 20 series with 50 books each (1000 total books for reasonable benchmark)
-	for seriesIdx := 0; seriesIdx < 20; seriesIdx++ {
+	for seriesIdx := range 20 {
 		series, _ := store.CreateSeries(fmt.Sprintf("Series %d", seriesIdx), &author.ID)
 
-		for bookIdx := 0; bookIdx < 50; bookIdx++ {
+		for bookIdx := range 50 {
 			isPrimary := true
 			book := &Book{
 				Title:            fmt.Sprintf("Book %d", bookIdx),

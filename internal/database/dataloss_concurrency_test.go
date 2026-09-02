@@ -1,7 +1,7 @@
 // file: internal/database/dataloss_concurrency_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a6b7c8d9-0e1f-2a3b-4c5d-concurrency001
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package database
 
@@ -36,10 +36,7 @@ func TestConcurrency_StoreInvariantsHold(t *testing.T) {
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
 
-	workers := runtime.NumCPU()
-	if workers < 4 {
-		workers = 4
-	}
+	workers := max(runtime.NumCPU(), 4)
 	if workers > 16 {
 		workers = 16
 	}
@@ -53,11 +50,11 @@ func TestConcurrency_StoreInvariantsHold(t *testing.T) {
 	type owned struct{ ids []string }
 	all := make([]owned, workers)
 	for w := 0; w < workers; w++ {
-		for k := 0; k < booksPerWorker; k++ {
+		for k := range booksPerWorker {
 			b, err := store.CreateBook(&Book{
 				Title:    fmt.Sprintf("w%d-b%d", w, k),
 				FilePath: fmt.Sprintf("/lib/conc/w%d-b%d.m4b", w, k),
-				WorkID:   strPtr(sharedWorks[(w+k)%len(sharedWorks)]),
+				WorkID:   new(sharedWorks[(w+k)%len(sharedWorks)]),
 			})
 			if err != nil {
 				t.Fatalf("CreateBook w%d k%d: %v", w, k, err)
@@ -75,7 +72,7 @@ func TestConcurrency_StoreInvariantsHold(t *testing.T) {
 			defer wg.Done()
 			<-start
 			deleted := map[string]bool{}
-			for s := 0; s < steps; s++ {
+			for s := range steps {
 				id := all[w].ids[(w+s)%booksPerWorker]
 				if deleted[id] {
 					continue

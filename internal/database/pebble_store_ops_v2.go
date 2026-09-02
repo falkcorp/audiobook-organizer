@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.12.0
+// version: 3.12.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -24,7 +24,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -521,7 +520,7 @@ func (p *PebbleStore) AppendOpLogsV2(rows []OpLogV2Row) (err error) {
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	for _, row := range rows {
-		seq := atomic.AddInt64(&p.opsLogSeq, 1)
+		seq := p.opsLogSeq.Add(1)
 		key := opv2LogKey(row.OperationID, row.CreatedAt, seq)
 		data, err := json.Marshal(&row)
 		if err != nil {

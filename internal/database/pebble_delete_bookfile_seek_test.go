@@ -1,7 +1,7 @@
 // file: internal/database/pebble_delete_bookfile_seek_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e8187d63-0c08-49b4-9879-6cab49841d0b
-// last-edited: 2026-08-04
+// last-edited: 2026-09-02
 
 package database
 
@@ -134,7 +134,7 @@ func TestDeleteBookFile_LeavesSiblingRowsIntact(t *testing.T) {
 		t.Fatalf("CreateBook: %v", err)
 	}
 	var ids []string
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		f := &BookFile{BookID: book.ID, FilePath: fmt.Sprintf("/lib/Sibling Book/%02d.mp3", i), Duration: 600}
 		if err := s.CreateBookFile(f); err != nil {
 			t.Fatalf("CreateBookFile %d: %v", i, err)

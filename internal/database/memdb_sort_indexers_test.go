@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sort_indexers_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c8a6f31-9b07-4de5-a142-70e3d95cb864
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 //
 // Tests for the sorted secondary indexes.
 //
@@ -106,11 +106,11 @@ func TestBookYearSortValue_MirrorsComparator(t *testing.T) {
 		wantVal     int64
 		wantPresent bool
 	}{
-		{"release wins", ptrInt_mem(2001), ptrInt_mem(1999), 2001, true},
-		{"zero release falls back to print", ptrInt_mem(0), ptrInt_mem(1999), 1999, true},
-		{"nil release falls back to print", nil, ptrInt_mem(1999), 1999, true},
+		{"release wins", new(2001), new(1999), 2001, true},
+		{"zero release falls back to print", new(0), new(1999), 1999, true},
+		{"nil release falls back to print", nil, new(1999), 1999, true},
 		{"both absent", nil, nil, 0, false},
-		{"both zero is absent", ptrInt_mem(0), ptrInt_mem(0), 0, false},
+		{"both zero is absent", new(0), new(0), 0, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -266,17 +266,17 @@ func TestSortIndexOrderMatchesComparator(t *testing.T) {
 	t2 := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	books := []Book{
-		{ID: "b1", Title: "One", Narrator: ptrString_mem("Zoe"), Duration: ptrInt_mem(300),
-			FileSize: ptrInt64_mem(9000), Bitrate: ptrInt_mem(128),
-			AudiobookReleaseYear: ptrInt_mem(2001), CreatedAt: &t1, UpdatedAt: &t2},
-		{ID: "b2", Title: "Two", Narrator: ptrString_mem("adam"), Duration: ptrInt_mem(100),
-			FileSize: ptrInt64_mem(100), Bitrate: ptrInt_mem(320),
-			AudiobookReleaseYear: ptrInt_mem(1999), CreatedAt: &t2, UpdatedAt: &t1},
+		{ID: "b1", Title: "One", Narrator: new("Zoe"), Duration: new(300),
+			FileSize: ptrInt64_mem(9000), Bitrate: new(128),
+			AudiobookReleaseYear: new(2001), CreatedAt: &t1, UpdatedAt: &t2},
+		{ID: "b2", Title: "Two", Narrator: new("adam"), Duration: new(100),
+			FileSize: ptrInt64_mem(100), Bitrate: new(320),
+			AudiobookReleaseYear: new(1999), CreatedAt: &t2, UpdatedAt: &t1},
 		// No values at all — must still appear, sorted last ascending.
 		{ID: "b3", Title: "Three"},
-		{ID: "b4", Title: "Four", Narrator: ptrString_mem("Mabel"), Duration: ptrInt_mem(0),
-			FileSize: ptrInt64_mem(0), Bitrate: ptrInt_mem(0),
-			PrintYear: ptrInt_mem(1888)},
+		{ID: "b4", Title: "Four", Narrator: new("Mabel"), Duration: new(0),
+			FileSize: ptrInt64_mem(0), Bitrate: new(0),
+			PrintYear: new(1888)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -366,8 +366,8 @@ func TestDisabledSortFieldFallsBackInsteadOfErroring(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", Title: "A", Duration: ptrInt_mem(30)},
-		{ID: "b2", Title: "B", Duration: ptrInt_mem(10)},
+		{ID: "b1", Title: "A", Duration: new(30)},
+		{ID: "b2", Title: "B", Duration: new(10)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -395,9 +395,9 @@ func TestSortIndexDescendingReversesAscending(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", Title: "A", Duration: ptrInt_mem(10)},
-		{ID: "b2", Title: "B", Duration: ptrInt_mem(30)},
-		{ID: "b3", Title: "C", Duration: ptrInt_mem(20)},
+		{ID: "b1", Title: "A", Duration: new(10)},
+		{ID: "b2", Title: "B", Duration: new(30)},
+		{ID: "b3", Title: "C", Duration: new(20)},
 		{ID: "b4", Title: "D"}, // missing
 	}
 	seedMemStore(t, m, books, nil, nil, nil)

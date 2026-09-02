@@ -1,7 +1,7 @@
 // file: internal/database/dataloss_key_encoding_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f5b6c7d8-9e0f-1a2b-3c4d-keyencoding001
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package database
 
@@ -124,11 +124,11 @@ func TestKeyEncoding_WorkIndex(t *testing.T) {
 
 	widA := "WORK:A:1"
 	widB := "WORK:A:1:extra" // shares the byte prefix "WORK:A:1"
-	a, err := store.CreateBook(&Book{Title: "wa", FilePath: "/lib/wa.m4b", WorkID: strPtr(widA)})
+	a, err := store.CreateBook(&Book{Title: "wa", FilePath: "/lib/wa.m4b", WorkID: new(widA)})
 	if err != nil {
 		t.Fatalf("CreateBook a: %v", err)
 	}
-	b, err := store.CreateBook(&Book{Title: "wb", FilePath: "/lib/wb.m4b", WorkID: strPtr(widB)})
+	b, err := store.CreateBook(&Book{Title: "wb", FilePath: "/lib/wb.m4b", WorkID: new(widB)})
 	if err != nil {
 		t.Fatalf("CreateBook b: %v", err)
 	}

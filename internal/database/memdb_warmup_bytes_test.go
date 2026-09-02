@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup_bytes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b91d70e-52c4-4f18-a6d3-9e7f04c1b8a5
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package database
 
@@ -51,7 +51,7 @@ func seedWarmBytesBook(t *testing.T, store *PebbleStore, tag string, n int, fp [
 	})
 	require.NoError(t, err)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		fh := fmt.Sprintf("warmbytes-%s-%03d", tag, i)
 		bf := &BookFile{
 			BookID:   book.ID,

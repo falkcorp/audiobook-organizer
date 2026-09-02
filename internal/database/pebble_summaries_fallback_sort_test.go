@@ -1,7 +1,7 @@
 // file: internal/database/pebble_summaries_fallback_sort_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b8e2c14-7a93-4d60-8f25-1c9d4e7a3b62
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 package database
 
@@ -205,10 +205,7 @@ func TestGetAllBookSummariesFiltered_FallbackHonorsSortBy(t *testing.T) {
 						SortBy: "title", SortAscending: true,
 					})
 					require.NoError(t, err)
-					end := offset + pageSize
-					if end > len(wantAsc) {
-						end = len(wantAsc)
-					}
+					end := min(offset+pageSize, len(wantAsc))
 					require.Equal(t, wantAsc[offset:end], summaryTitlesInOrder(page),
 						"%s: page at offset %d", backend, offset)
 					seen = append(seen, summaryTitlesInOrder(page)...)

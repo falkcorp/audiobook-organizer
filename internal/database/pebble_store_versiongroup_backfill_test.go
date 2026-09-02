@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_versiongroup_backfill_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b8e1d07-9a3c-4f52-8e61-7d0c2a9f4b13
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package database
 
@@ -38,7 +38,7 @@ func countVGIndexRows(t *testing.T, s *PebbleStore) int {
 func seedGroupedBooks(t *testing.T, s *PebbleStore, gid string, n int) []string {
 	t.Helper()
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b := &Book{
 			Title:          fmt.Sprintf("Backfill Book %d", i),
 			VersionGroupID: &gid,

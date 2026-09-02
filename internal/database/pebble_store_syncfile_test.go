@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncfile_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 80186a0c-f2d2-4c17-9ef2-cfb78d441e1f
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 package database
 
@@ -229,7 +229,7 @@ func TestSyncFile_ConcurrentMintRace_SingleWinner(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		go func(idx int) {
 			defer wg.Done()
 			id, err := store.MintOrGetSyncFileID("race-book", "race-file")
@@ -464,7 +464,7 @@ func TestSyncFile_RepointSyncFileToBook_ConcurrentRace_SingleConsistentOutcome(t
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		go func(idx int) {
 			defer wg.Done()
 			errs[idx] = store.RepointSyncFileToBook("race-book-A", "race-book-B", "race-file")

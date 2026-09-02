@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync_bench_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e7c4a92-6d15-4b83-a9f0-2c58e1d76b34
-// last-edited: 2026-08-14
+// last-edited: 2026-09-02
 
 package database
 
@@ -28,7 +28,7 @@ func BenchmarkParallelUpdateBook(b *testing.B) {
 
 	const nBooks = 32
 	books := make([]*Book, nBooks)
-	for i := 0; i < nBooks; i++ {
+	for i := range nBooks {
 		bk, err := store.CreateBook(&Book{Title: fmt.Sprintf("bench-%02d", i), FilePath: fmt.Sprintf("/b/%02d", i)})
 		if err != nil {
 			b.Fatalf("CreateBook: %v", err)
@@ -38,7 +38,7 @@ func BenchmarkParallelUpdateBook(b *testing.B) {
 		// is exactly what C816 moved out of the global writer lock. Production
 		// AcoustID fingerprints run tens of KB per file.
 		fp := []byte(strings.Repeat("AQADtEmSJEmSJEcOHzh8", 1500)) // ~30KB
-		for j := 0; j < 8; j++ {
+		for j := range 8 {
 			if err := store.CreateBookFile(&BookFile{BookID: bk.ID, FilePath: fmt.Sprintf("/b/%02d/f%d.mp3", i, j), Duration: 60, AcoustIDFingerprint: fp}); err != nil {
 				b.Fatalf("CreateBookFile: %v", err)
 			}

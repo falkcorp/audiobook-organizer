@@ -1,5 +1,5 @@
 // file: internal/database/pebble_metrics_store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5f6a7b8-c9d0-0005-ef01-000000000005
 
 // Package database — PebbleDB-backed cache-stats metrics store.
@@ -20,6 +20,8 @@
 // The "met:" prefix avoids collision with all other PebbleDB key families.
 // Cache names are stored in met:_idx: so GetCacheStatsHistory can enumerate
 // all known names without scanning every met: key.
+// last-edited: 2026-09-02
+
 package database
 
 import (
@@ -208,10 +210,7 @@ func (s *PebbleMetricsStore) PruneCacheStatsHistory(olderThan time.Time) (int64,
 		_ = iter.Close()
 
 		for i := 0; i < len(keys); i += 500 {
-			end := i + 500
-			if end > len(keys) {
-				end = len(keys)
-			}
+			end := min(i+500, len(keys))
 			batch := s.db.NewBatch()
 			for _, k := range keys[i:end] {
 				if err := batch.Delete(k, nil); err != nil {
@@ -267,10 +266,7 @@ func (s *PebbleMetricsStore) SweepExpiredMetrics() (int64, error) {
 		_ = iter.Close()
 
 		for i := 0; i < len(keys); i += 500 {
-			end := i + 500
-			if end > len(keys) {
-				end = len(keys)
-			}
+			end := min(i+500, len(keys))
 			batch := s.db.NewBatch()
 			for _, k := range keys[i:end] {
 				if err := batch.Delete(k, nil); err != nil {
