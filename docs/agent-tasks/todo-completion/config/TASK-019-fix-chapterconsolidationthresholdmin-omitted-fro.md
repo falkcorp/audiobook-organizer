@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-019-fix-chapterconsolidationthresholdmin-omitted-fro.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4f8d6bfa-88f2-4b46-ac86-5c50d0983cd8 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-019 — Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (factory reset silently disables consolidation) (CFG-AUDIT)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2729 merged 2026-08-22 (213d0b6c9).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · config subagent · **Why:** One missing field in a large struct literal — add it. · **Depends on:** none · **Wave:** 2
 

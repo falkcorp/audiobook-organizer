@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-034-add-func-override-fields-to-mockstore-s-86-hardw.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 375778d8-2337-49c5-b3e5-8a6a00846173 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-034 — Add Func override fields to MockStore's ~86 hardwired-zero-return methods (TODO.md L4728)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2704 merged 2026-08-22 (54839dc47).
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Haiku-class · database subagent · **Why:** Purely mechanical — for each of the ~86 methods, add one `XFunc func(...) (...)` field to the MockStore struct and wrap the existing hardwired return in `if m.XFunc != nil { return m.XFunc(args...) }` before it, following the pattern of the other 313 methods verbatim. Large in count but zero design judgment per method; a strong candidate for the repo's parallel-refactor-sweep skill, sharded by method-name ranges within the single file. · **Depends on:** none · **Wave:** 1
 

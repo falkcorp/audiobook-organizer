@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-094-restore-version-group-count-and-current-version-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 31630b9f-033f-40a5-8577-1ff345774d79 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-094 — Restore version-group count and current-version marker on Book Detail (TODO.md L6252)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2770 merged 2026-08-23 (a7eeb6b13).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** Touches two related components; needs the version count plumbed to the header chip label. · **Depends on:** none · **Wave:** 1
 

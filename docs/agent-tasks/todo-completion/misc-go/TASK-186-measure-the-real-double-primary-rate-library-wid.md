@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8966db4e-27fe-4949-a247-834520a898c1 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-186 — Measure the real double-primary rate library-wide, then build the demote-extras sibling of ElectMissingPrimaries (VG-DOUBLE-PRIMARY)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — 'primaries > 1\|MultiPrimary\|DoublePrimary' non-test -> 0 hits; elect_primaries.go only counts gs.primaries>0 (:158). #2777 landed prevention-on-merge; no library-wide measure or demote sweep. Recommendation: keep — prevention shipped in #2777; the measure + demote-existing half did not.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · misc-go subagent · **Why:** Report + repair op following an existing, well-documented, in-repo sibling pattern (ElectMissingPrimaries) -- moderate size, low novelty once the exact reuse target (electPrimaryFor) is identified. · **Depends on:** none · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

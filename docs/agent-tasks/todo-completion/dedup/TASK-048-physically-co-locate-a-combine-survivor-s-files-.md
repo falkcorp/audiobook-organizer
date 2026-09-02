@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-048-physically-co-locate-a-combine-survivor-s-files-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6c34f325-9e46-461a-8fd2-16ad792e1270 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-048 — Physically co-locate a Combine survivor's files under RootDir after CombineBooks (AP-1b)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — merge/service.go:467 still reads 'DB-only: files stay where they are on disk'; no OrganizeBook/ensureUnderRoot call in the file. Recommendation: keep.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · dedup subagent · **Why:** touches the file-move/organize path on a prod-data operation (Combine); needs careful review of the RootDir-only gate · **Depends on:** none · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

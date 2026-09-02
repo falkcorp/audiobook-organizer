@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9d1903e4-8b0b-44e5-939b-d5390332acf0 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-214 — Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log when it exceeds 5s (REV-EMPTY-2)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — metadata_cache.go:168 limit := ParseQueryInt(c,'limit',0) unchanged; 0 hits for an 'all' query param; useMetadataLane.ts:537 still calls getCachedReviewResults(0, 0); no 5s slow-log. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** Requires widening a shared narrow interface plus regenerating (or hand-mirroring) a mockery-managed mock file correctly, adding a testable pure helper for the scan-active check, and building a >200-row Go test fixture -- more surface and more ways to get the mock/interface sync wrong than a Haiku pass should be trusted with. · **Depends on:** none · **Wave:** 1
 

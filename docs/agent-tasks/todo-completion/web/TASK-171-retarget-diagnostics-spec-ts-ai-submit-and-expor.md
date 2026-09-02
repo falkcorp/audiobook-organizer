@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dfdec6ca-94f9-4e6d-b4ce-5115aaabc320 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-171 — Retarget diagnostics.spec.ts AI-submit and export status mocks to v2 (TODO.md L4960)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — half landed: 871f90e71 retargeted op-1 to '**/api/v1/operations/v2/op-1' (spec L183) with the v2 body; op-2 is still '**/api/v1/operations/op-2' at L80 with the v1 progress shape. Recommendation: keep, but re-scope to op-2 only.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Mechanical URL+body retarget across two mocks in one file, same pattern as part 1. · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9a724df9-9515-4388-8e82-4def72e8f2f8 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-189 — Play the first ~2 minutes of part 1's audio directly from the review metadata panel, reusing the existing bounded audio-sample endpoint (REVIEW-PREVIEW)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — audio_sample.go:47 still context.WithTimeout(ctx, 120) (bare-nanoseconds bug) and :42 FilePath: book.FilePath, no GetBookFiles; MetadataPanel.tsx has 0 '/sample' hits; audio_sample_test.go absent. Recommendation: keep - contains a real latent bug (120ns timeout).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Mostly UI wiring against an already-bounded, already-proven endpoint, but requires a real backend fix (resolving part 1 via GetBookFiles instead of the currently-wrong book.FilePath directory path) plus the frontend control -- moderate, not trivial. · **Depends on:** none · **Wave:** 1
 

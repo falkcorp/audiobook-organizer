@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-137-fix-testorganizeservice-performorganize-nobookst.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e9f0a4b0-0252-49c3-96ec-855b20711e3b -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-137 — Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the method PerformOrganize actually calls (TODO.md L4732)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2753 merged 2026-08-23 (904f9a87e).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Swap one mock field name for the correct one and add a real assertion; mechanical once the right field is identified (already identified above). · **Depends on:** none · **Wave:** 1
 

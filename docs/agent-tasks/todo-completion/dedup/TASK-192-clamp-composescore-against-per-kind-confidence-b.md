@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d26b2ad8-7531-4d8e-9412-e95e4d6ddca8 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-192 — Clamp ComposeScore against per-kind confidence bounds; route calibrate-composite Round 2 through a new apply_confidence param (INIT-1 T05)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn apply_confidence/ApplyConfidence internal/ = 0 hits; scoreWithClamp exists only in the simulation (calibrate_composite.go:198); 0 commits to any exact_file. Recommendation: keep - the owner already decided FOR it: DECISIONS-PENDING.md L43 row 10 = option (a), 'clamp primary kinds + route Round-2 via a separate apply_confidence param', briefable/Opus-tier.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · dedup subagent · **Why:** owner decision explicitly names Opus tier; touches the core scoring formula (noisy-OR composition) where a clamping-order or precedence mistake silently shifts every dedup candidate's score across the whole corpus · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

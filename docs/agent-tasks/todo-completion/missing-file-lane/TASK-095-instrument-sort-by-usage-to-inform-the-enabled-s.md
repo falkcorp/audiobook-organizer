@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-095-instrument-sort-by-usage-to-inform-the-enabled-s.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: eef26577-153b-4226-b17f-a6f5d3576404 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-095 — Instrument sort_by usage to inform the enabled_sort_indexes decision (TODO.md L6701)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — 'slog.*sort_by\|sort_by.*slog' internal/ -> 0 hits; no sort_by metric in metrics.go; ParseQueryString(c,"sort_by") handler.go:489; CanPushDownSort memdb_sort_indexers.go:336. Recommendation: keep — but #2911/#2912/#2913 reworked sort handling in late Aug; confirm the decision it feeds is still open.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** One log line at an existing, well-understood call site. · **Depends on:** none · **Wave:** 2
 

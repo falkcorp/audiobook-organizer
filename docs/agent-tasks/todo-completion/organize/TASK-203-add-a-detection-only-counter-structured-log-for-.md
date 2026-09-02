@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4a15fbdf-8ff5-4196-b034-b1099e35e798 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-203 — Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run (DEC-11)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — prometheus.NewCounter internal/organizer -> 0 hits; no run-scoped collision map in organizeBooks (:959). 1fdf37a0e (08-28) added _copyN suffixing + OnCollision (organizer.go:150,184) but counts nothing. Recommendation: keep at lower priority — the overwrite harm is now mitigated by #2944's suffixing; remaining value is measuring degenerate patterns.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · organize subagent · **Why:** Small, well-scoped, but touches the concurrent whole-library organize worker pool (8 workers), so the shared collision map needs correct locking — not a haiku-safe mechanical change, but far short of opus-level risk since it is detection-only with zero behavior change. · **Depends on:** none · **Wave:** 5
 

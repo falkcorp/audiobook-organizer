@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 01f9b950-f16e-4929-b1c9-92fc3faf7184 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-173 — Add resizable/sortable columns to the acoustic dedup candidates table (TODO.md L10660)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep useConfigurableTable DedupAcousticTab.tsx = 0 hits; raw <TableContainer> still at :1136-1307 with candidates.map at :1163; no commits to the file since 2026-08-21. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** requires preserving the checkbox-select-all column and busy/selected row styling while swapping in ConfigurableTable's column model — not pure mechanical copy · **Depends on:** none · **Wave:** 1
 

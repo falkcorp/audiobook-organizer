@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 328dfae3-d3d4-454c-a330-5a32d57be05b -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-148 — Re-capture the series ABS fixture against a populated library (it currently contains zero series) (TODO.md L491)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — brief's own presence check at HEAD: len(results)==0 in testdata/abs-fixtures/get_api_libraries_id_series.json; no commits to the file since 2026-08-21. Recommendation: keep, but note it needs a populated live library to re-capture - not doable from the repo alone.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** Requires actually running a real capture (hitting a populated library's /api/libraries/:id/series endpoint against a live server, presumably real ABS or this server itself pointed at a populated library) and hand-curating the result into fixture format — not a pure code edit, needs an environment with real data. · **Depends on:** TASK-147 · **Wave:** 5
 

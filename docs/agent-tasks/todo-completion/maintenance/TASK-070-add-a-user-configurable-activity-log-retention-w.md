@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-070-add-a-user-configurable-activity-log-retention-w.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 96cf2297-b655-4dd1-92db-bd66f345bc06 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-070 — Add a user-configurable activity-log retention window (default 7 days, 0=never) (TODO.md L3488)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep activity_log_retention_days config.go -> 0; ActivityLogRetentionDays across go/ts -> 0; CompactActivityLog still hardcodes compactionDays<=0 -> 14 (server_maintenance_deps.go:255-257). Op-ID anchor now 2 hits not 3, def moved to cleanup.go:132/ID :135. Recommendation: keep — anchors all still hit.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** spans backend config + an existing maintenance op + a new frontend control; needs the 0=never semantics wired correctly through both layers · **Depends on:** none · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

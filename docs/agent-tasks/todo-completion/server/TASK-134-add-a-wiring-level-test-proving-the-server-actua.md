@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 91620eb9-3955-4a64-8933-bec17f8f7a08 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-134 — Add a wiring-level test proving the server actually constructs CancelOperationV2 with AI-scan cancellation attached (TODO.md L4449)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — wire_handlers_test.go absent; grep pipelineManager=/aiScanStore= in internal/server/*_test.go = 0 hits; only handler-level fakes at handlers/operations_v2_test.go:409,430 (542a69296, pre-brief). Recommendation: keep - TODO itself says 'Still open, and deliberately'.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Requires constructing a real *aiscan.PipelineManager and *database.AIScanStore (not just interface fakes) and driving them through the actual wireHandlers/setupRoutes path — more setup than a typical handler unit test, though the pieces are all documented and reusable. · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 856ad3b1-f713-493c-96eb-c5122c33aade -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-064 — Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambiguous (REGROUP-PARTCHAPTER-PARSER)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — fs_regroup_shape.go has 14 regexp.MustCompile (disc/chapter-subdir/edition/lead-trail-num/anthology markers) and none matches a Part/Chapter token; 0 commits to the file. Recommendation: keep.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Why:** Adds a new pattern into a dense, carefully evidence-ranked classification decision tree (classifyGroup, ~L832-1075) where ordering and guard interactions with existing rules (anthology markers, generic-title guard, edition markers) matter — a naive regex add risks reclassifying folders that should stay ambiguous for other reasons · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

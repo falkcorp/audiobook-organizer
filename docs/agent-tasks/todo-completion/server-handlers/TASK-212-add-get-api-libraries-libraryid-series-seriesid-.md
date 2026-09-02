@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-212-add-get-api-libraries-libraryid-series-seriesid-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2e0b5105-c281-4caf-ae8d-7a3f1c27f97f -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-212 — Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface (TODO.md L476)
+
+> **Status 2026-09-02:** ⏩ SUPERSEDED — f1072d065 (2026-08-28) served the need via GET /api/series/:id instead - handler.go:534 r.GET('/api/series/:id', auth, h.SeriesDetail), browse.go:824 using GetSeriesByIDs; TODO now [x]. Recommendation: close - the brief's route shape was superseded by the /api/series/:id detail route.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** single-item variant of an existing well-documented handler (LibrarySeries) in the same file -- needs care reusing the right helpers and matching the exact per-series JSON shape but is not architecturally novel · **Depends on:** none · **Wave:** 3
 

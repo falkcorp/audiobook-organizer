@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9966d94f-8ec8-417e-b9e1-56c5f4673d58 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-020 — Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option (CFG-AUDIT)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — EnableSQLite still live at cmd/diagnostics.go:76, cmd/dedup_bench.go:109, cmd/child_mode.go:71 and cmd/commands_test.go x7. Recommendation: keep - pure dead-code removal; the flag has been inert since SQLite3 support was removed.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · config subagent · **Why:** Pure removal but touches ~8 files (flag registration, config struct, 5 call sites passing the dead param, a test that stubs the function) — needs care to not break the initializeStore signature for its remaining real use (dbType, path). · **Depends on:** none · **Wave:** 3
 

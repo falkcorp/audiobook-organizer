@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5b5b4540-c6c0-4409-915d-d21ddc1e3a90 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-184 — Measure iTunes XML track Persistent ID coverage against the local DB before promising a Playlist-Items snapshot import (ITUNES-SMARTCRIT-PARSE)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/itunes/pid_coverage.go and _test.go absent; cmd/pid-census pre-dates the brief; 0 commits to any exact_file since 2026-08-21. Recommendation: keep - it is the measurement gate before promising a Playlist-Items snapshot import.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · itunes subagent · **Why:** A bounded, mechanical measurement against existing, already-proven parsing infrastructure (ParseITL + GetBookByITunesPersistentID) -- small and low-risk, mostly wiring rather than new parsing logic. · **Depends on:** none · **Wave:** 1
 

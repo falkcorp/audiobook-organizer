@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-145-n-6-log-metric-when-listening-stats-read-fails-c.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a2bfb8df-3f94-436a-b571-65ba56023a5f -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-145 — N-6: log + metric when listening-stats read fails (currently silent 0) (ABS-N6)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2701 merged 2026-08-22 (0fd2f9d67).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Why:** Small, localized addition of a log line and a metric increment inside an existing error branch — mechanical once an existing metrics helper pattern is located to copy. · **Depends on:** none · **Wave:** 1
 

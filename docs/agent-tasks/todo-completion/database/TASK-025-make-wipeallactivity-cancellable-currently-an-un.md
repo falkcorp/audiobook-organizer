@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-025-make-wipeallactivity-cancellable-currently-an-un.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 45ab6b11-c5a2-445e-b4b2-3c9751ea142b -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-025 — Make WipeAllActivity cancellable (currently an uncancellable full scan reachable from a request path) (TODO.md L1970)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2769 merged 2026-08-23 (51259deb0).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** Interface signature change across 5 files (4 implementations + the call site), same shape and risk profile as L1970's sibling L1957's CountByPrefix work in this same scope, but the change itself (threading a ctx through an existing loop) is mechanical once the interface is widened. · **Depends on:** none · **Wave:** 1
 

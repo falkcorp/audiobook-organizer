@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cad429fe-9b4b-4dda-9315-d66e493c421b -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-086 — Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly (TODO.md L3790)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — normalize.go:26 NormalizeAuthor still ToLower(TrimSpace) only; CollapseSpaces :36 has no author-path caller; CreateAuthor (pebble_store_authors.go:134) keys on the un-collapsed value. #2920 fixed atomicity only. Recommendation: keep — owner held it 'review_critical' 2026-08-23 and it did NOT land; needs a backfill/merge plan for existing dup rows before the key change.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · misc-go subagent · **Why:** single-function one-line body change plus a couple of test cases; no call sites need touching because every author/series/role/playlist index already funnels through this helper. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

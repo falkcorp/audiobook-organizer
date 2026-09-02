@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-170-retarget-dedup-operations-spec-ts-and-dedup-spec.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ad599510-939d-4ea2-be4f-e498a7bb55de -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-170 — Retarget dedup-operations.spec.ts and dedup.spec.ts resolve-production status mocks to v2 (TODO.md L4960)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — web/tests/e2e/dedup-operations.spec.ts:118 and dedup.spec.ts:163 both still page.route('**/api/v1/operations/*/status'); 0 hits for operations/v2 in either; no commits since 08-21. Recommendation: keep - the brief also lists non-existent tests/e2e/ paths; only web/tests/e2e/ exists.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Mechanical but must match the exact v2 response envelope (data.operation with progress_current/progress_total/progress_message) that two already-fixed sibling mocks in this same repo demonstrate; a naive URL-only fix (as the item's own measurement showed) does not produce a passing test. · **Depends on:** none · **Wave:** 1
 

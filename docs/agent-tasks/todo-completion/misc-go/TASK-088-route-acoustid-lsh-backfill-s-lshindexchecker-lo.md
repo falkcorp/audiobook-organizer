@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-088-route-acoustid-lsh-backfill-s-lshindexchecker-lo.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a834a1d4-584f-4e94-9a08-8f5ba1dcc930 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-088 — Route acoustid lsh_backfill's lshIndexChecker lookup through database.AsCapability (TODO.md L4698)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2696 merged 2026-08-22 (56302e007).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · misc-go subagent · **Why:** One-line body swap, same pattern as part 1. · **Depends on:** none · **Wave:** 1
 

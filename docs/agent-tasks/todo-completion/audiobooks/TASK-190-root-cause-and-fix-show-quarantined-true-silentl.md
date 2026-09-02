@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-190-root-cause-and-fix-show-quarantined-true-silentl.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8322dd9f-d3e9-4155-b46f-a5d2fcd51c92 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-190 — Root-cause and fix: show_quarantined=true silently narrows the audiobook list to is_primary_version=true (TODO.md L3718)
+
+> **Status 2026-09-02:** ⏩ SUPERSEDED — PR #2814 / 9d818d822 (2026-08-23) 're-diagnose show_quarantined as a count bug, not a list bug'; TODO L7554: 'previously filed as SHRINKS the list... That is wrong'. Recommendation: drop because the brief's premise (a list/scan-path bug) was overturned 2 days after it was written; re-brief the surviving count bug (audiobooks_helpers.go:113-127 overwrites matchTotal).
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · audiobooks subagent · **Why:** the obvious candidate code paths were read in full and do NOT reproduce the reported divergence, so this needs careful bisection across multiple layers (service_query.go pushdown selection, buildBookSummaryFilter, the search/Bleve path, and the list-cache warmer in library_list_warmer.go which pre-populates cache entries keyed on IsPrimaryVersion=true) rather than a known fix applied mechanically · **Depends on:** none · **Wave:** 2
 

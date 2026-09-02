@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4c0e1fbc-8c39-4a65-a66d-670fc9a7f4c4 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-142 — Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke) (MERGE-UNDO)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep UnmergeAuto internal/server internal/plugins = comments only (handler.go:1452, handler_test.go:1059); 0 hits for UndoMerge\|ListMergeJournal. PR #2676 shipped only the journal. Recommendation: keep - journal exists, the endpoints do not.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** Mostly mechanical handler + route wiring following the existing handler.go conventions (auth, error responses, event publishing), but touches a prod merge/undo surface so needs care on authz and idempotency, not pure boilerplate. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

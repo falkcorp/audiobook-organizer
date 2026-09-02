@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 672f0375-f97c-44e7-a7cb-74cbd6d75b17 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-122 — Add an {edition_suffix} folder-pattern token (TODO.md L5021)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep edition_suffix pathbuild.go -> 0 hits; model intact ('{edition}' :279, series_prefix-after-trim comment :298, Edition field :198). No commits on pathbuild.go since 2026-08-21. Recommendation: keep — small and self-contained.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · organize subagent · **Why:** Small, well-scoped addition with an exact model to copy, but touches the organize target-path computation (prod-data-adjacent) so needs a careful test, not a rubber-stamp. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

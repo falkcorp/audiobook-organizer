@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ca64109a-8396-4147-ae65-61572207f4cc -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-113 — Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has never run (TODO.md L8890)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — 'func.*Enqueue' in deps_scheduler.go -> 0 hits; PromoteToQueued is the only transition (:44,:46,:233,:236); Registry.EnqueueOp registry.go:575 and scheduler already holds reg *Registry (:55). Recommendation: keep — the wiring it needs (reg handle + EnqueueOp) is already in place.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** modifies core operations-registry scheduling logic (shipped flag-OFF and dormant per the item's own note, with only one real consumer today) — wide blast radius across every op using ReqOpCompleted · **Depends on:** none · **Wave:** 1
 

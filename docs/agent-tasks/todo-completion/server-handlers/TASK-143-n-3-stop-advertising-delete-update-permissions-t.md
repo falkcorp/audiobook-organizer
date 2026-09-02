@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-143-n-3-stop-advertising-delete-update-permissions-t.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b25ac00a-2697-4ff7-8790-cb7aebe98089 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-143 — N-3: stop advertising Delete/Update permissions the library surface cannot honor (ABS-N3)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — abs/dto.go:302 Delete: true and :305 Update: true still inside defaultPermissions(); LibraryStore (handler.go:182-189) is still six *Reader interfaces only. Recommendation: keep - cheap honesty fix, untouched.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** Small, localized DTO change, but requires judgment about what value is truthful (false vs. omit) and checking no client hard-requires true regardless of capability — worth a careful read of the ABS client contract doc, not pure mechanics. · **Depends on:** none · **Wave:** 1
 

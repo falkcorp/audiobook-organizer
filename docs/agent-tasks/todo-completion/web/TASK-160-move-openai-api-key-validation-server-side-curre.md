@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-160-move-openai-api-key-validation-server-side-curre.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3dc23c5c-7314-493c-ac1c-6da2120cf676 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-160 — Move OpenAI API key validation server-side (currently sent from the browser) (SEC-9)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — WelcomeWizard.tsx:160 still fetch('https://api.openai.com/v1/models') from the browser; grep 'validate-openai\|ValidateOpenAI' internal/server web/src = 0 hits; no commits to either file since 08-21. Recommendation: keep - live SEC-9 finding.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Opus-class · web subagent · **Why:** A small, well-scoped new backend endpoint plus a frontend call-site swap — standard proxy-validation pattern, not architecturally tricky, but touches both Go and TS so worth sonnet over haiku for the cross-stack coordination. · **Depends on:** none · **Wave:** 1
 

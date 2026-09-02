@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-084-add-codeql-specific-lgtm-suppressions-for-the-3-.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: d80aba87-7684-4893-b1c0-b3b7d4348862 -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-084 — Dismiss the 3 already-justified go/disabled-certificate-check alerts via the code-scanning API (SEC-CODEQL-BACKLOG)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2800 merged 2026-08-23 (d0cc228a2).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · misc-go subagent · **Why:** The risk judgment is already done and recorded in `#nosec` comments; what is missing is a suppression mechanism that actually works. · **Depends on:** none · **Wave:** 1
 

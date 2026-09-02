@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-058-update-execution-manifest-doc-to-reflect-the-now.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 55a7efc3-33b0-4eca-be90-48d2e5d88550 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-058 — Update execution-manifest doc to reflect the now-settled human gates (TODO.md L10635)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2715 merged 2026-08-22 (20c6d2f8b).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · docs subagent · **Why:** mechanical status-table edit reflecting decisions already made elsewhere in this session · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-099-fail-warn-ci-when-the-rc-ordinal-for-a-version-h.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 60c1333c-9bec-4933-b62d-ba33672b1ebd -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-099 — Fail/warn CI when the RC ordinal for a version hits 10 (TODO.md L8044)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2742 merged 2026-08-23 (d16bddcd7).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** one new step in an existing thin wrapper workflow, using a gh CLI pattern already used elsewhere in this repo's workflows · **Depends on:** none · **Wave:** 1
 

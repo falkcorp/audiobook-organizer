@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-216-show-a-loading-skeleton-not-the-empty-state-whil.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cbe7adad-2266-4de4-babb-fe74238c1f6c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-216 — Show a loading skeleton, not the empty state, while the metadata review list is still fetching (REV-EMPTY-1)
+
+> **Status 2026-09-02:** ✅ DONE — SHA 4a95f3696 added CompareSpine loading prop (:1076,:1089) + data-testid='spine-loading' (:1131) before the empty branch (:1150); pinned by CompareSpine.test.tsx:128, ReviewWorkspace.test.tsx:458. Recommendation: close - shipped as spine-loading in CompareSpine (not metadata-loading in MetadataPanel); behaviour is test-pinned.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · web subagent · **Why:** The guard condition has a real correctness trap (guarding on `loading` alone would flicker the spine to a loading skeleton on every post-apply refresh, since results are stale-but-present during a refresh's loading window) that a Haiku-tier pass is likely to get wrong; needs the reasoning spelled out in steps, which this brief does. · **Depends on:** none · **Wave:** 2
 

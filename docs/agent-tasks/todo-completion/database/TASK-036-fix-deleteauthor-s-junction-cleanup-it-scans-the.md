@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-036-fix-deleteauthor-s-junction-cleanup-it-scans-the.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a62f87f4-b3e3-4e8f-8424-37f9ce40003e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-036 — Fix DeleteAuthor's junction cleanup: it scans the dead book_author: keyspace instead of book_authors: (TODO.md L5290)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2775 merged 2026-08-23 (777dc7e64).
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · database subagent · **Why:** Bug fix on the prod-data author-deletion path with a clear existing pattern (GetAllAuthorBookCounts) to copy for the correct iteration, but must be careful to only rewrite affected books' junction rows, not all of them, and to keep it inside the existing batch/commit transaction. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

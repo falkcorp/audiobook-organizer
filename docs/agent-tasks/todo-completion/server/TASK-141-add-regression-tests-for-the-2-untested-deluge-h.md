@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6a5bc9d4-102c-4cd4-b133-a21b760208cd -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-141 — Add regression tests for the 2 untested deluge hydrate sites (TODO.md L10525)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2705 merged 2026-08-22 (260c0f4cb).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server subagent · **Why:** mechanical: mirror an existing, adjacent test pattern for 2 more call sites · **Depends on:** none · **Wave:** 1
 

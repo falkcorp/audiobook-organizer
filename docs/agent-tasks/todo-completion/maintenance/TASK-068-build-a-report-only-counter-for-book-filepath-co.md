@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 77300b0c-2d48-4426-84f2-5d41a989681e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-068 — Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across different books) (TODO.md L670)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn 'FilePathCollision\|CollisionCount\|filepath_collision' --include=*.go -> 0 hits; filepath_collision_report.go ABSENT; GetAllBooksCore anchor hits deps.go:39. Recommendation: keep — cheap report-only op, no contradiction with later decisions.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** small self-contained report op but must use a bounded worker pool / sharded map per the repo's whole-library concurrency mandate, not a naive single-threaded scan · **Depends on:** none · **Wave:** 1
 

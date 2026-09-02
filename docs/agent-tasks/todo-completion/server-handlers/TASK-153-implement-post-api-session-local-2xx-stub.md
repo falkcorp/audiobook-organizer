@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-153-implement-post-api-session-local-2xx-stub.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4987845c-fc10-4e03-baf9-8e75376a43de -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-153 — Implement POST /api/session/local (2xx stub) (TODO.md L4507)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2707 merged 2026-08-22 (747fdfd2a).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Why:** A single trivial route: authenticate, respond 200 with a non-empty body, per the spec's own note that Absorb tolerates 404/501 here and only AudioBooth needs a bare 2xx (no body parsing required for this half). · **Depends on:** none · **Wave:** 1
 

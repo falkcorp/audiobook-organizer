@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e0b918e9-4010-4660-83bc-1f558e74a2e3 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-211 — Migrate internal/server test fixtures to setupTestServerWithStore — cover_history_test.go, server_middleware_test.go, ai_jobs_handlers_test.go, entity_tag_handlers_test.go, import_collision_test.go, reading_handlers_test.go, user_handlers_test.go, organize_integration_test.go, server_op_registration_test.go, metadata_handlers_test.go (DEC-6)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — all 10 files still hold one NewServer(: cover_history:44, server_middleware:38, ai_jobs:40, entity_tag:36, import_collision:38, reading:35, user_handlers, organize_integration:53, op_registration:46. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** 10 files, 1 site each — individually trivial, but 3 of them (ai_jobs, reading, rating) route through their own single-use wrapper helper whose internals must be migrated the same way as Part 3's wrapper files, requiring the same judgment about how to thread cleanup. · **Depends on:** none · **Wave:** 2
 

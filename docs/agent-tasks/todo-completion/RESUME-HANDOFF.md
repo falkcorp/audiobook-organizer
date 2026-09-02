@@ -1,9 +1,24 @@
 <!-- file: docs/agent-tasks/todo-completion/RESUME-HANDOFF.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 7c1f0f6e-2b7a-4f0e-9a6d-3d1b2c9e8a41 -->
-<!-- last-edited: 2026-08-22 -->
+<!-- last-edited: 2026-09-02 -->
 
 # Resume handoff — planning package (paused 2026-08-22 ~00:15 EDT by owner's 20-minute shutdown)
+
+> **Status 2026-09-02 — read this before anything below.** Everything under "FAST-TRACK FIRST" and
+> "normal resume" has happened and is history: PR #2682 merged; the fast-track wave shipped as
+> TASK-221 (#2690), TASK-222 (#2688), TASK-215 (#2684), TASK-216 (4a95f3696), TASK-218 (#2687) and
+> TASK-223 (#2689) — only TASK-217 from that wave is still open; the package then ran through
+> 2026-08-23 and went dormant. Reconciled against HEAD on 2026-09-02: **88 of 208 briefs done, 116
+> open and still worth doing, 2 superseded, 2 not worth doing**. The authoritative next-steps list
+> is the per-workstream status table in
+> [`BREAKDOWN-2026-08-21.md` § Reconciliation 2026-09-02](BREAKDOWN-2026-08-21.md#reconciliation-2026-09-02);
+> every brief also carries its own `> **Status 2026-09-02:**` line. To resume: pick from the 116
+> open briefs (itunes 6/6 and maintenance 15/15 are untouched workstreams; TASK-046 and TASK-086 are
+> the two review-critical briefs held on 2026-08-23 that never landed), re-run each brief's
+> `grep -n -F` re-verify against HEAD first because TODO.md line numbers below are baseline lines
+> of commit 46628240 and have drifted. The "Standing prod facts" section is dated 2026-08-21 and
+> is not current.
 
 Branch `plan/todo-master-plan`, draft PR #2682. Package state: **208 briefs, 1017 re-verify greps, 0 audit failures**
 (checkpoint 8; scope-21 folded: 208 briefs, 1017 greps). Scratchpad mirrored under `state/scratchpad/`; tools under `tools/`; scout JSON under `scout-json/`;

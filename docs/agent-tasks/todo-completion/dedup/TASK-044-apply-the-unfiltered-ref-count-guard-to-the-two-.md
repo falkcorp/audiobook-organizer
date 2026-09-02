@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-044-apply-the-unfiltered-ref-count-guard-to-the-two-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b7546f64-fa65-455d-b9ba-f04eaddb6b21 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-044 — Apply the unfiltered ref-count guard to the two remaining series deleters (internal/dedup/series_dedup.go, internal/maintenance/jobs/cleanup_series.go) (TODO.md L4288)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2782 merged 2026-08-23 (b3bf412f6).
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · dedup subagent · **Why:** same fix pattern as the already-shipped L4281 fix, but applied across two different packages with their own store interfaces (bookSoftDeleter/seriesUnlinker/seriesMerger narrow interfaces in cleanup_series.go), so it's not a pure copy-paste · **Depends on:** none · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

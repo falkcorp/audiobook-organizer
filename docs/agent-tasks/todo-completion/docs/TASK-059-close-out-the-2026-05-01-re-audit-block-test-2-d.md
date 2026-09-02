@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-059-close-out-the-2026-05-01-re-audit-block-test-2-d.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 67832852-7ae9-4a9b-ab9c-5babacc72c57 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-059 — Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10) (TODO.md L10706)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2741 merged 2026-08-23 (bf277c1bc).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · docs subagent · **Why:** editing a TODO.md prose bullet to record verified closure; no code change beyond the DEP-1e follow-up which is a separate, smaller task · **Depends on:** none · **Wave:** 1
 

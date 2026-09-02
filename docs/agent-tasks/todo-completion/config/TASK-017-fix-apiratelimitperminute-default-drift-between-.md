@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-017-fix-apiratelimitperminute-default-drift-between-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 493e7668-48f8-4125-9260-21ccfc309ade -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-017 — Fix APIRateLimitPerMinute default drift between fresh-install (0) and ResetToDefaults/.env.example (100) (CFG-AUDIT)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2683 merged 2026-08-22 (03e5d8707).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · config subagent · **Why:** Single-value alignment across two or three constants, no logic change. · **Depends on:** none · **Wave:** 1
 

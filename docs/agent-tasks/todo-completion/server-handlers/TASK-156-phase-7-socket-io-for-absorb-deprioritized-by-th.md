@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-156-phase-7-socket-io-for-absorb-deprioritized-by-th.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a86e465a-fab7-4bff-99ee-dcc434e742ca -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-156 — Phase 7 — socket.io for Absorb (deprioritized by the item's own text; still unbuilt) (ABS-SYNC-Phase7)
+
+> **Status 2026-09-02:** 🚫 NOT WORTH DOING — 0 socketio hits in abs/*.go; a later decision landed instead: spa_fallback.go:45 'We do not implement socket.io. The honest answer is 404' + :57 nonSPAPrefixes entry. Recommendation: drop/defer - honest-404 degrade-to-polling is shipped and the primary client (AudioBooth) needs no websocket; TODO text self-deprioritizes.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** New protocol surface (socket.io) with a narrow scope (Absorb-only, one auth handshake), but nontrivial because it needs an actual socket.io-compatible server, not just a REST handler · **Depends on:** none · **Wave:** 2
 

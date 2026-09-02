@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-102-typescript-6-0-3-7-0-2-migration-the-one-remaini.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7432a274-ea82-4832-8942-4a62fd536eea -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-102 — TypeScript 6.0.3 → 7.0.2 migration (the one remaining piece of the frontend-framework-versions survey) (TODO.md L8273)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — web/package.json:62 still "typescript": "^6.0.3"; package-lock node_modules/typescript = 6.0.3. All 6 peer anchors (react 19 / MUI 9 / eslint 10 / zustand 5 / vite / jsdom) still hit. Recommendation: keep — last item of the frontend-framework-versions survey; run it alone so a tsc blast radius is attributable.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** the item itself says this is 'not a version bump... budget as a migration' — a different compiler implementation with its own compatibility surface · **Depends on:** none · **Wave:** 2
 

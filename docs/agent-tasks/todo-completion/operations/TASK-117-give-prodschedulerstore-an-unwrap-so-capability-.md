@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-117-give-prodschedulerstore-an-unwrap-so-capability-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0003372f-9192-4545-9974-382a893a8505 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-117 — Give prodSchedulerStore an Unwrap() so capability lookups can see past it (TODO.md L4703)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — register.go:58 prodSchedulerStore embeds only opRegistryStore, exactly 1 method (BookFiles :64), no Unwrap. StoreUnwrapper store_capability.go:68; construction register.go:91. Recommendation: keep — trivial, but it is speculative (enables a 'future AsCapability lookup'); merge into whichever task first needs it.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · operations subagent · **Why:** Needs a design call the item itself doesn't spell out: prodSchedulerStore only holds the narrow opRegistryStore interface today, so Unwrap() needs a second, wider field captured at construction time — not a pure copy-paste like items 4a/4b. · **Depends on:** none · **Wave:** 1
 

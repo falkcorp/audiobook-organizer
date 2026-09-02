@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0d3d5f7c-fb7f-4375-9ceb-d35b8ab3ae27 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-205 — Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounded readiness poll (TODO.md L283)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — server_more_test.go:375 time.Sleep(6*time.Second) + :382 syscall.Kill still present; no shutdownArmed field. PR #2698 fixed the sibling (SIGTERM parallelism guard), not the sleep. Recommendation: keep - the wall-clock cost is still there.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** requires touching Server struct + Start() + a test in the same package without breaking other tests that construct Server; needs the reader to understand goroutine/channel closing semantics correctly to avoid a new race · **Depends on:** TASK-204 · **Wave:** 5
 

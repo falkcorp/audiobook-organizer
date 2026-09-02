@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-018-fix-ai-backend-local-base-url-hardcoded-develope.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ab19153f-d4e0-4a32-90ef-e452fe1baf4d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-018 — Fix ai_backend.local_base_url hardcoded developer LAN IP default (CFG-AUDIT)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2785 merged 2026-08-23 (f4c3f26dd).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · config subagent · **Why:** Straightforward default-value fix, but needs to check EffectiveLLMMode's fallback behavior doesn't silently break for people relying on the current default resolving locally on THIS owner's LAN (unlikely to be relied upon by anyone else, but verify). · **Depends on:** none · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

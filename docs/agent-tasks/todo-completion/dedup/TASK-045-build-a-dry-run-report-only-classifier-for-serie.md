@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-045-build-a-dry-run-report-only-classifier-for-serie.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: aa6df42b-8bcf-47e9-ae26-fee95c833487 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-045 — Build a dry-run report-only classifier for series that look like they were minted from a book title (TODO.md L4304)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/plugins/maintenance/series_title_leak_audit.go and _test.go both absent; 0 commits to the paths. Recommendation: keep - report-only and cheap; run it as one measurement wave with TASK-180.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · dedup subagent · **Why:** a new whole-series-table maintenance op with a two-bucket fuzzy-match classifier (exact-equals vs contains) plus emitting a bounded sample list for hand-audit · **Depends on:** none · **Wave:** 1
 

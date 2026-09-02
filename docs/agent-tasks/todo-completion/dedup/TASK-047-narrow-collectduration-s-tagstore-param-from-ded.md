@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-047-narrow-collectduration-s-tagstore-param-from-ded.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b0482e86-a7f2-48c7-87b1-6aa1808ad589 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-047 — Narrow CollectDuration's tagStore param from dedup.Store to database.BookTagSingletonStore (TODO.md L4719)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2728 merged 2026-08-22 (987aaa454).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · dedup subagent · **Why:** Single parameter type change plus a doc-comment fix; both existing call sites already satisfy the narrower type with no changes needed. · **Depends on:** none · **Wave:** 2
 

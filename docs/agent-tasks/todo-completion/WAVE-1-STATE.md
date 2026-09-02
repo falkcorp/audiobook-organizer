@@ -1,9 +1,17 @@
 <!-- file: docs/agent-tasks/todo-completion/WAVE-1-STATE.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 5b3c9e21-8f47-4a6d-b0c2-71e4d8a35f90 -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-09-02 -->
 
 # Wave 1 — execution state as of 2026-08-22 06:15 EDT
+
+> **Status 2026-09-02.** This file stops at 2026-08-23. Since then: the two Sonnet PRs it lists
+> as open, #2769 (TASK-025) and #2770 (TASK-094), both merged; TASK-029 (#2821) merged; the two
+> review-critical briefs held for the owner, **TASK-046 and TASK-086, never landed and are still
+> open at HEAD**. Package-wide the reconciled count is **88 done / 116 open / 2 superseded / 2 not
+> worth doing = 208**; see
+> [`BREAKDOWN-2026-08-21.md` § Reconciliation 2026-09-02](BREAKDOWN-2026-08-21.md#reconciliation-2026-09-02)
+> for the per-brief table. Nothing below was edited.
 
 ## Merged to main (12)
 

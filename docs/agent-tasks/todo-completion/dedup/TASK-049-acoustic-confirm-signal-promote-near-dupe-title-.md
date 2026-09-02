@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-049-acoustic-confirm-signal-promote-near-dupe-title-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 06a9f485-6bba-48e2-87e7-d555ae7b86e0 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-049 — Acoustic-confirm signal: promote near-dupe title-leak pairs using WholeFileSimilarity (TODO.md L10750)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep WholeFileSimilarity internal/dedup/auto_resolve.go = 0 hits; only commit since 2026-08-21 is 9b698345e (merge journaling). Recommendation: keep.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · dedup subagent · **Why:** modifies the auto-merge eligibility gate on a prod-data-mutating path (dedup merges); must not weaken the existing suppressor/plausible-audio/identifier-conflict guards, only add a new corroborating path alongside them · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

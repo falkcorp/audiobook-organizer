@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f592a62b-538e-4afa-9107-94580cd9f7f0 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-071 — Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '-') (TODO.md L3602)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — Goal absent: author_title_fragment_report.go ABSENT, TitleFragmentAuthor -> 0 hits. Brief's step-1 export is already done by #3035: dedup.looksLikePersonName is now personname.LooksLikePersonName (authorname/parse.go:149). Recommendation: keep — goal unbuilt; re-point the brief's anchor at personname.LooksLikePersonName, the export step is no longer needed.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** requires designing a report-only heuristic (rows beginning with '-' plus a broader dirty-shape scan) and a new maintenance op, but no mutation logic — no prod-data risk · **Depends on:** none · **Wave:** 1
 

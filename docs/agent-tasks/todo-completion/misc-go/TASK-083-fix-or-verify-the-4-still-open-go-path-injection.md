@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-083-fix-or-verify-the-4-still-open-go-path-injection.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 935ef220-7739-4aed-a9b3-42a761c667dc -->
-<!-- last-edited: 2026-08-23 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-083 — Fix or verify the still-open go/path-injection findings (SEC-CODEQL-BACKLOG)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2781 (a76556310). Partial by its own account: 2 alerts dismissed, #1477/#1478 left open as real bugs (handoff/2026-08-23-state.md). Recommendation: close; the two real bugs are tracked in the SEC-CODEQL-BACKLOG item.
 
 > **Count deliberately not in this title.** It said "the 4 still-open" through
 > v2.0.0 and was wrong: 5 were open when measured on 2026-08-24, two of which the

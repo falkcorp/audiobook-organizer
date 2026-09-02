@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8cfe7ff2-9b9b-4585-b7d0-16f9f54492fb -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-009 — Teach the ABS fixture-capture harness to record request headers (TODO.md L2568)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep 'request_headers\|RequestHeaders\|req_headers' scripts/abs_capture_fixtures.py = 0 hits; the 2 ABS-oracle commits (ccdb23792, 828cb69ba) add no header capture. Recommendation: keep - TODO says 0 of 28 fixtures record headers, so it unblocks an evidence-blocked lane.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** Small, self-contained script change with a clear existing pattern (KEPT_HEADERS) to extend to the request side. · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a82ae8a4-0357-4c9c-9878-79d00f59ccfd -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-149 — Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong) (TODO.md L685)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — mapper.go:261 and :217 unchanged; grep 'stops short' mapper.go = 0 hits; mapper_test.go absent; only fb8bd73df (gofmt) + ee36e51ff (timeBase doc) touched the file. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** small, localized fix in one file's request-time code path plus a log-based detector; low risk since it only adds observability, not a behavior change to what's served · **Depends on:** none · **External blockers:** TODO.md L680 (needs_design) — not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch · **Wave:** 1
 

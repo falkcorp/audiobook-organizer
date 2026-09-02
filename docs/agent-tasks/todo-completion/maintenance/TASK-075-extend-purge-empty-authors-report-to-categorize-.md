@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: bd936d58-edbd-41f1-92ba-5add946967e1 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-075 — Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors (TODO.md L5275)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — author_purge_empty.go has ZeroBooksWithFiles (5) + RequireZeroFiles (3), no HeldBackSample. 3 post-08-21 commits (01c927fc0, 58718e84b, c81512fcd) — none added the sample. Recommendation: keep — the report struct it extends is actively maintained.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** Small, additive report extension reusing an existing op's structures, but needs a sensible per-author detail shape (file count, a sample file path or two, book_authors linkage check) for a human to actually make the decision from. · **Depends on:** none · **Wave:** 1
 

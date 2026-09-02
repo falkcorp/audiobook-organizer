@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-041-audit-remaining-we-use-the-wide-type-because-x-r.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 01a05f04-358a-41cb-90af-0550d326a6f6 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-041 — Audit remaining 'we use the wide type because X requires it' justification comments -- one genuinely stale instance found (TODO.md L903)
+
+> **Status 2026-09-02:** ✅ DONE — Duplicate of TASK-047: skeleton goal is the same CollectDuration narrowing, shipped in PR #2728 (987aaa454). The brief TITLE ("audit wide-type justification comments", TODO L4625) is NOT covered by any brief and that TODO item stays open. Recommendation: close as duplicate of TASK-047.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · dedup subagent · **Why:** single-file, single-parameter narrowing with a clear compiler-checkable target interface already defined; low risk · **Depends on:** none · **Wave:** 1
 

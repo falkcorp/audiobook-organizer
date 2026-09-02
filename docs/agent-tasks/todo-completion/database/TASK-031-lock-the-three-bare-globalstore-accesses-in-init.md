@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-031-lock-the-three-bare-globalstore-accesses-in-init.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 33f88667-c036-48ac-905c-1990f3edfdd9 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-031 — Lock the three bare globalStore accesses in InitializeStore/CloseStore (TODO.md L4678)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2693 merged 2026-08-22 (d6cba017b).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · database subagent · **Why:** Mechanical: swap 3 bare accesses for the existing locked setter/mutex, delete the sleep workaround. No new types or design. · **Depends on:** none · **Wave:** 1
 

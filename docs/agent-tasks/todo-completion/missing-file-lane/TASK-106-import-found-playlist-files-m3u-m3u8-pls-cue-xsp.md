@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cc0df523-ea1b-4bc3-ad80-b31404327fb5 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-106 — Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan, resolving entries to book_file rows (TODO.md L8646)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/playlist/import.go ABSENT (pkg has playlist.go/evaluator.go only); '\.pls\|\.xspf' in scanner.go -> 0 hits; parseM3UFile grouping-only :2160. #2767 shipped .m3u EXPORT, not import. Recommendation: keep — export half landed in #2767, import half did not.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** four file formats to parse, entry-to-book_file resolution with a real 38.2%-missing-book_file-row caveat this item itself flags, and scan-pipeline hook wiring · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

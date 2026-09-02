@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-133-regression-test-soft-deleting-an-indexed-book-mu.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 58b0da5e-dfe6-4454-bc1b-db42a1ef8b6e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-133 — Regression test: soft-deleting an indexed book must be unsearchable without a boot reconcile (TODO.md L4334)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2750 merged 2026-08-23 (b5ad85ac8).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** must be written to FAIL against the current buggy UpdateBook (proving the bug) and then PASS after L4329's fix — sequencing matters · **Depends on:** TASK-132 · **Wave:** 2
 

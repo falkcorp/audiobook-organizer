@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-200-build-the-tiered-per-file-intro-transcription-ba.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 889007a8-4a33-43b4-bf8a-b150cdd5c8ad -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-200 — Build the tiered per-file intro-transcription backfill (Tiers 0/1/1b/2/3) (TODO.md L8316)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — intro_tiered_backfill.go ABSENT; 'tiered.*backfill\|TieredBackfill\|introTierBackfill' -> 0 hits; ClassifyIntro classify.go:356; RunItems already used intro_transcribe.go:217. Recommendation: keep — but re-cost it against the new Metal/capability-routed Whisper workers (#2943/#2999/#3001).
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** a 5-tier, ~284,000-file, multi-day-GPU-cost backfill with an escalation rule (1b) whose whole safety property depends on getting the escalation condition exactly right -- a wrong escalation short-circuit would silently under-probe multi-file books the same way the ORIGINAL bug (one arbitrary file per book) did · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

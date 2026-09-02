@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-199-render-library-sub-nav-items-in-progress-finishe.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6b44cbb3-6aa4-4e0a-8ad3-049a594a1939 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-199 — Render Library sub-nav items (In Progress/Finished) in collapsed-sidebar mode (TODO.md L7819)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2768 merged 2026-08-23 (d9b61a45c).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** requires a real UI/UX decision embedded in the fix (how do 3 sub-items appear under one collapsed icon -- a flyout menu, an auto-expand-on-hover, or simply keeping the sidebar from collapsing while on a Library sub-route) plus MUI Tooltip/Menu composition, not a pure mechanical change · **Depends on:** none · **Wave:** 1
 

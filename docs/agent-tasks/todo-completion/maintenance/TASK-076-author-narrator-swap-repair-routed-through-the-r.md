@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f39b31b0-6002-4b12-bf6c-51bb7b3df9c1 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-076 — Author-narrator swap repair, routed through the review queue (cross-table population, distinct from the existing per-book fix-author-narrator-swap job) (TODO.md L5281)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — author_narrator_swap_review.go ABSENT; 'swap-shaped\|AuthorNarratorSwapCandidate' -> 0 hits. All 5 anchors hit (fix_author_narrator_swap.go:70,86; iface_review.go:12; regroup_shattered_ai.go:270). Recommendation: keep.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** New cross-table detection heuristic plus review-queue integration on a prod-data path (author/narrator identity) — requires careful design of the DedupKey/Payload shape and of what a human reviewer sees to approve/reject, not mechanical. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

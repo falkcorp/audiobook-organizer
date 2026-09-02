@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-159-add-and-use-a-test-reset-hook-for-the-module-sco.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 50cc2058-c671-491a-b1ea-462cf7c5a6b0 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-159 — Add and use a test-reset hook for the module-scope path-alias/path-var promise caches (2026-08-20-dual-path-settings-panel.md#3)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2711 merged 2026-08-22 (556048790).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · web subagent · **Why:** Small, mechanical: add one exported reset function per file plus a beforeEach call in up to 6 test files; no design ambiguity, pattern is identical to existing `let cached...Promise` code already in front of you. · **Depends on:** none · **Wave:** 1
 

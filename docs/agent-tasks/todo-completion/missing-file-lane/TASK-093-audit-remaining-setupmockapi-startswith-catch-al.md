@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-093-audit-remaining-setupmockapi-startswith-catch-al.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cb9af0e8-2634-4004-a6d1-90d857ee6db2 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-093 — Audit remaining setupMockApi startsWith() catch-alls for shadowed specific branches (TODO.md L5758)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2710 merged 2026-08-22 (d8f15bd0a).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · missing-file-lane subagent · **Why:** Read-and-verify ordering audit across one file, no new logic to design. · **Depends on:** none · **Wave:** 1
 

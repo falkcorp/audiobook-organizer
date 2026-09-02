@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-052-triage-the-16-removed-post-maintenance-paths-in-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 442d5337-026c-4296-8c6a-f112fc2d92bd -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-052 — Triage the 16 removed POST /maintenance/* paths in openapi.json — delete, or document as ops-API equivalents (TODO.md L296)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2751 merged 2026-08-23 (76325be70).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · docs subagent · **Why:** Each of the 16 needs an individual judgment call (delete vs. redocument as its registry-op equivalent) plus writing new OpenAPI entries for the ops-API dispatch pattern if that's the chosen path — more design-adjacent than part 1's pure deletion. · **Depends on:** none · **Wave:** 1
 

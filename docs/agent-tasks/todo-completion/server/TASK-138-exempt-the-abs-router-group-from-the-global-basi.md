@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 35c6082c-b812-497b-8a05-ddb8fd6f5c0c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-138 — Exempt the ABS router group from the global BasicAuth() middleware (ABS-SYNC)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — basicauth.go exempts only health (L28-32) and /assets/+extensions (L34-42); no ABS branch; git log since 08-21 on the file = no commits; server.go:472 still router.Use(BasicAuth()). Recommendation: keep - untouched.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Small, surgical middleware change, but it is a security-boundary edit (auth exemption) so it needs careful precision on the path-prefix match and a test proving BOTH the exemption and that non-ABS paths still enforce basic auth · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

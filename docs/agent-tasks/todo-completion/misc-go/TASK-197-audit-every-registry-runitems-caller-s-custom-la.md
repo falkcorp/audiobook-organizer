@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-197-audit-every-registry-runitems-caller-s-custom-la.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d6884b79-a511-4056-b4cb-d6e9030bdb53 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-197 — Audit every registry.RunItems caller's custom Label closure for the post-fn re-render timing change (TODO.md L697)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — Anchors hold: run_items.go:236 'Re-render the label AFTER fn'; 9d2307a64 in its log. grep -rl 'Label:\s*func' internal/plugins -> 32 (brief expected 31). No audit doc exists. Recommendation: keep, but re-scope: exact_files is one file short of the current 32; low value per file, batch it.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Sonnet-class · misc-go subagent · **Why:** breadth (31 files) with a narrow, mechanical check per file (does the Label closure read a counter/tally that fn itself mutates, and if so is post-fn rendering now correct or does it double-count) -- judgment-light but volume-heavy, not deep architecture work · **Depends on:** none · **Wave:** 2
 

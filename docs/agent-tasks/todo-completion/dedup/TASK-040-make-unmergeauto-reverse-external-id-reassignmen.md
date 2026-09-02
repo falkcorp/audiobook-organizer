@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c1f29101-8029-4672-acb7-c53f6cebaae5 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-040 — Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record (MERGE-UNDO)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — AutoMergeJournalEntry (dedup_automerge_journal.go:36-60) still has only Key/CandidateID/Winner/Loser/PreMergeTS/Tag/MergedAt - no ext-id or PID field. Recommendation: keep - highest-value item in this set: an unmerge that leaves ext-ids reassigned is silent, unrecoverable data loss.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · dedup subagent · **Why:** Touches a prod-data correctness surface (external-ID mapping table, iTunes write-back queue) across three packages (database/merge/dedup) with a locking discipline (mergeSerializeMu) that must not be broken; needs a new interface method and careful reasoning about partial-failure ordering, not mechanical edits. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

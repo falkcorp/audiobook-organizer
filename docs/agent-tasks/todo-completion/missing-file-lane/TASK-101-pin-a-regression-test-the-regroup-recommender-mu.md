@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-101-pin-a-regression-test-the-regroup-recommender-mu.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b83b9900-9330-468e-8838-e4c24f25bef4 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-101 — Pin a regression test: the regroup recommender must not default to duplicate-of on equal-runtime alone, using the 3 real multidisc holds as fixtures (TODO.md L8245)
+
+> **Status 2026-09-02:** 🚫 NOT WORTH DOING — Already shipped 93ed49f41 (2026-08-06, pre-brief): fs_regroup_recommend_test.go:251 TestRecommend_Multidisc_MajorityBookLength_Separate_NearMiss asserts ActionSeparate on the Sevenfold Sword equal-runtime two-disc pair. Recommendation: drop — duplicate of the test shipped in 93ed49f41; adding ULID-keyed fixtures re-pins the same assertion.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** small, targeted regression test using three concrete real IDs; needs enough regroup-domain context to construct a realistic hold fixture, so not pure-mechanical · **Depends on:** none · **Wave:** 1
 

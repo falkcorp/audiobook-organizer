@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-204-guard-testserverstartgracefulshutdown-s-sigterm-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d788e731-5a6f-440b-95bb-a784d4d42a04 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-204 — Guard TestServerStartGracefulShutdown's SIGTERM against future parallelism (TODO.md L280)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2698 merged 2026-08-22 (eaa32185b).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server subagent · **Why:** single-file comment/guard addition, no cross-package reasoning · **Depends on:** none · **Wave:** 1
 

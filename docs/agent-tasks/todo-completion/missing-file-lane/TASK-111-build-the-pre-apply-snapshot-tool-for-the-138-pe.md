@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-111-build-the-pre-apply-snapshot-tool-for-the-138-pe.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0bf4f681-32db-4452-926c-502241ab31af -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-111 — Build the pre-apply snapshot tool for the 138 pending multidisc holds (TODO.md L8837)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — multidisc_snapshot.go ABSENT; grep -rln snapshot regroup*.go -> 0 hits; pickPrimary regroup_apply.go:391. #2960 added a snapshot PRUNE job, not this pre-image. Recommendation: keep — cheap pre-image for an apply path that hard-deletes absorbed rows; do before any multidisc apply.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** a read-only report generator over existing review-hold data with an existing pickPrimary helper to call directly — mechanical once the review-hold accessor is found · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

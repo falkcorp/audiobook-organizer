@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-219-add-a-per-book-tsv-report-artifact-to-the-existi.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 60637175-5412-4c12-8b07-1576ab8b4696 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-219 — Add a per-book TSV report artifact to the EXISTING dedupe-book-file-rows dry run (DUPROW-2)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — dedupe_book_file_rows.go: no ReportPath/writeDupeRow/tsv hits; runDedupeBookFileRows :157, counters :224. TSV pattern exists metadata_cache_reap.go:223,478 and missing_file_repoint.go:188. Recommendation: keep — pure dry-run observability; pairs naturally with TASK-220.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · maintenance subagent · **Why:** Additive report emission on an existing op, but the row collection happens inside a parallel RunItems callback so the accumulator must go under the existing mutex. · **Depends on:** TASK-220 · **Wave:** 4
 

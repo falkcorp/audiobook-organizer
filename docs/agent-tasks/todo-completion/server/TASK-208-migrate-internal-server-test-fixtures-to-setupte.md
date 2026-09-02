@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d10bf777-e7b7-47e0-beb1-1be8958fb4f5 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-208 — Migrate internal/server test fixtures to setupTestServerWithStore — itunes_error_test.go, version_lifecycle_test.go (DEC-6)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — itunes_error_test.go still 11 NewServer(env.Store) (L34..286) with manual opRegistry Start/Shutdown; version_lifecycle_test.go:37 srv := NewServer(store). Baseline counts unchanged. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Mechanical fixture consolidation across two files, but itunes_error_test.go's 11 sites each hand-roll manual opRegistry.Start/Shutdown boilerplate that must be judged, not blindly deleted — a haiku-class run is likely to either strip needed opRegistry wiring or leave true duplicates behind. · **Depends on:** none · **Wave:** 1
 

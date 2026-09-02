@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-206-split-or-speed-up-the-internal-server-test-packa.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 791c34cb-1733-43c6-8202-c450c775b5bb -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-206 — Split or speed up the internal/server test package -- migrate call sites to a lighter newTestServer helper (TODO-SRVTIMEOUT)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep 'func newTestServer' internal/server/*.go = 0 hits; the 4 heavy fixtures unchanged (server_test.go:50,57,61,153); package grew 139 -> 164 *_test.go files. Recommendation: keep - no lighter fixture exists; scope grew.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · server subagent · **Why:** requires profiling which parts of full server construction (container.Start, search index warmup, cache warmers, backfill resume scans) are actually needed by each of ~60 call sites, then building a genuinely lighter constructor without silently changing what each migrated test exercises -- easy to get subtly wrong at this scale · **Depends on:** none · **Wave:** 1
 

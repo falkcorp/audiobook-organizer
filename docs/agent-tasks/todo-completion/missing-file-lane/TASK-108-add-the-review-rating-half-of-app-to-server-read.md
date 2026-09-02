@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c1b1703f-aec6-432a-9c27-b8f07f845bd6 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-108 — Add the review/rating half of app-to-server reading-state sync (reading status half already exists) (TODO.md L8675)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -inw 'rating\|review' handlers/abs/progress.go -> 0 hits; IsFinished pattern to mirror present (7 hits incl :58,:292,:305,:316). No commits on progress.go since 2026-08-21. Recommendation: keep — but the brief's first step (inspect what AudioBooth/Absorb actually send) is a real prerequisite, not optional.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** extends an existing, well-understood merge-semantics endpoint with one more field; needs real-client verification before finalizing the shape · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

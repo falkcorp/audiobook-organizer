@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ddc1fafe-6681-49f3-85e2-06183e0da806 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-114 — Never delete — re-associate: combine debris books into a template match by duration, then version-group (TODO.md L8943)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — combine_by_template.go ABSENT; 'Successors\|combine_by_template\|CombineByTemplate' internal -> 0 hits; DoNotImport/block_hash anchor hits internal/database. Recommendation: keep — 'never delete, re-associate' is exactly the later decision the lane settled on, so no contradiction.
 
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** novel duration-based template-matching logic against a prod data path with hard never-delete constraints and messy real debris (partial coverage, internally-redundant files) — the highest-complexity, highest-risk item in this scope · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

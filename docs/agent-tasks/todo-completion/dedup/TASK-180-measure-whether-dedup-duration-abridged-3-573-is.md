@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: eead065c-3fb2-404b-ada5-a14de9928300 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-180 — Measure whether dedup:duration-abridged (3,573) is over-firing before touching its display (TODO.md L1350)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/plugins/maintenance/dedup_abridged_measure.go absent; collectors_metadata.go:259-263 still applies the tag on the pct>=0.10 rule. Recommendation: keep - it is the measurement gate the TODO demands before any display change; bundle with TASK-045.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · dedup subagent · **Why:** Requires reading the abridged-detection condition, sampling real tagged pairs, and manually judging whether the duration difference genuinely indicates an abridged edition -- needs judgment, not just a mechanical count. · **Depends on:** none · **Wave:** 1
 

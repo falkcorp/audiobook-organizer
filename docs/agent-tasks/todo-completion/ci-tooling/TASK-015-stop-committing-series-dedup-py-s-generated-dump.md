@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-015-stop-committing-series-dedup-py-s-generated-dump.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 85a62f96-9a32-47ab-9bdf-c38f7811b758 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-015 — Stop committing series_dedup.py's generated dump/fix cache files (REPO-SIZE-1)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2726 merged 2026-08-22 (7ac49d895).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · ci-tooling subagent · **Why:** git rm + gitignore two lines; investigation already confirmed no downstream Go consumer · **Depends on:** none · **Wave:** 2
 

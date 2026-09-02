@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-179-database-store-40-build-the-ast-go-types-ci-gate.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1210aead-f978-4402-91b2-bb28c89d8de8 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-179 — database.Store (40) -- build the AST/go-types CI gate that makes it unreachable in new files (Phase 2 item 2 of the kill-v1-and-narrow plan) (TODO.md L969)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — tools/cmd/storewidthgate/ absent (tools/cmd has 8 other cmds); .store-width-gate-baseline absent; no store-width job in ci.yml or Makefile. Recommendation: keep - without the gate the 91 database.Store references keep growing; the interface-width job is the pattern to mirror.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · database subagent · **Why:** requires an AST/go-types-based static check (grep undercounts by 15% per the plan doc's own measurement) integrated into CI, plus a grandfather list for the 91 existing legitimate uses -- real tooling work, not a mechanical edit. · **Depends on:** none · **Wave:** 2
 

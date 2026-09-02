@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 20969099-2332-468b-92b6-2de8a87e5afc -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-130 — Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics (TODO.md L3384)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — PR #2758 (e4c1d4195) added ONLY search_index_docs_total (metrics.go:60). grep SearchIndexDropped internal/metrics/*.go = 0 hits; no dirty_backlog gauge (git log -S empty). Recommendation: keep - the #2758 hint is false; neither metric shipped.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Mechanical addition following an existing, well-established gauge-registration pattern in the same file (booksGauge/foldersGauge/SetBooks). · **Depends on:** none · **Wave:** 3
 

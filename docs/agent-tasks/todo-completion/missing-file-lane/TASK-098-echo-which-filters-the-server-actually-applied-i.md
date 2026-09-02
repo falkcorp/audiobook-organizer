@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-098-echo-which-filters-the-server-actually-applied-i.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a377dabf-43d4-4686-b0c1-e41f497d72ca -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-098 — Echo which filters the server actually applied in the /audiobooks list response (TODO.md L7736)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep applied_filters handlers/audiobooks/handler.go -> 0 hits; applied_filters_test.go ABSENT; filters query parse still handler.go:501. Recommendation: keep.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** small, well-scoped handler + response-shape change with an already-validated filter list to draw from · **Depends on:** none · **Wave:** 3
 

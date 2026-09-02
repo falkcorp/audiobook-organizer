@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d787f171-6303-472b-8d4b-99d237ec3846 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-166 — Make the book-detail page's Author field(s) link to a library view filtered by that author (TODO.md L3156)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — 0 hits for author_id in useLibraryQuery.ts, Library.tsx, BookDetailInfoTab.tsx; BookDetailInfoTab.tsx:215-217 still joins book.authors[].name with ' & '; backend filter exists (handler.go:379). Recommendation: keep.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** Requires both a new UI affordance (real <a href> per author, per the item's own notes) and new URL-param plumbing in useLibraryQuery.ts/Library.tsx that does not exist yet — more than a trivial link swap. · **Depends on:** none · **Wave:** 3
 

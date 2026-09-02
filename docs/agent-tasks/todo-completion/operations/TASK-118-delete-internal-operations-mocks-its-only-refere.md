@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e77f8da8-a227-4174-a7a5-5c31a6eb74df -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-118 — Delete internal/operations/mocks — its only referencer is dead, permanently-untagged, currently-broken test code (TODO.md L4743)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — mocks still 206 lines. 2nd referencer handlers/operations/handler_test.go:35 imports handlers/operations/mocks — DIFFERENT path — so sole importer is the //go:build mocks dead test (:6). No -tags mocks in CI. Recommendation: keep — safe deletion, confirmed sole referencer is the dead build-tagged file.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · operations subagent · **Why:** The deletion itself is mechanical, but deciding what to do with the one (broken, dead) referencer requires reading server_import_file_mocks_test.go closely enough to confirm nothing salvageable is being thrown away — not a pure delete-and-done. · **Depends on:** none · **Wave:** 1
 

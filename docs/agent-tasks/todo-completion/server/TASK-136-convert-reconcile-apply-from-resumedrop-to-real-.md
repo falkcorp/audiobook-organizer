@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6a8905bc-91bd-47e6-ad32-5c47d4f62b85 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-136 — Convert reconcile.apply from ResumeDrop to real checkpoint/resume (TODO.md L4575)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — reconcile_ops.go:96 ResumeDrop for 'reconcile.apply' (and :49 for reconcile.scan); 0 RunItems hits; reconcile_ops_test.go absent. PR #2763 only made it v2-native. Recommendation: keep - same TODO item as TASK-135.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server subagent · **Why:** Same mechanical-but-careful conversion as part 1, applied to a second op whose params shape (Matches, a list of merge decisions) must round-trip through the checkpoint correctly to avoid re-applying or dropping merge decisions on resume. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

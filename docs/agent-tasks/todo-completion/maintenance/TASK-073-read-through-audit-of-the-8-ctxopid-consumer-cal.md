@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-073-read-through-audit-of-the-8-ctxopid-consumer-cal.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b4e587cc-2200-4153-b220-d6af6e080a21 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-073 — Read-through audit of the 8 ctxOpID consumer call sites now that op IDs actually arrive (TODO.md L4137)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — All 8 ctxOpID sites present (cleanup:50,122; dedup_ops:124; metadata:121; optimize:54; reconcile:49; series:82; write_back:59). CreateOperationChange still decl-only deps.go:148. No audit doc. Recommendation: keep — read-only audit, no artifact anywhere; low cost.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** requires reading 8 call sites plus their downstream CreateOperationChange consumers across several packages and reasoning about correctness under real (previously-always-empty) opID values — not mechanical · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

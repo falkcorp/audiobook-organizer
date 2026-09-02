@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-215-never-send-batchfetchcandidates-from-the-search-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2e3e7fcf-2a36-459c-8423-11395752a88c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-215 — Never send batchFetchCandidates({}) from the Search providers command (REV-EMPTY-1)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2684 merged 2026-08-22 (cd511e17d).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · web subagent · **Why:** One-line call-site edit plus a small, template-following new test file; no new types or cross-file wiring. · **Depends on:** none · **Wave:** 2
 

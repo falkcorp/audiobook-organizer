@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-107-export-a-playlist-back-to-m3u.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0f643f68-50af-459a-81b4-1d7143698055 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-107 — Export a playlist back to .m3u (TODO.md L8646)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2767 merged 2026-08-23 (4b84e65af).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** small, single-endpoint feature with an existing playlist-membership accessor to build on · **Depends on:** none · **Wave:** 1
 

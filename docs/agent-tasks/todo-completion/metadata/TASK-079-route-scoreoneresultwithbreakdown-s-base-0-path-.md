@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-079-route-scoreoneresultwithbreakdown-s-base-0-path-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c793410a-632c-4ca6-a6b6-6c3ccbcaa66c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-079 — Route ScoreOneResultWithBreakdown's base==0 path through scoreRecorder instead of a hand-built ScoreStep (SCORE-REC)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2806 merged 2026-08-23 (b9ccfc4a8).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · metadata subagent · **Why:** Tiny diff but the golden-fixture/mutation-testing requirement means the change must be verified by breaking a value on purpose, which needs care from whoever executes it. · **Depends on:** none · **Wave:** 1
 

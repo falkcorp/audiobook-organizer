@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-218-operationactivitypanel-stop-re-appending-the-las.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d3c35262-ca33-4b37-955a-dd2052b45bd1 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-218 — OperationActivityPanel: stop re-appending the last SSE log line on every progress tick (REV-EMPTY-4)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2687 merged 2026-08-22 (618390ddf).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · web subagent · **Why:** Single-file, single-effect fix with a stable, already-existing dedup key (`sequence`) to use -- no design decision, no new type, no cross-file wiring; owner explicitly tagged this (S, haiku) in the scope brief and the investigation confirms that estimate. · **Depends on:** none · **Wave:** 1
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-024-replace-fragile-0x30-0x3a-only-book-0-book-bound.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4e56939b-fa97-4c80-9bc0-c121152b33aa -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-024 — Replace fragile [0x30-0x3A]-only book:0..book:; bounds in the version-group backfill with a real prefix scan (VGBACKFILL-BOUNDS-FRAGILE)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2801 merged 2026-08-23 (aa80d6fea).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · database subagent · **Why:** One-line-per-bound change in a well-commented, well-tested backfill function; low complexity but touches a production-repair code path so needs a careful re-run-safety check. · **Depends on:** none · **Wave:** 1
 

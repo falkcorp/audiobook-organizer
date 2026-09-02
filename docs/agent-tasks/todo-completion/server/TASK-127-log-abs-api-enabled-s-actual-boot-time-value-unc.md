@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-127-log-abs-api-enabled-s-actual-boot-time-value-unc.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d981f0d4-5a9d-4d20-b8c0-d3e78690db5b -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-127 — Log ABS_API_ENABLED's actual boot-time value unconditionally (currently silent when disabled) (N-11)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2695 logs the value. The TODO item (L3816, DECIDE ABS_API_ENABLED for prod) is an owner decision and stays open. Recommendation: close the brief; decision is Bucket 3.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server subagent · **Why:** One log line added to an already-identified branch. · **Depends on:** none · **Wave:** 1
 

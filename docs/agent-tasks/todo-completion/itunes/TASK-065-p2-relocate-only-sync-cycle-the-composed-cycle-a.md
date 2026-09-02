@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 00b2be77-c3a3-40a1-91d9-345f79804900 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-065 — P2 relocate-only sync cycle — the composed cycle already exists (RunRelocateSyncCycle); wire it to a caller and add an end-to-end test (TODO.md L10390)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rln RunRelocateSyncCycle internal/ = 1 file, its own definition (still unwired); internal/server/itl_sync_cycle.go and both new test files absent. Recommendation: keep - flagged 'possibly parked', but the composed cycle already exists, so this is a wiring job, not a build.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Why:** The hard/dangerous part (the composition, guard wiring, quiescence, oracle) is already built and reviewed-in; what remains is wiring a real write path to prod data plus an end-to-end test, which still needs careful review given the review_critical blast radius even though the diff is smaller than building the cycle from scratch · **Depends on:** none · **External blockers:** TODO.md L10383 (prod_run) — not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

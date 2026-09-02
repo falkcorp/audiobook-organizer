@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-223-organizer-collapse-duplicate-paths-in-plantarget.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 70aa3243-811c-4c94-bb19-ce15b72ab714 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-223 — organizer: collapse duplicate paths in planTargetPaths so totalTracks counts files, not rows (DUPROW-1)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2689 merged 2026-08-22 (ba869ab36).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · organize subagent · **Why:** Small edit, but it changes totalTracks and therefore the track numbers every organize run produces — the blast radius is every book, so the test must pin the numbering, not just the absence of a crash. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-188-harden-muimenu-against-the-documented-react-sets.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: be353f02-56e8-4ad0-aa9f-41caf2bcee71 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-188 — Harden MuiMenu against the documented React setState-drop defect (exit:0 -> exit:false), given the root-cause research is already extensively recorded at HEAD and remains unresolved (TODO.md L1727)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2779 applied the MuiMenu exit:false mitigation. The TODO item (L5460, WHY React drops the setState) is a research question and stays open. Recommendation: close the brief.
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · web subagent · **Why:** The fix pattern is already proven and documented in the same file for Drawer -- this is applying that same, already-validated mitigation to MuiMenu and re-running the existing stress test, not open-ended research. · **Depends on:** none · **Wave:** 1
 

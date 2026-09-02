@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-090-give-change-log-row-compare-snapshot-keyboard-a1.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f601ccdd-1a8b-4c1e-8201-fe980a38a983 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-090 — Give Change Log row 'Compare snapshot' keyboard/a11y affordance (TODO.md L5722)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2807 merged 2026-08-23 (7bac4e6de).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** Needs careful keyboard-event handling that doesn't double-fire with the nested Revert button's own stopPropagation. · **Depends on:** none · **Wave:** 1
 

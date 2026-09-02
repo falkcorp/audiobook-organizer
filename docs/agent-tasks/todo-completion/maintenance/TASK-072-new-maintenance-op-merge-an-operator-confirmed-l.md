@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dd2845f9-cb35-4719-a562-b9526243a13d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-072 — New maintenance op: merge an operator-confirmed list of duplicate real-author rows (TODO.md L3795)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — author_duplicate_merge.go ABSENT; 'author-duplicate-merge\|MergeAuthors\b' in maintenance -> 0 hits; mergeAuthorInto author_conjunction_repair.go:288; GetAllAuthors pebble_store_authors.go:21. Recommendation: keep — the reusable merge primitive it builds on is intact.
 
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** Deletes author rows and rewrites book links on a prod data path; needs a deliberately narrow, explicit-allowlist design (see notes) plus full dry-run/canonical-selection test coverage, not a mechanical change. · **Depends on:** TASK-086 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

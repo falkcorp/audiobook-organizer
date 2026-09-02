@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-110-audit-book-file-grouping-against-deluge-torrent-.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a2e31f41-2122-4212-bf2d-d068153549bc -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-110 — Audit book/file grouping against Deluge torrent file-list membership (read-only, tier 1 of the item's own 3-tier ambition) (TODO.md L8738)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/deluge/grouping_audit.go ABSENT; 'audit\|grouping' in deluge pkgs -> 0 hits. client.go:199 requests only hash/name/save_path/state/progress — no file list yet. Recommendation: keep — audit tier only; note client.go's field list needs extending to get 'files'.
 
 **Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** cross-references torrent file-membership against book grouping at library scale, feeding a regroup classifier signal — same class of judgment work as recommender-tuning items elsewhere in this codebase · **Depends on:** TASK-109 · **Wave:** 2
 

@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-178-reduce-internal-database-s-short-test-run-wall-c.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9bc0f41d-c4b6-42c4-9a68-e9c1fcf56757 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-178 — Reduce internal/database's -short test-run wall-clock cost (currently 200-280s, most of the coverage gate's budget) (TODO.md L238)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2810 merged 2026-08-23 (31e6feddf).
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** Requires profiling (go test -short -json timing analysis) to find the actual hot spots before optimizing -- not a blind rewrite; genuine performance-analysis judgment across 123 test files. · **Depends on:** none · **Wave:** 2
 

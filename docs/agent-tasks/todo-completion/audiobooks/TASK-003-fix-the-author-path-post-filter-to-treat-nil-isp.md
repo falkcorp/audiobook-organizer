@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-003-fix-the-author-path-post-filter-to-treat-nil-isp.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1e7f7ce5-390f-4e42-a7b6-5be4084082dd -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-003 — Fix the author-path post-filter to treat nil IsPrimaryVersion as primary, matching storage's default (TODO.md L3884)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2786 merged 2026-08-23 (5f7404066).
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** One-line fix but on a prod-data-shaped read path with subtle nil semantics -- worth a careful reviewer, not pure mechanical. · **Depends on:** TASK-002 · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

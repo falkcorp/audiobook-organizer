@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: fb267446-4c90-4f0b-8eb7-2ae760bc686e -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-063 — internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug, not named in the TODO but identical pattern in the same file (PERF-5)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/itunes/backfill.go:178 still 'offset := 0' (2 occurrences total, L60 and L178, exactly as the brief measured). Recommendation: merge into TASK-062 - identical fix, same file, one PR.
 
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · itunes subagent · **Why:** same mechanical rewrite as part 1, smaller function · **Depends on:** TASK-062 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 

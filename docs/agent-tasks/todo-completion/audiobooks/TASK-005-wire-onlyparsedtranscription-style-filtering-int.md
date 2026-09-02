@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-005-wire-onlyparsedtranscription-style-filtering-int.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 28ce1958-845e-4685-a484-e02aef35c02c -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-005 — Wire OnlyParsedTranscription-style filtering into the interactive audiobooks list endpoint (TODO.md L10728)
+
+> **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn OnlyParsedTranscription --include='*.go': hits only in database/, plugins/maintenance/ and a pushdown test; 0 in service_types.go ListFilters and 0 in handler.go. Recommendation: keep - the filter exists for bulk ops only; the interactive endpoint still cannot express it.
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** touches 4 files across 2 packages (query parsing, ListFilters struct, and the actual filter predicate applied during both the indexed/pebble-scan path and the memdb path) and must respect the project's documented bareParamAllowList gotcha · **Depends on:** none · **Wave:** 1
 

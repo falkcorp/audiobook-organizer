@@ -1,9 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-033-repoint-store-go-17-s-broken-doc-reference-to-th.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6d59abcd-cebf-40a8-91d7-a5ffba7abc80 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-09-02 -->
 
 # TASK-033 — Repoint store.go:17's broken doc reference to the archived design spec (TODO.md L4721)
+
+> **Status 2026-09-02:** ✅ DONE — PR #2732 merged 2026-08-22 (fd666bff3).
 
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · database subagent · **Why:** One-line comment edit repointing a path. · **Depends on:** none · **Wave:** 2
 
