@@ -1,0 +1,6 @@
+### Fixed
+
+- **Merge primary election no longer demotes the 12,525 books that have a `FilePath` but no `book_file` rows.** #3047's "file-aware survivor" guard equated *has audio* with *has `book_file` rows*, so a book whose only audio route is its own `FilePath` (20.4% of the production library) lost every election to a rowed sibling and could be picked as a merge loser. `HasAudioRoute` now treats either a `book_file` row set **or** a non-empty `FilePath` as an audio route, and the tier check is binary (has a route / does not) rather than a row count.
+- **Primary election is order-independent.** When neither book is strictly better, `preferOnTie` prefers the existing primary, then the older ULID, so retrying a merge with the pair reversed no longer flips the primary.
+- **Merge refusals reach the API as the right status.** `MergeBooks`/`CombineBooks` return typed `BookNotFoundError` (→ 404), and the duplicates handlers map `FilelessPrimaryError`/`SoftDeletedInputError` to 409 with the service's reason instead of a generic 500. The handlers previously matched on the substring `"not found"`, so any store error mentioning a not-found index was reported as a missing book.
+- **Replaying a merge whose loser is already soft-deleted leaves that loser untouched** — no second `SoftDeleteBook`, no `ReassignExternalIDs`, no `EnqueueRemove`.

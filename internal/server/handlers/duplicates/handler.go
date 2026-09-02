@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-09-02
 
@@ -29,8 +29,8 @@
 package duplicates
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -237,6 +237,27 @@ func (h *Handler) ScanBookDuplicates(c *gin.Context) {
 		bookDedupScanOpParams{})
 }
 
+// respondMergeError maps the merge service's typed refusals onto HTTP. A
+// missing book is 404 naming the ID. A refusal of the CALLER'S choice — the
+// picked primary has no audio route while another book does, or a
+// participant is soft-deleted — is 409 carrying the service's own message,
+// because that message is the only place the user learns why their pick lost;
+// until 2026-09-02 both came back as a generic 500 and the reason was only in
+// the server log. Anything else is the 500 it always was.
+func respondMergeError(c *gin.Context, err error, fallback string) {
+	var notFound *merge.BookNotFoundError
+	var fileless *merge.FilelessPrimaryError
+	var softDeleted *merge.SoftDeletedInputError
+	switch {
+	case errors.As(err, &notFound):
+		httputil.RespondWithNotFound(c, "book", notFound.BookID)
+	case errors.As(err, &fileless), errors.As(err, &softDeleted):
+		httputil.RespondWithConflict(c, err.Error())
+	default:
+		httputil.InternalError(c, fallback, err)
+	}
+}
+
 // MergeBookDuplicatesAsVersions merges a group of duplicate books into a version
 // group. POST /audiobooks/duplicates/merge.
 func (h *Handler) MergeBookDuplicatesAsVersions(c *gin.Context) {
@@ -260,11 +281,7 @@ func (h *Handler) MergeBookDuplicatesAsVersions(c *gin.Context) {
 
 	result, err := ms.MergeBooks(req.BookIDs, "")
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			httputil.RespondWithNotFound(c, "book", "")
-		} else {
-			httputil.InternalError(c, "failed to merge duplicate books", err)
-		}
+		respondMergeError(c, err, "failed to merge duplicate books")
 		return
 	}
 
@@ -384,11 +401,7 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 	// Pass ALL ids (the absorbed books plus the survivor) and the survivor id.
 	result, err := ms.CombineBooks(append(req.MergeIDs, req.KeepID), req.KeepID, req.Override)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			httputil.RespondWithNotFound(c, "book", req.KeepID)
-		} else {
-			httputil.InternalError(c, "failed to combine books", err)
-		}
+		respondMergeError(c, err, "failed to combine books")
 		return
 	}
 
