@@ -1,7 +1,7 @@
 // file: internal/fingerprint/wholefile.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package fingerprint
 
@@ -150,10 +150,7 @@ func WholeFileSimilarity(a, b []byte) (float64, error) {
 	}
 	sliceA := middleSliceFrames(a)
 	sliceB := middleSliceFrames(b)
-	n := len(sliceA)
-	if len(sliceB) < n {
-		n = len(sliceB)
-	}
+	n := min(len(sliceB), len(sliceA))
 	if n == 0 {
 		return 0, errors.New("middle slice is empty")
 	}

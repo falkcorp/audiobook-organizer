@@ -1,7 +1,7 @@
 // file: internal/fingerprint/book_signature_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-05-15
+// last-edited: 2026-09-02
 
 package fingerprint
 
@@ -218,7 +218,7 @@ func TestDownsampleMaxPool_Short(t *testing.T) {
 	if len(out) != 10 {
 		t.Errorf("expected length 10, got %d", len(out))
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if out[i] != data[i] {
 			t.Errorf("mismatch at %d: expected %d, got %d", i, data[i], out[i])
 		}
@@ -503,7 +503,7 @@ func TestEncodeMask_FirstHalfReal(t *testing.T) {
 		t.Fatalf("decodeMask: %v", err)
 	}
 	halfOut := BookSignatureFixedLength / 2
-	for i := 0; i < halfOut; i++ {
+	for i := range halfOut {
 		if !bits[i] {
 			t.Errorf("first-half bit %d should be 1", i)
 		}

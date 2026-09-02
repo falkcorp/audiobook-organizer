@@ -1,7 +1,7 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.4.0
+// version: 3.4.1
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 // Package fingerprint generates AcoustID-compatible acoustic fingerprints for
 // audio files. It supports two backends:
@@ -367,10 +367,7 @@ func HammingSimilarity(a, b string) (float64, error) {
 		return 0, fmt.Errorf("decode b: %w", err)
 	}
 
-	n := len(intsA)
-	if len(intsB) < n {
-		n = len(intsB)
-	}
+	n := min(len(intsB), len(intsA))
 	if n == 0 {
 		return 0, errors.New("empty fingerprint")
 	}
