@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package sysinfo
 
@@ -236,7 +236,7 @@ func (ss *SystemService) SortLogsByTimestamp(logs []database.OperationLog) []dat
 	copy(sorted, logs)
 
 	// Bubble sort for small sets
-	for i := 0; i < len(sorted); i++ {
+	for i := range sorted {
 		for j := 0; j < len(sorted)-1-i; j++ {
 			if sorted[j].CreatedAt.Before(sorted[j+1].CreatedAt) {
 				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
@@ -261,10 +261,7 @@ func (ss *SystemService) PaginateLogs(logs []database.OperationLog, page, pageSi
 		return []database.OperationLog{}
 	}
 
-	end := start + pageSize
-	if end > len(logs) {
-		end = len(logs)
-	}
+	end := min(start+pageSize, len(logs))
 
 	return logs[start:end]
 }

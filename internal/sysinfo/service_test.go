@@ -1,6 +1,7 @@
 // file: internal/sysinfo/service_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: g7h8i9j0-k1l2-m3n4-o5p6-q7r8s9t0u1v2
+// last-edited: 2026-09-02
 
 package sysinfo
 
@@ -64,7 +65,7 @@ func TestSystemService_PaginateLogs_Success(t *testing.T) {
 	service := NewSystemService(&database.MockStore{}, "test", nil)
 
 	logs := make([]database.OperationLog, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		logs[i] = database.OperationLog{Message: "Log"}
 	}
 
