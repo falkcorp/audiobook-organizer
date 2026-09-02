@@ -1,7 +1,7 @@
 <!-- file: docs/superpowers/specs/2026-08-28-ai-endpoint-pool-design.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 6d52e9c0-92fd-4193-9b9e-cd19e7d1bf5d -->
-<!-- last-edited: 2026-08-29 -->
+<!-- last-edited: 2026-09-01 -->
 
 # AI endpoint pool design
 
@@ -351,9 +351,10 @@ path.
 - Round-trip a pool with `schedule`, `devices`, and `host` ABSENT and assert each
   reloads as the permissive meaning (always available / worker chooses / alone on
   its host), not the restrictive one.
-- Run `GOTOOLCHAIN=go1.26.0 GOEXPERIMENT=jsonv2 go test ./internal/config
-  ./internal/ai ./internal/transcribe ./internal/server/... -count=1`, focused
-  frontend tests, and `GOTOOLCHAIN=go1.26.0 make ci` before deployment.
+- Run `GOTOOLCHAIN=go1.27.1 go test ./internal/config ./internal/ai
+  ./internal/transcribe ./internal/server/... -count=1`, focused frontend
+  tests, and `make ci` (the Makefile exports the toolchain pin) before
+  deployment.
   `GOEXPERIMENT=jsonv2` is not optional: the Makefile exports it (`Makefile:11`)
   and CI sets it, so a bare `go test` would exercise encoding/json v1 while
   production runs v2 — and v1/v2 disagree on exactly the field shapes this

@@ -1,5 +1,5 @@
 // file: internal/ai/embedding_client_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-01
 
@@ -257,30 +257,67 @@ func TestEmbedBatch_EmptyInput_NoAPICallNoError(t *testing.T) {
 }
 
 // TestEmbeddingClient_LocalGating verifies that when SetOllamaAvailable(false)
-// is called and a local base URL is configured, EmbedBatch returns
-// ErrOllamaNotAvailable without embedding.
+// is called and a local base URL is configured, EmbedBatch re-probes the
+// daemon's /api/tags inline and then either fails with ErrOllamaNotAvailable
+// (daemon still down) or reopens the gate and embeds (daemon came back).
 //
-// EmbedBatch re-probes the daemon inline before failing (the on-demand
-// OllamaDaemon may have started it since the last probe), so the base URL must
-// be one whose /api/tags answer is deterministically "unavailable". Pointing at
+// The re-probe is the point: the on-demand OllamaDaemon may have started the
+// daemon since the last probe, so a closed gate must not be permanent. That is
+// also why the base URL must be a server this test controls. Pointing at
 // http://127.0.0.1:11434 is not that: on any machine with a real Ollama running
-// the re-probe succeeds and the gate correctly stays open, and this test fails
-// for reasons that have nothing to do with the code under test.
+// the re-probe succeeds and the gate correctly stays open, and the "still down"
+// case fails for reasons that have nothing to do with the code under test.
 func TestEmbeddingClient_LocalGating(t *testing.T) {
-	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer down.Close()
-	embedCalls := 0
-	c := NewEmbeddingClientWithOptions("k", "bge-m3", down.URL+"/v1")
-	c.SetRawEmbedForTest(func(_ context.Context, texts []string) ([][]float32, error) {
-		embedCalls++
-		return make([][]float32, len(texts)), nil
+	newDaemon := func(t *testing.T, status int) (*httptest.Server, *int) {
+		t.Helper()
+		probes := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/tags" {
+				probes++
+			}
+			w.WriteHeader(status)
+		}))
+		t.Cleanup(srv.Close)
+		return srv, &probes
+	}
+	newGatedClient := func(baseURL string) (*EmbeddingClient, *int) {
+		embedCalls := 0
+		c := NewEmbeddingClientWithOptions("k", "bge-m3", baseURL+"/v1")
+		c.SetRawEmbedForTest(func(_ context.Context, texts []string) ([][]float32, error) {
+			embedCalls++
+			return make([][]float32, len(texts)), nil
+		})
+		c.SetOllamaAvailable(false)
+		return c, &embedCalls
+	}
+
+	t.Run("daemon still down", func(t *testing.T) {
+		down, probes := newDaemon(t, http.StatusServiceUnavailable)
+		c, embedCalls := newGatedClient(down.URL)
+
+		_, err := c.EmbedBatch(context.Background(), []string{"hello"})
+		assert.ErrorIs(t, err, ErrOllamaNotAvailable)
+		assert.Equal(t, 1, *probes, "a closed gate must re-probe /api/tags before failing")
+		assert.Equal(t, 0, *embedCalls, "a closed gate must not reach the embedding backend")
 	})
-	c.SetOllamaAvailable(false)
-	_, err := c.EmbedBatch(context.Background(), []string{"hello"})
-	assert.ErrorIs(t, err, ErrOllamaNotAvailable)
-	assert.Equal(t, 0, embedCalls, "a closed gate must not reach the embedding backend")
+
+	t.Run("daemon came back", func(t *testing.T) {
+		up, probes := newDaemon(t, http.StatusOK)
+		c, embedCalls := newGatedClient(up.URL)
+
+		results, err := c.EmbedBatch(context.Background(), []string{"hello"})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, 1, *probes, "a closed gate must re-probe /api/tags before embedding")
+		assert.Equal(t, 1, *embedCalls, "a successful re-probe must reopen the gate and embed")
+
+		// The reopened gate must stay open: the next batch goes straight to
+		// the backend without probing again.
+		_, err = c.EmbedBatch(context.Background(), []string{"again"})
+		require.NoError(t, err)
+		assert.Equal(t, 1, *probes, "a reopened gate must not re-probe on the next call")
+		assert.Equal(t, 2, *embedCalls)
+	})
 }
 
 // TestEmbeddingClient_LocalGating_DefaultIsAvailable verifies that a freshly
