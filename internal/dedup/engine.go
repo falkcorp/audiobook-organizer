@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.76.0
+// version: 1.77.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-02
 
@@ -3420,8 +3420,12 @@ type RescoreResult struct {
 // handler exposes this via the {"apply": true} body pattern already used by
 // emb-reencode and purge-legacy-fp.
 func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error) {
-	if de.embedStore == nil {
-		return RescoreResult{}, nil
+	// Guard the target the WRITES use, not just embedStore: rescoreStore()
+	// prefers an injected rescoreWriter and only falls back to embedStore, so
+	// checking embedStore alone tests a different object than the one the
+	// flush below writes through. Reading still needs embedStore.
+	if de.embedStore == nil || de.rescoreStore() == nil {
+		return RescoreResult{}, fmt.Errorf("dedup rescore: no candidate store configured")
 	}
 
 	candidates, _, err := de.embedStore.ListCandidates(database.CandidateFilter{
@@ -3482,6 +3486,18 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 			// same partial state as a failed one instead of silently claiming
 			// them.
 			result.WriteErrors += len(pending)
+			// Everything ALREADY flushed went out NoSync (see the flush
+			// comment). Returning here without a Sync would leave those rows
+			// durable only once Pebble happens to flush its memtable, while
+			// result.Written counts them as written — an honest count resting
+			// on a dishonest durability claim. Cancellation is not a reason to
+			// skip the fsync; it is a reason to do it now.
+			if apply && result.Written > 0 {
+				if syncErr := de.rescoreStore().SyncCandidateWrites(); syncErr != nil {
+					logging.Error(ctx, "dedup rescore: cancelled run could not sync the rows it had already written",
+						"written", result.Written, "err", syncErr)
+				}
+			}
 			return result, err
 		}
 		result.Inspected++
