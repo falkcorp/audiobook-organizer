@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
 // last-edited: 2026-09-02
 
@@ -420,7 +420,7 @@ func TestGetConfig_MasksAllSecrets(t *testing.T) {
 
 func TestUpdateConfig_MaskSecretsHappyPath(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything).Return(http.StatusOK, map[string]any{})
+	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything, mock.Anything).Return(http.StatusOK, map[string]any{})
 	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{})
 
 	w := run(http.MethodPut, "/config", "/config", []byte(`{"root_dir":"/x"}`), func(r *gin.Engine) {
@@ -431,7 +431,7 @@ func TestUpdateConfig_MaskSecretsHappyPath(t *testing.T) {
 
 func TestUpdateConfig_ServiceError(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything).Return(http.StatusBadRequest, map[string]any{"error": "bad"})
+	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything, mock.Anything).Return(http.StatusBadRequest, map[string]any{"error": "bad"})
 
 	w := run(http.MethodPut, "/config", "/config", []byte(`{"x":1}`), func(r *gin.Engine) {
 		r.PUT("/config", h.UpdateConfig)

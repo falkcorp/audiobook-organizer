@@ -1,12 +1,11 @@
 // file: internal/server/registry_wire.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
 // last-edited: 2026-09-02
 
 package server
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -19,7 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -178,7 +176,7 @@ func init() {
 	// in NewServer.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   serviceregistry.KeyDedup,
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge, serviceregistry.KeyConfigUpdate},
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := config.GetConfig(c)
@@ -236,17 +234,18 @@ func init() {
 				"confidence_overrides", len(cfg.Dedup.Signals.Confidence),
 				"source", "config.yaml dedup.signals overlaid by the persisted settings blob")
 			// Every later PUT /api/v1/config that changes dedup.signals reaches
-			// the live engine through this sink (review-round H2), and the sink
-			// re-bands the stored candidate rows under the new ladder (H3) —
-			// AutoResolveCertain reads the STORED band, so swapping the ladder
-			// without a rescore would leave rows auto-merging on the old one.
-			// The UpdateService rolls the persisted blob back if this returns
-			// an error, so memory, DB and engine never disagree.
-			updateSvc := serviceregistry.Get[*config.UpdateService](c, serviceregistry.KeyConfigUpdate)
-			updateSvc.SetDedupScoreConfigSink(func(sc unified.ScoreConfig) error {
-				_, err := engine.ReloadScoreConfig(context.Background(), sc)
-				return err
-			})
+			// the live engine through the UpdateService's dedup sink (review-
+			// round H2), which also re-bands the stored candidate rows under
+			// the new ladder (H3) — AutoResolveCertain reads the STORED band,
+			// so swapping the ladder without a rescore would leave rows
+			// auto-merging on the old one. The sink is installed by the dedup
+			// PLUGIN (internal/plugins/dedup/register.go PostInit), not here:
+			// it queues the re-band as the dedup.rescore operation, which
+			// needs the ops registry — a plugin-level dependency this Build
+			// does not have. It used to be an inline closure here that ran the
+			// whole re-band synchronously inside the HTTP PUT with a
+			// Background context and no concurrency key against a running
+			// dedup.full-scan (PR #3052 follow-up, D4).
 			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
 			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
 			engine.AuthorHighThreshold = cfg.Dedup.AuthorHighThreshold

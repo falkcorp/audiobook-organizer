@@ -464,10 +464,17 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	// error are writes to the global AppConfig; use the accessors so concurrent
 	// HTTP requests or background goroutines see a consistent value.
 	previousConfig := config.Snapshot()
-	status, resp := h.configUpdate.UpdateConfig(payload)
+	status, resp := h.configUpdate.UpdateConfig(c.Request.Context(), payload)
 	if status >= 400 {
-		// Roll back to previous config under the write lock.
-		config.Mutate(func(cfg *config.Config) { *cfg = previousConfig })
+		// No rollback here: UpdateService owns the in-memory/persisted state
+		// on every failure it reports. A 400 changed nothing; a save failure
+		// was already rolled back (to a deep copy); and a 500 with
+		// resp["saved"]==true means the config IS saved and in effect but the
+		// dedup re-band hand-off failed — rolling memory back to previousConfig
+		// there (as this handler used to on every >=400) would put memory on
+		// the old ladder while the blob and the engine keep the new one.
+		// previousConfig is also a SHALLOW Snapshot, so it could never restore
+		// map contents anyway.
 		errMsg, _ := resp["error"].(string)
 		httputil.RespondWithError(c, status, errMsg, "CONFIG_ERROR")
 		return
@@ -483,6 +490,11 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 	maskedConfig := h.configUpdate.MaskSecrets(config.Snapshot())
 	response := gin.H{"config": maskedConfig}
+	if opID, ok := resp["dedup_rescore_op_id"].(string); ok && opID != "" {
+		// The dedup ladder changed; the stored-candidate re-band was queued as
+		// an operation. Surface its id so the caller can follow it.
+		response["dedup_rescore_op_id"] = opID
+	}
 	if raw, err := json.Marshal(maskedConfig); err == nil {
 		var flat map[string]any
 		if err := json.Unmarshal(raw, &flat); err == nil {

@@ -1,5 +1,5 @@
 // file: internal/server/service_layer_test.go
-// version: 1.9.3
+// version: 1.10.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-09-02
 
@@ -108,7 +108,7 @@ func TestConfigUpdateService_ApplyUpdates_ErrorCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := svc.ApplyUpdates(tt.payload)
+			err := svc.ApplyUpdates(context.Background(), tt.payload)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
@@ -143,7 +143,7 @@ func TestConfigUpdateService_ApplyUpdates_ArrayFields(t *testing.T) {
 		"supported_extensions": []any{".mp3", ".m4b", ".m4a"},
 	}
 
-	err := svc.ApplyUpdates(payload)
+	err := svc.ApplyUpdates(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestApplyOverrideToPayload(t *testing.T) {
 func TestConfigUpdateService_UpdateConfig(t *testing.T) {
 	t.Run("nil db returns error", func(t *testing.T) {
 		svc := &config.UpdateService{DB: nil}
-		status, resp := svc.UpdateConfig(map[string]any{"root_dir": "/test"})
+		status, resp := svc.UpdateConfig(context.Background(), map[string]any{"root_dir": "/test"})
 		if status != 500 {
 			t.Errorf("expected 500, got %d", status)
 		}
@@ -668,7 +668,7 @@ func TestConfigUpdateService_UpdateConfig(t *testing.T) {
 	t.Run("database_type rejected", func(t *testing.T) {
 		mockStore := mocks.NewMockStore(t)
 		svc := config.NewUpdateService(mockStore)
-		status, resp := svc.UpdateConfig(map[string]any{"database_type": "mysql"})
+		status, resp := svc.UpdateConfig(context.Background(), map[string]any{"database_type": "mysql"})
 		if status != 400 {
 			t.Errorf("expected 400, got %d", status)
 		}
@@ -680,7 +680,7 @@ func TestConfigUpdateService_UpdateConfig(t *testing.T) {
 	t.Run("enable_sqlite rejected", func(t *testing.T) {
 		mockStore := mocks.NewMockStore(t)
 		svc := config.NewUpdateService(mockStore)
-		status, resp := svc.UpdateConfig(map[string]any{"enable_sqlite": true})
+		status, resp := svc.UpdateConfig(context.Background(), map[string]any{"enable_sqlite": true})
 		if status != 400 {
 			t.Errorf("expected 400, got %d", status)
 		}
@@ -706,7 +706,7 @@ func TestConfigUpdateService_ApplyUpdates_FieldTypes(t *testing.T) {
 		config.AppConfig.ConcurrentScans = originalScans
 	}()
 
-	err := svc.ApplyUpdates(map[string]any{
+	err := svc.ApplyUpdates(context.Background(), map[string]any{
 		"root_dir":         "/new/path",
 		"auto_organize":    true,
 		"concurrent_scans": float64(8),
@@ -990,7 +990,7 @@ func TestConfigUpdateService_UpdateConfig_AdditionalFields(t *testing.T) {
 		// Mock SetSetting calls that will happen during config persistence
 		mockStore.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-		status, resp := svc.UpdateConfig(map[string]any{
+		status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 			"playlist_dir": "/new/playlist/path",
 		})
 		if status != 200 {
@@ -1010,7 +1010,7 @@ func TestConfigUpdateService_UpdateConfig_AdditionalFields(t *testing.T) {
 		mockStore2.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 		svc2 := config.NewUpdateService(mockStore2)
 
-		status, resp := svc2.UpdateConfig(map[string]any{
+		status, resp := svc2.UpdateConfig(context.Background(), map[string]any{
 			"database_path": "/new/db/path.db",
 		})
 		if status != 200 {
@@ -1032,7 +1032,7 @@ func TestConfigUpdateService_UpdateConfig_AdditionalFields(t *testing.T) {
 
 		// setup_complete payload is ignored; actual value is derived from root_dir
 		config.AppConfig.RootDir = ""
-		status, resp := svc3.UpdateConfig(map[string]any{
+		status, resp := svc3.UpdateConfig(context.Background(), map[string]any{
 			"setup_complete": true,
 		})
 		if status != 200 {
@@ -1054,7 +1054,7 @@ func TestConfigUpdateService_UpdateConfig_AdditionalFields(t *testing.T) {
 		svc4 := config.NewUpdateService(mockStore4)
 
 		config.AppConfig.SetupComplete = true
-		status, resp := svc4.UpdateConfig(map[string]any{
+		status, resp := svc4.UpdateConfig(context.Background(), map[string]any{
 			"root_dir": "   ",
 		})
 		if status != 200 {
@@ -1075,7 +1075,7 @@ func TestConfigUpdateService_UpdateConfig_AdditionalFields(t *testing.T) {
 		svc5 := config.NewUpdateService(mockStore5)
 
 		config.AppConfig.SetupComplete = false
-		status, resp := svc5.UpdateConfig(map[string]any{
+		status, resp := svc5.UpdateConfig(context.Background(), map[string]any{
 			"root_dir": "/valid/path",
 		})
 		if status != 200 {
@@ -1137,7 +1137,7 @@ func TestConfigUpdateService_UpdateConfig_AllFields(t *testing.T) {
 		"concurrent_scans":      float64(5),
 	}
 
-	status, resp := svc.UpdateConfig(payload)
+	status, resp := svc.UpdateConfig(context.Background(), payload)
 	if status != 200 {
 		t.Errorf("expected 200, got %d: %v", status, resp)
 	}
@@ -1197,7 +1197,7 @@ func TestConfigUpdateService_UpdateConfig_IntConcurrentScans(t *testing.T) {
 		config.AppConfig.ConcurrentScans = originalConcurrentScans
 	}()
 
-	status, resp := svc.UpdateConfig(map[string]any{
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 		"concurrent_scans": 8,
 	})
 	if status != 200 {
@@ -1222,7 +1222,7 @@ func TestConfigUpdateService_ApplyUpdates_OpenAIKey(t *testing.T) {
 		config.AppConfig.EnableAIParsing = originalAI
 	}()
 
-	err := svc.ApplyUpdates(map[string]any{
+	err := svc.ApplyUpdates(context.Background(), map[string]any{
 		"openai_api_key":    "sk-proj-test12345",
 		"enable_ai_parsing": true,
 	})

@@ -14,6 +14,7 @@
 package system
 
 import (
+	"context"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
@@ -122,7 +123,7 @@ type SystemService interface {
 // updateConfig.
 type ConfigUpdateService interface {
 	MaskSecrets(cfg config.Config) config.Config
-	UpdateConfig(payload map[string]any) (int, map[string]any)
+	UpdateConfig(ctx context.Context, payload map[string]any) (int, map[string]any)
 }
 
 // PluginHealthChecker is the narrow *plugin.Registry subset used by

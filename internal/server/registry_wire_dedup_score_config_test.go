@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire_dedup_score_config_test.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: a9b707f0-a8bf-408c-80ca-6476753a15ba
 // last-edited: 2026-09-02
 
@@ -51,8 +51,13 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 	}
 	t.Cleanup(func() { _ = pebble.Close() })
 
+	// "dedupplugin" + "opregistry" are Included because the dedup-score sink
+	// is installed by the PLUGIN's PostInit (internal/plugins/dedup/register.go),
+	// not by the dedup ServiceDef — it needs the ops registry to queue the
+	// dedup.rescore op. Building only the engine would test a wiring that no
+	// longer exists.
 	c := serviceregistry.NewContainer().
-		Include(serviceregistry.KeyDedup).
+		Include(serviceregistry.KeyDedup, "dedupplugin", "opregistry").
 		Override(serviceregistry.KeyConfig, cfg).
 		Override(serviceregistry.KeyStore, pebble).
 		Override(serviceregistry.KeyEmbeddingStore, database.NewEmbeddingStore(pebble.DB())).
@@ -60,6 +65,9 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 		Override("llmparser", (*ai.OpenAIParser)(nil)).
 		Override(serviceregistry.KeyMerge, merge.NewService(pebble))
 	if err := c.Build(context.Background()); err != nil {
+		return dedupWiring{}, err
+	}
+	if err := c.PostInit(context.Background()); err != nil {
 		return dedupWiring{}, err
 	}
 	eng, ok := serviceregistry.TryGet[*dedup.Engine](c, serviceregistry.KeyDedup)
@@ -191,7 +199,7 @@ func TestRegistryWire_PutConfigReachesLiveEngine(t *testing.T) {
 		t.Fatalf("fixture: engine should start on the default 97, got %.2f", got)
 	}
 
-	status, resp := w.update.UpdateConfig(map[string]any{
+	status, resp := w.update.UpdateConfig(context.Background(), map[string]any{
 		"dedup": map[string]any{
 			"signals": map[string]any{
 				"band_certain_min": 98.5,
@@ -217,6 +225,30 @@ func TestRegistryWire_PutConfigReachesLiveEngine(t *testing.T) {
 	if persisted.BandCertainMin != 98.5 {
 		t.Fatalf("persisted band_certain_min = %.2f, want 98.5", persisted.BandCertainMin)
 	}
+
+	// D4: the stored-candidate re-band is QUEUED as dedup.rescore, not run
+	// inside the PUT. The response carries the op id, and a matching queued
+	// row exists in the ops store.
+	opID, _ := resp["dedup_rescore_op_id"].(string)
+	if opID == "" {
+		t.Fatalf("PUT response carries no dedup_rescore_op_id; the ladder changed but no re-band was queued: %v", resp)
+	}
+	ops, err := w.pebble.ListActiveOperationsV2()
+	if err != nil {
+		t.Fatalf("ListActiveOperationsV2: %v", err)
+	}
+	found := false
+	for _, op := range ops {
+		if op.ID == opID {
+			found = true
+			if op.DefID != "dedup.rescore" {
+				t.Errorf("queued op %s has def_id %q, want dedup.rescore", opID, op.DefID)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no queued operation with id %s; active ops = %+v", opID, ops)
+	}
 }
 
 // TestRegistryWire_PutInvalidLadderChangesNothing (review-round H1a): an
@@ -232,7 +264,7 @@ func TestRegistryWire_PutInvalidLadderChangesNothing(t *testing.T) {
 	}
 	before := config.Snapshot().Dedup.Signals
 
-	status, resp := w.update.UpdateConfig(map[string]any{
+	status, resp := w.update.UpdateConfig(context.Background(), map[string]any{
 		"dedup": map[string]any{
 			"signals": map[string]any{
 				"band_certain_min": 1.0, // below every other band

@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.74.0
+// version: 1.75.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-02
 
@@ -58,18 +58,36 @@ const partVsWholeDurationRatioMax = 0.5
 // candidates" must use this shared value and warn when it is hit exactly.
 const wholeBacklogCandidateLimit = 1_000_000
 
+// rescoreWriteBatchSize is how many re-banded candidate rows go into one
+// Pebble batch during Engine.Rescore. Large enough that a whole-backlog pass
+// is tens of commits rather than tens of thousands, small enough that one
+// batch's memory (a marshalled candidate record each) stays bounded.
+const rescoreWriteBatchSize = 500
+
+// RescoreWriter is the narrow store surface Engine.Rescore writes through.
+// *database.EmbeddingStore implements it; SetRescoreWriter swaps in a double
+// so the WriteErrors > 0 path — a re-band that partly fails, which is what
+// ReloadScoreConfig's honest error message reports on — is testable at all.
+type RescoreWriter interface {
+	UpdateCandidateScores(updates []database.CandidateScoreUpdate) (int, []int64, error)
+	SyncCandidateWrites() error
+}
+
 // Engine orchestrates a 3-layer dedup system:
 //   - Layer 1: Exact matching (free, instant) — same file hash, ISBN/ASIN, or near-identical titles
 //   - Layer 2: Embedding similarity (cheap, ~250ms) — cosine similarity of OpenAI embeddings
 //   - Layer 3: LLM review (expensive, batch only) — for ambiguous candidates
 type Engine struct {
-	embedStore   *database.EmbeddingStore
-	chromemStore database.VectorANNStore
-	bookStore    Store
-	embedClient  *ai.EmbeddingClient
-	llmParser    *ai.OpenAIParser
-	mergeService *merge.Service
-	aiJobsStore  database.AIJobsStore
+	embedStore *database.EmbeddingStore
+	// rescoreWriter overrides the embedding store as Rescore's write target.
+	// nil means "use embedStore"; only SetRescoreWriter sets it.
+	rescoreWriter RescoreWriter
+	chromemStore  database.VectorANNStore
+	bookStore     Store
+	embedClient   *ai.EmbeddingClient
+	llmParser     *ai.OpenAIParser
+	mergeService  *merge.Service
+	aiJobsStore   database.AIJobsStore
 
 	// Thresholds (read from config or set directly)
 	BookHighThreshold   float64
@@ -307,6 +325,21 @@ func (de *Engine) embeddingsEnabled() bool {
 // same values the config blob now holds. Rejects (and keeps the previous
 // config on) an invalid ScoreConfig — there is deliberately no "revert to
 // defaults" input.
+// SetRescoreWriter replaces the store Engine.Rescore writes re-banded rows
+// through. Pass nil to go back to the embedding store. Test seam: production
+// wiring never calls it.
+func (de *Engine) SetRescoreWriter(w RescoreWriter) {
+	de.rescoreWriter = w
+}
+
+// rescoreStore returns the effective write target for Rescore.
+func (de *Engine) rescoreStore() RescoreWriter {
+	if de.rescoreWriter != nil {
+		return de.rescoreWriter
+	}
+	return de.embedStore
+}
+
 func (de *Engine) SetScoreConfig(cfg unified.ScoreConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("dedup: invalid score config: %w", err)
@@ -330,36 +363,41 @@ func (de *Engine) ScoreConfig() unified.ScoreConfig {
 }
 
 // ReloadScoreConfig swaps the live ladder (SetScoreConfig) AND re-bands every
-// stored pending candidate under it (Rescore with apply=true). It is the one
-// entry point both runtime ladder changes use — the UpdateService's dedup
-// sink on PUT /api/v1/config, and dedup.calibrate-composite's apply.
+// stored pending candidate under it (Rescore with apply=true). It is the
+// synchronous form, used by dedup.calibrate-composite's apply, which is
+// already running inside an operation and reports the counts itself.
 //
-// WHY the rescore is part of the reload and not a separate step the operator
-// is told to run: AutoResolveCertain decides on the STORED band
-// (auto_resolve.go: `if c.Band != unified.BandCertain`), not on a score it
-// recomputes. So a ladder change that only swapped the in-memory config would
-// leave every existing candidate row carrying the OLD ladder's band —
-// lowering band_certain_min to pull more pairs into CERTAIN would auto-resolve
-// none of them until some unrelated scan happened to touch each pair, while
-// RAISING it would leave rows banded CERTAIN under a ladder that no longer
-// calls them that, and auto-resolve would merge them anyway. Either way the
-// operator was shown "saved" and the store disagreed. Re-banding the stored
-// rows in the same call is the only thing that makes "saved" true.
+// The config PUT does NOT use this: it swaps the ladder and QUEUES the re-band
+// as the dedup.rescore operation instead (internal/plugins/dedup/register.go),
+// because on a production backlog (27k+ pending rows) this call takes minutes
+// and an HTTP PUT must not block on it.
 //
-// If SetScoreConfig rejects cfg nothing is touched. If the rescore fails
-// part-way the new ladder is already live and some rows are re-banded; the
-// error is returned so the caller can surface it, and a later Rescore (the
-// dedup.rescore op) finishes the job idempotently.
+// WHY the rescore belongs with the ladder swap at all: AutoResolveCertain
+// decides on the STORED band (auto_resolve.go: `if c.Band != unified.BandCertain`),
+// not on a score it recomputes. So a ladder change that only swapped the
+// in-memory config would leave every existing candidate row carrying the OLD
+// ladder's band — lowering band_certain_min to pull more pairs into CERTAIN
+// would auto-resolve none of them until some unrelated scan happened to touch
+// each pair, while RAISING it would leave rows banded CERTAIN under a ladder
+// that no longer calls them that, and auto-resolve would merge them anyway.
+//
+// FAILURE RULE (PR #3052 follow-up, D2): if the re-band fails part-way, the new
+// ladder STAYS — live and, for the callers that persisted it, on disk. It
+// passed the same Validate the engine applies, so "the engine rejected it" was
+// never true; the failure is the re-band, and rolling the ladder back would
+// leave the engine, the in-memory config and the blob disagreeing three ways.
+// The error names the counts and the one remedy that finishes the job.
 func (de *Engine) ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig) (RescoreResult, error) {
 	if err := de.SetScoreConfig(cfg); err != nil {
 		return RescoreResult{}, err
 	}
 	res, err := de.Rescore(ctx, true)
 	if err != nil {
-		return res, fmt.Errorf("dedup: score config reloaded but rescoring stored candidates failed (rows may carry the previous ladder's band; run dedup.rescore): %w", err)
+		return res, fmt.Errorf("dedup: the new score ladder is live, but re-banding the stored candidates failed after %d of %d rows (the rest still carry the previous ladder's band; %s): %w",
+			res.Changed-res.WriteErrors, res.Inspected, RescoreRemedy, err)
 	}
 	if res.WriteErrors > 0 {
-		return res, fmt.Errorf("dedup: score config reloaded but %d of %d changed candidate rows could not be re-banded (they still carry the previous ladder's band; see the per-row warnings and run dedup.rescore)", res.WriteErrors, res.Changed)
+		return res, fmt.Errorf("dedup: the new score ladder is live, but %d of %d changed candidate rows could not be re-banded (they still carry the previous ladder's band; see the per-row warnings and %s)", res.WriteErrors, res.Changed, RescoreRemedy)
 	}
 	logging.Info(ctx, "dedup: score config reloaded and stored candidates re-banded",
 		"certain", cfg.BandCertainMin, "high", cfg.BandHighMin,
@@ -368,6 +406,13 @@ func (de *Engine) ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig
 		"band_deltas", res.BandDeltas)
 	return res, nil
 }
+
+// RescoreRemedy is the operator instruction every partial-re-band message ends
+// with. There is no `dedup.rescore` maintenance command to "run" by hand —
+// five messages used to say there was; the re-band is the HTTP endpoint below
+// (internal/server/wire_dedup_routes.go), which is also what the
+// dedup.rescore OPERATION the config PUT queues calls into.
+const RescoreRemedy = `run POST /api/v1/dedup/rescore {"apply":true}`
 
 // HydrateStats is the full per-bucket accounting for one HydrateChromem run.
 //
@@ -3244,9 +3289,16 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	}
 	// One ladder per scan: snapshot the score config ONCE here, not per book
 	// inside the workers, so a SetScoreConfig landing mid-scan cannot band
-	// half the library under the old ladder and half under the new one. The
-	// swap's own Rescore (ReloadScoreConfig) re-bands whatever this pass
-	// wrote under the superseded ladder.
+	// half the library under the old ladder and half under the new one.
+	//
+	// This does NOT make a mid-scan ladder swap harmless. The swap's re-band
+	// (Rescore, whether called inline by ReloadScoreConfig or queued as the
+	// dedup.rescore op) only fixes rows that already existed when it ran;
+	// rows this pass writes AFTERWARDS still carry the superseded ladder's
+	// band. That is why dedup.rescore shares dedup.full-scan's ConcurrencyKey
+	// — the two are serialized against each other rather than racing. A ladder
+	// change made mid-scan is still worth a follow-up rescore once the scan
+	// finishes.
 	scanScoreCfg := de.ScoreConfig()
 	err = registry.RunItems(ctx, &progressCallbackReporter{progress: scoreProgress}, scoreIndices,
 		func(ctx context.Context, i int) error {
@@ -3389,6 +3441,31 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 		BandDeltas: make(map[string]int),
 	}
 
+	// Writes are batched, not one-per-row: the per-row path forces a
+	// pebble.Sync per candidate, which is the fsync-per-row pattern
+	// candidateWriteOpts documents as the 2026-07-06 nine-hour stall, and this
+	// loop runs over the WHOLE pending backlog (27k+ rows in prod). Each batch
+	// commits NoSync under the store's own mutex; one Sync follows the last
+	// batch. (PR #3052 follow-up, D4.)
+	var pending []database.CandidateScoreUpdate
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		_, failed, err := de.rescoreStore().UpdateCandidateScores(pending)
+		switch {
+		case err != nil:
+			result.WriteErrors += len(pending)
+			logging.Warn(ctx, "dedup rescore: candidate score batch failed",
+				"batch_size", len(pending), "err", err)
+		case len(failed) > 0:
+			result.WriteErrors += len(failed)
+			logging.Warn(ctx, "dedup rescore: some candidate rows could not be re-banded",
+				"count", len(failed), "candidate_ids", failed)
+		}
+		pending = pending[:0]
+	}
+
 	for _, cand := range candidates {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -3408,12 +3485,26 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 		result.BandDeltas[deltaKey]++
 
 		if apply {
-			if err := de.embedStore.UpdateCandidateScore(cand.ID, &newScore, newScore.Band, newScore.Formula); err != nil {
-				result.WriteErrors++
-				logging.Warn(ctx, "dedup rescore: update candidate score",
-					"candidate_id", cand.ID,
-					"err", err,
-				)
+			pending = append(pending, database.CandidateScoreUpdate{
+				ID:             cand.ID,
+				Score:          &newScore,
+				Band:           newScore.Band,
+				FormulaVersion: newScore.Formula,
+			})
+			if len(pending) >= rescoreWriteBatchSize {
+				flush()
+			}
+		}
+	}
+	if apply {
+		flush()
+		// ONE fsync for the whole pass. Every batch above committed NoSync;
+		// without this the run's writes are durable only once Pebble happens
+		// to flush its memtable. See EmbeddingStore.SyncCandidateWrites.
+		if len(candidates) > 0 {
+			if err := de.rescoreStore().SyncCandidateWrites(); err != nil {
+				logging.Error(ctx, "dedup rescore: final sync failed; re-banded rows are not yet durable", "err", err)
+				return result, fmt.Errorf("rescore: sync candidate writes: %w", err)
 			}
 		}
 	}
