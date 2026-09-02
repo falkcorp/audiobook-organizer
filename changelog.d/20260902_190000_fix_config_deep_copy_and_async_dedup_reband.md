@@ -54,6 +54,27 @@ than callers inferring it by subtracting the write failures from the changed
 count. A run cancelled between two batches abandons whatever it had buffered,
 so that subtraction credited rows the store never saw.
 
+Reviewing this change's own diff turned up one more way a save could half-apply,
+introduced by the fix itself. The five API-key/password fields were written
+straight into the running configuration by separate calls, before the payload
+was validated — safe only because the HTTP layer used to undo the whole
+configuration on any error, which this change correctly removed (that undo was
+shallow, and it would have reverted a ladder that had already been saved). For
+one commit, a save that rotated a key *and* carried an invalid dedup setting
+answered "nothing was saved" while the process ran on the new key that never
+reached the database, silently reverting at the next restart. Secrets now go
+through the same all-or-nothing path as everything else, and whole-configuration
+validation moved ahead of the save instead of running after it and rolling back
+memory alone. Validation now refuses only a save that *introduces* a problem: if
+the stored configuration was already invalid, refusing every save would lock you
+out of fixing the bad field itself.
+
+Two related honesty fixes: `POST /api/v1/dedup/rescore` used to answer 200 even
+when it could not write back some rows — it is the endpoint the other failure
+messages send you to, so it now reports a failure with the counts — and a
+re-band cancelled part-way now flushes what it had already written instead of
+counting those rows as written while leaving them un-synced.
+
 **After deploying**, run `POST /api/v1/dedup/rescore {"apply":true}` once.
 27,123 of the 27,439 pending candidates are exact-layer rows, which a scan
 never re-bands (they are protected on upsert), so a ladder change reaches them
