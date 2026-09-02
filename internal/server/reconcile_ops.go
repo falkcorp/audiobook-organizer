@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5c2d8f41-a3e7-4b19-8d60-9f1e2c3a4b5d
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 // reconcile_ops registers the v2 OperationDefs for the reconcile scan and
 // reconcile apply operations. The HTTP handlers in reconcile.go enqueue these
@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
@@ -101,6 +103,11 @@ func (s *Server) RegisterReconcileApplyOp(reg *opsregistry.Registry) error {
 			var p reconcileApplyOpParams
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("reconcile.apply: decode params: %w", err)
+			}
+			// Fail-safe cap (internal/applycap): each match moves a file and
+			// rewrites a book row. Refuse the whole set before the first move.
+			if err := applycap.Check("reconcile.apply", len(p.Matches), config.AppConfig.BulkApplyMaxItems); err != nil {
+				return err
 			}
 			store := s.storeForWiring()
 			if store == nil {

@@ -62,7 +62,7 @@ func TestReplayApproved_HonoursOverrideAwayFromCombine(t *testing.T) {
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 
 	applyOn := false
-	h := reviewhandler.New(s, func() bool { return applyOn })
+	h := reviewhandler.New(s, func() bool { return applyOn }, nil)
 	combined := 0
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		combined++
@@ -112,7 +112,7 @@ func TestReplayApproved_HonoursOverrideTowardsCombine(t *testing.T) {
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionSeparate)
 
 	applyOn := false
-	h := reviewhandler.New(s, func() bool { return applyOn })
+	h := reviewhandler.New(s, func() bool { return applyOn }, nil)
 	var combinedIDs []string
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, item database.ReviewItem) error {
 		combinedIDs = append(combinedIDs, item.ID)
@@ -167,7 +167,7 @@ func TestReplayApproved_FallsBackToPayloadWhenNoActionWasPersisted(t *testing.T)
 			got.ChosenAction)
 	}
 
-	h := reviewhandler.New(s, func() bool { return true })
+	h := reviewhandler.New(s, func() bool { return true }, nil)
 	combined := 0
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		combined++
@@ -195,7 +195,7 @@ func TestReplayApproved_AppliesDecisionsMadeWhileApplyWasOff(t *testing.T) {
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 
 	applyOn := false
-	h := reviewhandler.New(s, func() bool { return applyOn })
+	h := reviewhandler.New(s, func() bool { return applyOn }, nil)
 
 	var appliedIDs []string
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, item database.ReviewItem) error {
@@ -242,7 +242,7 @@ func TestReplayApproved_AppliesDecisionsMadeWhileApplyWasOff(t *testing.T) {
 func TestReplayApproved_DryRunChangesNothing(t *testing.T) {
 	s := newTestStore(t)
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
-	h := reviewhandler.New(s, func() bool { return false })
+	h := reviewhandler.New(s, func() bool { return false }, nil)
 
 	ran := 0
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
@@ -270,7 +270,7 @@ func TestReplayApproved_DryRunChangesNothing(t *testing.T) {
 func TestReplayApproved_RefusesWhenApplyIsGloballyDisabled(t *testing.T) {
 	s := newTestStore(t)
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
-	h := reviewhandler.New(s, func() bool { return false })
+	h := reviewhandler.New(s, func() bool { return false }, nil)
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
 		return nil
 	})
@@ -288,7 +288,7 @@ func TestReplayApproved_RefusesWhenApplyIsGloballyDisabled(t *testing.T) {
 func TestReplayApproved_LeavesFailedItemsRetryable(t *testing.T) {
 	s := newTestStore(t)
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
-	h := reviewhandler.New(s, func() bool { return true })
+	h := reviewhandler.New(s, func() bool { return true }, nil)
 
 	fail := true
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
@@ -335,7 +335,7 @@ func TestReplayApproved_LeavesFailedItemsRetryable(t *testing.T) {
 func TestReplayApproved_ReportsItemsWithNoApplicableAction(t *testing.T) {
 	s := newTestStore(t)
 	it := seed(t, s, "regroup.ambiguous", "a1")
-	h := reviewhandler.New(s, func() bool { return true })
+	h := reviewhandler.New(s, func() bool { return true }, nil)
 	if _, err := s.SetReviewItemStatus(it.ID, database.ReviewStatusApproved); err != nil {
 		t.Fatalf("seed approved: %v", err)
 	}

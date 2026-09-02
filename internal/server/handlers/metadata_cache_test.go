@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -26,12 +26,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -192,6 +195,79 @@ func TestBatchApplyFromCache_RejectsMalformedBody(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Equal(t, 0, ops.calls, "nothing may be enqueued for an unparseable body")
+}
+
+// TestBatchApplyFromCache_RefusesOverTheBulkApplyCap is the bogus-value half of
+// the fail-safe pair: one more book than bulk_apply_max_items must be answered
+// 422 BULK_APPLY_CAP_EXCEEDED with NOTHING enqueued. The op would refuse too,
+// but a refusal that only fired after the 202 would look like a success to the
+// caller polling the op id.
+func TestBatchApplyFromCache_RefusesOverTheBulkApplyCap(t *testing.T) {
+	withBulkApplyCap(t, 3)
+	ops := &capturingEnqueuer{opID: "op-never"}
+	h := newDispatchHandler(t, ops)
+
+	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3","b4"]}`)
+	h.BatchApplyFromCache(c)
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	assert.Equal(t, 0, ops.calls, "an over-cap request must not enqueue anything")
+	var body struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "BULK_APPLY_CAP_EXCEEDED", body.Code)
+	assert.Contains(t, body.Error, "4 items")
+	assert.Contains(t, body.Error, "cap is 3")
+	assert.Contains(t, body.Error, "bulk_apply_max_items", "the refusal must name the config key that lifts it")
+}
+
+// TestBatchApplyFromCache_AllowsExactlyTheCap is the known-good twin: a batch of
+// exactly the cap is not "over" it and must dispatch normally. Without this a
+// gate that refused everything would pass the test above.
+func TestBatchApplyFromCache_AllowsExactlyTheCap(t *testing.T) {
+	withBulkApplyCap(t, 3)
+	ops := &capturingEnqueuer{opID: "op-cap"}
+	h := newDispatchHandler(t, ops)
+
+	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3"]}`)
+	h.BatchApplyFromCache(c)
+
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	require.Equal(t, 1, ops.calls)
+	assert.Len(t, paramsMap(t, ops.params)["book_ids"], 3)
+}
+
+// TestBatchApplyFromCache_ZeroConfigMeansDefaultNotUnlimited pins the one value
+// that must never be honoured literally: a zero in config (the shape a
+// full-struct save writes for an unset int) falls back to applycap.Default. It
+// does NOT disable the cap.
+func TestBatchApplyFromCache_ZeroConfigMeansDefaultNotUnlimited(t *testing.T) {
+	withBulkApplyCap(t, 0)
+	ops := &capturingEnqueuer{}
+	h := newDispatchHandler(t, ops)
+
+	ids := make([]string, applycap.Default+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("b%d", i)
+	}
+	raw, err := json.Marshal(map[string]any{"book_ids": ids})
+	require.NoError(t, err)
+	c, w := batchApplyCtx(string(raw))
+	h.BatchApplyFromCache(c)
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "a zero cap must mean the default, never unlimited")
+	assert.Equal(t, 0, ops.calls)
+}
+
+// withBulkApplyCap sets config.AppConfig.BulkApplyMaxItems for one test and
+// restores the previous value on cleanup.
+func withBulkApplyCap(t *testing.T, n int) {
+	t.Helper()
+	prev := config.AppConfig.BulkApplyMaxItems
+	config.AppConfig.BulkApplyMaxItems = n
+	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
 }
 
 // ---------------------------------------------------------------------------

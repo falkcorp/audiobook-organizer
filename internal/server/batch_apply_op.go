@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-08-28
+// last-edited: 2026-09-02
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -17,7 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -64,6 +66,13 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 		seen[id] = struct{}{}
 		merged.BookIDs = append(merged.BookIDs, id)
 	}
+	// Fail-safe cap (internal/applycap): two under-cap requests must not union
+	// into one over-cap run. Declining the merge is safe — the registry falls
+	// through to the ConcurrencyKey dedupe, the params byte-differ, and the
+	// second request is queued to run on its own, where Run's gate applies.
+	if !applycap.Fits(len(merged.BookIDs), config.AppConfig.BulkApplyMaxItems) {
+		return nil, false, nil
+	}
 	raw, err := json.Marshal(merged)
 	return raw, err == nil, err
 }
@@ -105,6 +114,17 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("batch-apply-cached: decode params: %w", err)
 				}
+			}
+
+			// Fail-safe cap, checked HERE and not only at the HTTP handler: this
+			// op can be dispatched directly through /operations/v2 with any
+			// book_ids list, and a resumed/merged run never passed through the
+			// handler. Refusal, not truncation — zero applies happen. It sits
+			// before the dependency checks because it is pure params
+			// validation, which also lets batch_apply_cap_test.go exercise it
+			// on a zero-value Server.
+			if err := applycap.Check("metadata.batch-apply-cached", len(p.BookIDs), config.AppConfig.BulkApplyMaxItems); err != nil {
+				return err
 			}
 
 			svc := s.metadataFetchService
