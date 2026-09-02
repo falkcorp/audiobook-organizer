@@ -1,6 +1,7 @@
 // file: internal/download/sabnzbd.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2670e805-a4a5-4cd0-870a-fe15f09bd4e8
+// last-edited: 2026-09-02
 
 package download
 
@@ -9,6 +10,7 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"time"
@@ -41,9 +43,7 @@ func (s *SABnzbdClient) apiCall(ctx context.Context, mode string, extra url.Valu
 		"output": {"json"},
 		"mode":   {mode},
 	}
-	for k, v := range extra {
-		params[k] = v
-	}
+	maps.Copy(params, extra)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL+"?"+params.Encode(), nil)
 	if err != nil {
