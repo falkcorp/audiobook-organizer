@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-09-02
 //
@@ -937,6 +937,19 @@ func executeSeriesNormalizeCore(
 // plain range loop. The partition is disjoint BY CONSTRUCTION -- map keys are
 // book IDs, so no two workers can ever touch the same row -- which is what makes
 // it safe to parallelise a full-column-replacement write.
+// TODO(field-locks): route this write through the user field-lock guard once
+// PR #3054 (branch fix/metadata-field-locks-honored) lands on main. That branch
+// adds internal/database/metadata_field_locks.go, whose FieldKeySeriesName and
+// FieldKeySeriesPosition are exactly the two fields this pass rewrites, and
+// whose database.ApplyRespectingLocks(reader, book, mutate) is the guard to
+// call: it applies the mutation and reports back which columns it refused.
+// Until then this pass will happily overwrite a series_position the user locked
+// by hand -- which is the same "I'll manually override" case the owner asked
+// for. The join is a one-line swap of the UpdateBook call below for
+// ApplyRespectingLocks, plus surfacing its refused-column list into the
+// activity log. Deliberately NOT stubbed here: the guard's reader interface
+// does not exist on this branch, and inventing a local copy would leave two
+// definitions to reconcile at merge time.
 func writeStrippedSeriesPositions(
 	ctx context.Context,
 	store maintenanceStore,
