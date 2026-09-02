@@ -1,6 +1,7 @@
 // file: internal/diagnostics/batch.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b4c5d6e7-f8a9-40b1-c2d3-e4f5a6b7c8d9
+// last-edited: 2026-09-02
 
 package diagnostics
 
@@ -21,10 +22,10 @@ const (
 
 // batchRequest represents a single line in OpenAI batch JSONL format.
 type batchRequest struct {
-	CustomID string                 `json:"custom_id"`
-	Method   string                 `json:"method"`
-	URL      string                 `json:"url"`
-	Body     map[string]interface{} `json:"body"`
+	CustomID string         `json:"custom_id"`
+	Method   string         `json:"method"`
+	URL      string         `json:"url"`
+	Body     map[string]any `json:"body"`
 }
 
 var categorySystemPrompts = map[string]string{
@@ -48,17 +49,14 @@ func GetSystemPrompt(category string) string {
 
 // BuildBatchJSONL constructs the OpenAI batch JSONL payload for diagnostics analysis.
 // Data is chunked into manageable pieces per request line.
-func BuildBatchJSONL(category, description string, books []SlimBook, itunesAlbums []ITunesAlbumSummary, logs, operationsData interface{}) ([]byte, error) {
+func BuildBatchJSONL(category, description string, books []SlimBook, itunesAlbums []ITunesAlbumSummary, logs, operationsData any) ([]byte, error) {
 	systemPrompt := GetSystemPrompt(category)
 	var buf bytes.Buffer
 	chunkIdx := 0
 
 	// Chunk books
 	for start := 0; start < len(books); start += BatchChunkBooks {
-		end := start + BatchChunkBooks
-		if end > len(books) {
-			end = len(books)
-		}
+		end := min(start+BatchChunkBooks, len(books))
 		chunk := books[start:end]
 
 		chunkJSON, err := json.Marshal(chunk)
@@ -87,10 +85,7 @@ func BuildBatchJSONL(category, description string, books []SlimBook, itunesAlbum
 	// Chunk iTunes albums if present
 	if len(itunesAlbums) > 0 {
 		for start := 0; start < len(itunesAlbums); start += BatchChunkItunes {
-			end := start + BatchChunkItunes
-			if end > len(itunesAlbums) {
-				end = len(itunesAlbums)
-			}
+			end := min(start+BatchChunkItunes, len(itunesAlbums))
 			chunk := itunesAlbums[start:end]
 
 			chunkJSON, err := json.Marshal(chunk)
@@ -113,13 +108,10 @@ func BuildBatchJSONL(category, description string, books []SlimBook, itunesAlbum
 		logsJSON, err := json.Marshal(logs)
 		if err == nil && len(logsJSON) > 2 { // not just "[]"
 			// Parse as array and chunk
-			var logEntries []interface{}
+			var logEntries []any
 			if json.Unmarshal(logsJSON, &logEntries) == nil && len(logEntries) > 0 {
 				for start := 0; start < len(logEntries); start += BatchChunkLogs {
-					end := start + BatchChunkLogs
-					if end > len(logEntries) {
-						end = len(logEntries)
-					}
+					end := min(start+BatchChunkLogs, len(logEntries))
 					chunk := logEntries[start:end]
 
 					chunkJSON, marshalErr := json.Marshal(chunk)
@@ -148,7 +140,7 @@ func writeRequestLine(buf *bytes.Buffer, idx int, systemPrompt, userContent stri
 		CustomID: fmt.Sprintf("chunk-%03d", idx),
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body: map[string]interface{}{
+		Body: map[string]any{
 			"model":       BatchModel,
 			"max_tokens":  BatchMaxTokens,
 			"temperature": BatchTemperature,
