@@ -25,3 +25,6 @@
 - **The metafetch library copy keeps `work_id`, the Audible/Google/user ratings,
   `quantity` and `version_notes`.** It was built with a full struct copy before this
   change and is now built by `CreateOrganizedVersion`, whose field list omits them.
+  The thirteen carried columns sit inside `copyMetadataColumns`, the body the field-lock
+  guard added in #3054 wraps, so they are covered by that guard by construction rather
+  than forming a second field list beside it.
