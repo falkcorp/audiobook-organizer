@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-09-02
 
@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
@@ -151,6 +152,10 @@ type diagnosticsStore interface {
 	diagnostics.Store   // NewService, lazy-construction fallback
 	merge.Store         // NewService, lazy-construction fallback
 	database.RawKVStore // CountCachedMetadataFetches
+
+	// ApplySuggestions writes Title / SeriesID from an AI suggestion; the
+	// user's field locks on the target book win over the suggestion.
+	database.MetadataFieldStateReader
 
 	diagnosticsOperationStore
 }
@@ -523,7 +528,9 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 
 	applied := 0
 	failed := 0
+	skipped := 0
 	var errors []string
+	var skippedReasons []string
 
 	for _, suggestion := range suggestions {
 		if !approvedSet[suggestion.ID] {
@@ -531,6 +538,7 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 		}
 
 		var applyErr error
+		var lockedBooks []string
 		switch suggestion.Action {
 		case "merge_versions":
 			if len(suggestion.BookIDs) >= 2 {
@@ -558,21 +566,10 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 				var fixes map[string]any
 				if parseErr := json.Unmarshal([]byte(suggestion.Fix), &fixes); parseErr != nil {
 					applyErr = fmt.Errorf("invalid fix data: %w", parseErr)
-				} else {
-					for _, bookID := range suggestion.BookIDs {
-						book, getErr := store.GetBookByID(bookID)
-						if getErr != nil || book == nil {
-							applyErr = fmt.Errorf("book %s not found", bookID)
-							break
-						}
-						if title, ok := fixes["title"].(string); ok {
-							book.Title = title
-						}
-						if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
-							applyErr = updateErr
-							break
-						}
-					}
+				} else if title, ok := fixes["title"].(string); ok {
+					lockedBooks, applyErr = applySuggestionRespectingLocks(store, suggestion.BookIDs, func(b *database.Book) {
+						b.Title = title
+					})
 				}
 			}
 
@@ -581,22 +578,11 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 				var fixes map[string]any
 				if parseErr := json.Unmarshal([]byte(suggestion.Fix), &fixes); parseErr != nil {
 					applyErr = fmt.Errorf("invalid fix data: %w", parseErr)
-				} else {
-					if seriesIDFloat, ok := fixes["series_id"].(float64); ok {
-						seriesID := int(seriesIDFloat)
-						for _, bookID := range suggestion.BookIDs {
-							book, getErr := store.GetBookByID(bookID)
-							if getErr != nil || book == nil {
-								applyErr = fmt.Errorf("book %s not found", bookID)
-								break
-							}
-							book.SeriesID = &seriesID
-							if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
-								applyErr = updateErr
-								break
-							}
-						}
-					}
+				} else if seriesIDFloat, ok := fixes["series_id"].(float64); ok {
+					seriesID := int(seriesIDFloat)
+					lockedBooks, applyErr = applySuggestionRespectingLocks(store, suggestion.BookIDs, func(b *database.Book) {
+						b.SeriesID = &seriesID
+					})
 				}
 			}
 
@@ -604,20 +590,57 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 			applyErr = fmt.Errorf("unknown action: %s", suggestion.Action)
 		}
 
-		if applyErr != nil {
+		switch {
+		case applyErr != nil:
 			failed++
 			errors = append(errors, fmt.Sprintf("suggestion %s: %v", suggestion.ID, applyErr))
 			slog.Warn("Failed to apply diagnostics suggestion", "suggestion", suggestion.ID, "applyErr", applyErr)
-		} else {
+		case len(lockedBooks) > 0:
+			// Every book the suggestion named is behind a user lock on the very
+			// field it wanted to change: not a failure, not an apply.
+			skipped++
+			skippedReasons = append(skippedReasons, fmt.Sprintf("suggestion %s: %s", suggestion.ID, strings.Join(lockedBooks, "; ")))
+			slog.Info("Diagnostics suggestion skipped: user-locked field", "suggestion", suggestion.ID, "books", lockedBooks)
+		default:
 			applied++
 		}
 	}
 
 	httputil.RespondWithOK(c, gin.H{
-		"applied": applied,
-		"failed":  failed,
-		"errors":  errors,
+		"applied":         applied,
+		"failed":          failed,
+		"errors":          errors,
+		"skipped":         skipped,
+		"skipped_reasons": skippedReasons,
 	})
+}
+
+// applySuggestionRespectingLocks runs mutate on each named book and saves it,
+// through database.ApplyRespectingLocks so a field the user locked is never
+// overwritten by an AI suggestion. A book whose locked field was the only thing
+// the suggestion changed is not written at all and is reported in the returned
+// list as "<bookID> (<locked keys>)". Lock reads fail closed: an unreadable
+// lock set is an error for the whole suggestion, and nothing is written.
+func applySuggestionRespectingLocks(store diagnosticsStore, bookIDs []string, mutate func(*database.Book)) ([]string, error) {
+	var locked []string
+	for _, bookID := range bookIDs {
+		book, getErr := store.GetBookByID(bookID)
+		if getErr != nil || book == nil {
+			return nil, fmt.Errorf("book %s not found", bookID)
+		}
+		restored, lerr := database.ApplyRespectingLocks(store, book, mutate)
+		if lerr != nil {
+			return nil, lerr
+		}
+		if len(restored) > 0 {
+			locked = append(locked, fmt.Sprintf("%s (%s)", bookID, strings.Join(restored, ", ")))
+			continue
+		}
+		if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
+			return nil, updateErr
+		}
+	}
+	return locked, nil
 }
 
 // GetDBHealth returns health stats for all backing stores.

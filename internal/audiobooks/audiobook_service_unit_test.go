@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-02
 
@@ -930,6 +930,9 @@ func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 	mockStore.EXPECT().GetMetadataFieldStates("id1").Return(nil, nil).Maybe()
 	// loadLegacyMetadataState calls GetUserPreference when GetMetadataFieldStates returns empty
 	mockStore.EXPECT().GetUserPreference(mock.Anything).Return(nil, nil).Maybe()
+	// saveMetadataState retires the pre-migration blob once the rows are
+	// authoritative (database.DeleteLegacyMetadataState).
+	mockStore.EXPECT().DeleteUserPreference(mock.Anything).Return(nil).Maybe()
 	mockStore.EXPECT().UpdateBook("id1", mock.AnythingOfType("*database.Book")).Return(updated, nil)
 	mockStore.EXPECT().GetBookAuthors("id1").Return(nil, nil).Maybe()
 	mockStore.EXPECT().GetBookNarrators("id1").Return(nil, nil).Maybe()

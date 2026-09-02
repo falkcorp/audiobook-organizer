@@ -1,5 +1,5 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
 // last-edited: 2026-09-02
 
@@ -13,14 +13,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
-// Every metafetch apply path funnels through guardedApply below, so the user's
-// field locks (database.UserLockableFields) are honored by construction rather
-// than by each caller remembering to check. Before 2026-09-02 NONE of them did:
-// auto-fetch, candidate apply, batch-apply-cached, transcription auto-match and
-// the metadata upgrade job all wrote straight over locked columns, while the
-// provenance panel layered the override value back on READ -- so the UI showed
-// the user's value and every list view, search index, write-back tag and
-// organize path used the overwritten one.
+// The user's field locks (database.UserLockableFields) are enforced by ONE
+// chokepoint, database.FieldLocks, shared by every writer of a lockable Book
+// column in the codebase. In this package that chokepoint is reached through
+// guardedApply (the metadata apply body) and ISBNService.EnrichBookISBN (the
+// background identifier enrichment both apply paths queue). Before 2026-09-02
+// NEITHER checked: auto-fetch, candidate apply, batch-apply-cached,
+// transcription auto-match and the metadata upgrade job all wrote straight over
+// locked columns, while the provenance panel layered the override value back
+// on READ -- so the UI showed the user's value and every list view, search
+// index, write-back tag and organize path used the overwritten one.
 
 // StripLockedFields blanks every field of meta whose lock key is set in locked,
 // so the unguarded apply body cannot write it, and returns the keys it blanked
@@ -117,37 +119,73 @@ func StripLockedFields(meta metadata.BookMetadata, locked map[string]bool) (meta
 	return meta, skipped
 }
 
-// lockedFields reads the book's lock set through the shared guard. Fail closed:
-// the error is returned, never swallowed into an empty map.
-func (mfs *Service) lockedFields(bookID string) (map[string]bool, error) {
+// loadFieldLocks reads the book's lock set through the shared guard. Fail
+// closed: the error is returned, never swallowed into an empty set.
+func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 	if mfs == nil {
-		return nil, fmt.Errorf("%w: nil service", database.ErrFieldLocksUnavailable)
+		return database.FieldLocks{}, fmt.Errorf("%w: nil service", database.ErrFieldLocksUnavailable)
 	}
-	return database.LockedUserFields(mfs.db, bookID)
+	return database.LoadFieldLocks(mfs.db, bookID)
 }
 
-// guardedApply is THE apply chokepoint. It resolves the locks, strips locked
-// fields, records change history for what will actually change, and applies.
+// guardedApply is this package's entry to the shared chokepoint. It loads the
+// locks (fail closed), strips locked fields from the candidate, records change
+// history for what will actually change, and runs the apply body inside
+// database.FieldLocks.Apply.
+//
+// Why strip AND restore: applyMetadataUnguarded has side effects on two locked
+// fields -- it resolves/creates an Author row and rewrites the book_authors
+// join for author_name, and resolves/creates a Series row for series_name.
+// Restoring the id afterwards would leave those side effects behind, so the
+// value is removed before the body ever sees it. Apply then guarantees that
+// whatever the body did, no locked column leaves here changed; any key it had
+// to restore is a body bug, and is reported alongside the stripped keys.
+//
 // It returns the stripped metadata (so callers persist provenance / tag against
 // what was applied, or the full candidate if they prefer) and the skipped keys.
-//
 // source == "" skips history recording (ApplyMetadataToBook's contract).
 func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, error) {
 	if book == nil {
 		return meta, nil, fmt.Errorf("apply metadata: nil book")
 	}
-	locked, err := mfs.lockedFields(book.ID)
+	locks, err := mfs.loadFieldLocks(book.ID)
 	if err != nil {
 		return meta, nil, fmt.Errorf("refusing to apply metadata to %s: %w", book.ID, err)
 	}
-	meta, skipped := StripLockedFields(meta, locked)
+	meta, skipped := StripLockedFields(meta, locks.Set())
+	if source != "" {
+		mfs.RecordChangeHistory(book, meta, source)
+	}
+	restored := locks.Apply(book, func(b *database.Book) { mfs.applyMetadataUnguarded(b, meta) })
+	if len(restored) > 0 {
+		// Strip should have made this unreachable; if it fires, a new write in
+		// applyMetadataUnguarded reaches a locked column by a route
+		// StripLockedFields does not know about.
+		slog.Warn("metadata apply: apply body reached a locked column after strip; restored",
+			"book_id", book.ID, "source", source, "restored", restored)
+		skipped = mergeSkipped(skipped, restored)
+	}
 	if len(skipped) > 0 {
 		slog.Info("metadata apply: skipped user-locked fields",
 			"book_id", book.ID, "source", source, "skipped_locked", skipped)
 	}
-	if source != "" {
-		mfs.RecordChangeHistory(book, meta, source)
-	}
-	mfs.applyMetadataUnguarded(book, meta)
 	return meta, skipped, nil
+}
+
+// mergeSkipped unions two skipped-key lists in vocabulary order.
+func mergeSkipped(a, b []string) []string {
+	seen := map[string]bool{}
+	for _, k := range a {
+		seen[k] = true
+	}
+	for _, k := range b {
+		seen[k] = true
+	}
+	var out []string
+	for _, f := range database.UserLockableFields {
+		if seen[f.Key] {
+			out = append(out, f.Key)
+		}
+	}
+	return out
 }

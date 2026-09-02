@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-09-02
 
@@ -446,6 +446,27 @@ func DedupSeries(
 							"series %d kept, it may still reference it", bookCore.ID, s.ID))
 					continue
 				}
+				// A user lock on series_name protects the NAME the user chose.
+				// The group was formed by NORMALISED name, so the canonical may
+				// be spelled differently from the series this book points at;
+				// a locked book is not moved onto a differently-spelled series,
+				// and the refuse-to-delete guard below then keeps its series.
+				// When the two are spelled identically the repoint preserves the
+				// user's value and the lock is not consulted.
+				if group[keepIdx].Name != s.Name {
+					locks, lerr := database.LoadFieldLocks(store, full.ID)
+					if lerr != nil {
+						result.Errors = append(result.Errors,
+							fmt.Sprintf("book %s: not moved off series %d, %v", full.ID, s.ID, lerr))
+						continue
+					}
+					if locks.Locked(database.FieldKeySeriesName) {
+						result.Errors = append(result.Errors,
+							fmt.Sprintf("book %s: series name is user-locked as %q; not moved to %q (series %d kept)",
+								full.ID, s.Name, group[keepIdx].Name, s.ID))
+						continue
+					}
+				}
 				full.SeriesID = &keepID
 				if dryRun {
 					result.TotalBooksReassigned++
@@ -543,6 +564,13 @@ type SeriesMergeResult struct {
 // MergeSeries reassigns all books from each series in mergeIDs to keepID,
 // optionally renames the kept series to customName, and relinks authors.
 // It does NOT invalidate the server cache — the caller must do that.
+//
+// FIELD LOCKS -- deliberately NOT consulted here. MergeSeries is the USER's
+// own action: the series UI hands it explicit keep/merge IDs and, optionally,
+// the name to keep. A user lock exists to stop fetches, scans and unattended
+// maintenance from overwriting what the user chose; it does not exist to stop
+// the user from choosing again. The unattended twin, DedupSeries, does honour
+// the lock.
 //
 // Each merged-from series row is deleted only when the UNFILTERED reference
 // count agrees that nothing still points at it; a refusal is recorded in

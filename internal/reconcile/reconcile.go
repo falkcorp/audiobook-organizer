@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-02
 
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,13 @@ type bookWriter interface {
 	DeleteBook(id string) error
 }
 
+// fieldLockReader is what mergeBookMetadataRespectingLocks needs: the merge
+// fills the WINNER's empty fields from the loser, and a field the user locked
+// blank on the winner must stay blank.
+type fieldLockReader interface {
+	database.MetadataFieldStateReader
+}
+
 type importPathReader interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
@@ -63,6 +71,7 @@ type Store interface {
 	bookWriter
 	importPathReader
 	operationRecorder
+	fieldLockReader
 }
 
 // ReconcileMatch represents a potential match between a broken DB record and an untracked file.
@@ -1047,7 +1056,14 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 			continue
 		}
 
-		merged := MergeBookMetadata(primary, dupe)
+		merged, merr := mergeBookMetadataRespectingLocks(store, primary, dupe)
+		if merr != nil {
+			slog.Warn("merge-dupes refused: field locks unreadable", "primary", primary.ID, "err", merr)
+			entry.Action = "error"
+			result.Errors++
+			result.Details = append(result.Details, entry)
+			continue
+		}
 		database.DropDanglingSeriesRef(store, primary, "reconcile.merge-primary")
 		entry.FieldsMerged = merged
 
@@ -1143,7 +1159,14 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 				continue
 			}
 
-			merged := MergeBookMetadata(keeper, dupe)
+			merged, merr := mergeBookMetadataRespectingLocks(store, keeper, dupe)
+			if merr != nil {
+				slog.Warn("merge-self-dupes refused: field locks unreadable", "keeper", keeper.ID, "err", merr)
+				entry.Action = "error"
+				result.Errors++
+				result.Details = append(result.Details, entry)
+				continue
+			}
 			database.DropDanglingSeriesRef(store, keeper, "reconcile.merge-keeper")
 			entry.FieldsMerged = merged
 
@@ -1186,8 +1209,37 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 	return result, nil
 }
 
+// mergeBookMetadataRespectingLocks is MergeBookMetadata behind the user's
+// field locks on dst (the winner). "Fill where empty" is exactly the write a
+// locked BLANK exists to forbid: the user cleared the field and locked it, and
+// the loser's stale value must not resurrect it. Lock reads fail closed -- an
+// error means nothing was merged and dst is untouched. The returned list is
+// what actually changed, with the restored (locked) fields removed.
+func mergeBookMetadataRespectingLocks(store fieldLockReader, dst, src *database.Book) ([]string, error) {
+	locks, err := database.LoadFieldLocks(store, dst.ID)
+	if err != nil {
+		return nil, err
+	}
+	var merged []string
+	restored := locks.Apply(dst, func(b *database.Book) { merged = MergeBookMetadata(b, src) })
+	if len(restored) == 0 {
+		return merged, nil
+	}
+	kept := make([]string, 0, len(merged))
+	for _, name := range merged {
+		if !slices.Contains(restored, name) {
+			kept = append(kept, name)
+		}
+	}
+	slog.Info("merge left the winner's user-locked fields alone", "book", dst.ID, "locked", restored)
+	return kept, nil
+}
+
 // MergeBookMetadata copies non-empty metadata fields from src to dst where dst field is empty.
-// Returns list of field names that were merged.
+// Returns list of field names that were merged. The names it reports for the
+// user-lockable columns are the database.FieldKey* vocabulary, so a caller can
+// subtract database.FieldLocks.Apply's restored list from it -- use
+// mergeBookMetadataRespectingLocks for that, never this directly on a store row.
 func MergeBookMetadata(dst, src *database.Book) []string {
 	var merged []string
 

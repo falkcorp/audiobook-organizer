@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-02
 //
@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -51,6 +52,9 @@ type OnFileMovedFunc func(bookID, oldFilePath string)
 // parameter previously embedded database.BookStore + BookVersionStore +
 // OperationStore — 90 methods.
 type undoStore interface {
+	// MetadataFieldStateReader: revertMetadataUpdate consults the book's
+	// user locks before restoring a field. See that function.
+	database.MetadataFieldStateReader
 	GetBookByID(id string) (*database.Book, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	CreateOperationChange(change *database.OperationChange) error
@@ -171,9 +175,11 @@ func revertFileMove(change *database.OperationChange) error {
 	return os.Rename(change.NewValue, change.OldValue)
 }
 
-// metadataReverter is the two-method slice of the book store that reverting a
-// metadata change needs. Was database.BookStore (51 methods).
+// metadataReverter is the slice of the book store that reverting a
+// metadata change needs: read the row, read its user locks, write the row.
+// Was database.BookStore (51 methods).
 type metadataReverter interface {
+	database.MetadataFieldStateReader
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 }
@@ -181,6 +187,22 @@ type metadataReverter interface {
 // revertMetadataUpdate restores a book field from the change's
 // OldValue. OldValue is either a plain string (for single-field
 // changes) or a JSON object (for multi-field snapshots).
+//
+// FIELD LOCKS. An undo writes the value a field held BEFORE the recorded
+// operation. If the user has edited and locked the field since, the user's
+// value is newer than both the operation's and the one being restored, and
+// putting the old value back is exactly the overwrite the lock promises to
+// prevent. So the restore goes through database.ApplyRespectingLocks: the
+// unlocked fields of the change are written, the locked ones are left as the
+// user set them, and the change is reported as an error -- naming the locked
+// fields -- so the row is NOT marked reverted_at. The undo of that change did
+// not fully happen, and the report says so instead of claiming it did.
+// Fails closed on an unreadable lock set: nothing is written.
+//
+// The field names on a change row are the database.FieldKey vocabulary where
+// the field is lockable at all (title, narrator, description, language,
+// publisher, genre); file_path / format / edition / library_state have no lock
+// and are always restored.
 func revertMetadataUpdate(store metadataReverter, change *database.OperationChange) error {
 	if change.BookID == "" {
 		return fmt.Errorf("no book_id on metadata change %s", change.ID)
@@ -191,22 +213,41 @@ func revertMetadataUpdate(store metadataReverter, change *database.OperationChan
 		return fmt.Errorf("book %s not found", change.BookID)
 	}
 
+	fields := map[string]string{}
 	if change.FieldName != "" && change.OldValue != "" {
-		applyFieldRestore(book, change.FieldName, change.OldValue)
+		fields[change.FieldName] = change.OldValue
 	} else if change.OldValue != "" {
 		// Multi-field JSON snapshot.
 		var snapshot map[string]any
 		if err := json.Unmarshal([]byte(change.OldValue), &snapshot); err == nil {
 			for field, val := range snapshot {
 				if s, ok := val.(string); ok {
-					applyFieldRestore(book, field, s)
+					fields[field] = s
 				}
 			}
 		}
 	}
 
-	_, err = store.UpdateBook(book.ID, book)
-	return err
+	kept, err := database.ApplyRespectingLocks(store, book, func(b *database.Book) {
+		for field, value := range fields {
+			applyFieldRestore(b, field, value)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("book %s: not restored, %w", change.BookID, err)
+	}
+	if len(kept) < len(fields) || len(fields) == 0 {
+		// At least one field of the change was not locked (or the change
+		// carried none we know how to restore): write what changed.
+		if _, err := store.UpdateBook(book.ID, book); err != nil {
+			return err
+		}
+	}
+	if len(kept) > 0 {
+		return fmt.Errorf("book %s: user-locked field(s) left as the user set them, not restored: %s",
+			change.BookID, strings.Join(kept, ", "))
+	}
+	return nil
 }
 
 // applyFieldRestore sets a single field on a Book from a string value.

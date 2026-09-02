@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-08-28
+// last-edited: 2026-09-02
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -21,16 +21,20 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // SplitBookMergeResult summarises a successful merge.
 type SplitBookMergeResult struct {
-	KeepID         string   `json:"keep_id"`
-	MergedSrcCount int      `json:"merged_src_count"`
-	FilesMoved     int      `json:"files_moved"`
-	NewDuration    int      `json:"new_duration"`
-	Errors         []string `json:"errors,omitempty"`
+	KeepID         string `json:"keep_id"`
+	MergedSrcCount int    `json:"merged_src_count"`
+	FilesMoved     int    `json:"files_moved"`
+	NewDuration    int    `json:"new_duration"`
+	// TitleKeptLocked reports that a suggested title was offered but the keep
+	// book's title is user-locked, so the user's title stands.
+	TitleKeptLocked bool     `json:"title_kept_locked,omitempty"`
+	Errors          []string `json:"errors,omitempty"`
 }
 
 // BulkSplitBookMergeItem is the immutable candidate snapshot consumed by the
@@ -126,9 +130,23 @@ func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggeste
 		}
 	}
 
-	// Step 3: update keep title if a non-empty suggested title was given.
+	// Step 3: update keep title if a non-empty suggested title was given --
+	// unless the user locked the keep's title, in which case theirs stands.
+	// Fail closed on an unreadable lock set: the duration recount (Step 2) is
+	// derived from the files and is never lockable, so it is still written;
+	// only the title change is withheld.
 	if suggestedTitle != "" && suggestedTitle != keep.Title {
-		keep.Title = suggestedTitle
+		locks, lerr := database.LoadFieldLocks(store, keep.ID)
+		switch {
+		case lerr != nil:
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("keep %s: title not changed, %v", keep.ID, lerr))
+		case locks.Locked(database.FieldKeyTitle):
+			result.TitleKeptLocked = true
+			slog.Info("split-book merge kept the user-locked title", "keep", keep.ID, "suggested", suggestedTitle)
+		default:
+			keep.Title = suggestedTitle
+		}
 	}
 	if _, err := store.UpdateBook(keep.ID, keep); err != nil {
 		result.Errors = append(result.Errors,

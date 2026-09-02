@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_preferences.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e4bfd34-ab51-4a5f-ba9f-f23e75305c06
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package database
 
@@ -62,6 +62,13 @@ func (p *PebbleStore) SetUserPreference(key, value string) error {
 
 	dbKey := []byte(fmt.Sprintf("preference:%s", key))
 	return p.db.Set(dbKey, data, pebble.Sync)
+}
+
+// DeleteUserPreference removes a global preference row. Deleting a key that
+// is not there is not an error.
+func (p *PebbleStore) DeleteUserPreference(key string) error {
+	dbKey := []byte(fmt.Sprintf("preference:%s", key))
+	return p.db.Delete(dbKey, pebble.Sync)
 }
 
 // GetAllUserPreferences returns all user preferences.

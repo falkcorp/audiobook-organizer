@@ -1,12 +1,13 @@
 // file: internal/metafetch/isbn.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package metafetch
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -31,14 +32,35 @@ func NewISBNService(db isbnEnrichmentStore, sources []metadata.MetadataSource) *
 // EnrichBookISBN searches external sources for ISBN if the book doesn't have one.
 // It also back-fills ASIN from Audible when missing. Returns true if any
 // identifier was found and saved.
+//
+// A user lock on isbn10, isbn13 or asin is honoured: a locked identifier is
+// never searched for or written, even when the column is blank -- a blank
+// the user locked is a deliberate blank. Lock reads fail closed: when the
+// locks cannot be read the book is left untouched and the error is returned.
 func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, error) {
 	book, err := s.db.GetBookByID(bookID)
 	if err != nil || book == nil {
 		return false, err
 	}
 
+	locks, err := database.LoadFieldLocks(s.db, bookID)
+	if err != nil {
+		return false, fmt.Errorf("refusing to enrich identifiers for %s: %w", bookID, err)
+	}
+
 	hasISBN := (book.ISBN10 != nil && *book.ISBN10 != "") || (book.ISBN13 != nil && *book.ISBN13 != "")
 	hasASIN := book.ASIN != nil && *book.ASIN != ""
+
+	// A locked identifier counts as "present": whatever is there is what the
+	// user wants there.
+	isbnLocked := locks.Locked(database.FieldKeyISBN10) && locks.Locked(database.FieldKeyISBN13)
+	asinLocked := locks.Locked(database.FieldKeyASIN)
+	if isbnLocked || asinLocked {
+		logging.Info(ctx, "ISBN enrichment leaving user-locked identifiers alone",
+			"id", bookID, "isbn_locked", isbnLocked, "asin_locked", asinLocked)
+	}
+	hasISBN = hasISBN || isbnLocked
+	hasASIN = hasASIN || asinLocked
 
 	// Nothing to do if both are already present.
 	if hasISBN && hasASIN {
@@ -58,10 +80,19 @@ func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, 
 			if isbn == "" {
 				continue
 			}
-			if isbnLen == 13 {
-				book.ISBN13 = &isbn
-			} else {
-				book.ISBN10 = &isbn
+			// Only one of the two ISBN columns may be locked here (both locked
+			// was handled above); Apply restores it if the hit lands there.
+			restored := locks.Apply(book, func(b *database.Book) {
+				if isbnLen == 13 {
+					b.ISBN13 = &isbn
+				} else {
+					b.ISBN10 = &isbn
+				}
+			})
+			if len(restored) > 0 {
+				logging.Info(ctx, "ISBN enrichment hit a user-locked column; not written",
+					"isbn", isbn, "title", title, "source", src.Name(), "locked", restored)
+				continue
 			}
 			if _, err := s.db.UpdateBook(bookID, book); err != nil {
 				return false, err

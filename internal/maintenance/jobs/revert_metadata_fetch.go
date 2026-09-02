@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package jobs
 
@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
@@ -100,7 +101,7 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobS
 	slog.Info("revert-metadata-fetch reverting books, changes after", "bookIDSet_count", len(bookIDSet), "revertAfter", revertAfter.Format(time.RFC3339))
 	reporter.SetTotal(len(bookIDSet))
 
-	reverted, skipped, errors := 0, 0, 0
+	reverted, skipped, errors, lockedKept := 0, 0, 0, 0
 
 	for bookID := range bookIDSet {
 		if ctx.Err() != nil {
@@ -141,6 +142,31 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobS
 			byField[h.Field] = revertEntry{field: h.Field, prev: prev}
 		}
 
+		if len(byField) == 0 {
+			skipped++
+			continue
+		}
+
+		// A revert writes the value the field held BEFORE the fetch. If the
+		// user has edited and locked the field since, that pre-fetch value is
+		// older than the user's own, and restoring it would be exactly the
+		// overwrite the lock promises to prevent. The field names in byField
+		// are the database.FieldKey vocabulary (they came from the same
+		// RecordChangeHistory writes), so the lock set answers them directly.
+		// Locked entries are dropped BEFORE the switch below so that the
+		// author_name branch's GetAuthorByName is never reached for them.
+		locks, lerr := database.LoadFieldLocks(store, bookID)
+		if lerr != nil {
+			slog.Warn("revert-metadata-fetch: field locks unreadable; leaving book alone", "bookID", bookID, "err", lerr)
+			errors++
+			continue
+		}
+		for field := range byField {
+			if locks.Locked(field) {
+				delete(byField, field)
+				lockedKept++
+			}
+		}
 		if len(byField) == 0 {
 			skipped++
 			continue
@@ -216,8 +242,8 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobS
 		}
 	}
 
-	slog.Info("revert-metadata-fetch done — reverted skipped errors", "reverted", reverted, "skipped", skipped, "errors", errors)
-	summary := fmt.Sprintf("Reverted %d books (skipped: %d, errors: %d)", reverted, skipped, errors)
+	slog.Info("revert-metadata-fetch done — reverted skipped errors", "reverted", reverted, "skipped", skipped, "errors", errors, "fields_kept_locked", lockedKept)
+	summary := fmt.Sprintf("Reverted %d books (skipped: %d, errors: %d, user-locked fields left alone: %d)", reverted, skipped, errors, lockedKept)
 	slog.Info(summary)
 	return nil
 }

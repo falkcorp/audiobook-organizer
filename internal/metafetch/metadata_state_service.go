@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_state_service.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -29,6 +29,7 @@ type metadataStateStore interface {
 	DeleteMetadataFieldState(bookID, field string) error
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
 	GetUserPreference(key string) (*database.UserPreference, error)
+	DeleteUserPreference(key string) error
 }
 
 // MetadataStateService handles metadata field state operations
@@ -137,6 +138,11 @@ func (mss *MetadataStateService) SaveMetadataState(bookID string, state map[stri
 		}
 	}
 
+	// The rows are now authoritative; the pre-migration blob must not be
+	// consulted again (see database.DeleteLegacyMetadataState).
+	if err := database.DeleteLegacyMetadataState(mss.db, bookID); err != nil {
+		return fmt.Errorf("failed to retire legacy metadata state: %w", err)
+	}
 	return nil
 }
 

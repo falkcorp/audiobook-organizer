@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.95.0
+// version: 1.96.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package database
 
@@ -291,6 +291,7 @@ type MockStore struct {
 
 	// User Preferences
 	GetUserPreferenceFunc     func(key string) (*UserPreference, error)
+	DeleteUserPreferenceFunc  func(key string) error
 	SetUserPreferenceFunc     func(key, value string) error
 	GetAllUserPreferencesFunc func() ([]UserPreference, error)
 
@@ -1472,6 +1473,13 @@ func (m *MockStore) GetUserPreference(key string) (*UserPreference, error) {
 func (m *MockStore) SetUserPreference(key, value string) error {
 	if m.SetUserPreferenceFunc != nil {
 		return m.SetUserPreferenceFunc(key, value)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteUserPreference(key string) error {
+	if m.DeleteUserPreferenceFunc != nil {
+		return m.DeleteUserPreferenceFunc(key)
 	}
 	return nil
 }

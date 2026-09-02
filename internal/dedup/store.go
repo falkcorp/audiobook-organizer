@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -53,6 +53,11 @@ type dedupCheckpointStores interface {
 }
 
 type dedupBookReader interface {
+	// The user's field locks. MergeSplitBookCluster (keep.Title) and
+	// DedupSeries (SeriesID) write user-lockable columns on the WINNER and go
+	// through database.LoadFieldLocks -- the guard every metadata writer shares.
+	database.MetadataFieldStateReader
+
 	GetBookByID(id string) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)

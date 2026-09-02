@@ -1,5 +1,5 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
 // last-edited: 2026-09-02
 //
@@ -166,6 +166,11 @@ func (svc *AudiobookService) saveMetadataState(bookID string, state map[string]m
 		if err := svc.store.DeleteMetadataFieldState(bookID, field); err != nil {
 			return fmt.Errorf("failed to clean up metadata state for %s: %w", field, err)
 		}
+	}
+	// The rows are now authoritative; the pre-migration blob must not be
+	// consulted again (see database.DeleteLegacyMetadataState).
+	if err := database.DeleteLegacyMetadataState(svc.store, bookID); err != nil {
+		return fmt.Errorf("failed to retire legacy metadata state: %w", err)
 	}
 	return nil
 }

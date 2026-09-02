@@ -1,5 +1,5 @@
 // file: internal/database/metadata_field_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 041867f9-1429-4696-8eac-a3faef717c4d
 // last-edited: 2026-09-02
 
@@ -149,5 +149,219 @@ func TestLockedUserFields_FailsClosed(t *testing.T) {
 					"that ignores the error would treat it as 'nothing locked'", locked)
 			}
 		})
+	}
+}
+
+// curatedLockBook has a real value in every lockable column so a mutation to
+// any of them is observable.
+func curatedLockBook() *Book {
+	return &Book{
+		ID:                   "b-apply",
+		Title:                "Curated Title",
+		AuthorID:             new(7),
+		SeriesID:             new(21),
+		SeriesSequence:       new(1),
+		Narrator:             new("Curated Narrator"),
+		Publisher:            new("Curated Publisher"),
+		Language:             new("en"),
+		AudiobookReleaseYear: new(2001),
+		ISBN10:               new("1111111111"),
+		ISBN13:               new("9781111111111"),
+		ASIN:                 new("B000CURATED"),
+		Genre:                new("Curated Genre"),
+		Description:          new("Curated description."),
+	}
+}
+
+// clobberEverything is a writer that changes every lockable column.
+func clobberEverything(b *Book) {
+	b.Title = "Clobbered"
+	b.AuthorID = new(8)
+	b.SeriesID = new(22)
+	b.SeriesSequence = new(5)
+	b.Narrator = new("Clobbered Narrator")
+	b.Publisher = new("Clobbered Publisher")
+	b.Language = new("de")
+	b.AudiobookReleaseYear = new(2020)
+	b.ISBN10 = new("2222222222")
+	b.ISBN13 = new("9782222222222")
+	b.ASIN = new("B000CLOBBER")
+	b.Genre = new("Clobbered Genre")
+	b.Description = new("Clobbered description.")
+}
+
+func columnOf(t *testing.T, b *Book, column string) any {
+	t.Helper()
+	v := reflect.ValueOf(b).Elem().FieldByName(column)
+	if !v.IsValid() {
+		t.Fatalf("Book has no column %q", column)
+	}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return nil
+		}
+		return v.Elem().Interface()
+	}
+	return v.Interface()
+}
+
+// Every key, through the chokepoint: unlocked the column changes (so the
+// fixture can see the writer run), locked it is restored and reported, and a
+// sibling column still changes (so a blanket refusal cannot pass).
+func TestFieldLocksApply_RestoresEveryLockedColumn(t *testing.T) {
+	for _, f := range UserLockableFields {
+		t.Run(f.Key, func(t *testing.T) {
+			want := columnOf(t, curatedLockBook(), f.Column)
+
+			open := curatedLockBook()
+			if restored := (FieldLocks{}).Apply(open, clobberEverything); restored != nil {
+				t.Fatalf("nothing locked but restored %v", restored)
+			}
+			if reflect.DeepEqual(columnOf(t, open, f.Column), want) {
+				t.Fatalf("fixture cannot observe the writer: Book.%s unchanged when unlocked", f.Column)
+			}
+
+			locks := NewFieldLocks("b-apply", map[string]bool{f.Key: true})
+			book := curatedLockBook()
+			restored := locks.Apply(book, clobberEverything)
+			if got := columnOf(t, book, f.Column); !reflect.DeepEqual(got, want) {
+				t.Errorf("lock %s: Book.%s = %v, want %v", f.Key, f.Column, got, want)
+			}
+			if !reflect.DeepEqual(restored, []string{f.Key}) {
+				t.Errorf("restored = %v, want [%s]", restored, f.Key)
+			}
+			sibling := "Title"
+			if f.Key == FieldKeyTitle {
+				sibling = "Narrator"
+			}
+			if reflect.DeepEqual(columnOf(t, book, sibling), columnOf(t, curatedLockBook(), sibling)) {
+				t.Errorf("locking %s also blocked Book.%s", f.Key, sibling)
+			}
+		})
+	}
+}
+
+func TestFieldLocksApply_SeriesNameLockKeepsThePosition(t *testing.T) {
+	locks := NewFieldLocks("b-apply", map[string]bool{FieldKeySeriesName: true})
+	book := curatedLockBook()
+	restored := locks.Apply(book, clobberEverything)
+	if *book.SeriesID != 21 || *book.SeriesSequence != 1 {
+		t.Errorf("series lock must hold both the series and its position: id=%d seq=%d", *book.SeriesID, *book.SeriesSequence)
+	}
+	if !reflect.DeepEqual(restored, []string{FieldKeySeriesName}) {
+		t.Errorf("restored = %v, want [series_name] (the position is reported under the lock that protected it)", restored)
+	}
+}
+
+func TestFieldLocksApply_UnchangedLockedColumnIsNotReported(t *testing.T) {
+	locks := NewFieldLocks("b-apply", AllUserLockableFieldsLocked())
+	book := curatedLockBook()
+	restored := locks.Apply(book, func(b *Book) { b.FilePath = "/moved/elsewhere.m4b" })
+	if restored != nil {
+		t.Errorf("a writer that touched no locked column was reported as restored: %v", restored)
+	}
+	if book.FilePath != "/moved/elsewhere.m4b" {
+		t.Errorf("non-lockable column must still be written")
+	}
+}
+
+func TestFieldLocksApply_CatchesWritesThroughThePointer(t *testing.T) {
+	locks := NewFieldLocks("b-apply", map[string]bool{FieldKeyNarrator: true})
+	book := curatedLockBook()
+	restored := locks.Apply(book, func(b *Book) { *b.Narrator = "Overwritten in place" })
+	if *book.Narrator != "Curated Narrator" {
+		t.Errorf("Narrator = %q, want the curated value restored", *book.Narrator)
+	}
+	if !reflect.DeepEqual(restored, []string{FieldKeyNarrator}) {
+		t.Errorf("restored = %v", restored)
+	}
+}
+
+func TestFieldLocksApply_NilToValueAndValueToNil(t *testing.T) {
+	// A locked-BLANK field is the case the fill-empty writers miss: the user
+	// cleared it on purpose and the writer "helpfully" fills it back in.
+	locks := NewFieldLocks("b-apply", map[string]bool{FieldKeyISBN13: true, FieldKeyGenre: true})
+	book := curatedLockBook()
+	book.ISBN13 = nil
+	restored := locks.Apply(book, func(b *Book) {
+		b.ISBN13 = new("9783333333333") // fill-empty
+		b.Genre = nil                   // clear
+	})
+	if book.ISBN13 != nil {
+		t.Errorf("locked-blank ISBN13 was filled: %q", *book.ISBN13)
+	}
+	if book.Genre == nil || *book.Genre != "Curated Genre" {
+		t.Errorf("locked Genre was cleared")
+	}
+	if !reflect.DeepEqual(restored, []string{FieldKeyISBN13, FieldKeyGenre}) {
+		t.Errorf("restored = %v", restored)
+	}
+}
+
+func TestApplyRespectingLocks_FailsClosedWithoutMutating(t *testing.T) {
+	book := curatedLockBook()
+	ran := false
+	restored, err := ApplyRespectingLocks(&lockReader{statesErr: errors.New("pebble: closed")}, book, func(b *Book) {
+		ran = true
+		clobberEverything(b)
+	})
+	if !errors.Is(err, ErrFieldLocksUnavailable) {
+		t.Fatalf("err = %v, want ErrFieldLocksUnavailable", err)
+	}
+	if ran {
+		t.Errorf("mutate ran despite an unreadable lock set")
+	}
+	if restored != nil {
+		t.Errorf("restored = %v on error", restored)
+	}
+	if !reflect.DeepEqual(book, curatedLockBook()) {
+		t.Errorf("book changed on a failed lock read")
+	}
+	if _, err := ApplyRespectingLocks(&lockReader{}, nil, clobberEverything); err == nil {
+		t.Errorf("nil book must be an error, not a silent no-op")
+	}
+}
+
+func TestApplyRespectingLocks_ReadsRowsAndLegacyBlob(t *testing.T) {
+	// Rows win.
+	book := curatedLockBook()
+	restored, err := ApplyRespectingLocks(&lockReader{states: []MetadataFieldState{
+		{Field: FieldKeyTitle, OverrideLocked: true},
+	}}, book, clobberEverything)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Title != "Curated Title" || *book.Narrator != "Clobbered Narrator" {
+		t.Errorf("row lock: title=%q narrator=%q", book.Title, *book.Narrator)
+	}
+	if !reflect.DeepEqual(restored, []string{FieldKeyTitle}) {
+		t.Errorf("restored = %v", restored)
+	}
+
+	// No rows: the legacy blob still locks.
+	book = curatedLockBook()
+	pref := `{"author_name":{"override_locked":true}}`
+	restored, err = ApplyRespectingLocks(&lockReader{pref: &UserPreference{Value: &pref}}, book, clobberEverything)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *book.AuthorID != 7 {
+		t.Errorf("legacy author lock not honored: %d", *book.AuthorID)
+	}
+	if !reflect.DeepEqual(restored, []string{FieldKeyAuthorName}) {
+		t.Errorf("restored = %v", restored)
+	}
+}
+
+func TestFieldLocksAccessors(t *testing.T) {
+	l := NewFieldLocks("b", map[string]bool{FieldKeyTitle: true, FieldKeyGenre: false})
+	if !l.Locked(FieldKeyTitle) || l.Locked(FieldKeyGenre) || !l.Any() {
+		t.Errorf("accessors disagree with the map: %+v", l)
+	}
+	if got := l.Set(); !reflect.DeepEqual(got, map[string]bool{FieldKeyTitle: true}) {
+		t.Errorf("Set() = %v", got)
+	}
+	if (FieldLocks{}).Any() {
+		t.Errorf("zero value must lock nothing")
 	}
 }

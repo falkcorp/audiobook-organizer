@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -343,12 +343,23 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 		row = target
 	}
 
+	// A user lock beats "still empty". A blank the user locked is a deliberate
+	// blank, and a field the user set that the AI also filled is theirs. Same
+	// fail-closed adapter the rescan overlay uses: if the locks cannot be read,
+	// every lockable column is treated as locked and the parse is left unapplied
+	// (the row's path is still stamped -- it was attempted).
+	lockedKeys, locksOK := lockedFieldsForBook(store, row.ID)
+	if !locksOK {
+		aiParseLog.Warn("AI parse: could not read field locks for %s; leaving every lockable field alone", row.ID)
+	}
+	locks := database.NewFieldLocks(row.ID, lockedKeys)
+
 	changed := false
-	if row.Title == "" && book.Title != "" {
+	if row.Title == "" && book.Title != "" && !locks.Locked(database.FieldKeyTitle) {
 		row.Title = book.Title
 		changed = true
 	}
-	if (row.AuthorID == nil || *row.AuthorID == 0) && book.Author != "" {
+	if (row.AuthorID == nil || *row.AuthorID == 0) && book.Author != "" && !locks.Locked(database.FieldKeyAuthorName) {
 		authorID, aerr := resolveAuthorID(book.Author)
 		if aerr != nil {
 			return "", fmt.Errorf("resolve author %q: %w", book.Author, aerr)
@@ -358,7 +369,7 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 			changed = true
 		}
 	}
-	if row.SeriesID == nil && book.Series != "" {
+	if row.SeriesID == nil && book.Series != "" && !locks.Locked(database.FieldKeySeriesName) {
 		seriesID, serr := resolveSeriesID(book.Series, row.AuthorID)
 		if serr != nil {
 			return "", fmt.Errorf("resolve series %q: %w", book.Series, serr)
@@ -366,18 +377,18 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 		if seriesID != nil {
 			row.SeriesID = seriesID
 			changed = true
-			if row.SeriesSequence == nil && book.Position > 0 {
+			if row.SeriesSequence == nil && book.Position > 0 && !locks.Locked(database.FieldKeySeriesPosition) {
 				pos := book.Position
 				row.SeriesSequence = &pos
 			}
 		}
 	}
-	if isBlankPtr(row.Narrator) && book.Narrator != "" {
+	if isBlankPtr(row.Narrator) && book.Narrator != "" && !locks.Locked(database.FieldKeyNarrator) {
 		n := book.Narrator
 		row.Narrator = &n
 		changed = true
 	}
-	if isBlankPtr(row.Publisher) && book.Publisher != "" {
+	if isBlankPtr(row.Publisher) && book.Publisher != "" && !locks.Locked(database.FieldKeyPublisher) {
 		pub := book.Publisher
 		row.Publisher = &pub
 		changed = true

@@ -1,7 +1,7 @@
 // file: internal/reconcile/app_dir_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d5c3e78-1b46-4a02-8f95-7c2e60b3d417
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package reconcile
 
@@ -83,7 +83,7 @@ func TestBuildFileIndex_SkipsAppDirs(t *testing.T) {
 	}
 }
 
-// appDirStore is the 8-method reconcile.Store surface, stubbed. Only
+// appDirStore is the 10-method reconcile.Store surface, stubbed. Only
 // GetAllImportPaths is exercised by FindUntrackedFiles.
 type appDirStore struct{ imports []database.ImportPath }
 
@@ -97,6 +97,10 @@ func (s appDirStore) UpdateBook(string, *database.Book) (*database.Book, error) 
 func (s appDirStore) DeleteBook(string) error                                   { return nil }
 func (s appDirStore) GetAllImportPaths() ([]database.ImportPath, error)         { return s.imports, nil }
 func (s appDirStore) CreateOperationChange(*database.OperationChange) error     { return nil }
+func (s appDirStore) GetMetadataFieldStates(string) ([]database.MetadataFieldState, error) {
+	return nil, nil
+}
+func (s appDirStore) GetUserPreference(string) (*database.UserPreference, error) { return nil, nil }
 
 // TestFindUntrackedFiles_SkipsAppDirs pins the untracked-file scan.
 //
