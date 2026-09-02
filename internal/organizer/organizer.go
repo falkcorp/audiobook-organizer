@@ -1,18 +1,22 @@
 // file: internal/organizer/organizer.go
-// version: 1.34.1
+// version: 1.35.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-02
 
 package organizer
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
@@ -527,33 +531,44 @@ func stringOrEmpty(s *string) string {
 
 // copyFile copies src to dst without ever replacing an existing dst.
 //
-// The bytes go through fileops.CopyFileIngest — INGEST, not CopyFile: src is a
-// file from outside the library (a download client's output, a watch folder),
-// and adopting its permission bits would let that client's umask decide the
-// library's. A torrent client on umask 077 produces an 0600 .m4b, and an
+// The bytes go through fileops.CopyFileIngestExclusive — INGEST, not CopyFile:
+// src is a file from outside the library (a download client's output, a watch
+// folder), and adopting its permission bits would let that client's umask decide
+// the library's. A torrent client on umask 077 produces an 0600 .m4b, and an
 // organized library of 0600 files stops being served over the share while every
 // copy still reports success. The os.Create this replaced was umask-floored and
-// safe for that reason; CopyFileIngest keeps the property deliberately.
+// safe for that reason; the Ingest variants keep the property deliberately.
 //
-// The temp-then-safeRename dance stays here because the temp name is this
-// package's own — cleanupTempFiles sweeps `*.tmp-organizer` under RootDir and
-// must be able to recognise what it wrote.
+// The temp name is UNIQUE PER WRITER and opened O_EXCL. It used to be the fixed
+// `dst+".tmp"`, os.Remove'd first and opened O_TRUNC — and organizeBooks runs
+// eight workers with no cross-book target dedupe, so two same-titled books, or
+// one book planned twice, wrote through the same temp at once. In 30 of 30 probe
+// iterations one worker returned success while dst held the OTHER worker's
+// bytes, or an interleaving of both at full length, so verifyRenamed's size
+// check passed over corrupt audio. O_EXCL turns a shared temp into an error
+// instead of a shared file descriptor, and a temp this writer did not create is
+// never removed.
 //
-// safeRename rather than a bare os.Rename: os.Rename silently REPLACES a
-// destination that appeared between the caller's exists-check and now
-// (concurrent organize workers), which for an audiobook means the other
-// worker's file is gone. The wrapped error still satisfies os.IsExist, so
-// organizeFile callers' race recovery keeps working.
+// The temp still sits beside dst and ends in tempFileSuffix because
+// cleanupTempFiles sweeps by that suffix under RootDir and must be able to
+// recognise what a crashed worker left behind.
+//
+// Finalisation is finalizeExclusive rather than a bare os.Rename: os.Rename
+// silently REPLACES a destination that appeared between the caller's
+// exists-check and now (concurrent organize workers), which for an audiobook
+// means the other worker's file is gone. The returned error still satisfies
+// os.IsExist, so organizeFile callers' race recovery keeps working.
 func (o *Organizer) copyFile(src, dst string) error {
-	tempPath := dst + tempFileSuffix
-	_ = os.Remove(tempPath)
+	tempPath := o.tempPathFor(dst)
 
-	if err := fileops.CopyFileIngest(src, tempPath); err != nil {
-		_ = os.Remove(tempPath)
-		return err
+	if err := fileops.CopyFileIngestExclusive(src, tempPath); err != nil {
+		if !os.IsExist(err) {
+			_ = os.Remove(tempPath)
+		}
+		return fmt.Errorf("failed to write temp file for %s: %w", dst, err)
 	}
 
-	if err := safeRename(tempPath, dst); err != nil {
+	if err := finalizeExclusive(tempPath, dst); err != nil {
 		_ = os.Remove(tempPath)
 		if os.IsExist(err) {
 			return err
@@ -561,6 +576,30 @@ func (o *Organizer) copyFile(src, dst string) error {
 		return fmt.Errorf("failed to finalize destination file: %w", err)
 	}
 	return nil
+}
+
+// tempPathFor returns a fresh temp name beside dst: `<dst>.<nonce>.tmp`. The
+// nonce is what makes two concurrent writers of the same dst independent;
+// O_EXCL at open time is what makes a collision an error rather than a shared
+// file. The two are separate defences on purpose: tests pin the nonce to force
+// a collision and prove the O_EXCL half holds on its own.
+func (o *Organizer) tempPathFor(dst string) string {
+	return dst + "." + tempNonce() + tempFileSuffix
+}
+
+// tempNonce is a package variable, not a direct call, so a test can make two
+// writers collide on one temp name. Production never reassigns it.
+var tempNonce = randomTempNonce
+
+func randomTempNonce() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is a broken host, not a recoverable condition;
+		// fall back to the clock so the name is still per-call, and let
+		// O_EXCL catch the astronomically unlikely collision.
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
 }
 
 func (o *Organizer) cleanupTempFiles() error {
@@ -708,43 +747,8 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 		// proven by hashing both sides. See destinationIsSameContent for what
 		// that does and does not establish.
 		if dstInfo, statErr := os.Stat(dstPath); statErr == nil {
-			srcInfo, srcErr := os.Stat(srcPath)
-			switch {
-			case srcErr == nil && os.SameFile(srcInfo, dstInfo):
+			if adoptExistingDestination(book, srcPath, dstPath, dstInfo) {
 				pathMap[srcPath] = dstPath
-			case srcErr == nil && destinationIsSameContent(srcPath, dstPath, srcInfo.Size(), dstInfo.Size()):
-				// Interrupted copy/reflink from an earlier run: same content,
-				// different inode. Adopt it rather than re-copying.
-				//
-				// Evaluated lazily, after os.SameFile, but be precise about who
-				// that actually spares. HARDLINK re-organizes short-circuit
-				// above: os.Link shares the inode, so os.SameFile is true.
-				// SYMLINK too, since os.Stat follows the link. REFLINK DOES
-				// NOT. reflink_unix.go opens the destination with
-				// os.O_CREATE|os.O_EXCL, which allocates a NEW inode, and the
-				// FICLONE ioctl only shares extents into it -- os.SameFile
-				// compares dev+ino and returns false for every successful
-				// reflink pair.
-				//
-				// So on btrfs/XFS, where FICLONE succeeds and the default
-				// "auto" strategy reaches for reflink first, a re-organize
-				// whose rows still point at the pre-organize path DOES pay two
-				// full reads here. That is the correct price for not adopting
-				// the wrong audio, but it is a price, not free.
-				pathMap[srcPath] = dstPath
-			default:
-				// "not proven to be this book's file", NOT "a different file".
-				// This branch is now also where an UNDECIDABLE destination
-				// lands -- unreadable file, hash I/O error, size changed
-				// mid-read -- because destinationIsSameContent fails closed.
-				// Saying "different" here would contradict the warn that
-				// function already emitted about the same path, and would send
-				// an operator looking for a content mismatch that may not
-				// exist.
-				slog.Warn("organizeFile destination occupied by a file not proven to be this book's — leaving this file's row unchanged",
-					"book_id", book.ID, "book_title", book.Title,
-					"source_path", srcPath, "dest_path", dstPath,
-					"source_stat_error", srcErr)
 			}
 			continue
 		}
@@ -758,9 +762,24 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 					"error", err)
 				continue
 			}
-			// Handle race: another worker may have created the file between our stat and copy
+			// Race: the destination appeared between the os.Stat above and the
+			// exclusive create/finalize inside organizeFile — another worker
+			// planning the same target, or the same book planned twice. This
+			// used to record pathMap[src] = dst UNVERIFIED, which is the exact
+			// adoption-by-existence the pre-copy check above stopped doing:
+			// whoever won the race, this book's row was pointed at their file.
+			// Re-run the same content test; an occupant that is not proven to
+			// be this file leaves the row unchanged, as it would have had it
+			// been there a millisecond earlier.
 			if os.IsExist(err) {
-				pathMap[srcPath] = dstPath
+				if dstInfo, statErr := os.Stat(dstPath); statErr == nil && adoptExistingDestination(book, srcPath, dstPath, dstInfo) {
+					pathMap[srcPath] = dstPath
+				} else {
+					slog.Warn("organizeFile lost a destination race to a file not proven to be this book's — leaving this file's row unchanged",
+						"book_id", book.ID, "book_title", book.Title,
+						"source_path", srcPath, "dest_path", dstPath,
+						"dest_stat_error", statErr)
+				}
 				continue
 			}
 			return "", nil, fmt.Errorf("failed to organize segment %s: %w", fileName, err)
@@ -790,6 +809,65 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 	}
 
 	return targetDir, pathMap, nil
+}
+
+// adoptExistingDestination decides whether a file already sitting at dstPath
+// is THIS book's file (adopt it: record the row as organized there) or an
+// unrelated occupant (leave the row unchanged). It is the single adoption
+// test for both places organizeBooks can meet an occupied destination — the
+// pre-copy os.Stat, and the os.IsExist returned when another worker won the
+// race between that stat and the exclusive create/finalize — so the two
+// cannot drift apart again. Until 2026-09-02 the race path adopted
+// unconditionally.
+//
+// A destination is only OURS if it is the same file or byte-identical in
+// CONTENT. Recording an unrelated occupant would point this book's row at
+// another book's file: the earliest version did a bare os.Stat and wrote
+// pathMap[src] = dst for whatever it found, which was survivable while the
+// destination name was just filepath.Base(src) and is not now that the file
+// naming pattern decides it.
+//
+// Equal size used to BE the adoption test, and equal size is not the same
+// file. Two different audiobooks of identical byte length are not rare —
+// same-length encodes of the same runtime, placeholder files, files padded to
+// a block boundary — and adopting one silently points this book's row at the
+// other book's audio, which cannot be undone from inside the app. Size
+// survives only as a free pre-filter (a differing size is still a hard "not
+// the same file"); sameness itself is proven by hashing both sides. See
+// destinationIsSameContent for what that does and does not establish.
+//
+// Who os.SameFile actually spares: HARDLINK re-organizes, since os.Link shares
+// the inode; SYMLINK, since os.Stat follows the link. REFLINK DOES NOT —
+// reflink_unix.go opens the destination O_CREATE|O_EXCL, which allocates a
+// NEW inode, and the FICLONE ioctl only shares extents into it, so os.SameFile
+// is false for every successful reflink pair. On btrfs/XFS, where the default
+// "auto" strategy reaches for reflink first, a re-organize whose rows still
+// point at the pre-organize path pays two full reads here. That is the correct
+// price for not adopting the wrong audio, but it is a price, not free.
+func adoptExistingDestination(book *database.Book, srcPath, dstPath string, dstInfo os.FileInfo) bool {
+	srcInfo, srcErr := os.Stat(srcPath)
+	switch {
+	case srcErr == nil && os.SameFile(srcInfo, dstInfo):
+		return true
+	case srcErr == nil && destinationIsSameContent(srcPath, dstPath, srcInfo.Size(), dstInfo.Size()):
+		// Interrupted copy/reflink from an earlier run, or the other worker
+		// in a race copied the same bytes: same content, different inode.
+		// Adopt it rather than re-copying.
+		return true
+	default:
+		// "not proven to be this book's file", NOT "a different file". This
+		// branch is also where an UNDECIDABLE destination lands — unreadable
+		// file, hash I/O error, size changed mid-read — because
+		// destinationIsSameContent fails closed. Saying "different" here
+		// would contradict the warn that function already emitted about the
+		// same path, and would send an operator looking for a content
+		// mismatch that may not exist.
+		slog.Warn("organizeFile destination occupied by a file not proven to be this book's — leaving this file's row unchanged",
+			"book_id", book.ID, "book_title", book.Title,
+			"source_path", srcPath, "dest_path", dstPath,
+			"source_stat_error", srcErr)
+		return false
+	}
 }
 
 // destinationIsSameContent reports whether srcPath and dstPath hold

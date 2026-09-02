@@ -1,15 +1,17 @@
 // file: internal/organizer/saferename.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2df18e44-98f0-407e-ab5f-daf158f22554
-// last-edited: 2026-08-16
+// last-edited: 2026-09-02
 
 package organizer
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
+	"syscall"
 )
 
 // safeRename renames src to dst, refusing to overwrite an existing dst.
@@ -104,4 +106,89 @@ func verifyRenamed(src, dst string, srcInfo os.FileInfo) error {
 		return fmt.Errorf("rename reported success but source %s is in an unknown state: %w", src, err)
 	}
 	return nil
+}
+
+// finalizeExclusive publishes a fully written regular file tmp at dst WITHOUT
+// ever replacing a dst that already exists. tmp is consumed on success.
+//
+// safeRename's Lstat-then-Rename has a TOCTOU window: two organize workers
+// finishing the same dst at the same time both see "absent" and both rename,
+// and rename(2) silently replaces — the loser's audio is gone with a success
+// return. copyFile used to run exactly that race, and once its temp names
+// became per-writer that window was the last way two workers could still
+// destroy each other's output.
+//
+// os.Link is the primitive that closes it: link(2) is atomic and FAILS with
+// EEXIST if dst appeared in the meantime, on every POSIX filesystem this
+// project organizes onto (ext4, xfs, zfs, btrfs, apfs, and NFS/SMB when the
+// server supports hard links). The link is then the published file and tmp is
+// unlinked; both names are the same inode so there is no second copy.
+//
+// The collision error is an *os.LinkError wrapping fs.ErrExist so that
+// os.IsExist and errors.Is(err, fs.ErrExist) both recognise it, the same shape
+// safeRename and os.Link produce — callers' race recovery does not need to
+// know which primitive refused.
+//
+// Filesystems that refuse hard links altogether (EPERM/ENOTSUP/EXDEV — exFAT,
+// FAT32, some SMB mounts) fall back to safeRename and its documented
+// sub-millisecond window. That is a narrowing, not a regression: those mounts
+// had the window before this function existed.
+func finalizeExclusive(tmp, dst string) error {
+	tmpInfo, err := os.Lstat(tmp)
+	if err != nil {
+		return fmt.Errorf("stat finalize source %s: %w", tmp, err)
+	}
+	if !tmpInfo.Mode().IsRegular() {
+		return fmt.Errorf("finalize source %s is not a regular file (mode %s)", tmp, tmpInfo.Mode())
+	}
+
+	if err := os.Link(tmp, dst); err != nil {
+		if os.IsExist(err) {
+			slog.Warn("finalizeExclusive refusing to overwrite existing destination",
+				"tmp", tmp, "dst", dst)
+			return &os.LinkError{Op: "link", Old: tmp, New: dst, Err: fs.ErrExist}
+		}
+		if !linkUnsupported(err) {
+			return fmt.Errorf("link %s to %s: %w", tmp, dst, err)
+		}
+		slog.Debug("finalizeExclusive: filesystem refuses hard links, falling back to rename",
+			"tmp", tmp, "dst", dst, "error", err)
+		return safeRename(tmp, dst)
+	}
+
+	// dst is published; tmp is a second name for the same inode. Losing the
+	// unlink is a leak cleanupTempFiles will sweep, not a correctness problem.
+	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+		slog.Warn("finalizeExclusive: published destination but could not remove temp name",
+			"tmp", tmp, "dst", dst, "error", err)
+	}
+
+	info, err := os.Lstat(dst)
+	if err != nil {
+		return fmt.Errorf("link reported success but destination is unreadable %s: %w", dst, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("link reported success but destination %s is not a regular file (mode %s)", dst, info.Mode())
+	}
+	if info.Size() != tmpInfo.Size() {
+		return fmt.Errorf("link reported success but destination %s is %d bytes, expected %d",
+			dst, info.Size(), tmpInfo.Size())
+	}
+	return nil
+}
+
+// linkUnsupported reports whether a link(2) failure means "this filesystem
+// does not do hard links" rather than "this particular link was refused".
+// Only the former justifies falling back to a rename; anything else (EACCES on
+// the directory, ENOSPC for the dirent, EIO) must surface as the error it is.
+func linkUnsupported(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	switch errno {
+	case syscall.EPERM, syscall.ENOTSUP, syscall.EXDEV, syscall.EMLINK:
+		return true
+	}
+	return false
 }
