@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package reconcile
 
@@ -173,7 +173,6 @@ func BuildFileIndex(dirs []string, extSet map[string]bool, app pathutil.AppDirs)
 
 	var wg sync.WaitGroup
 	for _, dir := range dirs {
-		dir := dir
 		wg.Go(func() {
 			_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
@@ -625,10 +624,7 @@ func fuzzyFindByAlbum(track iTunesTrack, fileIndex map[string][]string) string {
 		}
 	}
 	// Require at least (all album words × 2) − 2 to avoid short-title false positives.
-	minScore := len(albumWords)*2 - 2
-	if minScore < 8 {
-		minScore = 8
-	}
+	minScore := max(len(albumWords)*2-2, 8)
 	if best.score >= minScore {
 		return best.path
 	}
@@ -657,7 +653,7 @@ func healTrack(dst, src string) error {
 // titleWords returns lowercase words >3 chars from s, for overlap scoring.
 func titleWords(s string) []string {
 	var out []string
-	for _, w := range strings.Fields(strings.ToLower(s)) {
+	for w := range strings.FieldsSeq(strings.ToLower(s)) {
 		if len(w) > 3 {
 			out = append(out, w)
 		}

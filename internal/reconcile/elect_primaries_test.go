@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package reconcile
 
@@ -222,7 +222,7 @@ func keysOfElectUpdated(f *electFakeStore) []string {
 func TestElectMissingPrimaries_DryRunWritesNothing(t *testing.T) {
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	store := newElectFakeStore()
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		gid := fmt.Sprintf("vg-dry-%02d", i)
 		store.addElectBook(fmt.Sprintf("dry-%02d", i), fmt.Sprintf("Dry %02d", i), gid, false, base)
 	}

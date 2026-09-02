@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package reconcile
 
@@ -221,7 +221,7 @@ func BuildReconcilePreview(store Store) (*ReconcilePreviewResult, error) {
 // the running completed count.
 func hashFilesConcurrent(files []string, report func(done int)) map[string]string {
 	hashes := make([]string, len(files))
-	var done int64
+	var done atomic.Int64
 	var g errgroup.Group
 	g.SetLimit(max(runtime.NumCPU(), 1))
 	for i, fp := range files {
@@ -229,7 +229,7 @@ func hashFilesConcurrent(files []string, report func(done int)) map[string]strin
 			if h, err := scanner.ComputeSegmentFileHash(fp); err == nil {
 				hashes[i] = h // sha256 hex is never empty; "" == unhashed
 			}
-			if n := atomic.AddInt64(&done, 1); report != nil && n%100 == 0 {
+			if n := done.Add(1); report != nil && n%100 == 0 {
 				report(int(n))
 			}
 			return nil
@@ -319,7 +319,7 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 	// with an empty FilePath were skipped before (never broken); brokenFlag stays
 	// false for them.
 	brokenFlag := make([]bool, len(books))
-	var statDone int64
+	var statDone atomic.Int64
 	var g errgroup.Group
 	g.SetLimit(max(runtime.NumCPU(), 1))
 	for i := range books {
@@ -330,7 +330,7 @@ func BuildReconcilePreviewWithProgress(store Store, log logger.Logger) (*Reconci
 			if _, err := os.Stat(books[i].FilePath); err != nil {
 				brokenFlag[i] = true
 			}
-			if n := atomic.AddInt64(&statDone, 1); n%1000 == 0 {
+			if n := statDone.Add(1); n%1000 == 0 {
 				report(int(n), totalBooks, fmt.Sprintf("Checked %d/%d book paths", n, totalBooks))
 			}
 			return nil
@@ -922,7 +922,7 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 					slog.Warn("failed to hydrate broken book for update", "book", book.ID, "ferr", ferr)
 				} else {
 					full.LibraryState = &needsReview
-					full.MarkedForDeletion = boolPtr(true)
+					full.MarkedForDeletion = new(true)
 					full.MarkedForDeletionAt = &now
 					if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
 						slog.Warn("failed to mark broken book", "book", full.ID, "uerr", uerr)
@@ -984,7 +984,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 
 	// Helper to soft-delete a book
 	softDelete := func(book *database.Book) error {
-		book.MarkedForDeletion = boolPtr(true)
+		book.MarkedForDeletion = new(true)
 		book.MarkedForDeletionAt = &now
 		book.LibraryState = &deletedState
 		_, err := store.UpdateBook(book.ID, book)
@@ -1437,8 +1437,4 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	)
 
 	return result, nil
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }

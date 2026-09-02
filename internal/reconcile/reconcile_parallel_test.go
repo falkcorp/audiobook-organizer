@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package reconcile
 
@@ -86,7 +86,7 @@ func TestFindBrokenSegmentBooks_ParallelOrderAndCounts(t *testing.T) {
 
 	store := newFakeStore()
 	var wantBrokenIDs []string
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("book-%02d", i)
 		dir := filepath.Join(base, id)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -190,7 +190,7 @@ func TestBuildReconcilePreview_ParallelBrokenOrder(t *testing.T) {
 
 	store := newFakeStore()
 	var wantBrokenIDs []string
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("bk-%02d", i)
 		var path string
 		if brokenSet[i] {
@@ -236,7 +236,7 @@ func TestFindBrokenSegmentBooks_RealStoreConcurrent(t *testing.T) {
 	base := t.TempDir()
 	const n = 40 // enough books to keep NumCPU workers genuinely contending
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		dir := filepath.Join(base, fmt.Sprintf("book-%02d", i))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
