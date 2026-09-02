@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.26.0
+// version: 2.27.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-02
 
@@ -70,7 +70,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.organizeService,
 		s.writeBackBatcher,
 		s.eventBus,
-		config.AppConfig.RootDir,
 		config.AppConfig.AutoOrganize,
 	)
 	filesystemH := handlers.NewFilesystemHandler(

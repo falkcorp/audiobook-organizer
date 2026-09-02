@@ -1,5 +1,5 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
 // last-edited: 2026-09-02
 
@@ -71,7 +71,6 @@ func TestCreateOrganizedVersion_UnlandedRowKeepsSource_EvenWhenTargetIsOccupied(
 		Path:    targetDir,
 		Files:   map[string]string{src1: dst1}, // ch02 did NOT land
 		Created: []string{dst1},
-		Skipped: []string{src2},
 	}
 	created, err := svcCreateOrganized(t, store, book, landing)
 	require.NoError(t, err)
@@ -167,7 +166,6 @@ func TestRollbackOrganizedVersion_RemovesOnlyCreated(t *testing.T) {
 		Path:    targetDir,
 		Files:   map[string]string{"/src/01.mp3": ours},
 		Created: []string{ours},
-		Skipped: []string{"/src/02.mp3"},
 	}, &noopLogger{})
 
 	_, err := os.Stat(ours)
@@ -299,7 +297,7 @@ func TestRenameFiles_ResumesANonceSuffixedStrandedTemp(t *testing.T) {
 	require.True(t, strings.HasPrefix(parked, dst+TmpRenameSuffix+"-"), "temp name shape: %s", parked)
 	require.NoError(t, os.WriteFile(parked, []byte("stranded"), 0o644))
 
-	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst}})
+	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: int64(len("stranded"))}})
 	require.NoError(t, err)
 	require.Empty(t, result.Skipped)
 	require.Len(t, result.Succeeded, 1)
@@ -307,6 +305,72 @@ func TestRenameFiles_ResumesANonceSuffixedStrandedTemp(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "stranded", string(got))
 	assertNoRenameTemps(t, dst)
+}
+
+// A stranded temp is bytes of unproven identity at a name every same-titled
+// book plans. It is resumed only when its size matches the row; a mismatch
+// or a row with no size refuses, leaves the temp where it is (it may be
+// another book's file), and publishes nothing under this row.
+func TestRenameFiles_StrandedTemp_RefusedWhenUnverifiable(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		expected int64
+		reason   string
+	}{
+		{"size mismatch", 3, "is 8 bytes but the row records 3"},
+		{"row has no size", 0, "records no file size"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, "old", "book.m4b") // gone
+			dst := filepath.Join(dir, "new", "book.m4b")
+			require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+			parked := renameTempPath(dst)
+			require.NoError(t, os.WriteFile(parked, []byte("stranded"), 0o644))
+
+			result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: tc.expected}})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.reason)
+			require.Contains(t, err.Error(), parked, "the error must name the temp an operator has to look at")
+			require.Empty(t, result.Succeeded)
+			require.Len(t, result.Errors, 1)
+			_, statErr := os.Stat(dst)
+			require.True(t, errors.Is(statErr, fs.ErrNotExist), "nothing may be published under this row")
+			got, err := os.ReadFile(parked)
+			require.NoError(t, err, "the temp is left in place for the operator, not removed")
+			require.Equal(t, "stranded", string(got))
+		})
+	}
+}
+
+// A legacy fixed-name temp beside a PRESENT source: the pre-nonce binary
+// refused to park on the taken name, which is what surfaced such a file.
+// Proceeding on a nonce name beside it would orphan it forever, so the batch
+// refuses before anything moves — the source stays where it is.
+func TestRenameFiles_LegacyTempBesidePresentSource_Refuses(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "old", "book.m4b")
+	dst := filepath.Join(dir, "new", "book.m4b")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	require.NoError(t, os.WriteFile(src, []byte("live"), 0o644))
+	legacy := dst + TmpRenameSuffix
+	require.NoError(t, os.WriteFile(legacy, []byte("orphan"), 0o644))
+
+	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: 4}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), legacy)
+	require.Empty(t, result.Succeeded)
+	got, err := os.ReadFile(src)
+	require.NoError(t, err, "the source must not have moved")
+	require.Equal(t, "live", string(got))
+	got, err = os.ReadFile(legacy)
+	require.NoError(t, err, "the legacy temp is the operator's to resolve, not ours to remove")
+	require.Equal(t, "orphan", string(got))
+	_, statErr := os.Stat(dst)
+	require.True(t, errors.Is(statErr, fs.ErrNotExist))
+	matches, _ := filepath.Glob(globEscape(dst+TmpRenameSuffix) + "-*")
+	require.Empty(t, matches, "no nonce temp may have been parked beside the legacy one")
 }
 
 func TestRenameFiles_TwoStrandedTempsForOneTarget_RefusesToGuess(t *testing.T) {
@@ -480,13 +544,68 @@ func TestOrganizeOneBook_MultiRowBookWithFileFilePath_TakesDirectoryPath(t *test
 	require.True(t, landing.IsDir(), "a 2-row book must land as a directory, got %+v", landing)
 	require.Len(t, landing.Files, 2)
 	require.Len(t, landing.Created, 2)
-	require.Empty(t, landing.Skipped)
+	require.False(t, landing.InPlace, "a book outside the root is copied in, not renamed in place")
 	for src, dst := range landing.Files {
 		want, _ := os.ReadFile(src)
 		got, err := os.ReadFile(dst)
 		require.NoError(t, err)
 		require.Equal(t, want, got, "%s -> %s", src, dst)
 	}
+}
+
+// A book already under the library root is renamed in place, and the Landing
+// says so. Callers (the HTTP handler, the batch worker) branch on InPlace to
+// stamp the existing row instead of creating a version; until 2026-09-02 the
+// handler re-derived the decision from a RootDir snapshot taken at startup
+// and, after a runtime root_dir change, created a second row at the path the
+// in-place move had just produced.
+func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{
+		RootDir:              rootDir,
+		FolderNamingPattern:  "{author}/{title}",
+		FileNamingPattern:    "{title}",
+		OrganizationStrategy: "copy",
+	}
+	stale := filepath.Join(rootDir, "Old Author", "Old Title.m4b")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stale), 0o775))
+	require.NoError(t, os.WriteFile(stale, []byte("audio"), 0o644))
+
+	book := &database.Book{
+		ID:       "book-inplace",
+		Title:    "New Title",
+		FilePath: stale,
+		Format:   "m4b",
+		Author:   &database.Author{Name: "New Author"},
+	}
+	mockStore := mocks.NewMockStore(t)
+	mockStore.EXPECT().GetBookFiles("book-inplace").Return([]database.BookFile{
+		{ID: "bf-1", BookID: "book-inplace", FilePath: stale},
+	}, nil).Maybe()
+	mockStore.EXPECT().GetBookByID("book-inplace").Return(book, nil).Maybe()
+	mockStore.EXPECT().UpdateBook("book-inplace", mock.Anything).Return(book, nil).Maybe()
+	mockStore.EXPECT().UpdateBookFile(mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockStore.On("GetBookFileByPath", mock.Anything).Return(nil, nil).Maybe()
+
+	svc := NewService(mockStore)
+	landing, err := svc.OrganizeOneBook(NewOrganizer(&config.AppConfig), book, &noopLogger{})
+	require.NoError(t, err)
+	require.True(t, landing.InPlace, "a book under the root is renamed in place, and the Landing must say so: %+v", landing)
+	require.Equal(t, filepath.Join(rootDir, "New Author", "New Title", "New Title.m4b"), landing.Path)
+	require.Empty(t, landing.Created, "an in-place rename creates no copy a rollback could remove")
+	require.FileExists(t, landing.Path)
+	_, statErr := os.Stat(stale)
+	require.True(t, errors.Is(statErr, fs.ErrNotExist), "the file was MOVED, not copied")
+
+	// And the copy-in path says the opposite.
+	outside := filepath.Join(t.TempDir(), "in.m4b")
+	require.NoError(t, os.WriteFile(outside, []byte("audio2"), 0o644))
+	other := &database.Book{ID: "book-outside", Title: "Other", FilePath: outside, Format: "m4b", Author: &database.Author{Name: "Someone"}}
+	mockStore.EXPECT().GetBookFiles("book-outside").Return(nil, nil).Once()
+	landing, err = svc.OrganizeOneBook(NewOrganizer(&config.AppConfig), other, &noopLogger{})
+	require.NoError(t, err)
+	require.False(t, landing.InPlace)
+	require.FileExists(t, outside, "a copy-in leaves the source where it was")
 }
 
 // OrganizeBook returns mode "" when the target already IS this file (here: a

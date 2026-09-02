@@ -1,10 +1,12 @@
 // file: internal/server/organize_service_regression_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-organize-regr
+// last-edited: 2026-09-02
 
 package server
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -176,7 +178,7 @@ func TestOrganizeDirectoryBook_SuccessWithRealFiles(t *testing.T) {
 	assert.NotEmpty(t, targetDir)
 	assert.DirExists(t, targetDir)
 	assert.Len(t, landing.Created, 2, "both copies are this organize's own writes")
-	assert.Empty(t, landing.Skipped)
+	assert.False(t, landing.InPlace)
 
 	// Verify files actually exist in target
 	entries, _ := os.ReadDir(targetDir)
@@ -191,12 +193,13 @@ func TestOrganizeDirectoryBook_PartialMissing(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(importDir, "ch01.mp3"), []byte("audio-data-1"), 0644))
 	// ch02.mp3 intentionally NOT created
 
+	rows := []database.BookFile{
+		{ID: "f1", BookID: "book-5", FilePath: filepath.Join(importDir, "ch01.mp3")},
+		{ID: "f2", BookID: "book-5", FilePath: filepath.Join(importDir, "ch02.mp3")}, // gone on disk
+	}
 	mockDB := &database.MockStore{
 		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
-			return []database.BookFile{
-				{ID: "f1", BookID: bookID, FilePath: filepath.Join(importDir, "ch01.mp3")},
-				{ID: "f2", BookID: bookID, FilePath: filepath.Join(importDir, "ch02.mp3")}, // missing
-			}, nil
+			return rows, nil
 		},
 	}
 
@@ -218,16 +221,37 @@ func TestOrganizeDirectoryBook_PartialMissing(t *testing.T) {
 		Author:   &database.Author{Name: "Partial Author"},
 	}
 
-	// Should succeed with partial files (at least one copied)
+	// A row whose file has vanished but is NOT flagged missing is a book the
+	// library still believes is whole. Landing half of it would create a
+	// version row claiming the target directory while one book_file row still
+	// points outside it, so the organize fails closed and leaves nothing behind
+	// (until 2026-09-02 this test asserted the opposite: "should succeed with
+	// partial files").
 	landing, err := svc.OrganizeDirectoryBook(org, book, testLog)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not land 1 of 2")
+	assert.Contains(t, err.Error(), "re-scan")
+	assert.Nil(t, landing)
+	var left []string
+	_ = filepath.WalkDir(rootDir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr == nil && !d.IsDir() {
+			left = append(left, p)
+		}
+		return nil
+	})
+	assert.Empty(t, left, "a failed landing must not leave files under the root")
+
+	// Once a scan has flagged the row missing, the planner skips it and the
+	// remaining file lands on its own.
+	rows[1].Missing = true
+	landing, err = svc.OrganizeDirectoryBook(org, book, testLog)
 	require.NoError(t, err)
 	require.NotNil(t, landing)
-	targetDir := landing.Path
-	assert.NotEmpty(t, targetDir)
-
-	// Only one file should exist in target
-	entries, _ := os.ReadDir(targetDir)
-	assert.Equal(t, 1, len(entries), "only the existing file should be copied")
+	assert.NotEmpty(t, landing.Path)
+	entries, err := os.ReadDir(landing.Path)
+	require.NoError(t, err)
+	assert.Equal(t, 1, len(entries), "only the present file is copied")
+	assert.Len(t, landing.Files, 1)
 }
 
 // ---------------------------------------------------------------------------

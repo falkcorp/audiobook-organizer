@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-02
 
@@ -656,13 +656,14 @@ func (o *Organizer) symlinkFile(src, dst string) error {
 // PlanFilePaths returns current file path -> organized target path for every
 // non-missing file of a directory book, using the SAME planner
 // OrganizeBookDirectory copies with. It answers "where WOULD this go", which
-// is not the same question as "where DID it go": a planned target can be
-// skipped (source vanished, occupant not proven to be this file, lost race),
-// and until 2026-09-02 CreateOrganizedVersion recomputed the plan and then
-// adopted any file that happened to exist at a planned target — pointing a
-// book's row at another book's audio. Callers that need the landed paths must
-// take them from OrganizeBookDirectory's returned map (see service.Landing),
-// never from this plan. Files already at their target map to themselves.
+// is not the same question as "where DID it go": a planned target can fail
+// to land (source vanished, occupant not proven to be this file, lost race),
+// which now fails the whole book, and until 2026-09-02 CreateOrganizedVersion
+// recomputed the plan and then adopted any file that happened to exist at a
+// planned target — pointing a book's row at another book's audio. Callers
+// that need the landed paths must take them from OrganizeBookDirectory's
+// returned map (see service.Landing), never from this plan. Files already at
+// their target map to themselves.
 func (o *Organizer) PlanFilePaths(book *database.Book, files []database.BookFile) (map[string]string, error) {
 	planned, err := planTargetPaths(o.config.RootDir, o.config.FolderNamingPattern,
 		o.config.FileNamingPattern, files, o.pathVars(book, 0, 0, ""), o.buildOpts())
@@ -699,12 +700,29 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 }
 
 // organizeBookDirectory is OrganizeBookDirectory's implementation, returning
-// the full Landing: which files it wrote (Created) and which planned, present
-// files did not land (Skipped), on top of the landed map. The exported wrapper
-// keeps the (dir, map, err) shape for the metafetch and iTunes callers that
-// only need the map; Service.OrganizeDirectoryBook takes the Landing so that
-// CreateOrganizedVersion can point rows at landed paths only and roll back
-// created files only.
+// the full Landing: which files it wrote (Created) on top of the landed map.
+// The exported wrapper keeps the (dir, map, err) shape for the metafetch and
+// iTunes callers that only need the map; Service.OrganizeDirectoryBook takes
+// the Landing so that CreateOrganizedVersion can point rows at landed paths
+// only and roll back created files only.
+//
+// A directory landing is ALL OR NOTHING. Every planned file (planTargetPaths
+// has already dropped rows flagged Missing) must land, or the whole book fails
+// and everything this call wrote is removed. There is no partial success,
+// because a partial one is not a smaller success — it is a version row whose
+// FilePath is a directory this book does not own. Two same-titled books
+// organizing concurrently plan the same directory T; if A's 01.mp3 wins and
+// B's 02.mp3 still lands, B's version row says FilePath=T just as A's does,
+// and the next ReOrganizeInPlace on either book renames T wholesale, carrying
+// the other book's audio with it and re-pointing its rows at files that are
+// not its own. Until 2026-09-02 the skipped files were merely counted
+// (Stats.Partial) and the book was promoted to a version anyway; the count
+// was never read.
+//
+// A source that vanished since the last scan fails the book for the same
+// reason: the row still says present, and a re-scan (which flags it Missing
+// so planTargetPaths drops it) is the repair, not a landing that quietly
+// leaves the row pointing at a path that is not there.
 func (o *Organizer) organizeBookDirectory(book *database.Book, files []database.BookFile) (*Landing, error) {
 	if book == nil {
 		return nil, fmt.Errorf("invalid book")
@@ -739,17 +757,22 @@ func (o *Organizer) organizeBookDirectory(book *database.Book, files []database.
 
 	pathMap := make(map[string]string, len(planned))
 	var created []string
+	// Every planned file that does not land is recorded here with why, and
+	// any entry fails the book once the loop has seen every file — the loop
+	// keeps going so the error can name ALL of them, not just the first.
+	var unlanded []unlandedFile
 	for _, entry := range planned {
 		srcPath, dstPath := entry.SourcePath, entry.TargetPath
 		fileName := filepath.Base(dstPath)
 
 		// Verify dstPath stays inside targetDir (defense against crafted filenames)
 		if err := ensureUnderRoot(dstPath, targetDir); err != nil {
-			slog.Warn("organizeFile skipping unsafe destination",
+			slog.Warn("organizeFile refusing unsafe destination",
 				"error", err,
 				"book_id", book.ID, "book_title", book.Title,
 				"source_path", srcPath, "dest_path", dstPath,
 				"target_dir", targetDir, "file_name", fileName)
+			unlanded = append(unlanded, unlandedFile{Source: srcPath, Target: dstPath, Reason: "destination escapes the target directory"})
 			continue
 		}
 
@@ -778,22 +801,24 @@ func (o *Organizer) organizeBookDirectory(book *database.Book, files []database.
 		if dstInfo, statErr := os.Stat(dstPath); statErr == nil {
 			if adoptExistingDestination(book, srcPath, dstPath, dstInfo) {
 				pathMap[srcPath] = dstPath
+			} else {
+				unlanded = append(unlanded, unlandedFile{Source: srcPath, Target: dstPath, Reason: "destination is occupied by a file not proven to be this book's"})
 			}
 			continue
 		}
 
 		if _, err := o.organizeFile(srcPath, dstPath); err != nil {
-			// Skip a missing SOURCE instead of aborting the entire book. "Is the
-			// source missing" is answered by looking at the source, not by
-			// pattern-matching the error: the old test (os.IsNotExist on the
+			// "Is the source missing" is answered by looking at the source, not
+			// by pattern-matching the error: the old test (os.IsNotExist on the
 			// error, or "no such file" anywhere in its text) also matched a
 			// temp swept from under a live copy and a target directory that
-			// vanished mid-write, and skipped those as if the source were gone.
+			// vanished mid-write, and treated those as if the source were gone.
 			if _, statErr := os.Lstat(srcPath); errors.Is(statErr, fs.ErrNotExist) {
-				slog.Warn("organizeFile skipping missing source file",
+				slog.Warn("organizeFile: source file has vanished since the last scan",
 					"source_path", srcPath, "dest_path", dstPath,
 					"book_id", book.ID, "book_title", book.Title,
 					"error", err)
+				unlanded = append(unlanded, unlandedFile{Source: srcPath, Target: dstPath, Reason: "source file no longer exists (re-scan to mark it missing)"})
 				continue
 			}
 			// Race: the destination appeared between the os.Stat above and the
@@ -803,57 +828,91 @@ func (o *Organizer) organizeBookDirectory(book *database.Book, files []database.
 			// adoption-by-existence the pre-copy check above stopped doing:
 			// whoever won the race, this book's row was pointed at their file.
 			// Re-run the same content test; an occupant that is not proven to
-			// be this file leaves the row unchanged, as it would have had it
-			// been there a millisecond earlier.
+			// be this file fails the book, as it would have had it been there
+			// a millisecond earlier.
 			if errors.Is(err, fs.ErrExist) {
 				if dstInfo, statErr := os.Stat(dstPath); statErr == nil && adoptExistingDestination(book, srcPath, dstPath, dstInfo) {
 					pathMap[srcPath] = dstPath
 				} else {
-					slog.Warn("organizeFile lost a destination race to a file not proven to be this book's — leaving this file's row unchanged",
+					slog.Warn("organizeFile lost a destination race to a file not proven to be this book's",
 						"book_id", book.ID, "book_title", book.Title,
 						"source_path", srcPath, "dest_path", dstPath,
 						"dest_stat_error", statErr)
+					unlanded = append(unlanded, unlandedFile{Source: srcPath, Target: dstPath, Reason: "lost the destination to another writer whose file is not proven to be this book's"})
 				}
 				continue
 			}
-			return nil, fmt.Errorf("failed to organize segment %s: %w", fileName, err)
+			// Any other failure is fatal for the book too, and what this call
+			// already wrote comes back out — until 2026-09-02 this return left
+			// the earlier files behind under RootDir with no row naming them.
+			leftover := unlinkCreated(created, targetDir, targetDir)
+			return nil, fmt.Errorf("failed to organize segment %s: %w%s", fileName, err, leftoverSuffix(leftover))
 		}
 		pathMap[srcPath] = dstPath
 		created = append(created, dstPath)
 	}
 
-	// Nothing landed. Report it HERE rather than leaving each caller to notice,
-	// because "returns a directory path with a nil error" is indistinguishable
-	// from success and two of the three callers took it at face value:
-	// ensureLibraryCopy (internal/metafetch/service_apply.go) created a
-	// version-linked book record pointing at this directory, and
-	// organizeMultiFileBook (internal/itunes/service/importer.go) assigned it to
-	// book.FilePath. Both would have pointed a book at a directory that
-	// MkdirAll had just created and nothing had been copied into.
-	//
-	// Only OrganizeDirectoryBook checked, and it had to re-derive the check
-	// itself — the same shape of bug as the target-path divergence: a rule that
-	// lives in the caller is a rule every future caller must remember.
-	//
-	// This is reachable WITHOUT any row being flagged Missing: the loop above
-	// skips a source that has vanished from disk since the last scan, so rows
-	// that look present can all skip and leave pathMap empty.
-	if len(pathMap) == 0 {
-		return nil, fmt.Errorf("organize produced no files for %q (id=%s): all %d planned source file(s) were missing or skipped — re-scan to verify, or restore from backup",
-			book.Title, book.ID, len(planned))
+	if len(unlanded) > 0 {
+		leftover := unlinkCreated(created, targetDir, targetDir)
+		var b strings.Builder
+		for i, u := range unlanded {
+			if i > 0 {
+				b.WriteString("; ")
+			}
+			fmt.Fprintf(&b, "%s -> %s: %s", u.Source, u.Target, u.Reason)
+		}
+		return nil, fmt.Errorf("organize of %q (id=%s) did not land %d of %d file(s); nothing was kept: %s%s",
+			book.Title, book.ID, len(unlanded), len(planned), b.String(), leftoverSuffix(leftover))
 	}
 
-	// Every planned source that is not in pathMap took one of the `continue`s
-	// above. planTargetPaths already dropped rows flagged Missing, so these
-	// are files the library believed present that did not land.
-	var skipped []string
-	for _, entry := range planned {
-		if _, landed := pathMap[entry.SourcePath]; !landed {
-			skipped = append(skipped, entry.SourcePath)
+	return &Landing{Path: targetDir, Files: pathMap, Created: created}, nil
+}
+
+// unlandedFile is one planned file that a directory organize could not land,
+// with the reason, so the error that fails the book can name every one.
+type unlandedFile struct {
+	Source, Target, Reason string
+}
+
+// unlinkCreated removes the files an organize wrote and then dir — the
+// target directory, or "" for a single-file landing — if and only if that
+// left it empty. It returns the paths it could not remove so the caller can
+// say so. Every path must sit under root (the target directory for an
+// in-flight directory landing, the library root for a version rollback);
+// containment is checked per path with ensureUnderRoot even though Created is
+// built from paths that already passed it: the guard is cheap and a rollback
+// is exactly the place a bug would be expensive. A path that fails the guard
+// is reported as leftover, not removed.
+//
+// Organize COPIES (or links); the original survives at its source row, so
+// removing the copy destroys no audio. The directory removal is os.Remove,
+// which fails on a non-empty directory — files that were not ours stay.
+func unlinkCreated(created []string, root, dir string) []string {
+	var leftover []string
+	for _, p := range created {
+		if p == "" || ensureUnderRoot(p, root) != nil {
+			leftover = append(leftover, p)
+			continue
+		}
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			leftover = append(leftover, p)
 		}
 	}
+	if dir != "" {
+		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.Debug("organize: rollback left the target directory in place", "dir", dir, "error", err)
+		}
+	}
+	return leftover
+}
 
-	return &Landing{Path: targetDir, Files: pathMap, Created: created, Skipped: skipped}, nil
+// leftoverSuffix renders unlinkCreated's failures for an error message, or
+// nothing when the rollback was clean.
+func leftoverSuffix(leftover []string) string {
+	if len(leftover) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (rollback could not remove %d file(s): %s)", len(leftover), strings.Join(leftover, ", "))
 }
 
 // adoptExistingDestination decides whether a file already sitting at dstPath

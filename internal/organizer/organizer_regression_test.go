@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_regression_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e4f5a6b7-c8d9-e0f1-a2b3-organizer-reg
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -94,6 +94,11 @@ func TestOrganizeBookDirectory_AllFilesMissing_IsAnError(t *testing.T) {
 			"assigned it straight onto the book, which is how a book ended up pointing at an empty directory")
 }
 
+// A row that says PRESENT for a file that is gone fails the book: the row is
+// wrong, a re-scan (which flags it Missing so planTargetPaths drops it) is
+// the repair, and the file that did land is rolled back so no version row
+// can claim a directory holding a third of a book. The flagged-Missing shape
+// — the one a scan produces — is the sibling test below and succeeds.
 func TestOrganizeBookDirectory_PartialFilesMissing(t *testing.T) {
 	rootDir := t.TempDir()
 	importDir := t.TempDir()
@@ -122,11 +127,31 @@ func TestOrganizeBookDirectory_PartialFilesMissing(t *testing.T) {
 	}
 
 	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(segmentPaths...))
+	require.Error(t, err, "two rows say present for files that are gone; the book must not land as one third of itself")
+	assert.Contains(t, err.Error(), "did not land 2 of 3")
+	assert.Contains(t, err.Error(), "re-scan")
+	assert.Empty(t, pathMap)
+	assert.Empty(t, targetDir)
+
+	// The one file that did land was rolled back; nothing is left under the root.
+	var leftover []string
+	_ = filepath.WalkDir(rootDir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			leftover = append(leftover, p)
+		}
+		return nil
+	})
+	assert.Empty(t, leftover, "a failed landing must leave no files under the library root")
+
+	// Rows flagged Missing (what a scan produces for a gone file) are dropped
+	// by the planner and the remaining file lands.
+	segs := segsFor(segmentPaths...)
+	segs[0].Missing = true
+	segs[2].Missing = true
+	targetDir, pathMap, err = org.OrganizeBookDirectory(book, segs)
 	require.NoError(t, err)
 	assert.NotEmpty(t, targetDir)
-	assert.Len(t, pathMap, 1, "only the one existing file should be in pathMap")
-
-	// Verify the copied file exists
+	assert.Len(t, pathMap, 1, "only the one present file is planned and lands")
 	for _, dstPath := range pathMap {
 		assert.FileExists(t, dstPath)
 	}
@@ -556,19 +581,19 @@ func TestOrganizeBookDirectory_DstSameSizeDifferentContent_NotAdopted(t *testing
 	require.NoError(t, os.WriteFile(dstPaths[1], occupant, 0644))
 
 	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
-	require.NoError(t, err, "one segment still lands, so the book must not error")
-
-	assert.NotContains(t, pathMap, srcPaths[1],
+	require.Error(t, err, "an occupant not proven to be this book's fails the whole book — a version row must never claim a directory it shares")
+	assert.Contains(t, err.Error(), "not proven to be this book's")
+	assert.Empty(t, pathMap,
 		"a same-size but different-content occupant must NOT be adopted: doing so points this book's row at another book's audio")
-	assert.Contains(t, pathMap, srcPaths[0],
-		"the untouched segment must still be adopted — the guard must not suppress everything")
-	assert.Len(t, pathMap, 1)
 
-	// And the occupant is left exactly as it was: declining to adopt must not
+	// The occupant is left exactly as it was: declining to adopt must not
 	// quietly overwrite whatever was there either.
 	after, err := os.ReadFile(dstPaths[1])
 	require.NoError(t, err)
 	assert.Equal(t, occupant, after, "the unrelated occupant's bytes must be untouched")
+	// And the byte-identical file at segment one's target was ADOPTED, not
+	// created, so the rollback must leave it alone: it was there before.
+	assert.FileExists(t, dstPaths[0], "rollback removes only what this run wrote; an adopted file predates it")
 }
 
 func TestOrganizeBookDirectory_DstSameSizeSameContent_Adopted(t *testing.T) {
@@ -612,9 +637,9 @@ func TestOrganizeBookDirectory_DstUnreadable_NotAdopted(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dstPaths[1], 0644) })
 
 	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
-	require.NoError(t, err)
-
-	assert.NotContains(t, pathMap, srcPaths[1],
-		"an unreadable destination is an unknown, and the check must fail closed")
-	assert.Contains(t, pathMap, srcPaths[0])
+	require.Error(t, err, "an unreadable destination is an unknown, and the check must fail closed — for the whole book")
+	assert.Contains(t, err.Error(), "not proven to be this book's")
+	assert.Empty(t, pathMap)
+	assert.FileExists(t, dstPaths[0], "the adopted segment predates this run and survives the rollback")
+	assert.FileExists(t, dstPaths[1], "the unreadable occupant must not be touched")
 }

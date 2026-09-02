@@ -1,5 +1,5 @@
 // file: internal/config/naming_patterns.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e4b7f21-c390-4a6d-b158-7d02f9ac4e63
 // last-edited: 2026-09-02
 
@@ -75,8 +75,9 @@ func validateNamingPatterns(_ /* folderPattern */, filePattern string) []string 
 	// completely reasonable: "{title} - {author} - read by {narrator}" was a
 	// shipped default. It is fine for a single-file book and catastrophic for
 	// a multi-file one, because every track expands to the SAME name. The
-	// first file lands, and every subsequent file finds its target occupied
-	// and is left behind as "<name>.tmp-rename-<nonce>".
+	// first file parks, every subsequent file plans the SAME target, and the
+	// batch fails at publish time and rolls every file back to its source —
+	// nothing is lost, and nothing is organized either.
 	//
 	// "{track:02d}" is the pattern that serves both layouts: a single-file
 	// book has no track, so the whole " - " segment drops and the file is

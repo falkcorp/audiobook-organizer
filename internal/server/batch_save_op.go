@@ -1,5 +1,5 @@
 // file: internal/server/batch_save_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-09-02
 //
@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -162,10 +161,6 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 							_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
 						} else if landing.Path != "" && landing.Path != oldPath {
 							organized.Add(1)
-							if len(landing.Skipped) > 0 {
-								detail := strings.Join(landing.Skipped, "\n")
-								_ = progress.Log("warn", fmt.Sprintf("organized %s but %d file(s) did not land and keep their source paths", book.Title, len(landing.Skipped)), &detail)
-							}
 						}
 					}
 				}

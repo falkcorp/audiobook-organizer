@@ -1,5 +1,5 @@
 // file: internal/organizer/pipeline.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-02
 
@@ -8,6 +8,7 @@ package organizer
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -31,6 +32,14 @@ type FileRenameEntry struct {
 	SegmentID  string `json:"segment_id"`
 	SourcePath string `json:"source_path"`
 	TargetPath string `json:"target_path"`
+	// ExpectedSize is the byte length the book_file row records for this
+	// file (0 when the row has none). RenameFiles uses it to decide whether a
+	// file stranded at a temp path by an interrupted run is THIS file before
+	// resuming it: a stranded temp is bytes of unproven identity sitting at a
+	// name derived from the target, and the target is shared by every book
+	// that formats to the same path. Without a size to check against, the
+	// resume is refused rather than guessed.
+	ExpectedSize int64 `json:"expected_size,omitempty"`
 }
 
 // FilePipelineResult holds the results of a file pipeline operation.
@@ -243,9 +252,10 @@ func planPass(rootDir, folderPattern, filePattern string, sorted []database.Book
 		seen[targetPath] = struct{}{}
 
 		entries = append(entries, FileRenameEntry{
-			SegmentID:  f.ID,
-			SourcePath: f.FilePath,
-			TargetPath: targetPath,
+			SegmentID:    f.ID,
+			SourcePath:   f.FilePath,
+			TargetPath:   targetPath,
+			ExpectedSize: f.FileSize,
 		})
 	}
 
@@ -367,11 +377,20 @@ func renameTempPath(target string) string {
 // parked for target: the legacy fixed name `target+TmpRenameSuffix` (runs
 // before 2026-09-02) and any nonce-suffixed `target+TmpRenameSuffix+"-*"`.
 // Directory entries are ignored; a parked file is always a regular file.
+//
+// An Lstat failure other than not-exist is an error, not "not stranded": a
+// parked file behind EACCES is still a parked file, and treating it as absent
+// would make the caller skip the entry as "source missing" and never report
+// the temp again.
 func strandedRenameTemps(target string) ([]string, error) {
 	var found []string
 	legacy := target + TmpRenameSuffix
-	if info, err := os.Lstat(legacy); err == nil && info.Mode().IsRegular() {
-		found = append(found, legacy)
+	if info, err := os.Lstat(legacy); err == nil {
+		if info.Mode().IsRegular() {
+			found = append(found, legacy)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("stat stranded temp %s: %w", legacy, err)
 	}
 	// filepath.Glob treats the target's own characters as pattern syntax, so
 	// escape them; only our "-*" tail is meant to match anything.
@@ -380,11 +399,60 @@ func strandedRenameTemps(target string) ([]string, error) {
 		return nil, fmt.Errorf("scan for stranded temps of %s: %w", target, err)
 	}
 	for _, m := range matches {
-		if info, err := os.Lstat(m); err == nil && info.Mode().IsRegular() {
+		info, err := os.Lstat(m)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // swept between Glob and Lstat
+			}
+			return nil, fmt.Errorf("stat stranded temp %s: %w", m, err)
+		}
+		if info.Mode().IsRegular() {
 			found = append(found, m)
 		}
 	}
 	return found, nil
+}
+
+// legacyRenameTemp reports whether the pre-2026-09-02 fixed-name parking file
+// `target+TmpRenameSuffix` exists for target. Nothing writes that name any
+// more, so when it exists it is a file an old binary left parked with no
+// worker in flight: real bytes of unknown identity, which the temp sweep
+// deliberately never removes (it is a library file, not scratch). The old
+// binary refused to rename into a target whose parking name was taken, which
+// is what surfaced such a file; RenameFiles keeps that refusal so it is not
+// orphaned forever beside a nonce-named run that quietly proceeded.
+func legacyRenameTemp(target string) (string, bool, error) {
+	legacy := target + TmpRenameSuffix
+	info, err := os.Lstat(legacy)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("stat legacy temp %s: %w", legacy, err)
+	}
+	return legacy, !info.IsDir(), nil
+}
+
+// strandedTempMismatch returns "" when temp can be resumed as entry's file,
+// or the reason it cannot. Size is the only identity the plan carries
+// (FileRenameEntry.ExpectedSize, from the book_file row); a row with no size
+// gives nothing to check against, and "nothing to check" is a refusal, not a
+// pass — the alternative is publishing whatever is parked there under this
+// row's name.
+func strandedTempMismatch(temp string, entry FileRenameEntry) string {
+	if entry.ExpectedSize <= 0 {
+		return fmt.Sprintf("stranded temp %s for %s (source %s is gone) cannot be verified: the row records no file size; refusing to resume it",
+			temp, entry.TargetPath, entry.SourcePath)
+	}
+	info, err := os.Stat(temp)
+	if err != nil {
+		return fmt.Sprintf("stranded temp %s for %s: %v", temp, entry.TargetPath, err)
+	}
+	if info.Size() != entry.ExpectedSize {
+		return fmt.Sprintf("stranded temp %s for %s is %d bytes but the row records %d (source %s is gone); refusing to resume a file of unproven identity",
+			temp, entry.TargetPath, info.Size(), entry.ExpectedSize, entry.SourcePath)
+	}
+	return ""
 }
 
 // globEscape quotes every filepath.Match metacharacter in s so it matches
@@ -410,9 +478,15 @@ func globEscape(s string) string {
 // Failure semantics:
 //   - A file stranded at its temp path by a previously interrupted run (temp
 //     exists, source doesn't) is picked up and resumed through phase 2 instead
-//     of being skipped forever. If MORE than one stranded temp exists for a
-//     target, the batch fails before anything moves: picking one would publish
-//     a file whose identity nobody verified, and the choice is an operator's.
+//     of being skipped forever — but only when exactly one such temp exists
+//     AND its size matches the entry's ExpectedSize. Otherwise (two temps, a
+//     size mismatch, or a row with no recorded size) the batch fails before
+//     anything moves: resuming would publish a file whose identity nobody
+//     verified under this row, and the choice is an operator's.
+//   - A legacy fixed-name temp (`target.tmp-rename`, from runs before
+//     2026-09-02) beside a PRESENT source fails the batch the same way: the
+//     old binary refused to park on a taken name, and proceeding beside it
+//     would orphan it forever.
 //   - On any phase failure, every file still parked at a temp path is rolled
 //     back to its source path; rollback failures are logged and recorded in
 //     result.Errors.
@@ -445,8 +519,14 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 			case 0:
 				result.Skipped = append(result.Skipped, entry)
 			case 1:
+				if msg := strandedTempMismatch(stranded[0], entry); msg != "" {
+					slog.Error("RenameFiles refusing to resume an unverified stranded temp — operator must resolve",
+						"temp_path", stranded[0], "target_path", entry.TargetPath, "source_path", entry.SourcePath, "reason", msg)
+					result.Errors = append(result.Errors, msg)
+					return result, errors.New(msg)
+				}
 				slog.Warn("RenameFiles resuming stranded temp file from interrupted rename",
-					"temp_path", stranded[0], "target_path", entry.TargetPath)
+					"temp_path", stranded[0], "target_path", entry.TargetPath, "size", entry.ExpectedSize)
 				temps = append(temps, renameTemp{TempPath: stranded[0], Entry: entry})
 			default:
 				msg := fmt.Sprintf("%d stranded temp files for %s (source %s is gone); refusing to guess which is the file: %s",
@@ -457,6 +537,16 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 				return result, errors.New(msg)
 			}
 			continue
+		}
+		if legacy, ok, lerr := legacyRenameTemp(entry.TargetPath); lerr != nil {
+			return result, lerr
+		} else if ok {
+			msg := fmt.Sprintf("stranded temp %s from an interrupted pre-nonce rename sits beside a present source %s; refusing to rename into %s until it is resolved",
+				legacy, entry.SourcePath, entry.TargetPath)
+			slog.Error("RenameFiles found a legacy stranded temp beside a present source — operator must resolve",
+				"temp_path", legacy, "target_path", entry.TargetPath, "source_path", entry.SourcePath)
+			result.Errors = append(result.Errors, msg)
+			return result, errors.New(msg)
 		}
 		valid = append(valid, entry)
 	}
