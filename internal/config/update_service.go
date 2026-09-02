@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.16.0
+// version: 3.17.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-09-02
 
@@ -366,8 +366,17 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// immediately before the update, captured under the write lock. It is
 		// the rollback target when the save fails, and includes the secret
 		// updates applied above so a rollback does not un-apply those.
-		// Deep, not `prior = *c`: a struct assignment shares every map and
-		// slice with the live config, so restoring it restored nothing.
+		//
+		// Honest note on the depth: with the update applied to `candidate` and
+		// swapped in wholesale (`*c = *candidate` below), the live config's
+		// maps are REPLACED rather than mutated, so a shallow `prior = *c`
+		// would in fact restore correctly today — a mutation swapping the
+		// Clone for a shallow copy survives the test suite, and this comment
+		// used to claim otherwise. The clone is kept because the shallow
+		// version is only correct as long as nothing mutates *c in place
+		// between the swap and the save, which is an invariant no test
+		// enforces and which the pre-#3052 code had already violated once.
+		// One reflection walk per config PUT is not worth re-arming that.
 		prior *Config
 		// priorLadder / newLadder decide whether the dedup sink must run: a
 		// PUT that touches only unrelated fields must not trigger a rescore.
