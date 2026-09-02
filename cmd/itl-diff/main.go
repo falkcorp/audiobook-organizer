@@ -1,5 +1,5 @@
 // file: cmd/itl-diff/main.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 //
 // Structural diff between two iTunes Library.itl files. Reports:
@@ -12,6 +12,7 @@
 //   - optional: --audit runs AuditITL on both sides and reports per-guard results
 //
 // Usage: itl-diff [flags] <a.itl> <b.itl>
+// last-edited: 2026-09-02
 
 package main
 
@@ -296,15 +297,9 @@ func printList(label string, pids []string, idx map[string]itunes.ITLTrack, max 
 }
 
 func printHexDiff(a, b []byte) {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
+	n := min(len(b), len(a))
 	for i := 0; i < n; i += 16 {
-		end := i + 16
-		if end > n {
-			end = n
-		}
+		end := min(i+16, n)
 		ra := a[i:end]
 		rb := b[i:end]
 		marker := " "
