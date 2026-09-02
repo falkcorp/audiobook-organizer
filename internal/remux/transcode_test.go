@@ -1,7 +1,7 @@
 // file: internal/remux/transcode_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 package remux
 
@@ -85,7 +85,7 @@ func TestTranscodeMalformedFilesProgressCallback(t *testing.T) {
 	config.AppConfig.RootDir = tmpDir
 	defer func() { config.AppConfig.RootDir = origRoot }()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := filepath.Join(tmpDir, fmt.Sprintf("test%d.m4b", i))
 		if err := os.WriteFile(p, []byte("not a real m4b"), 0o644); err != nil {
 			t.Fatalf("write test file: %v", err)
