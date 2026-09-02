@@ -1,5 +1,5 @@
 // file: internal/auth/permissions_prop_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 693012d9-3742-4acf-87c7-5570195e7dfc
 //
 // Property-based tests for the permission system (backlog item 4.5,
@@ -17,6 +17,8 @@
 //
 // These tests must not modify production code — if a property uncovers
 // a real bug, it is skipped with a note rather than patched here.
+// last-edited: 2026-09-02
+
 package auth
 
 import (
@@ -56,7 +58,7 @@ func genPermSubset(t *rapid.T, label string) []Permission {
 	n := rapid.IntRange(0, len(all)).Draw(t, label+"_n")
 	perm := rapid.Permutation(all).Draw(t, label+"_perm")
 	out := make([]Permission, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, perm[i])
 	}
 	return out
