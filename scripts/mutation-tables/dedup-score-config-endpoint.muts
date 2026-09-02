@@ -1,0 +1,16 @@
+# Mutation table for the third WriteErrors gate: POST /api/v1/dedup/rescore.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/server/handlers/dedup/ \
+#     --table scripts/mutation-tables/dedup-score-config-endpoint.muts
+#
+# WHY THIS TABLE IS ITS OWN FILE. PR #3058 changed RescoreResult's contract so
+# a nil error can accompany WriteErrors > 0, and updated two of the three
+# callers. This endpoint was the third — and it is the one every partial-re-band
+# message tells the operator to run, so a 200 here means the remedy reported
+# success having done half the job. That is the shape of defect this repo keeps
+# shipping: a 200 OK carrying the failure in its body.
+
+M01 answer 200 on a re-band that failed to write | internal/server/handlers/dedup/handler.go | s/\tif result\.WriteErrors > 0 \{/\tif false {/

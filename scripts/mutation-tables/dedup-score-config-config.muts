@@ -29,3 +29,7 @@ M01 unmarshal the payload into the LIVE config again | internal/config/update_se
 M02 KNOWN-SURVIVOR rollback target becomes a shallow copy | internal/config/update_service.go | s/prior = c\.Clone\(\)/shallow := *c; prior = &shallow/
 
 M03 roll the saved ladder back when the engine hand-off fails | internal/config/update_service.go | s/\t\t\t\tslog\.Error\("config saved but dedup score ladder hand-off failed/\t\t\t\tMutate(func(c *Config) { *c = *prior })\n\t\t\t\tslog.Error("config saved but dedup score ladder hand-off failed/
+
+M04 apply the rotated secrets to the LIVE config before validation | internal/config/update_service.go | s/\t\tapplySecretUpdates\(candidate, payload\)/\t\tMutate(func(live *Config) { applySecretUpdates(live, payload) })/
+
+M05 accept a config that fails Validate | internal/config/update_service.go | s/\t\tif candidateErr != nil && priorCheck\.Validate\(\) == nil \{/\t\tif false {/
