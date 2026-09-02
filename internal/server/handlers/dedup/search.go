@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/search.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2e8f31-9c47-4b06-8d1e-6f3a97c2b8d4
 // last-edited: 2026-09-01
 
@@ -24,11 +24,12 @@ import (
 // # Which fields, and why not simply the client's list
 //
 // The panel's old in-browser filter built its haystack from ten fields, two of
-// which -- book_a.author_name and book_b.author_name -- were always undefined:
-// the TypeScript Book interface declares author_name?: string, but the Go Book
-// struct marshals its author as a nested `author` object and this handler never
-// sets an author_name key. The optional `?` meant that read produced undefined,
-// `?? ”` swallowed it, and author search silently matched nothing. So this
+// which -- book_a.author_name and book_b.author_name -- were always undefined.
+// The TypeScript Book interface declares author_name?: string and OTHER
+// endpoints do populate it (the audiobooks service, and enrichedBookResponse in
+// server.go), but this one returns the bare database.Book from GetBookByID,
+// which populates neither author_name nor the joined `author` object. The optional `?` meant that read produced undefined,
+// `?? ''` swallowed it, and author search silently matched nothing. So this
 // resolver implements what the UI intended -- title, author, path -- rather
 // than replicating a haystack with two dead entries.
 //

@@ -6,3 +6,7 @@ coverage
 .env
 .env.local
 .env.production
+
+# tsc --incremental caches: they change on every local build, so tracking
+# them churns every diff and conflicts on every concurrent branch.
+*.tsbuildinfo
