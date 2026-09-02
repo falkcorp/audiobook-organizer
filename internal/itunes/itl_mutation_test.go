@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_mutation_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c9d2e4f6-8a1b-4c3d-9e5f-7a6b8c0d1e2f
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -285,7 +286,7 @@ func TestMutation_MultiTrackCounts(t *testing.T) {
 	for _, n := range counts {
 		t.Run(fmt.Sprintf("%d_tracks", n), func(t *testing.T) {
 			specs := make([]trackSpec, n)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				specs[i] = makeTrackSpec(i)
 			}
 			data := buildSyntheticITLMultiTrack(t, "9.0.0", true, specs)
@@ -312,7 +313,7 @@ func TestMutation_MultiTrackCounts(t *testing.T) {
 
 func TestMutation_MultiTrackMetadataPreserved(t *testing.T) {
 	specs := make([]trackSpec, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", false, specs)
@@ -343,7 +344,7 @@ func TestMutation_MultiTrackMetadataPreserved(t *testing.T) {
 func TestMutation_TrackRemovalByExclusion(t *testing.T) {
 	// Build ITL with 5 tracks
 	specs5 := make([]trackSpec, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		specs5[i] = makeTrackSpec(i)
 	}
 
@@ -376,7 +377,7 @@ func TestMutation_TrackRemovalByExclusion(t *testing.T) {
 
 func TestMutation_RemoveFirstTrack(t *testing.T) {
 	specs := make([]trackSpec, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		specs[i] = makeTrackSpec(i)
 	}
 	// Remove first
@@ -391,7 +392,7 @@ func TestMutation_RemoveFirstTrack(t *testing.T) {
 
 func TestMutation_RemoveLastTrack(t *testing.T) {
 	specs := make([]trackSpec, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		specs[i] = makeTrackSpec(i)
 	}
 	// Remove last
@@ -544,7 +545,7 @@ func TestMutation_MixedMetadataPerTrack(t *testing.T) {
 
 func TestMutation_RoundTripUncompressed(t *testing.T) {
 	specs := make([]trackSpec, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", false, specs)
@@ -574,7 +575,7 @@ func TestMutation_RoundTripUncompressed(t *testing.T) {
 
 func TestMutation_RoundTripCompressed(t *testing.T) {
 	specs := make([]trackSpec, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", true, specs)
@@ -592,7 +593,7 @@ func TestMutation_RoundTripCompressed(t *testing.T) {
 func TestMutation_RoundTripV12(t *testing.T) {
 	// v12 uses different encryption limit (maxCryptSize)
 	specs := make([]trackSpec, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "12.0.0", true, specs)
@@ -609,7 +610,7 @@ func TestMutation_RoundTripV12(t *testing.T) {
 func TestMutation_RoundTripWriteAndReparse(t *testing.T) {
 	// Build -> write -> parse -> update location -> write -> parse -> verify
 	specs := make([]trackSpec, 2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", true, specs)
@@ -803,7 +804,7 @@ func TestMutation_StressTest1000Tracks(t *testing.T) {
 	}
 	n := 1000
 	specs := make([]trackSpec, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", true, specs)
@@ -894,7 +895,7 @@ func TestMutation_InsertIntoEmptyITL(t *testing.T) {
 // TestMutation_InsertMultipleIntoExisting: BE fixture → refused (see above).
 func TestMutation_InsertMultipleIntoExisting(t *testing.T) {
 	specs := make([]trackSpec, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", false, specs)
@@ -938,7 +939,7 @@ func TestMutation_VersionVariations(t *testing.T) {
 
 func TestMutation_CompressionToggle(t *testing.T) {
 	specs := make([]trackSpec, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		specs[i] = makeTrackSpec(i)
 	}
 
@@ -966,7 +967,7 @@ func TestMutation_CompressionToggle(t *testing.T) {
 
 func TestMutation_PIDHexRoundTrip(t *testing.T) {
 	specs := make([]trackSpec, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", false, specs)
@@ -991,7 +992,7 @@ func TestMutation_PIDHexRoundTrip(t *testing.T) {
 
 func TestMutation_UpdateOneOfMany(t *testing.T) {
 	specs := make([]trackSpec, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", true, specs)
@@ -1011,7 +1012,7 @@ func TestMutation_UpdateOneOfMany(t *testing.T) {
 
 func TestMutation_UpdateMultipleOfMany(t *testing.T) {
 	specs := make([]trackSpec, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", false, specs)
@@ -1195,7 +1196,7 @@ func TestMutation_HohmTypeOrdering(t *testing.T) {
 // SPEC §3 step 1 / K12).
 func TestMutation_InsertPlaylistIntoMultiTrackITL(t *testing.T) {
 	specs := make([]trackSpec, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", false, specs)
@@ -1227,7 +1228,7 @@ func TestMutation_SequentialMutations(t *testing.T) {
 
 	// Step 1: Build initial BE (v9) ITL with 2 tracks.
 	specs := make([]trackSpec, 2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		specs[i] = makeTrackSpec(i)
 	}
 	data := buildSyntheticITLMultiTrack(t, "9.0.0", true, specs)

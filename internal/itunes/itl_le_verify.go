@@ -1,5 +1,5 @@
 // file: internal/itunes/itl_le_verify.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d9e0f1a-2b3c-4d5e-6f7a-8b9c0d1e2f3a
 //
 // Consistency verification for LE-format ITL payloads. Detects dangling
@@ -11,6 +11,7 @@
 // This guards against the May-2026 corruption class where RemoveTracksByPIDLE
 // excised mith blocks but left orphaned references in playlists, causing
 // iTunes to mark the library file as damaged on next open.
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -106,10 +107,7 @@ func CollectMasterTrackIDsLE(data []byte) map[uint32]struct{} {
 		return nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 
 	tids := make(map[uint32]struct{}, 100000)
 	offset := contentStart
@@ -150,10 +148,7 @@ func FindDanglingMtphRefsLE(data []byte, masterTIDs map[uint32]struct{}) []uint3
 		return nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 
 	var missing []uint32
 	seen := make(map[uint32]struct{})

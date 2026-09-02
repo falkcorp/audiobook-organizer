@@ -1,7 +1,7 @@
 // file: internal/itunes/generate_test_itls.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: e0f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-07-07
+// last-edited: 2026-09-02
 //
 // Generates ITL test files by using the REAL production ITL as a template.
 // Previous approach (v1) built synthetic ITLs from scratch using BE format,
@@ -66,9 +66,9 @@ func GenerateTestITLSuite(
 	const windowsRoot = `W:\audiobook-organizer\`
 
 	linuxToWindows := func(p string) string {
-		if strings.HasPrefix(p, linuxRoot) {
+		if after, ok := strings.CutPrefix(p, linuxRoot); ok {
 			return windowsRoot + strings.ReplaceAll(
-				strings.TrimPrefix(p, linuxRoot), "/", `\`,
+				after, "/", `\`,
 			)
 		}
 		return p
@@ -324,7 +324,7 @@ func multiTracks(count int, toWin func(string) string) []ITLNewTrack {
 	}
 
 	tracks := make([]ITLNewTrack, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		f := formats[i%len(formats)]
 		author := fmt.Sprintf("Author %03d", i+1)
 		title := fmt.Sprintf("Book %03d", i+1)

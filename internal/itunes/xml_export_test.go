@@ -1,6 +1,7 @@
 // file: internal/itunes/xml_export_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f1e2d3c4-b5a6-7890-abcd-0123456789ab
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -26,7 +27,7 @@ func TestExportBooksToITunesXML_EmptyList(t *testing.T) {
 	require.NoError(t, err)
 
 	// Must be valid XML
-	assert.True(t, xml.Unmarshal(data, new(interface{})) == nil || isValidPlist(data),
+	assert.True(t, xml.Unmarshal(data, new(any)) == nil || isValidPlist(data),
 		"output should be valid XML")
 
 	// Should contain the playlist but no track entries

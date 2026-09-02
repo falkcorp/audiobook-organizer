@@ -1,11 +1,12 @@
 // file: internal/itunes/itl_le_repair.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 //
 // Surgical repair for ITL files damaged by the May-2026 RemoveTracksByPIDLE
 // bug: removes only the orphaned `mtph` playlist track items and updates the
 // enclosing `miph` and playlist `msdh` length/count fields. Does NOT touch
 // the master track list. Safe to run on production libraries.
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -37,10 +38,7 @@ func LocateDanglingMtphLE(data []byte, masterTIDs map[uint32]struct{}) []MtphHit
 		return nil
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 
 	var hits []MtphHitLE
 	locateMtphRange(data, contentStart, contentEnd, -1, masterTIDs, &hits)
@@ -155,10 +153,7 @@ func RepairITLDropDanglingMtphLE(data []byte, hits []MtphHitLE) []byte {
 			continue
 		}
 		oldTotal := readUint32LE(result, newMiph+8)
-		newTotal := int(oldTotal) - removed
-		if newTotal < 0 {
-			newTotal = 0
-		}
+		newTotal := max(int(oldTotal)-removed, 0)
 		writeUint32LE(result, newMiph+8, uint32(newTotal))
 
 		// Many miph headers store the playlist's track-item count at
@@ -183,10 +178,7 @@ func RepairITLDropDanglingMtphLE(data []byte, hits []MtphHitLE) []byte {
 	if msdhOffset >= 0 && msdhOffset+12 <= len(result) {
 		// findMsdhByType reads from the post-splice buffer so msdhTotalLen
 		// here is the OLD value still encoded — we must subtract removed.
-		newMsdhTotal := msdhTotalLen - totalRemoved
-		if newMsdhTotal < 0 {
-			newMsdhTotal = 0
-		}
+		newMsdhTotal := max(msdhTotalLen-totalRemoved, 0)
 		writeUint32LE(result, msdhOffset+8, uint32(newMsdhTotal))
 	}
 

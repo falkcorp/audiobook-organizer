@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 01ad6c79-5f3f-4ee1-a07a-1f4b3a8c0d12
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 //
 // PathRepairer dumps the iTunes XML, finds tracks whose Location no
 // longer exists on disk, re-discovers the correct path via three tiers
@@ -301,7 +301,7 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 	//     via bookLocks — disjoint books still run fully in parallel.
 	var (
 		resMu     sync.Mutex
-		scanned   int64
+		scanned   atomic.Int64
 		bookLocks bookWriteLocks
 		// persistMu serializes the periodic partial-report write (both the
 		// report-file os.WriteFile and the DB persist call). `n` is a
@@ -318,7 +318,6 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 	g.SetLimit(pathRepairWorkers)
 
 	for _, track := range lib.Tracks {
-		track := track
 		g.Go(func() error {
 			select {
 			case <-gctx.Done():
@@ -326,7 +325,7 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 			default:
 			}
 
-			n := atomic.AddInt64(&scanned, 1)
+			n := scanned.Add(1)
 			if n%progressEvery == 0 {
 				resMu.Lock()
 				snap := result
@@ -475,7 +474,7 @@ func (r *PathRepairer) repairWithResult(ctx context.Context, opID string, dryRun
 	if err := g.Wait(); err != nil {
 		return result, err
 	}
-	scannedTotal := int(atomic.LoadInt64(&scanned))
+	scannedTotal := int(scanned.Load())
 
 	// The defer at the top of this function handles the final
 	// persistRepairResult + writeReportFile call. Just clear the

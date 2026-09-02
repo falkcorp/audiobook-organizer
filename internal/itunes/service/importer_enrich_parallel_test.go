@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_parallel_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8d3a5b1e-6f2c-4a97-9e1d-3c7b8f4a2d6e
-// last-edited: 2026-07-16
+// last-edited: 2026-09-02
 
 package itunesservice
 
@@ -87,7 +87,7 @@ func buildEnrichFixture(t *testing.T, n int) ([]database.Book, *dbmocks.MockStor
 	src := "/mnt/itunes/Library.xml"
 
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books[i] = database.Book{
 			ID:                 fmt.Sprintf("book-%d", i),
 			Title:              fmt.Sprintf("Title-%d", i),
@@ -235,14 +235,14 @@ func TestEnrichImportedBooks_BreakerResetsOnSuccess(t *testing.T) {
 
 	_, store := buildEnrichFixture(t, totalBooks)
 
-	var callN int32
+	var callN atomic.Int32
 	fetcher := newFakeMetadataFetcher(func(string) bool {
 		// Fail every other call: 1 failure, 1 success, repeat. Never
 		// accumulates enrichBreakerThreshold(5) failures without an
 		// intervening reset, whether run sequentially or with the real
 		// worker pool (which serializes atomic increments/resets even
 		// though call ORDER across books is not guaranteed).
-		n := atomic.AddInt32(&callN, 1)
+		n := callN.Add(1)
 		return n%2 == 1
 	})
 	// Force sequential so the fail/succeed/fail/succeed pattern is

@@ -1,5 +1,5 @@
 // file: internal/itunes/mhoh_encoding_audit.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c46832f-3418-4be7-8e80-2184a8ec9d63
 
 // AuditMhohEncoding walks every mhoh string block in an iTunes .itl payload
@@ -18,6 +18,8 @@
 //	+32..+39    8 bytes       — iTunes writes these as 0x00 always
 //
 // Container types walked: 1 (tracks), 2 (playlists), 9 (albums), 11 (artists).
+// last-edited: 2026-09-02
+
 package itunes
 
 import (
@@ -112,10 +114,7 @@ func AuditMhohEncoding(fileData []byte, libPath string) (*MhohAuditReport, error
 		}
 		report.TotalContainersWalked++
 		contentStart := off + hdrLen
-		contentEnd := off + totalLen
-		if contentEnd > len(payload) {
-			contentEnd = len(payload)
-		}
+		contentEnd := min(off+totalLen, len(payload))
 		walkContainerForMhoh(payload, contentStart, contentEnd, report)
 	}
 
@@ -168,10 +167,7 @@ func walkContainerForMhoh(data []byte, start, end int, report *MhohAuditReport) 
 			// When totalLen == headerLen (mith with no sub-mhoh children), the
 			// range is empty and we recurse vacuously.
 			childStart := offset + headerLen
-			childEnd := offset + chunkSize
-			if childEnd > end {
-				childEnd = end
-			}
+			childEnd := min(offset+chunkSize, end)
 			if childStart < childEnd {
 				walkContainerForMhoh(data, childStart, childEnd, report)
 			}

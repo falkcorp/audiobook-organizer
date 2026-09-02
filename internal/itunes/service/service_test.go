@@ -1,6 +1,7 @@
 // file: internal/itunes/service/service_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4ab6d921-bccd-4265-b04b-31faaacd5826
+// last-edited: 2026-09-02
 
 package itunesservice
 
@@ -185,12 +186,12 @@ func TestEnabled_EnabledService(t *testing.T) {
 func TestDisabledService_StartShutdown_MultipleCallsAreNoOps(t *testing.T) {
 	svc := NewDisabled()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := svc.Start(context.Background()); err != nil {
 			t.Errorf("Start[%d] on disabled: %v", i, err)
 		}
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := svc.Shutdown(0); err != nil {
 			t.Errorf("Shutdown[%d] on disabled: %v", i, err)
 		}

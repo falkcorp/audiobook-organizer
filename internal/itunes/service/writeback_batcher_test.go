@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d4e5f6a7-b8c9-0123-def4-56789abcdef0
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package itunesservice
 
@@ -388,7 +388,7 @@ func TestFlush_RefusesOverCap(t *testing.T) {
 		itlWriteBackEnabled: true,
 		libraryWritePath:    itlPath,
 	}
-	for i := 0; i < MaxRemovesPerFlush+1; i++ {
+	for i := range MaxRemovesPerFlush + 1 {
 		b.pendingRemoves[strings.Repeat("a", 16-len(itoaSafe(i)))+itoaSafe(i)] = true
 	}
 

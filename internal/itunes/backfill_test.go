@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c9d0e1f2-a3b4-c5d6-e7f8-a9b0c1d2e3f4
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -48,10 +48,7 @@ func (m *MockBackfillStore) GetAllBooksCore(limit, offset int) ([]database.BookC
 	if offset >= len(all) {
 		return []database.BookCore{}, nil
 	}
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
-	}
+	end := min(offset+limit, len(all))
 	return all[offset:end], nil
 }
 

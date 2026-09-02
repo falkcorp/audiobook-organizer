@@ -1,7 +1,7 @@
 // file: internal/itunes/mhoh_encoding_table.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: a0dacfc4-01c3-4a83-9404-b510ca4d051a
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 // ITunesMhohEncoding is the authoritative per-hohmType encoding constant table
 // for mhoh string blocks in iTunes-authored .itl files.
@@ -58,6 +58,8 @@
 // 0x06, 0x0B, 0x0D — see CRIT-1 and SPEC 2 §2.
 package itunes
 
+import "slices"
+
 // MhohEncodingEntry holds the corpus-derived constraints for one hohmType.
 type MhohEncodingEntry struct {
 	// HeaderLen is the exclusively observed headerLen value. In every
@@ -84,12 +86,7 @@ type MhohEncodingEntry struct {
 
 // AllowedAt24Contains reports whether v is in e.AllowedAt24.
 func (e MhohEncodingEntry) AllowedAt24Contains(v uint32) bool {
-	for _, a := range e.AllowedAt24 {
-		if a == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(e.AllowedAt24, v)
 }
 
 // ITunesMhohEncoding is the corpus-derived constant table for text string

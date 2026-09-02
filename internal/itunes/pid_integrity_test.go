@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c9a3e714-0d62-4b58-9f21-6e4a2c8b1d70
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -64,7 +64,7 @@ func TestComputeMergeOrphanCensus(t *testing.T) {
 			"b_j":  {ID: "b_j", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del},
 			"b_hp": {ID: "b_hp", IsPrimaryVersion: &primary},
 			"b_m": {ID: "b_m", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del,
-				MergedIntoBookID: strptr("b_winner")},
+				MergedIntoBookID: new("b_winner")},
 		},
 	}
 
@@ -115,8 +115,6 @@ func TestComputeMergeOrphanCensus(t *testing.T) {
 		t.Errorf("ResidualDuplicatePIDs = %d, want 0", c.ResidualDuplicatePIDs)
 	}
 }
-
-func strptr(s string) *string { return &s }
 
 // TestComputePIDIntegrity exercises the duplicate-PID classification and the
 // relocate-correctness probe with no real .itl (itlPath = "").

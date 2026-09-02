@@ -1,7 +1,7 @@
 // file: internal/itunes/relocate_oracle.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a2e9c14-6b83-4d50-9f27-1c8b5a0e3d62
-// last-edited: 2026-07-25
+// last-edited: 2026-09-02
 //
 // Post-write acceptance oracle for the 2-way-sync relocate path (P2 of the
 // 2-way-sync system design). After a relocate write, this compares the decompressed
@@ -263,10 +263,7 @@ func splitMithBlocksByPID(data []byte) (map[string][]byte, error) {
 		return nil, fmt.Errorf("track section (msdh type 1) not found")
 	}
 	contentStart := msdhOffset + msdhHeaderLen
-	contentEnd := msdhOffset + msdhTotalLen
-	if contentEnd > len(data) {
-		contentEnd = len(data)
-	}
+	contentEnd := min(msdhOffset+msdhTotalLen, len(data))
 	mlthHeaderLen := 0
 	if contentStart+12 <= contentEnd && readTag(data, contentStart) == "mlth" {
 		mlthHeaderLen = int(readUint32LE(data, contentStart+4))
