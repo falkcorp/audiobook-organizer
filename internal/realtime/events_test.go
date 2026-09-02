@@ -1,7 +1,7 @@
 // file: internal/realtime/events_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package realtime
 
@@ -121,7 +121,7 @@ func TestEventHub_GetClientCount(t *testing.T) {
 	}
 
 	// Add clients
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		client := NewClient(fmt.Sprintf("client-%d", i))
 		hub.RegisterClient(client)
 	}
@@ -145,7 +145,7 @@ func TestEventHub_Broadcast_SystemWideEvent(t *testing.T) {
 		Type:      EventSystemStatus,
 		ID:        "",
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"status": "running",
 		},
 	}
@@ -191,7 +191,7 @@ func TestEventHub_Broadcast_OperationSpecificEvent(t *testing.T) {
 		Type:      EventOperationProgress,
 		ID:        "op-1",
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"progress": 50,
 		},
 	}
@@ -250,7 +250,7 @@ func TestEventHub_SendOperationStatus(t *testing.T) {
 	client.Subscribe("op-123")
 	hub.RegisterClient(client)
 
-	details := map[string]interface{}{
+	details := map[string]any{
 		"files_processed": 42,
 	}
 	hub.SendOperationStatus("op-123", "completed", details)
@@ -302,7 +302,7 @@ func TestEventHub_SendSystemStatus(t *testing.T) {
 	client := NewClient("client-1")
 	hub.RegisterClient(client)
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"uptime": "10m",
 	}
 	hub.SendSystemStatus(data)
@@ -383,7 +383,7 @@ func TestEventHub_Broadcast_ChannelFull(t *testing.T) {
 			Type:      EventSystemStatus,
 			ID:        "",
 			Timestamp: time.Now(),
-			Data: map[string]interface{}{
+			Data: map[string]any{
 				"status": "test",
 			},
 		}
@@ -425,7 +425,7 @@ func TestEventHub_Broadcast_NoClients(t *testing.T) {
 		Type:      EventSystemStatus,
 		ID:        "",
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"status": "test",
 		},
 	}
@@ -447,7 +447,7 @@ func TestEventHub_Broadcast_ClientWithNoSubscriptions(t *testing.T) {
 		Type:      EventOperationProgress,
 		ID:        "op-123",
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"progress": 50,
 		},
 	}
@@ -491,7 +491,7 @@ func TestClient_ConcurrentSubscribe(t *testing.T) {
 
 	// Concurrent subscribe operations
 	done := make(chan bool)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(id int) {
 			opID := fmt.Sprintf("op-%d", id)
 			client.Subscribe(opID)
@@ -504,7 +504,7 @@ func TestClient_ConcurrentSubscribe(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 }
@@ -622,7 +622,7 @@ func TestHandleSSE_EventDelivery(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Send an event
-	hub.SendSystemStatus(map[string]interface{}{
+	hub.SendSystemStatus(map[string]any{
 		"status": "test_event",
 	})
 
@@ -730,7 +730,7 @@ func TestHandleSSE_JSONMarshalError(t *testing.T) {
 		Type:      EventSystemStatus,
 		ID:        "",
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"normal": "value",
 		},
 	}
@@ -767,7 +767,7 @@ func TestEventHub_MultipleSubscriptions(t *testing.T) {
 		Type:      EventOperationProgress,
 		ID:        "op-2",
 		Timestamp: time.Now(),
-		Data:      map[string]interface{}{"test": "data"},
+		Data:      map[string]any{"test": "data"},
 	}
 
 	hub.Broadcast(event)
@@ -785,7 +785,7 @@ func TestEventHub_MultipleSubscriptions(t *testing.T) {
 		Type:      EventOperationProgress,
 		ID:        "op-999",
 		Timestamp: time.Now(),
-		Data:      map[string]interface{}{"test": "data"},
+		Data:      map[string]any{"test": "data"},
 	}
 
 	hub.Broadcast(event2)
@@ -821,7 +821,7 @@ func TestEvent_JSONMarshaling(t *testing.T) {
 		Type:      EventOperationProgress,
 		ID:        "op-123",
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"progress": 50,
 			"message":  "test",
 		},
@@ -856,7 +856,7 @@ func TestEventHub_RegisterClient_MultipleClients(t *testing.T) {
 	hub := NewEventHub()
 
 	clients := make([]*Client, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		clients[i] = NewClient(fmt.Sprintf("client-%d", i))
 		hub.RegisterClient(clients[i])
 	}
@@ -866,7 +866,7 @@ func TestEventHub_RegisterClient_MultipleClients(t *testing.T) {
 	}
 
 	// Unregister half
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		hub.UnregisterClient(clients[i].ID)
 	}
 
@@ -951,20 +951,20 @@ func TestEventHub_ConcurrentBroadcast(t *testing.T) {
 
 	// Register multiple clients
 	clients := make([]*Client, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		clients[i] = NewClient(fmt.Sprintf("client-%d", i))
 		hub.RegisterClient(clients[i])
 	}
 
 	// Broadcast multiple events concurrently
 	done := make(chan bool)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(id int) {
 			event := &Event{
 				Type:      EventSystemStatus,
 				ID:        "",
 				Timestamp: time.Now(),
-				Data: map[string]interface{}{
+				Data: map[string]any{
 					"id": id,
 				},
 			}
@@ -974,7 +974,7 @@ func TestEventHub_ConcurrentBroadcast(t *testing.T) {
 	}
 
 	// Wait for all broadcasts to complete
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 
@@ -1004,12 +1004,12 @@ func TestClient_ChannelCapacity(t *testing.T) {
 	// Channel should have capacity of 100
 	// We can't directly test capacity, but we can verify it doesn't block
 	// for reasonable number of events
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		select {
 		case client.Channel <- &Event{
 			Type:      EventSystemStatus,
 			Timestamp: time.Now(),
-			Data:      map[string]interface{}{"i": i},
+			Data:      map[string]any{"i": i},
 		}:
 			// Expected - should not block
 		default:
