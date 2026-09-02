@@ -1,7 +1,7 @@
 # file: .github/workflows/security.yml
-# version: 2.4.2
+# version: 2.5.0
 # guid: 7f2a3c1d-4e5f-6g7h-8i9j-0k1l2m3n4o5p
-# last-edited: 2026-08-27
+# last-edited: 2026-09-01
 #
 # Security scanning: advanced CodeQL, dependency review, language audits, and
 # Go/NPM dependency submission for supply chain security. Third-party filesystem
@@ -43,7 +43,6 @@ jobs:
     permissions:
       contents: write
     env:
-      GOEXPERIMENT: jsonv2
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,7 +53,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Submit Go Dependencies
         uses: actions/go-dependency-submission@f35d5c9af13ce9cc32f7930b171e315e878f6921 # v2.0.3

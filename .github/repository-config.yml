@@ -1,5 +1,5 @@
 # file: .github/repository-config.yml
-# version: 1.2.1
+# version: 1.3.0
 # guid: audiobook-organizer-repo-config-001
 
 # Repository Metadata
@@ -40,7 +40,7 @@ languages:
       - docker
 
   versions:
-    go: ['1.25']
+    go: ['1.27']
     node: ['22']
 
   # Working directories for language-specific builds

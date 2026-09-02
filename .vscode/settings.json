@@ -1,11 +1,12 @@
 {
+  // encoding/json/v2 is GA and the default in Go 1.27, so the former
+  // GOEXPERIMENT=jsonv2 env and `-tags=goexperiment.jsonv2` build flag are
+  // gone; the toolchain sets that build tag itself. Pin the toolchain instead
+  // so gopls and the test runner match `make` and CI.
   "go.toolsEnvVars": {
-    "GOEXPERIMENT": "jsonv2"
+    "GOTOOLCHAIN": "go1.27.1"
   },
   "go.testEnvVars": {
-    "GOEXPERIMENT": "jsonv2"
-  },
-  "go.buildFlags": [
-    "-tags=goexperiment.jsonv2"
-  ]
+    "GOTOOLCHAIN": "go1.27.1"
+  }
 }

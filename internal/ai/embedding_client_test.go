@@ -1,13 +1,15 @@
 // file: internal/ai/embedding_client_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-20
+// last-edited: 2026-09-01
 
 package ai
 
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -256,12 +258,29 @@ func TestEmbedBatch_EmptyInput_NoAPICallNoError(t *testing.T) {
 
 // TestEmbeddingClient_LocalGating verifies that when SetOllamaAvailable(false)
 // is called and a local base URL is configured, EmbedBatch returns
-// ErrOllamaNotAvailable without making any network call.
+// ErrOllamaNotAvailable without embedding.
+//
+// EmbedBatch re-probes the daemon inline before failing (the on-demand
+// OllamaDaemon may have started it since the last probe), so the base URL must
+// be one whose /api/tags answer is deterministically "unavailable". Pointing at
+// http://127.0.0.1:11434 is not that: on any machine with a real Ollama running
+// the re-probe succeeds and the gate correctly stays open, and this test fails
+// for reasons that have nothing to do with the code under test.
 func TestEmbeddingClient_LocalGating(t *testing.T) {
-	c := NewEmbeddingClientWithOptions("k", "bge-m3", "http://127.0.0.1:11434/v1")
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer down.Close()
+	embedCalls := 0
+	c := NewEmbeddingClientWithOptions("k", "bge-m3", down.URL+"/v1")
+	c.SetRawEmbedForTest(func(_ context.Context, texts []string) ([][]float32, error) {
+		embedCalls++
+		return make([][]float32, len(texts)), nil
+	})
 	c.SetOllamaAvailable(false)
 	_, err := c.EmbedBatch(context.Background(), []string{"hello"})
 	assert.ErrorIs(t, err, ErrOllamaNotAvailable)
+	assert.Equal(t, 0, embedCalls, "a closed gate must not reach the embedding backend")
 }
 
 // TestEmbeddingClient_LocalGating_DefaultIsAvailable verifies that a freshly

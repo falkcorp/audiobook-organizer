@@ -1,7 +1,7 @@
 # file: Dockerfile.build-cgo
-# version: 1.1.1
+# version: 1.2.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-08-25
+# last-edited: 2026-09-01
 #
 # Builds a statically-linked CGO binary with native TagLib for Linux amd64/arm64.
 # Used by CI to produce downloadable release binaries.
@@ -18,8 +18,9 @@ RUN npm ci --prefer-offline --no-audit
 COPY web/ ./
 RUN npm run build
 
-# SHA pinned 2026-06-23 (golang:1.26-alpine manifest-list).
-FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS go-builder
+# SHA pinned 2026-09-01 (golang:1.27.1-alpine manifest-list). Keep in step with
+# the Makefile's GOTOOLCHAIN pin and the main Dockerfile.
+FROM golang:1.27.1-alpine@sha256:3f6d04dc61331ee3c2fbbaad62d54412a84680f6a041d269a20a5270a078515b AS go-builder
 
 ARG TARGETPLATFORM
 ARG TARGETOS
@@ -28,7 +29,6 @@ ARG APP_VERSION=dev
 
 WORKDIR /build
 
-ENV GOEXPERIMENT=jsonv2
 RUN apk add --no-cache git gcc g++ musl-dev sqlite-dev ca-certificates tzdata \
     cmake make curl zlib-dev zlib-static
 

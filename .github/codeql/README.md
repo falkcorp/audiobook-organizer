@@ -1,7 +1,7 @@
 <!-- file: .github/codeql/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 303b26f9-5786-4834-906e-ad57c12ff434 -->
-<!-- last-edited: 2026-05-03 -->
+<!-- last-edited: 2026-09-01 -->
 
 # CodeQL Custom Models Pack
 
@@ -124,7 +124,7 @@ codeql pack install .github/codeql/
 # Create CodeQL database
 codeql database create \
   --language=go \
-  --command="cd /path/to/worktree && GOEXPERIMENT=jsonv2 go build ./..." \
+  --command="cd /path/to/worktree && GOTOOLCHAIN=go1.27.1 go build ./..." \
   /path/to/abk-codeql-db
 
 # Run analysis with custom pack
@@ -139,7 +139,9 @@ grep -c '"ruleId": "go/path-injection"' /path/to/abk-codeql.sarif
 ```
 
 **Note:** Replace `/path/to/worktree` and `/path/to/abk-codeql-db` with actual paths.
-The `GOEXPERIMENT=jsonv2` flag is required by this project.
+`GOTOOLCHAIN=go1.27.1` matches the Makefile's pin so the extractor builds with the
+same toolchain as CI; the former `GOEXPERIMENT=jsonv2` requirement ended with Go 1.27,
+where `encoding/json/v2` is GA and the default.
 
 ## Maintenance
 

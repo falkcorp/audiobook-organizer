@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.2.0
+# version: 1.3.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-08-29
+# last-edited: 2026-09-01
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -17,25 +17,29 @@
 # template's `.prev`-preserving step enables.
 #
 # ---------------------------------------------------------------------------
-# TOOLCHAIN: the `go build` lines below deliberately carry NO GOTOOLCHAIN /
-# GOEXPERIMENT prefix. The committed Makefile exports both
-# (`export GOTOOLCHAIN := go1.26.0`, `export GOEXPERIMENT := jsonv2`) BEFORE its
-# `-include Makefile.local`, and an exported make variable becomes an
+# TOOLCHAIN: the `go build` lines below deliberately carry NO GOTOOLCHAIN
+# prefix. The committed Makefile exports it (`export GOTOOLCHAIN := go1.27.1`)
+# BEFORE its `-include Makefile.local`, and an exported make variable becomes an
 # environment variable for every recipe — including recipes defined in this
-# included file. Verified 2026-08-29: a probe target here echoed
-# `GOTOOLCHAIN=go1.26.0` and built clean on a box whose default `go` is 1.27.0;
-# with the export commented out the same target failed with
-# `undefined: fastrand64` from github.com/cockroachdb/swiss.
+# included file. Verified 2026-08-29 (then at go1.26.0): a probe target here
+# echoed the pinned `GOTOOLCHAIN` and built clean on a box whose default `go`
+# was newer; with the export commented out the same target built with the
+# machine's default toolchain instead. (Back then that failed outright with
+# `undefined: fastrand64` from github.com/cockroachdb/swiss; that blocker is gone
+# as of the 2026-09-01 move to Go 1.27, but the drift mechanism is unchanged.)
 #
-# So: do NOT set `GOTOOLCHAIN` or `GOEXPERIMENT` in this file — you would only
-# create a second copy to drift. Two things you MUST NOT do, because they
-# re-open the 2026-08-24 deploy break:
-#   * `unexport`/override either variable here;
+# There is no `GOEXPERIMENT` any more either: encoding/json/v2 is GA and the
+# default in Go 1.27, so the `jsonv2` pin the Makefile used to export is gone.
+#
+# So: do NOT set `GOTOOLCHAIN` in this file — you would only create a second
+# copy to drift. Two things you MUST NOT do, because they re-open the
+# 2026-08-24 deploy break:
+#   * `unexport`/override the variable here;
 #   * lift one of these `go build` lines out into a standalone shell script or a
 #     wrapper that does not run under this Makefile — outside make there is
 #     nothing exporting the pin, and GOTOOLCHAIN's default (`auto`) will never
-#     step DOWN from an installed 1.27+ to the 1.26.0 go.mod asks for. Set both
-#     explicitly in any such script.
+#     step DOWN from a newer installed toolchain to the one go.mod asks for. Set
+#     it explicitly in any such script.
 #
 # PIPING: never judge one of these targets by `make deploy 2>&1 | tail -30`. A
 # pipeline's exit status is the LAST command's (`tail`, always 0), so a deploy

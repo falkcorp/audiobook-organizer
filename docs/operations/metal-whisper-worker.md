@@ -1,7 +1,7 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
-<!-- last-edited: 2026-08-31 -->
+<!-- last-edited: 2026-09-01 -->
 
 # Metal Whisper worker (Mac)
 
@@ -87,7 +87,7 @@ uv run --with fastapi --with httpx --with pytest --with python-multipart \
 Confirm the Go client contract is untouched:
 
 ```bash
-GOTOOLCHAIN=go1.26.7 GOEXPERIMENT=jsonv2 go test ./internal/transcribe -count=1
+GOTOOLCHAIN=go1.27.1 go test ./internal/transcribe -count=1
 ```
 
 ## Measured on an M1 Max (32 GB), 2026-08-30
