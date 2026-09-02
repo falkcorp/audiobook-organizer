@@ -1,7 +1,7 @@
 // file: internal/watcher/watcher_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package watcher
 
@@ -208,7 +208,7 @@ func TestDebounceMultipleEvents(t *testing.T) {
 
 	// Rapid-fire create multiple files; no wall-clock pacing needed since
 	// the fake clock's debounce timer only fires when Advance is called.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		f := filepath.Join(dir, "test"+string(rune('a'+i))+".m4b")
 		if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
 			t.Fatal(err)
