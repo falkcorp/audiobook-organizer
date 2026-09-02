@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.8.0
+// version: 2.8.1
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package transcribe
 
@@ -154,10 +154,7 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, j
 
 	size := whisperBatchSize()
 	for start := 0; start < len(ordered); start += size {
-		end := start + size
-		if end > len(ordered) {
-			end = len(ordered)
-		}
+		end := min(start+size, len(ordered))
 		chunk := ordered[start:end]
 
 		// Hold an endpoint slot for the request only. Acquiring around the

@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1ca890f2-8505-4a42-9d74-209cc293077e
-// last-edited: 2026-08-07
+// last-edited: 2026-09-02
 
 package transcribe
 
@@ -43,7 +43,7 @@ func tempWAVJobs(t *testing.T, n int) map[string]string {
 	t.Helper()
 	dir := t.TempDir()
 	jobs := make(map[string]string, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("book-%03d", i)
 		path := filepath.Join(dir, id+".wav")
 		if err := os.WriteFile(path, []byte("RIFF-fake-wav"), 0o644); err != nil {

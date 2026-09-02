@@ -1,7 +1,7 @@
 // file: internal/transcribe/cuda.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e9f0a1b2-c3d4-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-06-26
+// last-edited: 2026-09-02
 
 package transcribe
 
@@ -92,12 +92,12 @@ func probeCUDA() cudaConfig {
 		// `nvidia-smi` plain output header ("CUDA Version: X.Y").
 		headerOut, herr := exec.Command(nvidiaSMI).Output()
 		if herr == nil {
-			for _, line := range strings.Split(string(headerOut), "\n") {
-				if idx := strings.Index(line, "CUDA Version:"); idx >= 0 {
-					raw := strings.TrimSpace(line[idx+len("CUDA Version:"):])
+			for line := range strings.SplitSeq(string(headerOut), "\n") {
+				if _, after, ok := strings.Cut(line, "CUDA Version:"); ok {
+					raw := strings.TrimSpace(after)
 					// raw is like "12.4" or "11.8 "
 					raw = strings.Fields(raw)[0]
-					majStr := strings.SplitN(raw, ".", 2)[0]
+					majStr, _, _ := strings.Cut(raw, ".")
 					if v, e := strconv.Atoi(majStr); e == nil {
 						cudaDriverMajor = v
 					}

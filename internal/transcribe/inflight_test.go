@@ -1,7 +1,7 @@
 // file: internal/transcribe/inflight_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ca92ba48-3205-42c3-b911-885ce0ba2b40
-// last-edited: 2026-08-31
+// last-edited: 2026-09-02
 
 package transcribe
 
@@ -38,19 +38,17 @@ func resetInFlight(t *testing.T, maxTotal int) {
 // the highest number seen holding a slot simultaneously.
 func hammer(t *testing.T, url string, limit, n int, peak *int64) {
 	t.Helper()
-	var live int64
+	var live atomic.Int64
 	var wg sync.WaitGroup
 	for range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			release, err := acquireInFlight(context.Background(), url, limit)
 			if err != nil {
 				t.Errorf("acquire: %v", err)
 				return
 			}
 			defer release()
-			cur := atomic.AddInt64(&live, 1)
+			cur := live.Add(1)
 			for {
 				old := atomic.LoadInt64(peak)
 				if cur <= old || atomic.CompareAndSwapInt64(peak, old, cur) {
@@ -59,8 +57,8 @@ func hammer(t *testing.T, url string, limit, n int, peak *int64) {
 			}
 			// Hold long enough that an uncapped implementation would overlap.
 			time.Sleep(20 * time.Millisecond)
-			atomic.AddInt64(&live, -1)
-		}()
+			live.Add(-1)
+		})
 	}
 	wg.Wait()
 }
@@ -89,11 +87,9 @@ func TestAcquireInFlightIsSharedAcrossIndependentCallers(t *testing.T) {
 	var peak int64
 	var wg sync.WaitGroup
 	for range 4 { // four separate "dispatches"
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			hammer(t, "http://shared", 2, 5, &peak)
-		}()
+		})
 	}
 	wg.Wait()
 	if peak > 2 {
@@ -123,20 +119,18 @@ func TestAcquireInFlightIsPerEndpoint(t *testing.T) {
 func TestPoolWideCapAppliesAcrossEndpoints(t *testing.T) {
 	resetInFlight(t, 2)
 	var peak int64
-	var live int64
+	var live atomic.Int64
 	var wg sync.WaitGroup
 	for i := range 12 {
 		url := []string{"http://a", "http://b", "http://c"}[i%3]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			release, err := acquireInFlight(context.Background(), url, 10)
 			if err != nil {
 				t.Errorf("acquire: %v", err)
 				return
 			}
 			defer release()
-			cur := atomic.AddInt64(&live, 1)
+			cur := live.Add(1)
 			for {
 				old := atomic.LoadInt64(&peak)
 				if cur <= old || atomic.CompareAndSwapInt64(&peak, old, cur) {
@@ -144,8 +138,8 @@ func TestPoolWideCapAppliesAcrossEndpoints(t *testing.T) {
 				}
 			}
 			time.Sleep(20 * time.Millisecond)
-			atomic.AddInt64(&live, -1)
-		}()
+			live.Add(-1)
+		})
 	}
 	wg.Wait()
 	if peak > 2 {
@@ -212,16 +206,14 @@ func TestBusyEndpointDoesNotStarveIdleEndpoint(t *testing.T) {
 	// holding one of the two global slots while parked.
 	queued := make(chan struct{})
 	var qwg sync.WaitGroup
-	qwg.Add(1)
-	go func() {
-		defer qwg.Done()
+	qwg.Go(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		close(queued)
 		if rel, err := acquireInFlight(ctx, "http://a", 1); err == nil {
 			rel()
 		}
-	}()
+	})
 	<-queued
 	time.Sleep(100 * time.Millisecond) // let it reach the park
 
@@ -248,20 +240,18 @@ func TestBusyEndpointDoesNotStarveIdleEndpoint(t *testing.T) {
 func TestConflictingLimitsForOneURLDoNotRemoveTheCap(t *testing.T) {
 	resetInFlight(t, 0)
 	var peak int64
-	var live int64
+	var live atomic.Int64
 	var wg sync.WaitGroup
 	for i := range 20 {
 		limit := 2 + (i % 3) // callers disagree: 2, 3, 4, 2, 3, 4, ...
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			release, err := acquireInFlight(context.Background(), "http://same", limit)
 			if err != nil {
 				t.Errorf("acquire: %v", err)
 				return
 			}
 			defer release()
-			cur := atomic.AddInt64(&live, 1)
+			cur := live.Add(1)
 			for {
 				old := atomic.LoadInt64(&peak)
 				if cur <= old || atomic.CompareAndSwapInt64(&peak, old, cur) {
@@ -269,8 +259,8 @@ func TestConflictingLimitsForOneURLDoNotRemoveTheCap(t *testing.T) {
 				}
 			}
 			time.Sleep(20 * time.Millisecond)
-			atomic.AddInt64(&live, -1)
-		}()
+			live.Add(-1)
+		})
 	}
 	wg.Wait()
 	// Whichever limit was established first wins; the cap must still be SOME
