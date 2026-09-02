@@ -1,7 +1,7 @@
 // file: internal/updater/scheduler.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package updater
 
@@ -44,10 +44,7 @@ func (s *Scheduler) Start() {
 		return
 	}
 
-	interval := time.Duration(cfg.CheckMins) * time.Minute
-	if interval < time.Minute {
-		interval = time.Minute
-	}
+	interval := max(time.Duration(cfg.CheckMins)*time.Minute, time.Minute)
 	s.ticker = time.NewTicker(interval)
 
 	slog.Info("Auto-update scheduler started checking every minutes", "checkMins", cfg.CheckMins)
