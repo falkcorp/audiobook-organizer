@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.0.1
+# version: 3.1.0
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-08-30
+# last-edited: 2026-09-01
 
 name: Prerelease on Merge
 
@@ -49,10 +49,10 @@ jobs:
       disabled-languages: 'python,docker'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
-      go-experiment: 'jsonv2'
-      # gha-release-go's lint step doesn't set GOEXPERIMENT from go-experiment,
-      # so go vet fails on jsonv2 imports even though ci.yml already vetted
-      # this commit correctly. Skip until fixed upstream in gha-release-go.
+      # Linters stayed off because gha-release-go's lint step did not see
+      # GOEXPERIMENT=jsonv2 and go vet failed on json/v2 imports. That reason
+      # is gone with Go 1.27 (json/v2 is GA and default); re-enabling is a
+      # separate decision because it can only be verified by a real release run.
       go-run-linters: false
     secrets: inherit
 

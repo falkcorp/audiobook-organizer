@@ -1,7 +1,7 @@
 # file: .github/workflows/nightly.yml
-# version: 1.0.4
+# version: 1.1.0
 # guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-# last-edited: 2026-07-08
+# last-edited: 2026-09-01
 
 # Nightly full CI: property tests, coverage check, E2E, staticcheck.
 # Runs the complete reusable-ci.yml suite on a schedule.
@@ -30,8 +30,7 @@ jobs:
     name: Full CI Suite
     uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)
     with:
-      go-version: '1.26'
-      go-experiment: 'jsonv2'
+      go-version: '1.27'
       node-version: '22'
       python-version: '3.13'
       rust-version: '1.76'

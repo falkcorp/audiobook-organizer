@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.10.0
+# version: 3.11.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-08-27
+# last-edited: 2026-09-01
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -44,8 +44,7 @@ jobs:
     # golangci-lint).
     uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@828afb50d0d18c426c72a6ed1060123677bee674 # main 2026-08-18 (adds go-lint + advisory super-linter jobs)
     with:
-      go-version: '1.26'
-      go-experiment: 'jsonv2'
+      go-version: '1.27'
       node-version: '22'
       system-packages: 'libtag1-dev'
       frontend-working-dir: 'web'
@@ -103,7 +102,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      GOEXPERIMENT: jsonv2
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -114,7 +112,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go cache (manual)
@@ -123,9 +121,9 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
       - name: Install system packages
@@ -185,7 +183,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      GOEXPERIMENT: jsonv2
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -196,7 +193,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go cache (manual)
@@ -205,9 +202,9 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
       - name: Install system packages
@@ -261,7 +258,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      GOEXPERIMENT: jsonv2
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -272,7 +268,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go cache (manual)
@@ -281,9 +277,9 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
       - name: Install system packages
@@ -391,7 +387,6 @@ jobs:
     # ~500s package (TODO-SRVTIMEOUT) and sharding it is still open.
     timeout-minutes: 35
     env:
-      GOEXPERIMENT: jsonv2
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -402,7 +397,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go cache (manual)
@@ -411,9 +406,9 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
       - name: Install system dependencies

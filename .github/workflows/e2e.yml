@@ -1,7 +1,7 @@
 # file: .github/workflows/e2e.yml
-# version: 1.4.4
+# version: 1.5.0
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
-# last-edited: 2026-08-27
+# last-edited: 2026-09-01
 
 # Runs the Playwright end-to-end suite.
 #
@@ -152,7 +152,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -182,7 +182,6 @@ jobs:
       # keeps the wait short rather than merely survivable.
       - name: Pre-build frontend and Go binary
         env:
-          GOEXPERIMENT: jsonv2
         run: |
           cd web && npm run build
           cd .. && go build -tags embed_frontend -o audiobook-organizer .
@@ -218,7 +217,6 @@ jobs:
 
       - name: Run E2E suite
         env:
-          GOEXPERIMENT: jsonv2
           CI: 'true'
           EVENT_NAME: ${{ github.event_name }}
           INPUT_PROJECTS: ${{ inputs.projects }}

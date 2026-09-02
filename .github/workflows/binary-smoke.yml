@@ -1,7 +1,7 @@
 # file: .github/workflows/binary-smoke.yml
-# version: 1.4.1
+# version: 1.5.0
 # guid: 8dad4b58-c626-48e4-9adc-2696ddd2e864
-# last-edited: 2026-08-27
+# last-edited: 2026-09-01
 
 name: Binary Smoke
 
@@ -31,7 +31,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -46,7 +46,6 @@ jobs:
       - name: Build CLI Binary
         run: go build -o audiobook-organizer .
         env:
-          GOEXPERIMENT: jsonv2
 
       - name: Verify CLI Help Output
         run: |
@@ -60,7 +59,6 @@ jobs:
       - name: Build Embedded Binary (embed_frontend)
         run: go build -tags embed_frontend -o audiobook-organizer-embedded .
         env:
-          GOEXPERIMENT: jsonv2
 
       - name: Start Embedded Server And Probe Health + SPA
         run: |

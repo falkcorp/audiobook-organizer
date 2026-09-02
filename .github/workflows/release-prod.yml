@@ -1,7 +1,7 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.10.1
+# version: 4.11.0
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-08-30
+# last-edited: 2026-09-01
 
 name: Production Release
 
@@ -56,10 +56,10 @@ jobs:
       disabled-languages: 'python'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
-      go-experiment: 'jsonv2'
-      # gha-release-go's lint step doesn't set GOEXPERIMENT from go-experiment,
-      # so go vet fails on jsonv2 imports even though ci.yml already vetted
-      # this commit correctly. Skip until fixed upstream in gha-release-go.
+      # Linters stayed off because gha-release-go's lint step did not see
+      # GOEXPERIMENT=jsonv2 and go vet failed on json/v2 imports. That reason
+      # is gone with Go 1.27 (json/v2 is GA and default); re-enabling is a
+      # separate decision because it can only be verified by a real release run.
       go-run-linters: false
       previous-version: ${{ github.event.inputs.previous-version }}
     secrets: inherit

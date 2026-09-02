@@ -53,4 +53,4 @@ Reports: pass/fail count, any failures with spec file
 - Only run Playwright E2E if explicitly requested or if changes touch `web/` code
 - If a test fails, include the error message and file location
 - Do not attempt to fix failures — just report them
-- Use `GOEXPERIMENT=jsonv2` (already set in Makefile)
+- Do not set `GOEXPERIMENT=jsonv2` — `encoding/json/v2` is GA and the default on Go 1.27; the Makefile exports `GOTOOLCHAIN=go1.27.1`, so run tests via `make` or with that variable set
