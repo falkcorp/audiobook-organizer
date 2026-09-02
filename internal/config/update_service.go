@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.14.0
+// version: 3.14.1
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package config
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -107,9 +108,7 @@ func snapshotSourceCredentials(srcs []MetadataSource) map[string]map[string]stri
 			continue
 		}
 		creds := make(map[string]string, len(s.Credentials))
-		for k, v := range s.Credentials {
-			creds[k] = v
-		}
+		maps.Copy(creds, s.Credentials)
 		out[s.ID] = creds
 	}
 	return out
@@ -150,9 +149,7 @@ func restoreMaskedCredentials(srcs []MetadataSource, prior map[string]map[string
 			// The payload dropped the map entirely; rebuild it from the prior
 			// values rather than silently losing every credential.
 			restored := make(map[string]string, len(old))
-			for k, v := range old {
-				restored[k] = v
-			}
+			maps.Copy(restored, old)
 			srcs[i].Credentials = restored
 			continue
 		}
@@ -282,9 +279,7 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 
 	// Build filtered payload without secrets (already applied above)
 	filtered := make(map[string]any, len(payload))
-	for k, v := range payload {
-		filtered[k] = v
-	}
+	maps.Copy(filtered, payload)
 	for _, k := range secretFieldKeys {
 		delete(filtered, k)
 	}

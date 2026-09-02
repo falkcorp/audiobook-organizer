@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.35.0
+// version: 1.35.1
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-08-27
+// last-edited: 2026-09-02
 
 package config
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -581,9 +582,7 @@ func remapScheduledKeys(payload map[string]any) map[string]any {
 	}
 	for group, fields := range groups {
 		if existingGroup, ok := existing[group].(map[string]any); ok {
-			for k, v := range fields {
-				existingGroup[k] = v
-			}
+			maps.Copy(existingGroup, fields)
 		} else {
 			existing[group] = fields
 		}
