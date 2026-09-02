@@ -1,6 +1,7 @@
 // file: internal/database/user_playlist_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b1e2c4d-6f5a-4a70-b8c5-3d7e0f1b9a59
+// last-edited: 2026-09-02
 
 package database
 
@@ -144,7 +145,7 @@ func TestUserPlaylist_ListFilterByType(t *testing.T) {
 func TestUserPlaylist_ListPagination(t *testing.T) {
 	store := newPlaylistTestStore(t)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, _ = store.CreateUserPlaylist(&UserPlaylist{
 			Name: string(rune('a'+i)) + "-list", Type: UserPlaylistTypeStatic,
 		})

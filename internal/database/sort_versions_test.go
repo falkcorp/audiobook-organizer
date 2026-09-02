@@ -1,7 +1,7 @@
 // file: internal/database/sort_versions_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4959dece-aa81-423a-bfff-63ecbf764a2b
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package database
 
@@ -9,8 +9,6 @@ import (
 	"sort"
 	"testing"
 )
-
-func boolPtrVS(b bool) *bool { return &b }
 
 // TestSortVersionsTreatsNilFlagAsPrimary pins the rule EffectiveIsPrimaryVersion
 // exists to enforce: a nil IsPrimaryVersion counts as PRIMARY.
@@ -21,9 +19,9 @@ func boolPtrVS(b bool) *bool { return &b }
 // without a nil-flagged row passes identically before and after the fix.
 func TestSortVersionsTreatsNilFlagAsPrimary(t *testing.T) {
 	books := []Book{
-		{ID: "1", Title: "zeta-explicit-false", IsPrimaryVersion: boolPtrVS(false)},
+		{ID: "1", Title: "zeta-explicit-false", IsPrimaryVersion: new(false)},
 		{ID: "2", Title: "alpha-nil-flag", IsPrimaryVersion: nil},
-		{ID: "3", Title: "beta-explicit-true", IsPrimaryVersion: boolPtrVS(true)},
+		{ID: "3", Title: "beta-explicit-true", IsPrimaryVersion: new(true)},
 	}
 
 	sortVersions(books)
@@ -49,11 +47,11 @@ func TestSortVersionsTreatsNilFlagAsPrimary(t *testing.T) {
 // was unspecified rather than title-ordered.
 func TestSortVersionsIsAValidStrictWeakOrdering(t *testing.T) {
 	books := []Book{
-		{ID: "1", Title: "delta", IsPrimaryVersion: boolPtrVS(true)},
-		{ID: "2", Title: "alpha", IsPrimaryVersion: boolPtrVS(true)},
+		{ID: "1", Title: "delta", IsPrimaryVersion: new(true)},
+		{ID: "2", Title: "alpha", IsPrimaryVersion: new(true)},
 		{ID: "3", Title: "charlie", IsPrimaryVersion: nil},
-		{ID: "4", Title: "bravo", IsPrimaryVersion: boolPtrVS(true)},
-		{ID: "5", Title: "echo", IsPrimaryVersion: boolPtrVS(false)},
+		{ID: "4", Title: "bravo", IsPrimaryVersion: new(true)},
+		{ID: "5", Title: "echo", IsPrimaryVersion: new(false)},
 	}
 
 	sortVersions(books)

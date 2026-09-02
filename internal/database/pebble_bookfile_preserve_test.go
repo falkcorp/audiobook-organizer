@@ -1,7 +1,7 @@
 // file: internal/database/pebble_bookfile_preserve_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7e1a9c43-2b86-4d05-9f71-3c6e8a0d2b54
-// last-edited: 2026-07-06
+// last-edited: 2026-09-02
 
 package database
 
@@ -124,7 +124,7 @@ func TestUpsertBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 		AcoustIDFingerprint:       []byte{10, 20, 30, 40},
 		FingerprintFailureReason:  nil,
 		FingerprintFailureDetail:  &detail,
-		FingerprintDiagnosticJSON: strPtr(`{"codec":"mp3"}`),
+		FingerprintDiagnosticJSON: new(`{"codec":"mp3"}`),
 	}); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
@@ -331,9 +331,6 @@ func TestUpdateBookFile_WritesFreshFingerprintAndClearsFailureDiagnostics(t *tes
 		t.Errorf("failure detail NOT cleared on success (guard over-fired): %v", *got[0].FingerprintFailureDetail)
 	}
 }
-
-// strPtr is a local test helper — returns a pointer to the given string.
-func strPtr(s string) *string { return &s }
 
 // BatchUpsertBookFiles must refresh the memdb view so batch-written rows are
 // immediately visible to memdb-backed reads (GetAllBookFilesCore / the UI).

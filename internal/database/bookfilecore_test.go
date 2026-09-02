@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 29325171-4866-4142-82c6-e010f724ae5e
-// last-edited: 2026-08-06
+// last-edited: 2026-09-02
 
 package database
 
@@ -40,8 +40,8 @@ var strippedBookFileFields = []string{
 // TestBookFileCoreIsBookFileMinusHeavyFields asserts the field-name set of
 // BookFileCore equals BookFile's set minus EXACTLY the stripped heavy set.
 func TestBookFileCoreIsBookFileMinusHeavyFields(t *testing.T) {
-	bfNames := structFieldNames(reflect.TypeOf(BookFile{}))
-	coreNames := structFieldNames(reflect.TypeOf(BookFileCore{}))
+	bfNames := structFieldNames(reflect.TypeFor[BookFile]())
+	coreNames := structFieldNames(reflect.TypeFor[BookFileCore]())
 
 	// (1) Every Core field must exist on BookFile (no invented fields).
 	for name := range coreNames {
@@ -103,9 +103,9 @@ func fillNonZero(t *testing.T, v reflect.Value) {
 			s := reflect.MakeSlice(f.Type(), 1, 1)
 			s.Index(0).Set(reflect.ValueOf(byte(i + 1)).Convert(f.Type().Elem()))
 			f.Set(s)
-		case reflect.Ptr:
+		case reflect.Pointer:
 			// Only *time.Time appears in BookFile.
-			if f.Type().Elem() == reflect.TypeOf(time.Time{}) {
+			if f.Type().Elem() == reflect.TypeFor[time.Time]() {
 				tt := ts.Add(time.Duration(i) * time.Hour)
 				f.Set(reflect.ValueOf(&tt))
 			} else {
@@ -113,7 +113,7 @@ func fillNonZero(t *testing.T, v reflect.Value) {
 				f.Set(np)
 			}
 		case reflect.Struct:
-			if f.Type() == reflect.TypeOf(time.Time{}) {
+			if f.Type() == reflect.TypeFor[time.Time]() {
 				f.Set(reflect.ValueOf(ts.Add(time.Duration(i) * time.Minute)))
 			} else {
 				fillNonZero(t, f)

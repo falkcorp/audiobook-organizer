@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package database
 
@@ -129,10 +129,7 @@ func (p *PebbleStore) ListOperations(limit, offset int) ([]Operation, int, error
 	}
 	end := len(operations)
 	if limit > 0 {
-		end = offset + limit
-		if end > len(operations) {
-			end = len(operations)
-		}
+		end = min(offset+limit, len(operations))
 	}
 	return operations[offset:end], total, nil
 }

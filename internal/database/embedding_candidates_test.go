@@ -1,7 +1,7 @@
 // file: internal/database/embedding_candidates_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: f3e2d1c0-b9a8-4765-8e7d-6f5c4b3a2190
-// last-edited: 2026-06-22
+// last-edited: 2026-09-02
 
 package database
 
@@ -18,7 +18,9 @@ import (
 )
 
 // floatPtr is a test helper that returns a pointer to a float64 value.
-func floatPtr(f float64) *float64 { return &f }
+//
+//go:fix inline
+func floatPtr(f float64) *float64 { return new(f) }
 
 func TestDedupCandidates_CreateAndList(t *testing.T) {
 	store := newTestEmbeddingStore(t)
@@ -28,7 +30,7 @@ func TestDedupCandidates_CreateAndList(t *testing.T) {
 		EntityAID:  "b1",
 		EntityBID:  "b2",
 		Layer:      "embedding",
-		Similarity: floatPtr(0.95),
+		Similarity: new(0.95),
 		Status:     "pending",
 	}
 	c2 := DedupCandidate{
@@ -36,7 +38,7 @@ func TestDedupCandidates_CreateAndList(t *testing.T) {
 		EntityAID:  "b3",
 		EntityBID:  "b4",
 		Layer:      "embedding",
-		Similarity: floatPtr(0.80),
+		Similarity: new(0.80),
 		Status:     "pending",
 	}
 
@@ -90,14 +92,14 @@ func TestDedupCandidates_UpsertIdempotent(t *testing.T) {
 		EntityAID:  "b1",
 		EntityBID:  "b2",
 		Layer:      "embedding",
-		Similarity: floatPtr(0.90),
+		Similarity: new(0.90),
 		Status:     "pending",
 	}
 	require.NoError(t, store.UpsertCandidate(base))
 
 	// Second upsert with updated similarity.
 	updated := base
-	updated.Similarity = floatPtr(0.99)
+	updated.Similarity = new(0.99)
 	require.NoError(t, store.UpsertCandidate(updated))
 
 	results, total, err := store.ListCandidates(CandidateFilter{})
@@ -362,7 +364,7 @@ func TestDedupCandidates_LayerPrecedence(t *testing.T) {
 		EntityAID:  "book_a",
 		EntityBID:  "book_b",
 		Layer:      "embedding",
-		Similarity: floatPtr(0.94),
+		Similarity: new(0.94),
 		Status:     "pending",
 	}))
 
@@ -403,7 +405,7 @@ func TestDedupCandidates_LayerUpgrade(t *testing.T) {
 		EntityAID:  "book_a",
 		EntityBID:  "book_b",
 		Layer:      "embedding",
-		Similarity: floatPtr(0.88),
+		Similarity: new(0.88),
 		Status:     "pending",
 	}))
 
@@ -451,7 +453,7 @@ func TestDedupCandidates_UpsertCanonicalizes(t *testing.T) {
 		EntityAID:  "book_z",
 		EntityBID:  "book_a",
 		Layer:      "embedding",
-		Similarity: floatPtr(0.92),
+		Similarity: new(0.92),
 		Status:     "pending",
 	}))
 	// Insert the same pair in canonical direction — should update the
@@ -461,7 +463,7 @@ func TestDedupCandidates_UpsertCanonicalizes(t *testing.T) {
 		EntityAID:  "book_a",
 		EntityBID:  "book_z",
 		Layer:      "embedding",
-		Similarity: floatPtr(0.93),
+		Similarity: new(0.93),
 		Status:     "pending",
 	}))
 
@@ -543,9 +545,9 @@ func TestListCandidatesForEntity(t *testing.T) {
 	store := newTestEmbeddingStore(t)
 
 	// book "b1" is paired with b2 and b3; b2 and b3 also have a pair with each other.
-	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Similarity: floatPtr(0.95), Status: "pending"}))
-	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b3", Layer: "embedding", Similarity: floatPtr(0.80), Status: "dismissed"}))
-	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b2", EntityBID: "b3", Layer: "embedding", Similarity: floatPtr(0.70), Status: "pending"}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Similarity: new(0.95), Status: "pending"}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b3", Layer: "embedding", Similarity: new(0.80), Status: "dismissed"}))
+	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b2", EntityBID: "b3", Layer: "embedding", Similarity: new(0.70), Status: "pending"}))
 
 	// b1 appears in 2 pairs; filtered by status it's 1.
 	all, err := store.ListCandidatesForEntity("book", "b1", "")

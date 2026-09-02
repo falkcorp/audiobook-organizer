@@ -1,12 +1,13 @@
 // file: internal/database/pebble_store_booksig_migrate_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e51c0d3-2a87-4f16-b74e-5c8203f9a1d6
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package database
 
 import (
 	"encoding/json"
+	"maps"
 	"reflect"
 	"testing"
 	"time"
@@ -44,9 +45,7 @@ func migrateSeedLegacyRow(t *testing.T, store *PebbleStore, id, tag string, extr
 		"book_sig_coverage_pct": coverage,
 		"book_sig_built_at":     builtAt.Format("2006-01-02T15:04:05Z"),
 	}
-	for k, v := range extra {
-		row[k] = v
-	}
+	maps.Copy(row, extra)
 	data, err := json.Marshal(row)
 	require.NoError(t, err)
 	require.NoError(t, store.db.Set([]byte("book:"+id), data, pebble.Sync))
@@ -172,7 +171,7 @@ func TestBookSigJSONKeysMatchStructTags(t *testing.T) {
 		"BookSigV1", "BookSigV1Mask", "BookSigSegments",
 		"BookSigBuiltAt", "BookSigCoveragePct",
 	}
-	typ := reflect.TypeOf(Book{})
+	typ := reflect.TypeFor[Book]()
 
 	want := make(map[string]bool, len(fields))
 	for _, name := range fields {

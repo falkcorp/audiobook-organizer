@@ -1,7 +1,7 @@
 // file: internal/database/pebble_summaries_fallback_filter_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f7c1d92-8b3e-4a56-9d07-2e6b5a1c8f43
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package database
 
@@ -200,7 +200,7 @@ func TestGetAllBookSummariesFiltered_PebbleFallbackHonorsEveryPredicate(t *testi
 			// deleted row unconditionally before the filter is consulted, so
 			// the fallback returns the empty set for this filter today.
 			name:   "MarkedForDeletionTrue",
-			filter: BookSummaryFilter{MarkedForDeletion: boolPtr(true)},
+			filter: BookSummaryFilter{MarkedForDeletion: new(true)},
 			want:   func(f fallbackFixture) bool { return f.deleted },
 		},
 		{
@@ -208,7 +208,7 @@ func TestGetAllBookSummariesFiltered_PebbleFallbackHonorsEveryPredicate(t *testi
 			// fallback already implements. It must stay green on both paths —
 			// if this reddens, the fix over-reached.
 			name:   "IsPrimaryVersionControl",
-			filter: BookSummaryFilter{IsPrimaryVersion: boolPtr(false)},
+			filter: BookSummaryFilter{IsPrimaryVersion: new(false)},
 			want: func(f fallbackFixture) bool {
 				return !f.primary && !f.deleted
 			},

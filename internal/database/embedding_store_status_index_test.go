@@ -1,7 +1,7 @@
 // file: internal/database/embedding_store_status_index_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a2c7e1f-9d3b-4a6e-8c1d-2f4b6a8e0c3d
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package database
 
@@ -41,12 +41,12 @@ func statusIndexRows(t *testing.T, s *EmbeddingStore) []string {
 func seedStatusIndexFixture(t *testing.T, s *EmbeddingStore) {
 	t.Helper()
 	fixture := []DedupCandidate{
-		{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Similarity: floatPtr(0.95), Status: "pending"},
-		{EntityType: "book", EntityAID: "b3", EntityBID: "b4", Layer: "embedding", Similarity: floatPtr(0.80), Status: "pending"},
-		{EntityType: "book", EntityAID: "b5", EntityBID: "b6", Layer: "exact", Similarity: floatPtr(0.99), Status: "pending"},
-		{EntityType: "book", EntityAID: "b7", EntityBID: "b8", Layer: "embedding", Similarity: floatPtr(0.70), Status: "merged"},
-		{EntityType: "author", EntityAID: "a1", EntityBID: "a2", Layer: "metadata", Similarity: floatPtr(0.60), Status: "pending"},
-		{EntityType: "book", EntityAID: "b9", EntityBID: "b10", Layer: "embedding", Similarity: floatPtr(0.85), Status: "dismissed"},
+		{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Similarity: new(0.95), Status: "pending"},
+		{EntityType: "book", EntityAID: "b3", EntityBID: "b4", Layer: "embedding", Similarity: new(0.80), Status: "pending"},
+		{EntityType: "book", EntityAID: "b5", EntityBID: "b6", Layer: "exact", Similarity: new(0.99), Status: "pending"},
+		{EntityType: "book", EntityAID: "b7", EntityBID: "b8", Layer: "embedding", Similarity: new(0.70), Status: "merged"},
+		{EntityType: "author", EntityAID: "a1", EntityBID: "a2", Layer: "metadata", Similarity: new(0.60), Status: "pending"},
+		{EntityType: "book", EntityAID: "b9", EntityBID: "b10", Layer: "embedding", Similarity: new(0.85), Status: "dismissed"},
 	}
 	for _, c := range fixture {
 		require.NoError(t, s.UpsertCandidate(c))
@@ -126,7 +126,7 @@ func TestCandidateStatusIndex_Maintenance_CreateChangeDelete(t *testing.T) {
 	// Create.
 	require.NoError(t, store.UpsertCandidate(DedupCandidate{
 		EntityType: "book", EntityAID: "b1", EntityBID: "b2",
-		Layer: "embedding", Similarity: floatPtr(0.9), Status: "pending",
+		Layer: "embedding", Similarity: new(0.9), Status: "pending",
 	}))
 	results, _, err := store.ListCandidates(CandidateFilter{})
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestCandidateStatusIndex_Maintenance_CreateChangeDelete(t *testing.T) {
 	// Status change via UpsertCandidateNew's update branch (existing pair).
 	_, isNew, err := store.UpsertCandidateNew(DedupCandidate{
 		EntityType: "book", EntityAID: "b1", EntityBID: "b2",
-		Layer: "embedding", Similarity: floatPtr(0.9), Status: "dismissed",
+		Layer: "embedding", Similarity: new(0.9), Status: "dismissed",
 	})
 	require.NoError(t, err)
 	assert.False(t, isNew, "same pair must update in place, not create a new row")

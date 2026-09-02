@@ -1,7 +1,7 @@
 // file: internal/database/author_create_race_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a1c0f2e-9b64-4d3a-8c51-2f8e6d4b7a09
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 package database
 
@@ -48,10 +48,8 @@ func TestCreateAuthorIsAtomicUnderConcurrency(t *testing.T) {
 		startCh = make(chan struct{})
 	)
 
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			<-startCh // release all workers at once to widen the window
 			a, err := store.CreateAuthor(name)
 			mu.Lock()
@@ -61,7 +59,7 @@ func TestCreateAuthorIsAtomicUnderConcurrency(t *testing.T) {
 				return
 			}
 			ids[a.ID]++
-		}()
+		})
 	}
 	close(startCh)
 	wg.Wait()

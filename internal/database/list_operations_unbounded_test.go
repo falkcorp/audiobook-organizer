@@ -1,7 +1,7 @@
 // file: internal/database/list_operations_unbounded_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d40b6c1-9e25-4a83-bb17-2c5f8e04d961
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package database
 
@@ -30,7 +30,7 @@ func TestListOperations_LimitZeroReturnsEverything(t *testing.T) {
 	// More rows than any page size the callers use, so a implementation that
 	// silently clamps to a default page cannot pass.
 	const total = 1200
-	for i := 0; i < total; i++ {
+	for i := range total {
 		_, err := store.CreateOperation(fmt.Sprintf("op-%04d", i), "scan", nil)
 		require.NoError(t, err)
 	}

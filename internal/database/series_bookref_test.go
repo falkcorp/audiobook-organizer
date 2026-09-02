@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package database
 
@@ -19,8 +19,8 @@ import (
 // that no longer resolved. Every assertion below is about the difference
 // between the two questions.
 
-func boolp(b bool) *bool { return &b }
-func intp(i int) *int    { return &i }
+//go:fix inline
+func intp(i int) *int { return new(i) }
 
 // seedRefStore writes books through the normal path, then applies raw flag
 // updates. Books are created with CreateBook so the memdb and Pebble both see
@@ -39,9 +39,9 @@ func mkBook(t *testing.T, s *PebbleStore, title string, seriesID int, primary, t
 	b, err := s.CreateBook(&Book{
 		Title:             title,
 		FilePath:          "/ref/" + title,
-		SeriesID:          intp(seriesID),
-		IsPrimaryVersion:  boolp(primary),
-		MarkedForDeletion: boolp(trashed),
+		SeriesID:          new(seriesID),
+		IsPrimaryVersion:  new(primary),
+		MarkedForDeletion: new(trashed),
 	})
 	require.NoError(t, err)
 	return b
@@ -103,12 +103,12 @@ func TestSeriesBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
 
 	// A deliberately mixed population: trashed, non-primary, both, neither,
 	// nil-flags, and books with no series at all.
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		sid := 920 + (i % 7)
 		mkBook(t, store, fmt.Sprintf("mix-%02d", i), sid, i%2 == 0, i%3 == 0)
 	}
 	// nil flags — the pointer-nil branch each filter treats differently.
-	_, err := store.CreateBook(&Book{Title: "nilflags", FilePath: "/ref/nilflags", SeriesID: intp(927)})
+	_, err := store.CreateBook(&Book{Title: "nilflags", FilePath: "/ref/nilflags", SeriesID: new(927)})
 	require.NoError(t, err)
 	// no series at all — must not appear under any key.
 	_, err = store.CreateBook(&Book{Title: "noseries", FilePath: "/ref/noseries"})
@@ -122,7 +122,7 @@ func TestSeriesBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
 	// number of implementations it compares.
 	_, err = store.CreateBook(&Book{
 		ID: "ZZREF00000000000000000000", Title: "letterled",
-		FilePath: "/ref/letterled", SeriesID: intp(928),
+		FilePath: "/ref/letterled", SeriesID: new(928),
 	})
 	require.NoError(t, err)
 
@@ -201,7 +201,7 @@ func TestSeriesBookRefCounts_CountsALetterLeadingBookID(t *testing.T) {
 	b, err := store.CreateBook(&Book{
 		ID: "ZZBOUNDS0000000000000000", Title: "letter-leading",
 		FilePath: "/ref/letter-leading", SeriesID: intp(lonely),
-		IsPrimaryVersion: boolp(true),
+		IsPrimaryVersion: new(true),
 	})
 	require.NoError(t, err)
 	require.Equal(t, "ZZBOUNDS0000000000000000", b.ID,

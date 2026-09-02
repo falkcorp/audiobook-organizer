@@ -1,7 +1,7 @@
 // file: internal/database/pebble_quick_queries.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package database
 
@@ -31,10 +31,10 @@ type QuickQueryEntry struct {
 
 // QuickQueryResult is one item in the GET /api/v1/library/quick-queries response.
 type QuickQueryResult struct {
-	ID     string                 `json:"id"`
-	Label  string                 `json:"label"`
-	Count  int                    `json:"count"`
-	Filter map[string]interface{} `json:"filter"`
+	ID     string         `json:"id"`
+	Label  string         `json:"label"`
+	Count  int            `json:"count"`
+	Filter map[string]any `json:"filter"`
 }
 
 // quickQueryDefs defines the six preset quick queries: id, human label, and the
@@ -43,47 +43,47 @@ type QuickQueryResult struct {
 var quickQueryDefs = []struct {
 	id     string
 	label  string
-	filter map[string]interface{}
+	filter map[string]any
 }{
 	{
 		id:    "missing_covers",
 		label: "Missing covers",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"missingCovers": true,
 		},
 	},
 	{
 		id:    "broken_files",
 		label: "Broken files",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"hasFileErrors": true,
 		},
 	},
 	{
 		id:    "no_fingerprints",
 		label: "No fingerprints",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"fingerprintStatus": "none",
 		},
 	},
 	{
 		id:    "in_import_path",
 		label: "In import path",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"inImportPath": true,
 		},
 	},
 	{
 		id:    "no_isbn",
 		label: "No ISBN",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"noIsbn": true,
 		},
 	},
 	{
 		id:    "duplicates_flagged",
 		label: "Duplicates flagged",
-		filter: map[string]interface{}{
+		filter: map[string]any{
 			"duplicatesFlagged": true,
 		},
 	},

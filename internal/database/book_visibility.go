@@ -1,7 +1,7 @@
 // file: internal/database/book_visibility.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4eee927b-72ce-4b07-aa41-a91afb2368ba
-// last-edited: 2026-08-14
+// last-edited: 2026-09-02
 
 package database
 
@@ -121,7 +121,7 @@ func includeByDeletionState(deleted bool, want *bool) bool {
 // removes it. Getting live books when you asked wrongly for deleted ones is
 // a visible wrong answer; leaking deleted rows into a full-library op is an
 // invisible one.
-func deletionStateFromFilters(filters map[string]interface{}) *bool {
+func deletionStateFromFilters(filters map[string]any) *bool {
 	v, ok := filters["marked_for_deletion"].(bool)
 	if !ok {
 		return nil

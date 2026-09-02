@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
-// last-edited: 2026-07-16
+// last-edited: 2026-09-02
 
 package database
 
@@ -12,12 +12,8 @@ import (
 	"time"
 )
 
-// Local ptr helpers — names suffixed _mem to avoid conflict with poc_chai_test.go.
-func ptrBool_mem(b bool) *bool       { return &b }
-func ptrInt_mem(i int) *int          { return &i }
-func ptrInt64_mem(i int64) *int64    { return &i } //nolint:unused // kept for future tests
-func ptrString_mem(s string) *string { return &s } //nolint:unused // kept for future tests
-
+//go:fix inline
+func ptrInt64_mem(i int64) *int64 { return new(i) } //nolint:unused // kept for future tests
 // seed inserts the given objects into the appropriate memdb tables.
 // Used to set up deterministic state for the read query tests.
 func seedMemStore(t *testing.T, m *MemStore, books []Book, files []BookFile, authors []Author, series []Series) {
@@ -58,19 +54,19 @@ func TestMemStore_GetAllSeriesBookCounts(t *testing.T) {
 
 	books := []Book{
 		// Primary, not deleted — counted
-		{ID: "b1", Title: "B1", SeriesID: ptrInt_mem(10), IsPrimaryVersion: ptrBool_mem(true)},
+		{ID: "b1", Title: "B1", SeriesID: new(10), IsPrimaryVersion: new(true)},
 		// Primary, not deleted — counted (same series)
-		{ID: "b2", Title: "B2", SeriesID: ptrInt_mem(10), IsPrimaryVersion: ptrBool_mem(true)},
+		{ID: "b2", Title: "B2", SeriesID: new(10), IsPrimaryVersion: new(true)},
 		// Different series, counted
-		{ID: "b3", Title: "B3", SeriesID: ptrInt_mem(20), IsPrimaryVersion: ptrBool_mem(true)},
+		{ID: "b3", Title: "B3", SeriesID: new(20), IsPrimaryVersion: new(true)},
 		// Marked for deletion — skipped
-		{ID: "b4", Title: "B4", SeriesID: ptrInt_mem(10), IsPrimaryVersion: ptrBool_mem(true), MarkedForDeletion: ptrBool_mem(true)},
+		{ID: "b4", Title: "B4", SeriesID: new(10), IsPrimaryVersion: new(true), MarkedForDeletion: new(true)},
 		// Not primary — skipped (effectiveBoolFieldIndex stores false here)
-		{ID: "b5", Title: "B5", SeriesID: ptrInt_mem(10), IsPrimaryVersion: ptrBool_mem(false)},
+		{ID: "b5", Title: "B5", SeriesID: new(10), IsPrimaryVersion: new(false)},
 		// nil SeriesID — skipped
-		{ID: "b6", Title: "B6", IsPrimaryVersion: ptrBool_mem(true)},
+		{ID: "b6", Title: "B6", IsPrimaryVersion: new(true)},
 		// nil IsPrimaryVersion → effectively true, counted
-		{ID: "b7", Title: "B7", SeriesID: ptrInt_mem(20)},
+		{ID: "b7", Title: "B7", SeriesID: new(20)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -90,11 +86,11 @@ func TestMemStore_GetAllAuthorBookCounts(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", Title: "A", AuthorID: ptrInt_mem(1), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b2", Title: "B", AuthorID: ptrInt_mem(1), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b3", Title: "C", AuthorID: ptrInt_mem(2), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b4", Title: "D", AuthorID: ptrInt_mem(1), MarkedForDeletion: ptrBool_mem(true), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b5", Title: "E", AuthorID: ptrInt_mem(1), IsPrimaryVersion: ptrBool_mem(false)},
+		{ID: "b1", Title: "A", AuthorID: new(1), IsPrimaryVersion: new(true)},
+		{ID: "b2", Title: "B", AuthorID: new(1), IsPrimaryVersion: new(true)},
+		{ID: "b3", Title: "C", AuthorID: new(2), IsPrimaryVersion: new(true)},
+		{ID: "b4", Title: "D", AuthorID: new(1), MarkedForDeletion: new(true), IsPrimaryVersion: new(true)},
+		{ID: "b5", Title: "E", AuthorID: new(1), IsPrimaryVersion: new(false)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -114,10 +110,10 @@ func TestMemStore_GetAllSeriesFileCounts(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", Title: "B1", SeriesID: ptrInt_mem(10), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b2", Title: "B2", SeriesID: ptrInt_mem(10), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b3", Title: "B3", SeriesID: ptrInt_mem(20), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b4", Title: "B4", SeriesID: ptrInt_mem(10), IsPrimaryVersion: ptrBool_mem(false)}, // skipped
+		{ID: "b1", Title: "B1", SeriesID: new(10), IsPrimaryVersion: new(true)},
+		{ID: "b2", Title: "B2", SeriesID: new(10), IsPrimaryVersion: new(true)},
+		{ID: "b3", Title: "B3", SeriesID: new(20), IsPrimaryVersion: new(true)},
+		{ID: "b4", Title: "B4", SeriesID: new(10), IsPrimaryVersion: new(false)}, // skipped
 	}
 	files := []BookFile{
 		{ID: "f1", BookID: "b1", Missing: false},
@@ -146,10 +142,10 @@ func TestMemStore_GetBooksBySeriesIDCore(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", Title: "Book One", SeriesID: ptrInt_mem(10), SeriesSequence: ptrInt_mem(1), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b2", Title: "Book Three", SeriesID: ptrInt_mem(10), SeriesSequence: ptrInt_mem(3), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b3", Title: "Book Two", SeriesID: ptrInt_mem(10), SeriesSequence: ptrInt_mem(2), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b4", Title: "Other Series", SeriesID: ptrInt_mem(20), IsPrimaryVersion: ptrBool_mem(true)},
+		{ID: "b1", Title: "Book One", SeriesID: new(10), SeriesSequence: new(1), IsPrimaryVersion: new(true)},
+		{ID: "b2", Title: "Book Three", SeriesID: new(10), SeriesSequence: new(3), IsPrimaryVersion: new(true)},
+		{ID: "b3", Title: "Book Two", SeriesID: new(10), SeriesSequence: new(2), IsPrimaryVersion: new(true)},
+		{ID: "b4", Title: "Other Series", SeriesID: new(20), IsPrimaryVersion: new(true)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -173,9 +169,9 @@ func TestMemStore_GetBooksByAuthorID(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", Title: "Zebra", AuthorID: ptrInt_mem(1), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b2", Title: "Alpha", AuthorID: ptrInt_mem(1), IsPrimaryVersion: ptrBool_mem(true)},
-		{ID: "b3", Title: "Other", AuthorID: ptrInt_mem(2), IsPrimaryVersion: ptrBool_mem(true)},
+		{ID: "b1", Title: "Zebra", AuthorID: new(1), IsPrimaryVersion: new(true)},
+		{ID: "b2", Title: "Alpha", AuthorID: new(1), IsPrimaryVersion: new(true)},
+		{ID: "b3", Title: "Other", AuthorID: new(2), IsPrimaryVersion: new(true)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -204,15 +200,15 @@ func TestMemStore_GetAllBooksCore_Filters(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", Title: "A", IsPrimaryVersion: ptrBool_mem(true), AuthorID: ptrInt_mem(1), MarkedForDeletion: ptrBool_mem(false)},
-		{ID: "b2", Title: "B", IsPrimaryVersion: ptrBool_mem(true), AuthorID: ptrInt_mem(2), MarkedForDeletion: ptrBool_mem(false)},
-		{ID: "b3", Title: "C", IsPrimaryVersion: ptrBool_mem(false), AuthorID: ptrInt_mem(1), MarkedForDeletion: ptrBool_mem(false)},
-		{ID: "b4", Title: "D", IsPrimaryVersion: ptrBool_mem(true), AuthorID: ptrInt_mem(1), MarkedForDeletion: ptrBool_mem(true)},
+		{ID: "b1", Title: "A", IsPrimaryVersion: new(true), AuthorID: new(1), MarkedForDeletion: new(false)},
+		{ID: "b2", Title: "B", IsPrimaryVersion: new(true), AuthorID: new(2), MarkedForDeletion: new(false)},
+		{ID: "b3", Title: "C", IsPrimaryVersion: new(false), AuthorID: new(1), MarkedForDeletion: new(false)},
+		{ID: "b4", Title: "D", IsPrimaryVersion: new(true), AuthorID: new(1), MarkedForDeletion: new(true)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
 	// author_id=1 && is_primary && !deleted → only b1
-	got, err := m.GetAllBooksCore(100, 0, map[string]interface{}{
+	got, err := m.GetAllBooksCore(100, 0, map[string]any{
 		"author_id":           1,
 		"is_primary_version":  true,
 		"marked_for_deletion": false,
@@ -245,8 +241,8 @@ func TestMemStore_GetAllBooksCore_LimitZeroIsUnbounded(t *testing.T) {
 		books = append(books, Book{
 			ID:                fmt.Sprintf("b%d", i),
 			Title:             fmt.Sprintf("Book %d", i),
-			IsPrimaryVersion:  ptrBool_mem(true),
-			MarkedForDeletion: ptrBool_mem(false),
+			IsPrimaryVersion:  new(true),
+			MarkedForDeletion: new(false),
 		})
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
@@ -390,11 +386,11 @@ func TestMemStore_ListSoftDeletedBooks(t *testing.T) {
 		// alive — skipped
 		{ID: "b1", Title: "Alive"},
 		// soft-deleted (recent)
-		{ID: "b2", Title: "Recently deleted", MarkedForDeletion: ptrBool_mem(true), MarkedForDeletionAt: &tRecent},
+		{ID: "b2", Title: "Recently deleted", MarkedForDeletion: new(true), MarkedForDeletionAt: &tRecent},
 		// soft-deleted (old)
-		{ID: "b3", Title: "Old deleted", MarkedForDeletion: ptrBool_mem(true), MarkedForDeletionAt: &tOlder},
+		{ID: "b3", Title: "Old deleted", MarkedForDeletion: new(true), MarkedForDeletionAt: &tOlder},
 		// soft-deleted, no timestamp — included, sorts last
-		{ID: "b4", Title: "Timeless deleted", MarkedForDeletion: ptrBool_mem(true)},
+		{ID: "b4", Title: "Timeless deleted", MarkedForDeletion: new(true)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -441,13 +437,13 @@ func TestMemStore_CountBooksByPathPrefix(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	books := []Book{
-		{ID: "b1", FilePath: "/mnt/books/a/one.m4b", SourceImportPath: ptrString_mem("/mnt/books/a")},
-		{ID: "b2", FilePath: "/mnt/books/a/two.m4b", SourceImportPath: ptrString_mem("/mnt/books/a")},
-		{ID: "b3", FilePath: "/mnt/books/b/three.m4b", SourceImportPath: ptrString_mem("/mnt/books/b")},
+		{ID: "b1", FilePath: "/mnt/books/a/one.m4b", SourceImportPath: new("/mnt/books/a")},
+		{ID: "b2", FilePath: "/mnt/books/a/two.m4b", SourceImportPath: new("/mnt/books/a")},
+		{ID: "b3", FilePath: "/mnt/books/b/three.m4b", SourceImportPath: new("/mnt/books/b")},
 		// no SourceImportPath → falls back to FilePath
 		{ID: "b4", FilePath: "/mnt/books/a/four.m4b"},
 		// deleted — excluded
-		{ID: "b5", FilePath: "/mnt/books/a/five.m4b", SourceImportPath: ptrString_mem("/mnt/books/a"), MarkedForDeletion: ptrBool_mem(true)},
+		{ID: "b5", FilePath: "/mnt/books/a/five.m4b", SourceImportPath: new("/mnt/books/a"), MarkedForDeletion: new(true)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)
 
@@ -482,20 +478,20 @@ func TestMemStore_ComputeLibraryStats(t *testing.T) {
 	}
 	books := []Book{
 		// organized (under root)
-		{ID: "b1", Title: "Org1", FilePath: "/library/x.m4b", IsPrimaryVersion: ptrBool_mem(true),
-			Duration: ptrInt_mem(3600), FileSize: ptrInt64_mem(100), Codec: ptrString_mem("aac"), LibraryState: ptrString_mem("organized")},
+		{ID: "b1", Title: "Org1", FilePath: "/library/x.m4b", IsPrimaryVersion: new(true),
+			Duration: new(3600), FileSize: ptrInt64_mem(100), Codec: new("aac"), LibraryState: new("organized")},
 		// unorganized under import path A
-		{ID: "b2", Title: "Inbox1", FilePath: "/inbox/a/x.m4b", IsPrimaryVersion: ptrBool_mem(true),
-			Duration: ptrInt_mem(7200), FileSize: ptrInt64_mem(200), Codec: ptrString_mem("aac")},
+		{ID: "b2", Title: "Inbox1", FilePath: "/inbox/a/x.m4b", IsPrimaryVersion: new(true),
+			Duration: new(7200), FileSize: ptrInt64_mem(200), Codec: new("aac")},
 		// unorganized under import path B
-		{ID: "b3", Title: "Inbox2", FilePath: "/inbox/b/y.m4b", IsPrimaryVersion: ptrBool_mem(true),
+		{ID: "b3", Title: "Inbox2", FilePath: "/inbox/b/y.m4b", IsPrimaryVersion: new(true),
 			FileSize: ptrInt64_mem(50)},
 		// non-primary version — counted in totals, NOT in organized/unorganized
-		{ID: "b4", Title: "Variant", FilePath: "/library/x-alt.m4b", IsPrimaryVersion: ptrBool_mem(false),
+		{ID: "b4", Title: "Variant", FilePath: "/library/x-alt.m4b", IsPrimaryVersion: new(false),
 			FileSize: ptrInt64_mem(10)},
 		// deleted — fully excluded
-		{ID: "b5", Title: "Gone", FilePath: "/library/gone.m4b", IsPrimaryVersion: ptrBool_mem(true),
-			MarkedForDeletion: ptrBool_mem(true), FileSize: ptrInt64_mem(999)},
+		{ID: "b5", Title: "Gone", FilePath: "/library/gone.m4b", IsPrimaryVersion: new(true),
+			MarkedForDeletion: new(true), FileSize: ptrInt64_mem(999)},
 	}
 	files := []BookFile{
 		// b1: 2 files, one fingerprinted (AcoustIDSeg0, the primary/non-fallback

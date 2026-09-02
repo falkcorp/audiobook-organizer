@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_cancel_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3e91b7d2-6c04-4a58-9f13-8d27e5a06b41
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 // Package database — regression suite for CANCELLATION of the activity query.
 //
@@ -206,7 +206,7 @@ func TestQueryByIndexPrefixAbortsWhenCallerGoesAway(t *testing.T) {
 
 	const opID = "op-cancel-test"
 	base := time.Now().UTC().Add(-10 * time.Minute)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		_, err := s.Record(ActivityEntry{
 			Timestamp:   base.Add(time.Duration(i) * time.Second),
 			Tier:        "change",
@@ -291,7 +291,7 @@ func TestWipeAllActivityAbortsMidWipe(t *testing.T) {
 
 	const seeded = 750 // 2 delete batches: 500 then 250
 	base := time.Now().UTC().Add(-time.Hour)
-	for i := 0; i < seeded; i++ {
+	for i := range seeded {
 		_, err := s.Record(ActivityEntry{
 			Tier: "change", Type: "test", Level: "info",
 			Source: "test", Summary: "bulk seed",
@@ -357,7 +357,7 @@ func TestWipeAllActivityRefusesAlreadyCancelledContext(t *testing.T) {
 
 	const seeded = 10
 	base := time.Now().UTC().Add(-time.Hour)
-	for i := 0; i < seeded; i++ {
+	for i := range seeded {
 		_, err := s.Record(ActivityEntry{
 			Tier: "change", Type: "test", Level: "info",
 			Source: "test", Summary: "seed",

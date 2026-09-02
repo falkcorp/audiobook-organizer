@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_bench_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-06-14
+// last-edited: 2026-09-02
 
 // Benchmarks proving the HNSW speedup over chromem's brute-force scan.
 // Run: go test ./internal/database/ -run '^$' -bench 'FindSimilar' -benchmem
@@ -24,7 +24,7 @@ func benchPopulate(b *testing.B, s VectorANNStore, n, dim int) []float32 {
 	b.Helper()
 	ctx := context.Background()
 	rng := rand.New(rand.NewSource(1))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := s.Upsert(ctx, "book", fmt.Sprintf("v%d", i), unitVec(rng, dim), map[string]string{"is_primary_version": "true"}); err != nil {
 			b.Fatalf("upsert: %v", err)
 		}

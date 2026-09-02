@@ -1,7 +1,7 @@
 // file: internal/database/series_scan_truncation_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1f9a72-3d84-4b05-9e27-8a5d61b3f9c4
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package database
 
@@ -81,7 +81,7 @@ func truncatingStoreWithFixture(t *testing.T, seriesID int) (*PebbleStore, *erro
 	seed.WaitForWarmup()
 
 	yes := true
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		seq := i
 		_, err := seed.CreateBook(&Book{
 			Title:            "trunc-" + string(rune('a'+i)),

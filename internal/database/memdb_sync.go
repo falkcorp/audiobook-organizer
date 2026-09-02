@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package database
 
@@ -127,10 +127,10 @@ func applyMemSync(m *MemStore, op string, fn func(txn memTxn, m *MemStore) error
 // memTxn aliases the memdb transaction type so callers don't have to import
 // the memdb package directly.
 type memTxn interface {
-	Insert(table string, obj interface{}) error
-	Delete(table string, obj interface{}) error
-	DeleteAll(table, index string, args ...interface{}) (int, error)
-	First(table, index string, args ...interface{}) (interface{}, error)
+	Insert(table string, obj any) error
+	Delete(table string, obj any) error
+	DeleteAll(table, index string, args ...any) (int, error)
+	First(table, index string, args ...any) (any, error)
 }
 
 // ── Book ────────────────────────────────────────────────────────────────────

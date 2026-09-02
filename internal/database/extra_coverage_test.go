@@ -1,7 +1,7 @@
 // file: internal/database/extra_coverage_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: e1f2a3b4-c5d6-7890-abcd-ef0102030405
-// last-edited: 2026-06-10
+// last-edited: 2026-09-02
 
 // Package database — extra tests to lift coverage of 0%-covered functions.
 // Covers: APIKeyToken helpers, PebbleStore book/tag/user/activity/metadata
@@ -438,7 +438,7 @@ func TestSQLiteStore_GetOperationResultsPage(t *testing.T) {
 	op, err := store.CreateOperation("page-op-1", "scan", nil)
 	require.NoError(t, err)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, store.CreateOperationResult(&OperationResult{
 			OperationID: op.ID,
 			BookID:      "book-" + string(rune('A'+i)),

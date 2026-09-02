@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_dups_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c9d6e21-7a4b-4f18-9c02-metadatadups01
-// last-edited: 2026-07-11
+// last-edited: 2026-09-02
 
 package database
 
@@ -70,7 +70,7 @@ func buildMetadataDupFixture(t *testing.T, store Store) metadataDupFixtureIDs {
 	// contributes zero groups, while the run still returns the (a) group.
 	authD := newAuthor("Author Four")
 	ids.oversized = make([]string, 0, metadataFuzzyBucketCap+1)
-	for i := 0; i < metadataFuzzyBucketCap+1; i++ {
+	for range metadataFuzzyBucketCap + 1 {
 		ids.oversized = append(ids.oversized, create("Collected Works", authD))
 	}
 

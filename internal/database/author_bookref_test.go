@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package database
 
@@ -37,11 +37,11 @@ func mkAuthorRefBook(t *testing.T, s *PebbleStore, title string, legacyAuthor in
 	b := &Book{
 		Title:             title,
 		FilePath:          "/authorref/" + title,
-		IsPrimaryVersion:  boolp(primary),
-		MarkedForDeletion: boolp(trashed),
+		IsPrimaryVersion:  new(primary),
+		MarkedForDeletion: new(trashed),
 	}
 	if legacyAuthor != 0 {
-		b.AuthorID = intp(legacyAuthor)
+		b.AuthorID = new(legacyAuthor)
 	}
 	created, err := s.CreateBook(b)
 	require.NoError(t, err)

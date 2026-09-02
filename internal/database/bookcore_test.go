@@ -1,7 +1,7 @@
 // file: internal/database/bookcore_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2d9a610-4f37-4a8e-9c15-bookcoretest01
-// last-edited: 2026-07-05
+// last-edited: 2026-09-02
 
 package database
 
@@ -28,8 +28,8 @@ var heavyFields = map[string]struct{}{
 
 func structFieldNames(t reflect.Type) map[string]struct{} {
 	names := make(map[string]struct{}, t.NumField())
-	for i := 0; i < t.NumField(); i++ {
-		names[t.Field(i).Name] = struct{}{}
+	for field := range t.Fields() {
+		names[field.Name] = struct{}{}
 	}
 	return names
 }
@@ -38,8 +38,8 @@ func structFieldNames(t reflect.Type) map[string]struct{} {
 // Book minus exactly the nine heavy fields, and it must carry every shared
 // field's struct tag over verbatim.
 func TestBookCoreIsBookMinusHeavyFields(t *testing.T) {
-	bookT := reflect.TypeOf(Book{})
-	coreT := reflect.TypeOf(BookCore{})
+	bookT := reflect.TypeFor[Book]()
+	coreT := reflect.TypeFor[BookCore]()
 
 	bookNames := structFieldNames(bookT)
 	coreNames := structFieldNames(coreT)
@@ -120,16 +120,16 @@ func TestBookCoreCopiesAllFields(t *testing.T) {
 // maps, interfaces, and scalars.
 func setNonZero(v reflect.Value) {
 	switch v.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		v.Set(reflect.New(v.Type().Elem()))
 		setNonZero(v.Elem())
 	case reflect.Struct:
-		if v.Type() == reflect.TypeOf(time.Time{}) {
+		if v.Type() == reflect.TypeFor[time.Time]() {
 			v.Set(reflect.ValueOf(time.Unix(1_730_000_000, 0).UTC()))
 			return
 		}
-		for i := 0; i < v.NumField(); i++ {
-			f := v.Field(i)
+		for _, f := range v.Fields() {
+			f := f
 			if f.CanSet() {
 				setNonZero(f)
 			}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Contract tests for the activity index limit pushdown.
 //
@@ -94,7 +94,7 @@ func TestIndexPushdownForeignRefOutsidePageInflatesTotalByExactlyOne(t *testing.
 	const theirs = "op-theirs-outside"
 
 	base := time.Now().UTC().Add(-time.Hour)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		recAt(t, s, mine, base.Add(time.Duration(i+10)*time.Second), fmt.Sprintf("mine-%d", i))
 	}
 	// Older than every row of mine, so it sorts LAST and a short page never
@@ -145,7 +145,7 @@ func TestIndexPushdownForeignRefBeforeOffsetShiftsPage(t *testing.T) {
 	const theirs = "op-theirs-offset"
 
 	base := time.Now().UTC().Add(-time.Hour)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		recAt(t, s, mine, base.Add(time.Duration(i+10)*time.Second), fmt.Sprintf("mine-%d", i))
 	}
 	// NEWEST of all, so it lands at rank 0 — inside the skipped prefix for any
@@ -318,7 +318,7 @@ func TestIndexPushdownTiedTimestampsAgreeExactly(t *testing.T) {
 	const opID = "op-ties"
 	ts := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	const n = 12
-	for i := 0; i < n; i++ {
+	for i := range n {
 		recAt(t, s, opID, ts, fmt.Sprintf("tied-%02d", i))
 	}
 	prefix := "act:op:" + opID + ":"
@@ -521,7 +521,7 @@ func TestIndexPushdownPrunedRowDoesNotConsumeAPageSlot(t *testing.T) {
 // only place that dependency is written down.
 func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 	const classified = 15
-	got := reflect.TypeOf(ActivityFilter{}).NumField()
+	got := reflect.TypeFor[ActivityFilter]().NumField()
 	require.Equal(t, classified, got,
 		"ActivityFilter gained or lost a field. pactIndexPushdownEligible is an ALLOW-LIST "+
 			"(pactPushdownDecidable): an unclassified field REFUSES the pushdown, so this is a "+
@@ -533,8 +533,8 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 	// The classification itself, so a RENAMED field cannot keep the count at 15
 	// while quietly changing what is decided.
 	var names []string
-	for i := 0; i < got; i++ {
-		names = append(names, reflect.TypeOf(ActivityFilter{}).Field(i).Name)
+	for i := range got {
+		names = append(names, reflect.TypeFor[ActivityFilter]().Field(i).Name)
 	}
 	assert.Equal(t, []string{
 		"Limit", "Offset", // pagination, handled explicitly (negatives refuse)
@@ -592,7 +592,7 @@ func TestIndexPushdownEligibilityIsDecidedFieldByField(t *testing.T) {
 		"Limit": true, "Offset": true, "OperationID": true, "Since": true, "Until": true,
 	}
 
-	ft := reflect.TypeOf(ActivityFilter{})
+	ft := reflect.TypeFor[ActivityFilter]()
 	for i := 0; i < ft.NumField(); i++ {
 		field := ft.Field(i)
 		t.Run(field.Name, func(t *testing.T) {
@@ -702,12 +702,12 @@ func TestIndexPushdownEligibleAcceptsNonNilEmptySlices(t *testing.T) {
 func randomizedDifferential(t *testing.T, seed int64, trials, tieGroup int) {
 	t.Helper()
 	rng := rand.New(rand.NewSource(seed))
-	for trial := 0; trial < trials; trial++ {
+	for trial := range trials {
 		s := newTestPebbleActivityStore(t)
 		opID := fmt.Sprintf("op-rand-%d-%d", tieGroup, trial)
 		n := tieGroup + rng.Intn(40)
 		base := time.Now().UTC().Add(-24 * time.Hour)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			recAt(t, s, opID, base.Add(time.Duration(i/tieGroup)*time.Second), fmt.Sprintf("e%03d", i))
 		}
 		prefix := "act:op:" + opID + ":"
@@ -719,7 +719,7 @@ func randomizedDifferential(t *testing.T, seed int64, trials, tieGroup int) {
 			}
 		}
 
-		for probe := 0; probe < 12; probe++ {
+		for range 12 {
 			f := ActivityFilter{
 				OperationID: opID,
 				Limit:       rng.Intn(n + 3),

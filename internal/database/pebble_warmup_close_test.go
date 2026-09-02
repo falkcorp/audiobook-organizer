@@ -1,7 +1,7 @@
 // file: internal/database/pebble_warmup_close_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b3a1e9c-2f47-4d80-9a15-7c0e8b2d4f63
-// last-edited: 2026-06-04
+// last-edited: 2026-09-02
 
 package database
 
@@ -23,7 +23,7 @@ func seedPebbleDir(t *testing.T, path string, n int) {
 		t.Fatalf("seed open: %v", err)
 	}
 	batch := db.NewBatch()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		for _, prefix := range []string{"book:", "author:", "series:"} {
 			key := fmt.Sprintf("%s%06d", prefix, i)
 			// Minimal valid JSON; warmup unmarshal failures are skipped, but the
@@ -49,7 +49,7 @@ func seedPebbleDir(t *testing.T, path string, n int) {
 // Repeated open+immediate-close over a seeded DB reliably triggered the panic
 // pre-fix; post-fix every iteration is clean.
 func TestPebbleStore_CloseDuringWarmupDoesNotPanic(t *testing.T) {
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		dir := filepath.Join(t.TempDir(), fmt.Sprintf("db-%d", i))
 		seedPebbleDir(t, dir, 6000)
 

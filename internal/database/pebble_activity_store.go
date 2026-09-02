@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -757,10 +757,7 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) ([]Ac
 	// the caller another page exists without counting the rest of the log.
 	probe := f.Offset + f.Limit + 1
 
-	pageCap := f.Limit
-	if pageCap < 0 {
-		pageCap = 0
-	}
+	pageCap := max(f.Limit, 0)
 	page := make([]ActivityEntry, 0, pageCap)
 	matched := 0
 	collect := func(e ActivityEntry) bool {
@@ -929,10 +926,7 @@ func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, erro
 	deleted := 0
 	// Delete in batches of 500 to keep batch size reasonable.
 	for i := 0; i < len(kvs); i += 500 {
-		end := i + 500
-		if end > len(kvs) {
-			end = len(kvs)
-		}
+		end := min(i+500, len(kvs))
 		batch := s.db.NewBatch()
 		for _, kv := range kvs[i:end] {
 			if err := pactDeleteEntry(batch, kv); err != nil {
@@ -1120,10 +1114,7 @@ func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error
 			if err := ctx.Err(); err != nil {
 				return total, err
 			}
-			end := i + 500
-			if end > len(kvs) {
-				end = len(kvs)
-			}
+			end := min(i+500, len(kvs))
 			batch := s.db.NewBatch()
 			for _, kv := range kvs[i:end] {
 				if err := pactDeleteEntry(batch, kv); err != nil {
@@ -1618,13 +1609,7 @@ func (s *PebbleActivityStore) RecompactDigests(ctx context.Context) (RecompactRe
 		}
 
 		// Check if any items need updating.
-		needsUpdate := false
-		for _, item := range c.dd.Items {
-			if isLegacyItem(item) {
-				needsUpdate = true
-				break
-			}
-		}
+		needsUpdate := slices.ContainsFunc(c.dd.Items, isLegacyItem)
 		if !needsUpdate {
 			result.Skipped++
 			continue
@@ -1765,13 +1750,7 @@ func pactSelectTiers(f ActivityFilter) (nonDigest, digest []string) {
 		base = []string{f.Tier}
 	}
 	for _, tier := range base {
-		excluded := false
-		for _, ex := range f.ExcludeTiers {
-			if tier == ex {
-				excluded = true
-				break
-			}
-		}
+		excluded := slices.Contains(f.ExcludeTiers, tier)
 		if excluded {
 			continue
 		}
@@ -2201,8 +2180,8 @@ func (s *PebbleActivityStore) scanIndexRefs(ctx context.Context, prefix string) 
 		// Same rejection as pactPrimaryKeyFromRef: a ref with no ':' cannot be
 		// turned into a primary key, so the full path skips it and it is absent
 		// from that path's total. Skipping it here keeps the two totals equal.
-		ti := bytes.IndexByte(ref, ':')
-		if ti < 0 {
+		before, _, ok := bytes.Cut(ref, []byte{':'})
+		if !ok {
 			continue
 		}
 
@@ -2211,7 +2190,7 @@ func (s *PebbleActivityStore) scanIndexRefs(ctx context.Context, prefix string) 
 		sc.arena = append(sc.arena, ref...)
 		sc.ends = append(sc.ends, int32(len(sc.arena)))
 
-		tier := ref[:ti]
+		tier := before
 		bucket := -1
 		for i := range sc.byTier {
 			// string(tier) in a comparison does not allocate; assigning it does,
@@ -2269,7 +2248,7 @@ func (s *PebbleActivityStore) markLiveRefs(ctx context.Context, sc *pactIndexSca
 
 		positioned := false
 		checked := 0
-		for i := len(bucket.pos) - 1; i >= 0; i-- {
+		for _, v := range slices.Backward(bucket.pos) {
 			if checked%activityCtxCheckInterval == 0 {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					pit.Close()
@@ -2278,13 +2257,13 @@ func (s *PebbleActivityStore) markLiveRefs(ctx context.Context, sc *pactIndexSca
 			}
 			checked++
 
-			k := sc.key(bucket.pos[i])
+			k := sc.key(v)
 			if !positioned || !pit.Valid() || bytes.Compare(pit.Key(), k) < 0 {
 				pit.SeekGE(k)
 				positioned = true
 			}
 			if pit.Valid() && bytes.Equal(pit.Key(), k) {
-				alive[bucket.pos[i]] = true
+				alive[v] = true
 				live++
 				pit.Next()
 			}
@@ -2591,14 +2570,8 @@ func (s *PebbleActivityStore) queryByIndexPrefixFull(ctx context.Context, prefix
 	pactSortEntriesNewestFirst(all)
 
 	total := len(all)
-	start := f.Offset
-	if start > len(all) {
-		start = len(all)
-	}
-	end := start + f.Limit
-	if end > len(all) {
-		end = len(all)
-	}
+	start := min(f.Offset, len(all))
+	end := min(start+f.Limit, len(all))
 	window := all[start:end]
 	if window == nil {
 		// all[0:0] on a nil slice is nil, and the pushdown returns nil in the

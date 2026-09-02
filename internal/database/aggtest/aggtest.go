@@ -1,7 +1,7 @@
 // file: internal/database/aggtest/aggtest.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2fac3bb3-d63b-433a-8d70-6be714066e1a
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 // Package aggtest counts how many times RecomputeBookAggregates ran, for tests
 // that need to prove a write path coalesces its aggregate recomputes.
@@ -117,7 +117,7 @@ var TerminalMarkers = []string{
 // times passed a version of this suite that counted writes.
 func CountInvocations(logs, bookID string) int {
 	n := 0
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if !strings.Contains(line, "book_id="+bookID) {
 			continue
 		}
@@ -136,7 +136,7 @@ func CountInvocations(logs, bookID string) int {
 // the note there before choosing between them.
 func CountWrites(logs, bookID string) int {
 	n := 0
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if strings.Contains(line, "RecomputeBookAggregates updated") &&
 			strings.Contains(line, "book_id="+bookID) {
 			n++

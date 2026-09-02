@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-07-31
+// last-edited: 2026-09-02
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -33,6 +33,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -215,7 +216,7 @@ func (p *PebbleStore) ResolveSyncItem(syncID string) (*SyncItem, error) {
 	visited := make(map[string]bool, maxHops)
 
 	current := syncID
-	for hop := 0; hop < maxHops; hop++ {
+	for range maxHops {
 		if visited[current] {
 			return nil, fmt.Errorf("sync item redirect chain too long or cyclic starting at %s", syncID)
 		}
@@ -343,13 +344,7 @@ func (p *PebbleStore) RecordSyncMerge(loserBookID, winnerBookID string) error {
 		return err
 	}
 
-	alreadyMerged := false
-	for _, id := range winnerItem.MergedFrom {
-		if id == loserSyncID {
-			alreadyMerged = true
-			break
-		}
-	}
+	alreadyMerged := slices.Contains(winnerItem.MergedFrom, loserSyncID)
 	if !alreadyMerged {
 		winnerItem.MergedFrom = append(winnerItem.MergedFrom, loserSyncID)
 	}

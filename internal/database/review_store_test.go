@@ -1,7 +1,7 @@
 // file: internal/database/review_store_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package database
 
@@ -228,7 +228,7 @@ func TestListReviewItems_FilterByStatusAndKind(t *testing.T) {
 
 func TestListReviewItems_Pagination(t *testing.T) {
 	s := newReviewTestStore(t)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		dk := string(rune('a' + i))
 		if _, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", dk, "/f/"+dk, "s", "")); err != nil {
 			t.Fatalf("seed: %v", err)

@@ -1,9 +1,10 @@
 // file: internal/database/embedding_f16_zstd_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8a1b9c-d4e7-4a3f-b8c0-5e2d9f1a4b7c
 
 // T021 tests: float16+zstd vector encoding, dual-read compatibility, cosine-drift
 // property, compression-ratio assertion, and the re-encode idempotency contract.
+// last-edited: 2026-09-02
 
 package database
 
@@ -139,7 +140,7 @@ func TestEncodeDecodeV1_CosineDrift(t *testing.T) {
 	rng := rand.New(rand.NewSource(42)) // deterministic
 
 	var maxObservedDrift float64
-	for i := 0; i < numPairs; i++ {
+	for i := range numPairs {
 		// Generate two random unit vectors.
 		a32 := randomUnitVector(rng, dims)
 		b32 := randomUnitVector(rng, dims)
@@ -220,7 +221,7 @@ func TestEncodeDecodeV1_CompressionRatio(t *testing.T) {
 		rng := rand.New(rand.NewSource(7))
 		const numVectors = 20
 		var totalV0, totalV1 int
-		for i := 0; i < numVectors; i++ {
+		for range numVectors {
 			v := randomUnitVector(rng, dims)
 			totalV0 += len(encodeVectorV0(v))
 			totalV1 += len(encodeVector(v))
@@ -243,7 +244,7 @@ func TestEncodeDecodeV1_CompressionRatio(t *testing.T) {
 		// Generate a common base vector and perturb each vector slightly.
 		base := randomUnitVector(rng, dims)
 		var totalV0, totalV1 int
-		for i := 0; i < numVectors; i++ {
+		for range numVectors {
 			v := perturbedUnitVector(rng, base, 0.1) // 10% noise
 			totalV0 += len(encodeVectorV0(v))
 			totalV1 += len(encodeVector(v))

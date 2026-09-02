@@ -1,7 +1,7 @@
 // file: internal/database/book_file_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-07-01
+// last-edited: 2026-09-02
 
 package database
 
@@ -311,7 +311,7 @@ func TestDeleteBookFilesForBook(t *testing.T) {
 	store, bookID, cleanup := newTestStoreWithBook(t)
 	defer cleanup()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		f := &BookFile{
 			BookID:      bookID,
 			FilePath:    "/books/bulk_delete_" + string(rune('a'+i)) + ".m4b",
