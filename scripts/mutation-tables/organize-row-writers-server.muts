@@ -16,7 +16,7 @@
 
 # The batch-save caller stops at the file operation again: files copied into
 # the library, nothing at all written to the database.
-M01 batch-save-skips-the-row-write | internal/server/batch_save_op.go | s/\toutcome, _, err := s\.organizeService\.CommitLanding\(book, landing, operationID, log\)\n/\toutcome, err := organizer.LandingVersioned, error(nil)\n/
+M01 batch-save-skips-the-row-write | internal/server/batch_save_op.go | s/\toutcome, _, err := s\.organizeService\.CommitLanding\(book, landing, operationID, log\)\n/\t_ = landing\n\toutcome, err := organizer.LandingVersioned, error(nil)\n/
 
 # The folder-auto-scan op stops delegating and organizes nothing.
 M02 autoscan-drops-the-organize-hook | internal/server/folder_autoscan_op.go | s/\t\t\t\ts\.autoOrganizeScannedBooks\(ctx, books, scanLog\)\n/\t\t\t\t_ = ctx\n/
