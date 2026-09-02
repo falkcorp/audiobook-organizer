@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/calibrate_composite_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7e5a1c3b-9d2f-4a08-8b61-3c4d5e6f7a89
 // last-edited: 2026-09-02
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
@@ -29,6 +30,19 @@ func breakdownWith(kind unified.SignalKind, conf float64) json.RawMessage {
 	}
 	b, _ := json.Marshal(uds)
 	return b
+}
+
+// newCalibratePlugin wires a Plugin with a real engine on unified defaults
+// over the given stores. calibrate-composite sweeps around the LIVE engine's
+// score config and, on apply, reloads into it, so it refuses to run without
+// one (see runCalibrateComposite's engine guard).
+func newCalibratePlugin(t *testing.T, pebble *database.PebbleStore, es *database.EmbeddingStore) *Plugin {
+	t.Helper()
+	eng, err := dedupengine.NewEngine(es, pebble, nil, nil, nil, unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	return &Plugin{engine: eng, store: pebble, embeddingStore: es}
 }
 
 // upsertPairs writes n labeled examples of the given label, each a DISTINCT
@@ -85,7 +99,7 @@ func TestCalibrateCompositeInsufficientCoverage(t *testing.T) {
 	// Two nil-breakdown rows that must be skipped + counted, not scored as zero.
 	upsertPairs(t, es, 3000, 2, "true_dup", nil)
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), nil, rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -118,7 +132,7 @@ func TestCalibrateCompositeDryRunWritesNothing(t *testing.T) {
 
 	before := config.Snapshot().Dedup.Signals
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), nil, rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -149,7 +163,7 @@ func TestCalibrateCompositeFindsSeparation(t *testing.T) {
 	upsertPairs(t, es, 100000, 30, "true_dup", breakdownWith(unified.SigEmbedHigh, 0.94))
 	upsertPairs(t, es, 200000, 30, "not_dup", breakdownWith(unified.SigEmbedHigh, 0.915))
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":10}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -178,7 +192,7 @@ func TestCalibrateCompositeTargetNotMet(t *testing.T) {
 	upsertPairs(t, es, 100000, 30, "true_dup", breakdownWith(unified.SigEmbedHigh, 0.92))
 	upsertPairs(t, es, 200000, 30, "not_dup", breakdownWith(unified.SigEmbedHigh, 0.92))
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":10}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -209,13 +223,16 @@ func TestCalibrateCompositeTargetNotMetApplyWritesNothing(t *testing.T) {
 
 	before := config.Snapshot().Dedup.Signals
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":10,"apply":true}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if after := config.Snapshot().Dedup.Signals; !reflect.DeepEqual(before, after) {
 		t.Errorf("apply on target-not-met mutated config: before=%+v after=%+v", before, after)
+	}
+	if live := p.engine.ScoreConfig(); !reflect.DeepEqual(live, unified.DefaultScoreConfig()) {
+		t.Errorf("apply on target-not-met reloaded the live engine: %+v", live)
 	}
 }
 
@@ -228,7 +245,7 @@ func TestCalibrateCompositeSweepParallel(t *testing.T) {
 	upsertPairs(t, es, 100000, 40, "true_dup", breakdownWith(unified.SigEmbedHigh, 0.94))
 	upsertPairs(t, es, 200000, 40, "not_dup", breakdownWith(unified.SigEmbedHigh, 0.915))
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":10}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -239,10 +256,17 @@ func TestCalibrateCompositeSweepParallel(t *testing.T) {
 }
 
 // TestCalibrateCompositeApplyPersistsBands: with apply=true and both tunable
-// bands meeting target, the recommended BAND thresholds survive a
-// SaveConfigToDatabase → LoadConfigFromDatabase round-trip. (Per-signal
+// bands meeting target, the recommended BAND thresholds (1) survive a
+// SaveConfigToDatabase → LoadConfigFromDatabase round-trip AND (2) are what
+// the LIVE engine scores with as soon as the op returns — no restart. (Per-signal
 // confidences are advisory-only and intentionally do NOT round-trip — no config
 // blob surface exists for them.)
+//
+// Mutation check on (2): delete the SetScoreConfig reload in
+// applyBandThresholds and p.engine.ScoreConfig() stays at the 97/90 defaults
+// the engine was built with, so the live assertions below fail. That is the
+// bug this guards — before 2026-09-02 apply only wrote the blob and the engine
+// kept scoring on defaults.
 func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 	pebble := newPebbleForISBNIndexTest(t)
 	es := database.NewEmbeddingStore(pebble.DB())
@@ -258,7 +282,7 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 	orig := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = orig }) })
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":10,"apply":true}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -270,7 +294,23 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 	recCertain := f["recommended_certain_min"].(float64)
 	recHigh := f["recommended_high_min"].(float64)
 
-	// Reload from the persisted config blob and assert the bands round-tripped.
+	// Fixture guard: the recommendation must actually differ from the defaults
+	// the engine was constructed with, or "live == recommended" proves nothing.
+	def := unified.DefaultScoreConfig()
+	if recCertain == def.BandCertainMin && recHigh == def.BandHighMin {
+		t.Fatalf("fixture cannot observe the reload: recommended bands %.2f/%.2f equal the defaults", recCertain, recHigh)
+	}
+
+	// (2) The LIVE engine now scores with the applied bands.
+	live := p.engine.ScoreConfig()
+	if live.BandCertainMin != recCertain {
+		t.Errorf("live engine band_certain_min = %v, want applied %v", live.BandCertainMin, recCertain)
+	}
+	if live.BandHighMin != recHigh {
+		t.Errorf("live engine band_high_min = %v, want applied %v", live.BandHighMin, recHigh)
+	}
+
+	// (1) Reload from the persisted config blob and assert the bands round-tripped.
 	if err := config.LoadConfigFromDatabase(pebble); err != nil {
 		t.Fatalf("LoadConfigFromDatabase: %v", err)
 	}
@@ -358,7 +398,7 @@ func TestCalibrateCompositeJoinsCandidateBreakdown(t *testing.T) {
 	// nothing to join to, so it must stay skipped (never scored as zero).
 	upsertStaleLabel(t, es, 99999999, "not_dup")
 
-	p := &Plugin{store: pebble, embeddingStore: es}
+	p := newCalibratePlugin(t, pebble, es)
 	rep := newCaptureReporter()
 	if err := p.runCalibrateComposite(context.Background(), json.RawMessage(`{"min_scored_pairs":1}`), rep); err != nil {
 		t.Fatalf("run: %v", err)

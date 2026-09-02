@@ -1,7 +1,7 @@
 // file: internal/dedup/rescore_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4a70f81-92db-4e35-8a16-0d5f7c2e9b41
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 
 // newRescoreTestEngine builds an Engine backed by a real PebbleStore so the
@@ -23,7 +24,19 @@ func newRescoreTestEngine(t *testing.T) (*Engine, *database.PebbleStore) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	es := database.NewEmbeddingStore(store.DB())
-	return NewEngine(es, store, nil, nil, nil), store
+	return newRescoreTestEngineWithConfig(t, store, es, unified.DefaultScoreConfig()), store
+}
+
+// newRescoreTestEngineWithConfig builds an Engine over an already-open store
+// with an explicit unified.ScoreConfig, so a test can score the SAME pair
+// under two band ladders and observe the band move.
+func newRescoreTestEngineWithConfig(t *testing.T, store *database.PebbleStore, es *database.EmbeddingStore, cfg unified.ScoreConfig) *Engine {
+	t.Helper()
+	eng, err := NewEngine(es, store, nil, nil, nil, cfg)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	return eng
 }
 
 func mkBookWithHash(t *testing.T, store *database.PebbleStore, title, hash string, authorID *int, durationSec int) string {

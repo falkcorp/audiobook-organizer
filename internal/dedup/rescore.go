@@ -1,7 +1,7 @@
 // file: internal/dedup/rescore.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b1d4f27-6a90-4c3e-9d21-0f5a7c2e8b64
-// last-edited: 2026-07-12
+// last-edited: 2026-09-02
 
 // Package dedup — per-pair signal gather shared by the operational unified scan
 // and the dedup.rescore-labeled-examples op (ScorePairsForBook).
@@ -207,7 +207,7 @@ func (de *Engine) ScorePairsForBook(ctx context.Context, aID string, inputs []Re
 	}
 
 	// Per-book configs — identical to runUnifiedScoringForBook.
-	cfg := de.getScoreConfig()
+	cfg := de.ScoreConfig()
 	embCfg := DefaultEmbeddingCollectorConfig()
 	embHigh, embLow := de.resolvedBookThresholds()
 	embCfg.HighThreshold = embHigh

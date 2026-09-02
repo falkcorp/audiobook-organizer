@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
 // last-edited: 2026-09-02
 
@@ -304,7 +304,10 @@ func setupRealStoreEngine(t *testing.T) (*Engine, database.Store, *database.Embe
 	})
 
 	ms := merge.NewService(store)
-	engine := NewEngine(es, store, nil, nil, ms)
+	engine, err := NewEngine(es, store, nil, nil, ms, unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
 	return engine, store, es
 }
 
@@ -468,7 +471,10 @@ func TestAutoMergeCertain_ProvisionalJournalFailureSkipsMerge(t *testing.T) {
 		_ = edb.Close()
 		_ = store.Close()
 	})
-	engine := NewEngine(es, store, nil, nil, merge.NewService(store))
+	engine, err := NewEngine(es, store, nil, nil, merge.NewService(store), unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
 
 	for _, id := range []string{"JA", "JB"} {
 		if _, err := store.CreateBook(arPlausibleBook(id, "Dup Title "+id)); err != nil {

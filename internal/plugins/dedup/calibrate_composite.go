@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
 // last-edited: 2026-09-02
 
@@ -31,9 +31,9 @@
 // Confidence map[string]DedupKindConfidence field, so a per-kind confidence
 // bound survives UpdateConfig's JSON round-trip and a restart (previously it
 // had no field and was silently dropped, same failure class as the retired
-// flat keys). unified.SetKindConfidenceOverrides + registry_wire.go wire the
-// persisted map into unified.LoadScoreConfig exactly like SetBandThresholds
-// does for bands.
+// flat keys). dedup.LoadScoreConfig (internal/dedup/score_config.go) folds the
+// persisted map into the unified.ScoreConfig the live engine is built from,
+// exactly like the persisted bands.
 //
 // That closes the STORAGE gap, but NOT the reason Round 2 stays advisory:
 // unified.ComposeScore reads Signal.Confidence DIRECTLY and does not clamp it
@@ -52,6 +52,19 @@
 //     because prod runs baseline confidences + these bands. The apply path uses
 //     ONLY these, and the apply gate is computed from the EXACT config being
 //     persisted (baseline confidences + recommended bands).
+//
+// # One config channel (2026-09-02)
+//
+// The baseline this op sweeps around is p.engine.ScoreConfig() — the config
+// the live engine is scoring with RIGHT NOW — not a fresh unified.LoadScoreConfig
+// call. And apply does two things, in order: persist the bands through the
+// config update service (so they survive a restart), then reload the
+// persisted settings into the live engine via Engine.SetScoreConfig (so the
+// running process scores on them immediately). Before this, apply only
+// persisted: the engine never read the persisted values (nothing called
+// SetScoreConfig in production), so a calibration "applied" here changed
+// nothing until the next restart — and not even then, because startup fed
+// the values into unified package globals the engine also never read.
 //   - Round 2 — per-signal confidence bounds — remains ADVISORY only. It is
 //     reported so an operator can persist it (via config.yaml or, now, a direct
 //     UpdateConfig write to dedup.signals.confidence.<kind>.*), but this op
@@ -79,7 +92,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"maps"
 	"runtime"
 	"slices"
 	"time"
@@ -88,6 +100,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"
@@ -145,7 +158,8 @@ func (p *Plugin) calibrateCompositeDef() sdk.OperationDef {
 			"unified.ComposeScore under coordinate-wise config variants against the " +
 			"pair-deduped gold set, and recommends noisy-OR band thresholds hitting a target " +
 			"precision. Per-signal confidence bounds are swept ADVISORY-only (no config-blob " +
-			"surface). Dry-run by default; apply=true writes dedup.signals.* band thresholds — " +
+			"surface). Dry-run by default; apply=true persists dedup.signals.* band thresholds AND reloads them into " +
+			"the live engine (no restart) — " +
 			"operator-gated, refuses partial/target-not-met recommendations.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
@@ -174,15 +188,6 @@ var primaryKinds = []unified.SignalKind{
 
 func isPrimaryKind(k unified.SignalKind) bool {
 	return slices.Contains(primaryKinds, k)
-}
-
-// cloneScoreConfig deep-copies a ScoreConfig, including its Signals map, so a
-// candidate variant never aliases the baseline's per-kind entries.
-func cloneScoreConfig(cfg unified.ScoreConfig) unified.ScoreConfig {
-	out := cfg
-	out.Signals = make(map[string]unified.KindConfig, len(cfg.Signals))
-	maps.Copy(out.Signals, cfg.Signals)
-	return out
 }
 
 // scoreWithClamp composes a pair's signals under cfg, re-clamping each primary
@@ -334,6 +339,12 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 	if p.embeddingStore == nil {
 		return fmt.Errorf("embedding store not available")
 	}
+	// The baseline is the LIVE engine's config and apply reloads into it, so
+	// there is nothing meaningful this op can do without one. Register only
+	// registers ops when p.engine != nil, so this guards direct callers.
+	if p.engine == nil {
+		return fmt.Errorf("dedup engine not available; calibrate-composite sweeps around and reloads the live engine's score config")
+	}
 
 	var params calibrateCompositeParams
 	if len(rawParams) > 0 {
@@ -457,12 +468,9 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 		return nil
 	}
 
-	// --- Baseline config (production load; fall back to defaults) ---
-	baseCfg, lerr := unified.LoadScoreConfig()
-	if lerr != nil {
-		log.Warn("calibrate-composite: LoadScoreConfig failed, using DefaultScoreConfig", "error", lerr)
-		baseCfg = unified.DefaultScoreConfig()
-	}
+	// --- Baseline config: what the live engine is scoring with right now ---
+	// (a Clone — the sweep's variants never touch live scoring).
+	baseCfg := p.engine.ScoreConfig()
 	totalTrue := scoredTrue
 
 	// Baseline scores under production confidences — computed ONCE and shared
@@ -533,7 +541,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 
 	// --- Recommended config being considered for APPLY: baseline confidences +
 	// recommended bands (this is exactly what prod would run) ---
-	recCfg := cloneScoreConfig(baseCfg)
+	recCfg := baseCfg.Clone()
 	if certainRec.Met && !orderingConflict {
 		recCfg.BandCertainMin = certainRec.Rec.Min
 	}
@@ -665,6 +673,23 @@ func (p *Plugin) applyBandThresholds(recCfg, prevCfg unified.ScoreConfig, log *s
 		return fmt.Errorf("persist band thresholds: %w", err)
 	}
 	log.Info("calibrate-composite APPLY: band thresholds persisted (survives restart via config blob)")
+
+	// Reload the PERSISTED settings into the live engine — the same
+	// conversion registry_wire.go uses at startup, read back from the config
+	// UpdateConfig just mutated, so "what the blob holds" and "what the
+	// engine scores with" cannot drift. An error here is loud on purpose:
+	// the bands are on disk but the running engine is still on the old ones,
+	// and the operator must know that rather than see a green op.
+	liveCfg, err := dedupengine.LoadScoreConfig(config.Snapshot().Dedup.Signals)
+	if err != nil {
+		return fmt.Errorf("band thresholds persisted but reloading them into the live engine failed (engine still scoring on the previous config until restart): %w", err)
+	}
+	if err := p.engine.SetScoreConfig(liveCfg); err != nil {
+		return fmt.Errorf("band thresholds persisted but the live engine rejected them (engine still scoring on the previous config until restart): %w", err)
+	}
+	log.Info("calibrate-composite APPLY: live engine reloaded",
+		"certain_min", liveCfg.BandCertainMin, "high_min", liveCfg.BandHighMin,
+		"medium_min", liveCfg.BandMediumMin, "review_min", liveCfg.BandReviewMin)
 	return nil
 }
 
@@ -748,7 +773,7 @@ func sweepConfidenceAdvisory(
 	highMetBase := baseHigh.N >= minBandSampleSize && baseHigh.Precision >= targetHigh
 	baseObjective := baseCertain.Recall + baseHigh.Recall
 
-	working := cloneScoreConfig(baseCfg)
+	working := baseCfg.Clone()
 	var suggestions []confSuggestion
 
 	type variant struct {
@@ -789,7 +814,7 @@ func sweepConfidenceAdvisory(
 						return gctx.Err()
 					default:
 					}
-					cand := cloneScoreConfig(working)
+					cand := working.Clone()
 					ck := cand.Signals[string(kind)]
 					if variants[i].bound == "min_confidence" {
 						ck.MinConfidence = variants[i].value
