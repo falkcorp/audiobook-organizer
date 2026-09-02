@@ -1,5 +1,5 @@
 // file: internal/dedup/store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
 // last-edited: 2026-09-02
 
@@ -52,12 +52,13 @@ type dedupCheckpointStores interface {
 	operations.OperationStateDeleter
 }
 
-type dedupBookReader interface {
-	// The user's field locks. MergeSplitBookCluster (keep.Title) and
-	// DedupSeries (SeriesID) write user-lockable columns on the WINNER and go
-	// through database.LoadFieldLocks -- the guard every metadata writer shares.
-	database.MetadataFieldStateReader
-
+// dedupBookQueries is the plain book-read surface: given an id, a hash or a
+// cursor, hand back rows. It is split out from dedupBookReader only so that
+// adding the field-lock reader below does not push one interface past the
+// width ratchet -- the two answer different questions ("what is this book"
+// versus "what has the user locked"), and every consumer still names
+// dedupBookReader, whose method set is unchanged.
+type dedupBookQueries interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
@@ -66,6 +67,15 @@ type dedupBookReader interface {
 	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
 	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)
 	GetDuplicateBooks() ([][]database.Book, error)
+}
+
+type dedupBookReader interface {
+	dedupBookQueries
+
+	// The user's field locks. MergeSplitBookCluster (keep.Title) and
+	// DedupSeries (SeriesID) write user-lockable columns on the WINNER and go
+	// through database.LoadFieldLocks -- the guard every metadata writer shares.
+	database.MetadataFieldStateReader
 }
 
 type dedupBookWriter interface {
