@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-09-01
 
@@ -79,6 +79,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { serverAnsweredTerm, useDebouncedSearch } from '../../../hooks/useDebouncedSearch';
 import * as api from '../../../services/api';
 import type { ReviewBulkSkip, ReviewItem, ReviewItemsPage } from '../../../services/api';
 import { useReviewStore } from '../../../stores/useReviewStore';
@@ -353,8 +354,9 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   const [reloadToken, setReloadToken] = useState(0);
   const [filters, setFiltersState] = useState<RegroupFilters>(REGROUP_INITIAL_FILTERS);
   // The debounced twin of filters.search. The raw value drives the text field so
-  // typing never lags; this one drives the buckets.
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  // typing never lags; this one drives the buckets. Shared with useDupesLane --
+  // the mechanism is identical in both lanes, so it lives in one place.
+  const debouncedSearch = useDebouncedSearch(filters.search, REGROUP_SEARCH_DEBOUNCE_MS);
   // The search term the rows currently in `items` were fetched under. '' means
   // "these rows are the unsearched queue".
   const [appliedSearch, setAppliedSearch] = useState('');
@@ -404,16 +406,10 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
 
   const clearFilters = useCallback(() => {
     setFiltersState((prev) => ({ ...prev, kind: '', search: '' }));
-    // Clear the debounced twin in the same tick. Leaving it to the timer would
-    // mean "Clear filters" visibly did nothing for a quarter of a second.
-    setDebouncedSearch('');
+    // No manual clear of the debounced twin: useDebouncedSearch collapses an
+    // empty value in the same tick precisely so "Clear filters" cannot appear
+    // to do nothing for a quarter of a second.
   }, []);
-
-  useEffect(() => {
-    if (filters.search === debouncedSearch) return;
-    const t = setTimeout(() => setDebouncedSearch(filters.search), REGROUP_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [filters.search, debouncedSearch]);
 
   const kindFilter = filters.kind;
   // The DEBOUNCED term, never filters.search: this feeds a network request, so
@@ -644,7 +640,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     // Comparing case-folded because the server matches case-insensitively; the
     // question is "has the server answered for THIS term", not "is the string
     // byte-identical".
-    const serverAnsweredThisTerm = appliedSearch.trim().toLowerCase() === query;
+    const serverAnsweredThisTerm = serverAnsweredTerm(appliedSearch, query);
     const visible =
       query && !serverAnsweredThisTerm
         ? items.filter((item) => (searchIndex.get(item.id) ?? '').includes(query))
@@ -759,11 +755,11 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
       }),
       loadCount(),
     ]);
-  // No `kindFilter` here: this body no longer reads it. `fetchPage` is keyed on
-  // it, so reload is still rebuilt on a kind change -- carrying it twice only
-  // tells a reader the body reads something it does not.
-  // `searchFilter` IS read here now -- it is handed to applyPage as the term
-  // these rows answer. It is not the dead duplicate that `kindFilter` was.
+    // No `kindFilter` here: this body no longer reads it. `fetchPage` is keyed on
+    // it, so reload is still rebuilt on a kind change -- carrying it twice only
+    // tells a reader the body reads something it does not.
+    // `searchFilter` IS read here now -- it is handed to applyPage as the term
+    // these rows answer. It is not the dead duplicate that `kindFilter` was.
   }, [loadCount, fetchPage, applyPage, searchFilter]);
 
   const runItemAction = useCallback(
@@ -884,8 +880,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     // had become the match count. A justification that stops being true does
     // not announce itself; this is the CLAUDE.md worked example, so the
     // condition names both filters rather than the one that existed first.
-    queueTotal:
-      kindFilter || searchFilter ? (storeCount > 0 ? storeCount : null) : total,
+    queueTotal: kindFilter || searchFilter ? (storeCount > 0 ? storeCount : null) : total,
     loaded: items.length,
     visible,
     oldestSortIsPartial: filters.sortBy === 'oldest' && items.length < total,
