@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatch_stale_params_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e18d3b7-0c92-44a6-8f31-b7d260e94a18
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 // White-box regression tests for the dispatcher's stale-params TOCTOU.
 //
@@ -89,7 +89,7 @@ func TestDispatchCycle_UsesParamsMergedAfterSnapshot(t *testing.T) {
 	store.EXPECT().ListQueuedOperationsV2().
 		Return([]database.OperationV2Row{queuedRow("op-1", "test.mergeable", staleParams)}, nil).Once()
 	store.EXPECT().GetOperationV2("op-1").
-		Return(ptrRow(queuedRow("op-1", "test.mergeable", mergedParams)), nil).Once()
+		Return(new(queuedRow("op-1", "test.mergeable", mergedParams)), nil).Once()
 
 	r := New(store, slog.Default(), 1, nil)
 	require.NoError(t, r.RegisterOp(mergeableDef("test.mergeable")))
@@ -188,5 +188,3 @@ func requireClaimReleased(t *testing.T, r *Registry, opID, plugin string) {
 		"claim not released: the stub handle strands the op behind Gate 0 forever")
 	require.Zero(t, r.pluginRunning[plugin], "plugin concurrency accounting leaked")
 }
-
-func ptrRow(row database.OperationV2Row) *database.OperationV2Row { return &row }

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-22
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -10,6 +10,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,8 +48,7 @@ func newTestReporter(t *testing.T, ctx context.Context) (registry.Reporter, *fak
 // TestReporterDB_UpdateProgressWritesColumns verifies that UpdateProgress
 // stores current, total, and message in the fakeStore.
 func TestReporterDB_UpdateProgressWritesColumns(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, store, opID := newTestReporter(t, ctx)
 
@@ -64,8 +64,7 @@ func TestReporterDB_UpdateProgressWritesColumns(t *testing.T) {
 
 // TestReporterDB_LogFlushAfter100Entries verifies bulk-flush to op_logs_v2.
 func TestReporterDB_LogFlushAfter100Entries(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, store, opID := newTestReporter(t, ctx)
 
@@ -95,8 +94,7 @@ func TestReporterDB_LogFlushAfter100Entries(t *testing.T) {
 // TestReporterDB_ErrorLevelAlsoWritesOpError verifies that slog.LevelError
 // writes to both op_logs_v2 and op_errors_v2.
 func TestReporterDB_ErrorLevelAlsoWritesOpError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, store, opID := newTestReporter(t, ctx)
 
@@ -117,8 +115,7 @@ func TestReporterDB_ErrorLevelAlsoWritesOpError(t *testing.T) {
 // TestReporterDB_LoggerHasOpIDAttr verifies that Logger() returns a logger
 // with the op_id attribute set in its output.
 func TestReporterDB_LoggerHasOpIDAttr(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, _, _ := newTestReporter(t, ctx)
 
@@ -147,8 +144,7 @@ func init() {
 // TestReporterDB_CheckpointEncodesAndUpserts verifies that Checkpoint stores
 // gob-encoded state in op_state_v2 and updates high_water_progress.
 func TestReporterDB_CheckpointEncodesAndUpserts(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, store, opID := newTestReporter(t, ctx)
 
@@ -203,8 +199,7 @@ func TestReporterDB_IsCanceledReturnsTrueAfterCtxCancel(t *testing.T) {
 // TestReporterDB_RunPhaseUpdatesCurrentPhase verifies that RunPhase sets and
 // then clears current_phase on the operation row.
 func TestReporterDB_RunPhaseUpdatesCurrentPhase(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, store, opID := newTestReporter(t, ctx)
 
@@ -235,8 +230,7 @@ func TestReporterDB_RunPhaseUpdatesCurrentPhase(t *testing.T) {
 // TestReporterDB_TriggerWithNilBusIsNoop verifies that Trigger with a nil bus
 // returns nil without panicking.
 func TestReporterDB_TriggerWithNilBusIsNoop(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, _, _ := newTestReporter(t, ctx)
 
@@ -248,8 +242,7 @@ func TestReporterDB_TriggerWithNilBusIsNoop(t *testing.T) {
 // TestReporterDB_BusPublishCalled verifies that the bus receives Publish calls
 // when it is non-nil.
 func TestReporterDB_BusPublishCalled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	opID := "01TESTOPID000000000000001"
@@ -286,12 +279,7 @@ func (b *fakeBus) Publish(_ context.Context, eventName string, _ any) error {
 }
 
 func (b *fakeBus) hasEvent(name string) bool {
-	for _, e := range b.events {
-		if e == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(b.events, name)
 }
 
 // Ensure fakeBus implements Bus — compile-time check via JSON round-trip test.
@@ -331,8 +319,7 @@ func TestReporterDB_LogFlushOnContextCancel(t *testing.T) {
 
 // TestReporterDB_AttrsAreIncludedInLog verifies that Log encodes attrs into JSON.
 func TestReporterDB_AttrsAreIncludedInLog(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rep, store, opID := newTestReporter(t, ctx)
 
@@ -380,11 +367,10 @@ func TestReporterDB_AttrsAreIncludedInLog(t *testing.T) {
 // closure is called on every UpdateProgress call — proving the in-memory
 // atomic clock is stamped before any DB write can block.
 func TestReporter_TouchProgressFnCalledOnUpdate(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	var touchCount int64
-	touchFn := func() { atomic.AddInt64(&touchCount, 1) }
+	var touchCount atomic.Int64
+	touchFn := func() { touchCount.Add(1) }
 
 	store := newFakeStore()
 	opID := "01TESTOPID000000000000002"
@@ -402,7 +388,7 @@ func TestReporter_TouchProgressFnCalledOnUpdate(t *testing.T) {
 	_ = rep.UpdateProgress(20, 100, "second")
 	_ = rep.UpdateProgress(30, 100, "third")
 
-	got := atomic.LoadInt64(&touchCount)
+	got := touchCount.Load()
 	if got != 3 {
 		t.Errorf("expected touchFn called 3 times, got %d", got)
 	}

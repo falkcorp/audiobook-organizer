@@ -1,13 +1,14 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package registry
 
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -292,11 +293,8 @@ func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []
 		}
 		var overlap []Resource
 		for _, w := range candidateWrites {
-			for _, hw := range h.writes {
-				if w == hw {
-					overlap = append(overlap, w)
-					break
-				}
+			if slices.Contains(h.writes, w) {
+				overlap = append(overlap, w)
 			}
 		}
 		if len(overlap) > 0 {
@@ -349,10 +347,8 @@ func (r *Registry) checkDependsOn(depDefIDs []string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, h := range r.running {
-		for _, depID := range depDefIDs {
-			if h.defID == depID {
-				return true
-			}
+		if slices.Contains(depDefIDs, h.defID) {
+			return true
 		}
 	}
 	return false

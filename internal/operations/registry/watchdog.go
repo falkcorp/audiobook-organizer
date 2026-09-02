@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-08-27
+// last-edited: 2026-09-02
 
 package registry
 
@@ -190,10 +190,7 @@ func (r *Registry) watchdogCycle() {
 		// C-4: the strike threshold honors the def's own MinCheckpointInterval,
 		// with defaultMinCheckpointTimeout as the floor. The old code compared
 		// against the 5m constant alone, striking long-interval defs spuriously.
-		threshold := minInterval
-		if threshold < defaultMinCheckpointTimeout {
-			threshold = defaultMinCheckpointTimeout
-		}
+		threshold := max(minInterval, defaultMinCheckpointTimeout)
 
 		// Reference time: last_checkpoint_at if set, else started_at.
 		var refTime *time.Time

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/shutdown_drain_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c1f8a52-7d63-4e90-9b21-6f0a2c5d8e74
-// last-edited: 2026-06-04
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -28,8 +28,7 @@ import (
 // goroutine has truly exited. It FAILS on the pre-fix code (Shutdown returns
 // after AbandonGrace while the goroutine is still alive).
 func TestShutdown_WaitsForOpGoroutineToExit(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{

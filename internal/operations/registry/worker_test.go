@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f2a3b4c5-d6e7-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-05-06
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -19,8 +19,7 @@ import (
 
 // TestWorker_SuccessfulRunSetsCompleted verifies the happy path.
 func TestWorker_SuccessfulRunSetsCompleted(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -38,8 +37,7 @@ func TestWorker_SuccessfulRunSetsCompleted(t *testing.T) {
 
 // TestWorker_RunReturningErrorSetsFailed verifies error path.
 func TestWorker_RunReturningErrorSetsFailed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -66,8 +64,7 @@ func TestWorker_RunReturningErrorSetsFailed(t *testing.T) {
 // TestWorker_PanicSetsFailed verifies that a panicking Run is caught and
 // the op is marked as failed.
 func TestWorker_PanicSetsFailed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)
@@ -94,8 +91,7 @@ func TestWorker_PanicSetsFailed(t *testing.T) {
 // TestWorker_IsolateReturnsSentinelError verifies that Isolate=true ops are
 // rejected with ErrSubprocessNotImplemented until UOS-03.
 func TestWorker_IsolateReturnsSentinelError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)

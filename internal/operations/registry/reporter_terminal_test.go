@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_terminal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b1c4e7a-3d52-4a68-b0f1-6c2d3e4f5a6b
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 package registry
 
@@ -34,7 +34,7 @@ func TestReporterR3_LogNoOpAfterTerminal(t *testing.T) {
 	r := newBareReporter()
 
 	// A few pre-terminal lines buffer normally.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = r.Log(slog.LevelInfo, "pre-terminal")
 	}
 	r.logMu.Lock()
@@ -47,7 +47,7 @@ func TestReporterR3_LogNoOpAfterTerminal(t *testing.T) {
 	r.markTerminal()
 
 	// Post-terminal lines must be dropped without touching the buffer.
-	for i := 0; i < 10_000; i++ {
+	for range 10_000 {
 		_ = r.Log(slog.LevelInfo, "post-terminal — wedged goroutine still logging")
 	}
 	r.logMu.Lock()
@@ -69,7 +69,7 @@ func TestReporterR3_BufferCapDropsOldest(t *testing.T) {
 
 	const extra = 500
 	total := maxBufferedLogEntries + extra
-	for i := 0; i < total; i++ {
+	for range total {
 		_ = r.Log(slog.LevelInfo, "line")
 	}
 

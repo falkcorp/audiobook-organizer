@@ -1,13 +1,14 @@
 // file: internal/operations/registry/resume.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package registry
 
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -57,7 +58,6 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 	r.logger.Info("registry: resumeAfterStartup: processing resumable ops", "count", len(rows))
 
 	for _, row := range rows {
-		row := row // capture
 
 		// Always drop reconcile_scan.
 		if row.DefID == reconcileScanDefID {
@@ -211,9 +211,7 @@ func mergeJSONParams(base, overlay []byte) ([]byte, error) {
 	if err := json.Unmarshal(overlay, &over); err != nil {
 		return nil, err
 	}
-	for k, v := range over {
-		merged[k] = v
-	}
+	maps.Copy(merged, over)
 	return json.Marshal(merged)
 }
 

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-06-14
+// last-edited: 2026-09-02
 
 // batch.go implements M3: coalescing burst enqueues of a Batchable op type into
 // one OperationV2Row via a debounce timer.
@@ -149,10 +149,7 @@ func (r *Registry) batchAdd(opType string, sub database.OpSubject, bw, bmw time.
 	if maxWaitDeadline.Before(fireAt) {
 		fireAt = maxWaitDeadline
 	}
-	delay := fireAt.Sub(now)
-	if delay < 0 {
-		delay = 0
-	}
+	delay := max(fireAt.Sub(now), 0)
 
 	// Stop the old timer (if any) to prevent double-fire. Drain its channel
 	// only if it hadn't already fired to avoid a goroutine leak.
@@ -387,10 +384,7 @@ func (r *Registry) batchReloadOnStart(ctx context.Context) {
 			if maxWaitDeadline.Before(windowDeadline) {
 				windowDeadline = maxWaitDeadline
 			}
-			delay = windowDeadline.Sub(now)
-			if delay < 0 {
-				delay = 0
-			}
+			delay = max(windowDeadline.Sub(now), 0)
 		}
 
 		r.batch.mu.Lock()

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_fieldset_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-06-14
+// last-edited: 2026-09-02
 
 // batch_fieldset_test.go is the TDD regression test for C1 (C1 = "give the
 // registry a real book-aware store for dep evaluation").
@@ -122,8 +122,7 @@ func TestBatch_FieldSet_ReadySubjectDispatched(t *testing.T) {
 		t.Fatalf("RegisterOp: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 	defer func() {
 		if err := r.Shutdown(ctx); err != nil {
