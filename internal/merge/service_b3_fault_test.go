@@ -1,5 +1,5 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
 // last-edited: 2026-09-02
 
@@ -173,7 +173,13 @@ func (f *b3FaultStore) CreateBookFile(file *database.BookFile) error {
 
 // ---------- MergeBooks warn-and-continue branches ----------
 
-func TestB3_MergeBooks_ReassignExternalIDsError_NonFatal(t *testing.T) {
+// Until 2026-09-02 this test was named ..._NonFatal and asserted that a failed
+// ReassignExternalIDs was warned and swallowed while the loser was soft-deleted
+// anyway. That returned success with ext_id:* rows still pointing at a deleted
+// book, and once the replay path started skipping soft-deleted losers there was
+// no route back. The contract is now the same as SoftDeleteBook's: the loser
+// stays LIVE, the merge reports it, and a retry re-runs the cleanup.
+func TestB3_MergeBooks_ReassignExternalIDsError_LeavesLoserLive(t *testing.T) {
 	real := setupTestStore(t)
 	fault := &b3FaultStore{Store: real}
 
@@ -187,15 +193,19 @@ func TestB3_MergeBooks_ReassignExternalIDsError_NonFatal(t *testing.T) {
 	fault.failReassignExternalIDsFor = map[string]bool{loser.ID: true}
 
 	ms := NewService(fault)
-	result, err := ms.MergeBooks([]string{loser.ID, winner.ID}, winner.ID)
-	require.NoError(t, err, "a failed external-id reassignment must not fail the whole merge")
-	assert.Equal(t, winner.ID, result.PrimaryID)
+	_, err = ms.MergeBooks([]string{loser.ID, winner.ID}, winner.ID)
+	require.Error(t, err, "a failed external-id reassignment must fail the merge, not be swallowed")
+	assert.Contains(t, err.Error(), "remain live")
+	assert.Contains(t, err.Error(), "b3 injected")
 
-	// The loser is still soft-deleted despite the reassignment failure.
+	// The loser is NOT soft-deleted: it is still a non-primary member of the
+	// group, visible, and a retry re-enters cleanup for it.
 	l, err := real.GetBookByID(loser.ID)
 	require.NoError(t, err)
-	require.NotNil(t, l.MarkedForDeletion)
-	assert.True(t, *l.MarkedForDeletion)
+	assert.False(t, l.IsSoftDeleted(), "loser must stay live so the retry can move its external IDs")
+	if l.VersionGroupID != nil {
+		assert.NotNil(t, l.IsPrimaryVersion)
+	}
 }
 
 func TestB3_MergeBooks_SoftDeleteError_IsReported(t *testing.T) {

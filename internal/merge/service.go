@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-02
 
@@ -146,6 +146,34 @@ type BookNotFoundError struct {
 
 func (e *BookNotFoundError) Error() string {
 	return fmt.Sprintf("book %s not found", e.BookID)
+}
+
+// ProvisionalScanError is returned when a merge participant still has a
+// provisional (hash-less) book_file row: a merge decided without a file hash
+// rests on title similarity alone, so the service refuses until the book's
+// deep scan has run. It is a refusal of the request's timing, not a server
+// fault, and is mapped to 409 by the handlers.
+type ProvisionalScanError struct {
+	BookID string
+}
+
+func (e *ProvisionalScanError) Error() string {
+	return fmt.Sprintf("book %s is awaiting a full scan and cannot be merged yet; "+
+		"run its deep scan first (a merge decided without a file hash rests on "+
+		"title similarity alone)", e.BookID)
+}
+
+// IsRefusal reports whether err is one of the service's typed refusals of the
+// caller's request — a file-less forced primary, a soft-deleted participant,
+// or a participant awaiting its deep scan. These are 409-class: the request
+// was understood and declined for a reason the caller can act on. A missing
+// book (BookNotFoundError) is deliberately NOT a refusal — it is 404 and, for
+// the dedup handler, the signal that a candidate is stale.
+func IsRefusal(err error) bool {
+	var fileless *FilelessPrimaryError
+	var softDeleted *SoftDeletedInputError
+	var provisional *ProvisionalScanError
+	return errors.As(err, &fileless) || errors.As(err, &softDeleted) || errors.As(err, &provisional)
 }
 
 // HasAudioRoute reports whether a book row can reach audio at all: it has at
@@ -408,9 +436,7 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 			return nil, fmt.Errorf("cannot verify scan state for book %s, refusing to merge: %w", b.ID, err)
 		}
 		if database.AnyProvisional(files) {
-			return nil, fmt.Errorf("book %s is awaiting a full scan and cannot be merged yet; "+
-				"run its deep scan first (a merge decided without a file hash rests on "+
-				"title similarity alone)", b.ID)
+			return nil, &ProvisionalScanError{BookID: b.ID}
 		}
 		filesByID[b.ID] = files
 	}
@@ -586,8 +612,16 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	//  (d) soft-delete the loser so it drops off the default
 	//      library view. Files on disk are left alone for the
 	//      archive sweep to handle later.
+	//
+	// Ordering is the repair path: a loser is soft-deleted (d) ONLY after
+	// (a)-(c) succeeded for it. If (a) or (b) fails the loser is left LIVE
+	// (still a non-primary member of the group, visible as an extra version)
+	// and reported, so a retried merge re-enters this loop for it. Soft-
+	// deleting first and warning about a failed reassign would return
+	// success with ext_id:* rows still pointing at a deleted book, and the
+	// soft-deleted-loser skip below would then make that permanent.
 	eidStore := AsExternalIDReassigner(ms.db)
-	var softDeleteErrs []error
+	var loserErrs []error
 	for _, book := range books {
 		if book.ID == resolvedPrimaryID {
 			continue
@@ -606,20 +640,31 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 			continue
 		}
 
-		// (a) Collect PIDs before reassignment.
+		// (a) Collect PIDs before reassignment. A read failure here is not
+		// skippable: once (b) moves the mappings to the winner the loser's
+		// PIDs are unrecoverable, so the ITL removals would be lost for good.
 		var dupPIDs []string
-		if mappings, err := ms.db.GetExternalIDsForBook(book.ID); err == nil {
-			for _, m := range mappings {
-				if m.Source == "itunes" && m.ExternalID != "" && !m.Tombstoned {
-					dupPIDs = append(dupPIDs, m.ExternalID)
-				}
+		mappings, err := ms.db.GetExternalIDsForBook(book.ID)
+		if err != nil {
+			slog.Error("merge: cannot read loser's external IDs; loser left live for retry",
+				"id", book.ID, "primary", resolvedPrimaryID, "err", err)
+			loserErrs = append(loserErrs, fmt.Errorf("read external IDs of loser %s: %w", book.ID, err))
+			continue
+		}
+		for _, m := range mappings {
+			if m.Source == "itunes" && m.ExternalID != "" && !m.Tombstoned {
+				dupPIDs = append(dupPIDs, m.ExternalID)
 			}
 		}
 
-		// (b) Reassign external IDs to the winner.
+		// (b) Reassign external IDs to the winner. On failure the loser stays
+		// live so the retry re-runs this step; see the ordering note above.
 		if eidStore != nil {
 			if err := eidStore.ReassignExternalIDs(book.ID, resolvedPrimaryID); err != nil {
-				slog.Warn("merge ReassignExternalIDs", "from", book.ID, "to", resolvedPrimaryID, "err", err)
+				slog.Error("merge: ReassignExternalIDs failed; loser left live for retry",
+					"from", book.ID, "to", resolvedPrimaryID, "err", err)
+				loserErrs = append(loserErrs, fmt.Errorf("reassign external IDs of loser %s: %w", book.ID, err))
+				continue
 			}
 		}
 
@@ -643,12 +688,12 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		if err := SoftDeleteBook(ms.db, book.ID); err != nil {
 			slog.Error("merge soft-delete failed; loser left live as a non-primary version",
 				"id", book.ID, "primary", resolvedPrimaryID, "err", err)
-			softDeleteErrs = append(softDeleteErrs, fmt.Errorf("soft-delete loser %s: %w", book.ID, err))
+			loserErrs = append(loserErrs, fmt.Errorf("soft-delete loser %s: %w", book.ID, err))
 		}
 	}
-	if len(softDeleteErrs) > 0 {
-		return nil, fmt.Errorf("merge into %s applied but %d loser(s) could not be soft-deleted and remain live: %w",
-			resolvedPrimaryID, len(softDeleteErrs), errors.Join(softDeleteErrs...))
+	if len(loserErrs) > 0 {
+		return nil, fmt.Errorf("merge into %s applied but %d loser(s) could not be cleaned up and remain live: %w",
+			resolvedPrimaryID, len(loserErrs), errors.Join(loserErrs...))
 	}
 
 	// --- Sync-identity + progress follow ---

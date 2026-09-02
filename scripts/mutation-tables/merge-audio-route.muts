@@ -39,3 +39,15 @@ M07 replay-skips-sync-follow-for-deleted-loser | internal/merge/service.go | s/\
 # Review round (L5): a soft-deleted sibling's audio route must not be counted
 # as evidence against keeping the chosen primary.
 M08 deleted-sibling-counts-as-file-bearing | internal/merge/service.go | s/if !b\.IsSoftDeleted\(\) && HasAudioRoute\(b, filesByID\[b\.ID\]\)/if HasAudioRoute(b, filesByID[b.ID])/
+
+# Silent-failure round (F1): a failed ReassignExternalIDs must stop the loser's
+# cleanup BEFORE the soft-delete. Warn-and-continue returns success with ext_id
+# rows pointing at a deleted book.
+M09 reassign-failure-swallowed | internal/merge/service.go | s/\t\t\t\tloserErrs = append\(loserErrs, fmt\.Errorf\("reassign external IDs of loser %s: %w", book\.ID, err\)\)\n\t\t\t\tcontinue\n/\t\t\t\t_ = err\n/
+
+# Silent-failure round (F2): an unreadable PID set must likewise leave the loser
+# live — once (b) moves the mappings the PIDs are unrecoverable.
+M10 extid-read-failure-swallowed | internal/merge/service.go | s/\t\t\tloserErrs = append\(loserErrs, fmt\.Errorf\("read external IDs of loser %s: %w", book\.ID, err\)\)\n\t\t\tcontinue\n/\t\t\tmappings = nil\n/
+
+# Silent-failure round (F5): the provisional refusal must be the typed error.
+M11 provisional-refusal-untyped | internal/merge/service.go | s/return nil, &ProvisionalScanError\{BookID: b\.ID\}/return nil, fmt.Errorf("book %s is awaiting a full scan and cannot be merged yet", b.ID)/

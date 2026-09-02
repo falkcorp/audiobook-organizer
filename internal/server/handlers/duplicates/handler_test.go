@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
 // last-edited: 2026-09-02
 
@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -291,6 +292,19 @@ func TestMergeBookDuplicatesAsVersions_SoftDeletedInputIs409(t *testing.T) {
 	}
 }
 
+func TestMergeBookDuplicatesAsVersions_ProvisionalIs409(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().MergeBooks(mock.Anything, "").Return(nil, &merge.ProvisionalScanError{BookID: "b"})
+	w := doReq(t, h.MergeBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/merge",
+		map[string]any{"book_ids": []string{"a", "b"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "deep scan") {
+		t.Fatalf("409 must carry the actionable reason, got %s", w.Body.String())
+	}
+}
+
 // --- CombineBooks ---
 
 func TestCombineBooks_OK(t *testing.T) {
@@ -377,6 +391,18 @@ func TestMergeBooks_KeepNotFound(t *testing.T) {
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A store failure loading keep_id is not "the book is gone": the store returns
+// (nil, nil) for a missing row and an error only for I/O or corruption.
+func TestMergeBooks_KeepLoadFailureIs500(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookByID("keep").Return(nil, errors.New("sstable block not found"))
+	w := doReq(t, h.MergeBooks, http.MethodPost, "/audiobooks/merge",
+		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

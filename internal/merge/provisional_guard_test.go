@@ -1,11 +1,12 @@
 // file: internal/merge/provisional_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 51f8f6c7-7a87-45e9-b9fa-cecc30246566
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package merge
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -79,6 +80,9 @@ func TestMergeBooks_RefusesAProvisionalBook(t *testing.T) {
 			_, err := svc.MergeBooks([]string{"book-1", "book-2"}, "book-1")
 
 			require.Error(t, err, "a merge involving a provisional book must be refused")
+			var provisional *ProvisionalScanError
+			require.True(t, errors.As(err, &provisional), "refusal must be the typed ProvisionalScanError so handlers can 409 it: %v", err)
+			assert.Equal(t, tc.wantMentioned, provisional.BookID)
 			assert.Contains(t, err.Error(), "awaiting a full scan")
 			assert.Contains(t, err.Error(), tc.wantMentioned,
 				"the error must name WHICH book is unscanned, or the operator cannot act on it")
