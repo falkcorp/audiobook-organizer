@@ -35,8 +35,8 @@ func capEligibleBooks(n int) []database.Book {
 		books = append(books, database.Book{
 			ID:                "b" + strconv.Itoa(i),
 			Title:             "Book " + strconv.Itoa(i),
-			TranscribedTitle:  strPtr("Book " + strconv.Itoa(i)),
-			TranscribedAuthor: strPtr("Some Author"),
+			TranscribedTitle:  new("Book " + strconv.Itoa(i)),
+			TranscribedAuthor: new("Some Author"),
 		})
 	}
 	return books
