@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_orphanvg_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a1c9e2d-4f6b-4a3e-9d0c-5b8e2f1a6c3d
-// last-edited: 2026-08-14
+// last-edited: 2026-09-02
 
 package reconcile
 
@@ -28,7 +28,7 @@ func TestAssignOrphanVGs_PoolCorrectness(t *testing.T) {
 
 	store := newFakeStore()
 	var orphanIDs []string
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("orphan-%02d", i)
 		orphanIDs = append(orphanIDs, id)
 		path := fmt.Sprintf("%s/%s.m4b", libRoot, id)
@@ -196,7 +196,7 @@ func TestAssignOrphanVGs_RealStoreConcurrent(t *testing.T) {
 	const n = 40
 
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		path := fmt.Sprintf("%s/book-%02d.m4b", libRoot, i)
 		book, err := ps.CreateBook(&database.Book{Title: fmt.Sprintf("book %d", i), FilePath: path})
 		if err != nil {
@@ -264,10 +264,7 @@ func (p *pagingHazardStore) GetAllBooksCore(limit, offset int) ([]database.BookC
 	if offset >= len(snap) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(snap) {
-		end = len(snap)
-	}
+	end := min(offset+limit, len(snap))
 	return snap[offset:end], nil
 }
 
@@ -286,7 +283,7 @@ func TestAssignOrphanVGs_SnapshotSwapCannotSkipBooks(t *testing.T) {
 	const n = 5001
 	inner := newFakeStore()
 	var snapA []database.BookCore
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("swap-%04d", i)
 		path := fmt.Sprintf("%s/%s.m4b", libRoot, id)
 		snapA = append(snapA, database.BookCore{ID: id, Title: id, FilePath: path})
