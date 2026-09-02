@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 
 package batch
 
@@ -19,6 +19,17 @@ type batchBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	DeleteBook(id string) error
+	// UserOverrideRecorder: a batch update is a HUMAN editing many books at
+	// once. It must record a lock row per edited field, exactly as the
+	// single-book edit handler does, or the next fetch or scan overwrites
+	// every one of them (database.RecordUserOverrides).
+	database.UserOverrideRecorder
+	// The lock vocabulary's author_name/series_name lock a NAME, while this
+	// package's payload carries an ID, so the id has to be resolved before a
+	// lock row can be written. Storing the id under a name key would store a
+	// value no reader can compare against.
+	GetAuthorByID(id int) (*database.Author, error)
+	GetSeriesByID(id int) (*database.Series, error)
 }
 
 // BatchService handles bulk operations on audiobooks.
@@ -91,9 +102,13 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		applyUpdates(book, req.Updates)
 		if _, err := bs.db.UpdateBook(id, book); err != nil {
 			resp.addError(id, err.Error())
-		} else {
-			resp.addSuccess(id)
+			continue
 		}
+		if err := bs.recordUserLocks(id, req.Updates); err != nil {
+			resp.addError(id, err.Error())
+			continue
+		}
+		resp.addSuccess(id)
 	}
 	return resp
 }
@@ -128,9 +143,13 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			applyUpdates(book, op.Updates)
 			if _, err := bs.db.UpdateBook(op.ID, book); err != nil {
 				resp.addError(op.ID, err.Error())
-			} else {
-				resp.addSuccess(op.ID)
+				continue
 			}
+			if err := bs.recordUserLocks(op.ID, op.Updates); err != nil {
+				resp.addError(op.ID, err.Error())
+				continue
+			}
+			resp.addSuccess(op.ID)
 
 		case "delete":
 			book, err := bs.db.GetBookByID(op.ID)
@@ -182,6 +201,73 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 // ---------------------------------------------------------------------------
 // applyUpdates — maps JSON fields to Book struct fields
 // ---------------------------------------------------------------------------
+
+// batchKeyToLockField maps this package's update-payload keys onto the shared
+// lock vocabulary. It is spelled out rather than derived because the two
+// vocabularies genuinely differ (series_sequence here, series_position there)
+// and because most payload keys are NOT lockable -- file_path, library_state,
+// version_group_id and the rest are plumbing, not user metadata, and a lock row
+// under one of those keys would be read by no guard.
+//
+// author_id/series_id are absent from this table because they need a lookup,
+// not a copy: applyUpdates writes an ID and the vocabulary locks a NAME.
+// recordUserLocks below resolves them separately.
+var batchKeyToLockField = map[string]string{
+	"title":                  database.FieldKeyTitle,
+	"narrator":               database.FieldKeyNarrator,
+	"publisher":              database.FieldKeyPublisher,
+	"language":               database.FieldKeyLanguage,
+	"description":            database.FieldKeyDescription,
+	"audiobook_release_year": database.FieldKeyAudiobookReleaseYear,
+	"series_sequence":        database.FieldKeySeriesPosition,
+}
+
+// recordUserLocks writes a lock row for each lockable field this batch update
+// actually set, reading the value back off the payload so the stored override
+// is what the user asked for.
+func (bs *BatchService) recordUserLocks(bookID string, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	userSet := map[string]any{}
+	for payloadKey, lockField := range batchKeyToLockField {
+		raw, ok := updates[payloadKey]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			userSet[lockField] = v
+		case float64:
+			// JSON numbers arrive as float64; the two numeric fields are ints.
+			userSet[lockField] = int(v)
+		case int:
+			userSet[lockField] = v
+		}
+	}
+	// author_id / series_id: resolve to the name the vocabulary locks. A
+	// lookup failure is reported rather than skipped -- silently dropping the
+	// lock is the exact defect this function exists to close.
+	if v, ok := updates["author_id"].(float64); ok {
+		author, err := bs.db.GetAuthorByID(int(v))
+		if err != nil {
+			return fmt.Errorf("resolve author %d for lock row: %w", int(v), err)
+		}
+		if author != nil {
+			userSet[database.FieldKeyAuthorName] = author.Name
+		}
+	}
+	if v, ok := updates["series_id"].(float64); ok {
+		series, err := bs.db.GetSeriesByID(int(v))
+		if err != nil {
+			return fmt.Errorf("resolve series %d for lock row: %w", int(v), err)
+		}
+		if series != nil {
+			userSet[database.FieldKeySeriesName] = series.Name
+		}
+	}
+	return database.RecordUserOverrides(bs.db, bookID, userSet)
+}
 
 func applyUpdates(book *database.Book, updates map[string]any) {
 	if updates == nil {

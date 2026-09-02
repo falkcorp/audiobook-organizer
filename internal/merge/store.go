@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package merge
 
@@ -96,6 +96,10 @@ type syncCapabilityStore = any
 // so a caller that constructs a Service can name it instead of database.Store.
 type Store interface {
 	BookWriter
+	// UserOverrideRecorder: Combine's metadata override is a HUMAN's choice
+	// of title/author/narrator for the survivor, so it must record a lock
+	// row or the next fetch overwrites it (database.RecordUserOverrides).
+	database.UserOverrideRecorder
 	mergeBookFileStore
 	mergeAuthorStore
 	UserProgressMerger
