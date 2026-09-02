@@ -1,5 +1,5 @@
 # file: .github/workflows/e2e.yml
-# version: 1.5.0
+# version: 1.5.1
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
 # last-edited: 2026-09-01
 
@@ -181,7 +181,6 @@ jobs:
       # config timeout was raised too, but warming the caches here is what
       # keeps the wait short rather than merely survivable.
       - name: Pre-build frontend and Go binary
-        env:
         run: |
           cd web && npm run build
           cd .. && go build -tags embed_frontend -o audiobook-organizer .

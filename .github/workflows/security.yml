@@ -1,5 +1,5 @@
 # file: .github/workflows/security.yml
-# version: 2.5.0
+# version: 2.5.1
 # guid: 7f2a3c1d-4e5f-6g7h-8i9j-0k1l2m3n4o5p
 # last-edited: 2026-09-01
 #
@@ -42,7 +42,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
-    env:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

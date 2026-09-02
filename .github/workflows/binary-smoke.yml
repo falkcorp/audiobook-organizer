@@ -1,5 +1,5 @@
 # file: .github/workflows/binary-smoke.yml
-# version: 1.5.0
+# version: 1.5.1
 # guid: 8dad4b58-c626-48e4-9adc-2696ddd2e864
 # last-edited: 2026-09-01
 
@@ -45,7 +45,6 @@ jobs:
 
       - name: Build CLI Binary
         run: go build -o audiobook-organizer .
-        env:
 
       - name: Verify CLI Help Output
         run: |
@@ -58,7 +57,6 @@ jobs:
 
       - name: Build Embedded Binary (embed_frontend)
         run: go build -tags embed_frontend -o audiobook-organizer-embedded .
-        env:
 
       - name: Start Embedded Server And Probe Health + SPA
         run: |

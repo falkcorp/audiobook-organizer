@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.11.0
+# version: 3.11.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-09-01
 
@@ -101,7 +101,6 @@ jobs:
     name: Interface Width Ratchet
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -182,7 +181,6 @@ jobs:
     name: Repo Guards
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -257,7 +255,6 @@ jobs:
     name: Mock Freshness
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -386,7 +383,6 @@ jobs:
     # This is a diagnosis fix, not a performance fix: internal/server alone is a
     # ~500s package (TODO-SRVTIMEOUT) and sharding it is still open.
     timeout-minutes: 35
-    env:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
