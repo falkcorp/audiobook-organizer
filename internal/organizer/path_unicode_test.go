@@ -1,7 +1,7 @@
 // file: internal/organizer/path_unicode_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c1e9a73-2d84-4f16-b0a7-9e3c25d8f401
-// last-edited: 2026-08-16
+// last-edited: 2026-09-02
 
 // Path construction against non-ASCII metadata.
 //
@@ -119,7 +119,7 @@ func TestBuildRelPath_AsianTitlesStayOneComponent(t *testing.T) {
 				t.Errorf("BuildRelPath(title=%q) = %q; has %d separators, want 2", title, got, n)
 			}
 
-			for _, comp := range strings.Split(got, "/") {
+			for comp := range strings.SplitSeq(got, "/") {
 				if comp == "" {
 					t.Errorf("BuildRelPath(title=%q) = %q; has an empty component", title, got)
 				}

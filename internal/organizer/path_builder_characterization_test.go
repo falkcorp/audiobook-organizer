@@ -1,7 +1,7 @@
 // file: internal/organizer/path_builder_characterization_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d8e2a41-9b73-4c06-8f15-6e39a2c7b048
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 // Characterization tests for the TWO target-path builders, written while both
 // still exist, so that unifying them is a measurement rather than a promise.
@@ -123,11 +123,11 @@ func TestChar_S1_QualityVocabulary(t *testing.T) {
 		Title:     "Q",
 		FilePath:  "/src/q.m4b",
 		Author:    &database.Author{Name: "A"},
-		Publisher: strPtr("Pub"),
-		Language:  strPtr("eng"),
-		Edition:   strPtr("Unabridged"),
-		Codec:     strPtr("aac"),
-		Quality:   strPtr("high"),
+		Publisher: new("Pub"),
+		Language:  new("eng"),
+		Edition:   new("Unabridged"),
+		Codec:     new("aac"),
+		Quality:   new("high"),
 		Bitrate:   &br,
 	}
 
@@ -606,5 +606,3 @@ func TestChar_SingleFileBookDropsTheTrackSegment(t *testing.T) {
 		t.Errorf("single-file target = %q, want %q", entries[0].TargetPath, want)
 	}
 }
-
-func strPtr(s string) *string { return &s }

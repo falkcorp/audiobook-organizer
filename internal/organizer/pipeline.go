@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -186,10 +186,7 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 // two files landed on the same target.
 func planPass(rootDir, folderPattern, filePattern string, sorted []database.BookFile, totalTracks int, vars PathVars, opts BuildOpts, forceTrackSuffix bool) ([]FileRenameEntry, bool, error) {
 	// Pad to the width of the largest track number so 9/10 sort as 09/10.
-	width := len(fmt.Sprintf("%d", totalTracks))
-	if width < 2 {
-		width = 2
-	}
+	width := max(len(fmt.Sprintf("%d", totalTracks)), 2)
 
 	var entries []FileRenameEntry
 	seen := make(map[string]struct{}, len(sorted))
