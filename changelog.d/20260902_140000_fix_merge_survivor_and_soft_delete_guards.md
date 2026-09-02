@@ -37,5 +37,5 @@ diagnostics) funnels through:
   interface drops `DeleteBook` so the fallback cannot come back by accident.
 
 Tests: real-PebbleStore repros for every guard, engine-level stale-owner
-tests, and 14/14 mutants killed (each guard removed or inverted in turn;
+tests, and 13/13 named mutants killed (each guard removed or inverted in turn;
 every mutant is caught by a named test).

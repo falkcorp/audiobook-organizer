@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-02-a-merge-can-no-longer-keep-the-wrong-book-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b4d8e2f6-9a1c-4e37-8f5b-0c2d4e6a8b1f -->
 <!-- last-edited: 2026-09-02 -->
 
 # A merge can no longer keep the wrong book
 
-**Pull request:** PENDING
+**Pull request:** https://github.com/falkcorp/audiobook-organizer/pull/3047
 
 ## Executive Summary
 
