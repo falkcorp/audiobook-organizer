@@ -1,7 +1,7 @@
 // file: internal/tools/ollama_daemon.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f2a3b4c5-d6e7-8901-fabc-901234567890
-// last-edited: 2026-06-15
+// last-edited: 2026-09-02
 
 package tools
 
@@ -118,7 +118,7 @@ func (d *OllamaDaemon) StopWhenIdle(ctx context.Context) error {
 		if d.cmd != nil {
 			d.cmd.Wait()
 		} else {
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				time.Sleep(100 * time.Millisecond)
 				if !processAlive(pid) {
 					return
