@@ -39,6 +39,18 @@ M04 positions-collected-from-primary-versions-only | internal/server/duplicates_
 # --- the write is skipped for flagged rows or never persisted ----------------
 M05 update-never-persisted | internal/server/duplicates_helpers.go | s/if _, err := store\.UpdateBook\(bookID, book\); err != nil \{/if _, err := error(nil), error(nil); err != nil {/
 
-# An un-vouched shape must be reported, never applied. Promoting "flag" to a
-# rename writes garbage like "-EIGHTY-SIX" over the user's series name.
-M06 flagged-actions-applied-as-renames | internal/server/duplicates_helpers.go | s/if a\.Action == "flag" \x7c\x7c a\.NewPosition == "" \{\n\t\t\tcontinue\n\t\t\}/if a.NewPosition == "" { continue }/
+# M06 IS A KNOWN EQUIVALENT MUTANT and is expected to SURVIVE. It is listed
+# rather than omitted so nobody "discovers" the gap later and writes a test that
+# cannot possibly pass.
+#
+# It drops the `a.Action == "flag"` clause, leaving `a.NewPosition == ""`. That
+# changes no behaviour, because computeSeriesNormalizeActions builds a flag
+# action with CandidatePosition set and NewPosition left EMPTY (see the
+# `if c.Flag` branch) -- so the surviving clause already excludes every flagged
+# action. A third guard, `strconv.Atoi(a.NewPosition)` failing, excludes them
+# again. Three redundant guards, so no fixture can distinguish the mutant.
+#
+# The clause stays in the source deliberately: it is defence in depth. If a
+# later change ever gives a flag action a NewPosition, this is the guard that
+# still refuses to write garbage like "-EIGHTY-SIX" over a user's series name.
+M06 flagged-actions-applied-as-renames-EQUIVALENT-EXPECTED-TO-SURVIVE | internal/server/duplicates_helpers.go | s/if a\.Action == "flag" \x7c\x7c a\.NewPosition == "" \{\n\t\t\tcontinue\n\t\t\}/if a.NewPosition == "" { continue }/
