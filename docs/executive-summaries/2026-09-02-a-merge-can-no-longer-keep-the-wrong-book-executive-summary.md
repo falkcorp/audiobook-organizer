@@ -67,6 +67,7 @@ described at the end.
   above, the web interface reported it as a generic server error instead of showing the
   reason — the reason now comes through.
 - Checked the same way: each new rule was deliberately broken and the tests caught it,
-  five of five. Whether any real merge already ran with the backwards guard between the
-  change above (2026-09-02, early) and this correction (same day) has **not** been
-  checked; the window is a few hours and the nightly maintenance did not run in it.
+  five of five. The backwards guard was live on the production server from 10:44 to the
+  deploy of this correction. The server's activity log for that window was read: no merge
+  ran, the automatic duplicate resolver is switched off, and the 6-hourly duplicate
+  refresh had not yet fired. No library entry was demoted by it.
