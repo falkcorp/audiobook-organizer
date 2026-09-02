@@ -1,0 +1,44 @@
+# Mutation table for the series-normalize apply path (internal/server).
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/server/ \
+#     --table scripts/mutation-tables/series-denumber-writetime-server.muts \
+#     --run 'TestExecuteSeriesNormalize|TestComputeSeriesNormalizeActions'
+#
+# WHAT THIS TABLE IS FOR. This is the path that was ACTUALLY losing data: it
+# renamed "Discworld 05" to "Discworld" and threw the 5 away. Every mutation
+# below restores a variant of that loss. None of them produce an error, a
+# non-200, or a red log line -- the pass reports success either way, which is
+# precisely why a fixture assertion is the only instrument that can see them.
+#
+# NOTE ON SHAPE: the obvious mutation -- delete the writeStrippedSeriesPositions
+# call -- is NOT here, because it leaves `pErr` unused and Go fails the BUILD.
+# A build failure is not a kill, and the harness reports it separately. So these
+# mutate the assignments INSIDE the pass instead, which is also closer to how
+# this defect actually arises: the call is present and looks right, and one
+# assignment inside it is wrong.
+
+# --- the position is dropped instead of written ------------------------------
+M01 position-discarded-instead-of-written-to-series-sequence | internal/server/duplicates_helpers.go | s/\t\t\tp := pos\n\t\t\tbook\.SeriesSequence = &p/\t\t\t_ = pos/
+
+M02 position-never-collected-from-the-action | internal/server/duplicates_helpers.go | s/\t\t\tif _, dup := positionByBook\[b\.ID\]; !dup \{\n\t\t\t\tpositionByBook\[b\.ID\] = pos\n\t\t\t\}/\t\t\t_ = b/
+
+# --- the existing sequence is clobbered --------------------------------------
+# "It is a MOVE, not a delete" cuts both ways: a book that already states its
+# own position must keep it. Overwriting is silent and unrecoverable.
+M03 existing-sequence-overwritten | internal/server/duplicates_helpers.go | s/if book\.SeriesSequence != nil && \*book\.SeriesSequence > 0 \{\n\t\t\t\treturn nil \/\/ Already has one; never overwrite it\.\n\t\t\t\}/if false { return nil }/
+
+# --- only the primary version gets the number --------------------------------
+# The listing this loop reads from is the whole point: a rename de-numbers the
+# series row that EVERY version points at, so a primary-filtered listing leaves
+# non-primary versions with the number deleted and recorded nowhere.
+M04 positions-collected-from-primary-versions-only | internal/server/duplicates_helpers.go | s/books, bErr := store\.GetBooksBySeriesIDAllVersions\(a\.SeriesID\)/books, bErr := store.GetBooksBySeriesIDCore(a.SeriesID)/
+
+# --- the write is skipped for flagged rows or never persisted ----------------
+M05 update-never-persisted | internal/server/duplicates_helpers.go | s/if _, err := store\.UpdateBook\(bookID, book\); err != nil \{/if _, err := error(nil), error(nil); err != nil {/
+
+# An un-vouched shape must be reported, never applied. Promoting "flag" to a
+# rename writes garbage like "-EIGHTY-SIX" over the user's series name.
+M06 flagged-actions-applied-as-renames | internal/server/duplicates_helpers.go | s/if a\.Action == "flag" \x7c\x7c a\.NewPosition == "" \{\n\t\t\tcontinue\n\t\t\}/if a.NewPosition == "" { continue }/

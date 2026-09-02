@@ -1,0 +1,11 @@
+# Mutation table for the iTunes importer's series write-back.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/itunes/service/ \
+#     --table scripts/mutation-tables/series-denumber-writetime-itunes.muts
+
+M01 position-discarded-instead-of-written-to-series-sequence | internal/itunes/service/importer.go | s/if seriesPos > 0 && book\.SeriesSequence == nil \{/if false {/
+
+M02 existing-sequence-overwritten | internal/itunes/service/importer.go | s/if seriesPos > 0 && book\.SeriesSequence == nil \{/if seriesPos > 0 {/

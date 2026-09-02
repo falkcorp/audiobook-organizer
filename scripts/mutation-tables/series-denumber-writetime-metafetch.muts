@@ -1,0 +1,18 @@
+# Mutation table for the metafetch apply path's series write-back.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/metafetch/ \
+#     --table scripts/mutation-tables/series-denumber-writetime-metafetch.muts
+
+# The number lifted out of the series name must land in SeriesPosition.
+M01 position-discarded-instead-of-written-to-series-position | internal/metafetch/service_normalize.go | s/if c\.Position != "" && meta\.SeriesPosition == "" \{/if false {/
+
+# ...and must not overwrite a position the payload already carried.
+M02 existing-position-overwritten-by-the-strip | internal/metafetch/service_normalize.go | s/if c\.Position != "" && meta\.SeriesPosition == "" \{/if c.Position != "" {/
+
+# The title-parsed position used to overwrite SeriesPosition unconditionally,
+# including the one the strip above had just recovered. A write-back that a
+# later line clobbers is not a write-back at all.
+M03 title-parse-clobbers-the-recovered-position | internal/metafetch/service_normalize.go | s/if parsedPosition != "" && meta\.SeriesPosition == "" \{/if parsedPosition != "" {/

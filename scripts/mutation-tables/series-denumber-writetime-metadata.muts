@@ -1,0 +1,44 @@
+# Mutation table for the shared series-position matcher (internal/metadata).
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/metadata/ \
+#     --table scripts/mutation-tables/series-denumber-writetime-metadata.muts
+#
+# WHAT THIS TABLE IS FOR. This package decides WHICH series names get rewritten
+# and which are only flagged. Both directions are damaging and neither raises an
+# error: under-matching leaves the contamination the owner asked to stop, and
+# over-matching silently rewrites a legitimate name and folds unrelated books
+# into one bogus series. So the mutations aim at the boundary between "strip"
+# and "leave alone", not at whether the function returns anything.
+#
+# M01 is the headline case. The `#` alternative sits OUTSIDE the \b-prefixed
+# keyword group on purpose: \b asserts a word boundary and `#` is a non-word
+# character, so with a space in front ("Sovereign #5") the assertion sits
+# between two non-word characters and fails. This mutation restores the
+# original, broken grouping -- the exact bug that made the owner's own example
+# never match. If it survives, the test suite cannot see the bug this whole
+# change was requested for.
+
+# --- the keyword suffix rule stops matching ---------------------------------
+M01 hash-moved-back-inside-the-word-boundary-group | internal/metadata/series_position.go | s/\(\?:\[\\s:,\\-_\]\*\\b\(\?:book\x7cbk\x7cvol\x7cvolume\x7cpart\x7cpt\x7cno\x7cnum\)\x7c\[\\s:,\\-_\]\*#\)/(?:[\\s:,\\-_]*\\b(?:book\x7cbk\x7cvol\x7cvolume\x7cpart\x7cpt\x7cno\x7cnum\x7c#))/
+M02 keyword-suffix-regex-never-matches | internal/metadata/series_position.go | s/`\(\?i\)\(\?:\[\\s:,\\-_\]\*\\b/`(?i)\\z(?:[\\s:,\\-_]*\\b/
+
+# --- the strip/flag boundary moves ------------------------------------------
+# Un-vouched embedded and leading shapes must be FLAGGED, never stripped:
+# stripping "86-EIGHTY-SIX" produces "-EIGHTY-SIX", i.e. garbage written over
+# the user's data with no error anywhere.
+M03 unvouched-embedded-shape-stripped-anyway | internal/metadata/series_normalize.go | s/case ShapeTrailingKeyword, ShapeTrailingBare, ShapeBracketed, ShapeEmbeddedKeyword:/case ShapeTrailingKeyword, ShapeTrailingBare, ShapeBracketed, ShapeEmbeddedKeyword, ShapeMidColon, ShapeLeadingBare:/
+
+# The junk-base guard is what keeps "Chapter 12" and "Disc 3" -- both perfectly
+# good trailing-bare matches -- from being rewritten into a series called
+# "Chapter". SplitSeriesPosition's own guard covers only the embedded shapes.
+M04 junk-base-guard-dropped-on-the-write-path | internal/metadata/series_normalize.go | s/if IsJunkSeriesBase\(sp\.Base\) \{\n\t\t\t\treturn SeriesCleanup\{Name: name\}\n\t\t\t\}/if false { return SeriesCleanup{Name: name} }/
+
+# The position is the payload. Computing it and then not reporting it is
+# indistinguishable from "there was no number" to every caller.
+M05 position-computed-but-not-reported | internal/metadata/series_normalize.go | s/Name:     sp\.Base,\n\t\t\t\tPosition: strconv\.Itoa\(sp\.Position\),/Name:     sp.Base,\n\t\t\t\tPosition: "",/
+
+# A flag with no candidate is a review surface with nothing to review.
+M06 flag-raised-without-the-candidate-split | internal/metadata/series_normalize.go | s/CandidateName:     sp\.Base,\n\t\t\t\tCandidatePosition: strconv\.Itoa\(sp\.Position\),/CandidateName:     "",\n\t\t\t\tCandidatePosition: "",/
