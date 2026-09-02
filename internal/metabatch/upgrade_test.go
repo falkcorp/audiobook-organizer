@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-06-29
+// last-edited: 2026-09-02
 
 package metabatch
 
@@ -12,17 +12,14 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
-// ptr returns a pointer to the given string — test helper.
-func ptr(s string) *string { return &s }
-
 // ---------------------------------------------------------------------------
 // transcriptionConfirmsCandidate
 // ---------------------------------------------------------------------------
 
 func TestTranscriptionConfirmsCandidate_TitleAndAuthorMatch(t *testing.T) {
 	book := &database.Book{
-		TranscribedTitle:  ptr("Project Hail Mary"),
-		TranscribedAuthor: ptr("Andy Weir"),
+		TranscribedTitle:  new("Project Hail Mary"),
+		TranscribedAuthor: new("Andy Weir"),
 	}
 	c := &metafetch.MetadataCandidate{
 		Title:  "Project Hail Mary",
@@ -37,7 +34,7 @@ func TestTranscriptionConfirmsCandidate_TitleAndAuthorMatch(t *testing.T) {
 func TestTranscriptionConfirmsCandidate_TitleMatchNoAuthor(t *testing.T) {
 	// No transcribed author — title match alone should confirm.
 	book := &database.Book{
-		TranscribedTitle: ptr("Dune"),
+		TranscribedTitle: new("Dune"),
 	}
 	c := &metafetch.MetadataCandidate{
 		Title:  "Dune",
@@ -52,8 +49,8 @@ func TestTranscriptionConfirmsCandidate_TitleMatchNoAuthor(t *testing.T) {
 func TestTranscriptionConfirmsCandidate_TitleMatchShortAuthor(t *testing.T) {
 	// Transcribed author is ≤3 chars — too short to be useful, ignore it.
 	book := &database.Book{
-		TranscribedTitle:  ptr("Dune"),
-		TranscribedAuthor: ptr("F"),
+		TranscribedTitle:  new("Dune"),
+		TranscribedAuthor: new("F"),
 	}
 	c := &metafetch.MetadataCandidate{
 		Title:  "Dune",
@@ -67,8 +64,8 @@ func TestTranscriptionConfirmsCandidate_TitleMatchShortAuthor(t *testing.T) {
 
 func TestTranscriptionConfirmsCandidate_TitleMismatch(t *testing.T) {
 	book := &database.Book{
-		TranscribedTitle:  ptr("The Martian"),
-		TranscribedAuthor: ptr("Andy Weir"),
+		TranscribedTitle:  new("The Martian"),
+		TranscribedAuthor: new("Andy Weir"),
 	}
 	c := &metafetch.MetadataCandidate{
 		Title:  "Project Hail Mary",
@@ -82,8 +79,8 @@ func TestTranscriptionConfirmsCandidate_TitleMismatch(t *testing.T) {
 
 func TestTranscriptionConfirmsCandidate_AuthorMismatch(t *testing.T) {
 	book := &database.Book{
-		TranscribedTitle:  ptr("Project Hail Mary"),
-		TranscribedAuthor: ptr("Brandon Sanderson"),
+		TranscribedTitle:  new("Project Hail Mary"),
+		TranscribedAuthor: new("Brandon Sanderson"),
 	}
 	c := &metafetch.MetadataCandidate{
 		Title:  "Project Hail Mary",
@@ -112,8 +109,8 @@ func TestTranscriptionConfirmsCandidate_AuthorSubstringMatch(t *testing.T) {
 	// Transcribed author is a substring of the candidate's author field
 	// (e.g., last-name-only transcript vs "First Last" in metadata).
 	book := &database.Book{
-		TranscribedTitle:  ptr("The Way of Kings"),
-		TranscribedAuthor: ptr("Sanderson"),
+		TranscribedTitle:  new("The Way of Kings"),
+		TranscribedAuthor: new("Sanderson"),
 	}
 	c := &metafetch.MetadataCandidate{
 		Title:  "The Way of Kings",
