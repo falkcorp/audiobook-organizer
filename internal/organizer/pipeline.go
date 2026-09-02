@@ -1,5 +1,5 @@
 // file: internal/organizer/pipeline.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-02
 
@@ -441,7 +441,7 @@ func legacyRenameTemp(target string) (string, bool, error) {
 // row's name.
 func strandedTempMismatch(temp string, entry FileRenameEntry) string {
 	if entry.ExpectedSize <= 0 {
-		return fmt.Sprintf("stranded temp %s for %s (source %s is gone) cannot be verified: the row records no file size; refusing to resume it",
+		return fmt.Sprintf("stranded temp %s for %s (source %s is gone) cannot be verified: no recorded file size for this file (book_file row, or the book row for a single-file book); refusing to resume it",
 			temp, entry.TargetPath, entry.SourcePath)
 	}
 	info, err := os.Stat(temp)

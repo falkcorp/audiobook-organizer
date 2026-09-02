@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.10.1
+// version: 5.10.2
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-02
 
@@ -511,6 +511,33 @@ func metadataCanonicalID(c MetadataCandidate) string {
 // audioFilesInDir returns the audio files found directly inside dir.
 // It globs for common audiobook extensions. Returns nil if dir is not a
 // directory or contains no matching files.
+// virtualBookFiles is the single-file (row-less) book's stand-in for its
+// book_file rows: one entry built from book.FilePath, or nil when FilePath is
+// empty or names a directory. It carries the book row's recorded size because
+// that is the only identity a stranded-temp resume can check against
+// (organizer.strandedTempMismatch refuses a size-less entry forever) — 12,525
+// prod books have no rows, so dropping the size here parked their renames for
+// good.
+func virtualBookFiles(id string, book *database.Book) []database.BookFile {
+	if book == nil || book.FilePath == "" {
+		return nil
+	}
+	ext := strings.TrimPrefix(filepath.Ext(book.FilePath), ".")
+	if ext == "" {
+		return nil
+	}
+	vf := database.BookFile{
+		ID:       "virtual-" + id,
+		BookID:   id,
+		FilePath: book.FilePath,
+		Format:   ext,
+	}
+	if book.FileSize != nil {
+		vf.FileSize = *book.FileSize
+	}
+	return []database.BookFile{vf}
+}
+
 // RunApplyPipelineRenameOnly runs only the rename portion of the apply pipeline.
 // Used by the "Save to Files" button to rename files without re-writing tags (tags are written separately).
 func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) error {
@@ -531,17 +558,8 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 	bookFiles = dedupeBookFilesByPath(id, bookFiles)
 
 	// For single-file books with no book files, create a virtual entry from book.FilePath
-	if len(bookFiles) == 0 && book.FilePath != "" {
-		ext := strings.TrimPrefix(filepath.Ext(book.FilePath), ".")
-		if ext != "" {
-			// This is a file, not a directory — create a virtual book file entry
-			bookFiles = []database.BookFile{{
-				ID:       "virtual-" + id,
-				BookID:   id,
-				FilePath: book.FilePath,
-				Format:   ext,
-			}}
-		}
+	if len(bookFiles) == 0 {
+		bookFiles = virtualBookFiles(id, book)
 	}
 	if len(bookFiles) == 0 {
 		return nil

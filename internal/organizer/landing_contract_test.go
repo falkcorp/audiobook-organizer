@@ -1,5 +1,5 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
 // last-edited: 2026-09-02
 
@@ -129,6 +129,37 @@ func TestCreateOrganizedVersion_SingleFileLandingForMultiRowBook_FailsClosedAndR
 	orig := mustGetBook(t, store, book.ID)
 	require.True(t, orig.LibraryState == nil || *orig.LibraryState != "organized_source",
 		"the original must not be demoted when the organized copy was never created")
+}
+
+// An in-place landing means the book's OWN files moved; the row to update is
+// the book. CreateOrganizedVersion refuses it outright — before touching the
+// store, and without a rollback, because Created would name files the book
+// still owns. The two live callers branch on InPlace first; this is the guard
+// for a future caller that does not (the batch-save and folder-autoscan ops
+// are slated to be routed through here).
+func TestCreateOrganizedVersion_InPlaceLandingIsRefused_NoRowNoRollback(t *testing.T) {
+	store := newLandingTestStore(t)
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{RootDir: rootDir}
+
+	dst := filepath.Join(rootDir, "Author", "Title.mp3")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o775))
+	require.NoError(t, os.WriteFile(dst, []byte("the book's own audio"), 0o644))
+	book, err := store.CreateBook(&database.Book{Title: "Title", FilePath: dst})
+	require.NoError(t, err)
+
+	_, err = svcCreateOrganized(t, store, book, &Landing{Path: dst, InPlace: true, Created: []string{dst}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "in place")
+
+	got, err := os.ReadFile(dst)
+	require.NoError(t, err, "a refused in-place landing must not unlink the file the book still owns")
+	require.Equal(t, "the book's own audio", string(got))
+
+	n, err := store.CountAllBooks()
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "no second row may be minted for an in-place landing")
+	require.Nil(t, mustGetBook(t, store, book.ID).VersionGroupID, "the original must not be pulled into a version group")
 }
 
 func mustGetBook(t *testing.T, store *database.PebbleStore, id string) *database.Book {
@@ -318,7 +349,7 @@ func TestRenameFiles_StrandedTemp_RefusedWhenUnverifiable(t *testing.T) {
 		reason   string
 	}{
 		{"size mismatch", 3, "is 8 bytes but the row records 3"},
-		{"row has no size", 0, "records no file size"},
+		{"row has no size", 0, "no recorded file size"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

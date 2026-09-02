@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-02
 
@@ -1471,6 +1471,14 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
 	if landing == nil || landing.Path == "" {
 		return nil, fmt.Errorf("organize: no landing for %s (%s) — refusing to create an organized version from nothing", book.Title, book.ID)
+	}
+	// An in-place landing moved this book's own files; the row to update is
+	// the book itself. Minting a second book row here would leave two rows on
+	// one set of files — the #3046 M2 hole — and a failure past this point
+	// would "roll back" by unlinking files the book still owns. Callers branch
+	// on InPlace before calling; this refusal is for the caller that forgets.
+	if landing.InPlace {
+		return nil, fmt.Errorf("organize: landing for %s (%s) is in place at %s — the existing row must be updated, not versioned", book.Title, book.ID, landing.Path)
 	}
 	newPath := landing.Path
 	isDir := landing.IsDir()

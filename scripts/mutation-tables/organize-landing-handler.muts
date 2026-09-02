@@ -1,0 +1,13 @@
+# Mutation table for the organize HTTP handler's use of the Landing contract
+# (PR #3051). Lives apart from organize-landing.muts because mutation-matrix.sh
+# runs ONE package per table and this file's tests are in handlers, not organizer.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/server/handlers/ \
+#     --table scripts/mutation-tables/organize-landing-handler.muts
+
+# The in-place / new-version decision arrives on Landing.InPlace; inverting it
+# mints a second book row for a file that moved in place (the #3046 M2 hole).
+M17 handler-inverts-inplace | internal/server/handlers/organize.go | s/if landing\.InPlace \{/if !landing.InPlace {/
