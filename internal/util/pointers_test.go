@@ -1,5 +1,6 @@
 // file: internal/util/pointers_test.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-09-02
 
 package util
 
@@ -10,19 +11,19 @@ import (
 )
 
 func TestStringPtr(t *testing.T) {
-	p := StringPtr("hello")
+	p := new("hello")
 	assert.NotNil(t, p)
 	assert.Equal(t, "hello", *p)
 }
 
 func TestIntPtr(t *testing.T) {
-	p := IntPtr(42)
+	p := new(42)
 	assert.NotNil(t, p)
 	assert.Equal(t, 42, *p)
 }
 
 func TestBoolPtr(t *testing.T) {
-	p := BoolPtr(true)
+	p := new(true)
 	assert.NotNil(t, p)
 	assert.True(t, *p)
 }
