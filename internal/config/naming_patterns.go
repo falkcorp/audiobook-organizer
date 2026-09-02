@@ -1,5 +1,5 @@
 // file: internal/config/naming_patterns.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8e4b7f21-c390-4a6d-b158-7d02f9ac4e63
 // last-edited: 2026-09-02
 
@@ -75,16 +75,17 @@ func validateNamingPatterns(_ /* folderPattern */, filePattern string) []string 
 	// completely reasonable: "{title} - {author} - read by {narrator}" was a
 	// shipped default. It is fine for a single-file book and catastrophic for
 	// a multi-file one, because every track expands to the SAME name. The
-	// first file parks, every subsequent file plans the SAME target, and the
-	// batch fails at publish time and rolls every file back to its source —
-	// nothing is lost, and nothing is organized either.
+	// planner (organizer.planTargetPaths) detects the collision and re-plans
+	// every file with a forced track suffix, so the files are not lost — but
+	// the operator did not choose those names, and the Warn it logs on every
+	// such book is the only sign the pattern is wrong.
 	//
 	// "{track:02d}" is the pattern that serves both layouts: a single-file
 	// book has no track, so the whole " - " segment drops and the file is
 	// "Foundation.m4b"; a multi-file book gets "Foundation - 01.m4b".
 	if !containsTrackPlaceholder(filePattern) {
 		errs = append(errs, fmt.Sprintf(
-			"file_naming_pattern %q contains no {track}, {track:02d} or {track_title} placeholder; every file of a multi-file book would expand to the same name and all but the first would be stranded — use something like \"{title} - {track:02d}\"",
+			"file_naming_pattern %q contains no {track}, {track:02d} or {track_title} placeholder; every file of a multi-file book would expand to the same name and the organizer would have to invent a track suffix for each — use something like \"{title} - {track:02d}\"",
 			filePattern))
 	}
 
