@@ -1,6 +1,7 @@
 // file: internal/audio/sample.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c1d2e3f4-a5b6-7c8d-9e0f-1a2b3c4d5e6f
+// last-edited: 2026-09-02
 
 package audio
 
@@ -45,10 +46,7 @@ func ExtractSample(ctx context.Context, req *SampleRequest, write func([]byte) (
 	}
 
 	// Clamp and validate parameters
-	start := req.Start
-	if start < 0 {
-		start = 0
-	}
+	start := max(req.Start, 0)
 	dur := req.Duration
 	if dur <= 0 {
 		dur = SampleDefault
