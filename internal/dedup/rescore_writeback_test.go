@@ -1,5 +1,5 @@
 // file: internal/dedup/rescore_writeback_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2d7f4a16-08b5-4c93-91ae-5f6c3d20b784
 // last-edited: 2026-09-02
 
@@ -302,5 +302,46 @@ func TestRescore_WrittenCountsWhatTheStoreConfirmed(t *testing.T) {
 	}
 	if res.Written != res.Changed-2 {
 		t.Errorf("Written = %d, want %d (Changed %d minus the 2 rows the store refused)", res.Written, res.Changed-2, res.Changed)
+	}
+}
+
+// TestRescore_WholeBatchFailureCountsEveryRow covers the batch-level failure
+// arm of flush(), which is distinct from the per-row arm: UpdateCandidateScores
+// returning an error means the batch was NOT committed, so every row in it is
+// unwritten — not just the ones it managed to name.
+//
+// Found by mutation M04 in scripts/mutation-tables/dedup-score-config-engine.muts:
+// deleting `result.WriteErrors += len(pending)` from the error arm SURVIVED the
+// suite, because every existing test exercised only the per-row `failed` arm.
+// A whole-batch failure was reported as a clean run.
+func TestRescore_WholeBatchFailureCountsEveryRow(t *testing.T) {
+	eng, store := newRescoreTestEngine(t)
+	es := database.NewEmbeddingStore(store.DB())
+	const rows = 7
+	seedRescorableCandidates(t, es, rows)
+
+	w := &recordingRescoreWriter{batchErr: errors.New("pebble: commit failed")}
+	eng.SetRescoreWriter(w)
+	cfg := unified.DefaultScoreConfig()
+	cfg.BandCertainMin = 93
+	if err := eng.SetScoreConfig(cfg); err != nil {
+		t.Fatalf("SetScoreConfig: %v", err)
+	}
+
+	res, err := eng.Rescore(context.Background(), true)
+	if err != nil {
+		t.Fatalf("Rescore: %v", err)
+	}
+	if res.Changed != rows {
+		t.Fatalf("Changed = %d, want %d", res.Changed, rows)
+	}
+	if res.Written != 0 {
+		t.Errorf("Written = %d after a failed batch commit, want 0 — the batch never landed", res.Written)
+	}
+	if res.WriteErrors != rows {
+		t.Errorf("WriteErrors = %d, want %d: a batch that failed to commit leaves EVERY row in it unwritten, not merely the ones it could name", res.WriteErrors, rows)
+	}
+	if res.Written+res.WriteErrors != res.Changed {
+		t.Errorf("Written(%d)+WriteErrors(%d) != Changed(%d)", res.Written, res.WriteErrors, res.Changed)
 	}
 }
