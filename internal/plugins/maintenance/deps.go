@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-02
 
@@ -203,15 +203,21 @@ type StoreProvider interface {
 	// chain is its own keyspace ("file_prov:*") deliberately kept out of the
 	// wide Store interface, so like the metadata cache it gets its own
 	// accessor rather than widening the common path for one caller. Returns
-	// nil when the underlying store does not implement it, and the op treats
-	// that as "not initialized" rather than panicking.
+	// nil when no layer of the store implements it, and the op treats that as
+	// "not initialized" rather than panicking.
+	//
+	// Implementors MUST resolve the capability with database.AsCapability, not
+	// a bare type assertion: in production the server's store is wrapped in a
+	// decorator that hides every capability from a bare assertion, and the
+	// accessor then returns nil on exactly the deployment that matters.
 	FileProvenanceStore() database.FileProvenanceStore
 	// ReviewStatusIndexStore serves runReviewStatusIndexRepair. Rebuilding the
 	// review_item:status:* index is a store-internal repair that nothing else
 	// should reach for, so like the provenance ledger it is kept out of Store
-	// and handed out by type assertion. Returns nil when the underlying store
-	// does not implement it; the op reports that as "not supported" rather
-	// than panicking.
+	// and resolved as a capability (same rule as above: database.AsCapability,
+	// never a bare assertion). Returns nil when no layer of the store
+	// implements it; the op reports that as "not supported" rather than
+	// panicking.
 	ReviewStatusIndexStore() database.ReviewStatusIndexRepairer
 }
 
