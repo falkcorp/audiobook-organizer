@@ -1,5 +1,5 @@
 // file: internal/server/batch_save_op.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-09-02
 //
@@ -29,6 +29,48 @@ type batchSaveOpParams struct {
 	BookIDs  []string `json:"book_ids"`
 	Organize bool     `json:"organize"`
 	Force    bool     `json:"force"`
+}
+
+// organizeAfterWriteBack organizes one book and COMMITS the landing to the
+// database, reporting whether the book actually moved. It is the whole
+// organize half of metadata.batch-save, in one named method rather than
+// inline, so a test can drive it against a real store.
+//
+// The book is re-loaded BY ID rather than reusing the caller's struct: the
+// write-back that just ran may have renamed the file, and a FilePath is not
+// durable across that boundary.
+//
+// The two halves are both required. OrganizeOneBook owns the in-place /
+// directory / single-file decision and does the file operation; CommitLanding
+// writes the rows -- the version row and its book_file rows at the landed
+// paths for an out-of-root book, the stamp for an in-place one. Until
+// 2026-09-02 this op stopped at OrganizeOneBook, so every book it organized
+// was copied into the library with NOTHING written to the database: audio
+// with no row, the original still pointing at the source, and the next
+// organize colliding with the orphan as _copy1. It counted them as organized
+// anyway. A CommitLanding failure has already rolled the copies back, which
+// the returned error says so the operator is not left hunting for them.
+func (s *Server) organizeAfterWriteBack(bookID, operationID string, log logger.Logger) (bool, error) {
+	store := s.storeForWiring()
+	book, err := store.GetBookByID(bookID)
+	if err != nil {
+		return false, fmt.Errorf("reload book %s before organize: %w", bookID, err)
+	}
+	if book == nil {
+		return false, fmt.Errorf("book %s vanished before organize", bookID)
+	}
+
+	org := organizer.NewOrganizer(&config.AppConfig)
+	landing, err := s.organizeService.OrganizeOneBook(org, book, log)
+	if err != nil {
+		return false, err
+	}
+
+	outcome, _, err := s.organizeService.CommitLanding(book, landing, operationID, log)
+	if err != nil {
+		return false, fmt.Errorf("%w (the organized copies were rolled back; the book is unchanged)", err)
+	}
+	return outcome != organizer.LandingUnchanged, nil
 }
 
 func mergeBatchSaveQueuedParams(existing, incoming json.RawMessage) (json.RawMessage, bool, error) {
@@ -113,7 +155,6 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 					return nil
 				}
 
-				org := organizer.NewOrganizer(&config.AppConfig)
 				log2 := logger.NewWithActivityLog("batch-write-back", store)
 
 				releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
@@ -149,36 +190,11 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// Organize. Still under the same path lock: organizing MOVES the file,
 				// so releasing between the write and the move would reopen the race.
 				if p.Organize {
-					// Re-load by ID, not by the FilePath captured above: the
-					// write-back may have renamed the file, and a FilePath is
-					// not durable across that boundary.
-					book, _ = store.GetBookByID(id)
-					if book != nil {
-						// OrganizeOneBook owns the in-place / directory / single-file
-						// decision. This op used to carry its own copy of it, which
-						// had drifted from the worker loop's; see OrganizeOneBook.
-						landing, orgErr := s.organizeService.OrganizeOneBook(org, book, log2)
-						if orgErr != nil {
-							detail := orgErr.Error()
-							_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
-						} else {
-							// CommitLanding is the row-writing half of an organize:
-							// the version row and its book_file rows at the landed
-							// paths for an out-of-root book, the stamp for an
-							// in-place one. Until 2026-09-02 this op stopped at
-							// OrganizeOneBook, which only moves files, so every
-							// book it organized was copied into the library with
-							// NOTHING written to the database -- audio with no
-							// row, and the next organize collided with it as
-							// _copy1. The op counted them as organized anyway.
-							outcome, _, commitErr := s.organizeService.CommitLanding(book, landing, opsregistry.ReporterOpID(reporter), log2)
-							if commitErr != nil {
-								detail := commitErr.Error()
-								_ = progress.Log("warn", fmt.Sprintf("organize failed for %s: files were rolled back", book.Title), &detail)
-							} else if outcome != organizer.LandingUnchanged {
-								organized.Add(1)
-							}
-						}
+					if organizedOne, orgErr := s.organizeAfterWriteBack(id, opsregistry.ReporterOpID(reporter), log2); orgErr != nil {
+						detail := orgErr.Error()
+						_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
+					} else if organizedOne {
+						organized.Add(1)
 					}
 				}
 				release()

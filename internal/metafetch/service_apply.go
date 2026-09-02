@@ -376,6 +376,39 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 	libCopy.GoogleBooksID = original.GoogleBooksID
 	libCopy.CoverURL = original.CoverURL
 	libCopy.MetadataReviewStatus = original.MetadataReviewStatus
+
+	// Work identity, ratings and the collection fields. These are NOT
+	// decoration: UserRating* is what the user typed and exists nowhere
+	// else, and WorkID is what joins this book to its other editions.
+	// Until 2026-09-02 ensureLibraryCopy built the library copy with a full
+	// struct copy (newBook := *book), so they came along for free; it now
+	// builds it through organizer.CreateOrganizedVersion, whose explicit
+	// field list omits them. They are carried here rather than there
+	// because CreateOrganizedVersion's omissions are a wider, pre-existing
+	// gap on the main organize path -- widening its list is a change to
+	// every organized version, not to this one caller.
+	//
+	// THEY BELONG IN THIS FUNCTION, NOT IN syncMetadataToLibraryCopy. #3054
+	// made this field list the body handed to database.ApplyRespectingLocks,
+	// so an assignment here is refused when the user has locked that field on
+	// the copy and an assignment in the caller is not. UserRatingOverall is
+	// the case that makes it concrete: it is a value the user typed, on a row
+	// the user may have locked, and writing it past the guard would overwrite
+	// by the back door exactly what #3054 shipped to protect. Pinned by
+	// TestSyncMetadataToLibraryCopy_HonorsALockOnACarriedRatingField.
+	libCopy.WorkID = original.WorkID
+	libCopy.AudibleRatingOverall = original.AudibleRatingOverall
+	libCopy.AudibleRatingPerformance = original.AudibleRatingPerformance
+	libCopy.AudibleRatingStory = original.AudibleRatingStory
+	libCopy.AudibleRatingCount = original.AudibleRatingCount
+	libCopy.GoogleRatingAverage = original.GoogleRatingAverage
+	libCopy.GoogleRatingCount = original.GoogleRatingCount
+	libCopy.UserRatingOverall = original.UserRatingOverall
+	libCopy.UserRatingStory = original.UserRatingStory
+	libCopy.UserRatingPerformance = original.UserRatingPerformance
+	libCopy.UserRatingNotes = original.UserRatingNotes
+	libCopy.Quantity = original.Quantity
+	libCopy.VersionNotes = original.VersionNotes
 }
 
 // ensureLibraryCopy returns a book record with files in the library folder.
