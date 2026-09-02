@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_fullscan_layer1_parallel_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-02
 
@@ -33,6 +33,7 @@ package dedup
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -219,6 +220,12 @@ func (s *mergeRaceStore) update(id string, b *database.Book) (*database.Book, er
 // pairs (own file hash + own matching title, no cross-pair overlap), so the
 // end state is fully deterministic: run under -race, then assert every
 // pair merged exactly once into the expected winner.
+//
+// The winner is decided by merge.ElectPrimary, not by which side owns the
+// book:hash: index entry (handleFileHashMatch used to force the index owner
+// as primary; dedup bug hunt F1/F2 removed that). The fixture therefore makes
+// the election deterministic on merit: MB has a book_file row and MA has
+// none, so MB must win by the file tier regardless of scan order.
 func TestFullScanLayer1AutoMergeConcurrent_NoRace(t *testing.T) {
 	const numPairs = 20 // > typical runtime.NumCPU(); many pairs contend for the merge lock at once
 
@@ -261,6 +268,13 @@ func TestFullScanLayer1AutoMergeConcurrent_NoRace(t *testing.T) {
 			return nil, nil
 		}
 		return rs.get(winnerID), nil
+	}
+	// Only the MB side has a file row on record; that is what elects it.
+	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
+		if strings.HasPrefix(bookID, "MB-") {
+			return []database.BookFile{{ID: bookID + "-f", BookID: bookID, FilePath: "/lib/" + bookID + ".m4b"}}, nil
+		}
+		return nil, nil
 	}
 	// No ISBN/AuthorID set on the fixture books, so checkExactISBN,
 	// checkExactTitle, and checkDurationMatch are all no-ops here — this

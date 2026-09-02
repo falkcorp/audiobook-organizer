@@ -1,12 +1,13 @@
 // file: internal/dedup/engine.go
-// version: 1.70.0
+// version: 1.71.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package dedup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"log/slog"
@@ -1205,6 +1206,25 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		}
 	}
 
+	// The book:hash: index is single-valued and last-writer-wins, and
+	// GetBookByFileHash does not filter soft-deleted rows. So after ANY merge
+	// whose winner was not the index owner, the next full scan visits the
+	// live winner and the index hands back its own soft-deleted loser. Before
+	// this guard that pair was merged again, in the opposite direction:
+	// winner soft-deleted into a deleted primary, zero live rows for the
+	// title, both hard-deleted by the purge 30 days later (dedup bug hunt
+	// F2). A stale owner is not a duplicate; it is nothing to act on.
+	if other.MarkedForDeletion != nil && *other.MarkedForDeletion {
+		slog.Debug("dedup exact-file-hash: index owner is soft-deleted; skipping",
+			"book", book.ID, "owner", other.ID)
+		return false, nil
+	}
+	// Two live members of one version group are already merged.
+	if book.VersionGroupID != nil && other.VersionGroupID != nil &&
+		*book.VersionGroupID != "" && *book.VersionGroupID == *other.VersionGroupID {
+		return false, nil
+	}
+
 	sameAuthor := NormalizeAuthorName(authorName) == NormalizeAuthorName(otherAuthorName)
 	sameTitle := normalizeTitle(book.Title) == normalizeTitle(other.Title)
 
@@ -1214,11 +1234,23 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		// merging into the same "other" book at once are made atomic there —
 		// no Engine-level lock needed. The (far more common) non-merge
 		// candidate path above/below is unaffected.
-		_, err := de.mergeService.MergeBooks([]string{book.ID, other.ID}, other.ID)
+		//
+		// primaryID is left empty so merge.ElectPrimary decides. This used to
+		// force `other` — whichever row happened to own the hash index, i.e.
+		// the most recently created — which made every re-import beat the
+		// curated original and could keep a file-less row over the one with
+		// audio (F1/F3). A stale-pair refusal from MergeBooks is not a scan
+		// error: log it and move on.
+		result, err := de.mergeService.MergeBooks([]string{book.ID, other.ID}, "")
 		if err != nil {
+			var stale *merge.SoftDeletedInputError
+			if errors.As(err, &stale) {
+				slog.Warn("dedup exact-file-hash: auto-merge skipped a soft-deleted row", "book", book.ID, "other", other.ID, "err", err)
+				return false, nil
+			}
 			return false, fmt.Errorf("auto-merge failed: %w", err)
 		}
-		slog.Info("dedup auto-merged book into (file hash match)", "book", book.ID, "other", other.ID)
+		slog.Info("dedup auto-merged books (file hash match)", "book", book.ID, "other", other.ID, "primary", result.PrimaryID)
 		return true, nil
 	}
 
