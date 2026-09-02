@@ -1,7 +1,7 @@
 // file: internal/acoustid/client.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d6e7f80-9a1b-2c3d-4e5f-607182931a2b
-// last-edited: 2026-06-26
+// last-edited: 2026-09-02
 
 // Package acoustid is a thin client for the acoustid.org /v2/lookup API.
 // We only need the smallest slice of the response — top-scoring
@@ -56,10 +56,7 @@ func parseRetryAfter(v string) time.Duration {
 	if err != nil || n <= 0 {
 		return 0
 	}
-	d := time.Duration(n) * time.Second
-	if d > 60*time.Second {
-		d = 60 * time.Second
-	}
+	d := min(time.Duration(n)*time.Second, 60*time.Second)
 	return d
 }
 
