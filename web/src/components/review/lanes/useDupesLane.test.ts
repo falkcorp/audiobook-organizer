@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
 // last-edited: 2026-09-01
 //
@@ -575,11 +575,24 @@ describe('search', () => {
   });
 
   it('reports the server total, not the page length', async () => {
-    vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [dune], total: 37 });
+    // The two totals must DIFFER, or this cannot observe anything: with one
+    // unconditional total the initial load already satisfies the assertion and
+    // the test passes even when `q` is never sent at all.
+    let call = 0;
+    vi.mocked(api.getDedupCandidates).mockImplementation(async () => {
+      call += 1;
+      return call === 1
+        ? { candidates: [dune, neuro], total: 900 }
+        : { candidates: [dune], total: 37 };
+    });
     const { result } = await renderLane();
+    expect(result.current.total).toBe(900);
 
     act(() => result.current.setFilters({ search: 'dune' }));
+
+    // 37 is the SEARCH response's total, and it is one row on the page.
     await waitFor(() => expect(result.current.total).toBe(37), DEBOUNCE_WAIT);
+    expect(result.current.candidates).toHaveLength(1);
   });
 });
 
