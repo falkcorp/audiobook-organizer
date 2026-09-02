@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/rescore_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c1a9f38-7b62-4d0e-9a15-6e3b8c07d24f
 // last-edited: 2026-09-02
 
@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -85,9 +86,19 @@ type RescoreParams struct {
 func ladderFingerprint(cfg unified.ScoreConfig) string {
 	b, err := json.Marshal(cfg)
 	if err != nil {
-		// Unreachable for a plain-data struct. Fall back to a value that
-		// cannot collide with a real digest, so a marshal failure degrades to
-		// "never dedupe" rather than "always dedupe".
+		// NOT unreachable, though it is narrow: encoding/json refuses NaN and
+		// ±Inf, and ScoreConfig.Validate range-checks only the per-kind
+		// confidence bounds of the eight primary kinds — Base, Scale, Boost and
+		// every non-primary kind are unchecked. A YAML `base: .inf` therefore
+		// reaches here. (A JSON PUT cannot: JSON has no literal for them.)
+		//
+		// The fallback direction is the safe one — a timestamp never collides,
+		// so this degrades to "never dedupe" (a redundant re-band, serialized
+		// by the shared key) rather than "always dedupe" (a re-band that never
+		// runs). But log it: silently re-queueing a 27k-row pass on every
+		// config PUT is not something to discover from a graph.
+		slog.Warn("dedup: could not fingerprint the score ladder; every config PUT will queue its own re-band instead of collapsing duplicates",
+			"err", err)
 		return "unfingerprintable-" + time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	sum := sha256.Sum256(b)

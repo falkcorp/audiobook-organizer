@@ -1,5 +1,5 @@
 // file: internal/config/config_deepcopy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e4b1c05-3a97-42d6-9f18-7c206ba4e35d
 // last-edited: 2026-09-02
 
@@ -110,6 +110,15 @@ func TestConfigClone_EveryReferenceFieldIsExported(t *testing.T) {
 				switch f.Type.Kind() {
 				case reflect.Map, reflect.Slice, reflect.Pointer, reflect.Chan, reflect.Interface, reflect.Func:
 					t.Errorf("%s is an UNEXPORTED %s: Config.Clone copies it shallowly, so the clone would share it with the live config (that sharing is exactly the D1 bug). Export it, or teach Clone about it.", fp, f.Type.Kind())
+				case reflect.Struct, reflect.Array:
+					// An unexported field whose OWN kind is a struct or array
+					// is not itself a reference — but deepCopyValue cannot
+					// recurse into it (CanSet is false), so every reference
+					// field UNDERNEATH it stays aliased with the live config.
+					// The guard used to `continue` here and so was blind to
+					// exactly that shape, while Clone's doc comment claimed it
+					// was covered. Recurse instead of skipping.
+					walkUnexportedRefs(t, f.Type, fp, map[reflect.Type]bool{})
 				}
 				continue
 			}
@@ -117,4 +126,30 @@ func TestConfigClone_EveryReferenceFieldIsExported(t *testing.T) {
 		}
 	}
 	walk(reflect.TypeOf(Config{}), "Config")
+}
+
+// walkUnexportedRefs reports every reference-kind field reachable underneath an
+// UNEXPORTED struct/array field. deepCopyValue leaves that whole subtree as
+// whatever the shallow dst.Set(src) produced, so a map or slice anywhere below
+// it is shared with the live config — the D1 aliasing bug, just one level down
+// where the top-level kind check cannot see it.
+func walkUnexportedRefs(t *testing.T, rt reflect.Type, path string, seen map[reflect.Type]bool) {
+	t.Helper()
+	for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Array {
+		rt = rt.Elem()
+	}
+	if rt.Kind() != reflect.Struct || seen[rt] || rt == reflect.TypeOf(time.Time{}) {
+		return
+	}
+	seen[rt] = true
+	for i := range rt.NumField() {
+		f := rt.Field(i)
+		fp := path + "." + f.Name
+		switch f.Type.Kind() {
+		case reflect.Map, reflect.Slice, reflect.Pointer, reflect.Chan, reflect.Interface, reflect.Func:
+			t.Errorf("%s is a %s reachable under an UNEXPORTED struct field: Config.Clone cannot set unexported fields, so this whole subtree stays SHARED with the live config. Export the parent, or teach Clone about it.", fp, f.Type.Kind())
+		case reflect.Struct, reflect.Array:
+			walkUnexportedRefs(t, f.Type, fp, seen)
+		}
+	}
 }

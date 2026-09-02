@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/register.go
-// version: 1.3.0
+// version: 1.4.0
 // last-edited: 2026-09-02
 
 // Service registry registration for the dedup UOS plugin (W5/W7).
@@ -16,6 +16,7 @@ package dedup
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -55,20 +56,31 @@ func (p *Plugin) PostInit(ctx context.Context, c *serviceregistry.Container) err
 	// internal/server/registry_wire.go, because it needs BOTH the engine and
 	// the ops registry: a PUT /api/v1/config that changes dedup.signals swaps
 	// the ladder into the live engine and queues dedup.rescore to re-band the
-	// stored rows (see rescore_op.go). It is installed before op registration
-	// so a PUT arriving mid-startup cannot find a half-wired service — and
-	// unconditionally on the registry being present, so a missing ops registry
-	// surfaces as a sink error naming the manual remedy rather than as a
-	// silently un-re-banded backlog.
-	if updateSvc, ok := serviceregistry.TryGet[*config.UpdateService](c, serviceregistry.KeyConfigUpdate); ok && updateSvc != nil {
-		updateSvc.SetDedupScoreConfigSink(p.dedupScoreSink)
-	} else {
-		slog.Warn("PostInit configupdate service not available; dedup.signals changes will not reach the live engine until restart")
+	// stored rows (see rescore_op.go). It is installed unconditionally on the
+	// registry being present, so a missing ops registry surfaces as a sink
+	// error naming the manual remedy rather than as a silently un-re-banded
+	// backlog.
+	//
+	// A MISSING update service is a hard error, not a warning. KeyConfigUpdate
+	// is a declared Needs of this plugin's ServiceDef (see the Needs list
+	// above), so its absence is a wiring bug, not a deployment shape. Warning
+	// and continuing would leave a server that starts clean and looks healthy
+	// while dedup.signals silently never reaches the live engine — the whole
+	// feature disabled by one log line nobody reads. Fail the startup instead.
+	updateSvc, ok := serviceregistry.TryGet[*config.UpdateService](c, serviceregistry.KeyConfigUpdate)
+	if !ok || updateSvc == nil {
+		return fmt.Errorf("dedup PostInit: the config update service (%s) is a declared Needs but was not in the container; dedup.signals changes would never reach the live engine", serviceregistry.KeyConfigUpdate)
 	}
+	updateSvc.SetDedupScoreConfigSink(p.dedupScoreSink)
 
+	// Unlike the update service above, a missing ops registry stays non-fatal:
+	// it is not a declared Needs, and the sink reports it per-request with the
+	// manual remedy (rescore_op.go's nil-registry branch). But say plainly that
+	// ZERO op defs were registered — including dedup.full-scan — rather than
+	// logging "skipping op-def registration" and returning success.
 	wrapper, ok := serviceregistry.TryGet[*opsregistry.RegistryWrapper](c, "opregistry")
 	if !ok || wrapper == nil {
-		slog.Warn("PostInit opregistry not available, skipping op-def registration")
+		slog.Warn("PostInit: no ops registry — the dedup plugin registered ZERO operations (dedup.full-scan and dedup.rescore are both unavailable); config PUTs will report the manual re-band remedy")
 		return nil
 	}
 	return p.Register(wrapper.Registry)
