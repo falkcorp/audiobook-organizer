@@ -1,7 +1,7 @@
 // file: internal/search/query_parser.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c4a1d8f-5b2e-4f70-a7c6-2f8d0e1b9a57
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 //
 // Parser for the library search DSL (spec 3.4 / DES-1 v1.1).
 //
@@ -63,10 +63,7 @@ func (p *parser) peek() byte {
 }
 
 func (p *parser) peekN(n int) string {
-	end := p.pos + n
-	if end > len(p.input) {
-		end = len(p.input)
-	}
+	end := min(p.pos+n, len(p.input))
 	return p.input[p.pos:end]
 }
 
