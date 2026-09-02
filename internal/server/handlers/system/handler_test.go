@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-08-21
+// last-edited: 2026-09-02
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -678,7 +678,7 @@ func TestSetUserPreference_DBError(t *testing.T) {
 
 func TestDeleteUserPreference_OK(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.store.EXPECT().SetUserPreference("col", "").Return(nil)
+	d.store.EXPECT().DeleteUserPreference("col").Return(nil)
 
 	w := run(http.MethodDelete, "/preferences/:key", "/preferences/col", nil, func(r *gin.Engine) {
 		r.DELETE("/preferences/:key", h.DeleteUserPreference)

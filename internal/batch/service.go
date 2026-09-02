@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-02
 
@@ -233,6 +233,12 @@ func (bs *BatchService) recordUserLocks(bookID string, updates map[string]any) e
 	for payloadKey, lockField := range batchKeyToLockField {
 		raw, ok := updates[payloadKey]
 		if !ok || raw == nil {
+			// A nil value (an explicit `"series_id": null`, i.e. "clear this")
+			// records no lock. That deliberately matches the single-book path
+			// in audiobooks.service_mutation, whose extractors also return
+			// ok=false for a nil column, so a cleared field is left unlocked
+			// by both. Diverging here would make a bulk clear lock a field the
+			// same edit on one book does not.
 			continue
 		}
 		switch v := raw.(type) {
