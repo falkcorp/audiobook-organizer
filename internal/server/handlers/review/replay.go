@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/replay.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d807d92-72d8-4df6-9da1-80123d2bf6b4
 // last-edited: 2026-09-02
 
@@ -25,6 +25,63 @@ type replayRequest struct {
 	Kind string `json:"kind,omitempty"`
 	// Limit caps how many items are replayed (0 = all). Useful for a canary.
 	Limit int `json:"limit,omitempty"`
+}
+
+// replayPageSize is how many approved items one store call fetches while replay
+// collects the approved set. It is a page size, not a cap: collectApprovedItems
+// walks Offset forward until the store's total is reached, so every approved
+// item is seen exactly once no matter how many there are.
+//
+// 🔴 WHY REPLAY PAGES AT ALL. The store treats Limit<=0 as "default page of 50",
+// not as "no limit". The previous version of this handler passed Limit: 0 in
+// the belief it meant unbounded, so a queue with 300 approved holds replayed 50
+// of them, reported approved_total=50, and an operator reading that saw a queue
+// that was done. Nothing errored. The other 250 decisions sat approved forever.
+const replayPageSize = 100
+
+// collectApprovedItems gathers EVERY approved item for kind by paging the store,
+// and returns the store's own total alongside. The items are collected in full
+// BEFORE anything is applied, because applying moves an item out of the approved
+// set and would shift every later page under a live walk.
+//
+// The store re-materialises and sorts the matching set on each page, so this is
+// O(total * pages) at the store; with approved counts in the hundreds to low
+// thousands that is milliseconds, and correctness of the count is worth it.
+//
+// Items are de-duplicated by ID: a hold approved between two page reads lands
+// at the head of the store's newest-first order and shifts the window, so a
+// page can repeat a row. Repeating an apply would be far worse than the cost
+// of a set.
+func (h *Handler) collectApprovedItems(kind string) ([]database.ReviewItem, int, error) {
+	var out []database.ReviewItem
+	seen := map[string]bool{}
+	total := 0
+	for offset := 0; ; offset += replayPageSize {
+		page, t, err := h.store.ListReviewItems(database.ReviewFilter{
+			Status: database.ReviewStatusApproved,
+			Kind:   kind,
+			Limit:  replayPageSize,
+			Offset: offset,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		total = t
+		for _, it := range page {
+			if seen[it.ID] {
+				continue
+			}
+			seen[it.ID] = true
+			out = append(out, it)
+		}
+		// Short page: the store ran out. Reached total: nothing left past here.
+		// Either alone would do on a quiet store; both together also end the walk
+		// if the store's total and its pages disagree, rather than spinning.
+		if len(page) < replayPageSize || offset+len(page) >= t {
+			break
+		}
+	}
+	return out, total, nil
 }
 
 // ReplayApprovedItems re-runs the apply handler for items already marked approved.
@@ -59,11 +116,11 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 	// A body is optional: no body means a dry run over every kind.
 	_ = c.ShouldBindJSON(&req)
 
-	items, _, err := h.store.ListReviewItems(database.ReviewFilter{
-		Status: database.ReviewStatusApproved,
-		Kind:   req.Kind,
-		Limit:  0,
-	})
+	// approvedTotal is the STORE's count of approved items for this kind, not the
+	// length of what was materialised — the two only agree because the walk is
+	// complete, and reporting the store's number is what makes a short walk
+	// visible instead of self-consistent.
+	items, approvedTotal, err := h.collectApprovedItems(req.Kind)
 	if err != nil {
 		httputil.InternalError(c, "failed to list approved review items", err)
 		return
@@ -133,7 +190,7 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 	if !req.Apply {
 		httputil.RespondWithOK(c, gin.H{
 			"dry_run":        true,
-			"approved_total": len(items),
+			"approved_total": approvedTotal,
 			"would_replay":   len(replayable),
 			"skipped":        noHandler,
 			"apply_enabled":  h.applyGloballyEnabled(),
@@ -190,7 +247,7 @@ func (h *Handler) ReplayApprovedItems(c *gin.Context) {
 
 	httputil.RespondWithOK(c, gin.H{
 		"dry_run":        false,
-		"approved_total": len(items),
+		"approved_total": approvedTotal,
 		"applied":        applied,
 		"failed":         failed,
 		"skipped":        noHandler,
