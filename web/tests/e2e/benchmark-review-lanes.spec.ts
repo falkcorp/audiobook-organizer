@@ -1,5 +1,5 @@
 // file: web/tests/e2e/benchmark-review-lanes.spec.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: e0d8440c-7578-4a92-9f69-4d05bae4b33e
 // last-edited: 2026-09-01
 
@@ -169,6 +169,25 @@ interface Sample {
 }
 
 const results: Sample[] = [];
+
+/**
+ * What the search stubs last answered, per page: the `q` they were asked and
+ * how many rows they returned. Both lanes narrow the DOM off their CLIENT pass
+ * before any response lands, so `expect.poll(rows).toBe(1)` is satisfiable
+ * without the server ever filtering -- that is exactly how the regroup stub
+ * ignored the parameter for weeks while the suite stayed green at N=50/100.
+ * The filter drivers assert against this record AFTER their timed block, so
+ * the instrument proves the round trip carried the term and came back narrowed
+ * without perturbing the number it reports.
+ */
+const lastServerFilter = new WeakMap<Page, { q: string; returned: number }>();
+
+/** Assert the search stub was actually asked `term` and answered with one row. */
+async function expectServerFiltered(page: Page, term: string) {
+  await expect
+    .poll(() => lastServerFilter.get(page), { timeout: 60_000 })
+    .toEqual({ q: term.toLowerCase(), returned: 1 });
+}
 
 function median(xs: number[]): number {
   const s = [...xs].sort((a, b) => a - b);
@@ -446,11 +465,14 @@ async function seedDupes(page: Page, n: number) {
       );
     };
     const matched = candidates.filter(hit);
+    lastServerFilter.set(page, { q, returned: matched.length });
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      // `total` is the server's count for the filter, NOT the page length --
-      // the same distinction the lane's own `total` comment draws.
+      // `total` is what the server reports for the filter. This stub does not
+      // paginate (it ignores limit/offset, see the doc block above), so here it
+      // always equals the page length; the field is populated so the lane's
+      // own `total` handling has a real value to read.
       body: JSON.stringify({ data: { candidates: matched, total: matched.length } }),
     });
   });
@@ -510,25 +532,40 @@ async function seedMetadata(page: Page, n: number, setSize = n) {
  *  NO `data` wrapper, unlike every other endpoint stubbed here. */
 async function seedRegroup(page: Page, n: number) {
   const items = regroupItems(n);
-  // Honours `search`, and NOT honouring it was measuring a race.
+  // Honours the search term, and NOT honouring it was measuring a race.
   //
-  // useRegroupLane pushes the term to the server AND filters on the client, but
-  // the client pass STANDS DOWN once serverAnsweredTerm() says the loaded rows
-  // were fetched under this exact term -- it correctly trusts the server to
-  // have filtered. This stub did not filter, so the lane faithfully rendered
-  // every row the stub returned.
+  // useRegroupLane pushes the term to the server AND filters on the client in
+  // the same instant (both are keyed on the debounced term), so the client pass
+  // covers the round trip; it then STANDS DOWN once serverAnsweredTerm() says
+  // the loaded rows were fetched under this exact term -- it correctly trusts
+  // the server to have filtered. Production runs that pass too; the stub did
+  // not filter, so after stand-down the lane faithfully rendered every row the
+  // stub returned, and the narrowed DOM existed only for the window between
+  // the client pass and the response landing.
   //
-  // That made the assertion a race rather than a measurement. At N=50/100 the
-  // larger stub payload lands slowly enough that the poll catches the TRANSIENT
-  // client-side narrowing and passes; at N=5 it lands fast, stand-down wins,
-  // and the poll sees all 5. So the noise-floor row failed deterministically
-  // while the rows that mattered passed by luck -- and every number this lane
-  // reported was the cost of a client pass that production does not run,
-  // because in production the server really did filter.
+  // That made the assertion a race rather than a measurement. expect.poll
+  // samples at its default intervals (100, 250, 500, 1000 ms), i.e. at
+  // t~0/100/350/850; the debounce fires at 250 ms, so the ONLY sample that can
+  // see the narrowed DOM is the one at ~350 ms. Miss it and every later sample
+  // sees N forever -- which is why N=5 failed outright (received 5) rather than
+  // flaking, while N=50/100 passed. The N-dependence is inferred, not proven:
+  // the plausible term that scales with N is the React commit of N rows after
+  // stand-down, not the fulfil latency of a stub payload.
+  //
+  // With the stub filtering, the steady state is 1 row too, so the count no
+  // longer reverts and the assertion is deterministic. Note what that does NOT
+  // change: the DOM still narrows off the client pass before any response can
+  // land, so the ms reported by regroupFilterOnce is debounce + first poll
+  // boundary after the narrowing, not a server round trip. It is the floor a
+  // user perceives, and it is now stable -- see the label note in runLane.
   //
   // The predicate mirrors reviewSearchMatches in review_store.go: case-
   // insensitive substring over summary, folder_ref, kind, dedup_key and id,
-  // then the payload's string values.
+  // then a recursive walk of the payload's STRING leaves (jsonStringValuesContain
+  // descends into nested objects and arrays; numbers and booleans never match).
+  // A payload that fails to decode falls back to a raw substring match, and ONLY
+  // that case -- a decodable non-object (`null`, `"str"`) is walked like any
+  // other value and matches nothing, exactly as the Go side does.
   await page.route('**/api/v1/review/items**', (route) => {
     // `q`, NOT `search`. The lane's filter FIELD is `search`, but api.ts maps it
     // onto the wire as `q` (`params.set('q', filter.search.trim())`). Reading
@@ -539,17 +576,28 @@ async function seedRegroup(page: Page, n: number) {
       if (!q) return true;
       const fields = [it.summary, it.folder_ref, it.kind, it.dedup_key, it.id];
       if (fields.some((f) => f && f.toLowerCase().includes(q))) return true;
-      // Payload values, with the same unparseable-falls-back-to-raw rule the
-      // store documents: a row that renders must stay findable.
+      // Payload STRING leaves, walked recursively like jsonStringValuesContain,
+      // with the same unparseable-falls-back-to-raw rule the store documents: a
+      // row that renders must stay findable. The parse is kept outside the walk
+      // so that only a genuine decode failure takes the raw-text path.
+      let decoded: unknown;
       try {
-        return Object.values(JSON.parse(it.payload) as Record<string, unknown>).some(
-          (v) => typeof v === 'string' && v.toLowerCase().includes(q),
-        );
+        decoded = JSON.parse(it.payload);
       } catch {
         return it.payload.toLowerCase().includes(q);
       }
+      const walk = (v: unknown): boolean =>
+        typeof v === 'string'
+          ? v.toLowerCase().includes(q)
+          : Array.isArray(v)
+            ? v.some(walk)
+            : typeof v === 'object' && v !== null
+              ? Object.values(v).some(walk)
+              : false;
+      return walk(decoded);
     };
     const matched = items.filter(hit);
+    lastServerFilter.set(page, { q, returned: matched.length });
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -642,6 +690,7 @@ async function dupesFilterOnce(page: Page, n: number): Promise<number> {
       await expect.poll(() => dupeRows(page).count(), { timeout: 60_000 }).toBe(1);
     },
   );
+  await expectServerFiltered(page, 'Dupe Book 0001 (copy)');
   await box.fill('');
   await expect.poll(() => dupeRows(page).count(), { timeout: 60_000 }).toBe(n);
   return ms;
@@ -672,9 +721,12 @@ async function metadataFilterOnce(page: Page, n: number): Promise<number> {
  * / maxTaskMs for this one.
  *
  * "Server-side", not "client-side" as this said before: the term goes to
- * GET /review/items?search=... and the lane's own client pass stands down once
- * the response arrives. See seedRegroup for what that stand-down did to this
- * assertion while the stub ignored the parameter.
+ * GET /review/items?q=... (the lane's FIELD is `search`; api.ts puts it on the
+ * wire as `q`) and the lane's own client pass stands down once the response
+ * arrives. See seedRegroup for what that stand-down did to this assertion while
+ * the stub ignored the parameter -- and for why the ms below is the client
+ * pass plus the poll boundary, not a round trip: the DOM narrows synchronously
+ * off the debounced term before the request can be answered.
  */
 async function regroupFilterOnce(page: Page, n: number): Promise<number> {
   const box = page.getByRole('textbox', { name: 'Search the queue' });
@@ -686,6 +738,7 @@ async function regroupFilterOnce(page: Page, n: number): Promise<number> {
       await expect.poll(() => regroupRows(page).count(), { timeout: 60_000 }).toBe(1);
     },
   );
+  await expectServerFiltered(page, 'Regroup Hold 0001');
   await box.fill('');
   await expect.poll(() => regroupRows(page).count(), { timeout: 60_000 }).toBe(n);
   return ms;
@@ -910,7 +963,11 @@ test.describe('review lane responsiveness (measurement only)', () => {
         // label read "client" until dupes moved server-side and made the two
         // rows contradict each other -- same mechanism, different word.
         'filter (server, 250ms debounce)',
-        `${note} includes 250ms debounce floor`.trim(),
+        // The lane's mechanism is server-side, but the ms is NOT a round trip:
+        // the client pass narrows the DOM at the debounce, and the poll catches
+        // it at the next sample. Quantised to the poll schedule -- flat across
+        // N is the tell.
+        `${note} includes 250ms debounce floor; client pass covers the round trip`.trim(),
         () => regroupFilterOnce(page, n),
       );
       await record(page, lane, n, 'sort change (client)', note, () =>
