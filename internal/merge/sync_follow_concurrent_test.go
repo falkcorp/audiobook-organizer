@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow_concurrent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: df75ad6b-54e4-4a58-b5dd-4e07ec76fb2f
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 package merge
 
@@ -67,7 +67,7 @@ func TestMergeBooks_SyncIdentity_ConcurrentSamePair_ExactlyOnce(t *testing.T) {
 	const goroutines = 16
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			_, _ = ms.MergeBooks([]string{aID, bID}, bID)
