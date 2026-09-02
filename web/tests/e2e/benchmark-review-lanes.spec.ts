@@ -1,5 +1,5 @@
 // file: web/tests/e2e/benchmark-review-lanes.spec.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: e0d8440c-7578-4a92-9f69-4d05bae4b33e
 // last-edited: 2026-09-01
 
@@ -59,8 +59,12 @@ import { setupPhase2Interactive } from './utils/test-helpers';
  *            re-issue GET /dedup/candidates. Under interception, measuring one
  *            of those measures this file's own fulfill latency plus a re-render
  *            of the same N rows. It is NOT a filter-cost measurement, so it is
- *            not reported as one. The "Search this page" box IS client-side
- *            (and undebounced), so that is what is measured for this lane.
+ *            not reported as one. The search box USED to be the exception —
+ *            client-side and undebounced over the loaded page — and is no
+ *            longer: it was pushed to the server and DEBOUNCED 250 ms
+ *            (DUPES_SEARCH_DEBOUNCE_MS), and its label lost the words "this
+ *            page" to match. So this lane now reads like regroup below: the ms
+ *            carry a 250 ms floor, and the longtask columns are the signal.
  *   metadata "Title filter" is client-side and undebounced. Measured.
  *            (There is no server-side filter pushdown on this lane at all —
  *            see the "metadata review filter-pushdown prerequisite" TODO.)
@@ -415,13 +419,41 @@ async function seedDupes(page: Page, n: number) {
       }),
     }),
   );
-  await page.route('**/api/v1/dedup/candidates**', (route) =>
-    route.fulfill({
+  // Honours `q`, because the dupes search box is no longer client-side.
+  //
+  // It POSTs the term to the server (GET /dedup/candidates?q=...) and renders
+  // whatever comes back, so a stub that ignored `q` would answer every search
+  // with the unfiltered page and the row count would never narrow. That is not
+  // a hypothetical: this handler DID ignore it, and the only reason the suite
+  // still went red rather than silently measuring the wrong thing is that the
+  // accessible name changed in the same PR.
+  //
+  // The predicate mirrors ListCandidates' union in embedding_store.go: the
+  // row-local fields (layer, band) match by SUBSTRING, entity ids match by
+  // PREFIX because they are ULIDs, and the joined book fields (title, author,
+  // path) stand in for the SearchEntityIDs set the real handler resolves via
+  // resolveBookIDsMatching. Keeping the shapes aligned matters -- a stub that
+  // matched entity ids by substring would report a filter cost for a query the
+  // real server answers with nothing.
+  await page.route('**/api/v1/dedup/candidates**', (route) => {
+    const q = new URL(route.request().url()).searchParams.get('q')?.trim().toLowerCase() ?? '';
+    const hit = (c: (typeof candidates)[number]) => {
+      if (!q) return true;
+      if ([c.layer, c.band].some((f) => f && f.toLowerCase().includes(q))) return true;
+      if ([c.entity_a_id, c.entity_b_id].some((id) => id.toLowerCase().startsWith(q))) return true;
+      return [c.book_a, c.book_b].some((b) =>
+        [b.title, b.author_name, b.file_path].some((f) => f && f.toLowerCase().includes(q)),
+      );
+    };
+    const matched = candidates.filter(hit);
+    return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ data: { candidates, total: n } }),
-    }),
-  );
+      // `total` is the server's count for the filter, NOT the page length --
+      // the same distinction the lane's own `total` comment draws.
+      body: JSON.stringify({ data: { candidates: matched, total: matched.length } }),
+    });
+  });
   await stubReviewCount(page);
 }
 
@@ -478,19 +510,58 @@ async function seedMetadata(page: Page, n: number, setSize = n) {
  *  NO `data` wrapper, unlike every other endpoint stubbed here. */
 async function seedRegroup(page: Page, n: number) {
   const items = regroupItems(n);
-  await page.route('**/api/v1/review/items**', (route) =>
-    route.fulfill({
+  // Honours `search`, and NOT honouring it was measuring a race.
+  //
+  // useRegroupLane pushes the term to the server AND filters on the client, but
+  // the client pass STANDS DOWN once serverAnsweredTerm() says the loaded rows
+  // were fetched under this exact term -- it correctly trusts the server to
+  // have filtered. This stub did not filter, so the lane faithfully rendered
+  // every row the stub returned.
+  //
+  // That made the assertion a race rather than a measurement. At N=50/100 the
+  // larger stub payload lands slowly enough that the poll catches the TRANSIENT
+  // client-side narrowing and passes; at N=5 it lands fast, stand-down wins,
+  // and the poll sees all 5. So the noise-floor row failed deterministically
+  // while the rows that mattered passed by luck -- and every number this lane
+  // reported was the cost of a client pass that production does not run,
+  // because in production the server really did filter.
+  //
+  // The predicate mirrors reviewSearchMatches in review_store.go: case-
+  // insensitive substring over summary, folder_ref, kind, dedup_key and id,
+  // then the payload's string values.
+  await page.route('**/api/v1/review/items**', (route) => {
+    // `q`, NOT `search`. The lane's filter FIELD is `search`, but api.ts maps it
+    // onto the wire as `q` (`params.set('q', filter.search.trim())`). Reading
+    // the field name here matched nothing and left the stub returning every row
+    // -- silently, because an unfiltered response is a valid response.
+    const q = new URL(route.request().url()).searchParams.get('q')?.trim().toLowerCase() ?? '';
+    const hit = (it: (typeof items)[number]) => {
+      if (!q) return true;
+      const fields = [it.summary, it.folder_ref, it.kind, it.dedup_key, it.id];
+      if (fields.some((f) => f && f.toLowerCase().includes(q))) return true;
+      // Payload values, with the same unparseable-falls-back-to-raw rule the
+      // store documents: a row that renders must stay findable.
+      try {
+        return Object.values(JSON.parse(it.payload) as Record<string, unknown>).some(
+          (v) => typeof v === 'string' && v.toLowerCase().includes(q),
+        );
+      } catch {
+        return it.payload.toLowerCase().includes(q);
+      }
+    };
+    const matched = items.filter(hit);
+    return route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        items,
-        count: items.length,
+        items: matched,
+        count: matched.length,
         limit: 500,
         offset: 0,
-        total: items.length,
+        total: matched.length,
       }),
-    }),
-  );
+    });
+  });
   await stubReviewCount(page, {
     'regroup.multidisc': Math.ceil(n / 3),
     'regroup.split': Math.ceil(n / 3),
@@ -545,9 +616,24 @@ async function seed(page: Page, lane: string, n: number, setSize = n) {
 // the wait for the DOM to reflect it, and leaves the page in a state where it
 // can be applied again.
 
-/** Client-side, undebounced substring filter over the loaded page. */
+/**
+ * Server-side search, DEBOUNCED by DUPES_SEARCH_DEBOUNCE_MS (250 ms).
+ *
+ * It used to be a client-side substring filter over the loaded page, and the
+ * label said so -- "Search this page". Both changed when the term was pushed to
+ * the server: the box now searches the whole queue, so the label is plain
+ * "Search". The locator here matched the OLD accessible name and this file is
+ * gate-exempt (testIgnore '**\/benchmark-*.spec.ts' on the chromium/webkit
+ * projects, plus GATE_EXEMPT in check-spec-discovery.mjs), so nothing in CI
+ * failed -- the instrument simply timed out the next time somebody ran it.
+ *
+ * CONSEQUENCE FOR THE NUMBER, and it is the same one the regroup rows carry:
+ * the reported wall-clock now contains a 250 ms debounce floor that is a
+ * product decision rather than a cost. Read the longtask columns for this lane,
+ * not the ms.
+ */
 async function dupesFilterOnce(page: Page, n: number): Promise<number> {
-  const box = page.getByRole('textbox', { name: 'Search this page' });
+  const box = page.getByRole('textbox', { name: 'Search', exact: true });
   const ms = await timed(
     async () => {
       await box.fill('Dupe Book 0001 (copy)');
@@ -581,9 +667,14 @@ async function metadataFilterOnce(page: Page, n: number): Promise<number> {
 }
 
 /**
- * Client-side but DEBOUNCED 250 ms. The returned ms therefore has a hard 250 ms
- * floor that is a product decision, not a render cost — read blockingMs /
- * maxTaskMs for this one.
+ * Server-side search, DEBOUNCED 250 ms. The returned ms therefore has a hard
+ * 250 ms floor that is a product decision, not a render cost — read blockingMs
+ * / maxTaskMs for this one.
+ *
+ * "Server-side", not "client-side" as this said before: the term goes to
+ * GET /review/items?search=... and the lane's own client pass stands down once
+ * the response arrives. See seedRegroup for what that stand-down did to this
+ * assertion while the stub ignored the parameter.
  */
 async function regroupFilterOnce(page: Page, n: number): Promise<number> {
   const box = page.getByRole('textbox', { name: 'Search the queue' });
@@ -776,8 +867,13 @@ test.describe('review lane responsiveness (measurement only)', () => {
     });
 
     if (lane === 'dupes') {
-      await record(page, lane, n, 'filter (client, undebounced)', note, () =>
-        dupesFilterOnce(page, n),
+      await record(
+        page,
+        lane,
+        n,
+        'filter (server, 250ms debounce)',
+        `${note} includes 250ms debounce floor`.trim(),
+        () => dupesFilterOnce(page, n),
       );
       const dupeCb = 'input[aria-label="Select candidate 1"]';
       const dupeOwner = await hitPointOwner(page, dupeCb);
@@ -810,7 +906,10 @@ test.describe('review lane responsiveness (measurement only)', () => {
         page,
         lane,
         n,
-        'filter (client, 250ms debounce)',
+        // "server", not "client": this lane's search is pushed down too. The
+        // label read "client" until dupes moved server-side and made the two
+        // rows contradict each other -- same mechanism, different word.
+        'filter (server, 250ms debounce)',
         `${note} includes 250ms debounce floor`.trim(),
         () => regroupFilterOnce(page, n),
       );
