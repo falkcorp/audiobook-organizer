@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-09-02
 
@@ -460,10 +460,6 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	// WHY Snapshot/Mutate: saving the previous config and rolling it back on
-	// error are writes to the global AppConfig; use the accessors so concurrent
-	// HTTP requests or background goroutines see a consistent value.
-	previousConfig := config.Snapshot()
 	status, resp := h.configUpdate.UpdateConfig(c.Request.Context(), payload)
 	if status >= 400 {
 		// No rollback here: UpdateService owns the in-memory/persisted state
@@ -480,13 +476,11 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	if snapForValidate := config.Snapshot(); snapForValidate.Validate() != nil {
-		validateErr := snapForValidate.Validate()
-		// Roll back to previous config under the write lock.
-		config.Mutate(func(cfg *config.Config) { *cfg = previousConfig })
-		httputil.RespondWithBadRequest(c, validateErr.Error())
-		return
-	}
+	// No Validate-and-roll-back here any more. It used to run AFTER
+	// UpdateConfig had already persisted, and undid the change in memory only —
+	// leaving the blob, and the dedup engine, holding a config that memory had
+	// just reverted. UpdateService now validates the CANDIDATE before the swap
+	// and returns 400 with nothing written, so there is nothing to undo.
 
 	maskedConfig := h.configUpdate.MaskSecrets(config.Snapshot())
 	response := gin.H{"config": maskedConfig}

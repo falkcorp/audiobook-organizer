@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.17.0
+// version: 3.18.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-09-02
 
@@ -254,6 +254,52 @@ var secretFieldKeys = []string{
 // immutableFieldKeys cannot be changed at runtime and are rejected if present.
 var immutableFieldKeys = []string{"database_type", "enable_sqlite"}
 
+// applySecretUpdates copies the five secret fields out of the payload onto cfg.
+//
+// WHY it takes a *Config instead of calling Mutate itself: it used to be five
+// separate Mutate calls that wrote straight into the LIVE config, before the
+// payload had been validated. A PUT that rotated a key AND carried an invalid
+// dedup ladder was then rejected with a 400 while the new key stayed live in
+// memory and never reached the blob — so the process authenticated with the
+// new key until the next restart silently reverted it. That is the same
+// memory/disk divergence this file's deep-copy rework exists to remove, and
+// the handler-level "roll back on any >=400" that used to paper over it is
+// gone. Now the secrets land on the candidate like every other field, and a
+// rejected PUT changes nothing at all.
+//
+// acceptSecretUpdate still compares against the value currently stored on cfg,
+// and the caller runs this inside Mutate, so the check-then-act stays under
+// the write lock.
+func applySecretUpdates(cfg *Config, payload map[string]any) {
+	if val, ok := payloadString(payload, "openai_api_key"); ok {
+		slog.Debug("UpdateConfig updating OpenAI API key (len)", "val_count", len(val))
+		if acceptSecretUpdate(val, cfg.OpenAIAPIKey) {
+			cfg.OpenAIAPIKey = val
+		}
+	}
+	if val, ok := payloadString(payload, "acoustid_api_key"); ok {
+		slog.Debug("UpdateConfig updating AcoustID API key (len)", "val_count", len(val))
+		if acceptSecretUpdate(val, cfg.AcoustIDAPIKey) {
+			cfg.AcoustIDAPIKey = val
+		}
+	}
+	if val, ok := payloadString(payload, "google_books_api_key"); ok {
+		if acceptSecretUpdate(val, cfg.GoogleBooksAPIKey) {
+			cfg.GoogleBooksAPIKey = val
+		}
+	}
+	if val, ok := payloadString(payload, "hardcover_api_token"); ok {
+		if acceptSecretUpdate(val, cfg.HardcoverAPIToken) {
+			cfg.HardcoverAPIToken = val
+		}
+	}
+	if val, ok := payloadString(payload, "basic_auth_password"); ok {
+		if acceptSecretUpdate(val, cfg.BasicAuthPassword) {
+			cfg.BasicAuthPassword = val
+		}
+	}
+}
+
 // UpdateConfig applies a config update payload to AppConfig and persists it.
 //
 // Architecture: non-secret fields are applied via JSON round-trip onto AppConfig.
@@ -302,43 +348,8 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	// the incoming value against the currently stored one, so reading the
 	// current value outside the lock and writing inside it would be a
 	// check-then-act race with any concurrent writer.
-	if val, ok := payloadString(payload, "openai_api_key"); ok {
-		slog.Debug("UpdateConfig updating OpenAI API key (len)", "val_count", len(val))
-		Mutate(func(c *Config) {
-			if acceptSecretUpdate(val, c.OpenAIAPIKey) {
-				c.OpenAIAPIKey = val
-			}
-		})
-	}
-	if val, ok := payloadString(payload, "acoustid_api_key"); ok {
-		slog.Debug("UpdateConfig updating AcoustID API key (len)", "val_count", len(val))
-		Mutate(func(c *Config) {
-			if acceptSecretUpdate(val, c.AcoustIDAPIKey) {
-				c.AcoustIDAPIKey = val
-			}
-		})
-	}
-	if val, ok := payloadString(payload, "google_books_api_key"); ok {
-		Mutate(func(c *Config) {
-			if acceptSecretUpdate(val, c.GoogleBooksAPIKey) {
-				c.GoogleBooksAPIKey = val
-			}
-		})
-	}
-	if val, ok := payloadString(payload, "hardcover_api_token"); ok {
-		Mutate(func(c *Config) {
-			if acceptSecretUpdate(val, c.HardcoverAPIToken) {
-				c.HardcoverAPIToken = val
-			}
-		})
-	}
-	if val, ok := payloadString(payload, "basic_auth_password"); ok {
-		Mutate(func(c *Config) {
-			if acceptSecretUpdate(val, c.BasicAuthPassword) {
-				c.BasicAuthPassword = val
-			}
-		})
-	}
+	// Secrets are NOT applied here any more — see applySecretUpdates. They go
+	// onto the CANDIDATE inside the single Mutate below, with everything else.
 
 	// Build filtered payload without secrets (already applied above)
 	filtered := make(map[string]any, len(payload))
@@ -362,6 +373,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	var (
 		unmarshalErr error
 		ladderErr    error
+		validateErr  error
 		// prior is a DEEP copy of the whole in-memory config as it stood
 		// immediately before the update, captured under the write lock. It is
 		// the rollback target when the save fails, and includes the secret
@@ -393,6 +405,12 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// not in a scalar field and not as a stray key in a shared map.
 		candidate := c.Clone()
 
+		// Secrets first, on the candidate — same order as before (they used to
+		// be applied to the live config immediately above this Mutate), and the
+		// filtered payload below carries no secret keys so the unmarshal cannot
+		// clobber them.
+		applySecretUpdates(candidate, payload)
+
 		// Captured INSIDE the lock, immediately before the unmarshal that would
 		// clobber them, so no concurrent writer can slip between snapshot and
 		// restore. See restoreMaskedCredentials for why this is needed.
@@ -414,10 +432,39 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 			ladderErr = newLadderErr
 			return
 		}
+		// Whole-config validation, also on the candidate. This used to run in
+		// the HTTP handler AFTER UpdateConfig had already saved, and rolled the
+		// live config back to a shallow Snapshot on failure — which left the
+		// blob (and, once the ladder started reaching it, the engine) holding a
+		// config that memory had just reverted. Validating before the swap
+		// means an invalid config is refused with nothing written anywhere.
+		//
+		// Validate() also NORMALIZES (it resolves the iTunes shims and fills an
+		// empty embedding.vector_backend), so it is always run on the candidate
+		// — those fixups have to reach the config that gets stored.
+		//
+		// Only a PUT that INTRODUCES invalidity is refused. If the config was
+		// ALREADY invalid before this request — an old blob predating a field
+		// the enum checks now cover — then failing every PUT would lock the
+		// operator out of fixing anything at all, including the bad field,
+		// since the payload is merged onto the stored config. That is a worse
+		// failure than the one being guarded, and the old handler-level check
+		// never had this problem: it saved first and only reverted memory, so
+		// the write still landed.
+		candidateErr := candidate.Validate()
+		priorCheck := prior.Clone()
+		if candidateErr != nil && priorCheck.Validate() == nil {
+			validateErr = candidateErr
+			return
+		}
 		*c = *candidate
 	})
 	if unmarshalErr != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to apply config: " + unmarshalErr.Error()}
+	}
+	if validateErr != nil {
+		slog.Warn("config update rejected: invalid configuration; nothing persisted", "err", validateErr)
+		return http.StatusBadRequest, map[string]any{"error": validateErr.Error()}
 	}
 	if ladderErr != nil {
 		slog.Warn("config update rejected: dedup score ladder invalid; nothing persisted", "err", ladderErr)
