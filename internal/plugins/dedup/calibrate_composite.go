@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
 // last-edited: 2026-09-02
 
@@ -664,14 +664,12 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 //     auto-resolving on the previous ladder.
 //
 // WHY a sink-less config.NewUpdateService(p.store) rather than the registry's
-// shared UpdateService: the shared one carries the dedup-score sink registered
-// by internal/server/registry_wire.go, which would perform step 3 itself — but
-// with context.Background() and without handing back the RescoreResult this op
-// reports. Using a private service keeps the reload under the op's ctx, gives
-// the op the counts, and avoids reloading (and rescoring the whole backlog)
-// twice. The trade-off is that step 3 here must stay in lock-step with that
-// sink; both call the same Engine.ReloadScoreConfig, so there is one place the
-// behaviour lives.
+// shared UpdateService: the shared one carries the dedup-score sink this
+// plugin installs (register.go), which would perform step 3 itself — but by
+// QUEUEING a dedup.rescore op, whose counts this op could not report and
+// whose ConcurrencyKey it would then be queued behind. Using a private
+// service keeps the re-band inline, under the op's own ctx and reporter, and
+// avoids re-banding the whole backlog twice.
 //
 // Returns the RescoreResult so the caller can report how many rows moved.
 func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) (dedupengine.RescoreResult, error) {
@@ -700,7 +698,7 @@ func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unifie
 		},
 	}
 	svc := config.NewUpdateService(p.store)
-	if err := svc.ApplyUpdates(payload); err != nil {
+	if err := svc.ApplyUpdates(ctx, payload); err != nil {
 		return dedupengine.RescoreResult{}, fmt.Errorf("persist band thresholds: %w", err)
 	}
 	log.Info("calibrate-composite APPLY: band thresholds persisted (survives restart via config blob)")
@@ -715,11 +713,11 @@ func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unifie
 	// only dedup.rescore does that — so the message says both.
 	liveCfg, err := config.Snapshot().Dedup.Signals.ScoreConfig()
 	if err != nil {
-		return dedupengine.RescoreResult{}, fmt.Errorf("band thresholds persisted but converting the persisted settings back into a score config failed — the live engine and the stored candidate bands are still on the previous ladder; fix the persisted dedup.signals via PUT /api/v1/config, then run dedup.rescore: %w", err)
+		return dedupengine.RescoreResult{}, fmt.Errorf("band thresholds persisted but converting the persisted settings back into a score config failed — the live engine and the stored candidate bands are still on the previous ladder; fix the persisted dedup.signals via PUT /api/v1/config, then "+dedupengine.RescoreRemedy+": %w", err)
 	}
 	res, err := p.engine.ReloadScoreConfig(ctx, liveCfg)
 	if err != nil {
-		return res, fmt.Errorf("band thresholds persisted but loading them into the live engine / re-banding stored candidates failed — run dedup.rescore to finish re-banding (a restart alone reloads the engine but leaves the stored bands stale): %w", err)
+		return res, fmt.Errorf("band thresholds persisted but loading them into the live engine / re-banding stored candidates failed — "+dedupengine.RescoreRemedy+" to finish re-banding (a restart alone reloads the engine but leaves the stored bands stale): %w", err)
 	}
 	log.Info("calibrate-composite APPLY: live engine reloaded and stored candidates re-banded",
 		"certain_min", liveCfg.BandCertainMin, "high_min", liveCfg.BandHighMin,

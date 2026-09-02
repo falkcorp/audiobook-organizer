@@ -5,6 +5,8 @@
 package systemmocks
 
 import (
+	"context"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -88,8 +90,8 @@ func (_c *MockConfigUpdateService_MaskSecrets_Call) RunAndReturn(run func(cfg co
 }
 
 // UpdateConfig provides a mock function for the type MockConfigUpdateService
-func (_mock *MockConfigUpdateService) UpdateConfig(payload map[string]any) (int, map[string]any) {
-	ret := _mock.Called(payload)
+func (_mock *MockConfigUpdateService) UpdateConfig(ctx context.Context, payload map[string]any) (int, map[string]any) {
+	ret := _mock.Called(ctx, payload)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateConfig")
@@ -97,16 +99,16 @@ func (_mock *MockConfigUpdateService) UpdateConfig(payload map[string]any) (int,
 
 	var r0 int
 	var r1 map[string]any
-	if returnFunc, ok := ret.Get(0).(func(map[string]any) (int, map[string]any)); ok {
-		return returnFunc(payload)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, map[string]any) (int, map[string]any)); ok {
+		return returnFunc(ctx, payload)
 	}
-	if returnFunc, ok := ret.Get(0).(func(map[string]any) int); ok {
-		r0 = returnFunc(payload)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, map[string]any) int); ok {
+		r0 = returnFunc(ctx, payload)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(map[string]any) map[string]any); ok {
-		r1 = returnFunc(payload)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, map[string]any) map[string]any); ok {
+		r1 = returnFunc(ctx, payload)
 	} else {
 		if ret.Get(1) != nil {
 			r1 = ret.Get(1).(map[string]any)
@@ -121,19 +123,25 @@ type MockConfigUpdateService_UpdateConfig_Call struct {
 }
 
 // UpdateConfig is a helper method to define mock.On call
+//   - ctx context.Context
 //   - payload map[string]any
-func (_e *MockConfigUpdateService_Expecter) UpdateConfig(payload any) *MockConfigUpdateService_UpdateConfig_Call {
-	return &MockConfigUpdateService_UpdateConfig_Call{Call: _e.mock.On("UpdateConfig", payload)}
+func (_e *MockConfigUpdateService_Expecter) UpdateConfig(ctx any, payload any) *MockConfigUpdateService_UpdateConfig_Call {
+	return &MockConfigUpdateService_UpdateConfig_Call{Call: _e.mock.On("UpdateConfig", ctx, payload)}
 }
 
-func (_c *MockConfigUpdateService_UpdateConfig_Call) Run(run func(payload map[string]any)) *MockConfigUpdateService_UpdateConfig_Call {
+func (_c *MockConfigUpdateService_UpdateConfig_Call) Run(run func(ctx context.Context, payload map[string]any)) *MockConfigUpdateService_UpdateConfig_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 map[string]any
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(map[string]any)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 map[string]any
+		if args[1] != nil {
+			arg1 = args[1].(map[string]any)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
@@ -144,7 +152,7 @@ func (_c *MockConfigUpdateService_UpdateConfig_Call) Return(n int, stringToAnyMo
 	return _c
 }
 
-func (_c *MockConfigUpdateService_UpdateConfig_Call) RunAndReturn(run func(payload map[string]any) (int, map[string]any)) *MockConfigUpdateService_UpdateConfig_Call {
+func (_c *MockConfigUpdateService_UpdateConfig_Call) RunAndReturn(run func(ctx context.Context, payload map[string]any) (int, map[string]any)) *MockConfigUpdateService_UpdateConfig_Call {
 	_c.Call.Return(run)
 	return _c
 }

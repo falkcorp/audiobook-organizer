@@ -1309,9 +1309,115 @@ func (s *EmbeddingStore) UpdateCandidateLLM(id int64, verdict, reason string) er
 	})
 }
 
+// CandidateScoreUpdate is one row's re-computed score for UpdateCandidateScores.
+type CandidateScoreUpdate struct {
+	ID             int64
+	Score          *models.UnifiedDedupScore
+	Band           string
+	FormulaVersion string
+}
+
+// UpdateCandidateScores is the bulk form of UpdateCandidateScore, built for
+// Engine.Rescore's whole-backlog pass (27k+ pending rows in prod).
+//
+// Every row's read-modify-write happens under s.mu — the SAME lock
+// UpsertCandidateNew holds — so a concurrent dedup.full-scan re-upserting a
+// pair can no longer interleave with the re-band on dedupRecKey(id) and lose
+// one side's fields (last writer wins was the failure mode; the per-row
+// updateCandidate path skipped s.mu entirely). All rows in the call go into
+// ONE Pebble batch committed with candidateWriteOpts (NoSync): the per-row
+// pebble.Sync that updateCandidate uses is exactly the fsync-per-row pattern
+// candidateWriteOpts documents as the 2026-07-06 nine-hour stall, and the
+// old Rescore did it once per changed row. Durability is restored by the
+// caller with ONE SyncCandidateWrites() after its last batch.
+//
+// Returns the number of rows written, the ids of rows that could not be
+// updated individually (record missing — deleted since it was listed — or
+// undecodable; the rest of the batch still commits), and a non-nil error only
+// when the batch as a whole failed, in which case NONE of the rows were
+// written and applied is 0.
+func (s *EmbeddingStore) UpdateCandidateScores(updates []CandidateScoreUpdate) (applied int, failed []int64, err error) {
+	if len(updates) == 0 {
+		return 0, nil, nil
+	}
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return 0, nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	now := time.Now().UnixNano()
+	for _, u := range updates {
+		val, closer, err := s.db.Get(dedupRecKey(u.ID))
+		if err == pebble.ErrNotFound {
+			failed = append(failed, u.ID)
+			continue
+		}
+		if err != nil {
+			return 0, nil, fmt.Errorf("update candidate scores read %d: %w", u.ID, err)
+		}
+		var rec candRec
+		if err := json.Unmarshal(val, &rec); err != nil {
+			closer.Close()
+			failed = append(failed, u.ID)
+			continue
+		}
+		closer.Close()
+		rec.ScoreBreakdown = u.Score
+		rec.Band = u.Band
+		rec.FormulaVersion = u.FormulaVersion
+		rec.UpdatedAt = now
+		data, err := json.Marshal(rec)
+		if err != nil {
+			failed = append(failed, u.ID)
+			continue
+		}
+		if err := b.Set(dedupRecKey(u.ID), data, nil); err != nil {
+			return 0, nil, fmt.Errorf("update candidate scores set %d: %w", u.ID, err)
+		}
+		applied++
+	}
+	if applied == 0 {
+		return 0, failed, nil
+	}
+	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
+		return 0, nil, fmt.Errorf("update candidate scores commit: %w", err)
+	}
+	return applied, failed, nil
+}
+
+// SyncCandidateWrites makes every candidate write committed so far durable
+// with a single WAL fsync. Pebble's WAL is sequential, so one Sync write
+// after a run of NoSync batches (UpdateCandidateScores, UpsertCandidateNew)
+// covers all of them — the one-fsync-per-run pattern candidateWriteOpts asks
+// for instead of one per row.
+func (s *EmbeddingStore) SyncCandidateWrites() error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	return s.db.LogData(nil, pebble.Sync)
+}
+
+// updateCandidate is the single-row read-modify-write behind
+// UpdateCandidateScore / UpdateCandidateLLM. It holds s.mu across the
+// read-modify-write for the same reason UpdateCandidateScores does: without
+// it a concurrent UpsertCandidateNew on the same row is a lost update. The
+// per-row pebble.Sync stays — these are one-off writes, not the whole-backlog
+// loop; bulk callers use UpdateCandidateScores + SyncCandidateWrites.
 func (s *EmbeddingStore) updateCandidate(id int64, mutFn func(*candRec)) error {
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	val, closer, err := s.db.Get(dedupRecKey(id))
 	if err == pebble.ErrNotFound {
 		return nil

@@ -1,6 +1,6 @@
 // file: internal/plugins/dedup/register.go
-// version: 1.2.0
-// last-edited: 2026-08-19
+// version: 1.3.0
+// last-edited: 2026-09-02
 
 // Service registry registration for the dedup UOS plugin (W5/W7).
 //
@@ -18,6 +18,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -27,7 +29,7 @@ import (
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "dedupplugin",
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore},
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore, serviceregistry.KeyConfigUpdate},
 		Groups: []string{"plugins"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, serviceregistry.KeyDedup)
@@ -49,6 +51,21 @@ func (p *Plugin) PostInit(ctx context.Context, c *serviceregistry.Container) err
 	if p == nil {
 		return nil
 	}
+	// The dedup-score sink lives here, not in the dedup ServiceDef in
+	// internal/server/registry_wire.go, because it needs BOTH the engine and
+	// the ops registry: a PUT /api/v1/config that changes dedup.signals swaps
+	// the ladder into the live engine and queues dedup.rescore to re-band the
+	// stored rows (see rescore_op.go). It is installed before op registration
+	// so a PUT arriving mid-startup cannot find a half-wired service — and
+	// unconditionally on the registry being present, so a missing ops registry
+	// surfaces as a sink error naming the manual remedy rather than as a
+	// silently un-re-banded backlog.
+	if updateSvc, ok := serviceregistry.TryGet[*config.UpdateService](c, serviceregistry.KeyConfigUpdate); ok && updateSvc != nil {
+		updateSvc.SetDedupScoreConfigSink(p.dedupScoreSink)
+	} else {
+		slog.Warn("PostInit configupdate service not available; dedup.signals changes will not reach the live engine until restart")
+	}
+
 	wrapper, ok := serviceregistry.TryGet[*opsregistry.RegistryWrapper](c, "opregistry")
 	if !ok || wrapper == nil {
 		slog.Warn("PostInit opregistry not available, skipping op-def registration")

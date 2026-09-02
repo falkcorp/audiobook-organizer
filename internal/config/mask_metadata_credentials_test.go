@@ -1,11 +1,12 @@
 // file: internal/config/mask_metadata_credentials_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c4f9a71-6b83-4d05-9e12-7a8f3b6c0d54
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -252,7 +253,7 @@ func TestUpdateConfig_EchoedMaskDoesNotDestroyStoredCredential(t *testing.T) {
 		t.Fatalf("test is not exercising the bug: payload carries the cleartext key %q", got)
 	}
 
-	if status, resp := us.UpdateConfig(payload); status != http.StatusOK {
+	if status, resp := us.UpdateConfig(context.Background(), payload); status != http.StatusOK {
 		t.Fatalf("UpdateConfig returned %d: %v", status, resp)
 	}
 
@@ -280,7 +281,7 @@ func TestUpdateConfig_NewCredentialIsWrittenThrough(t *testing.T) {
 			},
 		},
 	}
-	if status, resp := us.UpdateConfig(payload); status != http.StatusOK {
+	if status, resp := us.UpdateConfig(context.Background(), payload); status != http.StatusOK {
 		t.Fatalf("UpdateConfig returned %d: %v", status, resp)
 	}
 
@@ -302,7 +303,7 @@ func TestUpdateConfig_EchoedScalarMaskDoesNotDestroySecret(t *testing.T) {
 	us := NewUpdateService(newMockSettingsStore())
 
 	payload := map[string]any{"google_books_api_key": database.MaskSecret(realKey)}
-	if status, resp := us.UpdateConfig(payload); status != http.StatusOK {
+	if status, resp := us.UpdateConfig(context.Background(), payload); status != http.StatusOK {
 		t.Fatalf("UpdateConfig returned %d: %v", status, resp)
 	}
 
@@ -317,7 +318,7 @@ func TestUpdateConfig_EmptyScalarStillClearsSecret(t *testing.T) {
 	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: realKey})
 	us := NewUpdateService(newMockSettingsStore())
 
-	if status, resp := us.UpdateConfig(map[string]any{"google_books_api_key": ""}); status != http.StatusOK {
+	if status, resp := us.UpdateConfig(context.Background(), map[string]any{"google_books_api_key": ""}); status != http.StatusOK {
 		t.Fatalf("UpdateConfig returned %d: %v", status, resp)
 	}
 
@@ -331,7 +332,7 @@ func TestUpdateConfig_NewScalarSecretIsWrittenThrough(t *testing.T) {
 	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: realKey})
 	us := NewUpdateService(newMockSettingsStore())
 
-	if status, resp := us.UpdateConfig(map[string]any{"google_books_api_key": rotated}); status != http.StatusOK {
+	if status, resp := us.UpdateConfig(context.Background(), map[string]any{"google_books_api_key": rotated}); status != http.StatusOK {
 		t.Fatalf("UpdateConfig returned %d: %v", status, resp)
 	}
 

@@ -1,11 +1,12 @@
 // file: internal/config/update_service_dedup_ladder_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 7d1c3a9e-5b2f-4e8a-9c6d-0f1e2a3b4c5d
 // last-edited: 2026-09-02
 
 package config
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"reflect"
@@ -49,10 +50,10 @@ func TestUpdateConfig_RejectsInvalidDedupLadderBeforePersisting(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 	sinkCalls := 0
-	svc.SetDedupScoreConfigSink(func(unified.ScoreConfig) error { sinkCalls++; return nil })
+	svc.SetDedupScoreConfigSink(func(context.Context, unified.ScoreConfig) (string, error) { sinkCalls++; return "op-1", nil })
 
 	// The exact UI failure mode: a 0–1 spinner step persisted band_certain_min=1.
-	status, resp := svc.UpdateConfig(map[string]any{
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{"band_certain_min": 1}},
 	})
 
@@ -81,7 +82,7 @@ func TestUpdateConfig_RejectsUnknownConfidenceKind(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	status, resp := svc.UpdateConfig(map[string]any{
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{
 			"confidence": map[string]any{"embeding_medium": map[string]any{"min_confidence": 0.7}},
 		}},
@@ -108,9 +109,12 @@ func TestUpdateConfig_ValidDedupLadderReachesSink(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 	var got []unified.ScoreConfig
-	svc.SetDedupScoreConfigSink(func(cfg unified.ScoreConfig) error { got = append(got, cfg); return nil })
+	svc.SetDedupScoreConfigSink(func(_ context.Context, cfg unified.ScoreConfig) (string, error) {
+		got = append(got, cfg)
+		return "op-1", nil
+	})
 
-	status, resp := svc.UpdateConfig(map[string]any{
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{
 			"band_certain_min": 98.5, "band_high_min": 91, "band_medium_min": 76, "band_review_min": 61,
 		}},
@@ -143,9 +147,9 @@ func TestUpdateConfig_UnrelatedFieldDoesNotTriggerSink(t *testing.T) {
 	ms, _ := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 	sinkCalls := 0
-	svc.SetDedupScoreConfigSink(func(unified.ScoreConfig) error { sinkCalls++; return nil })
+	svc.SetDedupScoreConfigSink(func(context.Context, unified.ScoreConfig) (string, error) { sinkCalls++; return "op-1", nil })
 
-	if status, resp := svc.UpdateConfig(map[string]any{"root_dir": "/lib"}); status != http.StatusOK {
+	if status, resp := svc.UpdateConfig(context.Background(), map[string]any{"root_dir": "/lib"}); status != http.StatusOK {
 		t.Fatalf("status = %d; resp = %v", status, resp)
 	}
 	if sinkCalls != 0 {
@@ -153,34 +157,199 @@ func TestUpdateConfig_UnrelatedFieldDoesNotTriggerSink(t *testing.T) {
 	}
 }
 
-// TestUpdateConfig_SinkErrorRollsBackMemoryAndBlob: if the engine refuses a
-// ladder that passed Validate, the update must fail AND the prior ladder must
-// be re-persisted — otherwise the blob holds a value the engine will refuse
-// again at the next startup.
-func TestUpdateConfig_SinkErrorRollsBackMemoryAndBlob(t *testing.T) {
+// TestUpdateConfig_SinkErrorKeepsSavedLadderAndNamesTheRemedy (PR #3052
+// follow-up, D2) replaces the old "…RollsBackMemoryAndBlob" test, which
+// asserted the OPPOSITE rule.
+//
+// The old rule: a sink error rolled memory AND the blob back to the previous
+// ladder. It was wrong in two ways. The message said "dedup engine rejected
+// the new score ladder", which cannot happen — the config layer runs the same
+// unified.ScoreConfig.Validate the engine runs, so a ladder that reaches the
+// sink always passes it; the only thing that can fail is the hand-off (engine
+// missing, re-band could not be queued). And the rollback created a
+// three-way split: the sink had already swapped the ladder into the live
+// engine before the failing step, so memory and the blob went back to the old
+// ladder while the engine kept scoring on the new one.
+//
+// The rule now: the saved ladder stays saved and live, the response is a 500
+// that says so, and it names the one action that finishes the job.
+//
+// Mutation check: restore the `Mutate(func(c *Config) { *c = prior })` +
+// re-save in the sink-error branch of UpdateConfig and this test fails on
+// band_certain_min = 97 and on the second blob write.
+func TestUpdateConfig_SinkErrorKeepsSavedLadderAndNamesTheRemedy(t *testing.T) {
 	restoreAppConfig(t)
 	Mutate(func(c *Config) {
 		c.Dedup.Signals = DedupSignalConfig{BandCertainMin: 97, BandHighMin: 90, BandMediumMin: 75, BandReviewMin: 60}
 	})
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
-	svc.SetDedupScoreConfigSink(func(unified.ScoreConfig) error { return errors.New("engine says no") })
+	svc.SetDedupScoreConfigSink(func(context.Context, unified.ScoreConfig) (string, error) {
+		return "", errors.New("engine hand-off failed")
+	})
 
-	status, resp := svc.UpdateConfig(map[string]any{
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{"band_certain_min": 98}},
 	})
 	if status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; resp = %v", status, resp)
 	}
-	if got := Snapshot().Dedup.Signals.BandCertainMin; got != 97 {
-		t.Errorf("in-memory band_certain_min = %v after sink failure, want rolled back to 97", got)
+	if got := Snapshot().Dedup.Signals.BandCertainMin; got != 98 {
+		t.Errorf("in-memory band_certain_min = %v after a hand-off failure, want the SAVED 98 kept (rolling back would disagree with the blob and the engine)", got)
 	}
-	// Two writes: the attempted new blob, then the rollback re-save of the prior.
-	if len(*blobs) != 2 {
-		t.Fatalf("expected 2 blob writes (attempt + rollback), got %d", len(*blobs))
+	if len(*blobs) != 1 {
+		t.Fatalf("expected exactly 1 blob write (the save; no rollback re-save), got %d", len(*blobs))
 	}
-	if !strings.Contains((*blobs)[1], `"band_certain_min":97`) {
-		t.Errorf("rollback blob does not restore the prior ladder: %s", (*blobs)[1])
+	if !strings.Contains((*blobs)[0], `"band_certain_min":98`) {
+		t.Errorf("persisted blob should hold the new ladder: %s", (*blobs)[0])
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "saved") {
+		t.Errorf("500 body must say the configuration WAS saved, got %q", msg)
+	}
+	if !strings.Contains(msg, "POST /api/v1/dedup/rescore") {
+		t.Errorf("500 body must name the remedy endpoint, got %q", msg)
+	}
+	if strings.Contains(msg, "rejected") || strings.Contains(msg, "rolled back") {
+		t.Errorf("500 body must not claim the engine rejected the ladder or that anything was rolled back, got %q", msg)
+	}
+	if saved, _ := resp["saved"].(bool); !saved {
+		t.Errorf(`response must carry saved=true so a caller can tell "nothing happened" from "saved but not re-banded"; resp = %v`, resp)
+	}
+}
+
+// TestUpdateConfig_SuccessReportsRescoreOpID: on the happy path the sink
+// returns the id of the queued dedup.rescore operation, and UpdateConfig hands
+// it back so the HTTP caller can follow the re-band it just triggered.
+func TestUpdateConfig_SuccessReportsRescoreOpID(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) { c.Dedup.Signals = DedupSignalConfig{} })
+	ms, _ := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+	svc.SetDedupScoreConfigSink(func(ctx context.Context, _ unified.ScoreConfig) (string, error) {
+		if ctx == nil {
+			t.Error("sink must receive the caller's context, not nil")
+		}
+		return "01JRESCORE", nil
+	})
+
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+		"dedup": map[string]any{"signals": map[string]any{
+			"band_certain_min": 98.5, "band_high_min": 91, "band_medium_min": 76, "band_review_min": 61,
+		}},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; resp = %v", status, resp)
+	}
+	if got, _ := resp["dedup_rescore_op_id"].(string); got != "01JRESCORE" {
+		t.Fatalf("dedup_rescore_op_id = %q, want the queued op id 01JRESCORE", got)
+	}
+}
+
+// TestUpdateConfig_RejectedPutLeavesNoStrayConfidenceKey is D1: the shallow-copy
+// bug, reproduced end to end.
+//
+// The setup is what production looks like AFTER one confidence override has
+// ever been saved: a NON-NIL Dedup.Signals.Confidence map in the live config.
+// UpdateConfig used to json.Unmarshal the payload straight into that live
+// struct — and json.Unmarshal MERGES into an existing map — so a PUT carrying
+// a typo'd kind wrote the bad key into the live map before validation could
+// reject it. The 400 rolled back with `*c = prior`, a struct assignment that
+// shares the very same map, so the bad key survived. From then on EVERY config
+// PUT failed validation on a key the operator never saved, and any unguarded
+// SaveConfigToDatabase caller (scheduler_admin.go, system/handler.go) could
+// persist the poisoned map into the blob, where it also blocks startup.
+//
+// Mutation check: change `candidate := c.Clone()` back to unmarshalling into
+// `c` (or `prior = c.Clone()` back to `prior = *c`) and the follow-up PUT here
+// returns 400.
+func TestUpdateConfig_RejectedPutLeavesNoStrayConfidenceKey(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.Dedup.Signals = DedupSignalConfig{
+			BandCertainMin: 97, BandHighMin: 90, BandMediumMin: 75, BandReviewMin: 60,
+			Confidence: map[string]DedupKindConfidence{
+				string(unified.SigEmbedMedium): {MinConfidence: 0.7, MaxConfidence: 0.8},
+			},
+		}
+	})
+	ms, blobs := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+
+	status, _ := svc.UpdateConfig(context.Background(), map[string]any{
+		"dedup": map[string]any{"signals": map[string]any{
+			"confidence": map[string]any{"embeding_medium": map[string]any{"min_confidence": 0.7}},
+		}},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("unknown-kind PUT status = %d, want 400", status)
+	}
+
+	// (1) The live map must not carry the rejected key.
+	live := Snapshot().Dedup.Signals.Confidence
+	if _, bad := live["embeding_medium"]; bad {
+		t.Errorf("rejected PUT left the typo'd kind in the LIVE confidence map: %+v", live)
+	}
+	if len(live) != 1 {
+		t.Errorf("live confidence map should still hold exactly the one real override, got %+v", live)
+	}
+	// (2) The live config must still be valid — i.e. a later, unrelated PUT works.
+	if status, resp := svc.UpdateConfig(context.Background(), map[string]any{"log_level": "debug"}); status != http.StatusOK {
+		t.Fatalf("a later unrelated PUT returned %d (%v) — the rejected PUT poisoned the live config", status, resp)
+	}
+	if got := Snapshot().LogLevel; got != "debug" {
+		t.Errorf("log_level = %q after the follow-up PUT, want debug", got)
+	}
+	// (3) Only the follow-up PUT may have persisted anything.
+	if len(*blobs) != 1 {
+		t.Fatalf("expected exactly 1 blob write (the successful follow-up), got %d", len(*blobs))
+	}
+	if strings.Contains((*blobs)[0], "embeding_medium") {
+		t.Errorf("the persisted blob carries the rejected kind: %s", (*blobs)[0])
+	}
+}
+
+// TestUpdateConfig_SaveFailureRestoresMapContents is the rollback half of D1:
+// when SaveConfigToDatabase fails the service restores the PREVIOUS config,
+// and that restore has to include map CONTENTS. With `prior = *c` the rollback
+// restored the same map header the update had already mutated in place, so a
+// PUT that added a confidence override left it in memory even though the
+// response said the save failed and memory was rolled back.
+//
+// Mutation check: `prior = c.Clone()` → `prior = *c` and this fails on the
+// leftover key.
+func TestUpdateConfig_SaveFailureRestoresMapContents(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.Dedup.Signals = DedupSignalConfig{
+			BandCertainMin: 97, BandHighMin: 90, BandMediumMin: 75, BandReviewMin: 60,
+			Confidence: map[string]DedupKindConfidence{
+				string(unified.SigEmbedMedium): {MinConfidence: 0.7, MaxConfidence: 0.8},
+			},
+		}
+	})
+	ms := mocks.NewMockStore(t)
+	ms.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.New("disk on fire")).Maybe()
+	ms.On("GetSetting", mock.Anything).Return((*database.Setting)(nil), nil).Maybe()
+	svc := NewUpdateService(ms)
+
+	status, _ := svc.UpdateConfig(context.Background(), map[string]any{
+		"dedup": map[string]any{"signals": map[string]any{
+			"confidence": map[string]any{
+				string(unified.SigEmbedHigh): map[string]any{"min_confidence": 0.9, "max_confidence": 0.95},
+			},
+		}},
+	})
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 on a save failure", status)
+	}
+	live := Snapshot().Dedup.Signals.Confidence
+	if _, leaked := live[string(unified.SigEmbedHigh)]; leaked {
+		t.Errorf("save failed and memory was reported rolled back, but the new confidence entry is still live: %+v", live)
+	}
+	if len(live) != 1 {
+		t.Errorf("rollback should restore exactly the prior map contents, got %+v", live)
 	}
 }
 

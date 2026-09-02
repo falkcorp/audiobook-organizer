@@ -1,11 +1,12 @@
 // file: internal/config/update_service_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e5f6g7h8-i9j0-k1l2-m3n4-o5p6q7r8s9t0
-// last-edited: 2026-07-10
+// last-edited: 2026-09-02
 
 package config
 
 import (
+	"context"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -76,7 +77,7 @@ func TestUpdateService_ApplyUpdates_Success(t *testing.T) {
 		AppConfig.RootDir = originalDir
 	}()
 
-	if err := service.ApplyUpdates(updates); err != nil {
+	if err := service.ApplyUpdates(context.Background(), updates); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
@@ -100,7 +101,7 @@ func TestUpdateService_FlatKeysDropped(t *testing.T) {
 
 	// Seed a known value, then send the flat key with the OPPOSITE value.
 	Mutate(func(c *Config) { c.Dedup.EmbeddingsEnabled = true })
-	if err := service.ApplyUpdates(map[string]any{"dedup_embeddings_enabled": false}); err != nil {
+	if err := service.ApplyUpdates(context.Background(), map[string]any{"dedup_embeddings_enabled": false}); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
@@ -122,7 +123,7 @@ func TestUpdateService_NestedKeysStillApply(t *testing.T) {
 
 	Mutate(func(c *Config) { c.Dedup.EmbeddingsEnabled = true })
 	updates := map[string]any{"dedup": map[string]any{"embeddings_enabled": false}}
-	if err := service.ApplyUpdates(updates); err != nil {
+	if err := service.ApplyUpdates(context.Background(), updates); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
