@@ -1,6 +1,7 @@
 // file: internal/logger/operation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-09-02
 
 package logger
 
@@ -20,7 +21,7 @@ import (
 type opStoreCalls struct {
 	mu       sync.Mutex
 	logs     []string
-	changes  []interface{}
+	changes  []any
 	progress []string
 }
 
@@ -38,7 +39,7 @@ func newOpStoreMock(t *testing.T) (*mocks.MockOperationStore, *opStoreCalls) {
 		}).Maybe()
 	m.EXPECT().
 		CreateOperationChange(mock.Anything).
-		RunAndReturn(func(change interface{}) error {
+		RunAndReturn(func(change any) error {
 			calls.mu.Lock()
 			defer calls.mu.Unlock()
 			calls.changes = append(calls.changes, change)
