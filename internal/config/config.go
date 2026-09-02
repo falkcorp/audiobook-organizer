@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.100.0
+// version: 1.101.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-02
 
@@ -240,9 +240,11 @@ type DedupSignalConfig struct {
 	// whether ComposeScore should start doing so). Since 2026-09-02 this map
 	// DOES reach the live engine's ScoreConfig.Signals — via
 	// DedupSignalConfig.ScoreConfig (dedup_score_config.go) → dedup.NewEngine
-	// at startup, and → Engine.ReloadScoreConfig through the UpdateService's
-	// dedup-score sink on every PUT /api/v1/config and calibrate apply — the
-	// same channel the band_*_min fields use. So once ComposeScore starts
+	// at startup, and → Engine.SetScoreConfig through the UpdateService's
+	// dedup-score sink on every PUT /api/v1/config (which then queues the
+	// dedup.rescore op to re-band stored rows) or → Engine.ReloadScoreConfig
+	// on a calibrate apply, which is already inside an op and so re-bands
+	// inline — the same channel the band_*_min fields use. So once ComposeScore starts
 	// clamping there is nothing left to wire; until then the bounds are
 	// carried, not applied. A kind name not seeded by DefaultScoreConfig is
 	// REJECTED (400 on PUT, refused at startup), not skipped.

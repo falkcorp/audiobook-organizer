@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/rescore_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1a9f38-7b62-4d0e-9a15-6e3b8c07d24f
 // last-edited: 2026-09-02
 
@@ -22,6 +22,8 @@ package dedup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -38,6 +40,50 @@ type RescoreParams struct {
 	// Reason is free text recorded in the op log so an operator can tell a
 	// config-PUT-triggered re-band from a hand-run one.
 	Reason string `json:"reason,omitempty"`
+	// LadderFingerprint identifies the score ladder whose save triggered this
+	// re-band. It exists ONLY as a dedupe discriminator and an audit record —
+	// runRescore deliberately does NOT read it (see below).
+	//
+	// WHY it has to be here: Registry.EnqueueOp collapses an enqueue onto an
+	// already-active op with the same ConcurrencyKey and BYTE-EQUAL params.
+	// Without a per-ladder field every config PUT would enqueue the identical
+	// {"apply":true,"reason":"…"} blob, so a second PUT landing while the
+	// first re-band is still running would be handed the RUNNING op's id and
+	// queue nothing. That op read the ladder once, at its start (Rescore does
+	// cfg := de.ScoreConfig()), so it would finish the backlog under the OLD
+	// ladder and the new one would never reach the stored rows — the exact
+	// silent half-applied state D4 set out to remove, and it would look like
+	// a success because the PUT got a real op id back.
+	//
+	// With the fingerprint the dedupe becomes correct in every case rather
+	// than defeated: the same ladder enqueued twice while a re-band for it is
+	// still active DOES collapse (that op re-bands under this very ladder, so
+	// a second pass is pure duplicate work), and two different ladders never
+	// collapse — the second queues behind the first on the shared
+	// dedup.full-scan key and re-bands the whole backlog again.
+	//
+	// It is NOT the ladder the op scores with. runRescore re-bands under the
+	// engine's CURRENT ladder, which is the persisted truth; if three PUTs
+	// queue three ops, all three legitimately re-band under the newest ladder
+	// and the last two are cheap no-ops. Scoring from a value frozen into
+	// params would instead re-band the library under a ladder the operator
+	// has already replaced.
+	LadderFingerprint string `json:"ladder_fingerprint,omitempty"`
+}
+
+// ladderFingerprint is a short stable digest of a score ladder, used as
+// RescoreParams.LadderFingerprint. encoding/json sorts map keys, so the same
+// ladder always produces the same digest.
+func ladderFingerprint(cfg unified.ScoreConfig) string {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		// Unreachable for a plain-data struct. Fall back to a value that
+		// cannot collide with a real digest, so a marshal failure degrades to
+		// "never dedupe" rather than "always dedupe".
+		return "unfingerprintable-" + time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }
 
 func (p *Plugin) rescoreDef() sdk.OperationDef {
@@ -79,12 +125,14 @@ func (p *Plugin) runRescore(ctx context.Context, raw json.RawMessage, reporter s
 	res, err := p.engine.Rescore(ctx, params.Apply)
 	if err != nil {
 		reporter.Logger().Error("dedup rescore failed", "error", err,
-			"inspected", res.Inspected, "changed", res.Changed, "write_errors", res.WriteErrors)
+			"inspected", res.Inspected, "changed", res.Changed,
+			"written", res.Written, "write_errors", res.WriteErrors)
 		return fmt.Errorf("dedup rescore: %w", err)
 	}
 	reporter.Logger().Info("dedup rescore complete",
 		"apply", params.Apply, "reason", params.Reason,
 		"inspected", res.Inspected, "changed", res.Changed,
+		"written", res.Written,
 		"skipped_no_breakdown", res.Skipped, "write_errors", res.WriteErrors,
 		"band_deltas", res.BandDeltas)
 	// WriteErrors is a partial failure, not a success with a footnote: those
@@ -121,8 +169,9 @@ func (p *Plugin) dedupScoreSink(ctx context.Context, cfg unified.ScoreConfig) (s
 		return "", fmt.Errorf("operation registry not available; the new ladder is live but stored candidates keep their current band until you %s", dedupengine.RescoreRemedy)
 	}
 	opID, err := p.registry.EnqueueOp(ctx, "dedup.rescore", RescoreParams{
-		Apply:  true,
-		Reason: "dedup.signals changed via PUT /api/v1/config",
+		Apply:             true,
+		Reason:            "dedup.signals changed via PUT /api/v1/config",
+		LadderFingerprint: ladderFingerprint(cfg),
 	})
 	if err != nil {
 		return "", fmt.Errorf("queueing the candidate re-band failed: %w; the new ladder is live but stored candidates keep their current band until you %s", err, dedupengine.RescoreRemedy)

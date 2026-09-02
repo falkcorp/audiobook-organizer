@@ -1,5 +1,5 @@
 // file: internal/dedup/rescore_writeback_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d7f4a16-08b5-4c93-91ae-5f6c3d20b784
 // last-edited: 2026-09-02
 
@@ -205,5 +205,77 @@ func TestRescore_SyncFailureIsAnError(t *testing.T) {
 	}
 	if _, err := eng.Rescore(context.Background(), true); err == nil {
 		t.Fatal("Rescore reported success although the final sync failed")
+	}
+}
+
+// TestRescore_CancelledMidPassDoesNotClaimBufferedRows is the honest-counter
+// statement. Rescore buffers changed rows and writes them in batches, so a
+// cancellation between two flushes abandons whatever is buffered. Those rows
+// were already counted in Changed; if the caller infers "written" as
+// Changed-WriteErrors it credits rows the store never saw. Written is counted
+// from what the store CONFIRMED, and the abandoned buffer is counted as write
+// errors.
+//
+// Mutation check: drop the `result.WriteErrors += len(pending)` from the
+// ctx.Err() branch, or compute Written as Changed-WriteErrors, and this fails.
+func TestRescore_CancelledMidPassDoesNotClaimBufferedRows(t *testing.T) {
+	eng, store := newRescoreTestEngine(t)
+	es := database.NewEmbeddingStore(store.DB())
+	const rows = 8
+	seedRescorableCandidates(t, es, rows)
+
+	w := &recordingRescoreWriter{}
+	eng.SetRescoreWriter(w)
+	cfg := unified.DefaultScoreConfig()
+	cfg.BandCertainMin = 93
+	if err := eng.SetScoreConfig(cfg); err != nil {
+		t.Fatalf("SetScoreConfig: %v", err)
+	}
+
+	// Cancel before the loop starts its second row: rows land in the buffer
+	// (batch size is 500, far above `rows`) and no flush ever happens.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := eng.Rescore(ctx, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Rescore err = %v, want context.Canceled", err)
+	}
+	if res.Written != 0 {
+		t.Errorf("Written = %d, want 0 — nothing was flushed, so nothing was written", res.Written)
+	}
+	if len(w.batches) != 0 {
+		t.Errorf("store saw %d batches, want 0", len(w.batches))
+	}
+	if res.Written+res.WriteErrors != res.Changed {
+		t.Errorf("Written(%d) + WriteErrors(%d) != Changed(%d): a cancelled run must account for every changed row it counted",
+			res.Written, res.WriteErrors, res.Changed)
+	}
+}
+
+// TestRescore_WrittenCountsWhatTheStoreConfirmed: on a partial per-row failure
+// Written reports only the rows the store applied.
+func TestRescore_WrittenCountsWhatTheStoreConfirmed(t *testing.T) {
+	eng, store := newRescoreTestEngine(t)
+	es := database.NewEmbeddingStore(store.DB())
+	const rows = 6
+	seedRescorableCandidates(t, es, rows)
+
+	w := &recordingRescoreWriter{failIDs: map[int64]bool{2: true, 4: true}}
+	eng.SetRescoreWriter(w)
+	cfg := unified.DefaultScoreConfig()
+	cfg.BandCertainMin = 93
+	if err := eng.SetScoreConfig(cfg); err != nil {
+		t.Fatalf("SetScoreConfig: %v", err)
+	}
+
+	res, err := eng.Rescore(context.Background(), true)
+	if err != nil {
+		t.Fatalf("Rescore: %v", err)
+	}
+	if res.WriteErrors != 2 {
+		t.Fatalf("WriteErrors = %d, want 2", res.WriteErrors)
+	}
+	if res.Written != res.Changed-2 {
+		t.Errorf("Written = %d, want %d (Changed %d minus the 2 rows the store refused)", res.Written, res.Changed-2, res.Changed)
 	}
 }

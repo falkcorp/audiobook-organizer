@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.75.0
+// version: 1.76.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-02
 
@@ -394,7 +394,7 @@ func (de *Engine) ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig
 	res, err := de.Rescore(ctx, true)
 	if err != nil {
 		return res, fmt.Errorf("dedup: the new score ladder is live, but re-banding the stored candidates failed after %d of %d rows (the rest still carry the previous ladder's band; %s): %w",
-			res.Changed-res.WriteErrors, res.Inspected, RescoreRemedy, err)
+			res.Written, res.Inspected, RescoreRemedy, err)
 	}
 	if res.WriteErrors > 0 {
 		return res, fmt.Errorf("dedup: the new score ladder is live, but %d of %d changed candidate rows could not be re-banded (they still carry the previous ladder's band; see the per-row warnings and %s)", res.WriteErrors, res.Changed, RescoreRemedy)
@@ -3387,6 +3387,13 @@ type RescoreResult struct {
 	Skipped int `json:"skipped"`
 	// Changed is the count of candidates whose band or score changed.
 	Changed int `json:"changed"`
+	// Written is the count of changed candidates the store CONFIRMED it wrote
+	// (apply=true only). It is counted from what UpdateCandidateScores reports
+	// applied, not inferred as Changed-WriteErrors: a run cancelled mid-pass
+	// leaves rows counted in Changed that were never even attempted, so the
+	// subtraction overstates what landed. Written + WriteErrors can therefore
+	// be less than Changed, and that gap is real, not a bookkeeping error.
+	Written int `json:"written,omitempty"`
 	// Applied is true when changes were written back to the store.
 	Applied bool `json:"applied"`
 	// WriteErrors is the count of changed candidates whose new score/band
@@ -3452,7 +3459,8 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 		if len(pending) == 0 {
 			return
 		}
-		_, failed, err := de.rescoreStore().UpdateCandidateScores(pending)
+		applied, failed, err := de.rescoreStore().UpdateCandidateScores(pending)
+		result.Written += applied
 		switch {
 		case err != nil:
 			result.WriteErrors += len(pending)
@@ -3468,6 +3476,12 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 
 	for _, cand := range candidates {
 		if err := ctx.Err(); err != nil {
+			// Rows already banded into `pending` were counted in Changed but
+			// will never be written — the batch is abandoned with the run.
+			// Count them as write errors so a cancelled re-band reports the
+			// same partial state as a failed one instead of silently claiming
+			// them.
+			result.WriteErrors += len(pending)
 			return result, err
 		}
 		result.Inspected++
@@ -3514,6 +3528,7 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 		"skipped", result.Skipped,
 		"changed", result.Changed,
 		"applied", result.Applied,
+		"written", result.Written,
 		"write_errors", result.WriteErrors,
 	)
 	return result, nil
