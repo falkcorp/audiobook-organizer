@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 package importer
 
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -179,13 +180,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 
 	// Check if file extension is supported
 	ext := strings.ToLower(filepath.Ext(req.FilePath))
-	supported := false
-	for _, supportedExt := range config.AppConfig.SupportedExtensions {
-		if ext == supportedExt {
-			supported = true
-			break
-		}
-	}
+	supported := slices.Contains(config.AppConfig.SupportedExtensions, ext)
 
 	if !supported {
 		return nil, fmt.Errorf("unsupported file type: %s", ext)
@@ -226,7 +221,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	book := &database.Book{
 		Title:            meta.Title,
 		FilePath:         req.FilePath,
-		OriginalFilename: stringPtr(filepath.Base(req.FilePath)),
+		OriginalFilename: new(filepath.Base(req.FilePath)),
 	}
 
 	// Set author if available
@@ -274,19 +269,19 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		book.Title = meta.Album
 	}
 	if meta.Narrator != "" {
-		book.Narrator = stringPtr(meta.Narrator)
+		book.Narrator = new(meta.Narrator)
 	}
 	if meta.Language != "" {
-		book.Language = stringPtr(meta.Language)
+		book.Language = new(meta.Language)
 	}
 	if meta.Publisher != "" {
-		book.Publisher = stringPtr(meta.Publisher)
+		book.Publisher = new(meta.Publisher)
 	}
 	if meta.ISBN10 != "" {
-		book.ISBN10 = stringPtr(meta.ISBN10)
+		book.ISBN10 = new(meta.ISBN10)
 	}
 	if meta.ISBN13 != "" {
-		book.ISBN13 = stringPtr(meta.ISBN13)
+		book.ISBN13 = new(meta.ISBN13)
 	}
 
 	// Create book in database
@@ -393,8 +388,4 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		FilePath:       created.FilePath,
 		AuthorResolved: created.AuthorID != nil || created.Author != nil,
 	}, nil
-}
-
-func stringPtr(s string) *string {
-	return &s
 }
