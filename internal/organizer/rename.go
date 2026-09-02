@@ -1,7 +1,7 @@
 // file: internal/organizer/rename.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -34,7 +34,7 @@ type RenameService struct {
 
 	// FilterUnchangedTags filters out tags that already match on-disk values.
 	// Breaks the metafetch import cycle.
-	FilterUnchangedTags func(filePath string, tags map[string]interface{}) map[string]interface{}
+	FilterUnchangedTags func(filePath string, tags map[string]any) map[string]any
 
 	// ComputeITunesPath computes the iTunes-compatible path for a file.
 	// Breaks the metafetch import cycle.
@@ -58,7 +58,7 @@ func NewRenameService(db Store) *RenameService {
 			}
 			return authorName, seriesName
 		},
-		FilterUnchangedTags: func(_ string, tags map[string]interface{}) map[string]interface{} {
+		FilterUnchangedTags: func(_ string, tags map[string]any) map[string]any {
 			return tags // default: no filtering
 		},
 		ComputeITunesPath: func(_ string) string { return "" },
@@ -227,7 +227,7 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 
 		// Step 3: Update DB with new file path
 		book.FilePath = proposedPath
-		book.LibraryState = stringPtr("organized")
+		book.LibraryState = new("organized")
 		if _, err := rs.db.UpdateBook(bookID, book); err != nil {
 			slog.Error("rename DB update failed for , rolling back", "bookID", bookID, "err", err)
 			if !sourceIsProtected {
@@ -357,8 +357,8 @@ func (rs *RenameService) computeTagChanges(book *database.Book, authorName, narr
 }
 
 // BuildTagMetadata constructs the metadata map for WriteMetadataToFile.
-func (rs *RenameService) BuildTagMetadata(book *database.Book, authorName, narratorStr string) map[string]interface{} {
-	meta := map[string]interface{}{
+func (rs *RenameService) BuildTagMetadata(book *database.Book, authorName, narratorStr string) map[string]any {
+	meta := map[string]any{
 		"title": book.Title,
 		"album": book.Title,
 		"genre": "Audiobook",
@@ -499,11 +499,6 @@ func (rs *RenameService) hardlinkOrCopy(src, dst string) error {
 		return fmt.Errorf("failed to finalize: %w", err)
 	}
 	return nil
-}
-
-// stringPtr returns a pointer to the given string.
-func stringPtr(s string) *string {
-	return &s
 }
 
 // stringOrDefault returns the string pointed to by p, or def if p is nil.

@@ -1,7 +1,7 @@
 // file: internal/organizer/pattern_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -44,7 +44,7 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				FilePath:       "/source/book3.m4b",
 				Author:         &database.Author{Name: "Richard Morgan"},
 				Series:         &database.Series{Name: "Takeshi Kovacs"},
-				SeriesSequence: intPtr(3),
+				SeriesSequence: new(3),
 			},
 			folderPattern:  "{author}/{series}",
 			filePattern:    "{series_number} - {title}",
@@ -58,7 +58,7 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				FilePath:       "/source/book1.m4b",
 				Author:         &database.Author{Name: "Richard Morgan"},
 				Series:         &database.Series{Name: "Takeshi Kovacs"},
-				SeriesSequence: intPtr(1),
+				SeriesSequence: new(1),
 			},
 			folderPattern:  "{author}/{series}",
 			filePattern:    "{series} #{series_number} - {title}",
@@ -86,7 +86,7 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				Title:    "A Court of Wings and Ruin",
 				FilePath: "/source/acowar.m4b",
 				Author:   &database.Author{Name: "Sarah J. Maas"},
-				Narrator: stringPtr("Jennifer Ikeda"),
+				Narrator: new("Jennifer Ikeda"),
 			},
 			folderPattern:  "{author}",
 			filePattern:    "{title} - {narrator}",
@@ -100,7 +100,7 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				Title:    "The Hobbit",
 				FilePath: "/source/hobbit.m4b",
 				Author:   &database.Author{Name: "J.R.R. Tolkien"},
-				Edition:  stringPtr("Remastered 2020"),
+				Edition:  new("Remastered 2020"),
 			},
 			folderPattern:  "{author}",
 			filePattern:    "{title} ({edition})",
@@ -115,8 +115,8 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				FilePath:       "/source/hunger.m4b",
 				Author:         &database.Author{Name: "Michael Grant"},
 				Series:         &database.Series{Name: "Gone"},
-				SeriesSequence: intPtr(2),
-				Narrator:       stringPtr("Nick Podehl"),
+				SeriesSequence: new(2),
+				Narrator:       new("Nick Podehl"),
 			},
 			folderPattern:  "{author}/{series}",
 			filePattern:    "{series} {series_number} - {title} - {narrator}",
@@ -143,8 +143,8 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				Title:     "Memory Mambo",
 				FilePath:  "/source/memory-mambo.m4b",
 				Author:    &database.Author{Name: "Achy Obejas"},
-				Publisher: stringPtr("Audible Studios"),
-				PrintYear: intPtr(2019),
+				Publisher: new("Audible Studios"),
+				PrintYear: new(2019),
 			},
 			folderPattern:  "{author}",
 			filePattern:    "{title} - {publisher} ({year})",
@@ -158,9 +158,9 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				Title:    "Neural Wraith",
 				FilePath: "/source/neural.m4b",
 				Author:   &database.Author{Name: "K.D. Robertson"},
-				Codec:    stringPtr("AAC"),
-				Bitrate:  intPtr(128),
-				Quality:  stringPtr("High"),
+				Codec:    new("AAC"),
+				Bitrate:  new(128),
+				Quality:  new("High"),
 			},
 			folderPattern:  "{author}",
 			filePattern:    "{title} [{codec} {bitrate}kbps]",
@@ -174,7 +174,7 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				Title:    "The Passion",
 				FilePath: "/source/passion.m4b",
 				Author:   &database.Author{Name: "Jeanette Winterson"},
-				ISBN13:   stringPtr("978-0-375-70438-1"),
+				ISBN13:   new("978-0-375-70438-1"),
 			},
 			folderPattern:  "{author}",
 			filePattern:    "{title} - ISBN {isbn13}",
@@ -188,7 +188,7 @@ func TestPatternExpansionWithRealData(t *testing.T) {
 				Title:    "Oranges Are Not The Only Fruit",
 				FilePath: "/source/oranges.m4b",
 				Author:   &database.Author{Name: "Jeanette Winterson"},
-				Language: stringPtr("English"),
+				Language: new("English"),
 			},
 			folderPattern:  "{author}",
 			filePattern:    "{title} [{language}]",
@@ -274,7 +274,7 @@ func TestEmptyFieldRemoval(t *testing.T) {
 			book: &database.Book{
 				Title:    "Book Title",
 				Author:   &database.Author{Name: "Jane Doe"},
-				Narrator: stringPtr("Famous Narrator"),
+				Narrator: new("Famous Narrator"),
 			},
 			pattern:  "{title} - {narrator}",
 			expected: "Book Title - Famous Narrator",
@@ -295,7 +295,7 @@ func TestEmptyFieldRemoval(t *testing.T) {
 				Title:          "Book Title",
 				Author:         &database.Author{Name: "Author Name"},
 				Series:         &database.Series{Name: "Series Name"},
-				SeriesSequence: intPtr(5),
+				SeriesSequence: new(5),
 			},
 			pattern:  "{series} #{series_number} - {title}",
 			expected: "Series Name #5 - Book Title",
@@ -335,7 +335,7 @@ func TestComplexRealWorldPaths(t *testing.T) {
 				FilePath:       "/old/path/file.m4b",
 				Author:         &database.Author{Name: "Richard Morgan"},
 				Series:         &database.Series{Name: "Takeshi Kovacs"},
-				SeriesSequence: intPtr(3),
+				SeriesSequence: new(3),
 			},
 			folderPat:    "{author}/{series}",
 			filePat:      "Book {series_number} - {title}",
@@ -359,7 +359,7 @@ func TestComplexRealWorldPaths(t *testing.T) {
 				FilePath:       "/old/spellmonger9.m4b",
 				Author:         &database.Author{Name: "Terry Mancour"},
 				Series:         &database.Series{Name: "Spellmonger"},
-				SeriesSequence: intPtr(9),
+				SeriesSequence: new(9),
 			},
 			folderPat:    "{author}/{series}",
 			filePat:      "Book {series_number} - {title}",
@@ -481,11 +481,6 @@ func TestSanitizationWithRealWorldData(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Helper function for int pointer
-func intPtr(i int) *int {
-	return &i
 }
 
 func TestPatternPlaceholderNormalization(t *testing.T) {

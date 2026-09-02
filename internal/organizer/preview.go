@@ -1,7 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -17,14 +17,14 @@ import (
 
 // PreviewStep describes a single step in the organize preview.
 type PreviewStep struct {
-	Action      string                 `json:"action"`
-	Description string                 `json:"description"`
-	From        string                 `json:"from,omitempty"`
-	To          string                 `json:"to,omitempty"`
-	Files       []string               `json:"files,omitempty"`
-	Tags        map[string]interface{} `json:"tags,omitempty"`
-	CoverURL    string                 `json:"cover_url,omitempty"`
-	Warning     string                 `json:"warning,omitempty"`
+	Action      string         `json:"action"`
+	Description string         `json:"description"`
+	From        string         `json:"from,omitempty"`
+	To          string         `json:"to,omitempty"`
+	Files       []string       `json:"files,omitempty"`
+	Tags        map[string]any `json:"tags,omitempty"`
+	CoverURL    string         `json:"cover_url,omitempty"`
+	Warning     string         `json:"warning,omitempty"`
 }
 
 // PreviewResponse is the full response for a preview-organize request.

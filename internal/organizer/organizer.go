@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.34.0
+// version: 1.34.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -288,10 +288,7 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 		prefixLen := len(windowsRoot) + 1 + len(relDir) + 1
 		fileExt := filepath.Ext(fileName)
 		stem := strings.TrimSuffix(fileName, fileExt)
-		maxStem := 260 - prefixLen - len(fileExt)
-		if maxStem < 1 {
-			maxStem = 1
-		}
+		maxStem := max(260-prefixLen-len(fileExt), 1)
 		if len(stem) > maxStem {
 			stem = stem[:maxStem]
 			fileName = stem + fileExt

@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -156,7 +156,7 @@ type Service struct {
 	// Returns (result, error). Breaks the metafetch import cycle.
 	// ctx is threaded so a cancelled organize op aborts an in-flight external
 	// metadata fetch promptly.
-	FetchMetadataForBook func(ctx context.Context, bookID string) (interface{}, error)
+	FetchMetadataForBook func(ctx context.Context, bookID string) (any, error)
 }
 
 // SetWriteBackBatcher sets the iTunes write-back batcher.
@@ -199,7 +199,7 @@ func NewService(db Store) *Service {
 		},
 		ApplyOrganizedFileMetadata: func(book *database.Book, newPath string) {},
 		ComputeITunesPath:          func(_ string) string { return "" },
-		FetchMetadataForBook:       func(_ context.Context, _ string) (interface{}, error) { return nil, nil },
+		FetchMetadataForBook:       func(_ context.Context, _ string) (any, error) { return nil, nil },
 	}
 }
 
@@ -961,14 +961,14 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 
 	// Thread-safe counters and collectors
 	var statsMu sync.Mutex
-	var progressCounter int64
+	var progressCounter atomic.Int64
 
 	const numWorkers = 8
 	jobs := make(chan int, numWorkers*2)
 
 	// Start worker goroutines
 	var wg sync.WaitGroup
-	for w := 0; w < numWorkers; w++ {
+	for range numWorkers {
 		wg.Go(func() {
 			workerOrg := orgSvc.newOrganizer()
 
@@ -983,7 +983,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 					statsMu.Lock()
 					stats.Skipped++
 					statsMu.Unlock()
-					atomic.AddInt64(&progressCounter, 1)
+					progressCounter.Add(1)
 					continue
 				}
 
@@ -996,7 +996,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 						statsMu.Lock()
 						stats.Skipped++
 						statsMu.Unlock()
-						atomic.AddInt64(&progressCounter, 1)
+						progressCounter.Add(1)
 						continue
 					}
 				}
@@ -1148,7 +1148,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 
 			progress:
 				// --- Step 4: Progress reporting ---
-				count := atomic.AddInt64(&progressCounter, 1)
+				count := progressCounter.Add(1)
 				if count%50 == 0 || count == int64(len(booksToOrganize)) {
 					log.UpdateProgress(int(count), len(booksToOrganize),
 						fmt.Sprintf("Organizing: %d/%d books", count, len(booksToOrganize)))

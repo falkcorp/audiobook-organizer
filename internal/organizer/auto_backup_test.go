@@ -1,7 +1,7 @@
 // file: internal/organizer/auto_backup_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4b7e2d18-9c53-4a06-8f21-6d5e3a90c471
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -72,7 +72,7 @@ func TestAutoBackup_UsesCheckpointThroughADecorator(t *testing.T) {
 	// Guard: if a bare assertion starts resolving through the decorator, this
 	// test has stopped reproducing the production shape and must be rewritten
 	// rather than trusted.
-	if _, ok := interface{}(wrapped).(interface{ Checkpoint(string) error }); ok {
+	if _, ok := any(wrapped).(interface{ Checkpoint(string) error }); ok {
 		t.Fatal("a bare type assertion now resolves Checkpoint through the decorator; " +
 			"this test no longer reproduces the production bug")
 	}
