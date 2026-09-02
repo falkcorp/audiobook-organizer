@@ -1,6 +1,6 @@
 // file: tools/cmd/reconcile-paths/main.go
-// version: 1.5.0
-// last-edited: 2026-09-01
+// version: 1.5.1
+// last-edited: 2026-09-02
 //
 // reconcile-paths is a READ-ONLY dry-run CLI tool that identifies audiobooks
 // whose FilePath no longer exists on disk and finds their candidate location
@@ -27,10 +27,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -308,15 +310,10 @@ func filterMissingSSH(books []book, host string, verbose bool) []book {
 func sshStatBatch(host string, paths []string, verbose bool) map[string]bool {
 	result := make(map[string]bool, len(paths))
 	for i := 0; i < len(paths); i += sshBatchSize {
-		end := i + sshBatchSize
-		if end > len(paths) {
-			end = len(paths)
-		}
+		end := min(i+sshBatchSize, len(paths))
 		batch := paths[i:end]
 		hits := runSSHBatch(host, batch, verbose)
-		for k, v := range hits {
-			result[k] = v
-		}
+		maps.Copy(result, hits)
 	}
 	return result
 }
@@ -351,10 +348,10 @@ func runSSHBatch(host string, paths []string, verbose bool) map[string]bool {
 	scanner := bufio.NewScanner(bytes.NewReader(out))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "HIT:") {
-			result[strings.TrimPrefix(line, "HIT:")] = true
-		} else if strings.HasPrefix(line, "MISS:") {
-			result[strings.TrimPrefix(line, "MISS:")] = false
+		if after, ok := strings.CutPrefix(line, "HIT:"); ok {
+			result[after] = true
+		} else if after, ok := strings.CutPrefix(line, "MISS:"); ok {
+			result[after] = false
 		}
 	}
 	return result
@@ -576,11 +573,8 @@ func countAudioFilesRecursive(dir, sshHost string) int {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
-		for _, ae := range audioExt {
-			if ext == ae {
-				count++
-				break
-			}
+		if slices.Contains(audioExt, ext) {
+			count++
 		}
 		return nil
 	})
@@ -616,11 +610,8 @@ func countAudioFiles(dir, sshHost string) int {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(e.Name()))
-		for _, ae := range audioExt {
-			if ext == ae {
-				count++
-				break
-			}
+		if slices.Contains(audioExt, ext) {
+			count++
 		}
 	}
 	return count
