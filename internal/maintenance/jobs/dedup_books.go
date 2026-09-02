@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-02
 
@@ -376,7 +376,17 @@ func ddMergeDuplicateBook(store maintenance.JobStore, keeper *database.Book, dup
 		return fmt.Errorf("keeper book %s not found", keeper.ID)
 	}
 
-	ddMergeBookFields(current, dup)
+	// The keeper's user-locked fields win over the dup's values -- a blank the
+	// user locked stays blank. Fail closed: if the locks cannot be read, the
+	// merge does not happen and the dup is NOT deleted (its values would be the
+	// only copy of whatever the keeper lacks).
+	restored, lockErr := database.ApplyRespectingLocks(store, current, func(b *database.Book) { ddMergeBookFields(b, dup) })
+	if lockErr != nil {
+		return fmt.Errorf("keeper %s: %w", keeper.ID, lockErr)
+	}
+	if len(restored) > 0 {
+		slog.Info("dedup-books left the keeper's user-locked fields alone", "keeper", keeper.ID, "locked", restored)
+	}
 	database.DropDanglingSeriesRef(store, current, "dedup-books.keeper-fill")
 
 	if _, upErr := store.UpdateBook(keeper.ID, current); upErr != nil {

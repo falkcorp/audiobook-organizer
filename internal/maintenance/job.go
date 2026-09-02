@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -252,6 +252,11 @@ type jobBookWriter interface {
 type jobBookStore interface {
 	jobBookReader
 	jobBookWriter
+	// The user's field locks. A job that fills or overwrites a user-lockable
+	// column (dedup-books' keeper fill, the title/series repairs) goes through
+	// database.LoadFieldLocks / ApplyRespectingLocks -- the one guard every
+	// metadata writer shares -- and this is what that guard reads.
+	database.MetadataFieldStateReader
 }
 
 type jobBookFileReader interface {

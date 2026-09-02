@@ -9615,6 +9615,57 @@ func (_c *MockStore_DeleteUserPlaylist_Call) RunAndReturn(run func(id string) er
 	return _c
 }
 
+// DeleteUserPreference provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteUserPreference(key string) error {
+	ret := _mock.Called(key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteUserPreference")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(key)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_DeleteUserPreference_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteUserPreference'
+type MockStore_DeleteUserPreference_Call struct {
+	*mock.Call
+}
+
+// DeleteUserPreference is a helper method to define mock.On call
+//   - key string
+func (_e *MockStore_Expecter) DeleteUserPreference(key any) *MockStore_DeleteUserPreference_Call {
+	return &MockStore_DeleteUserPreference_Call{Call: _e.mock.On("DeleteUserPreference", key)}
+}
+
+func (_c *MockStore_DeleteUserPreference_Call) Run(run func(key string)) *MockStore_DeleteUserPreference_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteUserPreference_Call) Return(err error) *MockStore_DeleteUserPreference_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_DeleteUserPreference_Call) RunAndReturn(run func(key string) error) *MockStore_DeleteUserPreference_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteWork provides a mock function for the type MockStore
 func (_mock *MockStore) DeleteWork(id string) error {
 	ret := _mock.Called(id)

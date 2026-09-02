@@ -1,6 +1,7 @@
 // file: internal/database/iface_user.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ca96abf5-5353-428c-aa7f-903b91a481e8
+// last-edited: 2026-09-02
 
 package database
 
@@ -47,6 +48,10 @@ type UserPositionStore interface {
 type UserPreferenceStore interface {
 	GetUserPreference(key string) (*UserPreference, error)
 	SetUserPreference(key, value string) error
+	// DeleteUserPreference removes the row outright. Not-found is not an
+	// error. Before this existed callers "deleted" by writing "", which
+	// leaves a tombstone row behind forever.
+	DeleteUserPreference(key string) error
 	GetAllUserPreferences() ([]UserPreference, error)
 	SetUserPreferenceForUser(userID, key, value string) error
 	GetUserPreferenceForUser(userID, key string) (*UserPreferenceKV, error)

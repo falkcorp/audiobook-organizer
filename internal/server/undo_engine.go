@@ -1,7 +1,7 @@
 // file: internal/server/undo_engine.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0b8c9d6e-1f7a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 //
 // Backward-compatibility wrapper for the undo engine, now in internal/undo.
 // This file re-exports the public API from internal/undo with server-specific
@@ -29,8 +29,10 @@ type UndoConflictItem = undo.UndoConflictItem
 // serverUndoStore is the union of what undo.RunUndoOperation needs and what the
 // Deluge callback closes over — measured, not guessed. The parameter was an
 // inline anonymous interface embedding database.BookStore + BookVersionStore +
-// OperationStore: 90 methods for these five.
+// OperationStore: 90 methods for these five (plus the field-lock reader the undo
+// engine consults before restoring a metadata field).
 type serverUndoStore interface {
+	database.MetadataFieldStateReader
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)

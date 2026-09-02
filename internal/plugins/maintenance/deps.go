@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-02
 
@@ -144,10 +144,16 @@ type opsLinkStore interface {
 // opsHousekeeping is the remainder that belongs to no single entity: the review
 // queue, metadata field state, operation records, playlist listing and the
 // compaction hook.
+//
+// database.MetadataFieldStateReader (GetMetadataFieldStates + the legacy-blob
+// GetUserPreference) is embedded rather than spelled out so every op that
+// writes a user-lockable column can go through database.LoadFieldLocks /
+// ApplyRespectingLocks -- the ONE guard the metadata apply paths share.
 type opsHousekeeping interface {
+	database.MetadataFieldStateReader
+
 	CreateOperationChange(change *database.OperationChange) error
 	DeleteReviewItem(id string) error
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 	ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error)
 	ListUserPlaylists(playlistType string, limit int, offset int) ([]database.UserPlaylist, int, error)
 	Optimize() error
