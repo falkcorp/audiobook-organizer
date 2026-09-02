@@ -1,6 +1,7 @@
 // file: internal/sysinfo/memory_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
+// last-edited: 2026-09-02
 
 package sysinfo
 
@@ -126,7 +127,7 @@ func TestMemoryStats_Structure(t *testing.T) {
 
 func TestGetMemoryStats_Consistency(t *testing.T) {
 	// Call multiple times and ensure it doesn't panic or error
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		stats, err := GetMemoryStats()
 		if err != nil {
 			t.Fatalf("Call %d failed: %v", i+1, err)
@@ -167,7 +168,7 @@ func TestMemoryStats_EdgeCases(t *testing.T) {
 
 func TestGetMemoryStatsRepeated(t *testing.T) {
 	// Call GetMemoryStats multiple times to verify consistency
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		stats, err := GetMemoryStats()
 		if err != nil {
 			t.Errorf("GetMemoryStats() iteration %d failed: %v", i, err)
