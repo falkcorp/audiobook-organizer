@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-02-a-merge-can-no-longer-keep-the-wrong-book-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: b4d8e2f6-9a1c-4e37-8f5b-0c2d4e6a8b1f -->
 <!-- last-edited: 2026-09-02 -->
 
@@ -65,9 +65,18 @@ described at the end.
   survivor choice is now the same regardless of order (an existing survivor is kept,
   then the older entry). And when the app *refused* a merge for one of the reasons
   above, the web interface reported it as a generic server error instead of showing the
-  reason — the reason now comes through.
+  reason — the reason now comes through on every merge screen, including the duplicate
+  candidates page and the "wait for this book's deep scan first" refusal.
+- A second review of this correction found two more faults and fixed them here. A
+  temporary database hiccup while loading a book was being reported as "book not found",
+  and the duplicates page treats "not found" as "already merged" — so a flaky read could
+  have quietly retired a real duplicate pair. And if the step that moves a merged-away
+  book's iTunes identifiers to the survivor failed, the app used to hide the book anyway
+  and report success, leaving those identifiers pointing at a hidden entry with no way
+  back. Now the book stays visible, the merge reports the failure, and retrying it
+  finishes the job.
 - Checked the same way: each new rule was deliberately broken and the tests caught it,
-  five of five. The backwards guard was live on the production server from 10:44 to the
+  twelve of twelve. The backwards guard was live on the production server from 10:44 to the
   deploy of this correction. The server's activity log for that window was read: no merge
   ran, the automatic duplicate resolver is switched off, and the 6-hourly duplicate
   refresh had not yet fired. No library entry was demoted by it.

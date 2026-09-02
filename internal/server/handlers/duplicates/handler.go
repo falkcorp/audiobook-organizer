@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-09-02
 
@@ -31,6 +31,7 @@ package duplicates
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -239,19 +240,21 @@ func (h *Handler) ScanBookDuplicates(c *gin.Context) {
 
 // respondMergeError maps the merge service's typed refusals onto HTTP. A
 // missing book is 404 naming the ID. A refusal of the CALLER'S choice — the
-// picked primary has no audio route while another book does, or a
-// participant is soft-deleted — is 409 carrying the service's own message,
+// picked primary has no audio route while another book does, a participant is
+// soft-deleted, or one is still awaiting its deep scan — is 409 carrying the service's own message,
 // because that message is the only place the user learns why their pick lost;
 // until 2026-09-02 both came back as a generic 500 and the reason was only in
 // the server log. Anything else is the 500 it always was.
 func respondMergeError(c *gin.Context, err error, fallback string) {
 	var notFound *merge.BookNotFoundError
-	var fileless *merge.FilelessPrimaryError
-	var softDeleted *merge.SoftDeletedInputError
 	switch {
 	case errors.As(err, &notFound):
 		httputil.RespondWithNotFound(c, "book", notFound.BookID)
-	case errors.As(err, &fileless), errors.As(err, &softDeleted):
+	case merge.IsRefusal(err):
+		// RespondWithConflict does not log. A soft-deleted participant on
+		// this endpoint means the duplicates listing served a stale row, so
+		// operators need the line even though the user got the reason.
+		slog.Warn("merge refused", "path", c.FullPath(), "err", err)
 		httputil.RespondWithConflict(c, err.Error())
 	default:
 		httputil.InternalError(c, fallback, err)
@@ -359,7 +362,13 @@ func (h *Handler) MergeBooks(c *gin.Context) {
 
 	store := h.store
 	keepBook, err := store.GetBookByID(req.KeepID)
-	if err != nil || keepBook == nil {
+	if err != nil {
+		// The store returns (nil, nil) for a missing row; a non-nil error is
+		// I/O or corruption and is not "the book is gone".
+		httputil.InternalError(c, "failed to load keep book", err)
+		return
+	}
+	if keepBook == nil {
 		httputil.RespondWithNotFound(c, "book", req.KeepID)
 		return
 	}

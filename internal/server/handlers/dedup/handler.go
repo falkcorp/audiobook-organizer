@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-02
 
@@ -1492,6 +1492,15 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 					"status":       "already_merged",
 					"candidate_id": id,
 				})
+				return
+			}
+			// A typed refusal of the caller's choice (file-less keep_id, a
+			// soft-deleted participant, a book awaiting its deep scan) is a
+			// 409 carrying the service's reason — the only place the user
+			// learns why their pick lost. The candidate stays pending.
+			if merge.IsRefusal(mergeErr) {
+				slog.Warn("dedup merge refused", "candidate_id", id, "err", mergeErr)
+				httputil.RespondWithConflict(c, mergeErr.Error())
 				return
 			}
 			httputil.InternalError(c, "failed to merge books", mergeErr)

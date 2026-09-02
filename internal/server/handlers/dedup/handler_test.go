@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
 // last-edited: 2026-09-02
 
@@ -671,6 +671,34 @@ func TestMergeDedupCandidate_UntypedNotFoundTextIs500_CandidateUntouched(t *test
 	}
 	if cand.Status != "pending" {
 		t.Fatalf("candidate status=%q want pending (a store failure must not mark it merged)", cand.Status)
+	}
+}
+
+// A typed refusal (file-less keep_id, soft-deleted or unscanned participant)
+// is a 409 carrying the reason, and the candidate stays pending so the user
+// can pick again.
+func TestMergeDedupCandidate_RefusalIs409_CandidateUntouched(t *testing.T) {
+	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
+	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
+	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
+		Return(nil, "", fmt.Errorf("merge-journaled: merge books: %w",
+			&merge.FilelessPrimaryError{PrimaryID: aID, FileBearing: []string{bID}})).Once()
+	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "refusing to keep the file-less book") {
+		t.Fatalf("409 must carry the service's reason; body=%s", w.Body.String())
+	}
+	cand, err := d.es.GetCandidateByID(id)
+	if err != nil || cand == nil {
+		t.Fatalf("GetCandidateByID: %v %v", cand, err)
+	}
+	if cand.Status != "pending" {
+		t.Fatalf("candidate status=%q want pending (a refusal is not a merge)", cand.Status)
 	}
 }
 

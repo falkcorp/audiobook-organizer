@@ -14,3 +14,6 @@ D01 substring-not-found-reintroduced | internal/server/handlers/dedup/handler.go
 # Drop the typed match entirely: a stale candidate whose books are gone must
 # still be retired as merged (409 already-merged), not surfaced as a 500.
 D02 typed-not-found-never-matches | internal/server/handlers/dedup/handler.go | s/if errors\.As\(mergeErr, &notFound\) \{/if false \&\& errors.As(mergeErr, \&notFound) {/
+
+# A typed refusal must be a 409 with the reason, not the generic 500.
+D03 refusal-is-500 | internal/server/handlers/dedup/handler.go | s/if merge\.IsRefusal\(mergeErr\) \{/if false \&\& merge.IsRefusal(mergeErr) {/
