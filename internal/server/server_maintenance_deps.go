@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-02
 
@@ -62,11 +62,20 @@ func (s *Server) MetadataCacheStore() database.MetadataCacheStore { return s.sto
 // FileProvenanceStore exposes the append-only file provenance chain.
 //
 // The provenance methods are intentionally not part of database.Store, so this
-// asserts rather than returning s.store directly. A store that does not
-// implement them (a narrow test double, for instance) yields nil, and callers
-// are required to treat nil as "not initialized".
+// resolves the capability rather than returning s.store directly. A store that
+// does not implement them (a narrow test double, for instance) yields nil, and
+// callers are required to treat nil as "not initialized".
+//
+// 🔴 RESOLVED THROUGH database.AsCapability, NOT A BARE TYPE ASSERTION. These
+// accessors run at op-run time, after Start() has replaced s.store with the
+// Bleve indexedStore decorator, which embeds the Store INTERFACE and so exposes
+// none of the capability methods. A bare `s.store.(database.FileProvenanceStore)`
+// compiles, passes every test that hands in a *PebbleStore, and returns nil in
+// production — which is what this accessor did from 2026-08-21 until 2026-09-02,
+// so maintenance.file-provenance-capture reported "provenance store not
+// initialized" on every prod run. store_capability.go tells the story in full.
 func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
-	if fp, ok := s.store.(database.FileProvenanceStore); ok {
+	if fp, ok := database.AsCapability[database.FileProvenanceStore](s.store); ok {
 		return fp
 	}
 	return nil
@@ -76,8 +85,13 @@ func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
 // rebuild. It is not part of database.Store for the same reason the provenance
 // methods are not: it is a repair of a store-internal structure, not a library
 // operation. A store without it yields nil and the op reports that.
+//
+// Resolved through database.AsCapability for the reason FileProvenanceStore
+// gives: the decorator installed by Start() hides every capability from a bare
+// assertion. TestMaintenanceStoreAccessorsResolveThroughIndexedStore holds both
+// accessors to that.
 func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
-	if r, ok := s.store.(database.ReviewStatusIndexRepairer); ok {
+	if r, ok := database.AsCapability[database.ReviewStatusIndexRepairer](s.store); ok {
 		return r
 	}
 	return nil

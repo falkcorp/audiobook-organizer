@@ -1,5 +1,5 @@
 // file: internal/database/iface_review.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7a1e4d63-2c9f-48b5-b0a7-6e3d51f8c294
 // last-edited: 2026-09-02
 
@@ -55,8 +55,10 @@ type ReviewStore interface {
 // it is a maintenance concern with exactly one caller, the
 // maintenance.review-status-index-repair op, and widening the 398-method Store
 // for it would also mean regenerating two mocks. Like FileProvenanceStore, the
-// server hands it out by type assertion and a store that lacks it yields nil.
-// Implemented on *PebbleStore (review_store.go).
+// server resolves it with AsCapability (store_capability.go) -- never a bare
+// type assertion, which the production store decorator defeats -- and a store
+// that lacks it at every layer yields nil. Implemented on *PebbleStore
+// (review_store.go).
 type ReviewStatusIndexRepairer interface {
 	// RebuildReviewStatusIndex reconciles review_item:status:* against the
 	// records. apply=false only counts; apply=true deletes stale rows and adds
