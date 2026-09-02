@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_organize_parallel_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3f9a1c7e-2b6d-4a58-9e0f-7c1d5b8a4e2f
-// last-edited: 2026-07-16
+// last-edited: 2026-09-02
 
 package itunesservice
 
@@ -99,7 +99,7 @@ func buildOrganizeFixture(t *testing.T, n, distinctTitles int) ([]database.Book,
 	src := "/mnt/itunes/Library.xml"
 
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		title := fmt.Sprintf("Title-%d", i%distinctTitles)
 		books[i] = database.Book{
 			ID:                 fmt.Sprintf("book-%d", i),

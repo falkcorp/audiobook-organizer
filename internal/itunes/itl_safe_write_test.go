@@ -1,5 +1,5 @@
 // file: internal/itunes/itl_safe_write_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e2f3a4b-5c6d-7e8f-9a0b-1c2d3e4f5a6b
 //
 // Tests for SafeWriteITL — the atomic iTunes writeback protocol (fable5
@@ -9,6 +9,7 @@
 // (buildCleanPayload / buildPayloadFromTracks / buildITLFile / cleanTracks).
 // Test-local corruptor mutate funcs live here (production code never contains a
 // corruptor). No network, no real iTunes, no fixtures outside t.TempDir().
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -141,7 +142,7 @@ func TestSafeWrite_BackupRotation(t *testing.T) {
 		t.Fatalf("PinLastKnownGood: %v", err)
 	}
 
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		// Each write must produce a DISTINCT backup timestamp; the RFC3339 layout
 		// has nanosecond precision, but force separation to avoid same-instant
 		// collisions on fast machines by varying the payload trivially is not

@@ -1,5 +1,5 @@
 // file: internal/itunes/itl_le_metadata_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 //
 // Regression tests for UpdateMetadataLE and buildMhohLE.
@@ -7,6 +7,7 @@
 // setting headerLen = totalLen (full chunk size), but iTunes uses headerLen
 // to locate type-specific data within the mhoh. Wrong headerLen causes iTunes
 // to read string data at the wrong offset and declare the library corrupt.
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -60,7 +61,7 @@ func buildLETrackSection(trackID uint32, pid [8]byte, mhohs ...[]byte) []byte {
 	binary.LittleEndian.PutUint32(mith[8:12], uint32(mithTotalLen))
 	binary.LittleEndian.PutUint32(mith[16:20], trackID)
 	// PID stored reversed at bytes 128-135
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		mith[135-i] = pid[i]
 	}
 

@@ -1,6 +1,7 @@
 // file: internal/itunes/service/path_repair_resolver_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8aef0d23-1c84-4f3d-9b41-2d70eaf1c7c0
+// last-edited: 2026-09-02
 
 package itunesservice
 
@@ -174,7 +175,7 @@ func mustWrite(t *testing.T, p, content string) {
 
 func TestFSTagScanner_ParallelMatchesSequential(t *testing.T) {
 	root := t.TempDir()
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		mustWrite(t, filepath.Join(root, fmt.Sprintf("a%02d.m4b", i)), "x")
 	}
 	extractor := func(p string) (string, error) {

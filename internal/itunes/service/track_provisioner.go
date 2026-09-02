@@ -1,7 +1,7 @@
 // file: internal/itunes/service/track_provisioner.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8e768742-5ace-4e4b-8495-9550ed4620b5
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 //
 // TrackProvisioner generates ITL tracks for books that weren't imported
 // from iTunes (e.g. books added via scan or manual upload). For each
@@ -185,9 +185,9 @@ func (p *TrackProvisioner) bookAuthor(book *database.Book) string {
 func linuxToWindowsPath(p string) string {
 	const linuxRoot = "/mnt/bigdata/books/audiobook-organizer/"
 	const windowsRoot = `W:\audiobook-organizer\`
-	if strings.HasPrefix(p, linuxRoot) {
+	if after, ok := strings.CutPrefix(p, linuxRoot); ok {
 		return windowsRoot + strings.ReplaceAll(
-			strings.TrimPrefix(p, linuxRoot), "/", `\`,
+			after, "/", `\`,
 		)
 	}
 	return p

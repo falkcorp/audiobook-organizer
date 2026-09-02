@@ -1,5 +1,5 @@
 // file: internal/itunes/sync_diagnostic_tests.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b8c1a2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 //
 // Generator for the iTunes / Apple Devices sync-diagnostic ITL suite.
@@ -19,6 +19,7 @@
 // Bookmarkable, dates, etc.) are flagged in test-info.json with
 // "requires_format_research": true so the user can skip them or so a
 // follow-up round can tackle them.
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -394,7 +395,7 @@ func diagAddSynthetic(baseline []byte, n int, deterministicPID bool) ([]byte, Sy
 	}
 
 	tracks := make([]ITLNewTrack, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		tracks[i] = ITLNewTrack{
 			Location: fmt.Sprintf(`file://localhost/W:/audiobook-organizer/Diag%dAuthor/Diag%dBook/chapter.m4b`, i+1, i+1),
 			Name:     fmt.Sprintf("Diag Track %d", i+1),

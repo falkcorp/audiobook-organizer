@@ -1,7 +1,7 @@
 // file: internal/itunes/import.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4b58a17d-b2b4-4743-9b7e-3462e2ed55ac
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -271,7 +272,7 @@ func ValidateImport(opts ImportOptions) (*ValidationResult, error) {
 
 	// Start workers
 	var wg sync.WaitGroup
-	for w := 0; w < numWorkers; w++ {
+	for range numWorkers {
 		wg.Go(func() {
 			for idx := range jobs {
 				tc := checks[idx]
@@ -491,12 +492,9 @@ func ExtractPlaylistTags(trackID int, playlists []*Playlist) []string {
 		}
 
 		// Check if track is in this playlist
-		for _, id := range playlist.TrackIDs {
-			if id == trackID {
-				// Add playlist name as tag (lowercase for consistency)
-				tags = append(tags, strings.ToLower(playlist.Name))
-				break
-			}
+		if slices.Contains(playlist.TrackIDs, trackID) {
+			// Add playlist name as tag (lowercase for consistency)
+			tags = append(tags, strings.ToLower(playlist.Name))
 		}
 	}
 
@@ -519,11 +517,5 @@ func isBuiltInPlaylist(name string) bool {
 		"Top 25 Most Played",
 	}
 
-	for _, builtin := range builtIn {
-		if name == builtin {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(builtIn, name)
 }

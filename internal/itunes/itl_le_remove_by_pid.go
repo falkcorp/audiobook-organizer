@@ -1,5 +1,5 @@
 // file: internal/itunes/itl_le_remove_by_pid.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
 //
 // Track removal from LE-format ITL payloads.
@@ -8,6 +8,7 @@
 // `mith` chunks AND cleans up resulting orphan `mtph` references in the
 // playlist list, in one combined pass. The historic broken implementation
 // is preserved as removeTracksByPIDLEUnsafe for regression tests.
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -197,10 +198,7 @@ func removeTracksByPIDLEUnsafe(data []byte, pids map[string]bool) ([]byte, int) 
 	// Update mlth track count
 	if mlthOffset >= 0 && mlthOffset+12 <= len(result) {
 		oldCount := int(readUint32LE(result, mlthOffset+8))
-		newCount := oldCount - removedCount
-		if newCount < 0 {
-			newCount = 0
-		}
+		newCount := max(oldCount-removedCount, 0)
 		writeUint32LE(result, mlthOffset+8, uint32(newCount))
 	}
 
@@ -217,7 +215,7 @@ func removeTracksByPIDLEUnsafe(data []byte, pids map[string]bool) ([]byte, int) 
 // Returns a lowercase 16-char hex string matching the canonical format.
 func extractMithPIDLE(data []byte, mithOffset int) string {
 	var pid [8]byte
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		pid[i] = data[mithOffset+135-i]
 	}
 	return strings.ToLower(hex.EncodeToString(pid[:]))

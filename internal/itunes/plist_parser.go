@@ -1,7 +1,7 @@
 // file: internal/itunes/plist_parser.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d1f3e5c7-a9b1-c3d5-e7f9-1a3b5c7d9e1f
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -96,10 +96,7 @@ func parsePlist(data []byte) (*Library, error) {
 		// as unsigned 64-bit integers. Values > math.MaxInt64 wrap negative
 		// when parsed into int64; reset to 0 so the os.Stat fallback in
 		// buildBookFromTrack populates the correct value.
-		size := rawTrack.Size
-		if size < 0 {
-			size = 0
-		}
+		size := max(rawTrack.Size, 0)
 
 		library.Tracks[id] = &Track{
 			TrackID:      rawTrack.TrackID,

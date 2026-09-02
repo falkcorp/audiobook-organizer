@@ -1,9 +1,10 @@
 // file: internal/itunes/itl_le_mutate.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f00
 //
 // LE-format ITL mutation: add and remove tracks from v10+ (msdh/mith/mhoh)
 // iTunes libraries. Works on the decompressed payload directly.
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -208,10 +209,7 @@ func RemoveLastNTracksLE(data []byte, n int) []byte {
 	// Update mlth count
 	if mlthOffset >= 0 {
 		oldCount := int(readUint32LE(result, mlthOffset+8))
-		newCount := oldCount - n
-		if newCount < 0 {
-			newCount = 0
-		}
+		newCount := max(oldCount-n, 0)
 		writeUint32LE(result, mlthOffset+8, uint32(newCount))
 	}
 
@@ -268,7 +266,7 @@ func buildMithLE(trackID int, tr ITLNewTrack) []byte {
 	// Random persistent ID (stored in reverse byte order for LE format)
 	var pid [8]byte
 	_, _ = rand.Read(pid[:])
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		buf[135-i] = pid[i]
 	}
 	return buf

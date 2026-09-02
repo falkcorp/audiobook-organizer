@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_identity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b3c4d5e-6f7a-4b8c-9d0e-2f3a4b5c6d7e
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 //
 // Tests for the library-identity fingerprint (K13) and expected-magnitude
 // (K14) guards — the external-truth anchors added after the July 2026
@@ -39,7 +39,7 @@ const fxLibraryPIDHex = "48e87f59865568b0"
 // (PIDs are derived from TIDs in buildMith, so distinct TIDs => distinct PIDs).
 func disjointTracks(n int) []fxTrack {
 	tracks := make([]fxTrack, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		tracks = append(tracks, fxTrack{
 			tid:      uint32(1000 + i*10),
 			name:     fmt.Sprintf("Cloud Song %d", i),

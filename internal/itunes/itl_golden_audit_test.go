@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_golden_audit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a7e9c1d-3b2f-4e6a-8d0c-9f1b2a3c4d5f
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 //
 // Golden-corpus audit regression (SPEC 3 §6 / K16 acceptance).
 //
@@ -34,15 +34,12 @@ func TestGoldenCorpusAuditClean(t *testing.T) {
 		if r.Pass() {
 			continue
 		}
-		max := len(r.Violations)
-		if max > 5 {
-			max = 5
-		}
-		for _, v := range r.Violations[:max] {
+		shown := min(len(r.Violations), 5)
+		for _, v := range r.Violations[:shown] {
 			t.Errorf("guard %s: [%d/%s] %s", r.Guard, v.Offset, v.Chunk, v.Message)
 		}
-		if len(r.Violations) > max {
-			t.Errorf("guard %s: ...and %d more violations", r.Guard, len(r.Violations)-max)
+		if len(r.Violations) > shown {
+			t.Errorf("guard %s: ...and %d more violations", r.Guard, len(r.Violations)-shown)
 		}
 	}
 	if !verdict.Pass {

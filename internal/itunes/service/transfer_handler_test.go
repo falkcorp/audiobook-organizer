@@ -1,7 +1,7 @@
 // file: internal/itunes/service/transfer_handler_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package itunesservice
 
@@ -357,7 +357,7 @@ func TestHandleRestore_ValidBackup(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var envelope struct {
-		Data map[string]interface{} `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 	assert.Equal(t, true, envelope.Data["restored"])

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_reconcile.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 9e3b7a1d-4c2f-4a60-b8d5-2f1e8c0d9a47
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 //
 // One-time (repeatable) backfill that walks every book with an
 // iTunes persistent ID, recomputes book_files.ITunesPath from the
@@ -186,7 +186,7 @@ func (a *progressReporterAdapter) Logger() *slog.Logger {
 	return slog.Default()
 }
 
-func (a *progressReporterAdapter) Checkpoint(state interface{}) error {
+func (a *progressReporterAdapter) Checkpoint(state any) error {
 	// No-op checkpoint for this adapter.
 	return nil
 }

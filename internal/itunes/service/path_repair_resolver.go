@@ -1,10 +1,11 @@
 // file: internal/itunes/service/path_repair_resolver.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d4f25a1-8e29-4b8b-9a02-3c5e1f9d4b27
 //
 // Pure-function resolvers for the path-repair operation. Each tier
 // takes a narrow store interface and an existsFn so tests can drive
 // them without a real filesystem.
+// last-edited: 2026-09-02
 
 package itunesservice
 
@@ -186,13 +187,13 @@ func (s *fsTagScanner) scan() {
 		close(results)
 	}()
 
-	var done int64
+	var done atomic.Int64
 	total := len(paths)
 	for r := range results {
 		if r.bookID != "" {
 			s.index[r.bookID] = append(s.index[r.bookID], r.path)
 		}
-		n := atomic.AddInt64(&done, 1)
+		n := done.Add(1)
 		if s.progress != nil && (n%int64(everyN) == 0 || n == int64(total)) {
 			s.progress(int(n), total)
 		}
