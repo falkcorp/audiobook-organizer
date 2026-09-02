@@ -1,5 +1,5 @@
 // file: internal/audiobooks/update_service.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b2c3d4e5-f6g7-h8i9-j0k1-l2m3n4o5p6q7
 // last-edited: 2026-08-20
 
@@ -108,6 +108,19 @@ func (aus *AudiobookUpdateService) UpdateAudiobook(ctx context.Context, id strin
 	}
 	if desc, ok := util.ExtractStringField(payload, "description"); ok {
 		updates.Description = &desc
+	}
+	if genre, ok := util.ExtractStringField(payload, "genre"); ok {
+		updates.Genre = &genre
+	}
+	if asin, ok := util.ExtractStringField(payload, "asin"); ok {
+		updates.ASIN = &asin
+	}
+	// series_position is the lock vocabulary's name for the SeriesSequence
+	// column (database.UserLockableFields). It was the only lockable field
+	// with no top-level payload key, so a client could lock it but never set
+	// it through the same request shape as every other field.
+	if pos, ok := util.ExtractIntField(payload, "series_position"); ok {
+		updates.SeriesSequence = &pos
 	}
 
 	if overridesMap, ok := aus.ExtractOverrides(payload); ok {
