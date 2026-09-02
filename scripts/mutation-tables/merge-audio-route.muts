@@ -1,0 +1,27 @@
+# Mutation table for the merge primary-election / typed-error fixes
+# (fix/merge-audio-route-tiebreak-typed-errors). One package per table:
+# these mutants live in internal/merge and are killed by its tests.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/merge/ \
+#     --table scripts/mutation-tables/merge-audio-route.muts
+
+# A book whose only audio route is its own FilePath must count as file-bearing;
+# dropping the FilePath arm is exactly #3047's guard that demoted 12,525 books.
+M01 audio-route-ignores-filepath | internal/merge/service.go | s/return len\(files\) > 0 \x7c\x7c b\.FilePath != ""/return len(files) > 0/
+
+# Tie-break must be order-independent: preferring the NEWER ULID still yields a
+# deterministic answer, so the test has to pin which one wins.
+M02 tie-prefers-newer-ulid | internal/merge/service.go | s/\treturn a\.ID < b\.ID\n\}/\treturn a.ID > b.ID\n}/
+
+# Tie-break must keep the existing primary; ignoring primary-ness flips the
+# primary on a retried reversed pair.
+M03 tie-ignores-existing-primary | internal/merge/service.go | s/\tif aPrim != bPrim \{\n\t\treturn aPrim\n\t\}/\tif false {\n\t\treturn aPrim\n\t}/
+
+# Missing input must surface as the typed BookNotFoundError, not a bare string.
+M04 not-found-untyped | internal/merge/service.go | s/return nil, &BookNotFoundError\{BookID: id\}/return nil, fmt.Errorf("book %s not found", id)/g
+
+# A replayed merge must leave an already-soft-deleted loser untouched.
+M05 replay-recleans-deleted-loser | internal/merge/service.go | s/\t\tif book\.IsSoftDeleted\(\) \{\n\t\t\tslog\.Debug\("merge: loser already soft-deleted; cleanup skipped"/\t\tif false {\n\t\t\tslog.Debug("merge: loser already soft-deleted; cleanup skipped"/
