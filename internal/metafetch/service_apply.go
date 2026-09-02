@@ -388,14 +388,18 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 	// gap on the main organize path -- widening its list is a change to
 	// every organized version, not to this one caller.
 	//
-	// THEY BELONG IN THIS FUNCTION, NOT IN syncMetadataToLibraryCopy. #3054
-	// made this field list the body handed to database.ApplyRespectingLocks,
-	// so an assignment here is refused when the user has locked that field on
-	// the copy and an assignment in the caller is not. UserRatingOverall is
-	// the case that makes it concrete: it is a value the user typed, on a row
-	// the user may have locked, and writing it past the guard would overwrite
-	// by the back door exactly what #3054 shipped to protect. Pinned by
-	// TestSyncMetadataToLibraryCopy_HonorsALockOnACarriedRatingField.
+	// THEY GO IN THIS FUNCTION, NOT IN syncMetadataToLibraryCopy. #3054 made
+	// this field list the body handed to database.ApplyRespectingLocks, so an
+	// assignment here is refused when the user has locked that column and an
+	// assignment in the caller is not. Today that is a distinction without a
+	// difference for these thirteen: UserLockableFields has no key for a
+	// rating, WorkID, Quantity or VersionNotes, so no lock can refuse them and
+	// either placement behaves identically -- do NOT read a passing test as
+	// proof the placement is load-bearing, because no test can currently tell
+	// the two apart. It is still the right home: the guard covers this list by
+	// construction, so the day a rating becomes lockable it is protected
+	// without anyone remembering this block exists. Splitting the list in two
+	// is how that day goes wrong.
 	libCopy.WorkID = original.WorkID
 	libCopy.AudibleRatingOverall = original.AudibleRatingOverall
 	libCopy.AudibleRatingPerformance = original.AudibleRatingPerformance
