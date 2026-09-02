@@ -1,0 +1,21 @@
+# Mutation table for ensureLibraryCopy, the metafetch organize caller.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/metafetch/ \
+#     --table scripts/mutation-tables/organize-row-writers-metafetch.muts
+
+# The library copy loses the fields CreateOrganizedVersion does not carry.
+# Until 2026-09-02 ensureLibraryCopy built the copy with a full struct copy, so
+# these came along for free; routing through CreateOrganizedVersion means they
+# have to be carried explicitly, and dropping one is silent data loss (WorkID
+# joins the book to its other editions, UserRating* is what the user typed and
+# exists nowhere else).
+M01 library-copy-drops-workid | internal/metafetch/service_apply.go | s/\tlibCopy\.WorkID = original\.WorkID\n//
+M02 library-copy-drops-the-user-rating | internal/metafetch/service_apply.go | s/\tlibCopy\.UserRatingOverall = original\.UserRatingOverall\n//
+M03 library-copy-never-synced | internal/metafetch/service_apply.go | s/\tmfs\.syncMetadataToLibraryCopy\(book, created\)\n//
+
+# A copy whose rows could not be written is handed back as if it were one, so
+# the caller writes metadata to a book that owns no organized audio.
+M04 failed-copy-returned-as-success | internal/metafetch/service_apply.go | s/\t\tslog\.Warn\("failed to create library book record for protected book", "id", book\.ID, "error", err\)\n\t\treturn nil\n/\t\tslog.Warn("failed to create library book record for protected book", "id", book.ID, "error", err)\n\t\treturn book\n/

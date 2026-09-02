@@ -1,0 +1,28 @@
+# Mutation table for the iTunes import organize phase.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/itunes/service/ \
+#     --table scripts/mutation-tables/organize-row-writers-itunes.muts
+#
+# The importer does not version an imported book -- the imported row IS the
+# book -- so it commits the landing to that book's OWN rows. Every mutation
+# below is a way that commit, or its undo, silently stops matching the files.
+
+# The rows are never repointed: the book moves into the library and every
+# book_file row still names the iTunes source.
+M01 rows-never-repointed | internal/itunes/service/importer.go | s/\tif imp\.store == nil \x7c\x7c len\(remap\) == 0 \{\n\t\treturn nil\n\t\}\n/\tif true {\n\t\treturn nil\n\t}\n/
+
+# A repoint that fails halfway leaves the book with some rows on the copies and
+# some on the source.
+M02 partial-repoint-not-restored | internal/itunes/service/importer.go | s/\t\t\timp\.restoreImportedRows\(book, done, log\)\n\t\t\treturn fmt\.Errorf\("repoint book_file/\t\t\treturn fmt.Errorf("repoint book_file/
+
+# The Book write fails and nothing is undone at all.
+M03 updatebook-failure-not-rolled-back | internal/itunes/service/importer.go | s/\t\t\timp\.rollbackImportedOrganize\(book, files, landing, oldPath, log\)\n/\t\t\t_ = oldPath\n/
+
+# The rollback puts the files back but leaves the rows on the organized copies.
+M04 rollback-skips-the-row-restore | internal/itunes/service/importer.go | s/\t\timp\.restoreImportedRows\(book, repointed, log\)\n/\t\t_ = repointed\n/
+
+# The rollback restores the rows but leaves the copies in the library.
+M05 rollback-keeps-the-created-copies | internal/itunes/service/importer.go | s/\torganizer\.RemoveCreated\(landing, book\.ID, log\)\n\tbook\.FilePath = oldPath\n/\tbook.FilePath = oldPath\n/
