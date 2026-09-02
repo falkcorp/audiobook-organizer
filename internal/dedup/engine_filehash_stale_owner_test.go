@@ -92,3 +92,70 @@ func TestCheckExactFileHash_SameVersionGroup_IsNotADuplicate(t *testing.T) {
 		t.Fatalf("grouped pair must not become a candidate; got %d", len(cands))
 	}
 }
+
+// A soft-deleted index owner with NO version group (a user deleted the book
+// outright, or the row predates grouping) and auto-merge OFF would otherwise
+// reach upsertExactCandidate and put a deleted row in the review queue. The
+// engine-level skip is what stops it; MergeBooks' own guard never runs on
+// this path.
+func TestCheckExactFileHash_SoftDeletedUngroupedOwner_NoCandidate(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	engine.AutoMergeEnabled = false
+
+	hash := "HASH-UNGROUPED"
+	yes := true
+	live := &database.Book{ID: "LIVE2", Title: "Deleted Twin", FileHash: &hash}
+	gone := &database.Book{ID: "GONE2", Title: "Deleted Twin", FileHash: &hash, MarkedForDeletion: &yes}
+	mock.GetBookByFileHashFunc = func(h string) (*database.Book, error) { cp := *gone; return &cp, nil }
+
+	merged, err := engine.checkExactFileHash(live, "")
+	if err != nil || merged {
+		t.Fatalf("checkExactFileHash: merged=%v err=%v", merged, err)
+	}
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if len(cands) != 0 {
+		t.Fatalf("a soft-deleted row must never become a review candidate; got %d", len(cands))
+	}
+}
+
+// The scanned book, not the index owner, must survive when it is the one with
+// a file row. handleFileHashMatch used to force `other` (the index owner) as
+// primary; that put the file-less owner over the book that could play.
+func TestCheckExactFileHash_AutoMerge_ElectsOnMeritNotIndexOwnership(t *testing.T) {
+	engine, mock, _ := setupTestEngine(t)
+	engine.AutoMergeEnabled = true
+
+	hash := "HASH-MERIT"
+	title := "Merit Book"
+	scanned := database.Book{ID: "SCANNED", Title: title, FileHash: &hash, Format: "mp3"}
+	owner := database.Book{ID: "OWNER", Title: title, FileHash: &hash, Format: "m4b"} // BookIsBetter would pick it on format
+	rs := newMergeRaceStore([]database.Book{scanned, owner})
+
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return rs.get(id), nil }
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) { return rs.update(id, b) }
+	mock.GetBookByFileHashFunc = func(h string) (*database.Book, error) { return rs.get("OWNER"), nil }
+	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
+		if bookID == "SCANNED" {
+			return []database.BookFile{{ID: "f", BookID: bookID, FilePath: "/lib/scanned.mp3"}}, nil
+		}
+		return nil, nil
+	}
+
+	merged, err := engine.checkExactFileHash(rs.get("SCANNED"), "")
+	if err != nil {
+		t.Fatalf("checkExactFileHash: %v", err)
+	}
+	if !merged {
+		t.Fatal("expected an auto-merge")
+	}
+	s, o := rs.get("SCANNED"), rs.get("OWNER")
+	if s.IsPrimaryVersion == nil || !*s.IsPrimaryVersion || (s.MarkedForDeletion != nil && *s.MarkedForDeletion) {
+		t.Fatalf("the book with a file row must be the live primary; got primary=%v deleted=%v", s.IsPrimaryVersion, s.MarkedForDeletion)
+	}
+	if o.MarkedForDeletion == nil || !*o.MarkedForDeletion {
+		t.Fatal("the file-less index owner must be the soft-deleted loser")
+	}
+}
