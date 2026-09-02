@@ -1,7 +1,7 @@
 // file: internal/boilerplate/patterns.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e8d1c3a7-4b62-4f90-9a15-2c7e6b0d4f38
-// last-edited: 2026-07-12
+// last-edited: 2026-09-02
 
 // Package boilerplate holds the compiled-in list of publisher intro/outro
 // "titles" that are not real books, plus a pure matcher over that list. It is a
@@ -18,6 +18,7 @@
 package boilerplate
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -82,10 +83,8 @@ func IsBoilerplateTitle(title string) bool {
 	if normalized == "" {
 		return false
 	}
-	for _, pattern := range DefaultTitlePatterns {
-		if normalized == pattern {
-			return true
-		}
+	if slices.Contains(DefaultTitlePatterns, normalized) {
+		return true
 	}
 	for _, pattern := range DefaultPrefixPatterns {
 		if strings.HasPrefix(normalized, pattern+" ") {
