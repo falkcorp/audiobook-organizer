@@ -1,6 +1,7 @@
 // file: internal/cache/cache_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-09-02
 
 package cache
 
@@ -116,14 +117,14 @@ func TestLRUCapacityEviction(t *testing.T) {
 func TestLRUCapacityBoundedAtN(t *testing.T) {
 	const N = 50
 	c := NewWithLimit[int]("test_lru_n_plus_10", time.Minute, N)
-	for i := 0; i < N+10; i++ {
+	for i := range N + 10 {
 		c.Set(strconv.Itoa(i), i)
 	}
 	if got := c.Len(); got != N {
 		t.Fatalf("expected exactly %d entries after N+10 inserts, got %d", N, got)
 	}
 	// Oldest 10 (keys 0..9) must be evicted.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if _, ok := c.Get(strconv.Itoa(i)); ok {
 			t.Fatalf("expected key %d to be evicted (oldest)", i)
 		}
@@ -168,7 +169,7 @@ func TestLazyExpiredOnGet(t *testing.T) {
 
 func TestUnboundedAcceptsMany(t *testing.T) {
 	c := New[int]("test_unbounded", time.Minute)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		c.SetWithTTL(string(rune('a'+i%26))+string(rune('a'+i/26)), i, time.Minute)
 	}
 	if c.Len() == 0 {
