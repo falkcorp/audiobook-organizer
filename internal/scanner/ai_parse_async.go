@@ -370,16 +370,32 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 		}
 	}
 	if row.SeriesID == nil && book.Series != "" && !locks.Locked(database.FieldKeySeriesName) {
-		seriesID, serr := resolveSeriesID(book.Series, row.AuthorID)
+		seriesID, seriesPos, serr := resolveSeriesID(book.Series, row.AuthorID)
 		if serr != nil {
 			return "", fmt.Errorf("resolve series %q: %w", book.Series, serr)
 		}
 		if seriesID != nil {
 			row.SeriesID = seriesID
 			changed = true
-			if row.SeriesSequence == nil && book.Position > 0 && !locks.Locked(database.FieldKeySeriesPosition) {
+			// The LLM's own position wins; the number stripped out of the series
+			// name fills the gap when it had none. Either way it is only written
+			// into an EMPTY sequence -- a sequence the row already carries came
+			// from somewhere with more context than a regex over a name.
+			//
+			// 🔑 `book.Position > 0` was part of this condition before the merge
+			// with #3054 and is deliberately GONE, not lost: the position no
+			// longer comes only from the model. seriesPos carries the number
+			// stripped out of the series name, so requiring book.Position > 0
+			// here would silently discard it in exactly the case this change
+			// exists to fix. `pos > 0` below still gates the write.
+			if row.SeriesSequence == nil && !locks.Locked(database.FieldKeySeriesPosition) {
 				pos := book.Position
-				row.SeriesSequence = &pos
+				if pos <= 0 {
+					pos = seriesPos
+				}
+				if pos > 0 {
+					row.SeriesSequence = &pos
+				}
 			}
 		}
 	}

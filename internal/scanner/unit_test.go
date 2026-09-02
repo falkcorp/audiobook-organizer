@@ -1011,7 +1011,7 @@ func TestResolveAuthorID(t *testing.T) {
 
 func TestResolveSeriesID(t *testing.T) {
 	t.Run("empty name returns nil", func(t *testing.T) {
-		id, err := resolveSeriesID("", nil)
+		id, _, err := resolveSeriesID("", nil)
 		assert.NoError(t, err)
 		assert.Nil(t, id)
 	})
@@ -1026,7 +1026,7 @@ func TestResolveSeriesID(t *testing.T) {
 		authorID := 5
 		store.EXPECT().GetSeriesByName("Dune", &authorID).Return(&database.Series{ID: 33, Name: "Dune"}, nil)
 
-		id, err := resolveSeriesID("Dune", &authorID)
+		id, _, err := resolveSeriesID("Dune", &authorID)
 		require.NoError(t, err)
 		require.NotNil(t, id)
 		assert.Equal(t, 33, *id)
@@ -1042,7 +1042,7 @@ func TestResolveSeriesID(t *testing.T) {
 		store.EXPECT().GetSeriesByName("New Series", (*int)(nil)).Return(nil, nil)
 		store.EXPECT().CreateSeries("New Series", (*int)(nil)).Return(&database.Series{ID: 55, Name: "New Series"}, nil)
 
-		id, err := resolveSeriesID("New Series", nil)
+		id, _, err := resolveSeriesID("New Series", nil)
 		require.NoError(t, err)
 		require.NotNil(t, id)
 		assert.Equal(t, 55, *id)
@@ -1057,7 +1057,7 @@ func TestResolveSeriesID(t *testing.T) {
 
 		store.EXPECT().GetSeriesByName("Fail", (*int)(nil)).Return(nil, fmt.Errorf("db error"))
 
-		_, err := resolveSeriesID("Fail", nil)
+		_, _, err := resolveSeriesID("Fail", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "series lookup failed")
 	})
@@ -1072,7 +1072,7 @@ func TestResolveSeriesID(t *testing.T) {
 		store.EXPECT().GetSeriesByName("Bad", (*int)(nil)).Return(nil, nil)
 		store.EXPECT().CreateSeries("Bad", (*int)(nil)).Return(nil, fmt.Errorf("random error"))
 
-		_, err := resolveSeriesID("Bad", nil)
+		_, _, err := resolveSeriesID("Bad", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "series create failed")
 	})
@@ -1088,7 +1088,7 @@ func TestResolveSeriesID(t *testing.T) {
 		store.EXPECT().CreateSeries("Conflict", (*int)(nil)).Return(nil, fmt.Errorf("UNIQUE constraint failed"))
 		store.EXPECT().GetSeriesByName("Conflict", (*int)(nil)).Return(&database.Series{ID: 88, Name: "Conflict"}, nil).Once()
 
-		id, err := resolveSeriesID("Conflict", nil)
+		id, _, err := resolveSeriesID("Conflict", nil)
 		require.NoError(t, err)
 		require.NotNil(t, id)
 		assert.Equal(t, 88, *id)
@@ -1105,7 +1105,7 @@ func TestResolveSeriesID(t *testing.T) {
 		store.EXPECT().CreateSeries("Ghost", (*int)(nil)).Return(nil, fmt.Errorf("duplicate key value violates"))
 		store.EXPECT().GetSeriesByName("Ghost", (*int)(nil)).Return(nil, fmt.Errorf("db down")).Once()
 
-		_, err := resolveSeriesID("Ghost", nil)
+		_, _, err := resolveSeriesID("Ghost", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "series lookup after conflict failed")
 	})
@@ -1121,7 +1121,7 @@ func TestResolveSeriesID(t *testing.T) {
 		store.EXPECT().CreateSeries("Vanished", (*int)(nil)).Return(nil, fmt.Errorf("duplicate key value violates"))
 		store.EXPECT().GetSeriesByName("Vanished", (*int)(nil)).Return(nil, nil).Once()
 
-		_, err := resolveSeriesID("Vanished", nil)
+		_, _, err := resolveSeriesID("Vanished", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "conflict detected but series not found")
 	})

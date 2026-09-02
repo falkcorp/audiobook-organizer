@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2124,8 +2125,22 @@ func (imp *Importer) assignAuthorAndSeries(book *database.Book, track *itunes.Tr
 	}
 	seriesName := extractSeriesName(track.Album)
 	if seriesName != "" {
-		if seriesID, err := imp.ensureSeriesID(seriesName, book.AuthorID); err == nil {
+		seriesID, seriesPos, err := imp.ensureSeriesID(seriesName, book.AuthorID)
+		if err != nil {
+			// Was swallowed entirely by an `if err == nil` with no else. A failed
+			// series resolve now says so; the book still imports without a series
+			// rather than the whole track being dropped.
+			slog.Warn("itunes import: could not resolve the series; importing the book without one",
+				"series", seriesName, "err", err)
+		} else {
 			book.SeriesID = seriesID
+			// Record the position the strip removed, but never over an existing
+			// one -- a sequence already on the row came from the track's own tags
+			// and outranks a number recovered from a name.
+			if seriesPos > 0 && book.SeriesSequence == nil {
+				pos := seriesPos
+				book.SeriesSequence = &pos
+			}
 		}
 	}
 }
@@ -2161,24 +2176,50 @@ func (imp *Importer) ensureAuthorIDs(name string) ([]int, error) {
 	return ids, nil
 }
 
-func (imp *Importer) ensureSeriesID(name string, authorID *int) (*int, error) {
+// ensureSeriesID resolves (get-or-create) the series row for name and returns
+// its ID plus the book POSITION lifted out of the name, 0 when none was found.
+//
+// 🔑 The position is returned rather than dropped. Stripping "#5" off
+// "Nameless Sovereign #5" and recording the 5 nowhere does not clean the data,
+// it deletes the only record of where the book sits in its series. The caller
+// (assignAuthorAndSeries) holds the *database.Book and writes it into
+// SeriesSequence when that is still empty.
+func (imp *Importer) ensureSeriesID(name string, authorID *int) (*int, int, error) {
 	// Strip any embedded title/position contamination from the series name.
-	if cleaned, _, flagged := metadata.StripSeriesContamination(strings.TrimSpace(name), ""); !flagged && cleaned != "" {
-		name = cleaned
+	trimmed := strings.TrimSpace(name)
+	position := 0
+	c := metadata.StripSeriesContamination(trimmed, "")
+	switch {
+	case c.Flag:
+		slog.Info("itunes import: left a series name alone for review",
+			"series", trimmed, "reason", string(c.FlagReason),
+			"candidate_series", c.CandidateName, "candidate_position", c.CandidatePosition)
+	case c.Name != "" && c.Changed(trimmed):
+		// Every automatic rewrite of a user-visible name is logged with the rule
+		// that made it, so a false positive can be found and overridden.
+		slog.Info("itunes import: moved the book position out of the series name",
+			"rule", c.Rule, "series_before", trimmed, "series_after", c.Name,
+			"position", c.Position)
+		name = c.Name
+		if c.Position != "" {
+			if p, err := strconv.Atoi(c.Position); err == nil && p > 0 {
+				position = p
+			}
+		}
 	}
 
 	series, err := imp.store.GetSeriesByName(name, authorID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if series != nil {
-		return &series.ID, nil
+		return &series.ID, position, nil
 	}
 	series, err = imp.store.CreateSeries(name, authorID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return &series.ID, nil
+	return &series.ID, position, nil
 }
 
 func (imp *Importer) resolveImportMode(mode string) itunes.ImportMode {

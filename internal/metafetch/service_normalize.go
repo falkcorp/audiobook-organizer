@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_normalize.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: eceba49a-b99f-476f-9d43-fd6fd39a8e24
 // last-edited: 2026-09-02
 
@@ -8,6 +8,7 @@ package metafetch
 import (
 	"encoding/json"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -42,11 +43,28 @@ func jsonEncodeString(s string) string {
 func NormalizeMetaSeries(meta *metadata.BookMetadata) {
 	// Strip contamination (embedded title/position) from the series field first.
 	if meta.Series != "" {
-		cleaned, pos, flagged := metadata.StripSeriesContamination(meta.Series, meta.Title)
-		if !flagged && cleaned != meta.Series {
-			meta.Series = cleaned
-			if pos != "" && meta.SeriesPosition == "" {
-				meta.SeriesPosition = pos
+		c := metadata.StripSeriesContamination(meta.Series, meta.Title)
+		switch {
+		case c.Flag:
+			// Nothing was rewritten. Logged anyway so the owner has a route to
+			// the names the normalizer deliberately declined to touch --
+			// "when we find one I'll manually override" needs something to find.
+			slog.Info("series normalize: left a series name alone for review",
+				"series", meta.Series, "reason", string(c.FlagReason),
+				"candidate_series", c.CandidateName, "candidate_position", c.CandidatePosition,
+				"title", meta.Title, "asin", meta.ASIN)
+		case c.Changed(meta.Series):
+			// A silent rewrite of user-visible data is the pattern this repo
+			// keeps getting burned by, so every strip is logged with the rule
+			// that made it. There is no book id here: this runs on a metadata
+			// CANDIDATE, before any store write, so the title and ASIN are the
+			// only identity available.
+			slog.Info("series normalize: moved the book position out of the series name",
+				"rule", c.Rule, "series_before", meta.Series, "series_after", c.Name,
+				"position", c.Position, "title", meta.Title, "asin", meta.ASIN)
+			meta.Series = c.Name
+			if c.Position != "" && meta.SeriesPosition == "" {
+				meta.SeriesPosition = c.Position
 			}
 		}
 	}
@@ -63,7 +81,13 @@ func NormalizeMetaSeries(meta *metadata.BookMetadata) {
 		return
 	}
 	meta.Series = parsedSeries
-	if parsedPosition != "" {
+	// ⚠️ This guard is NEW. It used to be a bare `if parsedPosition != ""`, which
+	// overwrote SeriesPosition unconditionally -- including a position the strip
+	// block above had just lifted out of the series name, and including a
+	// provider's own explicit Sequence field. A number parsed out of prose by a
+	// regex does not outrank a number that arrived in a dedicated field, and a
+	// write-back that a later line silently clobbers is not a write-back at all.
+	if parsedPosition != "" && meta.SeriesPosition == "" {
 		meta.SeriesPosition = parsedPosition
 	}
 	if parsedTitle != "" {
