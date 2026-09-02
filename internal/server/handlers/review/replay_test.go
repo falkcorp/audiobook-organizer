@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/replay_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e3c5a71-9d24-4b60-af18-2c47e0b96d35
-// last-edited: 2026-08-06
+// last-edited: 2026-09-02
 
 package reviewhandler_test
 

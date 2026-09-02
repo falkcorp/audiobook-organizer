@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-02
 //

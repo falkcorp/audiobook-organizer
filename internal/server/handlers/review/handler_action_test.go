@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_action_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c1f0a83-6d47-4e29-b0a5-3f7c8e2d94b1
-// last-edited: 2026-08-06
+// last-edited: 2026-09-02
 
 // Tests for ACTION-KEYED approve dispatch (owner item 2, 2026-08-06).
 //

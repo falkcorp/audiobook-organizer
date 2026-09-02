@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // Tests for the universal review-queue handlers. The store is exercised through
 // a REAL pebble-backed *database.PebbleStore (which implements the ReviewStore
