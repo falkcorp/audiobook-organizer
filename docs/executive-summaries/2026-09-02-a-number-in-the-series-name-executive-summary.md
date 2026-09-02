@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-02-a-number-in-the-series-name-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7a3c9e15-2d84-4b06-9f71-c8e5b0a24d39 -->
 <!-- last-edited: 2026-09-02 -->
 
@@ -15,7 +15,9 @@ names like `Discworld 05`, `Nameless Sovereign #5` and `Dragon Born [04]` --
 the series and the book's place in it mashed into one piece of text. Out of
 42,495 series in the library, **7,814 are contaminated this way**: 955 carry an
 explicit marker like "Book 3" or "#5", and another 6,859 simply end in a bare
-number.
+number. (Those two shapes are what was counted; names with the number in
+brackets were counted separately, at 198, and other shapes were not counted at
+all -- so 7,814 is a floor, not a total.)
 
 The visible damage is that the library stops behaving like a library. Every
 volume of a series looks like a *different* series, so a shelf that should hold
@@ -66,6 +68,24 @@ fix would have silently dropped it for the others.
 Every change is written to the log with the book, the old and new name, the
 number recovered, and the rule that fired, so a rewrite of someone's data is
 never silent.
+
+## One case where the number is removed but not kept
+
+Names with the number in brackets -- `Dragon Born [04]`, `The Hollows (7)` --
+are handled differently on purpose, and it is worth knowing why.
+
+When the existing cleanup tool looked at those 198 names, about 180 of them
+turned out not to be series positions at all. They were pieces of a single
+audiobook that had been split into separate rows, each piece numbered. Treating
+that number as "this is book 4 of the series" would file the pieces as four
+different books in a series that does not exist.
+
+So for bracketed names only, the brackets are removed from the name and the
+number is **not** recorded as the book's position. The position is simply left
+blank. A blank position is easy to spot and easy to fill in; a confidently wrong
+one looks correct and tends to stay. The roughly one-in-ten bracketed names that
+really were positions lose their number, and that trade was made deliberately.
+
 
 ## What this does and does not do
 
