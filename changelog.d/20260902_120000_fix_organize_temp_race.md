@@ -46,6 +46,6 @@ down the single-file path); both are deleted and the folder-autoscan op uses it 
 
 Tests plant the other book's bytes at the contested path before asserting, and check
 that both files are readable afterwards, not just that one call errored. Mutation table
-`scripts/mutation-tables/organize-landing.muts` (12 mutants, results in the PR body; #3051 adds four more).
+`scripts/mutation-tables/organize-landing.muts` (12 mutants, results in the PR body; #3051 adds five more there and one each in `organize-landing-handler.muts` and `organize-landing-metafetch.muts` — 19/19 killed at final HEAD).
 Three "no temp left behind" checks that had gone blind (they stat'd the old fixed temp
 name) glob the new names instead.
