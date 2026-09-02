@@ -1,7 +1,7 @@
 // file: internal/database/iface_review.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a1e4d63-2c9f-48b5-b0a7-6e3d51f8c294
-// last-edited: 2026-08-06
+// last-edited: 2026-09-02
 
 package database
 
@@ -48,4 +48,19 @@ type ReviewStore interface {
 	// index forgets a remembered decision, so producers must only delete PENDING
 	// items (the regroup reconcile relies on this to purge superseded holds).
 	DeleteReviewItem(id string) error
+}
+
+// ReviewStatusIndexRepairer rebuilds the review-item status index from the
+// records. It is deliberately NOT part of ReviewStore (and so not part of Store):
+// it is a maintenance concern with exactly one caller, the
+// maintenance.review-status-index-repair op, and widening the 398-method Store
+// for it would also mean regenerating two mocks. Like FileProvenanceStore, the
+// server hands it out by type assertion and a store that lacks it yields nil.
+// Implemented on *PebbleStore (review_store.go).
+type ReviewStatusIndexRepairer interface {
+	// RebuildReviewStatusIndex reconciles review_item:status:* against the
+	// records. apply=false only counts; apply=true deletes stale rows and adds
+	// missing ones in one synced batch. See the implementation for what counts
+	// as stale or missing.
+	RebuildReviewStatusIndex(apply bool) (ReviewStatusIndexRepair, error)
 }

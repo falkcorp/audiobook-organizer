@@ -1,5 +1,5 @@
 // file: internal/database/review_store.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
 // last-edited: 2026-09-02
 
@@ -599,10 +599,23 @@ func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error
 //     Clearing requires no code path at all, so no caller can do it by accident.
 //
 // Returns (nil, nil) when the item does not exist.
+//
+// 🔴 reviewMu IS HELD ACROSS THE READ-MODIFY-WRITE. The status index is moved by
+// deleting the OLD status row, and "old" is whatever this call read a moment ago.
+// Without the lock two concurrent decisions on one item both read status=pending,
+// both delete the pending row, and each writes its own new row — the record ends
+// up with one status while the index lists it under two, so a status-filtered list
+// or count returns an item that no longer has that status. Upsert and Delete take
+// the same mutex for the same class of reason; this writer was the one sibling
+// that did not, and maintenance.review-status-index-repair exists to rebuild the
+// index for rows the unlocked version already damaged.
 func (p *PebbleStore) SetReviewItemDecision(id, status, chosenAction string) (*ReviewItem, error) {
 	if status == "" {
 		return nil, fmt.Errorf("review item: status is required")
 	}
+	p.reviewMu.Lock()
+	defer p.reviewMu.Unlock()
+
 	item, err := p.getReviewItem(id)
 	if err != nil {
 		return nil, err
@@ -678,4 +691,137 @@ func (p *PebbleStore) DeleteReviewItem(id string) error {
 		}
 	}
 	return b.Commit(pebble.Sync)
+}
+
+// ReviewStatusIndexRepair is the outcome of RebuildReviewStatusIndex.
+//
+// Stale and Missing are what the scan FOUND. They are removed/added only when
+// Applied is true; on a dry run they are the counts an apply would act on, and
+// the store itself is untouched.
+type ReviewStatusIndexRepair struct {
+	// ItemsScanned is the number of review_item:r: records read.
+	ItemsScanned int `json:"items_scanned"`
+	// IndexEntriesScanned is the number of review_item:status: rows read.
+	IndexEntriesScanned int `json:"index_entries_scanned"`
+	// StaleIndexEntries are index rows that name an item under a status the
+	// item does not have — including rows for items that no longer exist.
+	StaleIndexEntries int `json:"stale_index_entries"`
+	// MissingIndexEntries are items with no index row under their stored status.
+	MissingIndexEntries int `json:"missing_index_entries"`
+	// Applied reports whether the stale/missing rows were actually written.
+	Applied bool `json:"applied"`
+}
+
+// RebuildReviewStatusIndex reconciles the review_item:status:* secondary index
+// against the review_item:r: records, which are the source of truth.
+//
+// An index row is STALE when the item it names is gone or is stored under a
+// different status; an item is MISSING from the index when there is no row under
+// its stored status. With apply=false the scan only counts; with apply=true the
+// stale rows are deleted and the missing rows written in one synced batch.
+//
+// The whole scan-and-write runs under reviewMu so no decision, upsert or delete
+// can interleave with it: a repair that raced a writer could re-add a row the
+// writer had just correctly deleted. Every review-item writer now takes that
+// mutex, so holding it here is what makes the result exact rather than a
+// snapshot that was true at some point during the scan.
+//
+// Why this exists: SetReviewItemDecision wrote the record and moved the index
+// row WITHOUT the mutex until 2026-09-02, so two concurrent decisions on one item
+// could leave it indexed under two statuses. Fixing the writer stops new damage;
+// this is the route back for rows the old writer already left inconsistent.
+func (p *PebbleStore) RebuildReviewStatusIndex(apply bool) (ReviewStatusIndexRepair, error) {
+	p.reviewMu.Lock()
+	defer p.reviewMu.Unlock()
+
+	var res ReviewStatusIndexRepair
+
+	// Source of truth: every record, keyed by ID, with the status it is stored
+	// under. Items are never stored with an empty status (UpsertReviewItem
+	// defaults it, SetReviewItemDecision refuses it), so an empty status here is
+	// a record with nothing to index and no row it can be expected under.
+	items, err := p.listAllReviewItems()
+	if err != nil {
+		return res, err
+	}
+	res.ItemsScanned = len(items)
+	expected := make(map[string]string, len(items)) // id → stored status
+	for _, it := range items {
+		if it.Status == "" {
+			continue
+		}
+		expected[it.ID] = it.Status
+	}
+
+	// The index as it actually is. Keys are review_item:status:<status>:<id>;
+	// neither a status word nor a ULID contains ':', so the split is unambiguous.
+	prefix := []byte(reviewItemStatusPfx)
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixUpperBound(prefix)})
+	if err != nil {
+		return res, fmt.Errorf("rebuild review status index: scan: %w", err)
+	}
+	type idxRow struct{ status, id string }
+	var stale []idxRow
+	present := map[string]bool{} // id → an index row exists under the item's stored status
+	for iter.First(); iter.Valid(); iter.Next() {
+		res.IndexEntriesScanned++
+		rest := string(iter.Key()[len(prefix):])
+		sep := strings.LastIndex(rest, ":")
+		if sep < 0 {
+			// Not a well-formed row at all; it can never be matched by a lookup,
+			// so it is stale by construction.
+			stale = append(stale, idxRow{status: rest, id: ""})
+			continue
+		}
+		row := idxRow{status: rest[:sep], id: rest[sep+1:]}
+		if want, ok := expected[row.id]; ok && want == row.status {
+			present[row.id] = true
+			continue
+		}
+		stale = append(stale, row)
+	}
+	if err := iter.Error(); err != nil {
+		_ = iter.Close()
+		return res, fmt.Errorf("rebuild review status index: iterate: %w", err)
+	}
+	if err := iter.Close(); err != nil {
+		return res, fmt.Errorf("rebuild review status index: close iterator: %w", err)
+	}
+
+	var missing []idxRow
+	for id, status := range expected {
+		if !present[id] {
+			missing = append(missing, idxRow{status: status, id: id})
+		}
+	}
+	res.StaleIndexEntries = len(stale)
+	res.MissingIndexEntries = len(missing)
+
+	if !apply || (len(stale) == 0 && len(missing) == 0) {
+		return res, nil
+	}
+
+	b := p.db.NewBatch()
+	defer b.Close()
+	for _, row := range stale {
+		var key []byte
+		if row.id == "" {
+			key = []byte(reviewItemStatusPfx + row.status)
+		} else {
+			key = reviewItemStatusKey(row.status, row.id)
+		}
+		if err := b.Delete(key, nil); err != nil {
+			return res, fmt.Errorf("rebuild review status index: delete stale row: %w", err)
+		}
+	}
+	for _, row := range missing {
+		if err := b.Set(reviewItemStatusKey(row.status, row.id), nil, nil); err != nil {
+			return res, fmt.Errorf("rebuild review status index: add missing row: %w", err)
+		}
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
+		return res, fmt.Errorf("rebuild review status index: commit: %w", err)
+	}
+	res.Applied = true
+	return res, nil
 }
