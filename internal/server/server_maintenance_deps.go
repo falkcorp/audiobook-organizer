@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -68,6 +68,17 @@ func (s *Server) MetadataCacheStore() database.MetadataCacheStore { return s.sto
 func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
 	if fp, ok := s.store.(database.FileProvenanceStore); ok {
 		return fp
+	}
+	return nil
+}
+
+// ReviewStatusIndexStore hands the maintenance plugin the review status-index
+// rebuild. It is not part of database.Store for the same reason the provenance
+// methods are not: it is a repair of a store-internal structure, not a library
+// operation. A store without it yields nil and the op reports that.
+func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
+	if r, ok := s.store.(database.ReviewStatusIndexRepairer); ok {
+		return r
 	}
 	return nil
 }

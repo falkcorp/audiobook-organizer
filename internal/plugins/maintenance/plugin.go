@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-08-21
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -65,6 +65,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.metadataCacheReapDef(),
 		p.fileProvenanceCaptureDef(),
 		p.fileProvenanceExportDef(),
+		p.reviewStatusIndexRepairDef(),
 		p.seriesNormalizeDef(),
 		p.seriesPruneDef(),
 		p.resolveProductionAuthorsDef(),

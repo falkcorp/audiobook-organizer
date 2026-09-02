@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -206,6 +206,13 @@ type StoreProvider interface {
 	// nil when the underlying store does not implement it, and the op treats
 	// that as "not initialized" rather than panicking.
 	FileProvenanceStore() database.FileProvenanceStore
+	// ReviewStatusIndexStore serves runReviewStatusIndexRepair. Rebuilding the
+	// review_item:status:* index is a store-internal repair that nothing else
+	// should reach for, so like the provenance ledger it is kept out of Store
+	// and handed out by type assertion. Returns nil when the underlying store
+	// does not implement it; the op reports that as "not supported" rather
+	// than panicking.
+	ReviewStatusIndexStore() database.ReviewStatusIndexRepairer
 }
 
 // MetadataRunners runs the metadata enrichment and write-back operations.

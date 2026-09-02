@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -56,6 +56,15 @@ func (d fakeDeps) FileProvenanceStore() database.FileProvenanceStore {
 }
 func (d fakeDeps) MetadataCacheStore() database.MetadataCacheStore {
 	return d.store
+}
+
+// ReviewStatusIndexStore mirrors Server's accessor: the rebuild is not part of
+// database.Store, so this asserts and yields nil for a store that lacks it.
+func (d fakeDeps) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
+	if r, ok := d.store.(database.ReviewStatusIndexRepairer); ok {
+		return r
+	}
+	return nil
 }
 
 // Delegate stubs — maintenance plugin calls these on ServerDeps from other ops.
