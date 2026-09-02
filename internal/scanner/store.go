@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-08-25
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -77,7 +77,10 @@ type scannerStore interface {
 	scanBookWriter
 	scanEntityStore
 	scanProgressStore
-	scanFieldStateReader
+	// The lock guard's surface (field-state rows + the legacy blob), owned by
+	// internal/database so the scanner and every metafetch apply path read
+	// locks the same way.
+	database.MetadataFieldStateReader
 
 	// Forwarded, embedded by name so each re-narrows on its own.
 	scanServiceStore

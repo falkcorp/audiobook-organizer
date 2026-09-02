@@ -665,6 +665,68 @@ func (_c *MockMetadataStore_GetBooksBySeriesIDCore_Call) RunAndReturn(run func(s
 	return _c
 }
 
+// GetMetadataFieldStates provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetMetadataFieldStates")
+	}
+
+	var r0 []database.MetadataFieldState
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.MetadataFieldState, error)); ok {
+		return returnFunc(bookID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.MetadataFieldState); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.MetadataFieldState)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(bookID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataStore_GetMetadataFieldStates_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetMetadataFieldStates'
+type MockMetadataStore_GetMetadataFieldStates_Call struct {
+	*mock.Call
+}
+
+// GetMetadataFieldStates is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockMetadataStore_Expecter) GetMetadataFieldStates(bookID any) *MockMetadataStore_GetMetadataFieldStates_Call {
+	return &MockMetadataStore_GetMetadataFieldStates_Call{Call: _e.mock.On("GetMetadataFieldStates", bookID)}
+}
+
+func (_c *MockMetadataStore_GetMetadataFieldStates_Call) Run(run func(bookID string)) *MockMetadataStore_GetMetadataFieldStates_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_GetMetadataFieldStates_Call) Return(metadataFieldStates []database.MetadataFieldState, err error) *MockMetadataStore_GetMetadataFieldStates_Call {
+	_c.Call.Return(metadataFieldStates, err)
+	return _c
+}
+
+func (_c *MockMetadataStore_GetMetadataFieldStates_Call) RunAndReturn(run func(bookID string) ([]database.MetadataFieldState, error)) *MockMetadataStore_GetMetadataFieldStates_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetMetadataRejections provides a mock function for the type MockMetadataStore
 func (_mock *MockMetadataStore) GetMetadataRejections(bookID string) ([]database.MetadataRejection, error) {
 	ret := _mock.Called(bookID)
@@ -791,6 +853,68 @@ func (_c *MockMetadataStore_GetSeriesByName_Call) Return(series *database.Series
 }
 
 func (_c *MockMetadataStore_GetSeriesByName_Call) RunAndReturn(run func(name string, authorID *int) (*database.Series, error)) *MockMetadataStore_GetSeriesByName_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetUserPreference provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) GetUserPreference(key string) (*database.UserPreference, error) {
+	ret := _mock.Called(key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetUserPreference")
+	}
+
+	var r0 *database.UserPreference
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.UserPreference, error)); ok {
+		return returnFunc(key)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.UserPreference); ok {
+		r0 = returnFunc(key)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.UserPreference)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(key)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataStore_GetUserPreference_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetUserPreference'
+type MockMetadataStore_GetUserPreference_Call struct {
+	*mock.Call
+}
+
+// GetUserPreference is a helper method to define mock.On call
+//   - key string
+func (_e *MockMetadataStore_Expecter) GetUserPreference(key any) *MockMetadataStore_GetUserPreference_Call {
+	return &MockMetadataStore_GetUserPreference_Call{Call: _e.mock.On("GetUserPreference", key)}
+}
+
+func (_c *MockMetadataStore_GetUserPreference_Call) Run(run func(key string)) *MockMetadataStore_GetUserPreference_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_GetUserPreference_Call) Return(userPreference *database.UserPreference, err error) *MockMetadataStore_GetUserPreference_Call {
+	_c.Call.Return(userPreference, err)
+	return _c
+}
+
+func (_c *MockMetadataStore_GetUserPreference_Call) RunAndReturn(run func(key string) (*database.UserPreference, error)) *MockMetadataStore_GetUserPreference_Call {
 	_c.Call.Return(run)
 	return _c
 }

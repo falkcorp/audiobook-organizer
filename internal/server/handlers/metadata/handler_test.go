@@ -1,13 +1,15 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-09-02
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
 // mocks; the injected helper funcs (enrichBook, isProtectedPath,
-// loadMetadataState, updateFetchedMetadataState, publishEvent) are stub closures
-// that record their invocations or return canned payloads. There is at least one
+// updateFetchedMetadataState, publishEvent) are stub closures that record their
+// invocations or return canned payloads. Field locks are read from the store
+// mock through database.LockedUserFields (GetMetadataFieldStates +
+// GetUserPreference), the same guard every apply path uses. There is at least one
 // test per public method (19 methods) covering happy paths and key branches.
 
 package metadatahandler_test
@@ -43,8 +45,6 @@ func init() { gin.SetMode(gin.TestMode) }
 type recorders struct {
 	enrichCalls          int
 	protectedPaths       map[string]bool
-	loadState            map[string]metafetch.MetadataFieldState
-	loadStateErr         error
 	updatedFetchedValues map[string]any
 	updateFetchedErr     error
 	publishedEvents      []plugin.Event
@@ -114,9 +114,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, tes
 			return gin.H{"id": b.ID, "title": b.Title}
 		},
 		func(p string) bool { return rec.protectedPaths[p] },
-		func(bookID string) (map[string]metafetch.MetadataFieldState, error) {
-			return rec.loadState, rec.loadStateErr
-		},
 		func(bookID string, values map[string]any) error {
 			rec.updatedFetchedValues = values
 			return rec.updateFetchedErr
@@ -392,9 +389,16 @@ func TestBulkFetchMetadata_MissingBookIDs(t *testing.T) {
 	}
 }
 
+// expectNoLocks answers the lock guard's two store reads with "no state": no
+// per-field rows and no legacy blob, so nothing is locked.
+func expectNoLocks(store *metadatamocks.MockMetadataStore) {
+	store.EXPECT().GetMetadataFieldStates(mock.Anything).Return(nil, nil).Maybe()
+	store.EXPECT().GetUserPreference(mock.Anything).Return(nil, nil).Maybe()
+}
+
 func TestBulkFetchMetadata_Updates(t *testing.T) {
 	h, d := newHandler(t)
-	d.rec.loadState = map[string]metafetch.MetadataFieldState{}
+	expectNoLocks(d.store)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
 	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
@@ -409,6 +413,80 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 		map[string]any{"book_ids": []string{"b1"}}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A user-locked field is fetched (recorded as provenance) but NOT applied, even
+// when the book is missing it and onlyMissing would otherwise apply it. The lock
+// key is the writer's spelling ("publisher"); the guard is the shared
+// database.LockedUserFields, so this pins the handler onto the same vocabulary
+// as the scanner and metafetch.
+func TestBulkFetchMetadata_LockedFieldIsFetchedNotApplied(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetMetadataFieldStates("b1").Return([]database.MetadataFieldState{
+		{BookID: "b1", Field: database.FieldKeyPublisher, OverrideLocked: true},
+	}, nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
+		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
+			{Title: "New Title", Source: "audible", Publisher: "Pub"},
+		}}, nil)
+	// No RecordChangeHistory, no UpdateBook, no ApplyMetadataSystemTags: with the
+	// only applicable field locked there is nothing to write. mockery fails the
+	// test on any unexpected call, so their absence here IS the assertion.
+	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+		map[string]any{"book_ids": []string{"b1"}}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Results []struct {
+				Status        string   `json:"status"`
+				AppliedFields []string `json:"applied_fields"`
+				FetchedFields []string `json:"fetched_fields"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Data.Results) != 1 {
+		t.Fatalf("bad response %s: %v", w.Body.String(), err)
+	}
+	r := resp.Data.Results[0]
+	if r.Status != "fetched" {
+		t.Errorf("status = %q, want fetched (locked field must not count as an update)", r.Status)
+	}
+	if len(r.AppliedFields) != 0 {
+		t.Errorf("applied_fields = %v, want none: publisher is user-locked", r.AppliedFields)
+	}
+	if got := d.rec.updatedFetchedValues; got == nil || got[database.FieldKeyPublisher] != "Pub" {
+		t.Errorf("fetched publisher not recorded as provenance: %v", got)
+	}
+}
+
+// FAIL CLOSED: when the locks cannot be read the book is not written at all.
+func TestBulkFetchMetadata_LockReadErrorRefusesToApply(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetMetadataFieldStates("b1").Return(nil, errors.New("pebble: closed"))
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+	// No search, no UpdateBook: refused before any provider call.
+	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+		map[string]any{"book_ids": []string{"b1"}}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Results []struct {
+				Status  string `json:"status"`
+				Message string `json:"message"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Data.Results) != 1 {
+		t.Fatalf("bad response %s: %v", w.Body.String(), err)
+	}
+	if resp.Data.Results[0].Status != "error" {
+		t.Errorf("status = %q, want error: an unreadable lock set must not be treated as unlocked", resp.Data.Results[0].Status)
 	}
 }
 
@@ -429,11 +507,13 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 // is a plain unguarded field write — fine for the existing single-book,
 // strictly-sequential tests, but multiple of the book IDs below have
 // non-empty fetched values, so concurrent workers would race on that shared
-// field. The closures below are either pure (loadMetadataState) or
-// mutex-guarded (updateFetchedMetadataState) instead.
+// field. The remaining closure (updateFetchedMetadataState) is mutex-guarded
+// instead, and the lock reads go to the testify store mock, which is safe to
+// call concurrently.
 func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 	store := metadatamocks.NewMockMetadataStore(t)
 	mfs := metadatamocks.NewMockMetadataFetchService(t)
+	expectNoLocks(store)
 
 	// b0: book not found.
 	store.EXPECT().GetBookByID("b0").Return(nil, nil)
@@ -484,9 +564,6 @@ func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 		cache.New[gin.H]("meta-test-parallel", time.Minute),
 		func(b *database.Book) any { return gin.H{"id": b.ID} },
 		func(p string) bool { return false },
-		func(bookID string) (map[string]metafetch.MetadataFieldState, error) {
-			return map[string]metafetch.MetadataFieldState{}, nil // pure — safe for concurrent calls
-		},
 		func(bookID string, values map[string]any) error {
 			utMu.Lock()
 			defer utMu.Unlock()

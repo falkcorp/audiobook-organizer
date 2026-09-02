@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-09-02
 
@@ -260,60 +260,9 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		}
 	}
 
-	// Process direct field updates (non-override)
-	fieldExtractors := map[string]func() (any, bool){
-		"title": func() (any, bool) {
-			return payload.Title, true
-		},
-		"author_name": func() (any, bool) {
-			if resolvedAuthorName == "" {
-				return nil, false
-			}
-			return resolvedAuthorName, true
-		},
-		"series_name": func() (any, bool) {
-			if resolvedSeriesName == "" {
-				return nil, false
-			}
-			return resolvedSeriesName, true
-		},
-		"narrator": func() (any, bool) {
-			if payload.Narrator == nil {
-				return nil, false
-			}
-			return *payload.Narrator, true
-		},
-		"publisher": func() (any, bool) {
-			if payload.Publisher == nil {
-				return nil, false
-			}
-			return *payload.Publisher, true
-		},
-		"language": func() (any, bool) {
-			if payload.Language == nil {
-				return nil, false
-			}
-			return *payload.Language, true
-		},
-		"audiobook_release_year": func() (any, bool) {
-			if payload.AudiobookReleaseYear == nil {
-				return nil, false
-			}
-			return *payload.AudiobookReleaseYear, true
-		},
-		"isbn10": func() (any, bool) {
-			if payload.ISBN10 == nil {
-				return nil, false
-			}
-			return *payload.ISBN10, true
-		},
-		"isbn13": func() (any, bool) {
-			if payload.ISBN13 == nil {
-				return nil, false
-			}
-			return *payload.ISBN13, true
-		},
-	}
+	// Process direct field updates (non-override). Every key written here is a
+	// lock key: the extractors are the WRITER side of database.UserLockableFields.
+	fieldExtractors := userEditFieldExtractors(payload, resolvedAuthorName, resolvedSeriesName)
 
 	for field, extractor := range fieldExtractors {
 		if _, ok := req.RawPayload[field]; !ok {
@@ -521,34 +470,104 @@ func (svc *AudiobookService) enqueueITunesRemovesForBook(bookID string, book *da
 	}
 }
 
-// ApplyOverrideToPayload applies an override value to the update payload
+// userEditFieldExtractors is the WRITER side of the field-lock vocabulary. Each
+// key here becomes a MetadataFieldState row with OverrideLocked=true when the
+// user edits that field directly (UpdateAudiobook), and that row is what every
+// guard -- the scanner's rescan overlay, every metafetch apply path, the bulk
+// fetch handler -- consults through database.LockedUserFields. The keys are the
+// database.FieldKey* constants so the writer and the readers cannot drift: for
+// two weeks in 2026-08 the scanner guarded "author"/"series"/"series_sequence"
+// while this map wrote author_name/series_name/series_position, and every
+// curated author, series and position was clobbered on rescan.
+//
+// TestUserEditFieldExtractorsAreInTheLockVocabulary pins that every key here is
+// in database.UserLockableFields.
+func userEditFieldExtractors(payload *AudiobookUpdate, resolvedAuthorName, resolvedSeriesName string) map[string]func() (any, bool) {
+	return map[string]func() (any, bool){
+		database.FieldKeyTitle: func() (any, bool) {
+			return payload.Title, true
+		},
+		database.FieldKeyAuthorName: func() (any, bool) {
+			if resolvedAuthorName == "" {
+				return nil, false
+			}
+			return resolvedAuthorName, true
+		},
+		database.FieldKeySeriesName: func() (any, bool) {
+			if resolvedSeriesName == "" {
+				return nil, false
+			}
+			return resolvedSeriesName, true
+		},
+		database.FieldKeyNarrator: func() (any, bool) {
+			if payload.Narrator == nil {
+				return nil, false
+			}
+			return *payload.Narrator, true
+		},
+		database.FieldKeyPublisher: func() (any, bool) {
+			if payload.Publisher == nil {
+				return nil, false
+			}
+			return *payload.Publisher, true
+		},
+		database.FieldKeyLanguage: func() (any, bool) {
+			if payload.Language == nil {
+				return nil, false
+			}
+			return *payload.Language, true
+		},
+		database.FieldKeyAudiobookReleaseYear: func() (any, bool) {
+			if payload.AudiobookReleaseYear == nil {
+				return nil, false
+			}
+			return *payload.AudiobookReleaseYear, true
+		},
+		database.FieldKeyISBN10: func() (any, bool) {
+			if payload.ISBN10 == nil {
+				return nil, false
+			}
+			return *payload.ISBN10, true
+		},
+		database.FieldKeyISBN13: func() (any, bool) {
+			if payload.ISBN13 == nil {
+				return nil, false
+			}
+			return *payload.ISBN13, true
+		},
+	}
+}
+
+// ApplyOverrideToPayload applies an override value to the update payload. The
+// field names are the lock vocabulary (database.FieldKey*); a key this switch
+// does not handle is stored as state but not projected onto the row.
 func ApplyOverrideToPayload(payload *AudiobookUpdate, field string, value any) {
 	switch field {
-	case "title":
+	case database.FieldKeyTitle:
 		if v, ok := value.(string); ok {
 			payload.Title = v
 		}
-	case "author_name":
+	case database.FieldKeyAuthorName:
 		if v, ok := value.(string); ok {
 			payload.AuthorName = &v
 		}
-	case "series_name":
+	case database.FieldKeySeriesName:
 		if v, ok := value.(string); ok {
 			payload.SeriesName = &v
 		}
-	case "narrator":
+	case database.FieldKeyNarrator:
 		if v, ok := value.(string); ok {
 			payload.Narrator = new(v)
 		}
-	case "publisher":
+	case database.FieldKeyPublisher:
 		if v, ok := value.(string); ok {
 			payload.Publisher = new(v)
 		}
-	case "language":
+	case database.FieldKeyLanguage:
 		if v, ok := value.(string); ok {
 			payload.Language = new(v)
 		}
-	case "audiobook_release_year":
+	case database.FieldKeyAudiobookReleaseYear:
 		switch v := value.(type) {
 		case float64:
 			year := int(v)
@@ -557,15 +576,15 @@ func ApplyOverrideToPayload(payload *AudiobookUpdate, field string, value any) {
 			year := v
 			payload.AudiobookReleaseYear = &year
 		}
-	case "isbn10":
+	case database.FieldKeyISBN10:
 		if v, ok := value.(string); ok {
 			payload.ISBN10 = new(v)
 		}
-	case "isbn13":
+	case database.FieldKeyISBN13:
 		if v, ok := value.(string); ok {
 			payload.ISBN13 = new(v)
 		}
-	case "asin":
+	case database.FieldKeyASIN:
 		if v, ok := value.(string); ok {
 			payload.ASIN = new(v)
 		}

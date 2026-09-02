@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-02
 
@@ -118,12 +118,6 @@ type Handler struct {
 	// by handleBulkWriteBack to skip write-back for protected paths.
 	isProtectedPath func(filePath string) bool
 
-	// loadMetadataState wraps *Server.loadMetadataState (server_metadata.go). Its
-	// return type is exported (map[string]metafetch.MetadataFieldState) and the
-	// bulk-fetch handler reads OverrideLocked / OverrideValue off it, so it is
-	// injected with the concrete type.
-	loadMetadataState func(bookID string) (map[string]metafetch.MetadataFieldState, error)
-
 	// updateFetchedMetadataState wraps *Server.updateFetchedMetadataState
 	// (server_metadata.go), used by bulkFetchMetadata to persist fetched-but-
 	// not-applied field values.
@@ -144,7 +138,6 @@ func New(
 	listCache *cache.Cache[gin.H],
 	enrichBook func(book *database.Book) any,
 	isProtectedPath func(filePath string) bool,
-	loadMetadataState func(bookID string) (map[string]metafetch.MetadataFieldState, error),
 	updateFetchedMetadataState func(bookID string, values map[string]any) error,
 	publishEvent func(ctx context.Context, event plugin.Event),
 ) *Handler {
@@ -157,7 +150,6 @@ func New(
 		listCache:                  listCache,
 		enrichBook:                 enrichBook,
 		isProtectedPath:            isProtectedPath,
-		loadMetadataState:          loadMetadataState,
 		updateFetchedMetadataState: updateFetchedMetadataState,
 		publishEvent:               publishEvent,
 	}
@@ -943,15 +935,15 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			return nil
 		}
 
-		state, err := h.loadMetadataState(bookID)
+		// The user's field locks, read through the guard every apply path shares
+		// (database.LockedUserFields). Fail closed: an unreadable lock set means
+		// this book is not written at all this round.
+		locked, err := database.LockedUserFields(store, bookID)
 		if err != nil {
 			result.Status = "error"
-			result.Message = "failed to load metadata state"
+			result.Message = "failed to load metadata field locks"
 			setResult(i, result)
 			return nil
-		}
-		if state == nil {
-			state = map[string]metafetch.MetadataFieldState{}
 		}
 
 		// Delegate search to service using empty query (uses book's title).
@@ -1008,8 +1000,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		}
 
 		shouldApply := func(field string, hasValue bool) bool {
-			entry := state[field]
-			if entry.HasUserOverride() {
+			if locked[field] {
 				return false
 			}
 			if onlyMissing && hasValue {
@@ -1020,19 +1011,19 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 
 		hasBookValue := func(field string) bool {
 			switch field {
-			case "title":
+			case database.FieldKeyTitle:
 				return strings.TrimSpace(book.Title) != ""
-			case "author_name":
+			case database.FieldKeyAuthorName:
 				return book.AuthorID != nil || book.Author != nil
-			case "publisher":
+			case database.FieldKeyPublisher:
 				return book.Publisher != nil && strings.TrimSpace(*book.Publisher) != ""
-			case "language":
+			case database.FieldKeyLanguage:
 				return book.Language != nil && strings.TrimSpace(*book.Language) != ""
-			case "audiobook_release_year":
+			case database.FieldKeyAudiobookReleaseYear:
 				return book.AudiobookReleaseYear != nil && *book.AudiobookReleaseYear != 0
-			case "isbn10":
+			case database.FieldKeyISBN10:
 				return book.ISBN10 != nil && strings.TrimSpace(*book.ISBN10) != ""
-			case "isbn13":
+			case database.FieldKeyISBN13:
 				return book.ISBN13 != nil && strings.TrimSpace(*book.ISBN13) != ""
 			case "duration":
 				return book.Duration != nil && *book.Duration > 0
@@ -1048,17 +1039,17 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		didUpdate := false
 
 		if meta.Title != "" && !metafetch.IsGarbageValue(meta.Title) {
-			addFetched("title", meta.Title)
-			if shouldApply("title", hasBookValue("title")) {
+			addFetched(database.FieldKeyTitle, meta.Title)
+			if shouldApply(database.FieldKeyTitle, hasBookValue(database.FieldKeyTitle)) {
 				book.Title = meta.Title
-				appliedFields = append(appliedFields, "title")
+				appliedFields = append(appliedFields, database.FieldKeyTitle)
 				didUpdate = true
 			}
 		}
 
 		if meta.Author != "" && !metafetch.IsGarbageValue(meta.Author) {
-			addFetched("author_name", meta.Author)
-			if shouldApply("author_name", hasBookValue("author_name")) {
+			addFetched(database.FieldKeyAuthorName, meta.Author)
+			if shouldApply(database.FieldKeyAuthorName, hasBookValue(database.FieldKeyAuthorName)) {
 				author, err := store.GetAuthorByName(meta.Author)
 				if err != nil {
 					result.Status = "error"
@@ -1076,52 +1067,52 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 					}
 				}
 				book.AuthorID = &author.ID
-				appliedFields = append(appliedFields, "author_name")
+				appliedFields = append(appliedFields, database.FieldKeyAuthorName)
 				didUpdate = true
 			}
 		}
 
 		if meta.Publisher != "" && !metafetch.IsGarbageValue(meta.Publisher) {
-			addFetched("publisher", meta.Publisher)
-			if shouldApply("publisher", hasBookValue("publisher")) {
+			addFetched(database.FieldKeyPublisher, meta.Publisher)
+			if shouldApply(database.FieldKeyPublisher, hasBookValue(database.FieldKeyPublisher)) {
 				book.Publisher = new(meta.Publisher)
-				appliedFields = append(appliedFields, "publisher")
+				appliedFields = append(appliedFields, database.FieldKeyPublisher)
 				didUpdate = true
 			}
 		}
 
 		if meta.Language != "" && !metafetch.IsGarbageValue(meta.Language) {
-			addFetched("language", meta.Language)
-			if shouldApply("language", hasBookValue("language")) {
+			addFetched(database.FieldKeyLanguage, meta.Language)
+			if shouldApply(database.FieldKeyLanguage, hasBookValue(database.FieldKeyLanguage)) {
 				book.Language = new(meta.Language)
-				appliedFields = append(appliedFields, "language")
+				appliedFields = append(appliedFields, database.FieldKeyLanguage)
 				didUpdate = true
 			}
 		}
 
 		if meta.PublishYear != 0 {
-			addFetched("audiobook_release_year", meta.PublishYear)
-			if shouldApply("audiobook_release_year", hasBookValue("audiobook_release_year")) {
+			addFetched(database.FieldKeyAudiobookReleaseYear, meta.PublishYear)
+			if shouldApply(database.FieldKeyAudiobookReleaseYear, hasBookValue(database.FieldKeyAudiobookReleaseYear)) {
 				year := meta.PublishYear
 				book.AudiobookReleaseYear = &year
-				appliedFields = append(appliedFields, "audiobook_release_year")
+				appliedFields = append(appliedFields, database.FieldKeyAudiobookReleaseYear)
 				didUpdate = true
 			}
 		}
 
 		if meta.ISBN != "" {
 			if len(meta.ISBN) == 10 {
-				addFetched("isbn10", meta.ISBN)
-				if shouldApply("isbn10", hasBookValue("isbn10")) {
+				addFetched(database.FieldKeyISBN10, meta.ISBN)
+				if shouldApply(database.FieldKeyISBN10, hasBookValue(database.FieldKeyISBN10)) {
 					book.ISBN10 = new(meta.ISBN)
-					appliedFields = append(appliedFields, "isbn10")
+					appliedFields = append(appliedFields, database.FieldKeyISBN10)
 					didUpdate = true
 				}
 			} else {
-				addFetched("isbn13", meta.ISBN)
-				if shouldApply("isbn13", hasBookValue("isbn13")) {
+				addFetched(database.FieldKeyISBN13, meta.ISBN)
+				if shouldApply(database.FieldKeyISBN13, hasBookValue(database.FieldKeyISBN13)) {
 					book.ISBN13 = new(meta.ISBN)
-					appliedFields = append(appliedFields, "isbn13")
+					appliedFields = append(appliedFields, database.FieldKeyISBN13)
 					didUpdate = true
 				}
 			}

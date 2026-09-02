@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-02
 //
@@ -138,6 +138,12 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			_ = progress.UpdateProgress(0, total, "starting metadata apply")
 
 			var applied, noCandidates, decodeFailed, applyFailed, writeFailed atomic.Int64
+			// skippedLocked counts BOOKS where at least one user-locked field was
+			// left alone. It is not subtracted from applied: the unlocked fields
+			// landed. It exists so the summary cannot read "applied 500 of 500"
+			// while 200 of those kept a curated title the user would otherwise
+			// go looking for in the op log.
+			var skippedLocked atomic.Int64
 
 			// itunes may be a typed nil (*itunesservice.WriteBackBatcher)(nil), which
 			// is NOT == nil once boxed in an interface. Normalize to an untyped nil
@@ -186,6 +192,12 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				}
 
 				applied.Add(1)
+				if len(out.SkippedLocked) > 0 {
+					skippedLocked.Add(1)
+					reporter.Log(slog.LevelInfo, "applied; user-locked fields left unchanged",
+						slog.String("book_id", id),
+						slog.Any("skipped_locked", out.SkippedLocked))
+				}
 				if out.WriteBackFailed {
 					// Counted separately and logged, but NOT subtracted from
 					// applied: the database change is real and durable. Reporting
@@ -230,9 +242,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			}
 
 			_ = progress.UpdateProgress(total, total, fmt.Sprintf(
-				"complete: applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d)",
+				"complete: applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d, kept user-locked fields on %d)",
 				applied.Load(), total, noCandidates.Load(), decodeFailed.Load(),
-				applyFailed.Load(), writeFailed.Load()))
+				applyFailed.Load(), writeFailed.Load(), skippedLocked.Load()))
 			return nil
 		},
 	})
