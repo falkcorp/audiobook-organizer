@@ -1,12 +1,14 @@
 // file: internal/plugins/dedup/rescore_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b3d90e7-4c21-4a58-8f07-1d92e5cb37a0
 // last-edited: 2026-09-02
 
 package dedup
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -130,4 +132,75 @@ func TestRescoreOp_RegisteredWithPlugin(t *testing.T) {
 		}
 	}
 	t.Fatalf("dedup.rescore is not registered; the config sink would enqueue an unknown defID")
+}
+
+// TestDedupScoreSink_DistinctLaddersQueueDistinctRebands guards the dispatcher
+// dedupe hazard. Registry.EnqueueOp collapses an enqueue onto an already-active
+// op with the same ConcurrencyKey and BYTE-EQUAL params. Before the
+// LadderFingerprint field every config PUT enqueued the identical params blob,
+// so a second PUT arriving while the first re-band was still running got the
+// RUNNING op's id and queued nothing — and that op had already read its ladder
+// at start, so the new ladder never reached a single stored row while the PUT
+// reported success with a real op id.
+//
+// Mutation check: delete the LadderFingerprint assignment in dedupScoreSink and
+// the two marshalled params blobs become byte-identical and this fails.
+func TestDedupScoreSink_DistinctLaddersQueueDistinctRebands(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+	p := newCalibratePlugin(t, pebble, es)
+	reg := &fakeOpRegistry{enqueueID: "01JRESCOREOP"}
+	p.registry = reg
+
+	first := unified.DefaultScoreConfig()
+	first.BandCertainMin = 93
+	second := unified.DefaultScoreConfig()
+	second.BandCertainMin = 95
+
+	if _, err := p.dedupScoreSink(context.Background(), first); err != nil {
+		t.Fatalf("first sink call: %v", err)
+	}
+	if _, err := p.dedupScoreSink(context.Background(), second); err != nil {
+		t.Fatalf("second sink call: %v", err)
+	}
+	if len(reg.params) != 2 {
+		t.Fatalf("expected two enqueues, got %d", len(reg.params))
+	}
+	a, err := json.Marshal(reg.params[0])
+	if err != nil {
+		t.Fatalf("marshal first params: %v", err)
+	}
+	b, err := json.Marshal(reg.params[1])
+	if err != nil {
+		t.Fatalf("marshal second params: %v", err)
+	}
+	if bytes.Equal(a, b) {
+		t.Fatalf("two different ladders produced byte-equal op params (%s); the dispatcher would collapse the second re-band onto the first and the new ladder would never reach the stored rows", a)
+	}
+}
+
+// TestDedupScoreSink_SameLadderDedupesOnPurpose is the other half: the
+// fingerprint must not simply defeat the dedupe. Re-enqueueing the SAME ladder
+// has to stay byte-identical so the dispatcher collapses it — an active re-band
+// for exactly this ladder already does the work a second pass would repeat.
+func TestDedupScoreSink_SameLadderDedupesOnPurpose(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+	p := newCalibratePlugin(t, pebble, es)
+	reg := &fakeOpRegistry{enqueueID: "01JRESCOREOP"}
+	p.registry = reg
+
+	cfg := unified.DefaultScoreConfig()
+	cfg.BandCertainMin = 93
+
+	for i := 0; i < 2; i++ {
+		if _, err := p.dedupScoreSink(context.Background(), cfg); err != nil {
+			t.Fatalf("sink call %d: %v", i, err)
+		}
+	}
+	a, _ := json.Marshal(reg.params[0])
+	b, _ := json.Marshal(reg.params[1])
+	if !bytes.Equal(a, b) {
+		t.Errorf("the same ladder produced different op params (%s vs %s); the dispatcher would queue a redundant second full-backlog re-band", a, b)
+	}
 }
