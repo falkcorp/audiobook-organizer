@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-08-31
+// last-edited: 2026-09-02
 
 package transcribe
 
@@ -195,10 +195,7 @@ func poolEndpoints(cfgEndpoints []config.WhisperEndpoint, singleURL string) []En
 			// does mean unlimited -- so resolve it here, explicitly, rather
 			// than leaving a bare 0 to be interpreted by a clamp three layers
 			// down where nobody reading the config would find it.
-			conc := e.Concurrency
-			if conc < 1 {
-				conc = 1
-			}
+			conc := max(e.Concurrency, 1)
 			endpoints = append(endpoints, Endpoint{
 				URL:          e.URL,
 				Concurrency:  conc,

@@ -1,7 +1,7 @@
 // file: internal/transcribe/parse.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-07
+// last-edited: 2026-09-02
 
 package transcribe
 
@@ -184,7 +184,7 @@ func (f IntroFields) MatchesTrack(album, artist string) int {
 // titleWords returns lowercase words >3 chars (mirrors the helper in itunes_heal.go).
 func titleWords(s string) []string {
 	var out []string
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		if len(w) > 3 {
 			out = append(out, w)
 		}

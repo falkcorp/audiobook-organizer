@@ -1,7 +1,7 @@
 // file: internal/transcribe/errors.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e630c83e-990b-47c4-ac80-dea9e41b20c5
-// last-edited: 2026-08-07
+// last-edited: 2026-09-02
 
 package transcribe
 
@@ -101,16 +101,13 @@ func classifyTransport(endpoints []string, err error) error {
 // can (net.Error, *url.Error, net.OpError) and by wording only as a fallback,
 // since Go's HTTP stack surfaces some conditions as bare errors.
 func isTransportishError(err error) bool {
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
+	if _, ok := errors.AsType[*net.OpError](err); ok {
 		return true
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
+	if _, ok := errors.AsType[*url.Error](err); ok {
 		return true
 	}
 	if errors.Is(err, net.ErrClosed) {
