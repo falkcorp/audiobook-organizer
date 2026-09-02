@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.72.0
+// version: 1.74.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-02
 
@@ -327,6 +327,46 @@ func (de *Engine) ScoreConfig() unified.ScoreConfig {
 	de.scoreMu.RLock()
 	defer de.scoreMu.RUnlock()
 	return de.scoreConfig.Clone()
+}
+
+// ReloadScoreConfig swaps the live ladder (SetScoreConfig) AND re-bands every
+// stored pending candidate under it (Rescore with apply=true). It is the one
+// entry point both runtime ladder changes use — the UpdateService's dedup
+// sink on PUT /api/v1/config, and dedup.calibrate-composite's apply.
+//
+// WHY the rescore is part of the reload and not a separate step the operator
+// is told to run: AutoResolveCertain decides on the STORED band
+// (auto_resolve.go: `if c.Band != unified.BandCertain`), not on a score it
+// recomputes. So a ladder change that only swapped the in-memory config would
+// leave every existing candidate row carrying the OLD ladder's band —
+// lowering band_certain_min to pull more pairs into CERTAIN would auto-resolve
+// none of them until some unrelated scan happened to touch each pair, while
+// RAISING it would leave rows banded CERTAIN under a ladder that no longer
+// calls them that, and auto-resolve would merge them anyway. Either way the
+// operator was shown "saved" and the store disagreed. Re-banding the stored
+// rows in the same call is the only thing that makes "saved" true.
+//
+// If SetScoreConfig rejects cfg nothing is touched. If the rescore fails
+// part-way the new ladder is already live and some rows are re-banded; the
+// error is returned so the caller can surface it, and a later Rescore (the
+// dedup.rescore op) finishes the job idempotently.
+func (de *Engine) ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig) (RescoreResult, error) {
+	if err := de.SetScoreConfig(cfg); err != nil {
+		return RescoreResult{}, err
+	}
+	res, err := de.Rescore(ctx, true)
+	if err != nil {
+		return res, fmt.Errorf("dedup: score config reloaded but rescoring stored candidates failed (rows may carry the previous ladder's band; run dedup.rescore): %w", err)
+	}
+	if res.WriteErrors > 0 {
+		return res, fmt.Errorf("dedup: score config reloaded but %d of %d changed candidate rows could not be re-banded (they still carry the previous ladder's band; see the per-row warnings and run dedup.rescore)", res.WriteErrors, res.Changed)
+	}
+	logging.Info(ctx, "dedup: score config reloaded and stored candidates re-banded",
+		"certain", cfg.BandCertainMin, "high", cfg.BandHighMin,
+		"medium", cfg.BandMediumMin, "review", cfg.BandReviewMin,
+		"inspected", res.Inspected, "changed", res.Changed, "skipped", res.Skipped,
+		"band_deltas", res.BandDeltas)
+	return res, nil
 }
 
 // HydrateStats is the full per-bucket accounting for one HydrateChromem run.
@@ -768,7 +808,7 @@ func (de *Engine) CheckBook(ctx context.Context, bookID string) (bool, error) {
 	// candidate source for CollectMetaFuzzy (TASK-014 constraint: never O(N²)
 	// title scan).  Running the unified pass here guarantees the embedding is
 	// available.
-	if err := de.runUnifiedScoringForBook(ctx, book, authorName); err != nil {
+	if err := de.runUnifiedScoringForBook(ctx, book, authorName, de.ScoreConfig()); err != nil {
 		logging.Error(ctx, "dedup unified scoring error for", "bookID", bookID, "err", err)
 	}
 
@@ -795,7 +835,15 @@ func (de *Engine) CheckBook(ctx context.Context, bookID string) (bool, error) {
 // This method is best-effort: errors are logged at Debug level and do not abort
 // the scan — the existing per-layer candidates written by the earlier checks
 // remain valid.
-func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.Book, authorName string) error {
+//
+// cfg is the score ladder to band under, passed in rather than read from
+// de.ScoreConfig() here: FullScan shards this across NumCPU workers, and a
+// ladder swap (PUT /api/v1/config, calibrate apply) landing mid-scan would
+// otherwise band the first N books under one ladder and the rest under
+// another, with nothing in the rows saying which. The caller snapshots the
+// config once per scan (FullScan) or per call (CheckBook) so one pass is one
+// ladder.
+func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.Book, authorName string, cfg unified.ScoreConfig) error {
 	if de.embedStore == nil {
 		return nil
 	}
@@ -827,7 +875,6 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 		return nil
 	}
 
-	cfg := de.ScoreConfig()
 	embCfg := DefaultEmbeddingCollectorConfig()
 	// DEDUP-2/3: resolve the active embedding model's per-model thresholds
 	// (falls back to the engine's BookHighThreshold/BookLowThreshold fields for
@@ -3195,6 +3242,12 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 			progress("score", done, total)
 		}
 	}
+	// One ladder per scan: snapshot the score config ONCE here, not per book
+	// inside the workers, so a SetScoreConfig landing mid-scan cannot band
+	// half the library under the old ladder and half under the new one. The
+	// swap's own Rescore (ReloadScoreConfig) re-bands whatever this pass
+	// wrote under the superseded ladder.
+	scanScoreCfg := de.ScoreConfig()
 	err = registry.RunItems(ctx, &progressCallbackReporter{progress: scoreProgress}, scoreIndices,
 		func(ctx context.Context, i int) error {
 			book := books[i]
@@ -3210,7 +3263,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 			// usage. ToBook() is a lossless read-only projection here (no
 			// writeback).
 			bFull := book.ToBook()
-			if err := de.runUnifiedScoringForBook(ctx, &bFull, authorName); err != nil {
+			if err := de.runUnifiedScoringForBook(ctx, &bFull, authorName, scanScoreCfg); err != nil {
 				logging.Error(ctx, "dedup full scan unified scoring error for", "book", book.ID, "err", err)
 			}
 			return nil
@@ -3284,6 +3337,11 @@ type RescoreResult struct {
 	Changed int `json:"changed"`
 	// Applied is true when changes were written back to the store.
 	Applied bool `json:"applied"`
+	// WriteErrors is the count of changed candidates whose new score/band
+	// could NOT be written back (apply=true only). Each one is also logged.
+	// Non-zero means the store still carries the previous ladder's band for
+	// those rows — callers that promise "re-banded" must treat it as failure.
+	WriteErrors int `json:"write_errors,omitempty"`
 	// BandDeltas maps old_band→new_band to occurrence count.
 	// Key format: "<old>→<new>" (e.g. "HIGH→CERTAIN").
 	BandDeltas map[string]int `json:"band_deltas,omitempty"`
@@ -3351,6 +3409,7 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 
 		if apply {
 			if err := de.embedStore.UpdateCandidateScore(cand.ID, &newScore, newScore.Band, newScore.Formula); err != nil {
+				result.WriteErrors++
 				logging.Warn(ctx, "dedup rescore: update candidate score",
 					"candidate_id", cand.ID,
 					"err", err,
@@ -3364,6 +3423,7 @@ func (de *Engine) Rescore(ctx context.Context, apply bool) (RescoreResult, error
 		"skipped", result.Skipped,
 		"changed", result.Changed,
 		"applied", result.Applied,
+		"write_errors", result.WriteErrors,
 	)
 	return result, nil
 }

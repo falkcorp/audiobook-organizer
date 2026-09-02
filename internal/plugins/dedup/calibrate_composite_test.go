@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/calibrate_composite_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e5a1c3b-9d2f-4a08-8b61-3c4d5e6f7a89
 // last-edited: 2026-09-02
 
@@ -8,7 +8,10 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -257,16 +260,19 @@ func TestCalibrateCompositeSweepParallel(t *testing.T) {
 
 // TestCalibrateCompositeApplyPersistsBands: with apply=true and both tunable
 // bands meeting target, the recommended BAND thresholds (1) survive a
-// SaveConfigToDatabase → LoadConfigFromDatabase round-trip AND (2) are what
-// the LIVE engine scores with as soon as the op returns — no restart. (Per-signal
-// confidences are advisory-only and intentionally do NOT round-trip — no config
-// blob surface exists for them.)
+// SaveConfigToDatabase → LoadConfigFromDatabase round-trip, (2) are what the
+// LIVE engine scores with as soon as the op returns — no restart — AND (3) are
+// re-applied to the candidate rows ALREADY in the store, so a row banded under
+// the previous ladder does not keep that band (AutoResolveCertain reads the
+// stored band; review-round H3). (Per-signal confidences are advisory-only and
+// intentionally do NOT round-trip — no config blob surface exists for them.)
 //
-// Mutation check on (2): delete the SetScoreConfig reload in
-// applyBandThresholds and p.engine.ScoreConfig() stays at the 97/90 defaults
-// the engine was built with, so the live assertions below fail. That is the
-// bug this guards — before 2026-09-02 apply only wrote the blob and the engine
-// kept scoring on defaults.
+// Mutation check on (2)+(3): replace the ReloadScoreConfig call in
+// applyBandThresholds with a bare SetScoreConfig and (3) fails — the seeded
+// row keeps its default-ladder band; delete the reload entirely and (2) fails
+// as well, p.engine.ScoreConfig() staying at the 97/90 defaults the engine was
+// built with. Before 2026-09-02 apply only wrote the blob and the engine kept
+// scoring on defaults.
 func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 	pebble := newPebbleForISBNIndexTest(t)
 	es := database.NewEmbeddingStore(pebble.DB())
@@ -276,6 +282,27 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 	// target at baseline, so the sweep recommends and apply fires.
 	upsertPairs(t, es, 100000, 30, "true_dup", breakdownWith(unified.SigExactAcoustID, 0.99))
 	upsertPairs(t, es, 200000, 30, "not_dup", breakdownWith(unified.SigMetaFuzzy, 0.80))
+
+	// A pending candidate row banded under the DEFAULT ladder, sitting between
+	// the default CERTAIN floor (97) and where the sweep will put it. Its
+	// stored band is what AutoResolveCertain would read.
+	def := unified.DefaultScoreConfig()
+	staleSignals := []models.Signal{{Kind: unified.SigEmbedHigh, Confidence: 0.94, Raw: 0.94}}
+	staleUnderDefaults := unified.ComposeScore(staleSignals, nil, def, [2]string{"stale-a", "stale-b"})
+	staleSim := 0.94
+	staleID, _, err := es.UpsertCandidateNew(database.DedupCandidate{
+		EntityType:     "book",
+		EntityAID:      "stale-a",
+		EntityBID:      "stale-b",
+		Status:         "pending",
+		Layer:          "embedding",
+		Similarity:     &staleSim,
+		Band:           staleUnderDefaults.Band,
+		ScoreBreakdown: &staleUnderDefaults,
+	})
+	if err != nil {
+		t.Fatalf("seed stale candidate: %v", err)
+	}
 
 	// Restore global config after the test (UpdateConfig/LoadConfigFromDatabase
 	// mutate the process-wide AppConfig).
@@ -296,7 +323,6 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 
 	// Fixture guard: the recommendation must actually differ from the defaults
 	// the engine was constructed with, or "live == recommended" proves nothing.
-	def := unified.DefaultScoreConfig()
 	if recCertain == def.BandCertainMin && recHigh == def.BandHighMin {
 		t.Fatalf("fixture cannot observe the reload: recommended bands %.2f/%.2f equal the defaults", recCertain, recHigh)
 	}
@@ -308,6 +334,24 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 	}
 	if live.BandHighMin != recHigh {
 		t.Errorf("live engine band_high_min = %v, want applied %v", live.BandHighMin, recHigh)
+	}
+
+	// (3) The row that was already in the store carries the NEW ladder's band.
+	wantStale := unified.ComposeScore(staleSignals, nil, live, [2]string{"stale-a", "stale-b"})
+	if wantStale.Band == staleUnderDefaults.Band {
+		t.Fatalf("fixture cannot observe the rescore: the seeded row bands %s under both the default ladder and the applied %.2f/%.2f",
+			wantStale.Band, recCertain, recHigh)
+	}
+	stored, err := es.GetCandidateByID(staleID)
+	if err != nil {
+		t.Fatalf("GetCandidateByID(%d): %v", staleID, err)
+	}
+	if stored.Band != wantStale.Band {
+		t.Errorf("stored candidate band = %q after apply, want %q under the applied ladder (still carrying the default-ladder band %q — AutoResolveCertain would act on it)",
+			stored.Band, wantStale.Band, staleUnderDefaults.Band)
+	}
+	if !strings.Contains(rep.buf.String(), "stored candidates re-banded") {
+		t.Errorf("apply must log that the stored candidates were re-banded (with counts), so an operator can see the rescore happened")
 	}
 
 	// (1) Reload from the persisted config blob and assert the bands round-tripped.
@@ -419,5 +463,41 @@ func TestCalibrateCompositeJoinsCandidateBreakdown(t *testing.T) {
 	}
 	if got := f["skipped_no_breakdown"].(float64); got != 1 {
 		t.Errorf("skipped_no_breakdown = %v, want 1 (orphan stale label, no candidate)", got)
+	}
+}
+
+// TestCalibrateCompositeApplyRefusesInvalidLadderBeforePersisting (review-round
+// M4): applyBandThresholds validates the recommended ladder BEFORE it touches
+// the config blob or the live engine. An unordered recommendation must be
+// refused with an error naming this op, and leave config, blob and engine
+// exactly as they were.
+func TestCalibrateCompositeApplyRefusesInvalidLadderBeforePersisting(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = orig }) })
+
+	p := newCalibratePlugin(t, pebble, es)
+	before := config.Snapshot().Dedup.Signals
+
+	bad := unified.DefaultScoreConfig()
+	bad.BandCertainMin = 50 // below band_high_min — not a valid ladder
+	_, err := p.applyBandThresholds(context.Background(), bad, unified.DefaultScoreConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err == nil {
+		t.Fatalf("expected an error for an unordered recommended ladder")
+	}
+	for _, want := range []string{"calibrate-composite APPLY refused", "band_certain_min", "nothing written"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should contain %q, got: %v", want, err)
+		}
+	}
+	if after := config.Snapshot().Dedup.Signals; !reflect.DeepEqual(before, after) {
+		t.Errorf("refused apply mutated in-memory config: before=%+v after=%+v", before, after)
+	}
+	if _, err := pebble.GetSetting("config_blob"); !errors.Is(err, database.ErrSettingNotFound) {
+		t.Errorf("refused apply must not persist a config blob; GetSetting err = %v", err)
+	}
+	if live := p.engine.ScoreConfig(); !reflect.DeepEqual(live, unified.DefaultScoreConfig()) {
+		t.Errorf("refused apply reloaded the live engine: %+v", live)
 	}
 }

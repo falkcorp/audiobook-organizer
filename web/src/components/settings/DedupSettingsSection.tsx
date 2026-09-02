@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DedupSettingsSection.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 import { Box, Typography, TextField, FormControlLabel, Switch, Grid, Divider } from '@mui/material';
 import * as api from '../../services/api';
@@ -179,6 +179,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           <Typography variant="subtitle2" gutterBottom>
             Signal Band Thresholds
           </Typography>
+          <Typography variant="caption" color="text.secondary">
+            The composite duplicate score is 0–100. Bands must be strictly ordered: Certain &gt;
+            High &gt; Medium &gt; Review. The server rejects an unordered ladder and saves nothing;
+            a valid one reaches the running dedup engine immediately and re-bands existing
+            candidates.
+          </Typography>
         </Grid>
 
         <Grid
@@ -196,8 +202,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_certain_min: Number(e.target.value) } })
             }
             size="small"
+            helperText="0–100 composite score. Pairs at or above this auto-resolve when auto-resolve is on. Must be > High and ≤ 100 (default 97)."
             slotProps={{
-              htmlInput: { min: 0, max: 1, step: 0.01 },
+              htmlInput: { min: 0, max: 100, step: 0.5 },
             }}
           />
         </Grid>
@@ -217,8 +224,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_high_min: Number(e.target.value) } })
             }
             size="small"
+            helperText="0–100 composite score. Must be < Certain and > Medium (default 90)."
             slotProps={{
-              htmlInput: { min: 0, max: 1, step: 0.01 },
+              htmlInput: { min: 0, max: 100, step: 0.5 },
             }}
           />
         </Grid>
@@ -238,8 +246,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_medium_min: Number(e.target.value) } })
             }
             size="small"
+            helperText="0–100 composite score. Must be < High and > Review (default 75)."
             slotProps={{
-              htmlInput: { min: 0, max: 1, step: 0.01 },
+              htmlInput: { min: 0, max: 100, step: 0.5 },
             }}
           />
         </Grid>
@@ -259,8 +268,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_review_min: Number(e.target.value) } })
             }
             size="small"
+            helperText="0–100 composite score. Pairs below this are not shown for review. Must be < Medium and ≥ 0 (default 60)."
             slotProps={{
-              htmlInput: { min: 0, max: 1, step: 0.01 },
+              htmlInput: { min: 0, max: 100, step: 0.5 },
             }}
           />
         </Grid>

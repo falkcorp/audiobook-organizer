@@ -1,5 +1,5 @@
 // file: internal/dedup/score_config_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e38349e-2327-4736-a35a-5e24d7a580ae
 // last-edited: 2026-09-02
 
@@ -29,25 +29,20 @@ var nonDefaultSignals = config.DedupSignalConfig{
 	},
 }
 
-// TestLoadScoreConfig_PersistedSettingsReachTheEngine is the inverse of the
-// probe that proved the bug (TestPROBE_E4_ConfiguredBandThresholdsAreInert):
-// build the engine from the persisted settings and the engine's EFFECTIVE
-// score config — the one CheckBook/rescore/ScorePairsForBook read via
-// ScoreConfig() — equals the loaded one, not the defaults.
+// TestNewEngine_PersistedSettingsReachTheEngine is the inverse of the probe
+// that proved the bug (TestPROBE_E4_ConfiguredBandThresholdsAreInert): build
+// the engine from the persisted settings and the engine's EFFECTIVE score
+// config — the one CheckBook/rescore/ScorePairsForBook read via ScoreConfig()
+// — equals the loaded one, not the defaults. (The conversion itself is tested
+// in internal/config/dedup_score_config_test.go.)
 //
 // Mutation check: if NewEngine ignored its scoreCfg argument (or ScoreConfig()
 // fell back to DefaultScoreConfig as getScoreConfig used to), BandCertainMin
 // would read 97 and this fails.
-func TestLoadScoreConfig_PersistedSettingsReachTheEngine(t *testing.T) {
-	loaded, err := LoadScoreConfig(nonDefaultSignals)
+func TestNewEngine_PersistedSettingsReachTheEngine(t *testing.T) {
+	loaded, err := nonDefaultSignals.ScoreConfig()
 	if err != nil {
-		t.Fatalf("LoadScoreConfig: %v", err)
-	}
-	if loaded.BandCertainMin != 99.9 {
-		t.Fatalf("LoadScoreConfig dropped the persisted band: certain=%.2f want 99.9", loaded.BandCertainMin)
-	}
-	if kc := loaded.Signals[string(unified.SigEmbedMedium)]; kc.MinConfidence != 0.72 || kc.MaxConfidence != 0.83 {
-		t.Fatalf("LoadScoreConfig dropped the persisted confidence override: %+v", kc)
+		t.Fatalf("ScoreConfig: %v", err)
 	}
 
 	eng, err := NewEngine(nil, nil, nil, nil, nil, loaded)
@@ -60,16 +55,6 @@ func TestLoadScoreConfig_PersistedSettingsReachTheEngine(t *testing.T) {
 	}
 	if def := unified.DefaultScoreConfig(); got.BandCertainMin == def.BandCertainMin {
 		t.Fatalf("engine is scoring on the default band_certain_min (%.2f) — configured 99.9 is inert", got.BandCertainMin)
-	}
-}
-
-// TestLoadScoreConfig_InvalidPersistedSettingsIsAnError: a persisted band
-// ladder that fails unified.Validate is an ERROR from the loader — never a
-// silent fallback to defaults.
-func TestLoadScoreConfig_InvalidPersistedSettingsIsAnError(t *testing.T) {
-	_, err := LoadScoreConfig(config.DedupSignalConfig{BandCertainMin: 50.0})
-	if err == nil {
-		t.Fatal("expected error for band_certain_min=50 below band_high_min=90, got nil")
 	}
 }
 
@@ -98,9 +83,9 @@ func TestSetScoreConfig_ReplacesLiveConfig(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	next, err := LoadScoreConfig(nonDefaultSignals)
+	next, err := nonDefaultSignals.ScoreConfig()
 	if err != nil {
-		t.Fatalf("LoadScoreConfig: %v", err)
+		t.Fatalf("ScoreConfig: %v", err)
 	}
 	if err := eng.SetScoreConfig(next); err != nil {
 		t.Fatalf("SetScoreConfig(valid): %v", err)

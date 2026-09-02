@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.54.2
+// version: 1.55.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -352,10 +352,13 @@ export function Settings() {
     on_import_via_scheduler: false,
     review_model: 'gpt-5-mini',
     signals: {
-      band_certain_min: 0.97,
-      band_high_min: 0.92,
-      band_medium_min: 0.82,
-      band_review_min: 0.7,
+      // Composite-score bands are on the server's 0–100 scale
+      // (internal/dedup/unified.DefaultScoreConfig: 97/90/75/60), not 0–1.
+      // These are only the pre-load placeholders; the fetched config replaces them.
+      band_certain_min: 97,
+      band_high_min: 90,
+      band_medium_min: 75,
+      band_review_min: 60,
       duration_boost: 0.05,
       folder_path_boost: 0.03,
     },

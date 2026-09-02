@@ -1,5 +1,5 @@
 // file: internal/dedup/unified/config.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: d8a383db-5083-4257-be54-686ac2e72d32
 // last-edited: 2026-09-02
 
@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -172,14 +174,18 @@ type KindConfidenceOverride struct {
 // call makes the dependency visible at the ONE place the engine is built and
 // removes the second, disconnected way of configuring scoring.
 //
-// A band field at zero, and a confidence entry with a bound at zero, mean
-// "not set" — that value falls through to Viper / DefaultScoreConfig.
+// A band field at exactly zero, and a confidence entry with a bound at exactly
+// zero, mean "not set" — that value falls through to Viper / DefaultScoreConfig.
+// Any OTHER value, including a negative one, is an override and is checked by
+// Validate; a negative band used to read as "not set" and silently take the
+// default, which hid the mistake instead of rejecting it.
 type ScoreOverrides struct {
 	BandCertainMin float64
 	BandHighMin    float64
 	BandMediumMin  float64
 	BandReviewMin  float64
-	// Confidence is keyed by SignalKind string (e.g. "embedding_medium").
+	// Confidence is keyed by SignalKind string (e.g. "embedding_med" — the
+	// SignalKind constants' values, NOT their Go names; an unknown key is an error).
 	Confidence map[string]KindConfidenceOverride
 }
 
@@ -206,18 +212,19 @@ func LoadScoreConfig(ov ScoreOverrides) (ScoreConfig, error) {
 		cfg.BandReviewMin = viper.GetFloat64("dedup.signals.band_review_min")
 	}
 
-	// Override with DB-persisted band values. Non-zero check: zero values
-	// indicate "not set".
-	if ov.BandCertainMin > 0 {
+	// Override with DB-persisted band values. Exactly zero means "not set";
+	// everything else — negatives included — is an override that Validate
+	// below must pass or reject.
+	if ov.BandCertainMin != 0 {
 		cfg.BandCertainMin = ov.BandCertainMin
 	}
-	if ov.BandHighMin > 0 {
+	if ov.BandHighMin != 0 {
 		cfg.BandHighMin = ov.BandHighMin
 	}
-	if ov.BandMediumMin > 0 {
+	if ov.BandMediumMin != 0 {
 		cfg.BandMediumMin = ov.BandMediumMin
 	}
-	if ov.BandReviewMin > 0 {
+	if ov.BandReviewMin != 0 {
 		cfg.BandReviewMin = ov.BandReviewMin
 	}
 
@@ -252,20 +259,22 @@ func LoadScoreConfig(ov ScoreOverrides) (ScoreConfig, error) {
 
 	// Merge DB-persisted per-kind confidence overrides (highest precedence,
 	// mirroring the band thresholds above: DB override > Viper > defaults).
-	// Within one override entry, a zero MinConfidence/MaxConfidence field is
-	// "not set" and leaves that particular bound at its Viper/default value —
-	// only the non-zero bound(s) in an entry are applied. A kind not present
-	// in cfg.Signals (shouldn't happen — DefaultScoreConfig seeds every kind)
-	// is skipped rather than creating a partial entry.
+	// Within one override entry, an exactly-zero MinConfidence/MaxConfidence
+	// field is "not set" and leaves that particular bound at its Viper/default
+	// value — only the non-zero bound(s) in an entry are applied. The map is
+	// operator-written (the calibrate op's Round-2 advisory tells them what to
+	// write), so a kind DefaultScoreConfig does not seed is a typo, and a typo
+	// is an error — not a silent no-op that leaves the operator believing the
+	// bound took effect.
 	for kindStr, kov := range ov.Confidence {
 		kc, ok := cfg.Signals[kindStr]
 		if !ok {
-			continue
+			return ScoreConfig{}, fmt.Errorf("confidence override for unknown signal kind %q (known kinds: %s)", kindStr, knownSignalKindList())
 		}
-		if kov.MinConfidence > 0 {
+		if kov.MinConfidence != 0 {
 			kc.MinConfidence = kov.MinConfidence
 		}
-		if kov.MaxConfidence > 0 {
+		if kov.MaxConfidence != 0 {
 			kc.MaxConfidence = kov.MaxConfidence
 		}
 		cfg.Signals[kindStr] = kc
@@ -289,13 +298,28 @@ func (c ScoreConfig) Clone() ScoreConfig {
 	return out
 }
 
+// knownSignalKindList renders every kind DefaultScoreConfig seeds, sorted, for
+// the unknown-kind error so the operator can see the spelling that was meant.
+func knownSignalKindList() string {
+	kinds := slices.Sorted(maps.Keys(DefaultScoreConfig().Signals))
+	return strings.Join(kinds, ", ")
+}
+
 // Validate returns an error if the ScoreConfig contains out-of-range values.
 // Confidences must be in (0, 1] for primary kinds; band thresholds must be
-// strictly decreasing (CERTAIN > HIGH > MEDIUM > REVIEW ≥ 0).
+// strictly decreasing (100 ≥ CERTAIN > HIGH > MEDIUM > REVIEW ≥ 0).
+//
+// The 100 ceiling is not cosmetic: ComposeScore caps every score at 100
+// (compose.go), so a band_certain_min above it validates, starts, and makes
+// CERTAIN — and with it auto-resolve — silently unreachable with no error and
+// no log line. Reject it here where the value is set.
 func (c ScoreConfig) Validate() error {
 	var errs []error
 
 	// Band threshold ordering.
+	if c.BandCertainMin > 100 {
+		errs = append(errs, fmt.Errorf("band_certain_min (%.2f) must be ≤ 100 — scores are capped at 100, so a higher floor makes CERTAIN unreachable", c.BandCertainMin))
+	}
 	if !(c.BandCertainMin > c.BandHighMin) {
 		errs = append(errs, fmt.Errorf("band_certain_min (%.2f) must be > band_high_min (%.2f)", c.BandCertainMin, c.BandHighMin))
 	}

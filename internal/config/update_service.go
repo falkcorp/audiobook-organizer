@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.14.1
+// version: 3.15.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-09-02
 
@@ -11,19 +11,50 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
+
+// DedupScoreConfigSink receives the effective dedup score ladder after a
+// config update that changed it has been persisted. registry_wire.go installs
+// the live engine's reload here so a PUT /api/v1/config that edits
+// dedup.signals reaches scoring immediately instead of at the next restart.
+// Returning an error rolls the update back (memory AND the persisted blob) and
+// fails the request: a ladder the engine refused must not be left persisted,
+// where it would refuse the NEXT startup too.
+type DedupScoreConfigSink func(unified.ScoreConfig) error
 
 // UpdateService handles applying and persisting config changes.
 type UpdateService struct {
 	DB database.SettingsStore
+
+	sinkMu         sync.RWMutex
+	dedupScoreSink DedupScoreConfigSink
 }
 
 // NewUpdateService creates a new UpdateService.
 func NewUpdateService(db database.SettingsStore) *UpdateService {
 	return &UpdateService{DB: db}
+}
+
+// SetDedupScoreConfigSink installs (or, with nil, removes) the callback that
+// receives the dedup score ladder after an update changes it. Set once at
+// wiring time; guarded anyway so a concurrent UpdateConfig never observes a
+// torn function value.
+func (us *UpdateService) SetDedupScoreConfigSink(sink DedupScoreConfigSink) {
+	us.sinkMu.Lock()
+	defer us.sinkMu.Unlock()
+	us.dedupScoreSink = sink
+}
+
+func (us *UpdateService) getDedupScoreSink() DedupScoreConfigSink {
+	us.sinkMu.RLock()
+	defer us.sinkMu.RUnlock()
+	return us.dedupScoreSink
 }
 
 // ValidateUpdate checks that the payload is non-empty.
@@ -216,6 +247,16 @@ var immutableFieldKeys = []string{"database_type", "enable_sqlite"}
 // json.Unmarshal only overwrites keys present in the JSON, so absent keys leave
 // AppConfig unchanged. This means any new field added to Config is
 // automatically handled here with no registration required.
+//
+// dedup.signals is validated BEFORE the blob is persisted. Every other field
+// is validated by Config.Validate in the HTTP handler AFTER SaveConfigToDatabase
+// has already written the blob (see handlers/system/handler.go UpdateConfig —
+// a pre-existing gap tracked in todo.d/). The dedup ladder cannot live with
+// that ordering because registry_wire.go refuses to build the engine on an
+// invalid ladder: one persisted bad value is a crash loop on every restart,
+// and the blob overrides config.yaml so editing the file cannot repair it.
+// Rejecting here, with the in-memory config restored under the same write
+// lock, is the only place that closes the loop.
 func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]any) {
 	if us.DB == nil {
 		return http.StatusInternalServerError, map[string]any{"error": "database not initialized"}
@@ -296,8 +337,24 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	if err != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to encode payload: " + err.Error()}
 	}
-	var unmarshalErr error
+	var (
+		unmarshalErr error
+		ladderErr    error
+		// prior is the whole in-memory config as it stood immediately before
+		// the unmarshal, captured under the write lock. It is the rollback
+		// target for every failure below (ladder rejected, save failed, engine
+		// refused), and includes the secret updates applied above so a
+		// rollback does not un-apply those in memory.
+		prior Config
+		// priorLadder / newLadder decide whether the dedup sink must run: a
+		// PUT that touches only unrelated fields must not trigger a rescore.
+		priorLadder, newLadder       unified.ScoreConfig
+		priorLadderErr, newLadderErr error
+	)
 	Mutate(func(c *Config) {
+		prior = *c
+		priorLadder, priorLadderErr = prior.Dedup.Signals.ScoreConfig()
+
 		// Captured INSIDE the lock, immediately before the unmarshal that would
 		// clobber them, so no concurrent writer can slip between snapshot and
 		// restore. See restoreMaskedCredentials for why this is needed.
@@ -311,13 +368,34 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 		// Post-process inside the lock: trim root_dir whitespace, derive setup_complete
 		c.RootDir = strings.TrimSpace(c.RootDir)
 		c.SetupComplete = c.RootDir != ""
+
+		// Validate the dedup ladder while still holding the lock, and restore
+		// the prior config in the same critical section on failure so no
+		// reader ever observes the rejected values.
+		newLadder, newLadderErr = c.Dedup.Signals.ScoreConfig()
+		if newLadderErr != nil {
+			ladderErr = newLadderErr
+			*c = prior
+		}
 	})
 	if unmarshalErr != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to apply config: " + unmarshalErr.Error()}
 	}
+	if ladderErr != nil {
+		slog.Warn("config update rejected: dedup score ladder invalid; nothing persisted", "err", ladderErr)
+		return http.StatusBadRequest, map[string]any{
+			"error": "invalid configuration: " + ladderErr.Error() +
+				" — nothing was saved; the dedup score ladder must satisfy 100 ≥ band_certain_min > band_high_min > band_medium_min > band_review_min ≥ 0 (0–100 scale)",
+		}
+	}
 
 	if err := SaveConfigToDatabase(us.DB); err != nil {
-		slog.Error("failed to persist config", "err", err)
+		// The in-memory config was already mutated; leaving it there would
+		// make the process behave as if the update took while the blob (and
+		// the next restart) disagree. Roll memory back so memory and disk
+		// tell the same story.
+		Mutate(func(c *Config) { *c = prior })
+		slog.Error("failed to persist config; in-memory config rolled back", "err", err)
 		return http.StatusInternalServerError, map[string]any{
 			"error":   "failed to save configuration",
 			"details": err.Error(),
@@ -325,6 +403,38 @@ func (us *UpdateService) UpdateConfig(payload map[string]any) (int, map[string]a
 	}
 
 	slog.Info("Configuration saved successfully")
+
+	// Push a changed dedup ladder to the live engine. A prior ladder that
+	// failed to convert (a blob written before the guard above existed)
+	// counts as changed: the engine could not have been running on it.
+	if sink := us.getDedupScoreSink(); sink != nil {
+		ladderChanged := priorLadderErr != nil || !reflect.DeepEqual(priorLadder, newLadder)
+		if ladderChanged {
+			if err := sink(newLadder); err != nil {
+				// The engine refused a ladder that passed Validate — roll back
+				// memory AND the blob so the same value cannot refuse the next
+				// startup. If the re-save itself fails there is nothing more
+				// this path can do but say so loudly.
+				Mutate(func(c *Config) { *c = prior })
+				if rerr := SaveConfigToDatabase(us.DB); rerr != nil {
+					slog.Error("dedup engine refused new score ladder AND rollback re-save failed; persisted blob may hold a ladder the engine rejects",
+						"sink_err", err, "resave_err", rerr)
+					return http.StatusInternalServerError, map[string]any{
+						"error":   "dedup engine rejected the new score ladder and the rollback could not be persisted",
+						"details": err.Error() + "; rollback: " + rerr.Error(),
+					}
+				}
+				slog.Error("dedup engine refused new score ladder; config update rolled back", "err", err)
+				return http.StatusInternalServerError, map[string]any{
+					"error":   "dedup engine rejected the new score ladder; configuration rolled back",
+					"details": err.Error(),
+				}
+			}
+			slog.Info("dedup score ladder updated in live engine",
+				"certain", newLadder.BandCertainMin, "high", newLadder.BandHighMin,
+				"medium", newLadder.BandMediumMin, "review", newLadder.BandReviewMin)
+		}
+	}
 
 	return http.StatusOK, map[string]any{
 		"message": "configuration updated and saved to database",

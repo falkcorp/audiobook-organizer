@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
 // last-edited: 2026-09-02
 
@@ -31,9 +31,10 @@
 // Confidence map[string]DedupKindConfidence field, so a per-kind confidence
 // bound survives UpdateConfig's JSON round-trip and a restart (previously it
 // had no field and was silently dropped, same failure class as the retired
-// flat keys). dedup.LoadScoreConfig (internal/dedup/score_config.go) folds the
-// persisted map into the unified.ScoreConfig the live engine is built from,
-// exactly like the persisted bands.
+// flat keys). config.DedupSignalConfig.ScoreConfig
+// (internal/config/dedup_score_config.go) folds the persisted map into the
+// unified.ScoreConfig the live engine is built from, exactly like the persisted
+// bands.
 //
 // That closes the STORAGE gap, but NOT the reason Round 2 stays advisory:
 // unified.ComposeScore reads Signal.Confidence DIRECTLY and does not clamp it
@@ -633,23 +634,53 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 		return nil
 	}
 
-	if err := p.applyBandThresholds(recCfg, baseCfg, log); err != nil {
+	rescore, err := p.applyBandThresholds(ctx, recCfg, baseCfg, log)
+	if err != nil {
 		return err
 	}
 	_ = reporter.UpdateProgress(4, 4, fmt.Sprintf(
-		"Applied band thresholds certain=%.2f high=%.2f (previous certain=%.2f high=%.2f — rollback record). %s",
-		recCfg.BandCertainMin, recCfg.BandHighMin, baseCfg.BandCertainMin, baseCfg.BandHighMin, summary))
+		"Applied band thresholds certain=%.2f high=%.2f (previous certain=%.2f high=%.2f — rollback record); live engine reloaded and stored candidates re-banded (inspected=%d changed=%d skipped_no_breakdown=%d). %s",
+		recCfg.BandCertainMin, recCfg.BandHighMin, baseCfg.BandCertainMin, baseCfg.BandHighMin,
+		rescore.Inspected, rescore.Changed, rescore.Skipped, summary))
 	return nil
 }
 
-// applyBandThresholds persists the recommended band thresholds via the existing
-// config update service (the ONLY dedup.signals.* blob surface). It writes all
-// four band mins — recommended for tunable bands, baseline for held ones — so the
-// persisted config stays internally ordered, and loudly logs the previous values
-// as the rollback record.
-func (p *Plugin) applyBandThresholds(recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) error {
+// applyBandThresholds validates, persists and LIVE-LOADS the recommended band
+// thresholds, in that order:
+//
+//  1. recCfg.Validate() — refuse before anything is written. UpdateConfig
+//     validates the ladder again before persisting (review-round H1), so this
+//     is belt-and-braces; it exists so a sweep that produced an unordered or
+//     out-of-range recommendation fails with a message naming THIS op's
+//     output rather than a generic "invalid configuration" from the config
+//     layer. (Review-round M4.)
+//  2. config.UpdateService.UpdateConfig via ApplyUpdates — the ONLY
+//     dedup.signals.* blob surface. All four band mins are written (recommended
+//     for tunable bands, baseline for held ones) so the persisted config stays
+//     internally ordered; the previous values are logged as the rollback record.
+//  3. Engine.ReloadScoreConfig — swaps the live ladder AND re-bands every
+//     stored pending candidate under it (review-round H3). AutoResolveCertain
+//     reads the STORED band, so without the rescore the rows would keep
+//     auto-resolving on the previous ladder.
+//
+// WHY a sink-less config.NewUpdateService(p.store) rather than the registry's
+// shared UpdateService: the shared one carries the dedup-score sink registered
+// by internal/server/registry_wire.go, which would perform step 3 itself — but
+// with context.Background() and without handing back the RescoreResult this op
+// reports. Using a private service keeps the reload under the op's ctx, gives
+// the op the counts, and avoids reloading (and rescoring the whole backlog)
+// twice. The trade-off is that step 3 here must stay in lock-step with that
+// sink; both call the same Engine.ReloadScoreConfig, so there is one place the
+// behaviour lives.
+//
+// Returns the RescoreResult so the caller can report how many rows moved.
+func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) (dedupengine.RescoreResult, error) {
 	if p.store == nil {
-		return fmt.Errorf("main store not available; cannot persist config")
+		return dedupengine.RescoreResult{}, fmt.Errorf("main store not available; cannot persist config")
+	}
+	if err := recCfg.Validate(); err != nil {
+		return dedupengine.RescoreResult{}, fmt.Errorf("calibrate-composite APPLY refused: the recommended ladder certain=%.2f high=%.2f medium=%.2f review=%.2f is not a valid score config, nothing written: %w",
+			recCfg.BandCertainMin, recCfg.BandHighMin, recCfg.BandMediumMin, recCfg.BandReviewMin, err)
 	}
 	log.Info("calibrate-composite APPLY: persisting band thresholds",
 		"new_certain_min", recCfg.BandCertainMin, "new_high_min", recCfg.BandHighMin,
@@ -670,7 +701,7 @@ func (p *Plugin) applyBandThresholds(recCfg, prevCfg unified.ScoreConfig, log *s
 	}
 	svc := config.NewUpdateService(p.store)
 	if err := svc.ApplyUpdates(payload); err != nil {
-		return fmt.Errorf("persist band thresholds: %w", err)
+		return dedupengine.RescoreResult{}, fmt.Errorf("persist band thresholds: %w", err)
 	}
 	log.Info("calibrate-composite APPLY: band thresholds persisted (survives restart via config blob)")
 
@@ -678,19 +709,24 @@ func (p *Plugin) applyBandThresholds(recCfg, prevCfg unified.ScoreConfig, log *s
 	// conversion registry_wire.go uses at startup, read back from the config
 	// UpdateConfig just mutated, so "what the blob holds" and "what the
 	// engine scores with" cannot drift. An error here is loud on purpose:
-	// the bands are on disk but the running engine is still on the old ones,
-	// and the operator must know that rather than see a green op.
-	liveCfg, err := dedupengine.LoadScoreConfig(config.Snapshot().Dedup.Signals)
+	// the bands are on disk but the running engine (and/or the stored
+	// candidate rows) are still on the old ones. A restart would pick the
+	// persisted ladder up for the ENGINE, but never re-bands the rows —
+	// only dedup.rescore does that — so the message says both.
+	liveCfg, err := config.Snapshot().Dedup.Signals.ScoreConfig()
 	if err != nil {
-		return fmt.Errorf("band thresholds persisted but reloading them into the live engine failed (engine still scoring on the previous config until restart): %w", err)
+		return dedupengine.RescoreResult{}, fmt.Errorf("band thresholds persisted but converting the persisted settings back into a score config failed — the live engine and the stored candidate bands are still on the previous ladder; fix the persisted dedup.signals via PUT /api/v1/config, then run dedup.rescore: %w", err)
 	}
-	if err := p.engine.SetScoreConfig(liveCfg); err != nil {
-		return fmt.Errorf("band thresholds persisted but the live engine rejected them (engine still scoring on the previous config until restart): %w", err)
+	res, err := p.engine.ReloadScoreConfig(ctx, liveCfg)
+	if err != nil {
+		return res, fmt.Errorf("band thresholds persisted but loading them into the live engine / re-banding stored candidates failed — run dedup.rescore to finish re-banding (a restart alone reloads the engine but leaves the stored bands stale): %w", err)
 	}
-	log.Info("calibrate-composite APPLY: live engine reloaded",
+	log.Info("calibrate-composite APPLY: live engine reloaded and stored candidates re-banded",
 		"certain_min", liveCfg.BandCertainMin, "high_min", liveCfg.BandHighMin,
-		"medium_min", liveCfg.BandMediumMin, "review_min", liveCfg.BandReviewMin)
-	return nil
+		"medium_min", liveCfg.BandMediumMin, "review_min", liveCfg.BandReviewMin,
+		"inspected", res.Inspected, "changed", res.Changed, "skipped_no_breakdown", res.Skipped,
+		"band_deltas", res.BandDeltas)
+	return res, nil
 }
 
 // recOrBaselineMin returns the recommended band minimum when met, else the baseline.

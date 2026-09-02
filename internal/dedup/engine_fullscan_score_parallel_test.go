@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_fullscan_score_parallel_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7e5b9f24-4a3d-4b8e-9c2a-1d6f8e0b3a57
 // last-edited: 2026-09-02
 
@@ -123,7 +123,7 @@ func runFullScanLayer1AndScoreSerially(t *testing.T, engine *Engine, books []dat
 
 	for i := range books {
 		book := &books[i]
-		if err := engine.runUnifiedScoringForBook(ctx, book, ""); err != nil {
+		if err := engine.runUnifiedScoringForBook(ctx, book, "", engine.ScoreConfig()); err != nil {
 			t.Fatalf("runUnifiedScoringForBook(%s): %v", book.ID, err)
 		}
 	}

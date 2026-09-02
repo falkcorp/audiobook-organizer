@@ -1,11 +1,12 @@
 // file: internal/server/registry_wire.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
 // last-edited: 2026-09-02
 
 package server
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -176,7 +178,7 @@ func init() {
 	// in NewServer.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   serviceregistry.KeyDedup,
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge},
+		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge, serviceregistry.KeyConfigUpdate},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := config.GetConfig(c)
@@ -202,20 +204,49 @@ func init() {
 			store := serviceregistry.Get[dedup.Store](c, serviceregistry.KeyStore)
 			mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
 			// The unified scorer's bands + per-kind confidence bounds come from
-			// the persisted dedup.signals settings (config.yaml + DB blob) and
-			// are handed to the engine HERE, at construction. An invalid config
-			// fails the build — and so server startup — loudly. Until 2026-09-02
-			// this block wrote the same values into two unified package globals
-			// that the engine never read, so every configured band threshold
-			// was inert and scoring ran on the compiled-in 97/90/75/60.
-			scoreCfg, err := dedup.LoadScoreConfig(cfg.Dedup.Signals)
+			// the persisted dedup.signals settings (config.yaml overlaid by the DB
+			// settings blob) and are handed to the engine HERE, at construction.
+			// An invalid config fails the build — and so server startup — loudly.
+			// Until 2026-09-02 this block wrote the same values into two unified
+			// package globals that the engine never read, so every configured
+			// band threshold was inert and scoring ran on the compiled-in
+			// 97/90/75/60.
+			//
+			// Fail-closed is only safe because the SAME conversion now runs
+			// before anything is persisted (config.UpdateService.UpdateConfig
+			// rejects a bad ladder with 400 and writes nothing), so a ladder that
+			// trips this at startup can only have arrived via a hand-edited
+			// config.yaml or a settings blob written by an older build.
+			scoreCfg, err := cfg.Dedup.Signals.ScoreConfig()
 			if err != nil {
-				return nil, fmt.Errorf("dedup engine: dedup.signals score config rejected — fix config.yaml / the persisted settings, refusing to start on defaults: %w", err)
+				return nil, fmt.Errorf("dedup engine: %w — refusing to start on default thresholds. The effective value is config.yaml's dedup.signals overlaid by the settings blob persisted in the database (written by PUT /api/v1/config, Settings → Dedup, and calibrate-composite apply); the persisted blob wins, so re-save a valid ladder through the API/Settings page, or clear its dedup.signals keys, if config.yaml already looks right", err)
 			}
 			engine, err := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc, scoreCfg)
 			if err != nil {
 				return nil, fmt.Errorf("dedup engine: %w", err)
 			}
+			// Log the ladder the engine will actually score on, once, so a
+			// deploy can be checked against the persisted settings without
+			// reading the DB blob. (Review-round M5.)
+			slog.Info("dedup engine: effective score ladder",
+				"certain", scoreCfg.BandCertainMin,
+				"high", scoreCfg.BandHighMin,
+				"medium", scoreCfg.BandMediumMin,
+				"review", scoreCfg.BandReviewMin,
+				"confidence_overrides", len(cfg.Dedup.Signals.Confidence),
+				"source", "config.yaml dedup.signals overlaid by the persisted settings blob")
+			// Every later PUT /api/v1/config that changes dedup.signals reaches
+			// the live engine through this sink (review-round H2), and the sink
+			// re-bands the stored candidate rows under the new ladder (H3) —
+			// AutoResolveCertain reads the STORED band, so swapping the ladder
+			// without a rescore would leave rows auto-merging on the old one.
+			// The UpdateService rolls the persisted blob back if this returns
+			// an error, so memory, DB and engine never disagree.
+			updateSvc := serviceregistry.Get[*config.UpdateService](c, serviceregistry.KeyConfigUpdate)
+			updateSvc.SetDedupScoreConfigSink(func(sc unified.ScoreConfig) error {
+				_, err := engine.ReloadScoreConfig(context.Background(), sc)
+				return err
+			})
 			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
 			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
 			engine.AuthorHighThreshold = cfg.Dedup.AuthorHighThreshold
