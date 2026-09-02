@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package registry
 
@@ -158,10 +158,7 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 	// than restarting the denominator at the size of the remainder — a resumed
 	// op that appears to start over is exactly the confusion this whole change
 	// exists to remove.
-	resumeFrom := opt.ResumeFrom
-	if resumeFrom < 0 {
-		resumeFrom = 0
-	}
+	resumeFrom := max(opt.ResumeFrom, 0)
 	if resumeFrom > 0 {
 		if opt.ProgressTotal == 0 {
 			opt.ProgressTotal = total
@@ -195,10 +192,7 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 			return
 		}
 		mark := tracker.complete(i)
-		every := opt.CheckpointEvery
-		if every < 1 {
-			every = 1
-		}
+		every := max(opt.CheckpointEvery, 1)
 		ckptMu.Lock()
 		defer ckptMu.Unlock()
 		// Guard on the watermark, not the completion count: with a gap open the

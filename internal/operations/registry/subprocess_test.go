@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-05-06
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -54,8 +54,7 @@ func TestIsChildMode_FalseWithNoArgs(t *testing.T) {
 // Isolate=true op goes to "failed" status when the subprocess exits without
 // connecting (because the test binary doesn't handle --operation-runner).
 func TestSubprocess_ChildExitsWithErrorWhenNoBinaryKnowsRunner(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 1, nil)

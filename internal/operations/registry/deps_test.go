@@ -1,12 +1,13 @@
 // file: internal/operations/registry/deps_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-06-14
+// last-edited: 2026-09-02
 
 package registry
 
 import (
 	"fmt"
+	"maps"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -57,9 +58,7 @@ func (f *fakeDepStore) ListFileCompletions(sub database.OpSubject, opType string
 	}
 	// Return a copy so callers can't mutate the test state.
 	out := make(map[string]uint64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out, nil
 }
 
@@ -339,7 +338,6 @@ func TestReqFieldSet_AllAllowedFields(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.field+"/set", func(t *testing.T) {
 			st := newFakeDepStore()
 			b := &database.Book{ID: "bx"}
@@ -533,7 +531,6 @@ func TestSubjectsFromParams(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := subjectsFromParams([]byte(tc.input))

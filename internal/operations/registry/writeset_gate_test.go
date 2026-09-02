@@ -1,7 +1,7 @@
 // file: internal/operations/registry/writeset_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8a2b1c-9d4e-4f6a-8b2c-5e7d9a1f3c60
-// last-edited: 2026-08-07
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -33,8 +33,7 @@ func assertStaysQueued(t *testing.T, store *fakeStore, opID string, hold time.Du
 // an op whose declared Writes overlap a RUNNING op's Writes stays QUEUED
 // (not rejected, not failed) and dispatches after the running op completes.
 func TestDispatcher_WriteSetOverlapDefers(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
@@ -94,8 +93,7 @@ func TestDispatcher_WriteSetOverlapDefers(t *testing.T) {
 // TestDispatcher_WriteSetDisjointRunsConcurrently verifies that ops writing
 // DIFFERENT tables are not serialized by the gate.
 func TestDispatcher_WriteSetDisjointRunsConcurrently(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
@@ -150,8 +148,7 @@ func TestDispatcher_WriteSetDisjointRunsConcurrently(t *testing.T) {
 // an op with EMPTY Writes runs to completion while a declared writer is
 // still running — the gate ignores undeclared ops in both directions.
 func TestDispatcher_WriteSetUndeclaredUnaffected(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
@@ -196,8 +193,7 @@ func TestDispatcher_WriteSetUndeclaredUnaffected(t *testing.T) {
 // afterward. Release-on-completion is covered by
 // TestDispatcher_WriteSetOverlapDefers.
 func TestDispatcher_WriteSetReleasedOnFailure(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/liveness_contract_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4e91a37-8b02-4d65-9f18-6a30de75b2c1
-// last-edited: 2026-08-16
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -152,8 +152,7 @@ func TestLivenessMode_String(t *testing.T) {
 // not break dispatch. The validator runs on a path every op takes, so a mistake
 // here would disable the registry rather than tighten it.
 func TestRegisteredOpStillRuns(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	r, store := newTestRegistry(t)
 	ran := make(chan struct{})

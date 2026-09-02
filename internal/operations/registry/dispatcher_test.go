@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-06-04
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -33,8 +33,7 @@ func awaitStatus(t *testing.T, store *fakeStore, opID, want string, timeout time
 
 // TestDispatcher_SingleOpRunsAndCompletes tests the happy path.
 func TestDispatcher_SingleOpRunsAndCompletes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 2, nil)
@@ -53,14 +52,13 @@ func TestDispatcher_SingleOpRunsAndCompletes(t *testing.T) {
 // TestDispatcher_SameConcurrencyKeySerializes verifies that two ops with the
 // same ConcurrencyKey do not run simultaneously.
 func TestDispatcher_SameConcurrencyKeySerializes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
 
-	var overlap int64
-	var running int64
+	var overlap atomic.Int64
+	var running atomic.Int64
 	var mu sync.Mutex
 	var maxOverlap int
 
@@ -70,7 +68,7 @@ func TestDispatcher_SameConcurrencyKeySerializes(t *testing.T) {
 	def := makeValidDef("test.serial")
 	def.ConcurrencyKey = "same-key"
 	def.Run = func(runCtx context.Context, _ json.RawMessage, _ registry.Reporter) error {
-		cur := atomic.AddInt64(&running, 1)
+		cur := running.Add(1)
 		mu.Lock()
 		if int(cur) > maxOverlap {
 			maxOverlap = int(cur)
@@ -79,8 +77,8 @@ func TestDispatcher_SameConcurrencyKeySerializes(t *testing.T) {
 		// Signal after first op starts.
 		barrierOnce.Do(func() { close(barrier) })
 		time.Sleep(30 * time.Millisecond)
-		atomic.AddInt64(&running, -1)
-		atomic.AddInt64(&overlap, int64(cur-1)) // accumulate concurrent count above 1
+		running.Add(-1)
+		overlap.Add(int64(cur - 1)) // accumulate concurrent count above 1
 		return nil
 	}
 	_ = r.RegisterOp(def)
@@ -104,14 +102,13 @@ func TestDispatcher_SameConcurrencyKeySerializes(t *testing.T) {
 // TestDispatcher_DifferentConcurrencyKeysRunConcurrently verifies that two ops
 // with different ConcurrencyKeys can overlap.
 func TestDispatcher_DifferentConcurrencyKeysRunConcurrently(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 4, nil)
 
-	var running int64
-	var maxOverlap int64
+	var running atomic.Int64
+	var maxOverlap atomic.Int64
 
 	gate := make(chan struct{})
 	var gateOnce sync.Once
@@ -120,10 +117,10 @@ func TestDispatcher_DifferentConcurrencyKeysRunConcurrently(t *testing.T) {
 		d := makeValidDef(id)
 		d.ConcurrencyKey = key
 		d.Run = func(runCtx context.Context, _ json.RawMessage, _ registry.Reporter) error {
-			cur := atomic.AddInt64(&running, 1)
+			cur := running.Add(1)
 			for {
-				old := atomic.LoadInt64(&maxOverlap)
-				if cur <= old || atomic.CompareAndSwapInt64(&maxOverlap, old, cur) {
+				old := maxOverlap.Load()
+				if cur <= old || maxOverlap.CompareAndSwap(old, cur) {
 					break
 				}
 			}
@@ -134,7 +131,7 @@ func TestDispatcher_DifferentConcurrencyKeysRunConcurrently(t *testing.T) {
 			case <-runCtx.Done():
 			}
 			time.Sleep(10 * time.Millisecond)
-			atomic.AddInt64(&running, -1)
+			running.Add(-1)
 			return nil
 		}
 		return d
@@ -150,18 +147,17 @@ func TestDispatcher_DifferentConcurrencyKeysRunConcurrently(t *testing.T) {
 	awaitStatus(t, store, op1, "completed", 5*time.Second)
 	awaitStatus(t, store, op2, "completed", 5*time.Second)
 
-	if atomic.LoadInt64(&maxOverlap) < 2 {
+	if maxOverlap.Load() < 2 {
 		// It's possible they ran serially if the scheduler didn't interleave.
 		// This is a timing-sensitive test; log a warning but don't hard-fail.
-		t.Logf("warning: different ConcurrencyKey ops did not overlap (maxOverlap=%d) — may be a race in test timing", atomic.LoadInt64(&maxOverlap))
+		t.Logf("warning: different ConcurrencyKey ops did not overlap (maxOverlap=%d) — may be a race in test timing", maxOverlap.Load())
 	}
 }
 
 // TestDispatcher_PriorityOrderingHighBeforeLow verifies that a high-priority
 // op is dispatched before a low-priority op enqueued around the same time.
 func TestDispatcher_PriorityOrderingHighBeforeLow(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Single worker so ordering is strict.
 	store := newFakeStore()
@@ -225,15 +221,14 @@ func TestDispatcher_PriorityOrderingHighBeforeLow(t *testing.T) {
 
 // TestDispatcher_MaxConcurrentCapsPlugin verifies per-plugin concurrency cap.
 func TestDispatcher_MaxConcurrentCapsPlugin(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.New(store, slog.Default(), 8, nil)
 	r.SetPluginMaxConcurrent("capped-plugin", 1)
 
-	var running int64
-	var maxRunning int64
+	var running atomic.Int64
+	var maxRunning atomic.Int64
 
 	runOnce := make(chan struct{})
 	var runOnceOnce sync.Once
@@ -241,16 +236,16 @@ func TestDispatcher_MaxConcurrentCapsPlugin(t *testing.T) {
 	def := makeValidDef("capped.op")
 	def.Plugin = "capped-plugin"
 	def.Run = func(runCtx context.Context, _ json.RawMessage, _ registry.Reporter) error {
-		cur := atomic.AddInt64(&running, 1)
+		cur := running.Add(1)
 		for {
-			old := atomic.LoadInt64(&maxRunning)
-			if cur <= old || atomic.CompareAndSwapInt64(&maxRunning, old, cur) {
+			old := maxRunning.Load()
+			if cur <= old || maxRunning.CompareAndSwap(old, cur) {
 				break
 			}
 		}
 		runOnceOnce.Do(func() { close(runOnce) })
 		time.Sleep(40 * time.Millisecond)
-		atomic.AddInt64(&running, -1)
+		running.Add(-1)
 		return nil
 	}
 	_ = r.RegisterOp(def)
@@ -265,7 +260,7 @@ func TestDispatcher_MaxConcurrentCapsPlugin(t *testing.T) {
 	awaitStatus(t, store, op2, "completed", 10*time.Second)
 	awaitStatus(t, store, op3, "completed", 10*time.Second)
 
-	if atomic.LoadInt64(&maxRunning) > 1 {
-		t.Errorf("plugin concurrency cap violated: maxRunning=%d", atomic.LoadInt64(&maxRunning))
+	if maxRunning.Load() > 1 {
+		t.Errorf("plugin concurrency cap violated: maxRunning=%d", maxRunning.Load())
 	}
 }

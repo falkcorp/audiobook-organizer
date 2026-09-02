@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -68,8 +68,7 @@ func TestResume_DropLeavesInterruptedDropped(t *testing.T) {
 
 	opID := insertRunningOp(store, "test.resume-drop", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	// resumeAfterStartup ran synchronously in Start; check immediately.
@@ -94,8 +93,7 @@ func TestResume_AskLeavesInterruptedAsk(t *testing.T) {
 
 	opID := insertRunningOp(store, "test.resume-ask", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	time.Sleep(20 * time.Millisecond)
@@ -129,8 +127,7 @@ func TestResume_RestartReDispatchesWithIncrementedResumeCount(t *testing.T) {
 
 	opID := insertRunningOp(store, "test.resume-restart", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	// resumeAfterStartup should dispatch the op; wait for it to run.
@@ -193,8 +190,7 @@ func TestResume_RestartDoesNotInheritStaleLiveness(t *testing.T) {
 	stale := time.Now().UTC().Add(-3 * time.Hour)
 	store.setLastProgressAt(opID, &stale)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	select {
@@ -226,8 +222,7 @@ func TestResume_RequeueFreshRun(t *testing.T) {
 
 	originalID := insertRunningOp(store, "test.resume-requeue", "test", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	// Wait for the new op (fresh run) to complete.
@@ -259,8 +254,7 @@ func TestResume_ReconcileScanAlwaysDropped(t *testing.T) {
 
 	opID := insertRunningOp(store, "reconcile_scan", "scanner", 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	r.Start(ctx)
 
 	time.Sleep(20 * time.Millisecond)
@@ -321,8 +315,7 @@ func TestResume_PreservesParamsAcrossRestartAndRequeue(t *testing.T) {
 
 			insertRunningOpWithParams(store, tc.defID, "test", params)
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			r.Start(ctx)
 
 			var got string

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4d5e6f7a-8b9c-0123-def0-1234567890ab
-// last-edited: 2026-08-28
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -18,8 +18,7 @@ import (
 // TestWatchdog_StuckOpGetsStrike verifies that an op which never reports
 // progress is classified separately from one that reported and then stalled.
 func TestWatchdog_StuckOpGetsStrike(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Use 50ms watchdog interval for fast test.
 	store := newFakeStore()
@@ -70,8 +69,7 @@ func TestWatchdog_StuckOpGetsStrike(t *testing.T) {
 // TestWatchdog_UncheckpointedOpGetsStrike verifies that a ResumeRestart op
 // that hasn't checkpointed in ≥5 minutes accumulates an uncheckpointed strike.
 func TestWatchdog_UncheckpointedOpGetsStrike(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -125,8 +123,7 @@ func TestWatchdog_UncheckpointedOpGetsStrike(t *testing.T) {
 // The op calls UpdateProgress in a loop (keeping the atomic fresh) while the
 // test continuously backdates the DB row (simulating stuck DB writes).
 func TestWatchdog_InMemoryClockPreventsFalseStuck(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -183,8 +180,7 @@ func TestWatchdog_InMemoryClockPreventsFalseStuck(t *testing.T) {
 // TestWatchdog_InfiniteRestartForceDrop verifies that an op with resume_count≥3
 // and no high_water_progress advancement is force-dropped.
 func TestWatchdog_InfiniteRestartForceDrop(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{

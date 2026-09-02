@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reliability_fixes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f1c2a3b-4d5e-6f70-8192-a3b4c5d6e7f8
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package registry_test
 
@@ -33,8 +33,7 @@ import (
 // back to the row's StartedAt when both the in-memory atomic clock and the DB
 // last_progress_at are unset (R-2).
 func TestWatchdog_StuckBeforeFirstProgress(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -85,8 +84,7 @@ func TestWatchdog_StuckBeforeFirstProgress(t *testing.T) {
 // subsequent enqueue of the same ConcurrencyKey'd def creates a NEW op that
 // runs to completion instead of returning the zombie's ID forever (C-3).
 func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
@@ -146,8 +144,7 @@ func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
 // from ever being invoked (C-1 — previously a silent no-op: the stub handle
 // has a nil cancel func and the queued-path DB cancel was never attempted).
 func TestCancel_OpQueuedInWorkerChannelNeverRuns(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store := newFakeStore()
 	// Single worker so a long-running op saturates the pool.
