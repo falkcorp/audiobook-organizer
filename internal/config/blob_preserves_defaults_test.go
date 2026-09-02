@@ -1,7 +1,7 @@
 // file: internal/config/blob_preserves_defaults_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e14c7b2-58fa-4d63-8071-2ab6f5cd913e
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Regression tests for the stored config blob wiping every default.
 //
@@ -240,7 +240,7 @@ func TestDefaultInheritanceIsLogged(t *testing.T) {
 func parseAuditLine(t *testing.T, out string) (count int, keys []string, omitted int) {
 	t.Helper()
 	line := ""
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, "kept their shipped default") {
 			line = l
 			break
@@ -257,7 +257,7 @@ func parseAuditLine(t *testing.T, out string) (count int, keys []string, omitted
 	if err != nil {
 		t.Fatalf("count is not a number in: %s", line)
 	}
-	for _, k := range strings.Split(m[2], ", ") {
+	for k := range strings.SplitSeq(m[2], ", ") {
 		if k = strings.TrimSpace(k); k != "" {
 			keys = append(keys, k)
 		}

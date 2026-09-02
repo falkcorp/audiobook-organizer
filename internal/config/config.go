@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.98.0
+// version: 1.98.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package config
 
@@ -453,13 +453,6 @@ type MetadataScoringConfig struct {
 	// so exceeding the source count buys nothing and only deepens the queue.
 	// Default 4; 0 or negative falls back to the compiled-in default.
 	SourceFanoutWorkers int `json:"source_fanout_workers" mapstructure:"source_fanout_workers"`
-}
-
-// f64Ptr returns a pointer to v. Used to populate the pointer-typed scoring
-// knobs (CompilationPenalty, RichMetadataBonusCap, F1MinScore) from a
-// viper.GetFloat64 result, which can't have its address taken inline.
-func f64Ptr(v float64) *float64 {
-	return &v
 }
 
 // getFloat64Slice reads a []float64 out of viper. Viper has no
@@ -1297,7 +1290,7 @@ type WhisperEndpoint struct {
 // could ever satisfy, taking the whole pool down.
 func ParseLabelList(s string) []string {
 	var out []string
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		if l := strings.ToLower(strings.TrimSpace(part)); l != "" {
 			out = append(out, l)
 		}
@@ -1519,10 +1512,7 @@ func InitConfig() {
 	viper.SetDefault("cover_art_model", "gpt-5-mini")
 
 	// Set performance defaults — scale with available CPUs
-	defaultWorkers := runtime.NumCPU()
-	if defaultWorkers < 4 {
-		defaultWorkers = 4
-	}
+	defaultWorkers := max(runtime.NumCPU(), 4)
 	viper.SetDefault("concurrent_scans", defaultWorkers)
 	viper.SetDefault("chapter_consolidation_threshold_min", 10)
 	viper.SetDefault("operation_timeout_minutes", 30)
@@ -2183,10 +2173,10 @@ func InitConfig() {
 				TranscriptionAuthorBoost:      viper.GetFloat64("metadata_scoring.transcription_author_boost"),
 				TranscriptionNarratorBoost:    viper.GetFloat64("metadata_scoring.transcription_narrator_boost"),
 
-				CompilationPenalty:     f64Ptr(viper.GetFloat64("metadata_scoring.compilation_penalty")),
+				CompilationPenalty:     new(viper.GetFloat64("metadata_scoring.compilation_penalty")),
 				RichMetadataFieldBonus: viper.GetFloat64("metadata_scoring.rich_metadata_field_bonus"),
-				RichMetadataBonusCap:   f64Ptr(viper.GetFloat64("metadata_scoring.rich_metadata_bonus_cap")),
-				F1MinScore:             f64Ptr(viper.GetFloat64("metadata_scoring.f1_min_score")),
+				RichMetadataBonusCap:   new(viper.GetFloat64("metadata_scoring.rich_metadata_bonus_cap")),
+				F1MinScore:             new(viper.GetFloat64("metadata_scoring.f1_min_score")),
 
 				SeriesNameMatchBoost:     viper.GetFloat64("metadata_scoring.series_name_match_boost"),
 				SeriesNumberExactBoost:   viper.GetFloat64("metadata_scoring.series_number_exact_boost"),
@@ -2737,10 +2727,10 @@ func ResetToDefaults() {
 				TranscriptionAuthorBoost:      1.6,
 				TranscriptionNarratorBoost:    1.4,
 
-				CompilationPenalty:     f64Ptr(0.15),
+				CompilationPenalty:     new(0.15),
 				RichMetadataFieldBonus: 0.05,
-				RichMetadataBonusCap:   f64Ptr(0.15),
-				F1MinScore:             f64Ptr(0.35),
+				RichMetadataBonusCap:   new(0.15),
+				F1MinScore:             new(0.35),
 
 				SeriesNameMatchBoost:     1.4,
 				SeriesNumberExactBoost:   2.0,
