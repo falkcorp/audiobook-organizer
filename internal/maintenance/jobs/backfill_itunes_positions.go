@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
 // last-edited: 2026-09-02
 
@@ -490,10 +490,7 @@ func (j *backfillITunesPositionsJob) desiredState(userID, bookID string, merged 
 	}
 
 	fraction := ITunesPositionProgressFraction(merged.CurrentTime, merged.Duration)
-	state.ProgressPct = max(int(math.Round(fraction*100)), 0)
-	if state.ProgressPct > 100 {
-		state.ProgressPct = 100
-	}
+	state.ProgressPct = min(max(int(math.Round(fraction*100)), 0), 100)
 
 	if !state.StatusManual {
 		if merged.IsFinished {

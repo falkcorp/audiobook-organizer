@@ -1,5 +1,5 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.4.1
+// version: 3.4.2
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-02
 
@@ -373,7 +373,7 @@ func HammingSimilarity(a, b string) (float64, error) {
 	}
 
 	var matching, total uint32
-	for i := 0; i < n; i++ {
+	for i := range n {
 		xor := intsA[i] ^ intsB[i]
 		matching += 32 - popcount(xor)
 		total += 32

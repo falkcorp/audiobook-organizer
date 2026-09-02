@@ -1,7 +1,7 @@
 // file: internal/database/embedding_candidate_status_sticky_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f61d0b3-45ac-4e29-91d7-6b2f83c0e5a4
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package database
 
@@ -53,7 +53,7 @@ func TestUpsertCandidate_TerminalStatusSurvivesRescan(t *testing.T) {
 				EntityAID:  "01KNDBRDX5A7NPB408V2VTG9XY",
 				EntityBID:  "01KQAW4JMN3XXCB8HKD62F3K8W",
 				Layer:      "exact",
-				Similarity: floatPtr(1),
+				Similarity: new(float64(1)),
 				Status:     "pending",
 			}
 			id, isNew, err := store.UpsertCandidateNew(base)

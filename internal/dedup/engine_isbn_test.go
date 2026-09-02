@@ -1,5 +1,5 @@
 // file: internal/dedup/engine_isbn_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-09-02
 
@@ -327,7 +327,7 @@ func TestCheckExactISBN_ScanIndexedEquivalence(t *testing.T) {
 		ID:                "BOOK_H",
 		Title:             "Book H",
 		FilePath:          "/audio/BOOK_H.m4b",
-		ISBN13:            strPtr(sharedISBN13),
+		ISBN13:            new(sharedISBN13),
 		MarkedForDeletion: &falseVal,
 	}
 

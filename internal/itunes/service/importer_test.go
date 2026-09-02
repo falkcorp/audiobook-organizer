@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3e7f1a2b-8c4d-4e9a-b6f0-2d5e8c1a7f3b
 // last-edited: 2026-09-02
 
@@ -460,7 +460,7 @@ func TestPtrHelpers(t *testing.T) {
 	if p == nil || *p != 42 {
 		t.Errorf("intPtrLocal(42) = %v, want *42", p)
 	}
-	p64 := int64PtrLocal(99)
+	p64 := new(int64(99))
 	if p64 == nil || *p64 != 99 {
 		t.Errorf("int64PtrLocal(99) = %v, want *99", p64)
 	}

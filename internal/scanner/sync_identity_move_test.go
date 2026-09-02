@@ -1,7 +1,7 @@
 // file: internal/scanner/sync_identity_move_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5867d69f-d4f1-4d1e-9850-300c607a271b
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 package scanner
 
@@ -59,7 +59,7 @@ func TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity(t *testing.T) {
 	oldID := ulid.Make().String()
 	_, err = store.CreateBook(&database.Book{
 		ID: oldID, Title: "Moved Book", Format: "mp3",
-		FilePath: oldPath, FileHash: strPtr(hash), OriginalFileHash: strPtr(hash),
+		FilePath: oldPath, FileHash: new(hash), OriginalFileHash: new(hash),
 	})
 	require.NoError(t, err)
 
@@ -120,7 +120,7 @@ func TestSaveBookToDatabase_SecondCopy_KeepsSyncIdentity(t *testing.T) {
 	firstID := ulid.Make().String()
 	_, err := store.CreateBook(&database.Book{
 		ID: firstID, Title: "Two Copies", Format: "mp3",
-		FilePath: firstPath, FileHash: strPtr(hash), OriginalFileHash: strPtr(hash),
+		FilePath: firstPath, FileHash: new(hash), OriginalFileHash: new(hash),
 	})
 	require.NoError(t, err)
 	syncID, err := ids.MintOrGetSyncID(firstID)

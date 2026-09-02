@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
 // last-edited: 2026-09-02
 
@@ -18,9 +18,6 @@ import (
 // 2026-08-14 that had already stranded 13,322 live books on 6,893 series IDs
 // that no longer resolved. Every assertion below is about the difference
 // between the two questions.
-
-//go:fix inline
-func intp(i int) *int { return new(i) }
 
 // seedRefStore writes books through the normal path, then applies raw flag
 // updates. Books are created with CreateBook so the memdb and Pebble both see
@@ -200,7 +197,7 @@ func TestSeriesBookRefCounts_CountsALetterLeadingBookID(t *testing.T) {
 	const lonely = 940 // referenced by exactly one book, so the count is unambiguous
 	b, err := store.CreateBook(&Book{
 		ID: "ZZBOUNDS0000000000000000", Title: "letter-leading",
-		FilePath: "/ref/letter-leading", SeriesID: intp(lonely),
+		FilePath: "/ref/letter-leading", SeriesID: new(lonely),
 		IsPrimaryVersion: new(true),
 	})
 	require.NoError(t, err)

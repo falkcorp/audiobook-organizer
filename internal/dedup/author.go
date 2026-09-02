@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-09-02
 
@@ -1312,7 +1312,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	nextLi := int64(-1)
 	workers := min(scanWorkerCount, len(lastNames))
 	var scanWG sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for range workers {
 		scanWG.Go(func() {
 			for {
 				li := int(atomic.AddInt64(&nextLi, 1))

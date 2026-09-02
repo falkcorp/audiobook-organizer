@@ -1,5 +1,5 @@
 // file: internal/database/review_store.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
 // last-edited: 2026-09-02
 
@@ -366,10 +366,7 @@ func (p *PebbleStore) ListReviewItems(f ReviewFilter) ([]ReviewItem, int, error)
 	if limit <= 0 {
 		limit = 50
 	}
-	start := max(f.Offset, 0)
-	if start > total {
-		start = total
-	}
+	start := min(max(f.Offset, 0), total)
 	end := min(start+limit, total)
 	return all[start:end], total, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/database/book_sort_conformance_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8a4d2e07-6b39-4c15-9e8f-1d07b3a5c264
 // last-edited: 2026-09-02
 //
@@ -47,10 +47,10 @@ func TestIndexedWalkAndSortBooksAgree(t *testing.T) {
 	// test stayed green.
 	books := []Book{
 		{ID: "b1", Title: "One", Narrator: new("Zoe"), Duration: new(300),
-			FileSize: ptrInt64_mem(9000), Bitrate: new(128),
+			FileSize: new(int64(9000)), Bitrate: new(128),
 			AudiobookReleaseYear: new(2001), CreatedAt: &t1, UpdatedAt: &t2},
 		{ID: "b2", Title: "Two", Narrator: new("adam"), Duration: new(100),
-			FileSize: ptrInt64_mem(100), Bitrate: new(320),
+			FileSize: new(int64(100)), Bitrate: new(320),
 			AudiobookReleaseYear: new(1999), CreatedAt: &t2, UpdatedAt: &t1},
 		// Nothing set at all: every field missing.
 		{ID: "b3", Title: "Three"},
@@ -59,7 +59,7 @@ func TestIndexedWalkAndSortBooksAgree(t *testing.T) {
 		// that derefInt() destroyed. PrintYear-only exercises the year
 		// fallback.
 		{ID: "b4", Title: "Four", Narrator: new("Mabel"), Duration: new(0),
-			FileSize: ptrInt64_mem(0), Bitrate: new(0),
+			FileSize: new(int64(0)), Bitrate: new(0),
 			PrintYear: new(1888)},
 		// Empty narrator string vs nil narrator: both are "missing" and must
 		// rank together, not one at each end.

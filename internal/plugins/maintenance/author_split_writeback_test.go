@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_writeback_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b7e1d92-8c6a-4f3b-9a02-1e5c7d8f0a3b
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -36,8 +36,8 @@ func TestAuthorSplit_WritesFreshAuthorNotStaleOrNil(t *testing.T) {
 	storedBook := database.Book{
 		ID:          "bk1",
 		Title:       "The Left Hand of Darkness",
-		AuthorID:    intPtr(compositeID),
-		SeriesID:    intPtr(seriesID),
+		AuthorID:    new(compositeID),
+		SeriesID:    new(seriesID),
 		Author:      &database.Author{ID: compositeID, Name: "Alice Smith / Bob Jones"},
 		Series:      &database.Series{ID: seriesID, Name: "Hainish Cycle"},
 		Description: &desc,
@@ -64,7 +64,7 @@ func TestAuthorSplit_WritesFreshAuthorNotStaleOrNil(t *testing.T) {
 			if authorID != compositeID {
 				return nil, nil
 			}
-			return []database.BookCore{{ID: "bk1", Title: storedBook.Title, AuthorID: intPtr(compositeID)}}, nil
+			return []database.BookCore{{ID: "bk1", Title: storedBook.Title, AuthorID: new(compositeID)}}, nil
 		},
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			if id == "bk1" {

@@ -1,5 +1,5 @@
 // file: internal/server/search_reconciler.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
 // last-edited: 2026-09-02
 //
@@ -94,13 +94,7 @@ func nextBatchSize(backlog int) int {
 	if backlog <= 0 {
 		return 0
 	}
-	n := max(backlog/reconcileBacklogDivisor, reconcileMinBatch)
-	if n > reconcileMaxBatch {
-		n = reconcileMaxBatch
-	}
-	if n > backlog {
-		n = backlog
-	}
+	n := min(min(max(backlog/reconcileBacklogDivisor, reconcileMinBatch), reconcileMaxBatch), backlog)
 	return n
 }
 

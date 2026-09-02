@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_transcribe_status_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: cf20a915-6b83-4e47-a0d2-38f1e75c9b60
 // last-edited: 2026-09-02
 
@@ -11,9 +11,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
-
-//go:fix inline
-func rsp(s string) *string { return new(s) }
 
 // TestClassifyStatusRepair pins every branch of the repair decision. These rules
 // are the entire safety story: the op rewrites status on ~34k prod rows.
@@ -35,7 +32,7 @@ func TestClassifyStatusRepair(t *testing.T) {
 			name: "transport_failure_with_good_credits_text_becomes_ok",
 			book: database.Book{
 				TranscribeStatus:   new(statusWhisperError),
-				TranscribeError:    rsp(transportErr),
+				TranscribeError:    new(transportErr),
 				IntroTranscription: new("Dune by Frank Herbert read by Scott Brick"),
 			},
 			wantReason: repairRecomputedOK, wantWrite: true, wantStatus: new(statusOK),
@@ -44,7 +41,7 @@ func TestClassifyStatusRepair(t *testing.T) {
 			name: "transport_failure_with_prose_text_becomes_unparsed",
 			book: database.Book{
 				TranscribeStatus:   new(statusWhisperError),
-				TranscribeError:    rsp(transportErr),
+				TranscribeError:    new(transportErr),
 				IntroTranscription: new("Chapter 12 Fury drove through DC. He had a lot on his mind that day."),
 			},
 			wantReason: repairRecomputedUnparsed, wantWrite: true, wantStatus: new(statusUnparsed),
@@ -55,7 +52,7 @@ func TestClassifyStatusRepair(t *testing.T) {
 			name: "transport_failure_with_no_text_clears_to_never_attempted",
 			book: database.Book{
 				TranscribeStatus: new(statusWhisperError),
-				TranscribeError:  rsp(transportErr),
+				TranscribeError:  new(transportErr),
 			},
 			wantReason: repairClearedNeverTried, wantWrite: true, wantStatus: nil,
 		},
@@ -65,8 +62,8 @@ func TestClassifyStatusRepair(t *testing.T) {
 			name: "silence_sentinel_is_never_cleared",
 			book: database.Book{
 				TranscribeStatus:   new(statusWhisperError),
-				TranscribeError:    rsp(transportErr),
-				IntroTranscription: rsp(transcribe.SilenceSentinel),
+				TranscribeError:    new(transportErr),
+				IntroTranscription: new(transcribe.SilenceSentinel),
 			},
 			wantReason: repairSkipSilence,
 		},
@@ -175,7 +172,7 @@ func TestRepairNeverTouchesTranscriptText(t *testing.T) {
 	b := database.Book{
 		TranscribeStatus:    new(statusWhisperError),
 		TranscribeError:     new(`Post "http://h/transcribe-batch": connection refused`),
-		IntroTranscription:  rsp(text),
+		IntroTranscription:  new(text),
 		TranscribedTitle:    new("Dune"),
 		TranscribedAuthor:   new("Frank Herbert"),
 		TranscribedNarrator: new("Scott Brick"),

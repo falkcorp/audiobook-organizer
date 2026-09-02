@@ -1,5 +1,5 @@
 // file: internal/database/bookcore_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b2d9a610-4f37-4a8e-9c15-bookcoretest01
 // last-edited: 2026-09-02
 
@@ -129,7 +129,6 @@ func setNonZero(v reflect.Value) {
 			return
 		}
 		for _, f := range v.Fields() {
-			f := f
 			if f.CanSet() {
 				setNonZero(f)
 			}

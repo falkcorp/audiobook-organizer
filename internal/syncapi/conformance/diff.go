@@ -1,5 +1,5 @@
 // file: internal/syncapi/conformance/diff.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 85152964-4de2-4224-a975-52d3d928382f
 // last-edited: 2026-09-02
 
@@ -116,7 +116,7 @@ func compareArray(path string, want, got []any, opts Options, out *[]Finding) {
 		})
 	}
 	n := min(len(got), len(want))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		compareValue(fmt.Sprintf("%s[%d]", path, i), want[i], got[i], opts, out)
 	}
 }

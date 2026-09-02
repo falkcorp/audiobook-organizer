@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
 // last-edited: 2026-09-02
 
@@ -162,10 +162,7 @@ func (p *Plugin) titleRepairDef() sdk.OperationDef {
 // titleRepairWorkers caps the RunItems pool: the per-book work is disk-IO +
 // tag-read bound, so more than 8 workers just thrashes the disk.
 func titleRepairWorkers() int {
-	n := min(runtime.NumCPU(), 8)
-	if n < 1 {
-		n = 1
-	}
+	n := max(min(runtime.NumCPU(), 8), 1)
 	return n
 }
 

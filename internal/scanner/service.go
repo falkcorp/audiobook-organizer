@@ -1,5 +1,5 @@
 // file: internal/scanner/service.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-02
 package scanner
@@ -485,10 +485,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 		// re-run others, so the sort is load-bearing, not cosmetic.
 		sort.Slice(books, func(i, j int) bool { return books[i].FilePath < books[j].FilePath })
 
-		start := max(itemOffset, 0)
-		if start > len(books) {
-			start = len(books)
-		}
+		start := min(max(itemOffset, 0), len(books))
 		if start > 0 {
 			log.Info("Resuming folder %s at book %d/%d", folderPath, start, len(books))
 			processedFiles.Add(int32(start))
