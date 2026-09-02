@@ -1,5 +1,5 @@
 // file: internal/dedup/book_dedup_concurrent_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9f2c7b41-6d38-4e05-a1b9-3c7e0d2f5a64
 // last-edited: 2026-09-02
 
@@ -107,7 +107,6 @@ func TestDedupMergeBooks_SharesLockWithMergeService(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for i := range goroutines {
-		i := i
 		go func() {
 			defer wg.Done()
 			p := pairs[i]

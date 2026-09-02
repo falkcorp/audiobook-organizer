@@ -1,5 +1,5 @@
 // file: internal/merge/service_concurrent_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5c8a1f42-9d6b-4e73-8a10-2b4c6d9e0f13
 // last-edited: 2026-09-02
 
@@ -179,7 +179,6 @@ func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for i := range goroutines {
-		i := i
 		go func() {
 			defer wg.Done()
 			p := pairs[i]

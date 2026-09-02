@@ -1,5 +1,5 @@
 // file: internal/database/memdb_sort_indexers_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2c8a6f31-9b07-4de5-a142-70e3d95cb864
 // last-edited: 2026-09-02
 //
@@ -267,15 +267,15 @@ func TestSortIndexOrderMatchesComparator(t *testing.T) {
 
 	books := []Book{
 		{ID: "b1", Title: "One", Narrator: new("Zoe"), Duration: new(300),
-			FileSize: ptrInt64_mem(9000), Bitrate: new(128),
+			FileSize: new(int64(9000)), Bitrate: new(128),
 			AudiobookReleaseYear: new(2001), CreatedAt: &t1, UpdatedAt: &t2},
 		{ID: "b2", Title: "Two", Narrator: new("adam"), Duration: new(100),
-			FileSize: ptrInt64_mem(100), Bitrate: new(320),
+			FileSize: new(int64(100)), Bitrate: new(320),
 			AudiobookReleaseYear: new(1999), CreatedAt: &t2, UpdatedAt: &t1},
 		// No values at all — must still appear, sorted last ascending.
 		{ID: "b3", Title: "Three"},
 		{ID: "b4", Title: "Four", Narrator: new("Mabel"), Duration: new(0),
-			FileSize: ptrInt64_mem(0), Bitrate: new(0),
+			FileSize: new(int64(0)), Bitrate: new(0),
 			PrintYear: new(1888)},
 	}
 	seedMemStore(t, m, books, nil, nil, nil)

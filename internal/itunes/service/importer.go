@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.20.1
+// version: 1.20.2
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-02
 
@@ -2182,9 +2182,6 @@ func calculatePercent(current, total int) int {
 	}
 	return pct
 }
-
-//go:fix inline
-func int64PtrLocal(v int64) *int64 { return new(v) }
 
 // canonicalTrackFileHash returns the value that belongs in
 // book_files.file_hash for an iTunes track.

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5577372a-b3ed-4283-9217-345d654e2a57
 // last-edited: 2026-09-02
 
@@ -68,9 +68,6 @@ func runPositionBackfill(t *testing.T, store database.Store, dryRun bool) *noopR
 	return rep
 }
 
-//go:fix inline
-func int64p(v int64) *int64 { return new(v) }
-
 // wholeBookPosition returns the migrated whole-book row, or nil.
 func wholeBookPosition(t *testing.T, store *database.PebbleStore, userID, bookID string) *database.UserPosition {
 	t.Helper()
@@ -109,7 +106,7 @@ func TestBackfillITunesPositions_ConvertsMillisecondsToFloatSeconds(t *testing.T
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "half-listened", int64p(1234567), []int{1000, 1000}, nil)
+	book := seedBookmarkedBook(t, store, "half-listened", new(int64(1234567)), []int{1000, 1000}, nil)
 
 	runPositionBackfill(t, store, false)
 
@@ -143,9 +140,9 @@ func TestBackfillITunesPositions_FinishedWithinToleranceOfDuration(t *testing.T)
 
 	tracks := []int{1663, 1663, 1663, 1663, 1663, 1660} // sums to 9975
 	// 9973.5 s — 1.5 s short of the track sum, inside FinishedToleranceSec.
-	finished := seedBookmarkedBook(t, store, "odyssey-finished", int64p(9973500), tracks, nil)
+	finished := seedBookmarkedBook(t, store, "odyssey-finished", new(int64(9973500)), tracks, nil)
 	// 9972.0 s — 3 s short, outside the tolerance.
-	unfinished := seedBookmarkedBook(t, store, "odyssey-unfinished", int64p(9972000), tracks, nil)
+	unfinished := seedBookmarkedBook(t, store, "odyssey-unfinished", new(int64(9972000)), tracks, nil)
 
 	require.Equal(t, 2.0, progress.FinishedToleranceSec, "test assumes the spec §5b 2s tolerance")
 
@@ -171,7 +168,7 @@ func TestBackfillITunesPositions_StampsMillisecondEpochLastUpdate(t *testing.T) 
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
 	lastPlayed := time.UnixMilli(1_700_000_123_456).UTC()
-	book := seedBookmarkedBook(t, store, "stamped", int64p(600000), []int{1200}, &lastPlayed)
+	book := seedBookmarkedBook(t, store, "stamped", new(int64(600000)), []int{1200}, &lastPlayed)
 
 	runPositionBackfill(t, store, false)
 
@@ -209,8 +206,8 @@ func TestBackfillITunesPositions_ZeroBookmarkWritesNothing(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	zero := seedBookmarkedBook(t, store, "zero-bookmark", int64p(0), []int{1200}, nil)
-	neg := seedBookmarkedBook(t, store, "negative-bookmark", int64p(-5), []int{1200}, nil)
+	zero := seedBookmarkedBook(t, store, "zero-bookmark", new(int64(0)), []int{1200}, nil)
+	neg := seedBookmarkedBook(t, store, "negative-bookmark", new(int64(-5)), []int{1200}, nil)
 
 	runPositionBackfill(t, store, false)
 
@@ -225,8 +222,8 @@ func TestBackfillITunesPositions_NeverRewindsANewerPosition(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "already-ahead", int64p(1_000_000), []int{6000}, nil) // iTunes at 1000s
-	require.NoError(t, store.SetUserPosition(user.ID, book.ID, "device-1", 5000))              // device at 5000s
+	book := seedBookmarkedBook(t, store, "already-ahead", new(int64(1_000_000)), []int{6000}, nil) // iTunes at 1000s
+	require.NoError(t, store.SetUserPosition(user.ID, book.ID, "device-1", 5000))                  // device at 5000s
 	require.NoError(t, store.SetUserBookState(&database.UserBookState{
 		UserID: user.ID, BookID: book.ID,
 		Status: database.UserBookStatusInProgress, ProgressPct: 83,
@@ -256,7 +253,7 @@ func TestBackfillITunesPositions_AdvancesWhenITunesIsFurther(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "itunes-ahead", int64p(5_000_000), []int{6000}, nil) // iTunes at 5000s
+	book := seedBookmarkedBook(t, store, "itunes-ahead", new(int64(5_000_000)), []int{6000}, nil) // iTunes at 5000s
 	require.NoError(t, store.SetUserPosition(user.ID, book.ID, "device-1", 100))
 
 	runPositionBackfill(t, store, false)
@@ -272,7 +269,7 @@ func TestBackfillITunesPositions_RespectsManualStatus(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "abandoned-on-purpose", int64p(600_000), []int{6000}, nil)
+	book := seedBookmarkedBook(t, store, "abandoned-on-purpose", new(int64(600_000)), []int{6000}, nil)
 	require.NoError(t, store.SetUserBookState(&database.UserBookState{
 		UserID: user.ID, BookID: book.ID,
 		Status: database.UserBookStatusAbandoned, StatusManual: true,
@@ -300,7 +297,7 @@ func TestBackfillITunesPositions_DryRunWritesNothing(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "dry", int64p(600_000), []int{6000}, nil)
+	book := seedBookmarkedBook(t, store, "dry", new(int64(600_000)), []int{6000}, nil)
 
 	runPositionBackfill(t, store, true)
 
@@ -318,7 +315,7 @@ func TestBackfillITunesPositions_RerunIsANoOp(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "twice", int64p(600_000), []int{6000}, nil)
+	book := seedBookmarkedBook(t, store, "twice", new(int64(600_000)), []int{6000}, nil)
 
 	runPositionBackfill(t, store, false)
 	pos1 := wholeBookPosition(t, store, user.ID, book.ID)
@@ -348,7 +345,7 @@ func TestBackfillITunesPositions_RepairsMissingStateOnRerun(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "state-drift", int64p(600_000), []int{6000}, nil)
+	book := seedBookmarkedBook(t, store, "state-drift", new(int64(600_000)), []int{6000}, nil)
 	runPositionBackfill(t, store, false)
 
 	// Simulate a half-applied write: neutralize the state row, keep the position.
@@ -448,7 +445,7 @@ func TestBackfillITunesPositions_MigratesPositionWithoutDuration(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "no-duration", int64p(600_000), nil, nil)
+	book := seedBookmarkedBook(t, store, "no-duration", new(int64(600_000)), nil, nil)
 
 	rep := runPositionBackfill(t, store, false)
 
@@ -470,8 +467,8 @@ func TestBackfillITunesPositions_ReportsExactCounts(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	seedBookmarkedBook(t, store, "m1", int64p(600_000), []int{6000}, nil)
-	seedBookmarkedBook(t, store, "m2", int64p(700_000), []int{6000}, nil)
+	seedBookmarkedBook(t, store, "m1", new(int64(600_000)), []int{6000}, nil)
+	seedBookmarkedBook(t, store, "m2", new(int64(700_000)), []int{6000}, nil)
 	seedBookmarkedBook(t, store, "skipped", nil, []int{6000}, nil)
 
 	rep := runPositionBackfill(t, store, false)
@@ -495,7 +492,7 @@ func TestBackfillITunesPositions_DropsOneNamedBookmarkAtTheSameOffset(t *testing
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "with-marker", int64p(1_234_567), []int{6000}, nil)
+	book := seedBookmarkedBook(t, store, "with-marker", new(int64(1_234_567)), []int{6000}, nil)
 
 	rep := runPositionBackfill(t, store, false)
 
@@ -515,7 +512,7 @@ func TestBackfillITunesPositions_NoBookmarkWhenNothingMigrated(t *testing.T) {
 
 	// nil bookmark, and a book whose stored position is already further along.
 	skipped := seedBookmarkedBook(t, store, "no-marker", nil, []int{6000}, nil)
-	ahead := seedBookmarkedBook(t, store, "already-ahead-marker", int64p(1_000), []int{6000}, nil)
+	ahead := seedBookmarkedBook(t, store, "already-ahead-marker", new(int64(1_000)), []int{6000}, nil)
 	require.NoError(t, store.SetUserPosition(user.ID, ahead.ID, "device-1", 5000))
 
 	runPositionBackfill(t, store, false)
@@ -532,7 +529,7 @@ func TestBackfillITunesPositions_DryRunCreatesNoBookmark(t *testing.T) {
 	user := newPositionUser(t, store, "owner")
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, user.ID)
 
-	book := seedBookmarkedBook(t, store, "dry-marker", int64p(600_000), []int{6000}, nil)
+	book := seedBookmarkedBook(t, store, "dry-marker", new(int64(600_000)), []int{6000}, nil)
 
 	runPositionBackfill(t, store, true)
 

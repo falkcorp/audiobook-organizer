@@ -1,5 +1,7 @@
 // file: internal/util/util_coverage_test.go
-// version: 1.0.0
+// version: 1.0.1
+// guid: 4c1d9e2a-7b5f-4e83-9a6d-2f8c0b1e5d47
+// last-edited: 2026-09-02
 
 package util
 
@@ -10,16 +12,6 @@ import (
 )
 
 // --- Coverage for pointer/extract functions not tested ---
-
-func TestCoverage_Int64Ptr(t *testing.T) {
-	p := Int64Ptr(42)
-	if p == nil {
-		t.Fatal("Int64Ptr returned nil")
-	}
-	if *p != 42 {
-		t.Errorf("Int64Ptr(42) = %d, want 42", *p)
-	}
-}
 
 func TestCoverage_DerefBool(t *testing.T) {
 	t.Run("nil returns false", func(t *testing.T) {

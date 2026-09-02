@@ -1,5 +1,5 @@
 // file: internal/database/embedding_candidates_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: f3e2d1c0-b9a8-4765-8e7d-6f5c4b3a2190
 // last-edited: 2026-09-02
 
@@ -16,11 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// floatPtr is a test helper that returns a pointer to a float64 value.
-//
-//go:fix inline
-func floatPtr(f float64) *float64 { return new(f) }
 
 func TestDedupCandidates_CreateAndList(t *testing.T) {
 	store := newTestEmbeddingStore(t)

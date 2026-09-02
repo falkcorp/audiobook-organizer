@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.7.0
+// version: 5.7.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 //
 // Combined write-back batcher: handles location updates, track additions,
 // and track removals in a single ITL read-modify-write cycle.
@@ -258,10 +258,7 @@ func (b *WriteBackBatcher) resetTimer() {
 	}
 	// Otherwise, extend the timer (but don't exceed maxDelay from first enqueue)
 	remaining := b.maxDelay - elapsed
-	delay := b.delay
-	if delay > remaining {
-		delay = remaining
-	}
+	delay := min(b.delay, remaining)
 	b.timer = time.AfterFunc(delay, b.flush)
 }
 

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
 // last-edited: 2026-09-02
 
@@ -267,7 +267,6 @@ func TestSyncID_ConcurrentMintRace_SingleWinner(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for i := range goroutines {
-		i := i
 		go func() {
 			defer wg.Done()
 			id, err := store.MintOrGetSyncID("race-book")

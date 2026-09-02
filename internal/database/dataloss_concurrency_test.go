@@ -1,5 +1,5 @@
 // file: internal/database/dataloss_concurrency_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a6b7c8d9-0e1f-2a3b-4c5d-concurrency001
 // last-edited: 2026-09-02
 
@@ -36,10 +36,7 @@ func TestConcurrency_StoreInvariantsHold(t *testing.T) {
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
 
-	workers := max(runtime.NumCPU(), 4)
-	if workers > 16 {
-		workers = 16
-	}
+	workers := min(max(runtime.NumCPU(), 4), 16)
 	const booksPerWorker = 3
 	const steps = 24
 
@@ -49,7 +46,7 @@ func TestConcurrency_StoreInvariantsHold(t *testing.T) {
 
 	type owned struct{ ids []string }
 	all := make([]owned, workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		for k := range booksPerWorker {
 			b, err := store.CreateBook(&Book{
 				Title:    fmt.Sprintf("w%d-b%d", w, k),
@@ -66,7 +63,7 @@ func TestConcurrency_StoreInvariantsHold(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([][]error, workers)
 	start := make(chan struct{})
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()

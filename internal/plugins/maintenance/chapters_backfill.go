@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
 // last-edited: 2026-09-02
 
@@ -322,10 +322,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	// Clamp rather than trust. A checkpoint written before books were deleted
 	// can name a watermark past the current end; RunItems would return an empty
 	// slice and the op would report success having examined nothing.
-	resumeFrom := max(params.ResumeFrom, 0)
-	if resumeFrom > len(ids) {
-		resumeFrom = len(ids)
-	}
+	resumeFrom := min(max(params.ResumeFrom, 0), len(ids))
 	if resumeFrom > 0 {
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
 			"resuming at book %d/%d (%d already persisted by earlier attempts)",

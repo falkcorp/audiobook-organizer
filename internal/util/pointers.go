@@ -1,29 +1,9 @@
 // file: internal/util/pointers.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f1a2b3c4-d5e6-7f89-0a1b-2c3d4e5f6a7b
 // last-edited: 2026-09-02
 
 package util
-
-// StringPtr returns a pointer to the given string.
-//
-//go:fix inline
-func StringPtr(s string) *string { return new(s) }
-
-// IntPtr returns a pointer to the given int.
-//
-//go:fix inline
-func IntPtr(i int) *int { return new(i) }
-
-// BoolPtr returns a pointer to the given bool.
-//
-//go:fix inline
-func BoolPtr(b bool) *bool { return new(b) }
-
-// Int64Ptr returns a pointer to the given int64.
-//
-//go:fix inline
-func Int64Ptr(i int64) *int64 { return new(i) }
 
 // DerefStr returns the string value of a *string, or "" if nil.
 func DerefStr(p *string) string {

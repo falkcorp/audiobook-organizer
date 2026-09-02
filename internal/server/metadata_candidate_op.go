@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.0.2
+// version: 3.0.3
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-09-02
 //
@@ -130,7 +130,7 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 			var wg sync.WaitGroup
 			numWorkers := min(8, len(p.BookIDs))
 
-			for i := 0; i < numWorkers; i++ {
+			for range numWorkers {
 				wg.Go(func() {
 					for bookID := range workCh {
 						if ctx.Err() != nil {

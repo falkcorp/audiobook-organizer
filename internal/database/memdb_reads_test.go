@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
 // last-edited: 2026-09-02
 
@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-//go:fix inline
-func ptrInt64_mem(i int64) *int64 { return new(i) } //nolint:unused // kept for future tests
 // seed inserts the given objects into the appropriate memdb tables.
 // Used to set up deterministic state for the read query tests.
 func seedMemStore(t *testing.T, m *MemStore, books []Book, files []BookFile, authors []Author, series []Series) {
@@ -479,19 +477,19 @@ func TestMemStore_ComputeLibraryStats(t *testing.T) {
 	books := []Book{
 		// organized (under root)
 		{ID: "b1", Title: "Org1", FilePath: "/library/x.m4b", IsPrimaryVersion: new(true),
-			Duration: new(3600), FileSize: ptrInt64_mem(100), Codec: new("aac"), LibraryState: new("organized")},
+			Duration: new(3600), FileSize: new(int64(100)), Codec: new("aac"), LibraryState: new("organized")},
 		// unorganized under import path A
 		{ID: "b2", Title: "Inbox1", FilePath: "/inbox/a/x.m4b", IsPrimaryVersion: new(true),
-			Duration: new(7200), FileSize: ptrInt64_mem(200), Codec: new("aac")},
+			Duration: new(7200), FileSize: new(int64(200)), Codec: new("aac")},
 		// unorganized under import path B
 		{ID: "b3", Title: "Inbox2", FilePath: "/inbox/b/y.m4b", IsPrimaryVersion: new(true),
-			FileSize: ptrInt64_mem(50)},
+			FileSize: new(int64(50))},
 		// non-primary version — counted in totals, NOT in organized/unorganized
 		{ID: "b4", Title: "Variant", FilePath: "/library/x-alt.m4b", IsPrimaryVersion: new(false),
-			FileSize: ptrInt64_mem(10)},
+			FileSize: new(int64(10))},
 		// deleted — fully excluded
 		{ID: "b5", Title: "Gone", FilePath: "/library/gone.m4b", IsPrimaryVersion: new(true),
-			MarkedForDeletion: new(true), FileSize: ptrInt64_mem(999)},
+			MarkedForDeletion: new(true), FileSize: new(int64(999))},
 	}
 	files := []BookFile{
 		// b1: 2 files, one fingerprinted (AcoustIDSeg0, the primary/non-fallback

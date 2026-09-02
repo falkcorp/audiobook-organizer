@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
 // last-edited: 2026-09-02
 
@@ -61,9 +61,6 @@ func newReextractPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 	}
 	return New(fakeDeps{store: store}), &updates
 }
-
-//go:fix inline
-func intPtr(v int) *int { return new(v) }
 
 // pageBooksFullFrom mirrors PebbleStore.GetAllBooksFullFrom's afterID cursor
 // over a fixed fixture slice. STOREFID W5d-1 rerouted the SDK's PageBooks

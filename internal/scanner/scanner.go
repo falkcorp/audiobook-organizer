@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.80.1
+// version: 1.80.2
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-02
 
@@ -2368,7 +2368,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 
 	var firstAlbum string
 	allSame := true
-	for i := 0; i < sampleSize; i++ {
+	for i := range sampleSize {
 		album := quickReadAlbum(files[i])
 		if album == "" {
 			allSame = false
