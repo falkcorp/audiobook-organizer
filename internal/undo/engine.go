@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 //
 // Undo engine (spec 3.2 task 3). Reverses the destructive changes
 // recorded by a prior operation by walking its operation_changes
@@ -195,7 +195,7 @@ func revertMetadataUpdate(store metadataReverter, change *database.OperationChan
 		applyFieldRestore(book, change.FieldName, change.OldValue)
 	} else if change.OldValue != "" {
 		// Multi-field JSON snapshot.
-		var snapshot map[string]interface{}
+		var snapshot map[string]any
 		if err := json.Unmarshal([]byte(change.OldValue), &snapshot); err == nil {
 			for field, val := range snapshot {
 				if s, ok := val.(string); ok {
