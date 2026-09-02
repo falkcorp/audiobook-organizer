@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_integrity_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c1d7e2f-3a4b-4c5d-8e6f-0a1b2c3d4e5f
 // last-edited: 2026-09-02
 //
@@ -220,6 +220,37 @@ func (o *w8MultiFileOrganizer) OrganizeBookDirectory(book *database.Book, files 
 }
 
 var _ BookOrganizer = (*w8MultiFileOrganizer)(nil)
+
+// TestOrganizeMultiFileBook_PartialRepointRestoresTheRowsItAlreadyWrote pins
+// the all-or-nothing half of the repoint. A book_file write that fails halfway
+// through would otherwise leave the book with some rows on the organized
+// copies and some on the source -- the split state that makes a book
+// unplayable in a way no single row reveals.
+func TestOrganizeMultiFileBook_PartialRepointRestoresTheRowsItAlreadyWrote(t *testing.T) {
+	book := &database.Book{ID: "mfb-2", Title: "Multi Book", FilePath: "/old/common"}
+	files := []database.BookFile{
+		{ID: "bf-1", BookID: "mfb-2", FilePath: "/old/common/a.m4b"},
+		{ID: "bf-2", BookID: "mfb-2", FilePath: "/old/common/b.m4b"},
+	}
+
+	m := dbmocks.NewMockStore(t)
+	// bf-1 repoints, bf-2 fails, bf-1 is restored to its source path.
+	m.EXPECT().UpdateBookFile("bf-1", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == "/organized/Multi Book/a.m4b"
+	})).Return(nil).Once()
+	m.EXPECT().UpdateBookFile("bf-2", mock.Anything).Return(errors.New("pebble write stall")).Once()
+	m.EXPECT().UpdateBookFile("bf-1", mock.MatchedBy(func(bf *database.BookFile) bool {
+		return bf.FilePath == "/old/common/a.m4b"
+	})).Return(nil).Once()
+
+	imp := &Importer{store: m}
+	org := &w8MultiFileOrganizer{}
+	_, err := imp.organizeMultiFileBook(org, book, files, logger.New("test-partial"))
+
+	require.Error(t, err, "a book_file write failure must fail the organize")
+	require.Equal(t, "/old/common", book.FilePath,
+		"FilePath must not advance to the landing when the rows did not")
+}
 
 // TestOrganizeImportedBooks_MultiFileUpdateBookFailure_RollsBackRowsAndCopies
 // pins the rollback contract for the iTunes organize phase: when the Book
