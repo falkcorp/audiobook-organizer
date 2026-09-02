@@ -1,10 +1,11 @@
 // file: internal/search/query_parser_prop_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d169409-96cb-44ea-b915-ccd285d45168
 //
 // Property-based tests for the DSL query parser (plan 4.5 task 3).
 // Uses pgregory.net/rapid to generate random and well-formed inputs
 // and verify invariants that must always hold.
+// last-edited: 2026-09-02
 
 package search
 
@@ -159,7 +160,7 @@ func genSimpleClause(t *rapid.T) string {
 		field := pickField(t)
 		n := rapid.IntRange(2, 4).Draw(t, "altN")
 		vals := make([]string, 0, n)
-		for i := 0; i < n; i++ {
+		for range n {
 			vals = append(vals, genBareValue(t))
 		}
 		return field + ":(" + strings.Join(vals, "|") + ")"
@@ -188,7 +189,7 @@ func genValidQueryDepth(t *rapid.T, depth int) string {
 		// AND of 2-3 children.
 		n := rapid.IntRange(2, 3).Draw(t, "andN")
 		parts := make([]string, 0, n)
-		for i := 0; i < n; i++ {
+		for range n {
 			parts = append(parts, genValidQueryDepth(t, depth-1))
 		}
 		sep := rapid.SampledFrom([]string{" ", " && ", " AND "}).Draw(t, "andSep")
@@ -197,7 +198,7 @@ func genValidQueryDepth(t *rapid.T, depth int) string {
 		// OR of 2-3 children.
 		n := rapid.IntRange(2, 3).Draw(t, "orN")
 		parts := make([]string, 0, n)
-		for i := 0; i < n; i++ {
+		for range n {
 			parts = append(parts, genValidQueryDepth(t, depth-1))
 		}
 		sep := rapid.SampledFrom([]string{" || ", " OR "}).Draw(t, "orSep")

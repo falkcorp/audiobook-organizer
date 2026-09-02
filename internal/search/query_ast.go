@@ -1,5 +1,5 @@
 // file: internal/search/query_ast.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a2c4f1d-5b9e-4f60-a7c8-1d6e0f2b9a47
 //
 // AST for the library search DSL (spec 3.4 / DES-1 v1.1). Each
@@ -16,8 +16,11 @@
 //   Prefix / wildcard: field:vamp*
 //   Fuzzy: field:smith~
 //   Boost: field:vampire^3
+// last-edited: 2026-09-02
 
 package search
+
+import "strings"
 
 import "fmt"
 
@@ -162,20 +165,22 @@ type ValueAltNode struct {
 
 func (n *ValueAltNode) Kind() NodeKind { return NodeValueAlt }
 func (n *ValueAltNode) String() string {
-	out := n.Field + ":("
+	var out strings.Builder
+	out.WriteString(n.Field + ":(")
 	for i, v := range n.Values {
 		if i > 0 {
-			out += "|"
+			out.WriteString("|")
 		}
-		out += v
+		out.WriteString(v)
 	}
-	return out + ")"
+	return out.String() + ")"
 }
 
 func groupString(op string, children []Node) string {
-	out := "(" + op
+	var out strings.Builder
+	out.WriteString("(" + op)
 	for _, c := range children {
-		out += " " + c.String()
+		out.WriteString(" " + c.String())
 	}
-	return out + ")"
+	return out.String() + ")"
 }
