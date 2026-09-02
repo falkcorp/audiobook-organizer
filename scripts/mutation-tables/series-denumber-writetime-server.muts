@@ -21,7 +21,10 @@
 # assignment inside it is wrong.
 
 # --- the position is dropped instead of written ------------------------------
-M01 position-discarded-instead-of-written-to-series-sequence | internal/server/duplicates_helpers.go | s/\t\t\tp := pos\n\t\t\tbook\.SeriesSequence = &p/\t\t\t_ = pos/
+# NOTE: the write now lives inside the ApplyRespectingLocks closure. The old
+# pattern targeted the bare assignment and stopped matching when the guard
+# was added, reporting NOT-APPLIED rather than failing.
+M01 position-discarded-instead-of-written-to-series-sequence | internal/server/duplicates_helpers.go | s/b\.SeriesSequence = &p/_, _ = b, p/
 
 M02 position-never-collected-from-the-action | internal/server/duplicates_helpers.go | s/\t\t\tif _, dup := positionByBook\[b\.ID\]; !dup \{\n\t\t\t\tpositionByBook\[b\.ID\] = pos\n\t\t\t\}/\t\t\t_ = b/
 

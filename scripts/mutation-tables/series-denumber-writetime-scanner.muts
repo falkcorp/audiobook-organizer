@@ -14,6 +14,11 @@ M02 existing-position-overwritten | internal/scanner/scanner.go | s/if seriesPos
 
 # The AI-parse path writes the same position onto the row; it must respect a
 # sequence the row already has.
-M03 existing-sequence-overwritten-on-the-ai-parse-path | internal/scanner/ai_parse_async.go | s/if row\.SeriesSequence == nil \{/if true {/
+# NOTE: this pattern includes the #3054 lock guard. An earlier version matched
+# only `if row.SeriesSequence == nil {`, which stopped matching after the
+# rebase appended the guard -- the mutant then reported NOT-APPLIED and left
+# the denominator instead of failing. Re-check this line if the condition
+# changes again.
+M03 existing-sequence-overwritten-on-the-ai-parse-path | internal/scanner/ai_parse_async.go | s/if row\.SeriesSequence == nil && !locks\.Locked\(database\.FieldKeySeriesPosition\) \{/if !locks.Locked(database.FieldKeySeriesPosition) {/
 
 M04 position-discarded-on-the-ai-parse-path | internal/scanner/ai_parse_async.go | s/if pos > 0 \{\n\t\t\t\t\trow\.SeriesSequence = &pos\n\t\t\t\t\}/_ = pos/
