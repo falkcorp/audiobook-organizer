@@ -1,7 +1,7 @@
 // file: internal/backup/progress_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d1f6c07-4b28-4e93-a5f0-3c71d8e0b942
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 package backup
 
@@ -43,7 +43,7 @@ func seedDBDir(t *testing.T, n, size int) string {
 		// Non-constant bytes so gzip cannot collapse the archive to nothing.
 		payload[i] = byte(i % 251)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		name := filepath.Join(dir, filepath.Base(dir)+"-"+string(rune('a'+i))+".sst")
 		if err := os.WriteFile(name, payload, 0o644); err != nil {
 			t.Fatalf("setup: write %s: %v", name, err)

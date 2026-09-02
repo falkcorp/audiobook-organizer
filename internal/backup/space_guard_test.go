@@ -1,7 +1,7 @@
 // file: internal/backup/space_guard_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3b6d0f27-58c1-49ea-a704-1f8e2d95c6b3
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 package backup
 
@@ -147,7 +147,7 @@ func writeArchives(t *testing.T, dir string, n, size int) []string {
 	}
 	var names []string
 	base := time.Now().Add(-time.Duration(n) * time.Hour)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		name := filepath.Join(dir, "audiobooks_test_"+string(rune('a'+i))+".tar.gz")
 		if err := os.WriteFile(name, make([]byte, size), 0o600); err != nil {
 			t.Fatal(err)
