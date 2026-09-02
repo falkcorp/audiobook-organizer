@@ -1,7 +1,7 @@
 // file: tools/cmd/orphan-nonprimary-census/main_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d4b8a2e-1f6c-4a3d-8e5b-2c7f0a9d3e61
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 package main
 
 import (
@@ -14,10 +14,6 @@ import (
 	"testing"
 	"time"
 )
-
-func ptrStr(s string) *string        { return &s }
-func ptrBool(b bool) *bool           { return &b }
-func ptrTime(t time.Time) *time.Time { return &t }
 
 // TestSelectsOnlyExplicitlyNonPrimaryUngrouped is table-driven over in-memory
 // book rows, asserting the predicate matches ONLY (VersionGroupID nil/empty
@@ -35,17 +31,17 @@ func TestSelectsOnlyExplicitlyNonPrimaryUngrouped(t *testing.T) {
 	}{
 		{
 			name: "target population: no group, explicitly false",
-			b:    book{ID: "1", VersionGroupID: nil, IsPrimaryVersion: ptrBool(false)},
+			b:    book{ID: "1", VersionGroupID: nil, IsPrimaryVersion: new(false)},
 			want: true,
 		},
 		{
 			name: "target population: empty-string group, explicitly false",
-			b:    book{ID: "2", VersionGroupID: ptrStr(""), IsPrimaryVersion: ptrBool(false)},
+			b:    book{ID: "2", VersionGroupID: new(""), IsPrimaryVersion: new(false)},
 			want: true,
 		},
 		{
 			name: "target population: whitespace-only group counts as empty",
-			b:    book{ID: "3", VersionGroupID: ptrStr("   "), IsPrimaryVersion: ptrBool(false)},
+			b:    book{ID: "3", VersionGroupID: new("   "), IsPrimaryVersion: new(false)},
 			want: true,
 		},
 		{
@@ -55,22 +51,22 @@ func TestSelectsOnlyExplicitlyNonPrimaryUngrouped(t *testing.T) {
 		},
 		{
 			name: "excluded: has a version group, even though explicitly false",
-			b:    book{ID: "5", VersionGroupID: ptrStr("grp-123"), IsPrimaryVersion: ptrBool(false)},
+			b:    book{ID: "5", VersionGroupID: new("grp-123"), IsPrimaryVersion: new(false)},
 			want: false,
 		},
 		{
 			name: "excluded: explicitly true and no group",
-			b:    book{ID: "6", VersionGroupID: nil, IsPrimaryVersion: ptrBool(true)},
+			b:    book{ID: "6", VersionGroupID: nil, IsPrimaryVersion: new(true)},
 			want: false,
 		},
 		{
 			name: "excluded: has a group and nil flag",
-			b:    book{ID: "7", VersionGroupID: ptrStr("grp-456"), IsPrimaryVersion: nil},
+			b:    book{ID: "7", VersionGroupID: new("grp-456"), IsPrimaryVersion: nil},
 			want: false,
 		},
 		{
 			name: "excluded: has a group and explicitly true",
-			b:    book{ID: "8", VersionGroupID: ptrStr("grp-789"), IsPrimaryVersion: ptrBool(true)},
+			b:    book{ID: "8", VersionGroupID: new("grp-789"), IsPrimaryVersion: new(true)},
 			want: false,
 		},
 	}
@@ -95,13 +91,13 @@ func TestSelectsOnlyExplicitlyNonPrimaryUngrouped(t *testing.T) {
 func TestCensusMatchesExactSubset(t *testing.T) {
 	now := time.Now()
 	books := []book{
-		{ID: "orphan-1", Title: "Orphan One", VersionGroupID: nil, IsPrimaryVersion: ptrBool(false), CreatedAt: ptrTime(now)},
-		{ID: "orphan-2", Title: "Orphan Two", VersionGroupID: ptrStr(""), IsPrimaryVersion: ptrBool(false), CreatedAt: ptrTime(now)},
-		{ID: "grouped-nonprimary", Title: "Grouped Non-Primary", VersionGroupID: ptrStr("grp-1"), IsPrimaryVersion: ptrBool(false)},
-		{ID: "grouped-primary", Title: "Grouped Primary", VersionGroupID: ptrStr("grp-1"), IsPrimaryVersion: ptrBool(true)},
-		{ID: "explicit-primary", Title: "Explicit Primary", VersionGroupID: nil, IsPrimaryVersion: ptrBool(true)},
+		{ID: "orphan-1", Title: "Orphan One", VersionGroupID: nil, IsPrimaryVersion: new(false), CreatedAt: new(now)},
+		{ID: "orphan-2", Title: "Orphan Two", VersionGroupID: new(""), IsPrimaryVersion: new(false), CreatedAt: new(now)},
+		{ID: "grouped-nonprimary", Title: "Grouped Non-Primary", VersionGroupID: new("grp-1"), IsPrimaryVersion: new(false)},
+		{ID: "grouped-primary", Title: "Grouped Primary", VersionGroupID: new("grp-1"), IsPrimaryVersion: new(true)},
+		{ID: "explicit-primary", Title: "Explicit Primary", VersionGroupID: nil, IsPrimaryVersion: new(true)},
 		{ID: "nil-flagged", Title: "Nil Flagged", VersionGroupID: nil, IsPrimaryVersion: nil},
-		{ID: "nil-flagged-grouped", Title: "Nil Flagged Grouped", VersionGroupID: ptrStr("grp-2"), IsPrimaryVersion: nil},
+		{ID: "nil-flagged-grouped", Title: "Nil Flagged Grouped", VersionGroupID: new("grp-2"), IsPrimaryVersion: nil},
 	}
 
 	got := censusMatches(books)
@@ -164,7 +160,7 @@ func TestCheckFieldPresence(t *testing.T) {
 	t.Run("all nil is_primary_version fails loudly", func(t *testing.T) {
 		books := []book{
 			{ID: "1", IsPrimaryVersion: nil, VersionGroupID: nil},
-			{ID: "2", IsPrimaryVersion: nil, VersionGroupID: ptrStr("grp-1")},
+			{ID: "2", IsPrimaryVersion: nil, VersionGroupID: new("grp-1")},
 		}
 		c := countFieldPresence(books)
 		err := checkFieldPresence(c)
@@ -178,8 +174,8 @@ func TestCheckFieldPresence(t *testing.T) {
 
 	t.Run("a real mix passes even with zero grouped books", func(t *testing.T) {
 		books := []book{
-			{ID: "1", IsPrimaryVersion: ptrBool(true), VersionGroupID: nil},
-			{ID: "2", IsPrimaryVersion: ptrBool(false), VersionGroupID: nil},
+			{ID: "1", IsPrimaryVersion: new(true), VersionGroupID: nil},
+			{ID: "2", IsPrimaryVersion: new(false), VersionGroupID: nil},
 			{ID: "3", IsPrimaryVersion: nil, VersionGroupID: nil},
 		}
 		c := countFieldPresence(books)
@@ -205,8 +201,8 @@ func TestCheckFieldPresence(t *testing.T) {
 func TestCountFieldPresence(t *testing.T) {
 	books := []book{
 		{ID: "1", VersionGroupID: nil, IsPrimaryVersion: nil},
-		{ID: "2", VersionGroupID: ptrStr(""), IsPrimaryVersion: ptrBool(false)},
-		{ID: "3", VersionGroupID: ptrStr("grp-1"), IsPrimaryVersion: ptrBool(true)},
+		{ID: "2", VersionGroupID: new(""), IsPrimaryVersion: new(false)},
+		{ID: "3", VersionGroupID: new("grp-1"), IsPrimaryVersion: new(true)},
 	}
 	c := countFieldPresence(books)
 	if c.examined != 3 {
@@ -227,7 +223,7 @@ func TestCSVOutputColumns(t *testing.T) {
 	var buf strings.Builder
 	created := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	matches := []book{
-		{ID: "b1", Title: "Book One", CreatedAt: ptrTime(created), UpdatedAt: nil, VersionGroupID: nil, IsPrimaryVersion: ptrBool(false)},
+		{ID: "b1", Title: "Book One", CreatedAt: new(created), UpdatedAt: nil, VersionGroupID: nil, IsPrimaryVersion: new(false)},
 	}
 	if err := writeCSV(&buf, matches); err != nil {
 		t.Fatalf("writeCSV: %v", err)
@@ -273,7 +269,7 @@ func (f *fakeLibrary) handler() http.HandlerFunc {
 			items = append(items, book{
 				ID:               fmt.Sprintf("book-%04d", id),
 				Title:            fmt.Sprintf("Title %d", id),
-				IsPrimaryVersion: ptrBool(false),
+				IsPrimaryVersion: new(false),
 			})
 		}
 		_ = json.NewEncoder(w).Encode(listData{
