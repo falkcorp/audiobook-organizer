@@ -1,0 +1,33 @@
+# Mutation table for the organizer Landing contract (PR #3046).
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/organizer/ \
+#     --table scripts/mutation-tables/organize-landing.muts
+#
+# WHAT THIS TABLE IS FOR. Every mutation below is a way the organize path can
+# report success while pointing a row at another book's audio, deleting a file
+# it did not write, or replacing a file that was already at the destination.
+# None of them is a syntax-tree flip gremlins would generate; each is a
+# plausible "simplification" a later edit could make.
+
+# Rows follow the landing, never a guess.
+M01 unlanded-row-gets-empty-path | internal/organizer/service.go | s/\tif !ok \x7c\x7c dstPath == "" \{\n/\tif false {\n/
+# Fail-closed gate for a single-file landing on a multi-row book.
+M02 multirow-single-landing-accepted | internal/organizer/service.go | s/\tif !isDir && len\(bookFiles\) > 1 \{\n/\tif !isDir && len(bookFiles) > 1000 {\n/
+# Rollback scope.
+M03 rollback-removes-whole-directory | internal/organizer/service.go | s/\t\tif err := os\.Remove\(created\); err != nil && !errors\.Is\(err, fs\.ErrNotExist\) \{\n/\t\tif err := os.RemoveAll(filepath.Dir(created)); err != nil \&\& !errors.Is(err, fs.ErrNotExist) {\n/
+M04 rollback-ignores-containment | internal/organizer/service.go | s/\t\tif created == "" \x7c\x7c !strings\.HasPrefix\(created, config\.AppConfig\.RootDir\) \{\n/\t\tif created == "" {\n/
+M05 adopted-single-file-marked-created | internal/organizer/service.go | s/\tif mode != "" \{\n\t\tl\.Created = \[\]string\{newPath\}\n\t\}\n/\tl.Created = []string{newPath}\n/
+# Strategy decision.
+M06 multirow-file-path-routed-single | internal/organizer/service.go | s/\tisDir := len\(bookFiles\) > 1\n/\tisDir := len(bookFiles) > 1000\n/
+# Exclusive publish.
+M07 finalize-uses-rename | internal/organizer/saferename.go | s/\tif err := os\.Link\(src, dst\); err != nil \{\n/\tif err := os.Rename(src, dst); err != nil {\n/
+M08 reorganize-uses-saferename | internal/organizer/service.go | s/\tif err := moveExclusive\(oldPath, targetPath\); err != nil \{\n/\tif err := safeRename(oldPath, targetPath); err != nil {\n/
+# Temp naming and stranded-temp resume.
+M09 rename-temp-shares-name | internal/organizer/pipeline.go | s/\treturn target \+ TmpRenameSuffix \+ "-" \+ tempNonce\(\)\n/\treturn target + TmpRenameSuffix\n/
+M10 stranded-glob-unescaped | internal/organizer/pipeline.go | s/filepath\.Glob\(globEscape\(legacy\) \+ "-\*"\)/filepath.Glob(legacy + "-*")/
+M11 ambiguous-stranded-picks-first | internal/organizer/pipeline.go | s/\t\t\tcase 1:\n\t\t\t\tslog\.Warn\("RenameFiles resuming/\t\t\tdefault:\n\t\t\t\tslog.Warn("RenameFiles resuming/; s/\t\t\tdefault:\n\t\t\t\tmsg := fmt\.Sprintf\("%d stranded/\t\t\tcase -1:\n\t\t\t\tmsg := fmt.Sprintf("%d stranded/
+# copyFile temp collision must not look like a taken destination.
+M12 nonce-collision-is-errexist | internal/organizer/organizer.go | s/return fmt\.Errorf\("temp file %s for %s already exists \(nonce collision with another writer\): %v", tempPath, dst, err\)/return fmt.Errorf("temp file %s for %s already exists (nonce collision with another writer): %w", tempPath, dst, err)/
