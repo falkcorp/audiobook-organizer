@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9f4e2a1c-d7b3-4e8f-b5c0-2a1d9e4f7b3c
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Package dedup — op dedup.emb-reencode (T021, SPEC 3 §3).
 //
@@ -274,10 +274,7 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 			return context.Canceled
 		}
 
-		end := batchStart + embReencodeBatchSize
-		if end > len(batch) {
-			end = len(batch)
-		}
+		end := min(batchStart+embReencodeBatchSize, len(batch))
 		chunk := batch[batchStart:end]
 
 		if err := p.reencodeChunk(db, chunk); err != nil {

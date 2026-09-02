@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cf20a915-6b83-4e47-a0d2-38f1e75c9b60
-// last-edited: 2026-08-07
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -12,7 +12,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 
-func rsp(s string) *string { return &s }
+//go:fix inline
+func rsp(s string) *string { return new(s) }
 
 // TestClassifyStatusRepair pins every branch of the repair decision. These rules
 // are the entire safety story: the op rewrites status on ~34k prod rows.
@@ -33,27 +34,27 @@ func TestClassifyStatusRepair(t *testing.T) {
 			// exactly like this — good text from four days before the outage.
 			name: "transport_failure_with_good_credits_text_becomes_ok",
 			book: database.Book{
-				TranscribeStatus:   rsp(statusWhisperError),
+				TranscribeStatus:   new(statusWhisperError),
 				TranscribeError:    rsp(transportErr),
-				IntroTranscription: rsp("Dune by Frank Herbert read by Scott Brick"),
+				IntroTranscription: new("Dune by Frank Herbert read by Scott Brick"),
 			},
-			wantReason: repairRecomputedOK, wantWrite: true, wantStatus: rsp(statusOK),
+			wantReason: repairRecomputedOK, wantWrite: true, wantStatus: new(statusOK),
 		},
 		{
 			name: "transport_failure_with_prose_text_becomes_unparsed",
 			book: database.Book{
-				TranscribeStatus:   rsp(statusWhisperError),
+				TranscribeStatus:   new(statusWhisperError),
 				TranscribeError:    rsp(transportErr),
-				IntroTranscription: rsp("Chapter 12 Fury drove through DC. He had a lot on his mind that day."),
+				IntroTranscription: new("Chapter 12 Fury drove through DC. He had a lot on his mind that day."),
 			},
-			wantReason: repairRecomputedUnparsed, wantWrite: true, wantStatus: rsp(statusUnparsed),
+			wantReason: repairRecomputedUnparsed, wantWrite: true, wantStatus: new(statusUnparsed),
 		},
 		{
 			// 🔴 An unreachable endpoint is NO ATTEMPT MADE. Recording it as a
 			// per-file failure blames the file for the network's problem.
 			name: "transport_failure_with_no_text_clears_to_never_attempted",
 			book: database.Book{
-				TranscribeStatus: rsp(statusWhisperError),
+				TranscribeStatus: new(statusWhisperError),
 				TranscribeError:  rsp(transportErr),
 			},
 			wantReason: repairClearedNeverTried, wantWrite: true, wantStatus: nil,
@@ -63,7 +64,7 @@ func TestClassifyStatusRepair(t *testing.T) {
 			// Clearing it would re-queue the book forever at GPU cost.
 			name: "silence_sentinel_is_never_cleared",
 			book: database.Book{
-				TranscribeStatus:   rsp(statusWhisperError),
+				TranscribeStatus:   new(statusWhisperError),
 				TranscribeError:    rsp(transportErr),
 				IntroTranscription: rsp(transcribe.SilenceSentinel),
 			},
@@ -73,23 +74,23 @@ func TestClassifyStatusRepair(t *testing.T) {
 			// A genuine model failure is an honest record — keep it.
 			name: "genuine_model_failure_is_kept",
 			book: database.Book{
-				TranscribeStatus:   rsp(statusWhisperError),
-				TranscribeError:    rsp("CUDA out of memory while decoding segment 3"),
-				IntroTranscription: rsp("Dune by Frank Herbert read by Scott Brick"),
+				TranscribeStatus:   new(statusWhisperError),
+				TranscribeError:    new("CUDA out of memory while decoding segment 3"),
+				IntroTranscription: new("Dune by Frank Herbert read by Scott Brick"),
 			},
 			wantReason: repairSkipNotTransport,
 		},
 		{
 			name: "genuine_ffmpeg_failure_is_kept",
 			book: database.Book{
-				TranscribeStatus: rsp(statusFFmpegError),
-				TranscribeError:  rsp("Invalid data found when processing input"),
+				TranscribeStatus: new(statusFFmpegError),
+				TranscribeError:  new("Invalid data found when processing input"),
 			},
 			wantReason: repairSkipNotTransport,
 		},
 		{
 			name:       "already_ok_is_untouched",
-			book:       database.Book{TranscribeStatus: rsp(statusOK), IntroTranscription: rsp("Dune by Frank Herbert")},
+			book:       database.Book{TranscribeStatus: new(statusOK), IntroTranscription: new("Dune by Frank Herbert")},
 			wantReason: repairSkipNotFailed,
 		},
 		{
@@ -101,7 +102,7 @@ func TestClassifyStatusRepair(t *testing.T) {
 			// A failure status with NO recorded error tells us nothing about the
 			// cause, so we must not assume it was the network.
 			name:       "failure_with_empty_error_is_kept",
-			book:       database.Book{TranscribeStatus: rsp(statusWhisperError)},
+			book:       database.Book{TranscribeStatus: new(statusWhisperError)},
 			wantReason: repairSkipNotTransport,
 		},
 	}
@@ -172,12 +173,12 @@ func TestIsTransportFailureIsConservative(t *testing.T) {
 func TestRepairNeverTouchesTranscriptText(t *testing.T) {
 	const text = "Dune by Frank Herbert read by Scott Brick"
 	b := database.Book{
-		TranscribeStatus:    rsp(statusWhisperError),
-		TranscribeError:     rsp(`Post "http://h/transcribe-batch": connection refused`),
+		TranscribeStatus:    new(statusWhisperError),
+		TranscribeError:     new(`Post "http://h/transcribe-batch": connection refused`),
 		IntroTranscription:  rsp(text),
-		TranscribedTitle:    rsp("Dune"),
-		TranscribedAuthor:   rsp("Frank Herbert"),
-		TranscribedNarrator: rsp("Scott Brick"),
+		TranscribedTitle:    new("Dune"),
+		TranscribedAuthor:   new("Frank Herbert"),
+		TranscribedNarrator: new("Scott Brick"),
 	}
 	before := *b.IntroTranscription
 

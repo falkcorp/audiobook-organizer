@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/import.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package itunes
 
@@ -43,4 +43,4 @@ func (p *Plugin) runImport(ctx context.Context, _ json.RawMessage, reporter sdk.
 }
 
 // Ensure methods are referenced so staticcheck doesn't flag them as unused (U1000).
-var _ = []interface{}{(*Plugin).importDef, (*Plugin).runImport}
+var _ = []any{(*Plugin).importDef, (*Plugin).runImport}

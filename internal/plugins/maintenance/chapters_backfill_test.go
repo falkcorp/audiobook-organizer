@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -76,7 +76,7 @@ func chbfSeedBook(t *testing.T, s *database.PebbleStore, title string, nFiles in
 	if err != nil {
 		t.Fatalf("CreateBook(%s): %v", title, err)
 	}
-	for i := 0; i < nFiles; i++ {
+	for i := range nFiles {
 		bf := &database.BookFile{
 			BookID:   bk.ID,
 			FilePath: fmt.Sprintf("/lib/%s/track%02d.m4b", title, i),
@@ -484,7 +484,7 @@ func TestChaptersBackfill_ProgressLabelReportsEligibleCount(t *testing.T) {
 
 			s := chbfStore(t)
 			const n = 12
-			for i := 0; i < n; i++ {
+			for i := range n {
 				chbfSeedBook(t, s, fmt.Sprintf("Labelled Book %02d", i), 1)
 			}
 
@@ -722,7 +722,7 @@ func chbfRunSpying(t *testing.T, s *database.PebbleStore, params chaptersBackfil
 func chbfSeedSorted(t *testing.T, s *database.PebbleStore, n int) []string {
 	t.Helper()
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ids = append(ids, chbfSeedBook(t, s, fmt.Sprintf("Book %02d", i), 1))
 	}
 	sort.Strings(ids)

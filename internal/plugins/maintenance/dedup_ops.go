@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -132,7 +132,7 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, _ json.RawMessage, reporte
 	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Batch created: %s — polling for completion", batchID))
 
-	for i := 0; i < maxPolls; i++ {
+	for i := range maxPolls {
 		if reporter.IsCanceled() {
 			return fmt.Errorf("cancelled")
 		}

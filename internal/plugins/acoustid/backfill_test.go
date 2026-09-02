@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0123
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package acoustid
 
@@ -143,7 +143,6 @@ func TestFingerprintEligibility_IneligibleWhenFileDoesNotExist(t *testing.T) {
 func TestFingerprintEligibility_ProceedsWhenAllChecksPass(t *testing.T) {
 	tmp := t.TempDir()
 	for _, ext := range []string{".m4b", ".mp3", ".flac", ".m4a", ".ogg", ".opus", ".aac", ".wav"} {
-		ext := ext
 		t.Run(ext, func(t *testing.T) {
 			path := filepath.Join(tmp, "ok"+ext)
 			if err := os.WriteFile(path, []byte("placeholder"), 0o644); err != nil {

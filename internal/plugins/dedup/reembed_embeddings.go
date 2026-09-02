@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Package dedup — op dedup.reembed-embeddings.
 //
@@ -251,10 +251,7 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 		default:
 		}
 
-		end := start + batchSize
-		if end > needCount {
-			end = needCount
-		}
+		end := min(start+batchSize, needCount)
 		chunk := toReembed[start:end]
 
 		// Delete the stale entity embedding first so prepBookEmbed cannot

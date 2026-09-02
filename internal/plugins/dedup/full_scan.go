@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // T018: full_scan.go enforces phase ordering for the full dedup scan:
 //
@@ -56,10 +56,7 @@ func etaSuffix(phaseStart time.Time, done, total int) string {
 	if rate <= 0 {
 		return ""
 	}
-	remaining := total - done
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(total-done, 0)
 	etaSeconds := float64(remaining) / rate
 	eta := time.Duration(etaSeconds * float64(time.Second))
 	return fmt.Sprintf(" (%.1f books/sec, ~%s remaining)", rate, eta.Round(time.Second))

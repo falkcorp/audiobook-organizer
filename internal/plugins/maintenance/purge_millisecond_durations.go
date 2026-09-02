@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/purge_millisecond_durations.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7ad86e89-caff-4b83-8cdb-ec0403de1d98
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -147,10 +147,7 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 	// belongs to exactly one book, so workers never touch the same row or the same
 	// RecomputeBookAggregates target (same disjoint-partition argument as
 	// dedupe-book-file-rows).
-	workers := runtime.NumCPU()
-	if workers > len(bookIDs) {
-		workers = len(bookIDs)
-	}
+	workers := min(runtime.NumCPU(), len(bookIDs))
 	log.Info("purge-millisecond-durations: repairing in parallel",
 		"books", len(bookIDs), "workers", workers)
 

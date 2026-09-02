@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d
-// last-edited: 2026-07-11
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -70,7 +70,7 @@ func TestCalibrationReport_RowsInGePairsOut(t *testing.T) {
 
 	var rowsIn, pairsOut float64
 	found := false
-	for _, line := range strings.Split(strings.TrimSpace(rep.buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(rep.buf.String()), "\n") {
 		if line == "" {
 			continue
 		}

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2f8ff156-b5ec-4480-ac97-27acc54fd013
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 // End-to-end test for the dedup.dataset-backfill op against a real PebbleStore
 // + EmbeddingStore, added alongside the CONC-8 memoize-then-parallelize change
@@ -45,7 +45,7 @@ func TestDatasetBackfill_ParallelMatchesSerialOutput(t *testing.T) {
 	hub := createBookWithHashedFile(t, pebble, "BackfillHub", "backfillhubhash0001")
 
 	var wantNotDup, wantUnlabeled []int64
-	for i := 0; i < numLeaves; i++ {
+	for i := range numLeaves {
 		stubSide := i%2 == 0
 		var leaf string
 		if stubSide {

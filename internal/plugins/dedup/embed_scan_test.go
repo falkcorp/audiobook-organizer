@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a1d9c3e-4b7f-4a2d-9e6c-8f1b2c3d4e5f
-// last-edited: 2026-07-07
+// last-edited: 2026-09-02
 
 // Tests for CONC-5: parallelizing the dedup.embed-scan synchronous per-book
 // EmbedBook loop with registry.RunItems.
@@ -53,7 +53,7 @@ func newEmbedScanFixture(t *testing.T, n int) (*Plugin, *database.MockStore, *da
 
 	books := make([]database.Book, n)
 	byID := make(map[string]*database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b := database.Book{ID: fmt.Sprintf("BOOK_%03d", i), Title: fmt.Sprintf("Test Book %d", i)}
 		books[i] = b
 		bCopy := b
@@ -136,7 +136,7 @@ func TestRunEmbedScanMode_ParallelMatchesSerial(t *testing.T) {
 	require.NoError(t, err)
 
 	// Every book must have an identical stored embedding row in both runs.
-	for i := 0; i < numBooks; i++ {
+	for i := range numBooks {
 		id := fmt.Sprintf("BOOK_%03d", i)
 
 		serialEmb, err := serialES.Get("book", id)

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7e5a1c3b-9d2f-4a08-8b61-3c4d5e6f7a89
-// last-edited: 2026-07-18
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -36,7 +36,7 @@ func breakdownWith(kind unified.SignalKind, conf float64) json.RawMessage {
 // single-signal breakdown. idBase offsets candidate/entity IDs across calls.
 func upsertPairs(t *testing.T, es *database.EmbeddingStore, idBase, n int, label string, bd json.RawMessage) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := idBase + i
 		ex := database.LabeledExample{
 			CandidateID:    int64(id),
@@ -57,7 +57,7 @@ func upsertPairs(t *testing.T, es *database.EmbeddingStore, idBase, n int, label
 // op emits and returns its fields for assertion.
 func reportFields(t *testing.T, buf string) map[string]any {
 	t.Helper()
-	for _, line := range strings.Split(strings.TrimSpace(buf), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buf), "\n") {
 		if line == "" {
 			continue
 		}

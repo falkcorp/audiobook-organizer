@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b2f4a6c-1d3e-4f5a-9c7b-0e1a2b3c4d5f
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package acoustid
 
@@ -127,7 +127,7 @@ func TestResetAll_DeletesCandidatesAcrossPages(t *testing.T) {
 	emb := newTestResetAllEmbeddingStore(t)
 
 	const n = 7 // > 1 page when the loop's internal pageSize is small enough to matter
-	for i := 0; i < n; i++ {
+	for i := range n {
 		c := database.DedupCandidate{
 			EntityType: "book",
 			EntityAID:  string(rune('a' + i)),

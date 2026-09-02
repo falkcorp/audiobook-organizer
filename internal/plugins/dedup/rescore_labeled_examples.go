@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3e9c1a70-5d84-4b62-8f01-6a2d7c0e9b53
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Package dedup — op dedup.rescore-labeled-examples.
 //
@@ -251,7 +251,7 @@ func runRescoreLabeledExamplesWith(
 			mu.Unlock()
 		}
 
-		for i := 0; i < len(results); i++ {
+		for i := range results {
 			res := results[i]
 			ref := g.refs[i]
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -242,10 +242,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// each book COMPLETES, via a monotonic atomic counter that stays ordered even
 	// when books finish out of order. The stuck-op watchdog therefore sees progress
 	// on every completion rather than once per sequential step.
-	workers := runtime.NumCPU()
-	if workers > len(bookIDs) {
-		workers = len(bookIDs)
-	}
+	workers := min(runtime.NumCPU(), len(bookIDs))
 	log.Info("dedupe-book-file-rows: processing books in parallel",
 		"books", len(bookIDs), "workers", workers)
 

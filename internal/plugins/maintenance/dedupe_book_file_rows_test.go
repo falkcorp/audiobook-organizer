@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b6d19a7-4e52-4c08-b7f1-90a5e2c4d738
-// last-edited: 2026-08-04
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -69,7 +69,7 @@ func TestRankKeeper_IsDeterministicAcrossRuns(t *testing.T) {
 		}
 	}
 	first := rankKeeper(mk())[0].ID
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if got := rankKeeper(mk())[0].ID; got != first {
 			t.Fatalf("keeper changed between runs: %q then %q — a dry run would not "+
 				"describe the same deletion the apply performs", first, got)

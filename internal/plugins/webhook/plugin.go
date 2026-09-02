@@ -1,6 +1,7 @@
 // file: internal/plugins/webhook/plugin.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
+// last-edited: 2026-09-02
 
 package webhook
 
@@ -44,7 +45,7 @@ func (p *Plugin) Init(ctx context.Context, deps plugin.Deps) error {
 	if rawURLs == "" {
 		return fmt.Errorf("webhook: urls is required (comma-separated list)")
 	}
-	for _, u := range strings.Split(rawURLs, ",") {
+	for u := range strings.SplitSeq(rawURLs, ",") {
 		u = strings.TrimSpace(u)
 		if u != "" {
 			p.urls = append(p.urls, u)
@@ -62,7 +63,7 @@ func (p *Plugin) Init(ctx context.Context, deps plugin.Deps) error {
 	if rawEvents == "" || rawEvents == "all" {
 		p.events = allEventTypes()
 	} else {
-		for _, e := range strings.Split(rawEvents, ",") {
+		for e := range strings.SplitSeq(rawEvents, ",") {
 			e = strings.TrimSpace(e)
 			if e != "" {
 				p.events = append(p.events, plugin.EventType(e))

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 // Package dedup — op dedup.breakdown-backfill.
 //
@@ -420,7 +420,7 @@ func runBreakdownBackfillWith(
 			mu.Unlock()
 		}
 
-		for i := 0; i < len(results); i++ {
+		for i := range results {
 			res := results[i]
 			ref := g.refs[i]
 
@@ -564,25 +564,26 @@ func runBreakdownBackfillWith(
 		"certain_signal_sets", certainSets,
 	)
 
-	summary := fmt.Sprintf(
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf(
 		"targets=%d processed=%d backfilled=%d would_backfill=%d skipped_has_breakdown=%d zero_signal=%d skipped_no_book=%d score_errs=%d update_errs=%d",
-		targets, processed, backfilled, wouldBackfill, skippedHasBreakdown, zeroSignal, skippedNoBook, scoreErrs, updateErrs)
+		targets, processed, backfilled, wouldBackfill, skippedHasBreakdown, zeroSignal, skippedNoBook, scoreErrs, updateErrs))
 	for k, v := range missingSignalCounts {
-		summary += fmt.Sprintf(" missing[%s]=%d", k, v)
+		summary.WriteString(fmt.Sprintf(" missing[%s]=%d", k, v))
 	}
 	// Bands in a fixed high→low order (the JSON map is unordered); zero
 	// buckets are printed too, so an absent band reads as measured-zero rather
 	// than as a dropped key.
 	for _, b := range breakdownBackfillBandOrder {
-		summary += fmt.Sprintf(" %s=%d", b, bandCounts[b])
+		summary.WriteString(fmt.Sprintf(" %s=%d", b, bandCounts[b]))
 	}
-	summary += fmt.Sprintf(" certain_1sig=%d certain_primary[0]=%d certain_primary[1]=%d certain_primary[2+]=%d",
-		certainSigsEq1, certainPrimaries["0"], certainPrimaries["1"], certainPrimaries["2+"])
+	summary.WriteString(fmt.Sprintf(" certain_1sig=%d certain_primary[0]=%d certain_primary[1]=%d certain_primary[2+]=%d",
+		certainSigsEq1, certainPrimaries["0"], certainPrimaries["1"], certainPrimaries["2+"]))
 
 	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3, "Dry-run — "+summary+". Pass apply=true to persist ScoreBreakdowns.")
+		_ = reporter.UpdateProgress(3, 3, "Dry-run — "+summary.String()+". Pass apply=true to persist ScoreBreakdowns.")
 	} else {
-		_ = reporter.UpdateProgress(3, 3, "Complete — "+summary+".")
+		_ = reporter.UpdateProgress(3, 3, "Complete — "+summary.String()+".")
 	}
 	return nil
 }
