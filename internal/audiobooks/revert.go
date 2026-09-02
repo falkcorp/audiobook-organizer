@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 
 package audiobooks
 
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"slices"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -65,8 +66,8 @@ func (rs *RevertService) RevertOperation(operationID string) error {
 
 	// Process in reverse order
 	var errors []string
-	for i := len(changes) - 1; i >= 0; i-- {
-		c := changes[i]
+	for _, c := range slices.Backward(changes) {
+
 		if err := rs.revertChange(c); err != nil {
 			errors = append(errors, fmt.Sprintf("change %s: %v", c.ID, err))
 			slog.Warn("revert failed for change", "c", c.ID, "err", err)
@@ -167,13 +168,13 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 	// Set the field to old value
 	if c.OldValue == "" {
 		// Set to nil for pointer types
-		if f.Kind() == reflect.Ptr {
+		if f.Kind() == reflect.Pointer {
 			f.Set(reflect.Zero(f.Type()))
 		} else {
 			f.SetString("")
 		}
 	} else {
-		if f.Kind() == reflect.Ptr {
+		if f.Kind() == reflect.Pointer {
 			val := reflect.New(f.Type().Elem())
 			val.Elem().SetString(c.OldValue)
 			f.Set(val)
@@ -204,7 +205,7 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 		return nil
 	}
 
-	tagMap := map[string]interface{}{
+	tagMap := map[string]any{
 		c.FieldName: c.OldValue,
 	}
 	opConfig := fileops.OperationConfig{VerifyChecksums: true}

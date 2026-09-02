@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -37,11 +37,6 @@ import (
 )
 
 // --- basic pointer helpers --------------------------------------------------
-
-// stringPtr returns a pointer to s.
-func stringPtr(s string) *string { return &s }
-
-func boolPtr(b bool) *bool { return &b }
 
 func ptrStr(p *string) string {
 	if p == nil {

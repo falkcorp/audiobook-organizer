@@ -1,7 +1,7 @@
 // file: internal/audiobooks/duration_unit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d9e2a71-6b58-4c03-9f14-8e7a05b3d62c
-// last-edited: 2026-08-03
+// last-edited: 2026-09-02
 
 package audiobooks
 
@@ -34,7 +34,7 @@ func TestAggregateFileMetadata_DoesNotDivideCorrectSeconds(t *testing.T) {
 	const track = 600      // 10 minutes
 	const size = 4_800_000 // 4.8 MB -> 64 kbps at 600 s
 	files := make([]database.BookFileCore, 0, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		files = append(files, database.BookFileCore{Duration: track, FileSize: size})
 	}
 
