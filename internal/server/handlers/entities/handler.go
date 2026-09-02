@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
 // last-edited: 2026-09-02
 
@@ -331,6 +331,46 @@ func (h *Handler) ListAuthors(c *gin.Context) {
 		Items: resp.Items[start:end],
 		Count: total,
 	})
+}
+
+// GetAuthor implements GET /authors/:id.
+//
+// The Authors page previously had no way to address a single author: the only
+// author-shaped reads were the whole-list ListAuthors and the per-author
+// /books and /aliases sub-resources. A drill-down page needs the author's own
+// row (name + counts + aliases) without downloading all ~20k of them, so this
+// serves one row out of the same cached list ListAuthors builds — the counts
+// therefore agree with the list by construction rather than by a second
+// implementation that could drift.
+func (h *Handler) GetAuthor(c *gin.Context) {
+	authorID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		httputil.RespondWithBadRequest(c, "invalid author ID")
+		return
+	}
+
+	resp, ok := h.authorsCache.Get("all")
+	if !ok {
+		built, buildErr := h.authorSeriesService.ListAuthorsWithCounts()
+		if buildErr != nil {
+			httputil.InternalError(c, "failed to list authors", buildErr)
+			return
+		}
+		h.authorsCache.Set("all", built)
+		resp = built
+	}
+	if resp == nil {
+		httputil.RespondWithNotFound(c, "author", c.Param("id"))
+		return
+	}
+
+	for i := range resp.Items {
+		if resp.Items[i].ID == authorID {
+			httputil.RespondWithOK(c, gin.H{"author": resp.Items[i]})
+			return
+		}
+	}
+	httputil.RespondWithNotFound(c, "author", c.Param("id"))
 }
 
 // parseListWindow reads limit/offset. paged is false when neither is supplied,

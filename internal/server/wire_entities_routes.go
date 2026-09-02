@@ -1,7 +1,7 @@
 // file: internal/server/wire_entities_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-efab-567890123456
-// last-edited: 2026-06-23
+// last-edited: 2026-09-02
 
 package server
 
@@ -35,6 +35,10 @@ func (s *Server) wireEntitiesRoutes(
 	protected.POST("/authors/:id/aliases", s.perm(auth.PermLibraryEditMetadata), entitiesH.CreateAuthorAlias)
 	protected.DELETE("/authors/:id/aliases/:aliasId", s.perm(auth.PermLibraryDelete), entitiesH.DeleteAuthorAlias)
 	protected.GET("/authors/:id/books", s.perm(auth.PermLibraryView), entitiesH.GetAuthorBooks)
+	// Registered AFTER the /authors/:id/* sub-resources and after the static
+	// /authors/count and /authors/ref-audit siblings: gin ranks static segments
+	// above the :id wildcard, so ordering here is for readability, not routing.
+	protected.GET("/authors/:id", s.perm(auth.PermLibraryView), entitiesH.GetAuthor)
 	protected.DELETE("/authors/:id", s.perm(auth.PermLibraryDelete), entitiesH.DeleteAuthor)
 	protected.POST("/authors/bulk-delete", s.perm(auth.PermLibraryDelete), entitiesH.BulkDeleteAuthors)
 
