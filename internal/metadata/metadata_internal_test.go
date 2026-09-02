@@ -11,7 +11,7 @@ import (
 )
 
 func TestGetRawStringCaseInsensitive(t *testing.T) {
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		"Publisher": []string{"Podium Audio", "Other"},
 	}
 
@@ -22,7 +22,7 @@ func TestGetRawStringCaseInsensitive(t *testing.T) {
 }
 
 func TestGetRawStringSkipsReleaseGroupTag(t *testing.T) {
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		"aART": []string{"[PZG]", "Greg Chun"},
 	}
 
@@ -33,7 +33,7 @@ func TestGetRawStringSkipsReleaseGroupTag(t *testing.T) {
 }
 
 func TestGetRawStringFromTXXXComm(t *testing.T) {
-	raw := map[string]interface{}{
+	raw := map[string]any{
 		"TXXX": &tag.Comm{Description: "NARRATOR", Text: "Jane Doe"},
 	}
 

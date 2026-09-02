@@ -138,10 +138,10 @@ func TestWikipediaClient_WikidataEnrichment(t *testing.T) {
 
 			if props == "labels" {
 				// Author label resolution
-				json.MarshalWrite(w, map[string]interface{}{
-					"entities": map[string]interface{}{
-						ids: map[string]interface{}{
-							"labels": map[string]interface{}{
+				json.MarshalWrite(w, map[string]any{
+					"entities": map[string]any{
+						ids: map[string]any{
+							"labels": map[string]any{
 								"en": map[string]string{"value": "Frank Herbert"},
 							},
 						},

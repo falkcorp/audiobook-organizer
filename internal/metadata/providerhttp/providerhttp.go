@@ -297,10 +297,7 @@ func retryDelay(resp *http.Response, attempt int) time.Duration {
 		return d
 	}
 	// 1s, 2s, 4s, ... capped, plus up to 50% jitter.
-	base := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-	if base > 30*time.Second {
-		base = 30 * time.Second
-	}
+	base := min(time.Duration(math.Pow(2, float64(attempt)))*time.Second, 30*time.Second)
 	jitter := time.Duration(rand.Int63n(int64(base/2) + 1))
 	return base + jitter
 }
@@ -315,10 +312,9 @@ func parseRetryAfter(v string) (time.Duration, bool) {
 		if secs < 0 {
 			return 0, false
 		}
-		d := time.Duration(secs) * time.Second
-		if d > 5*time.Minute {
-			d = 5 * time.Minute // never park a worker indefinitely
-		}
+		d := min(time.Duration(secs)*time.Second,
+			// never park a worker indefinitely
+			5*time.Minute)
 		return d, true
 	}
 	if when, err := http.ParseTime(v); err == nil {

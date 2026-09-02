@@ -38,7 +38,7 @@ func TestBatchUpdateMetadata_ParallelManyItems(t *testing.T) {
 
 	// numOK: real books present in the store, title update should apply and
 	// succeed for every one of them regardless of goroutine interleaving.
-	for i := 0; i < numOK; i++ {
+	for i := range numOK {
 		id := fmt.Sprintf("ok-book-%d", i)
 		newTitle := fmt.Sprintf("Updated Title %d", i)
 		book := &database.Book{ID: id, Title: fmt.Sprintf("Old Title %d", i), Format: "mp3"}
@@ -48,28 +48,28 @@ func TestBatchUpdateMetadata_ParallelManyItems(t *testing.T) {
 		})).Return(book, nil).Once()
 		updates = append(updates, MetadataUpdate{
 			BookID:  id,
-			Updates: map[string]interface{}{"title": newTitle},
+			Updates: map[string]any{"title": newTitle},
 		})
 	}
 
 	// numValidateErr: Validate:true with an empty (required) title, fails
 	// ValidateMetadata before ever touching the store.
-	for i := 0; i < numValidateErr; i++ {
+	for i := range numValidateErr {
 		id := fmt.Sprintf("bad-validate-%d", i)
 		updates = append(updates, MetadataUpdate{
 			BookID:   id,
 			Validate: true,
-			Updates:  map[string]interface{}{"title": ""},
+			Updates:  map[string]any{"title": ""},
 		})
 	}
 
 	// numNotFound: GetBookByID fails for these IDs.
-	for i := 0; i < numNotFound; i++ {
+	for i := range numNotFound {
 		id := fmt.Sprintf("missing-%d", i)
 		store.EXPECT().GetBookByID(id).Return(nil, fmt.Errorf("book not found")).Once()
 		updates = append(updates, MetadataUpdate{
 			BookID:  id,
-			Updates: map[string]interface{}{"title": "won't matter"},
+			Updates: map[string]any{"title": "won't matter"},
 		})
 	}
 
@@ -97,27 +97,27 @@ func TestImportMetadata_ParallelManyItems(t *testing.T) {
 		numInvalid = 5
 	)
 
-	books := make([]interface{}, 0, numOK+numBadData+numInvalid)
+	books := make([]any, 0, numOK+numBadData+numInvalid)
 
-	for i := 0; i < numOK; i++ {
+	for i := range numOK {
 		title := fmt.Sprintf("Imported Book %d", i)
 		store.EXPECT().CreateBook(mock.MatchedBy(func(b *database.Book) bool {
 			return b != nil && b.Title == title
 		})).Return(&database.Book{ID: fmt.Sprintf("created-%d", i), Title: title}, nil).Once()
-		books = append(books, map[string]interface{}{"title": title, "format": "m4b"})
+		books = append(books, map[string]any{"title": title, "format": "m4b"})
 	}
 
 	// numBadData: not a map — fails the type assertion before any store call.
-	for i := 0; i < numBadData; i++ {
+	for i := range numBadData {
 		books = append(books, fmt.Sprintf("not-a-map-%d", i))
 	}
 
 	// numInvalid: required "title" validation fails.
-	for i := 0; i < numInvalid; i++ {
-		books = append(books, map[string]interface{}{"title": ""})
+	for range numInvalid {
+		books = append(books, map[string]any{"title": ""})
 	}
 
-	data := map[string]interface{}{"books": books}
+	data := map[string]any{"books": books}
 
 	count, errs := ImportMetadata(data, store, true)
 
