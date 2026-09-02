@@ -1,6 +1,6 @@
 - [ ] **~17 maintenance/regroup ops write `Book` columns without consulting a field
   lock** — the one write-path class the #3054 review's gate table (row 19, M2) found
-  unguarded that PR #3054 deliberately did not close: it had already reached 71 changed
+  unguarded that PR #3054 deliberately did not close: it had already reached 72 changed
   files, past the review's own >40-file stop threshold, so the remaining rows were
   deferred rather than rushed. Every other unguarded row in that table (ISBN
   enrichment, scanner AI nomination, diagnostics AI apply, iTunes reconcile, dedup
