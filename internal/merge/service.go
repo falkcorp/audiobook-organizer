@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-02
 
@@ -257,9 +257,10 @@ func preferOnTie(a, b *database.Book) bool {
 // unless it has no audio route while another does (FilelessPrimaryError). A
 // soft-deleted participant is refused (SoftDeletedInputError) unless it is a
 // loser already in the group this merge resolves to — that is a completed
-// merge being replayed, and the replayed loser is left exactly as it is: no
-// external-ID reroute, no ITL removals, no second soft-delete, no sync
-// follow. A book the store cannot load is BookNotFoundError.
+// merge being replayed, and the replayed loser's row is left exactly as it
+// is: no external-ID reroute, no ITL removals, no second soft-delete (only
+// the idempotent sync-identity follow re-runs). A book the store has no row
+// for is BookNotFoundError; a store failure is returned as itself.
 func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, error) {
 	// De-duplicate the incoming ID list before anything else. Every current
 	// caller either de-dupes itself or trusts a request body (e.g. the
@@ -302,7 +303,14 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	var books []*database.Book
 	for _, id := range bookIDs {
 		book, err := ms.db.GetBookByID(id)
-		if err != nil || book == nil {
+		if err != nil {
+			// A store failure is NOT "not found": the store returns (nil, nil)
+			// for a missing key and a non-nil error only for I/O or a corrupt
+			// row. Typing it as not-found would let the dedup handler mark
+			// the candidate "merged" for a pair that was never merged.
+			return nil, fmt.Errorf("load book %s: %w", id, err)
+		}
+		if book == nil {
 			return nil, &BookNotFoundError{BookID: id}
 		}
 		books = append(books, book)
@@ -429,7 +437,9 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	} else if !HasAudioRoute(books[bestIdx], filesByID[books[bestIdx].ID]) {
 		var fileBearing []string
 		for _, b := range books {
-			if HasAudioRoute(b, filesByID[b.ID]) {
+			// An admitted soft-deleted loser can never be kept, so its route
+			// is not a reason to refuse the requested primary.
+			if !b.IsSoftDeleted() && HasAudioRoute(b, filesByID[b.ID]) {
 				fileBearing = append(fileBearing, b.ID)
 			}
 		}
@@ -480,8 +490,16 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	// soft-delete call below.
 	resolvedPrimaryID := books[bestIdx].ID
 	for i, book := range books {
-		book.VersionGroupID = &versionGroupID
 		isPrimary := i == bestIdx
+		if !isPrimary && book.IsSoftDeleted() &&
+			book.VersionGroupID != nil && *book.VersionGroupID == versionGroupID &&
+			book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+			// Replayed loser already carries exactly these values. Under the
+			// copy-on-write book_ver: history every UpdateBook is a full
+			// snapshot, so an unchanged rewrite is not free.
+			continue
+		}
+		book.VersionGroupID = &versionGroupID
 		book.IsPrimaryVersion = &isPrimary
 		if _, err := ms.db.UpdateBook(book.ID, book); err != nil {
 			return nil, fmt.Errorf("failed to update book %s: %w", book.ID, err)
@@ -575,11 +593,14 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 			continue
 		}
 		// Admitted soft-deleted loser (see the guard above): already merged
-		// away, or deleted by the user. Nothing below is a no-op for it —
-		// ReassignExternalIDs strips the IDs a RestoreAudiobook would bring
-		// back, EnqueueRemove queues ITL deletes a second time, and
-		// SoftDeleteBook resets MarkedForDeletionAt, restarting its 30-day
-		// retention. Leave it exactly as it is.
+		// away, or deleted by the user. SoftDeleteBook below is NOT
+		// idempotent — it rewrites MarkedForDeletionAt, restarting the
+		// 30-day retention — and for a user-deleted version
+		// ReassignExternalIDs would strip the IDs a RestoreAudiobook brings
+		// back. Leave the row exactly as it is. (The sync-identity follow
+		// further down is idempotent and still runs for it: a first merge
+		// that crashed between SoftDeleteBook and FollowMerge has no other
+		// repair path.)
 		if book.IsSoftDeleted() {
 			slog.Debug("merge: loser already soft-deleted; cleanup skipped", "id", book.ID, "primary", resolvedPrimaryID)
 			continue
@@ -645,12 +666,14 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	// book's ID) and losers are only soft-deleted, so the winner's reverse
 	// index needs no repoint: this is a loser-only redirect. Kept as its own
 	// separately-testable step rather than folded into the loop above.
-	// Already-soft-deleted losers are excluded for the same reason they skip
-	// the cleanup loop: their identity was followed by the merge that deleted
-	// them, or was never part of one.
+	// Already-soft-deleted losers are deliberately INCLUDED, unlike in the
+	// cleanup loop: FollowMerge is idempotent (RecordSyncMerge returns early
+	// on an existing redirect; progress merge keeps the furthest position),
+	// and a replay is the only repair for a first merge that crashed after
+	// SoftDeleteBook but before this best-effort follow.
 	losers := make([]string, 0, len(books)-1)
 	for _, book := range books {
-		if book.ID != resolvedPrimaryID && !book.IsSoftDeleted() {
+		if book.ID != resolvedPrimaryID {
 			losers = append(losers, book.ID)
 		}
 	}
@@ -712,7 +735,10 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	defer mergeSerializeMu.Unlock()
 
 	survivor, err := ms.db.GetBookByID(primaryID)
-	if err != nil || survivor == nil {
+	if err != nil {
+		return nil, fmt.Errorf("load book %s: %w", primaryID, err)
+	}
+	if survivor == nil {
 		return nil, &BookNotFoundError{BookID: primaryID}
 	}
 	// Validate all IDs up front so a bad ID aborts before any mutation.
@@ -723,7 +749,10 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 		}
 		seen[id] = true
 		b, err := ms.db.GetBookByID(id)
-		if err != nil || b == nil {
+		if err != nil {
+			return nil, fmt.Errorf("load book %s: %w", id, err)
+		}
+		if b == nil {
 			return nil, &BookNotFoundError{BookID: id}
 		}
 	}

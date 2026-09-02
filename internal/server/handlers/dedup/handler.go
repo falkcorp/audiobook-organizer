@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-09-02
 
@@ -46,6 +46,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/gin-gonic/gin"
 )
@@ -1466,11 +1467,12 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 			// request being a server error. Treat that as 409 Conflict and mark the
 			// candidate merged so the UI's next refresh drops it.
 			//
-			// We use a substring match on "not found" because the underlying merge
-			// service returns a plain fmt.Errorf("book %s not found", ...) without an
-			// exported sentinel error. Switch to errors.Is if/when that error type
-			// becomes exported.
-			if strings.Contains(mergeErr.Error(), "not found") {
+			// Typed match: only the merge service's own "the store has no such
+			// row" is a stale candidate. A store I/O error whose text happens to
+			// mention "not found" used to take this branch and mark a candidate
+			// merged that never was.
+			var notFound *merge.BookNotFoundError
+			if errors.As(mergeErr, &notFound) {
 				if statusErr := es.UpdateCandidateStatus(id, "merged"); statusErr != nil {
 					slog.Warn("dedup merge already-merged: failed to update candidate status", "candidate_id", id, "err", statusErr)
 				}

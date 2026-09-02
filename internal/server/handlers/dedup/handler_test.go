@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -624,23 +625,61 @@ func TestMergeDedupCandidate_KeepIDEcho(t *testing.T) {
 	}
 }
 
+// A stale candidate — one of its books is gone because an earlier merge
+// absorbed it — is a 409 already_merged and the candidate is marked merged.
+// The engine wraps the merge service's typed error; errors.As must see through
+// the wrap.
 func TestMergeDedupCandidate_AlreadyMergedConflict(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
 	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
-		Return(nil, "", errNotFound{}).Once()
+		Return(nil, "", fmt.Errorf("merge-journaled: merge books: %w", &merge.BookNotFoundError{BookID: aID})).Once()
 	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
 		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status=%d want 409; body=%s", w.Code, w.Body.String())
 	}
+	cand, err := d.es.GetCandidateByID(id)
+	if err != nil || cand == nil {
+		t.Fatalf("GetCandidateByID: %v %v", cand, err)
+	}
+	if cand.Status != "merged" {
+		t.Fatalf("stale candidate status=%q want merged", cand.Status)
+	}
 }
 
-type errNotFound struct{}
+// A store failure whose text happens to contain "not found" is NOT a stale
+// candidate. Before 2026-09-02 the handler substring-matched the message and
+// marked the candidate merged for a pair that was never merged.
+func TestMergeDedupCandidate_UntypedNotFoundTextIs500_CandidateUntouched(t *testing.T) {
+	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
+	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
+	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
+		Return(nil, "", errNotFoundText{}).Once()
+	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500; body=%s", w.Code, w.Body.String())
+	}
+	cand, err := d.es.GetCandidateByID(id)
+	if err != nil || cand == nil {
+		t.Fatalf("GetCandidateByID: %v %v", cand, err)
+	}
+	if cand.Status != "pending" {
+		t.Fatalf("candidate status=%q want pending (a store failure must not mark it merged)", cand.Status)
+	}
+}
 
-func (errNotFound) Error() string { return "book book-aaa not found" }
+// errNotFoundText is an untyped error whose wording mimics the old merge
+// service message — the exact shape a pebble "index shard not found" I/O
+// failure could also take.
+type errNotFoundText struct{}
+
+func (errNotFoundText) Error() string { return "load book book-aaa: sstable block not found" }
 
 func TestDismissDedupCandidate(t *testing.T) {
 	h, d := newHandler(t)

@@ -25,3 +25,17 @@ M04 not-found-untyped | internal/merge/service.go | s/return nil, &BookNotFoundE
 
 # A replayed merge must leave an already-soft-deleted loser untouched.
 M05 replay-recleans-deleted-loser | internal/merge/service.go | s/\t\tif book\.IsSoftDeleted\(\) \{\n\t\t\tslog\.Debug\("merge: loser already soft-deleted; cleanup skipped"/\t\tif false {\n\t\t\tslog.Debug("merge: loser already soft-deleted; cleanup skipped"/
+
+# Review round (M1): a store I/O failure must stay a store failure. Re-typing
+# every load error as BookNotFoundError is the conflation that let the dedup
+# handler retire a live candidate as "merged" on a flaky read.
+M06 store-error-typed-not-found | internal/merge/service.go | s/return nil, fmt\.Errorf\("load book %s: %w", (\w+), err\)/return nil, \&BookNotFoundError{BookID: $1}/g
+
+# Review round (M3): the soft-deleted loser must still be in the sync-follow
+# list — FollowMerge is idempotent and is the only repair for a crash between
+# SoftDeleteBook and FollowMerge on the first attempt.
+M07 replay-skips-sync-follow-for-deleted-loser | internal/merge/service.go | s/\t\tif book\.ID != resolvedPrimaryID \{\n\t\t\tlosers = append\(losers, book\.ID\)/\t\tif book.ID != resolvedPrimaryID \&\& !book.IsSoftDeleted() {\n\t\t\tlosers = append(losers, book.ID)/
+
+# Review round (L5): a soft-deleted sibling's audio route must not be counted
+# as evidence against keeping the chosen primary.
+M08 deleted-sibling-counts-as-file-bearing | internal/merge/service.go | s/if !b\.IsSoftDeleted\(\) && HasAudioRoute\(b, filesByID\[b\.ID\]\)/if HasAudioRoute(b, filesByID[b.ID])/
