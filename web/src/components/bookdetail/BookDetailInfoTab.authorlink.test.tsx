@@ -1,12 +1,12 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.authorlink.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b0c4a12-9f7d-4e35-8c61-2a0d9e4f7b58
 // last-edited: 2026-09-02
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, useParams } from 'react-router-dom';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { BookDetailInfoTab } from './BookDetailInfoTab';
 
@@ -35,6 +35,16 @@ const bookWithoutIds = {
   author_name: 'Someone Uncredited',
 };
 
+// Renders WHICH author was opened. MemoryRouter never touches
+// window.location, so asserting on `location.pathname` is vacuous — it is
+// always "/" and a `not.toBe('/authors/7')` check passes no matter which link
+// was clicked. Reading the route param is the only way this test can observe
+// the difference between the two authors.
+function OpenedAuthor() {
+  const { id } = useParams<{ id: string }>();
+  return <div>Author page {id}</div>;
+}
+
 function renderTab(book: Record<string, unknown>) {
   return renderWithProviders(
     <Routes>
@@ -53,7 +63,7 @@ function renderTab(book: Record<string, unknown>) {
           />
         }
       />
-      <Route path="/authors/:id" element={<div>Author page</div>} />
+      <Route path="/authors/:id" element={<OpenedAuthor />} />
     </Routes>,
     { initialEntries: [`/library/${book.id as string}`] }
   );
@@ -70,17 +80,18 @@ describe('BookDetailInfoTab author link', () => {
     expect(screen.getByRole('button', { name: 'Neil Gaiman' })).toBeInTheDocument();
 
     await user.click(pratchett);
-    await waitFor(() => expect(screen.getByText('Author page')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Author page 7')).toBeInTheDocument());
   });
 
   it('navigates to the SECOND author, not always the first', async () => {
     const user = userEvent.setup();
-    const { container } = renderTab(bookWithIds);
+    renderTab(bookWithIds);
 
     await user.click(await screen.findByRole('button', { name: 'Neil Gaiman' }));
-    await waitFor(() => expect(screen.getByText('Author page')).toBeInTheDocument());
-    // A hardcoded /authors/7 would pass the previous test and fail here.
-    expect(container.ownerDocument.location.pathname).not.toBe('/authors/7');
+    // Asserts the id that actually reached the route. A handler hardcoded to
+    // the first author renders "Author page 7" here and fails.
+    await waitFor(() => expect(screen.getByText('Author page 9')).toBeInTheDocument());
+    expect(screen.queryByText('Author page 7')).toBeNull();
   });
 
   it('leaves the author as plain text when no id is available', async () => {
