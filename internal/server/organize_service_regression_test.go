@@ -1,5 +1,5 @@
 // file: internal/server/organize_service_regression_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-organize-regr
 
 package server
@@ -169,10 +169,14 @@ func TestOrganizeDirectoryBook_SuccessWithRealFiles(t *testing.T) {
 		Author:   &database.Author{Name: "Real Author"},
 	}
 
-	targetDir, err := svc.OrganizeDirectoryBook(org, book, testLog)
+	landing, err := svc.OrganizeDirectoryBook(org, book, testLog)
 	require.NoError(t, err)
+	require.NotNil(t, landing)
+	targetDir := landing.Path
 	assert.NotEmpty(t, targetDir)
 	assert.DirExists(t, targetDir)
+	assert.Len(t, landing.Created, 2, "both copies are this organize's own writes")
+	assert.Empty(t, landing.Skipped)
 
 	// Verify files actually exist in target
 	entries, _ := os.ReadDir(targetDir)
@@ -215,8 +219,10 @@ func TestOrganizeDirectoryBook_PartialMissing(t *testing.T) {
 	}
 
 	// Should succeed with partial files (at least one copied)
-	targetDir, err := svc.OrganizeDirectoryBook(org, book, testLog)
+	landing, err := svc.OrganizeDirectoryBook(org, book, testLog)
 	require.NoError(t, err)
+	require.NotNil(t, landing)
+	targetDir := landing.Path
 	assert.NotEmpty(t, targetDir)
 
 	// Only one file should exist in target
@@ -269,13 +275,6 @@ func TestCreateOrganizedVersion_RecomputesITunesPath(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{
-		RootDir:              rootDir,
-		OrganizationStrategy: "copy",
-		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
-	}
-	org := organizer.NewOrganizer(cfg)
 	svc := NewOrganizeService(mockDB)
 	testLog := logger.New("test")
 
@@ -292,7 +291,16 @@ func TestCreateOrganizedVersion_RecomputesITunesPath(t *testing.T) {
 		Author:           &database.Author{Name: "Author"},
 	}
 
-	created, err := svc.CreateOrganizedVersion(org, book, organizedPath, true, "op-1", testLog)
+	// The landing is what OrganizeDirectoryBook reports: rows follow it, and
+	// nothing here re-derives a plan or stats the target directory.
+	landing := &organizer.Landing{
+		Path: organizedPath,
+		Files: map[string]string{
+			"/mnt/bigdata/books/itunes/iTunes Media/Audiobooks/Author/book.m4b": filepath.Join(organizedPath, "book.m4b"),
+		},
+		Created: []string{filepath.Join(organizedPath, "book.m4b")},
+	}
+	created, err := svc.CreateOrganizedVersion(book, landing, "op-1", testLog)
 	require.NoError(t, err)
 	assert.NotNil(t, created)
 
@@ -493,13 +501,6 @@ func TestCreateOrganizedVersion_CopiesAllBookFiles(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{
-		RootDir:              rootDir,
-		OrganizationStrategy: "copy",
-		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
-	}
-	org := organizer.NewOrganizer(cfg)
 	svc := NewOrganizeService(mockDB)
 	testLog := logger.New("test")
 
@@ -515,7 +516,15 @@ func TestCreateOrganizedVersion_CopiesAllBookFiles(t *testing.T) {
 		Author:           &database.Author{Name: "Author"},
 	}
 
-	_, err := svc.CreateOrganizedVersion(org, book, targetDir, true, "op-1", testLog)
+	landing := &organizer.Landing{
+		Path: targetDir,
+		Files: map[string]string{
+			"/import/Author/ch01.mp3": filepath.Join(targetDir, "ch01.mp3"),
+			"/import/Author/ch02.mp3": filepath.Join(targetDir, "ch02.mp3"),
+			"/import/Author/ch03.mp3": filepath.Join(targetDir, "ch03.mp3"),
+		},
+	}
+	_, err := svc.CreateOrganizedVersion(book, landing, "op-1", testLog)
 	require.NoError(t, err)
 
 	assert.Len(t, createdFiles, 3, "all 3 book_files should be copied to organized version")
@@ -555,13 +564,6 @@ func TestCreateOrganizedVersion_SetsCorrectStates(t *testing.T) {
 		CreateBookFileFunc:  func(file *database.BookFile) error { return nil },
 	}
 
-	cfg := &config.Config{
-		RootDir:              rootDir,
-		OrganizationStrategy: "copy",
-		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
-	}
-	org := organizer.NewOrganizer(cfg)
 	svc := NewOrganizeService(mockDB)
 	testLog := logger.New("test")
 
@@ -574,7 +576,7 @@ func TestCreateOrganizedVersion_SetsCorrectStates(t *testing.T) {
 		Author:           &database.Author{Name: "Author"},
 	}
 
-	created, err := svc.CreateOrganizedVersion(org, book, filepath.Join(rootDir, "test.m4b"), false, "op-1", testLog)
+	created, err := svc.CreateOrganizedVersion(book, &organizer.Landing{Path: filepath.Join(rootDir, "test.m4b")}, "op-1", testLog)
 	require.NoError(t, err)
 
 	// New organized copy should be primary

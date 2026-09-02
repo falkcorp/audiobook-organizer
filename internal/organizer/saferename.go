@@ -1,5 +1,5 @@
 // file: internal/organizer/saferename.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2df18e44-98f0-407e-ab5f-daf158f22554
 // last-edited: 2026-09-02
 
@@ -133,34 +133,78 @@ func verifyRenamed(src, dst string, srcInfo os.FileInfo) error {
 // FAT32, some SMB mounts) fall back to safeRename and its documented
 // sub-millisecond window. That is a narrowing, not a regression: those mounts
 // had the window before this function existed.
+//
+// The temp is a scratch name of ours, so a failure to unlink it after the link
+// landed is a leak for cleanupTempFiles to sweep, not a correctness problem.
+// moveExclusive is the variant for a source that is a real file.
 func finalizeExclusive(tmp, dst string) error {
-	tmpInfo, err := os.Lstat(tmp)
+	return linkMoveExclusive(tmp, dst, true)
+}
+
+// moveExclusive moves src to dst WITHOUT ever replacing a dst that already
+// exists, for a src that is a real library file rather than a scratch temp.
+//
+// Regular files go through the same link-then-unlink as finalizeExclusive, so
+// two movers racing for one dst cannot destroy each other: link(2) fails EEXIST
+// for the loser. The one difference from finalizeExclusive is what an unlink
+// failure means. A temp left behind is a leak; a SOURCE left behind is the
+// same audio under two names, and the next scan sees the book twice. So here
+// that is an error, and the caller must not record dst as the file's path.
+//
+// Directories cannot be hard-linked, so a directory move is safeRename with
+// rename(2)'s own directory semantics standing in for exclusivity: a rename
+// onto an existing NON-EMPTY directory fails (ENOTEMPTY/EEXIST) and onto a
+// file fails (ENOTDIR), so the only thing a racing directory rename can replace
+// is an EMPTY directory — nothing is lost. The Lstat guard in safeRename still
+// turns the common case into a clear error before the syscall gets to decide.
+func moveExclusive(src, dst string) error {
+	info, err := os.Lstat(src)
 	if err != nil {
-		return fmt.Errorf("stat finalize source %s: %w", tmp, err)
+		return fmt.Errorf("stat move source %s: %w", src, err)
 	}
-	if !tmpInfo.Mode().IsRegular() {
-		return fmt.Errorf("finalize source %s is not a regular file (mode %s)", tmp, tmpInfo.Mode())
+	if info.IsDir() {
+		return safeRename(src, dst)
+	}
+	return linkMoveExclusive(src, dst, false)
+}
+
+// linkMoveExclusive is the shared body of finalizeExclusive and moveExclusive:
+// link src to dst (atomic, EEXIST if dst exists), unlink src, verify dst.
+// srcIsScratch decides whether a failed unlink of src is a leak (warn) or a
+// duplicate library file (error).
+func linkMoveExclusive(src, dst string, srcIsScratch bool) error {
+	srcInfo, err := os.Lstat(src)
+	if err != nil {
+		return fmt.Errorf("stat finalize source %s: %w", src, err)
+	}
+	if !srcInfo.Mode().IsRegular() {
+		return fmt.Errorf("finalize source %s is not a regular file (mode %s)", src, srcInfo.Mode())
 	}
 
-	if err := os.Link(tmp, dst); err != nil {
-		if os.IsExist(err) {
-			slog.Warn("finalizeExclusive refusing to overwrite existing destination",
-				"tmp", tmp, "dst", dst)
-			return &os.LinkError{Op: "link", Old: tmp, New: dst, Err: fs.ErrExist}
+	if err := os.Link(src, dst); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			slog.Warn("exclusive move refusing to overwrite existing destination",
+				"src", src, "dst", dst)
+			return &os.LinkError{Op: "link", Old: src, New: dst, Err: fs.ErrExist}
 		}
 		if !linkUnsupported(err) {
-			return fmt.Errorf("link %s to %s: %w", tmp, dst, err)
+			return fmt.Errorf("link %s to %s: %w", src, dst, err)
 		}
-		slog.Debug("finalizeExclusive: filesystem refuses hard links, falling back to rename",
-			"tmp", tmp, "dst", dst, "error", err)
-		return safeRename(tmp, dst)
+		// This is a downgrade of the guarantee — the rename fallback has the
+		// TOCTOU window the link does not — so it is logged where an operator
+		// will see it, not at Debug.
+		slog.Warn("exclusive move: filesystem refuses hard links, falling back to rename with its race window",
+			"src", src, "dst", dst, "error", err)
+		return safeRename(src, dst)
 	}
 
-	// dst is published; tmp is a second name for the same inode. Losing the
-	// unlink is a leak cleanupTempFiles will sweep, not a correctness problem.
-	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+	// dst is published; src is a second name for the same inode.
+	if err := os.Remove(src); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if !srcIsScratch {
+			return fmt.Errorf("moved %s to %s but the source name could not be removed and both now name the same file: %w", src, dst, err)
+		}
 		slog.Warn("finalizeExclusive: published destination but could not remove temp name",
-			"tmp", tmp, "dst", dst, "error", err)
+			"tmp", src, "dst", dst, "error", err)
 	}
 
 	info, err := os.Lstat(dst)
@@ -170,9 +214,9 @@ func finalizeExclusive(tmp, dst string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("link reported success but destination %s is not a regular file (mode %s)", dst, info.Mode())
 	}
-	if info.Size() != tmpInfo.Size() {
+	if info.Size() != srcInfo.Size() {
 		return fmt.Errorf("link reported success but destination %s is %d bytes, expected %d",
-			dst, info.Size(), tmpInfo.Size())
+			dst, info.Size(), srcInfo.Size())
 	}
 	return nil
 }
@@ -181,13 +225,21 @@ func finalizeExclusive(tmp, dst string) error {
 // does not do hard links" rather than "this particular link was refused".
 // Only the former justifies falling back to a rename; anything else (EACCES on
 // the directory, ENOSPC for the dirent, EIO) must surface as the error it is.
+//
+// ENOSYS is FUSE and some network filesystems that do not implement link at
+// all. EOPNOTSUPP is compared outside the switch because on Linux it is the
+// same value as ENOTSUP (a duplicate case would not compile) while on Darwin
+// they are distinct errnos (45 vs 102) and both are seen in the wild.
 func linkUnsupported(err error) bool {
 	var errno syscall.Errno
 	if !errors.As(err, &errno) {
 		return false
 	}
+	if errno == syscall.EOPNOTSUPP {
+		return true
+	}
 	switch errno {
-	case syscall.EPERM, syscall.ENOTSUP, syscall.EXDEV, syscall.EMLINK:
+	case syscall.EPERM, syscall.ENOTSUP, syscall.EXDEV, syscall.EMLINK, syscall.ENOSYS:
 		return true
 	}
 	return false

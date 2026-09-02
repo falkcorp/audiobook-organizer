@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 // Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
 // organize-preview, and single-book organize HTTP endpoints.
@@ -17,7 +17,6 @@ package handlers
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -48,10 +47,15 @@ type OrganizePreviewServicer interface {
 }
 
 // OrganizeServicer is the narrow interface for the organize service.
+//
+// OrganizeOneBook is the three-way in-place / directory / single-file decision
+// the batch organize worker uses. The handler used to make its own copy of
+// that decision and call the three strategies itself; the copies had drifted
+// (the worker looked only at file_path, this one at the row count), so one of
+// them was wrong for multi-row books whose file_path names a file.
 type OrganizeServicer interface {
-	ReOrganizeInPlace(book *database.Book, log logger.Logger) (string, error)
-	OrganizeDirectoryBook(org *organizer.Organizer, book *database.Book, log logger.Logger) (string, error)
-	CreateOrganizedVersion(org *organizer.Organizer, book *database.Book, newPath string, isDir bool, operationID string, log logger.Logger) (*database.Book, error)
+	OrganizeOneBook(org *organizer.Organizer, book *database.Book, log logger.Logger) (*organizer.Landing, error)
+	CreateOrganizedVersion(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*database.Book, error)
 }
 
 // OrganizeStore is what OrganizeHandler actually needs, measured by emptying it
@@ -245,35 +249,16 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	org.SetStore(h.store)
 	log2 := logger.NewWithActivityLog("organize", h.store)
 
-	bookFiles, _ := h.store.GetBookFiles(id)
-	isDir := false
-	if len(bookFiles) > 1 {
-		isDir = true
-	} else if len(bookFiles) == 0 {
-		if info, statErr := os.Stat(oldPath); statErr == nil && info.IsDir() {
-			isDir = true
-		}
-	} else if len(bookFiles) == 1 {
-		if info, statErr := os.Stat(oldPath); statErr == nil && info.IsDir() {
-			isDir = true
-		}
-	}
-
+	// alreadyInRoot is recomputed here because the DB-update step below
+	// branches on it; the file-side decision itself is OrganizeOneBook's.
 	alreadyInRoot := h.rootDir != "" && strings.HasPrefix(oldPath, h.rootDir)
 
-	var newPath string
-	if alreadyInRoot {
-		newPath, err = h.organizeSvc.ReOrganizeInPlace(book, log2)
-	} else if isDir {
-		newPath, err = h.organizeSvc.OrganizeDirectoryBook(org, book, log2)
-	} else {
-		newPath, _, err = org.OrganizeBook(book)
-	}
-
+	landing, err := h.organizeSvc.OrganizeOneBook(org, book, log2)
 	if err != nil {
 		httputil.InternalError(c, "failed to organize book", err)
 		return
 	}
+	newPath := landing.Path
 
 	if oldPath == newPath {
 		httputil.RespondWithOK(c, gin.H{
@@ -319,7 +304,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		return
 	}
 
-	createdBook, createErr := h.organizeSvc.CreateOrganizedVersion(org, book, newPath, isDir, opID, log2)
+	createdBook, createErr := h.organizeSvc.CreateOrganizedVersion(book, landing, opID, log2)
 	if createErr != nil {
 		httputil.InternalError(c, "failed to create organized version", createErr)
 		return
@@ -346,14 +331,23 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		}))
 	}
 
-	httputil.RespondWithOK(c, gin.H{
+	resp := gin.H{
 		"message":          fmt.Sprintf("organized: %s → %s", oldPath, newPath),
 		"book_id":          createdBook.ID,
 		"original_book_id": book.ID,
 		"old_path":         oldPath,
 		"new_path":         newPath,
 		"operation_id":     opID,
-	})
+	}
+	if len(landing.Skipped) > 0 {
+		// The book organized, but not all of it: these present source files did
+		// not land (their planned target was another book's file, or the copy
+		// failed) and their rows keep the source path. Say so rather than let
+		// "organized" imply every file moved.
+		resp["message"] = fmt.Sprintf("organized: %s → %s (%d file(s) did not land)", oldPath, newPath, len(landing.Skipped))
+		resp["skipped_files"] = landing.Skipped
+	}
+	httputil.RespondWithOK(c, resp)
 }
 
 // -----------------------------------------------------------------------

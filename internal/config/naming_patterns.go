@@ -1,7 +1,7 @@
 // file: internal/config/naming_patterns.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e4b7f21-c390-4a6d-b158-7d02f9ac4e63
-// last-edited: 2026-08-16
+// last-edited: 2026-09-02
 
 // Validation for the two naming patterns that decide where every file in the
 // library lives.
@@ -76,7 +76,7 @@ func validateNamingPatterns(_ /* folderPattern */, filePattern string) []string 
 	// shipped default. It is fine for a single-file book and catastrophic for
 	// a multi-file one, because every track expands to the SAME name. The
 	// first file lands, and every subsequent file finds its target occupied
-	// and is left behind as "<name>.tmp-rename".
+	// and is left behind as "<name>.tmp-rename-<nonce>".
 	//
 	// "{track:02d}" is the pattern that serves both layouts: a single-file
 	// book has no track, so the whole " - " segment drops and the file is

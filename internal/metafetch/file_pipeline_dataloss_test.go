@@ -1,7 +1,7 @@
 // file: internal/metafetch/file_pipeline_dataloss_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f1ed9f6-e6b5-47cb-9843-94343fe2e7eb
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package metafetch
 
@@ -47,8 +47,10 @@ func TestMetafetchRenameFilesPhase2CollisionRollsBack(t *testing.T) {
 	if data, rerr := os.ReadFile(src); rerr != nil || string(data) != "mover" {
 		t.Errorf("source not rolled back: %q err=%v", data, rerr)
 	}
-	if _, terr := os.Stat(dst + tmpRenameSuffix); !os.IsNotExist(terr) {
-		t.Error("temp file left behind after rollback")
+	// The temps are `target.tmp-rename-<nonce>` now, so a bare Stat of the fixed
+	// name would pass whether or not one was stranded; glob for any of them.
+	if matches, _ := filepath.Glob(dst + tmpRenameSuffix + "*"); len(matches) != 0 {
+		t.Errorf("temp file(s) left behind after rollback: %v", matches)
 	}
 }
 

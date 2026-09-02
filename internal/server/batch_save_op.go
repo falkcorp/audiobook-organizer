@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-28
+// last-edited: 2026-09-02
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -154,30 +153,19 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 					book, _ = store.GetBookByID(id)
 					if book != nil {
 						oldPath := book.FilePath
-						alreadyInRoot := config.AppConfig.RootDir != "" && strings.HasPrefix(oldPath, config.AppConfig.RootDir)
-						var newPath string
-						var orgErr error
-						if alreadyInRoot {
-							newPath, orgErr = s.organizeService.ReOrganizeInPlace(book, log2)
-						} else {
-							bookFiles, _ := store.GetBookFiles(id)
-							isDir := len(bookFiles) > 1
-							if !isDir {
-								if info, statErr := os.Stat(oldPath); statErr == nil && info.IsDir() {
-									isDir = true
-								}
-							}
-							if isDir {
-								newPath, orgErr = s.organizeService.OrganizeDirectoryBook(org, book, log2)
-							} else {
-								newPath, _, orgErr = org.OrganizeBook(book)
-							}
-						}
+						// OrganizeOneBook owns the in-place / directory / single-file
+						// decision. This op used to carry its own copy of it, which
+						// had drifted from the worker loop's; see OrganizeOneBook.
+						landing, orgErr := s.organizeService.OrganizeOneBook(org, book, log2)
 						if orgErr != nil {
 							detail := orgErr.Error()
 							_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
-						} else if newPath != "" && newPath != oldPath {
+						} else if landing.Path != "" && landing.Path != oldPath {
 							organized.Add(1)
+							if len(landing.Skipped) > 0 {
+								detail := strings.Join(landing.Skipped, "\n")
+								_ = progress.Log("warn", fmt.Sprintf("organized %s but %d file(s) did not land and keep their source paths", book.Title, len(landing.Skipped)), &detail)
+							}
 						}
 					}
 				}

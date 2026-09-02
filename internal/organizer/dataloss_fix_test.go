@@ -1,7 +1,7 @@
 // file: internal/organizer/dataloss_fix_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ff38c140-155a-4c69-b3ea-b350a8503066
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -111,11 +111,25 @@ func TestRenameFilesPhase2CollisionRollsBack(t *testing.T) {
 	if rerr != nil || string(data) != "mover" {
 		t.Errorf("source not rolled back: %q err=%v", data, rerr)
 	}
-	if _, terr := os.Stat(dst + TmpRenameSuffix); !os.IsNotExist(terr) {
-		t.Error("temp file left behind after rollback")
+	assertNoRenameTemps(t, dst)
+}
+
+// assertNoRenameTemps fails if any rename temp for target — the legacy fixed
+// name or a nonce-suffixed one — is still on disk. A bare os.Stat of the fixed
+// name went blind on 2026-09-02 when the temps became `target.tmp-rename-<nonce>`.
+func assertNoRenameTemps(t *testing.T, target string) {
+	t.Helper()
+	matches, err := filepath.Glob(globEscape(target+TmpRenameSuffix) + "*")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("temp file(s) left behind after rollback: %v", matches)
 	}
 }
 
+// TestRenameFilesResumesStrandedTemp: a temp parked under the LEGACY fixed name
+// by a run from before 2026-09-02 must still be resumed.
 func TestRenameFilesResumesStrandedTemp(t *testing.T) {
 	tmpDir := t.TempDir()
 	src := filepath.Join(tmpDir, "old", "book.m4b") // does NOT exist
@@ -193,9 +207,7 @@ func TestRenameFilesPartialSucceededReportedOnFailure(t *testing.T) {
 	if data, rerr := os.ReadFile(dst2); rerr != nil || string(data) != "occupant" {
 		t.Errorf("occupant destroyed: %q err=%v", data, rerr)
 	}
-	if _, terr := os.Stat(dst2 + TmpRenameSuffix); !os.IsNotExist(terr) {
-		t.Error("temp file left behind after rollback")
-	}
+	assertNoRenameTemps(t, dst2)
 }
 
 // ---------------------------------------------------------------------------

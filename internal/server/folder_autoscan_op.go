@@ -1,7 +1,7 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 //
 // folder_autoscan_op registers the "library.folder-auto-scan" UOS v2 OperationDef.
 // This op is enqueued when a new import path is added to the library; it replicates
@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -127,11 +128,15 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 						// existed and was missed, because that change grepped
 						// for the symptom rather than for every caller of
 						// Organizer.OrganizeBook.
-						newPath, err := s.organizeService.OrganizeOneBook(org, dbBook, scanLog)
+						landing, err := s.organizeService.OrganizeOneBook(org, dbBook, scanLog)
 						if err != nil {
 							_ = progress.Log("warn", fmt.Sprintf("Organize failed for %s: %v", dbBook.Title, err), nil)
 							failed++
 							continue
+						}
+						newPath := landing.Path
+						if len(landing.Skipped) > 0 {
+							_ = progress.Log("warn", fmt.Sprintf("Organized %s but %d file(s) did not land: %s", dbBook.Title, len(landing.Skipped), strings.Join(landing.Skipped, ", ")), nil)
 						}
 						if newPath != dbBook.FilePath {
 							dbBook.FilePath = newPath

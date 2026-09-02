@@ -1,7 +1,7 @@
 // file: internal/organizer/path_format.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a7b3c1d2-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-16
+// last-edited: 2026-09-02
 
 package organizer
 
@@ -224,7 +224,10 @@ func SanitizePathComponent(s string) string {
 }
 
 // maxComponentBytes is the budget for one path component. The filesystem limit
-// is 255 bytes; the headroom covers the extension plus TmpRenameSuffix.
+// is 255 bytes; the 55 bytes of headroom cover the extension plus the longest
+// scratch tail either move path appends: RenameFiles parks under
+// TmpRenameSuffix + "-" + a 16-hex nonce (28 bytes) and copyFile writes to
+// "." + nonce + ".tmp" (21 bytes).
 const maxComponentBytes = 200
 
 // truncateOnRuneBoundary cuts s to at most max bytes without splitting a rune,

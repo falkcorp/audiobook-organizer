@@ -1,11 +1,12 @@
 // file: internal/organizer/pipeline.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-02
 
 package organizer
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,10 +18,12 @@ import (
 )
 
 // TmpRenameSuffix is appended to the target path to form the intermediate temp
-// path used by RenameFiles' two-phase rename. Exported so internal/metafetch
-// shares the one constant: a file stranded at a temp path is only recoverable
-// by a process that recognizes the suffix, so two copies of it would mean two
-// definitions of "recoverable".
+// path used by RenameFiles' two-phase rename: `<target>.tmp-rename-<nonce>`
+// (see renameTempPath; runs before 2026-09-02 used the bare suffix, and
+// strandedRenameTemps still recognises that shape). Exported so
+// internal/metafetch shares the one constant: a file stranded at a temp path is
+// only recoverable by a process that recognizes the suffix, so two copies of
+// it would mean two definitions of "recoverable".
 const TmpRenameSuffix = ".tmp-rename"
 
 // FileRenameEntry represents a planned file rename operation.
@@ -325,9 +328,15 @@ type renameTemp struct {
 // .tmp-rename path is invisible to the library (its DB row points at the old
 // source path), so each failure is logged as an Error with both paths and
 // recorded in result.Errors — never silently dropped.
+//
+// The rollback is a safeRename, not a bare os.Rename: the source path was
+// vacated by phase 1 moments ago, but "moments ago" is exactly the window in
+// which a concurrent worker can land its own file there, and a bare rename
+// would replace it. Refusing leaves this file stranded at the temp (reported
+// above); replacing would destroy the other one silently.
 func rollbackRenameTemps(temps []renameTemp, result *RenameFilesResult) {
 	for _, t := range temps {
-		if err := os.Rename(t.TempPath, t.Entry.SourcePath); err != nil {
+		if err := safeRename(t.TempPath, t.Entry.SourcePath); err != nil {
 			slog.Error("RenameFiles rollback failed — file stranded at temp path",
 				"temp_path", t.TempPath,
 				"source_path", t.Entry.SourcePath,
@@ -340,6 +349,60 @@ func rollbackRenameTemps(temps []renameTemp, result *RenameFilesResult) {
 	}
 }
 
+// renameTempPath returns the phase-1 parking name for target: the target path,
+// TmpRenameSuffix, and a per-call nonce. The nonce is what makes two workers
+// renaming into the same target independent. With the fixed
+// `target+TmpRenameSuffix` both parked on ONE name: the second safeRename saw
+// the first worker's temp, refused, and rolled back — the good case — or, when
+// the first worker's phase 2 had just vacated the temp, parked on the freed
+// name and the two then raced for the target with rename(2), which replaces
+// silently. Phase 2 now uses finalizeExclusive, but the shared parking name
+// was a second way for the workers to meet, and it is removed rather than
+// reasoned about.
+func renameTempPath(target string) string {
+	return target + TmpRenameSuffix + "-" + tempNonce()
+}
+
+// strandedRenameTemps finds files a previous, interrupted RenameFiles left
+// parked for target: the legacy fixed name `target+TmpRenameSuffix` (runs
+// before 2026-09-02) and any nonce-suffixed `target+TmpRenameSuffix+"-*"`.
+// Directory entries are ignored; a parked file is always a regular file.
+func strandedRenameTemps(target string) ([]string, error) {
+	var found []string
+	legacy := target + TmpRenameSuffix
+	if info, err := os.Lstat(legacy); err == nil && info.Mode().IsRegular() {
+		found = append(found, legacy)
+	}
+	// filepath.Glob treats the target's own characters as pattern syntax, so
+	// escape them; only our "-*" tail is meant to match anything.
+	matches, err := filepath.Glob(globEscape(legacy) + "-*")
+	if err != nil {
+		return nil, fmt.Errorf("scan for stranded temps of %s: %w", target, err)
+	}
+	for _, m := range matches {
+		if info, err := os.Lstat(m); err == nil && info.Mode().IsRegular() {
+			found = append(found, m)
+		}
+	}
+	return found, nil
+}
+
+// globEscape quotes every filepath.Match metacharacter in s so it matches
+// itself. Library paths contain '[' and '*' (track titles, "[Unabridged]")
+// often enough that an unescaped glob would silently match the wrong files or
+// none at all.
+func globEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '*', '?', '[', '\\':
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // RenameFiles performs atomic file renames using a temp intermediate step
 // to avoid conflicts when source and target overlap.
 // Missing source files are skipped (not fatal) and reported in the result.
@@ -347,15 +410,20 @@ func rollbackRenameTemps(temps []renameTemp, result *RenameFilesResult) {
 // Failure semantics:
 //   - A file stranded at its temp path by a previously interrupted run (temp
 //     exists, source doesn't) is picked up and resumed through phase 2 instead
-//     of being skipped forever.
+//     of being skipped forever. If MORE than one stranded temp exists for a
+//     target, the batch fails before anything moves: picking one would publish
+//     a file whose identity nobody verified, and the choice is an operator's.
 //   - On any phase failure, every file still parked at a temp path is rolled
 //     back to its source path; rollback failures are logged and recorded in
 //     result.Errors.
 //   - Entries that already reached their final path before the failure remain
 //     in result.Succeeded — callers must persist DB path updates for them even
 //     when an error is returned.
-//   - Both phases refuse to overwrite an existing destination (safeRename);
-//     a collision fails the batch instead of silently destroying bytes.
+//   - Phase 1 parks each file on a per-call unique temp name (renameTempPath),
+//     and phase 2 publishes it with finalizeExclusive, which cannot replace a
+//     destination that exists — a collision fails the batch and rolls back
+//     instead of silently destroying bytes, even against a concurrent worker
+//     that appeared between the pre-check and the syscall.
 func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 	result := &RenameFilesResult{}
 	if len(entries) == 0 {
@@ -369,14 +437,25 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 	var temps []renameTemp
 	for _, entry := range entries {
 		if _, err := os.Stat(entry.SourcePath); os.IsNotExist(err) {
-			tempPath := entry.TargetPath + TmpRenameSuffix
-			if _, terr := os.Stat(tempPath); terr == nil {
-				slog.Warn("RenameFiles resuming stranded temp file from interrupted rename",
-					"temp_path", tempPath, "target_path", entry.TargetPath)
-				temps = append(temps, renameTemp{TempPath: tempPath, Entry: entry})
-				continue
+			stranded, serr := strandedRenameTemps(entry.TargetPath)
+			if serr != nil {
+				return result, serr
 			}
-			result.Skipped = append(result.Skipped, entry)
+			switch len(stranded) {
+			case 0:
+				result.Skipped = append(result.Skipped, entry)
+			case 1:
+				slog.Warn("RenameFiles resuming stranded temp file from interrupted rename",
+					"temp_path", stranded[0], "target_path", entry.TargetPath)
+				temps = append(temps, renameTemp{TempPath: stranded[0], Entry: entry})
+			default:
+				msg := fmt.Sprintf("%d stranded temp files for %s (source %s is gone); refusing to guess which is the file: %s",
+					len(stranded), entry.TargetPath, entry.SourcePath, strings.Join(stranded, ", "))
+				slog.Error("RenameFiles found ambiguous stranded temps — operator must resolve",
+					"target_path", entry.TargetPath, "source_path", entry.SourcePath, "temps", stranded)
+				result.Errors = append(result.Errors, msg)
+				return result, errors.New(msg)
+			}
 			continue
 		}
 		valid = append(valid, entry)
@@ -395,7 +474,7 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 			return result, fmt.Errorf("create target dir %s: %w", targetDir, err)
 		}
 
-		tempPath := entry.TargetPath + TmpRenameSuffix
+		tempPath := renameTempPath(entry.TargetPath)
 		if err := safeRename(entry.SourcePath, tempPath); err != nil {
 			// Rollback temps already moved
 			rollbackRenameTemps(temps, result)
@@ -404,10 +483,11 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 		temps = append(temps, renameTemp{TempPath: tempPath, Entry: entry})
 	}
 
-	// Phase 2: rename temp -> final. On failure, roll back this and every
-	// remaining temp so no file is left stranded at a .tmp-rename path.
+	// Phase 2: publish temp -> final without ever replacing an occupant. On
+	// failure, roll back this and every remaining temp so no file is left
+	// stranded at a .tmp-rename path.
 	for i, t := range temps {
-		if err := safeRename(t.TempPath, t.Entry.TargetPath); err != nil {
+		if err := finalizeExclusive(t.TempPath, t.Entry.TargetPath); err != nil {
 			rollbackRenameTemps(temps[i:], result)
 			return result, fmt.Errorf("rename temp -> %s: %w", t.Entry.TargetPath, err)
 		}
