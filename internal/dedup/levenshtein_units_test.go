@@ -1,7 +1,7 @@
 // file: internal/dedup/levenshtein_units_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c4e1a92-3d68-4b05-9f27-8a1c6e0d5b34
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -35,7 +35,7 @@ func TestLevenshteinDistanceIsMeasuredInRunes(t *testing.T) {
 		{}, // the empty-string edges
 	}
 	r := rand.New(rand.NewSource(1))
-	for i := 0; i < 200000; i++ {
+	for range 200000 {
 		mk := func() string {
 			al := alphabets[r.Intn(len(alphabets))]
 			if len(al) == 0 {

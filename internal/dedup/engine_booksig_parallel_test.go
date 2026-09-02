@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_booksig_parallel_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3c9e7d21-6b48-4f0a-9d2e-8a1f5c04b7e6
-// last-edited: 2026-07-05
+// last-edited: 2026-09-02
 
 // Regression tests for CONC-1: BookSignatureScan's O(n²) pairwise loop is now
 // sharded across a bounded worker pool (registry.RunItems) instead of running
@@ -30,7 +30,7 @@ import (
 // FuzzyMinSimilarity. Empty mask => all-real => overlap == 4096 (>= 512).
 func sigWord(word uint32) string {
 	buf := make([]byte, fingerprint.BookSignatureFixedLength*4)
-	for i := 0; i < fingerprint.BookSignatureFixedLength; i++ {
+	for i := range fingerprint.BookSignatureFixedLength {
 		binary.LittleEndian.PutUint32(buf[i*4:], word)
 	}
 	return base64.StdEncoding.EncodeToString(buf)
@@ -94,7 +94,7 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 	byID := make(map[string]database.Book)
 	for g, word := range groupWords {
 		sig := sigWord(word)
-		for k := 0; k < perGroup; k++ {
+		for k := range perGroup {
 			id := fmt.Sprintf("g%d-%02d", g, k)
 			b := database.Book{ID: id, Title: "Book " + id, BookSigV1: &sig}
 			books = append(books, b)

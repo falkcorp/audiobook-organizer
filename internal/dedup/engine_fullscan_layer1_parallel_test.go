@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_fullscan_layer1_parallel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 // Regression tests for CONC-4: FullScan's main pass now splits into a
 // parallel Pass 1 (Layer-1 exact checks — checkExactFileHash/ISBN/Title/
@@ -53,7 +53,7 @@ func fullScanLayer1FixtureBooks(n int) []database.Book {
 	authorID := 1
 	fileHash := "SHARED-HASH-1"
 	books := make([]database.Book, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books[i] = database.Book{
 			ID:       fmt.Sprintf("L1-%03d", i),
 			Title:    "The Same Layer1 Book",
@@ -226,7 +226,7 @@ func TestFullScanLayer1AutoMergeConcurrent_NoRace(t *testing.T) {
 	pairs := make([]pair, numPairs)
 	var fixture []database.Book
 	hashToWinner := make(map[string]string, numPairs)
-	for p := 0; p < numPairs; p++ {
+	for p := range numPairs {
 		loserID := fmt.Sprintf("MA-%03d", p)
 		winnerID := fmt.Sprintf("MB-%03d", p)
 		hash := fmt.Sprintf("HASH-%03d", p)

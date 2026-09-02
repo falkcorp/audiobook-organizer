@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_identifier_gate_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e6934a1-44e9-45a5-b789-c71b541d7f74
-// last-edited: 2026-06-28
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -21,38 +21,38 @@ func TestIdentifiersConflict(t *testing.T) {
 	}{
 		{
 			name: "different both-present ISBN13 conflicts after hyphen normalization",
-			a:    &database.Book{ISBN13: strPtr("978-0-00-000001-1")},
-			b:    &database.Book{ISBN13: strPtr("9780000000028")},
+			a:    &database.Book{ISBN13: new("978-0-00-000001-1")},
+			b:    &database.Book{ISBN13: new("9780000000028")},
 			want: true,
 		},
 		{
 			name: "same normalized ISBN13 keeps pair",
-			a:    &database.Book{ISBN13: strPtr("978-0-00-000001-1")},
-			b:    &database.Book{ISBN13: strPtr("9780000000011")},
+			a:    &database.Book{ISBN13: new("978-0-00-000001-1")},
+			b:    &database.Book{ISBN13: new("9780000000011")},
 			want: false,
 		},
 		{
 			name: "missing identifier is conservative and keeps pair",
-			a:    &database.Book{ISBN13: strPtr("9780000000011")},
+			a:    &database.Book{ISBN13: new("9780000000011")},
 			b:    &database.Book{},
 			want: false,
 		},
 		{
 			name: "same ASIN keeps pair after case normalization",
-			a:    &database.Book{ASIN: strPtr("b00case001")},
-			b:    &database.Book{ASIN: strPtr("B00CASE001")},
+			a:    &database.Book{ASIN: new("b00case001")},
+			b:    &database.Book{ASIN: new("B00CASE001")},
 			want: false,
 		},
 		{
 			name: "different both-present ASIN conflicts after case normalization",
-			a:    &database.Book{ASIN: strPtr("b00case001")},
-			b:    &database.Book{ASIN: strPtr("B00CASE002")},
+			a:    &database.Book{ASIN: new("b00case001")},
+			b:    &database.Book{ASIN: new("B00CASE002")},
 			want: true,
 		},
 		{
 			name: "nil book a is conservative",
 			a:    nil,
-			b:    &database.Book{ISBN13: strPtr("9780000000011")},
+			b:    &database.Book{ISBN13: new("9780000000011")},
 			want: false,
 		},
 	}
@@ -70,15 +70,15 @@ func TestUpsertExactCandidate_DropsConflictingIdentifiers(t *testing.T) {
 	engine, _, es := setupTestEngine(t)
 
 	conflictA := primaryBook("CONFLICT_A", "Shared Intro")
-	conflictA.ISBN13 = strPtr("978-0-00-000001-1")
+	conflictA.ISBN13 = new("978-0-00-000001-1")
 	conflictB := primaryBook("CONFLICT_B", "Shared Intro")
-	conflictB.ISBN13 = strPtr("9780000000028")
+	conflictB.ISBN13 = new("9780000000028")
 	sameA := primaryBook("SAME_A", "Shared Intro")
-	sameA.ISBN13 = strPtr("978-0-00-000003-5")
+	sameA.ISBN13 = new("978-0-00-000003-5")
 	sameB := primaryBook("SAME_B", "Shared Intro")
-	sameB.ISBN13 = strPtr("9780000000035")
+	sameB.ISBN13 = new("9780000000035")
 	missingA := primaryBook("MISSING_A", "Shared Intro")
-	missingA.ISBN13 = strPtr("9780000000042")
+	missingA.ISBN13 = new("9780000000042")
 	missingB := primaryBook("MISSING_B", "Shared Intro")
 
 	if err := engine.upsertExactCandidate(conflictA, conflictB, "acoustid", 1.0); err != nil {
@@ -107,9 +107,9 @@ func TestAcoustIDScan_DropsConflictingIdentifiers(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
 
 	bookA := primaryBook("BOOK_A", "Shared Intro A")
-	bookA.ISBN13 = strPtr("9780000000011")
+	bookA.ISBN13 = new("9780000000011")
 	bookB := primaryBook("BOOK_B", "Shared Intro B")
-	bookB.ISBN13 = strPtr("9780000000028")
+	bookB.ISBN13 = new("9780000000028")
 	books := map[string]*database.Book{"BOOK_A": bookA, "BOOK_B": bookB}
 
 	mock.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {

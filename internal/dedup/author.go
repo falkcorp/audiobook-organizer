@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -744,10 +744,7 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 	r1 := []rune(s1)
 	r2 := []rune(s2)
 
-	matchDistance := int(math.Max(float64(len1), float64(len2)))/2 - 1
-	if matchDistance < 0 {
-		matchDistance = 0
-	}
+	matchDistance := max(int(math.Max(float64(len1), float64(len2)))/2-1, 0)
 
 	s1Matches := make([]bool, len1)
 	s2Matches := make([]bool, len2)
@@ -755,7 +752,7 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 	matches := 0
 	transpositions := 0
 
-	for i := 0; i < len1; i++ {
+	for i := range len1 {
 		start := int(math.Max(0, float64(i-matchDistance)))
 		end := int(math.Min(float64(len2-1), float64(i+matchDistance)))
 
@@ -775,7 +772,7 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 	}
 
 	k := 0
-	for i := 0; i < len1; i++ {
+	for i := range len1 {
 		if !s1Matches[i] {
 			continue
 		}
@@ -1210,7 +1207,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 
 	for _, bucketKey := range bucketKeys {
 		bucket := lastNameBuckets[bucketKey]
-		for bi := 0; bi < len(bucket); bi++ {
+		for bi := range bucket {
 			i := bucket[bi]
 			pi := &precomputed[i]
 			if used[pi.author.ID] || pi.skip {
@@ -1313,10 +1310,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 
 	similarPairs := make([][]int, len(lastNames))
 	nextLi := int64(-1)
-	workers := scanWorkerCount
-	if workers > len(lastNames) {
-		workers = len(lastNames)
-	}
+	workers := min(scanWorkerCount, len(lastNames))
 	var scanWG sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		scanWG.Go(func() {
@@ -1482,7 +1476,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	}
 
 	// Phase 4: Add composite/multi-author entries as separate groups with split info
-	for i := 0; i < len(authors); i++ {
+	for i := range authors {
 		if used[authors[i].ID] {
 			continue
 		}
@@ -1499,7 +1493,7 @@ func findDuplicateAuthorsInternal(authors []database.Author, threshold float64, 
 	}
 
 	// Phase 5: Surface standalone production company authors as their own groups
-	for i := 0; i < len(authors); i++ {
+	for i := range authors {
 		if used[authors[i].ID] {
 			continue
 		}

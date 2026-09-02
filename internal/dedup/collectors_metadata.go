@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -339,10 +339,7 @@ func normalizedLevenshteinSimilarity(a, b string) float64 {
 	}
 	la := len([]rune(a))
 	lb := len([]rune(b))
-	maxLen := la
-	if lb > maxLen {
-		maxLen = lb
-	}
+	maxLen := max(lb, la)
 	if maxLen == 0 {
 		return 1.0
 	}

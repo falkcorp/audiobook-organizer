@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_cancellation_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1d4c8e-9b32-4f71-8e05-3c9a7d2b5f16
-// last-edited: 2026-07-05
+// last-edited: 2026-09-02
 
 // Regression guard for the 2026-07-05 unresponsive-cancel incident: a
 // dedup.full-scan op cancellation took 90+ seconds to take effect and
@@ -27,7 +27,7 @@ func TestRunUnifiedScoringForBook_StopsPromptlyOnCancel(t *testing.T) {
 	book := primaryBook("BOOK_A", "Book A")
 	others := make(map[string]*database.Book)
 	const numCandidates = 5
-	for i := 0; i < numCandidates; i++ {
+	for i := range numCandidates {
 		id := "OTHER_" + string(rune('0'+i))
 		others[id] = primaryBook(id, "Other Title "+string(rune('0'+i)))
 	}

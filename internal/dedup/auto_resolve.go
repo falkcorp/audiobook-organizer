@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -61,7 +61,7 @@ func DistinctAutoResolvePrimaryKinds(signals []unified.Signal) []unified.SignalK
 			out = append(out, sig.Kind)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -366,8 +366,8 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 	// GetBookSnapshots returns newest-first; walk oldest-first to find the
 	// earliest snapshot newer than the baseline.
 	var best int64
-	for i := len(snaps) - 1; i >= 0; i-- {
-		ns := snaps[i].Timestamp.UnixNano()
+	for _, snap := range slices.Backward(snaps) {
+		ns := snap.Timestamp.UnixNano()
 		if ns > baselineNanos {
 			best = ns
 			break

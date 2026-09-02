@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_isbn_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a1f7c92-6d84-4e3b-9f21-8c0a4b6e2d75
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Tests for CollectISBNASIN (scoring-path ISBN/ASIN collector): the indexed fast
 // path must emit a signal set identical to the O(N) GetAllBooksCore scan, and
@@ -50,13 +50,13 @@ func (f *fakeISBNASINStore) GetBookByID(id string) (*database.Book, error) {
 func isbnCore(id, isbn10, isbn13, asin string) database.BookCore {
 	var i10, i13, a *string
 	if isbn10 != "" {
-		i10 = strPtr(isbn10)
+		i10 = new(isbn10)
 	}
 	if isbn13 != "" {
-		i13 = strPtr(isbn13)
+		i13 = new(isbn13)
 	}
 	if asin != "" {
-		a = strPtr(asin)
+		a = new(asin)
 	}
 	return database.BookCore{ID: id, ISBN10: i10, ISBN13: i13, ASIN: a}
 }
@@ -64,13 +64,13 @@ func isbnCore(id, isbn10, isbn13, asin string) database.BookCore {
 func isbnFull(id, isbn10, isbn13, asin string) *database.Book {
 	b := &database.Book{ID: id}
 	if isbn10 != "" {
-		b.ISBN10 = strPtr(isbn10)
+		b.ISBN10 = new(isbn10)
 	}
 	if isbn13 != "" {
-		b.ISBN13 = strPtr(isbn13)
+		b.ISBN13 = new(isbn13)
 	}
 	if asin != "" {
-		b.ASIN = strPtr(asin)
+		b.ASIN = new(asin)
 	}
 	return b
 }

@@ -1,7 +1,7 @@
 // file: internal/dedup/author_determinism_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8b1e47c6-2a95-4d03-be71-5c9f28a4d016
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -250,7 +250,7 @@ func TestFindDuplicateAuthorsGoldenShape(t *testing.T) {
 	// intent survives any future regeneration of the constant.
 	for _, solo := range []string{"Le Guin", "Pratchett", "Asimov", "Butler",
 		"Mieville", "Leckie", "Banks", "Wolfe"} {
-		for _, line := range strings.Split(got, "\n") {
+		for line := range strings.SplitSeq(got, "\n") {
 			if strings.Contains(line, solo) && strings.Contains(line, "variants=[") &&
 				!strings.Contains(line, "variants=[]") {
 				t.Errorf("padding author %q was grouped with variants: %s", solo, line)
