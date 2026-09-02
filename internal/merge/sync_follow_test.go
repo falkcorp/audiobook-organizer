@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e424f3c3-3b6c-4345-b703-20ca6809ec0f
-// last-edited: 2026-07-30
+// last-edited: 2026-09-02
 
 package merge
 
@@ -189,7 +189,7 @@ func TestMergeBooks_SyncIdentity_IdempotentRemerge(t *testing.T) {
 	require.NoError(t, err)
 
 	ms := NewService(store)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err = ms.MergeBooks([]string{winnerID, loserID}, winnerID)
 		require.NoError(t, err, "re-merge %d", i)
 	}

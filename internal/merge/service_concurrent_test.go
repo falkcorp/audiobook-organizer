@@ -1,7 +1,7 @@
 // file: internal/merge/service_concurrent_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c8a1f42-9d6b-4e73-8a10-2b4c6d9e0f13
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package merge
 
@@ -28,22 +28,22 @@ import (
 // fire here; maxActive is the load-bearing serialization signal.)
 type serializeProbe struct {
 	database.Store
-	active    int32
-	maxActive int32
+	active    atomic.Int32
+	maxActive atomic.Int32
 }
 
 func (p *serializeProbe) enter() {
-	n := atomic.AddInt32(&p.active, 1)
+	n := p.active.Add(1)
 	for {
-		m := atomic.LoadInt32(&p.maxActive)
-		if n <= m || atomic.CompareAndSwapInt32(&p.maxActive, m, n) {
+		m := p.maxActive.Load()
+		if n <= m || p.maxActive.CompareAndSwap(m, n) {
 			break
 		}
 	}
 	time.Sleep(500 * time.Microsecond)
 }
 
-func (p *serializeProbe) leave() { atomic.AddInt32(&p.active, -1) }
+func (p *serializeProbe) leave() { p.active.Add(-1) }
 
 func (p *serializeProbe) GetBookByID(id string) (*database.Book, error) {
 	p.enter()
@@ -86,7 +86,7 @@ func TestMergeBooks_ConcurrentSamePair_Serializes(t *testing.T) {
 	const goroutines = 16
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			// primaryID="" so every caller auto-picks via BookIsBetter — the
@@ -96,7 +96,7 @@ func TestMergeBooks_ConcurrentSamePair_Serializes(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := atomic.LoadInt32(&probe.maxActive); got != 1 {
+	if got := probe.maxActive.Load(); got != 1 {
 		t.Fatalf("merges were NOT serialized: maxActive=%d, want 1 (two MergeBooks read-modify-writes overlapped)", got)
 	}
 
@@ -178,7 +178,7 @@ func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		i := i
 		go func() {
 			defer wg.Done()
@@ -194,7 +194,7 @@ func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := atomic.LoadInt32(&probe.maxActive); got != 1 {
+	if got := probe.maxActive.Load(); got != 1 {
 		t.Fatalf("Combine and Merge did NOT share one lock: maxActive=%d, want 1 "+
 			"(a CombineBooks read-modify-write overlapped a MergeBooks)", got)
 	}
