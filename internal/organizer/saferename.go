@@ -1,5 +1,5 @@
 // file: internal/organizer/saferename.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2df18e44-98f0-407e-ab5f-daf158f22554
 // last-edited: 2026-09-02
 
@@ -157,12 +157,20 @@ func finalizeExclusive(tmp, dst string) error {
 // file fails (ENOTDIR), so the only thing a racing directory rename can replace
 // is an EMPTY directory — nothing is lost. The Lstat guard in safeRename still
 // turns the common case into a clear error before the syscall gets to decide.
+//
+// A symlink source — what the `symlink` organization strategy leaves in the
+// library — takes the same route. link(2) on a symlink is filesystem-defined
+// (Linux links the symlink itself, Darwin follows it), so it cannot be the
+// exclusive primitive; and it is the LINK that is this book's library entry,
+// so renaming the link is the whole move. Until 2026-09-02 this fell through
+// to linkMoveExclusive's regular-file check and every symlinked book became
+// un-reorganizable with an error that talked about "finalize".
 func moveExclusive(src, dst string) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return fmt.Errorf("stat move source %s: %w", src, err)
 	}
-	if info.IsDir() {
+	if info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
 		return safeRename(src, dst)
 	}
 	return linkMoveExclusive(src, dst, false)
@@ -178,7 +186,7 @@ func linkMoveExclusive(src, dst string, srcIsScratch bool) error {
 		return fmt.Errorf("stat finalize source %s: %w", src, err)
 	}
 	if !srcInfo.Mode().IsRegular() {
-		return fmt.Errorf("finalize source %s is not a regular file (mode %s)", src, srcInfo.Mode())
+		return fmt.Errorf("exclusive move source %s is not a regular file (mode %s)", src, srcInfo.Mode())
 	}
 
 	if err := os.Link(src, dst); err != nil {
@@ -193,7 +201,11 @@ func linkMoveExclusive(src, dst string, srcIsScratch bool) error {
 		// This is a downgrade of the guarantee — the rename fallback has the
 		// TOCTOU window the link does not — so it is logged where an operator
 		// will see it, not at Debug.
-		slog.Warn("exclusive move: filesystem refuses hard links, falling back to rename with its race window",
+		// EPERM here is usually Linux fs.protected_hardlinks refusing a link
+		// to a file this process does not own (a torrent client's output),
+		// not a filesystem without hard links — the log names the errno and
+		// leaves the diagnosis to the reader rather than guessing wrong.
+		slog.Warn("exclusive move: link refused, falling back to rename with its race window",
 			"src", src, "dst", dst, "error", err)
 		return safeRename(src, dst)
 	}

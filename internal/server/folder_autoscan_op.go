@@ -1,5 +1,5 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
 // last-edited: 2026-09-02
 //
@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -135,9 +134,6 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 							continue
 						}
 						newPath := landing.Path
-						if len(landing.Skipped) > 0 {
-							_ = progress.Log("warn", fmt.Sprintf("Organized %s but %d file(s) did not land: %s", dbBook.Title, len(landing.Skipped), strings.Join(landing.Skipped, ", ")), nil)
-						}
 						if newPath != dbBook.FilePath {
 							dbBook.FilePath = newPath
 							scanner.ApplyOrganizedFileMetadata(dbBook, newPath)

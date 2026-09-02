@@ -1,5 +1,5 @@
 // file: internal/organizer/finalize_exclusive_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b2e4f61-9d3a-4c07-b5e8-2f6a1c9d7e43
 // last-edited: 2026-09-02
 
@@ -180,11 +180,117 @@ func TestOrganizeBookDirectory_ConcurrentSameTarget_NeverRecordsTheOtherBooksByt
 	}
 }
 
+// The directory-grain half of the same race: two multi-file books that
+// format to the same target directory. A version row's FilePath is that
+// directory, and ReOrganizeInPlace later renames it wholesale, so a
+// directory holding files of two books is a corruption even when every file
+// in it is intact. The invariant: after both workers return, the target
+// directory holds EXACTLY the winner's files (or none, when each won a
+// different file and both rolled back), never a mix; the loser's sources are
+// untouched; and no landing is reported for a book whose files are not all
+// there.
+func TestOrganizeBookDirectory_ConcurrentSameTargetDirectory_NeverShared(t *testing.T) {
+	const size = 256 << 10
+	payloads := [][]byte{bytes.Repeat([]byte{'A'}, size), bytes.Repeat([]byte{'B'}, size)}
+
+	for iter := range 30 {
+		rootDir := t.TempDir()
+		cfg := &config.Config{
+			RootDir:              rootDir,
+			OrganizationStrategy: "copy",
+			FolderNamingPattern:  "{author}/{title}",
+			FileNamingPattern:    "{title} - {track:02d}",
+		}
+		type result struct {
+			dir     string
+			pathMap map[string]string
+			err     error
+		}
+		results := make([]result, 2)
+		srcs := make([][]string, 2)
+		for i := range 2 {
+			in := t.TempDir()
+			srcs[i] = []string{filepath.Join(in, "ch01.m4b"), filepath.Join(in, "ch02.m4b")}
+			for _, p := range srcs[i] {
+				require.NoError(t, os.WriteFile(p, payloads[i], 0644))
+			}
+		}
+
+		var start, done sync.WaitGroup
+		start.Add(1)
+		for i := range 2 {
+			done.Add(1)
+			go func() {
+				defer done.Done()
+				org := NewOrganizer(cfg)
+				book := &database.Book{ID: "book-" + string(rune('a'+i)), Title: "Same Title", Format: "m4b",
+					Author: &database.Author{Name: "Same Author"}}
+				start.Wait()
+				dir, pm, err := org.OrganizeBookDirectory(book, segsFor(srcs[i]...))
+				results[i] = result{dir, pm, err}
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		winners := 0
+		for i := range 2 {
+			if results[i].err != nil {
+				assert.Empty(t, results[i].pathMap, "iter %d: a failed landing must report nothing", iter)
+				continue
+			}
+			winners++
+			require.Len(t, results[i].pathMap, 2, "iter %d: a successful directory landing is all of the book", iter)
+			for _, dst := range results[i].pathMap {
+				got, err := os.ReadFile(dst)
+				require.NoError(t, err)
+				assert.Truef(t, bytes.Equal(got, payloads[i]), "iter %d: book %d's row points at bytes that are not its own", iter, i)
+			}
+		}
+		assert.LessOrEqual(t, winners, 1, "iter %d: two books cannot both own one directory", iter)
+
+		// Whatever is in the target directory belongs to ONE book — or it is
+		// empty because each worker won one file and both rolled back.
+		targetDir := filepath.Join(rootDir, "Same Author", "Same Title")
+		entries, err := os.ReadDir(targetDir)
+		if errors.Is(err, fs.ErrNotExist) {
+			entries = nil
+			err = nil
+		}
+		require.NoError(t, err)
+		owners := map[byte]int{}
+		for _, e := range entries {
+			require.False(t, isTempName(e.Name()), "iter %d: temp left behind: %s", iter, e.Name())
+			got, err := os.ReadFile(filepath.Join(targetDir, e.Name()))
+			require.NoError(t, err)
+			require.NotEmpty(t, got)
+			owners[got[0]]++
+		}
+		assert.LessOrEqual(t, len(owners), 1, "iter %d: the target directory holds files of %d books: %v", iter, len(owners), owners)
+		if winners == 1 {
+			assert.Len(t, entries, 2, "iter %d: the winner's directory holds exactly its two files", iter)
+		} else {
+			assert.Empty(t, entries, "iter %d: with no winner, every created file must have been rolled back", iter)
+		}
+
+		// The loser's (or both losers') sources are intact.
+		for i := range 2 {
+			for _, p := range srcs[i] {
+				got, err := os.ReadFile(p)
+				require.NoError(t, err, "iter %d: source must survive an organize", iter)
+				assert.True(t, bytes.Equal(got, payloads[i]))
+			}
+		}
+	}
+}
+
 // Deterministic version of the race branch's "not proven" side: a dangling
 // symlink at the destination slips past the pre-copy os.Stat (ENOENT), the
 // copy runs, and finalizeExclusive refuses with EEXIST. The old branch then
 // recorded the destination anyway; the old finalize (os.Rename) would have
-// replaced the symlink. Neither may happen: the row stays unchanged.
+// replaced the symlink. Neither may happen — and since 2026-09-02 a
+// directory landing is all-or-nothing, so the book fails, the segment that
+// DID land is removed again, and the occupant is untouched.
 func TestOrganizeBookDirectory_RaceBranch_DoesNotAdoptAnUnprovenOccupant(t *testing.T) {
 	rootDir := t.TempDir()
 	cfg := &config.Config{
@@ -207,14 +313,18 @@ func TestOrganizeBookDirectory_RaceBranch_DoesNotAdoptAnUnprovenOccupant(t *test
 	require.NoError(t, os.MkdirAll(filepath.Dir(dst1), 0755))
 	require.NoError(t, os.Symlink(filepath.Join(rootDir, "does-not-exist"), dst1))
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcs...))
-	require.NoError(t, err, "segment one still lands, so the book must not error")
-	assert.Contains(t, pathMap, srcs[0])
-	assert.NotContains(t, pathMap, srcs[1], "an occupant that cannot be proven to be this file must not be recorded")
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcs...))
+	require.Error(t, err, "a directory landing with an unproven occupant must fail the whole book")
+	assert.Contains(t, err.Error(), "did not land 1 of 2")
+	assert.Contains(t, err.Error(), srcs[1])
+	assert.Empty(t, pathMap, "nothing may be recorded from a failed landing")
+	assert.Empty(t, targetDir)
 
 	fi, err := os.Lstat(dst1)
 	require.NoError(t, err)
 	assert.NotZero(t, fi.Mode()&os.ModeSymlink, "the occupant must not have been replaced")
+	_, err = os.Stat(planned[srcs[0]])
+	assert.True(t, errors.Is(err, fs.ErrNotExist), "the segment that landed must be rolled back — a version row would otherwise claim a directory it shares")
 
 	entries, err := os.ReadDir(filepath.Dir(dst1))
 	require.NoError(t, err)

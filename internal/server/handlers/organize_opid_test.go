@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_opid_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f8b2d61-9c07-4a35-b8e2-6d1a3f70c974
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package handlers_test
 
@@ -43,7 +43,7 @@ func (r *renameSpy) ApplyRename(_ string, operationID string) (*organizer.Rename
 func applyRename(t *testing.T, spy *renameSpy, bookID string) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := handlers.NewOrganizeHandler(nil, spy, nil, nil, nil, nil, "/library", false)
+	h := handlers.NewOrganizeHandler(nil, spy, nil, nil, nil, nil, false)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/audiobooks/"+bookID+"/rename/apply", nil)
@@ -93,7 +93,7 @@ func TestApplyRename_MintsADistinctIDPerCall(t *testing.T) {
 func TestApplyRename_MissingBookIDNeverReachesTheService(t *testing.T) {
 	spy := &renameSpy{}
 	gin.SetMode(gin.TestMode)
-	h := handlers.NewOrganizeHandler(nil, spy, nil, nil, nil, nil, "/library", false)
+	h := handlers.NewOrganizeHandler(nil, spy, nil, nil, nil, nil, false)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/audiobooks//rename/apply", nil)

@@ -1,5 +1,5 @@
 // file: internal/organizer/dataloss_fix_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ff38c140-155a-4c69-b3ea-b350a8503066
 // last-edited: 2026-09-02
 
@@ -129,7 +129,8 @@ func assertNoRenameTemps(t *testing.T, target string) {
 }
 
 // TestRenameFilesResumesStrandedTemp: a temp parked under the LEGACY fixed name
-// by a run from before 2026-09-02 must still be resumed.
+// by a run from before 2026-09-02 must still be resumed — when its size
+// matches what the row records for the file.
 func TestRenameFilesResumesStrandedTemp(t *testing.T) {
 	tmpDir := t.TempDir()
 	src := filepath.Join(tmpDir, "old", "book.m4b") // does NOT exist
@@ -144,7 +145,7 @@ func TestRenameFilesResumesStrandedTemp(t *testing.T) {
 	}
 
 	result, err := RenameFiles([]FileRenameEntry{
-		{SegmentID: "s1", SourcePath: src, TargetPath: dst},
+		{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: int64(len("stranded"))},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

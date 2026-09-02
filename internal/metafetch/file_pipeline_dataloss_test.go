@@ -1,5 +1,5 @@
 // file: internal/metafetch/file_pipeline_dataloss_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f1ed9f6-e6b5-47cb-9843-94343fe2e7eb
 // last-edited: 2026-09-02
 
@@ -66,8 +66,10 @@ func TestMetafetchRenameFilesResumesStrandedTemp(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Resuming a stranded temp requires it to match the row's recorded size;
+	// without a size the pipeline refuses (see organizer.strandedTempMismatch).
 	result, err := RenameFiles([]FileRenameEntry{
-		{SegmentID: "s1", SourcePath: src, TargetPath: dst},
+		{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: int64(len("stranded"))},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

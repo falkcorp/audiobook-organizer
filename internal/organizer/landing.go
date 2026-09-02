@@ -1,5 +1,5 @@
 // file: internal/organizer/landing.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1e9a3b-7d42-4f6e-9b8a-2e0c4d7f1a35
 // last-edited: 2026-09-02
 
@@ -33,12 +33,16 @@ type Landing struct {
 	// first and some other row may name it.
 	Created []string
 
-	// Skipped lists the source paths of a directory book that were planned,
-	// present on disk, and did not land: an unsafe destination, a source that
-	// vanished mid-run, an occupant not proven to be this file, or a lost race
-	// for the destination. Their rows must keep their source paths; a caller
-	// that reports the book as organized should report these too.
-	Skipped []string
+	// InPlace reports that the book was already under the library root and
+	// was RENAMED there (ReOrganizeInPlace rewrote its existing rows) rather
+	// than copied into a new organized version. Callers branch on this to
+	// decide whether to stamp the existing book or create a version row for
+	// it; they must never re-derive it from a RootDir prefix test of their
+	// own. The HTTP handler did exactly that against a RootDir snapshot taken
+	// at startup while OrganizeOneBook read the live value, and after a
+	// runtime root_dir change the two disagreed: the file was moved in place
+	// and then a second book row was created at the same path.
+	InPlace bool
 }
 
 // IsDir reports whether the landing describes a multi-file (directory) book.

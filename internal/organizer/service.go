@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-02
 
@@ -222,12 +222,6 @@ type Stats struct {
 	Skipped        int // soft-deleted / non-primary / missing file skips
 	Failed         int
 	Total          int
-	// Partial counts books tallied in Organized whose landing left one or more
-	// present files behind (see Landing.Skipped). It is a sub-tally, not a
-	// separate bucket: the book IS organized, but its rows for those files
-	// still name the source paths, and a summary that said only "Organized"
-	// hid that.
-	Partial int
 	// Canceled records that the run stopped early because ctx was cancelled or
 	// the operation was cancelled from the UI. Without it the summary said
 	// "Organize complete" for a run that had been deliberately stopped, which
@@ -1013,7 +1007,6 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 				}
 
 				oldPath := book.FilePath
-				alreadyInRoot := config.AppConfig.RootDir != "" && strings.HasPrefix(oldPath, config.AppConfig.RootDir)
 
 				// --- Step 1: File operations ---
 				var newPath string
@@ -1022,8 +1015,9 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 
 				// Same decision as the post-scan auto-organize hook, via one
 				// shared method — see OrganizeOneBook for why that matters.
-				// alreadyInRoot is still computed above because the DB-update
-				// step below branches on it too.
+				// The DB-update step below branches on landing.InPlace, the
+				// decision OrganizeOneBook actually took, not on a prefix
+				// test of its own.
 				landing, err = orgSvc.OrganizeOneBook(workerOrg, &book, log)
 				if landing != nil {
 					newPath = landing.Path
@@ -1067,7 +1061,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 							NewValue:    oldPath,
 						})
 					}
-				} else if alreadyInRoot {
+				} else if landing.InPlace {
 					now := time.Now()
 					if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
 						log.Debug("Organize: failed to stamp re-organized book %s: %s", book.ID, updateErr.Error())
@@ -1149,30 +1143,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 
 					statsMu.Lock()
 					stats.Organized++
-					if len(landing.Skipped) > 0 {
-						stats.Partial++
-					}
 					statsMu.Unlock()
-
-					// A partial landing is recorded as its own change row so the
-					// op's change log names the files, not just the book. The
-					// book counts as Organized above — it is — but a summary that
-					// said only that hid which files still sit at their source.
-					if len(landing.Skipped) > 0 {
-						log.Warn("Organized %s partially: %d present file(s) did not land and keep their source paths: %s",
-							book.Title, len(landing.Skipped), strings.Join(landing.Skipped, ", "))
-						if operationID != "" {
-							_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
-								ID:          ulid.Make().String(),
-								OperationID: operationID,
-								BookID:      createdBook.ID,
-								ChangeType:  "organize_partial",
-								FieldName:   "file_path",
-								OldValue:    oldPath,
-								NewValue:    strings.Join(landing.Skipped, "\n"),
-							})
-						}
-					}
 				}
 
 				// --- Step 3: Enqueue iTunes writeback ---
@@ -1286,7 +1257,7 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 		if err != nil {
 			return nil, err
 		}
-		return &Landing{Path: newPath}, nil
+		return &Landing{Path: newPath, InPlace: true}, nil
 	}
 	bookFiles, err := orgSvc.db.GetBookFiles(book.ID)
 	if err != nil {
@@ -1323,8 +1294,9 @@ func organizeSingleFile(org *Organizer, book *database.Book) (*Landing, error) {
 
 // OrganizeDirectoryBook handles organizing a multi-file book where file_path is a directory.
 // It always uses book_files from the database — no directory scanning fallback.
-// Returns the Landing: target directory, the source->organized map of files
-// that landed, the files it created, and the present files that did not land.
+// Returns the Landing: target directory, the source->organized map of every
+// planned file (a directory landing is all-or-nothing, see
+// organizeBookDirectory) and the files it created.
 func (orgSvc *Service) OrganizeDirectoryBook(org *Organizer, book *database.Book, log logger.Logger) (*Landing, error) {
 	bookFiles, err := orgSvc.db.GetBookFiles(book.ID)
 	if err != nil {
@@ -1392,10 +1364,6 @@ func (orgSvc *Service) organizeDirectoryBookRows(org *Organizer, book *database.
 	if copiedCount == 0 {
 		return nil, fmt.Errorf("organize produced 0 files for %s — all copies failed", book.Title)
 	}
-	if len(landing.Skipped) > 0 {
-		log.Warn("Organized %s with %d of %d present file(s) left behind (rows for those keep their source paths): %s",
-			book.Title, len(landing.Skipped), presentCount, strings.Join(landing.Skipped, ", "))
-	}
 
 	return landing, nil
 }
@@ -1410,10 +1378,16 @@ func (orgSvc *Service) organizeDirectoryBookRows(org *Organizer, book *database.
 // the winner's audio. Whether a file at the planned path is this book's file
 // was already decided (by hash) inside OrganizeBookDirectory; the answer is in
 // `landed`, and a stat cannot improve on it.
+//
+// A directory landing is all-or-nothing, so a present row that was planned is
+// always in `landed`. A row that is NOT there was never planned: it is flagged
+// Missing (planTargetPaths drops those), or it was added by a scan between the
+// two GetBookFiles reads. Neither is a failed copy, and the message must not
+// say it was.
 func resolveOrganizedFilePath(srcPath string, landed map[string]string, log logger.Logger) string {
 	dstPath, ok := landed[srcPath]
 	if !ok || dstPath == "" {
-		log.Warn("organize: %q did not land in the organized copy; its row keeps the source path", srcPath)
+		log.Warn("organize: %q was not part of this landing (flagged missing, or added by a scan mid-organize); its row keeps the source path", srcPath)
 		return srcPath
 	}
 	return dstPath
@@ -1444,7 +1418,8 @@ func resolveOrganizedFilePath(srcPath string, landed map[string]string, log logg
 // links are cleared explicitly rather than left to it.
 //
 // On disk it removes ONLY landing.Created — the files this organize wrote —
-// and then the target directory if that left it empty. It used to
+// and then the target directory if that left it empty (unlinkCreated, shared
+// with the in-flight directory rollback in organizeBookDirectory). It used to
 // os.RemoveAll the whole target directory, which is wrong twice over: a
 // directory book whose target already held another book's files (the
 // same-title collision that skips those targets) would have had the OTHER
@@ -1463,27 +1438,30 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 		}
 	}
 
-	if landing == nil || config.AppConfig.RootDir == "" {
+	if landing == nil || len(landing.Created) == 0 {
 		return
 	}
-	for _, created := range landing.Created {
-		// Containment guard: only ever remove something we are certain organize
-		// just wrote under the library root. Organize COPIES and the original
-		// survives as the source row, so removing the copy destroys no audio.
-		if created == "" || !strings.HasPrefix(created, config.AppConfig.RootDir) {
-			log.Warn("organize: rollback refusing to remove %s — not under the library root", created)
-			continue
-		}
-		if err := os.Remove(created); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			log.Warn("organize: rollback could not remove the organized file %s: %v", created, err)
-		}
+	root := config.AppConfig.RootDir
+	if root == "" {
+		// Without a root there is no containment guard, and a rollback that
+		// cannot prove a path is ours must not remove it. That leaves files on
+		// disk with no row — the next organize's collision — so this is an
+		// Error naming every one of them, not a silent return.
+		log.Error("organize: rollback cannot remove %d file(s) written for %s because root_dir is unset; left on disk with no row: %s",
+			len(landing.Created), newBookID, strings.Join(landing.Created, ", "))
+		return
 	}
-	if landing.IsDir() && landing.Path != "" && strings.HasPrefix(landing.Path, config.AppConfig.RootDir) {
-		// os.Remove on a directory succeeds only when it is empty; a non-empty
-		// directory means files that were not ours remain, which is the point.
-		if err := os.Remove(landing.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			log.Debug("organize: rollback left the target directory %s in place: %v", landing.Path, err)
-		}
+	dir := ""
+	if landing.IsDir() {
+		dir = landing.Path
+	}
+	// Containment is ensureUnderRoot (separator-aware), not a bare prefix
+	// test: /library2/x is not under /library. Organize COPIES and the
+	// original survives as the source row, so removing the copy destroys no
+	// audio; the directory goes only if that left it empty.
+	if leftover := unlinkCreated(landing.Created, root, dir); len(leftover) > 0 {
+		log.Error("organize: rollback for %s could not remove %d file(s), left on disk with no row: %s",
+			newBookID, len(leftover), strings.Join(leftover, ", "))
 	}
 }
 

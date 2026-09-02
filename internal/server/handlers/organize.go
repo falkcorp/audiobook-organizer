@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-09-02
 
@@ -105,7 +105,6 @@ type OrganizeHandler struct {
 	organizeSvc  OrganizeServicer
 	writeBack    WriteBackEnqueuer // may be nil
 	publisher    EventPublisher
-	rootDir      string
 	autoOrganize bool
 }
 
@@ -118,7 +117,6 @@ func NewOrganizeHandler(
 	organizeSvc OrganizeServicer,
 	writeBack WriteBackEnqueuer,
 	publisher EventPublisher,
-	rootDir string,
 	autoOrganize bool,
 ) *OrganizeHandler {
 	return &OrganizeHandler{
@@ -128,7 +126,6 @@ func NewOrganizeHandler(
 		organizeSvc:  organizeSvc,
 		writeBack:    writeBack,
 		publisher:    publisher,
-		rootDir:      rootDir,
 		autoOrganize: autoOrganize,
 	}
 }
@@ -249,10 +246,11 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	org.SetStore(h.store)
 	log2 := logger.NewWithActivityLog("organize", h.store)
 
-	// alreadyInRoot is recomputed here because the DB-update step below
-	// branches on it; the file-side decision itself is OrganizeOneBook's.
-	alreadyInRoot := h.rootDir != "" && strings.HasPrefix(oldPath, h.rootDir)
-
+	// The in-place / new-version decision is OrganizeOneBook's and arrives on
+	// the Landing. This handler used to recompute it from a RootDir snapshot
+	// taken at startup while OrganizeOneBook read the live value; after a
+	// runtime root_dir change the two disagreed and a file moved in place was
+	// then also given a second book row at the same path.
 	landing, err := h.organizeSvc.OrganizeOneBook(org, book, log2)
 	if err != nil {
 		httputil.InternalError(c, "failed to organize book", err)
@@ -271,7 +269,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		return
 	}
 
-	if alreadyInRoot {
+	if landing.InPlace {
 		now := time.Now()
 		book.LastOrganizeOperationID = &opID
 		book.LastOrganizedAt = &now
@@ -338,14 +336,6 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		"old_path":         oldPath,
 		"new_path":         newPath,
 		"operation_id":     opID,
-	}
-	if len(landing.Skipped) > 0 {
-		// The book organized, but not all of it: these present source files did
-		// not land (their planned target was another book's file, or the copy
-		// failed) and their rows keep the source path. Say so rather than let
-		// "organized" imply every file moved.
-		resp["message"] = fmt.Sprintf("organized: %s → %s (%d file(s) did not land)", oldPath, newPath, len(landing.Skipped))
-		resp["skipped_files"] = landing.Skipped
 	}
 	httputil.RespondWithOK(c, resp)
 }
