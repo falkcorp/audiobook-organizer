@@ -1,0 +1,22 @@
+# Mutation table for PR #3058's plugin half: the config-PUT sink that swaps the
+# ladder into the live engine and QUEUES the re-band (D4/D5).
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/plugins/dedup/ \
+#     --table scripts/mutation-tables/dedup-score-config-plugin.muts
+#
+# WHAT THIS TABLE IS FOR. Every failure this guards against returns a real
+# operation id to the caller and looks like a success. M01 is the sharpest:
+# Registry.EnqueueOp collapses an enqueue onto an ACTIVE op with the same
+# ConcurrencyKey and BYTE-EQUAL params, so without a per-ladder discriminator a
+# second config PUT arriving mid-re-band is handed the RUNNING op's id and
+# queues nothing — and that op read its ladder at start, so it finishes the
+# whole backlog under the OLD ladder while the PUT reports success.
+
+M01 drop the per-ladder discriminator so two ladders queue one re-band | internal/plugins/dedup/rescore_op.go | s/\t\tLadderFingerprint: ladderFingerprint\(cfg\),\n//
+
+M02 apply the ladder to the live engine but never queue the re-band | internal/plugins/dedup/rescore_op.go | s/\topID, err := p\.registry\.EnqueueOp\(ctx, "dedup\.rescore", RescoreParams\{/\treturn "", nil\n\topID, err := p.registry.EnqueueOp(ctx, "dedup.rescore", RescoreParams{/
+
+M03 give the re-band its own key so it can race a full scan | internal/plugins/dedup/rescore_op.go | s/\t\tConcurrencyKey: "dedup\.full-scan",/\t\tConcurrencyKey: "dedup.rescore-own-key",/
