@@ -1,7 +1,7 @@
 // file: internal/errhandling/skipcounter_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0910fd4e-59de-4348-9e4b-e02e31fcff50
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package errhandling
 
@@ -106,7 +106,7 @@ func TestSkipCounter_EmitsExactlyOneLineNotOnePerSkip(t *testing.T) {
 	records := captureLogs(t)
 
 	c := NewSkipCounter("noisy")
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		c.Skip("bad row", errors.New("decode"))
 	}
 	c.LogSummary(context.Background())
@@ -126,7 +126,7 @@ func TestSkipCounter_ConcurrentUseIsSafe(t *testing.T) {
 	c := NewSkipCounter("parallel")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Go(func() {
 			if i%2 == 0 {
 				c.Processed()

@@ -1,7 +1,7 @@
 // file: internal/errhandling/errhandling_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 21b860a5-1a53-4ed1-8cc2-d62c8862bea9
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package errhandling
 
@@ -30,7 +30,7 @@ func captureLogs(t *testing.T) func() []map[string]any {
 	return func() []map[string]any {
 		t.Helper()
 		var out []map[string]any
-		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 			if line == "" {
 				continue
 			}
@@ -147,7 +147,7 @@ func TestMustLog_ConcurrentUseIsSafe(t *testing.T) {
 	records := captureLogs(t)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Go(func() {
 			MustLog(errors.New("concurrent"), "parallel discard")
 		})

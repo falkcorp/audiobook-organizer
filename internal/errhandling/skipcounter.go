@@ -1,7 +1,7 @@
 // file: internal/errhandling/skipcounter.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ed47a1ef-7722-4c13-8cc7-48e09d29d4ae
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 package errhandling
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sort"
 	"sync"
 )
@@ -156,9 +157,7 @@ func (c *SkipCounter) ByReason() map[string]int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make(map[string]int, len(c.byReason))
-	for k, v := range c.byReason {
-		out[k] = v
-	}
+	maps.Copy(out, c.byReason)
 	return out
 }
 
@@ -178,13 +177,9 @@ func (c *SkipCounter) LogSummary(ctx context.Context) {
 	reasons := make([]string, len(c.order))
 	copy(reasons, c.order)
 	counts := make(map[string]int, len(c.byReason))
-	for k, v := range c.byReason {
-		counts[k] = v
-	}
+	maps.Copy(counts, c.byReason)
 	samples := make(map[string]error, len(c.firstErr))
-	for k, v := range c.firstErr {
-		samples[k] = v
-	}
+	maps.Copy(samples, c.firstErr)
 	c.mu.Unlock()
 
 	skipped := 0
