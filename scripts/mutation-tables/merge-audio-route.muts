@@ -16,9 +16,9 @@ M01 audio-route-ignores-filepath | internal/merge/service.go | s/return len\(fil
 # deterministic answer, so the test has to pin which one wins.
 M02 tie-prefers-newer-ulid | internal/merge/service.go | s/\treturn a\.ID < b\.ID\n\}/\treturn a.ID > b.ID\n}/
 
-# Tie-break must keep the existing primary; ignoring primary-ness flips the
-# primary on a retried reversed pair.
-M03 tie-ignores-existing-primary | internal/merge/service.go | s/\tif aPrim != bPrim \{\n\t\treturn aPrim\n\t\}/\tif false {\n\t\treturn aPrim\n\t}/
+# Tie-break must keep the EXISTING primary; preferring the non-primary flips
+# the primary on a retried reversed pair.
+M03 tie-prefers-non-primary | internal/merge/service.go | s/\tif aPrim != bPrim \{\n\t\treturn aPrim\n\t\}/\tif aPrim != bPrim {\n\t\treturn bPrim\n\t}/
 
 # Missing input must surface as the typed BookNotFoundError, not a bare string.
 M04 not-found-untyped | internal/merge/service.go | s/return nil, &BookNotFoundError\{BookID: id\}/return nil, fmt.Errorf("book %s not found", id)/g
