@@ -489,6 +489,66 @@ func TestOrganizeOneBook_MultiRowBookWithFileFilePath_TakesDirectoryPath(t *test
 	}
 }
 
+// OrganizeBook returns mode "" when the target already IS this file (here: a
+// hard link to the source, so os.SameFile). organizeSingleFile must then leave
+// Created empty, and a rollback of that landing must leave the target alone —
+// it was there before this run.
+func TestOrganizeSingleFile_AdoptedTarget_IsNotCreatedAndSurvivesRollback(t *testing.T) {
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{
+		RootDir:              rootDir,
+		FolderNamingPattern:  "{author}/{title}",
+		FileNamingPattern:    "{title}",
+		OrganizationStrategy: "copy",
+	}
+	src := filepath.Join(t.TempDir(), "solo.m4b")
+	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
+	book := &database.Book{ID: "b1", Title: "Title", FilePath: src, Format: "m4b", Author: &database.Author{Name: "Author"}}
+
+	org := NewOrganizer(&config.AppConfig)
+	target, err := org.GenerateTargetPath(book)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o775))
+	require.NoError(t, os.Link(src, target), "pre-existing hard link: the target already IS this file")
+
+	landing, err := organizeSingleFile(org, book)
+	require.NoError(t, err)
+	require.Equal(t, target, landing.Path)
+	require.Empty(t, landing.Created, "an adopted target was not created by this run")
+
+	svc := NewService(mocks.NewMockStore(t))
+	svc.rollbackOrganizedVersion("", landing, &noopLogger{})
+	got, err := os.ReadFile(target)
+	require.NoError(t, err, "rollback must not remove a file this run only adopted")
+	require.Equal(t, "audio", string(got))
+}
+
+// The control: a copy that WAS written this run is in Created and a rollback
+// removes it.
+func TestOrganizeSingleFile_FreshCopy_IsCreatedAndRolledBack(t *testing.T) {
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{
+		RootDir:              rootDir,
+		FolderNamingPattern:  "{author}/{title}",
+		FileNamingPattern:    "{title}",
+		OrganizationStrategy: "copy",
+	}
+	src := filepath.Join(t.TempDir(), "solo.m4b")
+	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
+	book := &database.Book{ID: "b1", Title: "Title", FilePath: src, Format: "m4b", Author: &database.Author{Name: "Author"}}
+
+	landing, err := organizeSingleFile(NewOrganizer(&config.AppConfig), book)
+	require.NoError(t, err)
+	require.Equal(t, []string{landing.Path}, landing.Created)
+
+	svc := NewService(mocks.NewMockStore(t))
+	svc.rollbackOrganizedVersion("", landing, &noopLogger{})
+	_, err = os.Stat(landing.Path)
+	require.True(t, errors.Is(err, fs.ErrNotExist), "the copy this run wrote must be removed")
+	_, err = os.Stat(src)
+	require.NoError(t, err, "the source is never touched")
+}
+
 // ENOSYS (FUSE / network filesystems with no link(2)) and EOPNOTSUPP (distinct
 // from ENOTSUP on Darwin) both mean "this filesystem does not do hard links".
 func TestLinkUnsupported_ENOSYSAndEOPNOTSUPP(t *testing.T) {
