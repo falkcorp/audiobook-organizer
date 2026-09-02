@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
-// last-edited: 2026-08-02
+// last-edited: 2026-09-02
 
 package abs
 
@@ -347,10 +347,7 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 	}
 	pct := 0
 	if merged.Duration > 0 {
-		pct = int(merged.CurrentTime / merged.Duration * 100)
-		if pct > 100 {
-			pct = 100
-		}
+		pct = min(int(merged.CurrentTime/merged.Duration*100), 100)
 	}
 	return h.updateUserBookState(userID, bookID, func(state *database.UserBookState) {
 		state.Status = status

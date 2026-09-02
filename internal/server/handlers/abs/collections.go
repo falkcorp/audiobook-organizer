@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 package abs
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -313,12 +314,10 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 	// Adding a book already present is a no-op rather than an error or a
 	// duplicate entry: the client's own list is the user's mental model, and a
 	// collection holding the same book twice has no meaning.
-	for _, existing := range col.BookIDs {
-		if existing == ids[0] {
-			books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-			respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
-			return
-		}
+	if slices.Contains(col.BookIDs, ids[0]) {
+		books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
+		respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+		return
 	}
 	col.BookIDs = append(col.BookIDs, ids[0])
 

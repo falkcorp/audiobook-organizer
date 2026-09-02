@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 package entities_test
 
@@ -571,7 +571,7 @@ func TestSplitSeries(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "S"}, nil)
 	d.store.EXPECT().CreateSeries("S (Split)", (*int)(nil)).Return(&database.Series{ID: 6, Name: "S (Split)"}, nil)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", SeriesID: intptr(5)}, nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", SeriesID: new(5)}, nil)
 	d.store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
 	c, w := newCtx(http.MethodPost, "/series/5/split", `{"book_ids":["b1"]}`, idParam("5"))
 	h.SplitSeries(c)
@@ -689,8 +689,6 @@ func TestSetAudiobookNarrators_BadJSON(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
-func intptr(i int) *int { return &i }
 
 // ── Authors paging ───────────────────────────────────────────────────────
 //

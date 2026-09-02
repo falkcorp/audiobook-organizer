@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 package deduphandler
 
@@ -145,14 +145,8 @@ func (h *Handler) ListSuspiciousDedupLabels(c *gin.Context) {
 
 	total := len(suspicious)
 	limit := clampAtoi(c.Query("limit"), 50, 1, 500)
-	offset := clampAtoi(c.Query("offset"), 0, 0, 1<<31)
-	if offset > total {
-		offset = total
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
+	offset := min(clampAtoi(c.Query("offset"), 0, 0, 1<<31), total)
+	end := min(offset+limit, total)
 
 	httputil.RespondWithOK(c, gin.H{
 		"labels": suspicious[offset:end],

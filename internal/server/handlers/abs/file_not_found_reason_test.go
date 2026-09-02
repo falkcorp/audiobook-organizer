@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/file_not_found_reason_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b3f0d92-47a1-4e6c-95d8-2c710fa6e534
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package abs_test
 
@@ -69,13 +69,13 @@ func seedFileServing(t *testing.T) (seed *oracleSeed, itemID, ino, missingPath s
 // logReason extracts the reason= value from the captured log, or "" if the log
 // recorded no file-not-found at all.
 func logReason(logs string) string {
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if !strings.Contains(line, "abs: file not found") {
 			continue
 		}
-		for _, f := range strings.Fields(line) {
-			if strings.HasPrefix(f, "reason=") {
-				return strings.TrimPrefix(f, "reason=")
+		for f := range strings.FieldsSeq(line) {
+			if after, ok := strings.CutPrefix(f, "reason="); ok {
+				return after
 			}
 		}
 	}

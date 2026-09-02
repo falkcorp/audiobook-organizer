@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -466,13 +466,13 @@ func (h *Handler) ValidateDedupEntry(c *gin.Context) {
 	}
 
 	if h.metadataFetchService == nil {
-		httputil.RespondWithOK(c, gin.H{"results": []interface{}{}, "message": "no metadata sources configured"})
+		httputil.RespondWithOK(c, gin.H{"results": []any{}, "message": "no metadata sources configured"})
 		return
 	}
 
 	chain := h.metadataFetchService.BuildSourceChain()
 	if len(chain) == 0 {
-		httputil.RespondWithOK(c, gin.H{"results": []interface{}{}, "message": "no metadata sources configured"})
+		httputil.RespondWithOK(c, gin.H{"results": []any{}, "message": "no metadata sources configured"})
 		return
 	}
 

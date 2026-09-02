@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/search_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f7a9d14-6c83-4e50-b927-8d1e5a3c07b6
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // Tests for the ?q= search path: the book-ID resolver's matching rules, and the
 // handler wiring that feeds it. Both were entirely untested when the feature
@@ -22,8 +22,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-func intPtr(i int) *int { return &i }
-
 // searchCorpus is deliberately built so each book is reachable by exactly ONE
 // field. A book matching on two fields could not tell a working branch from a
 // dead one.
@@ -35,12 +33,12 @@ func searchCorpus() ([]database.BookCore, []database.Author) {
 		// Path only -- neither title nor author contains the needle.
 		{ID: "b-path", Title: "Untitled", FilePath: "/lib/Discworld/Mort.m4b"},
 		// Author only, resolved through the author table.
-		{ID: "b-author", Title: "Untitled", FilePath: "/lib/bbb/2.m4b", AuthorID: intPtr(7)},
+		{ID: "b-author", Title: "Untitled", FilePath: "/lib/bbb/2.m4b", AuthorID: new(7)},
 		// No author at all: the nil-AuthorID branch must not panic.
 		{ID: "b-noauthor", Title: "Untitled", FilePath: "/lib/ccc/3.m4b"},
 		// AuthorID pointing at a row GetAllAuthors does not return -- a
 		// dangling ref, of which production has a documented population.
-		{ID: "b-dangling", Title: "Untitled", FilePath: "/lib/ddd/4.m4b", AuthorID: intPtr(999)},
+		{ID: "b-dangling", Title: "Untitled", FilePath: "/lib/ddd/4.m4b", AuthorID: new(999)},
 	}
 	authors := []database.Author{{ID: 7, Name: "Neil GAIMAN"}}
 	return books, authors

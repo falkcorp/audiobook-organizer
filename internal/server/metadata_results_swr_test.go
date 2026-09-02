@@ -1,7 +1,7 @@
 // file: internal/server/metadata_results_swr_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3ca5f9d1-807b-42e6-95af-1d60428c7bf3
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 package server
 
@@ -99,7 +99,7 @@ func TestRebuildingFlagPreventsStampede(t *testing.T) {
 
 	store := &database.MockStore{}
 	var wg sync.WaitGroup
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		wg.Go(func() {
 			_, _, _ = latestMetadataResultsByBookCached(store)
 		})
@@ -189,7 +189,7 @@ func TestGenerationSurvivesConcurrentInvalidations(t *testing.T) {
 	defer resetMetaResultsCache()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Go(func() {
 			invalidateMetadataResultsCache()
 		})

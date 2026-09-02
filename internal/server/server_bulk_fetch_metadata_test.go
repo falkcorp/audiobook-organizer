@@ -1,7 +1,7 @@
 // file: internal/server/server_bulk_fetch_metadata_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b1c0d9e-8f7a-6b5c-4d3e-2f1a0b9c8d7e
-// last-edited: 2026-08-20
+// last-edited: 2026-09-02
 
 package server
 
@@ -30,13 +30,13 @@ func TestBulkFetchMetadata_MixedResults(t *testing.T) {
 		q := r.URL.Query()
 		title := q.Get("title")
 		if title == url.QueryEscape("NoResults") || title == "NoResults" {
-			_ = json.MarshalWrite(w, map[string]interface{}{"numFound": 0, "start": 0, "docs": []interface{}{}})
+			_ = json.MarshalWrite(w, map[string]any{"numFound": 0, "start": 0, "docs": []any{}})
 			return
 		}
-		_ = json.MarshalWrite(w, map[string]interface{}{
+		_ = json.MarshalWrite(w, map[string]any{
 			"numFound": 1,
 			"start":    0,
-			"docs": []map[string]interface{}{
+			"docs": []map[string]any{
 				{
 					"title":              "Fetched Title",
 					"author_name":        []string{"Meta Author"},
@@ -70,7 +70,7 @@ func TestBulkFetchMetadata_MixedResults(t *testing.T) {
 	book3, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "NoResults", FilePath: tempFile3, Format: "m4b"})
 	require.NoError(t, err)
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"book_ids": []string{book1.ID, book2.ID, "missing-id", book3.ID},
 	}
 	body, err := json.Marshal(payload)
@@ -122,10 +122,10 @@ func TestBulkFetchMetadata_OnlyMissingFalse_AllowsOverwrite(t *testing.T) {
 	// Stub OpenLibrary with a different publisher.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.MarshalWrite(w, map[string]interface{}{
+		_ = json.MarshalWrite(w, map[string]any{
 			"numFound": 1,
 			"start":    0,
-			"docs": []map[string]interface{}{
+			"docs": []map[string]any{
 				{
 					"title":              "Fetched Title",
 					"publisher":          []string{"Overwrite Pub"},
@@ -147,7 +147,7 @@ func TestBulkFetchMetadata_OnlyMissingFalse_AllowsOverwrite(t *testing.T) {
 	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "Book One", FilePath: tempFile, Format: "m4b", Publisher: &existingPublisher})
 	require.NoError(t, err)
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"book_ids":     []string{book.ID},
 		"only_missing": false,
 	}

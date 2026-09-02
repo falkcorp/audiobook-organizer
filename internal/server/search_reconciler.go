@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-08-09
+// last-edited: 2026-09-02
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -94,10 +94,7 @@ func nextBatchSize(backlog int) int {
 	if backlog <= 0 {
 		return 0
 	}
-	n := backlog / reconcileBacklogDivisor
-	if n < reconcileMinBatch {
-		n = reconcileMinBatch
-	}
+	n := max(backlog/reconcileBacklogDivisor, reconcileMinBatch)
 	if n > reconcileMaxBatch {
 		n = reconcileMaxBatch
 	}

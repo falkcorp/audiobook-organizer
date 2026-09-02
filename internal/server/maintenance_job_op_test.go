@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d6fc8245-22c3-4636-a194-c57f613cf3af
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 
 package server
 
@@ -63,7 +63,6 @@ func TestMaintenanceOpCarriesTheJobsOwnPolicy(t *testing.T) {
 	require.NoError(t, (&Server{}).RegisterMaintenanceJobOps(reg))
 
 	for _, job := range maintenance.All() {
-		job := job
 		t.Run(job.ID(), func(t *testing.T) {
 			def, ok := reg.Def("maintenance." + job.ID())
 			require.True(t, ok)

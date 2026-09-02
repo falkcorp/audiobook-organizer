@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-28
+// last-edited: 2026-09-02
 
 package server
 
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -291,10 +292,8 @@ var absAppAPICollisions = []string{
 // absReservedPath reports whether a request path belongs to the ABS surface and must
 // therefore skip the /api/* → /api/v1/* compatibility redirect.
 func absReservedPath(path string) bool {
-	for _, p := range absReservedPaths {
-		if path == p {
-			return true
-		}
+	if slices.Contains(absReservedPaths, path) {
+		return true
 	}
 	for _, prefix := range absReservedPathPrefixes {
 		if strings.HasPrefix(path, prefix) {

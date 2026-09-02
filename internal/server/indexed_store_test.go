@@ -1,6 +1,6 @@
 // file: internal/server/indexed_store_test.go
-// version: 1.3.1
-// last-edited: 2026-08-30
+// version: 1.3.2
+// last-edited: 2026-09-02
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -187,7 +187,7 @@ func TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile(t *testing.T) {
 	// UpdateBook. No reconcileSearchIndexCoverage, no reconcileOnce.
 	deleted := &database.Book{
 		ID: "b1", Title: "Vanishing Treatise", FilePath: "/tmp/b1", Format: "m4b",
-		MarkedForDeletion: boolPtr(true),
+		MarkedForDeletion: new(true),
 	}
 	if _, err := wrapped.UpdateBook("b1", deleted); err != nil {
 		t.Fatalf("soft-delete update: %v", err)
@@ -250,7 +250,7 @@ func TestIndexedStoreUpdateBook_RestoreStillReindexes(t *testing.T) {
 	// Soft-delete.
 	if _, err := wrapped.UpdateBook("b1", &database.Book{
 		ID: "b1", Title: "Restorable Ledger", FilePath: "/tmp/b1", Format: "m4b",
-		MarkedForDeletion: boolPtr(true),
+		MarkedForDeletion: new(true),
 	}); err != nil {
 		t.Fatalf("soft-delete update: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestIndexedStoreUpdateBook_RestoreStillReindexes(t *testing.T) {
 	// Restore.
 	if _, err := wrapped.UpdateBook("b1", &database.Book{
 		ID: "b1", Title: "Restorable Ledger", FilePath: "/tmp/b1", Format: "m4b",
-		MarkedForDeletion: boolPtr(false),
+		MarkedForDeletion: new(false),
 	}); err != nil {
 		t.Fatalf("restore update: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestIndexedStore_EnqueueSafeAfterClose(t *testing.T) {
 
 	// Concurrent enqueue calls after close should all no-op.
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Go(func() {
 			srv.enqueueIndex("b1", false)
 			srv.enqueueIndex("b2", true)

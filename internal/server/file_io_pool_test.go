@@ -1,6 +1,7 @@
 // file: internal/server/file_io_pool_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d4e2a8f-1b6c-4f70-a3d1-7e5b9c2f8a04
+// last-edited: 2026-09-02
 
 package server
 
@@ -75,7 +76,7 @@ func TestPendingJobs_DistinctOpTypesPerBook(t *testing.T) {
 	pool.SubmitTyped("book1", "op_b", func() { done <- struct{}{} })
 
 	deadline := time.After(2 * time.Second)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case <-done:
 		case <-deadline:

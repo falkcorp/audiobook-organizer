@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -2368,7 +2368,7 @@ func TestListAudiobooksWithSearchAndPagination(t *testing.T) {
 
 	// Create multiple books
 	tempDir := t.TempDir()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		filePath := filepath.Join(tempDir, fmt.Sprintf("book%d.m4b", i))
 		require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 		_, err := database.GetGlobalStore().CreateBook(&database.Book{

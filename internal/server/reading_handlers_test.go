@@ -1,6 +1,6 @@
 // file: internal/server/reading_handlers_test.go
-// version: 1.2.0
-// last-edited: 2026-08-15
+// version: 1.2.1
+// last-edited: 2026-09-02
 // guid: 4f9a2c1d-5b8e-4f70-a7d6-2e8c0f1b9a57
 
 package server
@@ -54,7 +54,7 @@ func TestReading_SetAndGetPosition(t *testing.T) {
 	srv := setupReadingTestServer(t)
 
 	// POST position
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"segment_id": "s1", "position_seconds": 300,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/books/b1/position", bytes.NewReader(body))
@@ -88,7 +88,7 @@ func TestReading_StateComputed(t *testing.T) {
 	srv := setupReadingTestServer(t)
 
 	// Listen to 300s of a 1800s book → 16% in_progress.
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"segment_id": "s1", "position_seconds": 300,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/books/b1/position", bytes.NewReader(body))

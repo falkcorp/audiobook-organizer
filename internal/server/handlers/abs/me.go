@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/me.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 63b8c105-2f74-4ea9-8d16-947c0be5a2f3
-// last-edited: 2026-08-12
+// last-edited: 2026-09-02
 
 package abs
 
@@ -146,22 +146,14 @@ func (h *Handler) Sessions(c *gin.Context) {
 	page := queryInt(c, "page", 0)
 
 	total := len(out)
-	numPages := (total + perPage - 1) / perPage
-	if numPages < 1 {
+	numPages := max((total+perPage-1)/perPage,
 		// The oracle has three sessions, so it cannot say whether real ABS reports 0
 		// or 1 numPages for an empty list. Holding this at 1 leaves the empty case
 		// answering exactly as it always has rather than guessing at a change.
-		numPages = 1
-	}
+		1)
 
-	start := page * perPage
-	if start > total {
-		start = total
-	}
-	end := start + perPage
-	if end > total {
-		end = total
-	}
+	start := min(page*perPage, total)
+	end := min(start+perPage, total)
 
 	respondJSON(c, http.StatusOK, sessionsResponse{
 		ItemsPerPage: perPage,

@@ -1,7 +1,7 @@
 // file: internal/server/bg_wg.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cf86ebb1-cc97-4d0d-8a9b-03d5c4faa7c1
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // namedWaitGroup wraps sync.WaitGroup and keeps a concurrent set of
 // goroutine names so that when the 30s shutdown grace period expires we
@@ -82,7 +82,7 @@ func (n *namedWaitGroup) Running() []string {
 	defer n.mu.Unlock()
 	out := make([]string, 0, len(n.set))
 	for name, count := range n.set {
-		for i := 0; i < count; i++ {
+		for range count {
 			out = append(out, name)
 		}
 	}

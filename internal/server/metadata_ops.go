@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -157,7 +157,7 @@ func runBookFetchPool(ctx context.Context, workers, n int, processOne func(conte
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if gctx.Err() != nil {
 			break // stop dispatching promptly on cancellation
 		}

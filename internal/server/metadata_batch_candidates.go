@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.0.0
+// version: 4.0.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -529,7 +529,6 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	g.SetLimit(batchApplyConcurrency)
 
 	for i, bookID := range req.BookIDs {
-		i, bookID := i, bookID
 		g.Go(func() error {
 			if gctx.Err() != nil {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: canceled: %v", bookID, gctx.Err())}
@@ -887,16 +886,10 @@ func (s *Server) handleListMetadataResults(c *gin.Context) {
 	total := len(all)
 
 	// Apply pagination.
-	start := pp.Offset
-	if start > total {
-		start = total
-	}
+	start := min(pp.Offset, total)
 	end := total
 	if pp.Limit > 0 {
-		end = start + pp.Limit
-		if end > total {
-			end = total
-		}
+		end = min(start+pp.Limit, total)
 	}
 	page := all[start:end]
 

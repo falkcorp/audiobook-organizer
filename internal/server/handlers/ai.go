@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -515,7 +515,7 @@ func (h *AIHandler) StartScan(c *gin.Context) {
 // ListScans returns all AI scan pipeline runs.
 func (h *AIHandler) ListScans(c *gin.Context) {
 	if h.scanStore == nil {
-		httputil.RespondWithOK(c, gin.H{"scans": []interface{}{}})
+		httputil.RespondWithOK(c, gin.H{"scans": []any{}})
 		return
 	}
 	scans, err := h.scanStore.ListScans()
@@ -940,7 +940,7 @@ func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporte
 
 	_ = progress.Log("info", fmt.Sprintf("Received %d suggestions from AI", len(suggestions)), nil)
 
-	resultPayload := map[string]interface{}{
+	resultPayload := map[string]any{
 		"mode":        "groups",
 		"suggestions": suggestions,
 		"groups":      dedupGroups,
@@ -1056,7 +1056,7 @@ func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter,
 		})
 	}
 
-	resultPayload := map[string]interface{}{
+	resultPayload := map[string]any{
 		"mode":        "full",
 		"suggestions": suggestions,
 		"groups":      groups,

@@ -1,6 +1,7 @@
 // file: internal/server/tag_roundtrip_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
+// last-edited: 2026-09-02
 
 package server
 
@@ -26,20 +27,20 @@ func TestBuildFullTagMap_AllFields(t *testing.T) {
 	book := &database.Book{
 		ID:             "BOOK123",
 		Title:          "Return of the Archon",
-		SeriesID:       intPtrHelper(42),
-		SeriesSequence: intPtrHelper(5),
-		Language:       stringPtr("english"),
-		Publisher:      stringPtr("Audible Studios"),
-		Description:    stringPtr("A great book"),
-		ISBN10:         stringPtr("1234567890"),
-		ISBN13:         stringPtr("9781234567890"),
-		ASIN:           stringPtr("B01635BIDS"),
-		OpenLibraryID:  stringPtr("OL12345M"),
-		HardcoverID:    stringPtr("HC789"),
-		GoogleBooksID:  stringPtr("GB456"),
-		Edition:        stringPtr("First"),
-		PrintYear:      intPtrHelper(2015),
-		CoverURL:       stringPtr("https://example.com/cover.jpg"),
+		SeriesID:       new(42),
+		SeriesSequence: new(5),
+		Language:       new("english"),
+		Publisher:      new("Audible Studios"),
+		Description:    new("A great book"),
+		ISBN10:         new("1234567890"),
+		ISBN13:         new("9781234567890"),
+		ASIN:           new("B01635BIDS"),
+		OpenLibraryID:  new("OL12345M"),
+		HardcoverID:    new("HC789"),
+		GoogleBooksID:  new("GB456"),
+		Edition:        new("First"),
+		PrintYear:      new(2015),
+		CoverURL:       new("https://example.com/cover.jpg"),
 	}
 
 	tagMap := mfs.BuildFullTagMap(book, "Return of the Archon", "Return of the Archon", "Joshua Dalzelle", "Paul Heitsch", 2015, "")
@@ -130,7 +131,7 @@ func TestBuildMetadataProvenance_FileValues(t *testing.T) {
 	book := &database.Book{
 		ID:    "BOOK789",
 		Title: "Test Book",
-		ASIN:  stringPtr("B01635BIDS"),
+		ASIN:  new("B01635BIDS"),
 	}
 
 	meta := metadata.Metadata{

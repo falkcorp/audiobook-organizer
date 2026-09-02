@@ -1,7 +1,7 @@
 // file: internal/server/middleware/request_size.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f2129ae7-cf11-4888-bd4f-ab4b578f8f18
-// last-edited: 2026-06-09
+// last-edited: 2026-09-02
 
 package middleware
 
@@ -68,8 +68,7 @@ func MaxRequestBodySize(jsonLimitBytes, uploadLimitBytes int64) gin.HandlerFunc 
 		// Check if the context has an error from MaxBytesReader
 		// (This happens during request reading in c.Next() or subsequent handlers)
 		for _, err := range c.Errors {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err.Err, &maxBytesErr) {
+			if _, ok := errors.AsType[*http.MaxBytesError](err.Err); ok {
 				httputil.RespondWithError(c, http.StatusRequestEntityTooLarge, "request body too large", "REQUEST_TOO_LARGE")
 				c.Abort()
 				return

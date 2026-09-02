@@ -1,7 +1,7 @@
 // file: internal/server/ratelimit_gate_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: acf71ad4-2da2-41b4-9d39-0b1a3752cfa1
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 package server
 
@@ -20,7 +20,7 @@ import (
 // http.StatusTooManyRequests. The route itself answers 410 Gone and touches
 // no store, so any 429 seen can only be the apiRateLimiter middleware.
 func hitOperationsActive(srv *Server, n int) (tooMany int) {
-	for i := 0; i < n; i++ {
+	for range n {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/operations/active", nil)
 		w := httptest.NewRecorder()
 		srv.router.ServeHTTP(w, req)

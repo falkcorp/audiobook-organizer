@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-08-29
+// last-edited: 2026-09-02
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -485,9 +486,7 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	if raw, err := json.Marshal(maskedConfig); err == nil {
 		var flat map[string]any
 		if err := json.Unmarshal(raw, &flat); err == nil {
-			for k, v := range flat {
-				response[k] = v
-			}
+			maps.Copy(response, flat)
 		}
 	}
 	httputil.RespondWithOK(c, response)
@@ -895,7 +894,7 @@ func (h *Handler) GetQuickQueries(c *gin.Context) {
 
 	if getter == nil {
 		// Store implementation does not support quick queries (e.g. SQLite in tests).
-		httputil.RespondWithOK(c, gin.H{"queries": []interface{}{}})
+		httputil.RespondWithOK(c, gin.H{"queries": []any{}})
 		return
 	}
 

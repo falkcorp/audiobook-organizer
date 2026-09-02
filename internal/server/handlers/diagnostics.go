@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -412,12 +412,12 @@ func (h *DiagnosticsHandler) GetAIResults(c *gin.Context) {
 	if op.ResultData == nil || *op.ResultData == "" {
 		httputil.RespondWithOK(c, gin.H{
 			"status":      "completed",
-			"suggestions": []interface{}{},
+			"suggestions": []any{},
 		})
 		return
 	}
 
-	var resultData map[string]interface{}
+	var resultData map[string]any
 	if err := json.Unmarshal([]byte(*op.ResultData), &resultData); err != nil {
 		httputil.RespondWithInternalError(c, "failed to parse result data")
 		return
@@ -425,11 +425,11 @@ func (h *DiagnosticsHandler) GetAIResults(c *gin.Context) {
 
 	suggestions := resultData["suggestions"]
 	if suggestions == nil {
-		suggestions = []interface{}{}
+		suggestions = []any{}
 	}
 	rawResponses := resultData["raw_responses"]
 	if rawResponses == nil {
-		rawResponses = []interface{}{}
+		rawResponses = []any{}
 	}
 
 	httputil.RespondWithOK(c, gin.H{
@@ -467,7 +467,7 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 		return
 	}
 
-	var resultData map[string]interface{}
+	var resultData map[string]any
 	if err := json.Unmarshal([]byte(*op.ResultData), &resultData); err != nil {
 		httputil.RespondWithInternalError(c, "failed to parse result data")
 		return
@@ -531,7 +531,7 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 		case "fix_metadata":
 			// Fix field is a JSON string with field updates
 			if suggestion.Fix != "" && len(suggestion.BookIDs) > 0 {
-				var fixes map[string]interface{}
+				var fixes map[string]any
 				if parseErr := json.Unmarshal([]byte(suggestion.Fix), &fixes); parseErr != nil {
 					applyErr = fmt.Errorf("invalid fix data: %w", parseErr)
 				} else {
@@ -554,7 +554,7 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 
 		case "reassign_series":
 			if suggestion.Fix != "" && len(suggestion.BookIDs) > 0 {
-				var fixes map[string]interface{}
+				var fixes map[string]any
 				if parseErr := json.Unmarshal([]byte(suggestion.Fix), &fixes); parseErr != nil {
 					applyErr = fmt.Errorf("invalid fix data: %w", parseErr)
 				} else {

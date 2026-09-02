@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d0a3c84-1b57-4e92-8f36-9c2e5a710db4
-// last-edited: 2026-08-23
+// last-edited: 2026-09-02
 
 package server
 
@@ -145,7 +145,7 @@ func TestRecentReconcileScans_QueuedScanSurvivesACrowdedOpsTable(t *testing.T) {
 	started := now.Add(-time.Minute)
 
 	var rows []database.OperationV2Row
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		rows = append(rows, database.OperationV2Row{
 			ID: "other", DefID: "library.scan", Status: "running",
 			QueuedAt: now, StartedAt: &started,
@@ -207,7 +207,7 @@ func TestRecentReconcileScans_OldLegacyScanSurvivesACrowdedV1Table(t *testing.T)
 	v1 := []database.Operation{
 		{ID: "old-scan", Type: reconcileScanLegacyType, Status: "completed", CreatedAt: now.Add(-72 * time.Hour)},
 	}
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		v1 = append(v1, database.Operation{
 			ID: "noise", Type: "scan", Status: "completed", CreatedAt: now,
 		})

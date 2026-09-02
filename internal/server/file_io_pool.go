@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.5.1
+// version: 2.5.2
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -106,7 +106,7 @@ func NewFileIOPool(workers int) *FileIOPool {
 		ch:       make(chan fileIOJobEntry, 500),
 		overflow: make(chan struct{}, workers),
 	}
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		p.wg.Go(func() { p.worker(i) })
 	}
 	slog.Info("file I/O pool started with workers, buffer 500", "workers", workers)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
-// last-edited: 2026-08-02
+// last-edited: 2026-09-02
 
 package abs
 
@@ -216,7 +216,6 @@ func (p *userDataProvider) MediaProgress(userID string) ([]any, error) {
 	g := new(errgroup.Group)
 	g.SetLimit(p.concurrency)
 	for i := range bookIDs {
-		i := i
 		g.Go(func() error {
 			row, err := p.progressRow(userID, latest[bookIDs[i]])
 			if err != nil {

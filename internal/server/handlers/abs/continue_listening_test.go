@@ -1,12 +1,13 @@
 // file: internal/server/handlers/abs/continue_listening_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8c14b7-6039-4e5a-91cd-0847be3d2065
-// last-edited: 2026-08-02
+// last-edited: 2026-09-02
 
 package abs_test
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 )
 
@@ -63,12 +64,7 @@ func continueListeningIDs(t *testing.T, w *writeHarness) []string {
 }
 
 func contains(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // progressListIDs returns the libraryItemIds in GET /api/me/progress.

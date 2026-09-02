@@ -1,9 +1,11 @@
 // file: internal/server/spa_fallback.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1e6d90b4-27a5-4c31-8f9e-a3b715c8d604
-// last-edited: 2026-08-12
+// last-edited: 2026-09-02
 
 package server
+
+import "slices"
 
 import "strings"
 
@@ -76,10 +78,5 @@ func isNonSPAPath(path string) bool {
 			return true
 		}
 	}
-	for _, exact := range nonSPAExact {
-		if path == exact {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(nonSPAExact, path)
 }

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.0.1
+// version: 3.0.2
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -128,10 +128,7 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 
 			var completed int64 = int64(alreadyDone)
 			var wg sync.WaitGroup
-			numWorkers := 8
-			if numWorkers > len(p.BookIDs) {
-				numWorkers = len(p.BookIDs)
-			}
+			numWorkers := min(8, len(p.BookIDs))
 
 			for i := 0; i < numWorkers; i++ {
 				wg.Go(func() {

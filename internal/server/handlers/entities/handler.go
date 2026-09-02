@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-08-24
+// last-edited: 2026-09-02
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -210,14 +210,8 @@ func (h *Handler) ListWork(c *gin.Context) {
 	}
 
 	total := len(works)
-	start := params.Offset
-	if start > total {
-		start = total
-	}
-	end := start + params.Limit
-	if end > total {
-		end = total
-	}
+	start := min(params.Offset, total)
+	end := min(start+params.Limit, total)
 	page := works[start:end]
 
 	items := make([]map[string]any, 0, len(page))
