@@ -42,3 +42,12 @@ M05 position-computed-but-not-reported | internal/metadata/series_normalize.go |
 
 # A flag with no candidate is a review surface with nothing to review.
 M06 flag-raised-without-the-candidate-split | internal/metadata/series_normalize.go | s/CandidateName:     sp\.Base,\n\t\t\t\tCandidatePosition: strconv\.Itoa\(sp\.Position\),/CandidateName:     "",\n\t\t\t\tCandidatePosition: "",/
+
+# The bracketed shape must strip the NAME and write NO sequence (owner's ruling,
+# 2026-09-02; ~180 of 198 bracketed rows measured on 2026-08-06 were
+# shattered-book debris, not positions). Deleting the special case makes
+# bracketed fall through to the general strip-and-write branch, which is exactly
+# the regression that would silently re-enable the sequence write on all four
+# call sites -- the diff would be one line in this package and NOTHING at the
+# callers, because they all gate on `Position != ""`.
+M07 bracketed-writes-the-sequence-anyway | internal/metadata/series_normalize.go | s/if sp\.Shape == ShapeBracketed \{/if false \&\& sp.Shape == ShapeBracketed {/

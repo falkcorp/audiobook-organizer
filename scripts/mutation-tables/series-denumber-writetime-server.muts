@@ -57,3 +57,12 @@ M05 update-never-persisted | internal/server/duplicates_helpers.go | s/if _, err
 # later change ever gives a flag action a NewPosition, this is the guard that
 # still refuses to write garbage like "-EIGHTY-SIX" over a user's series name.
 M06 flagged-actions-applied-as-renames-EQUIVALENT-EXPECTED-TO-SURVIVE | internal/server/duplicates_helpers.go | s/if a\.Action == "flag" \x7c\x7c a\.NewPosition == "" \{\n\t\t\tcontinue\n\t\t\}/if a.NewPosition == "" { continue }/
+
+# M07 mutates internal/metadata but runs THIS package's tests on purpose. The
+# bracketed ruling (strip the name, write no sequence) is enforced by a single
+# empty Position in the matcher, and every write path -- including this one --
+# declines on its own because it gates on `Position != ""`. That means a
+# regression here has NO diff in internal/server at all. Running the mutation
+# against the server suite proves the end-to-end apply path observes the ruling,
+# not just the matcher's own unit table.
+M07 bracketed-writes-the-sequence-anyway-end-to-end | internal/metadata/series_normalize.go | s/if sp\.Shape == ShapeBracketed \{/if false \&\& sp.Shape == ShapeBracketed {/
