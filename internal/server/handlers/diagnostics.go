@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-09-02
 
@@ -451,13 +451,6 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 		return
 	}
 
-	// Fail-safe cap (internal/applycap): approved suggestions become merges and
-	// deletes — refuse an implausibly large approval set before touching any.
-	if ex := applycap.Refuse("diagnostics/apply-suggestions", len(req.ApprovedSuggestionIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
-		httputil.RespondWithApplyCapExceeded(c, ex)
-		return
-	}
-
 	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
@@ -498,6 +491,29 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 	approvedSet := make(map[string]bool)
 	for _, id := range req.ApprovedSuggestionIDs {
 		approvedSet[id] = true
+	}
+
+	// Fail-safe cap (internal/applycap). The unit that gets WRITTEN is a book,
+	// not a suggestion: merge_versions merges every ID in BookIDs, delete_orphan
+	// and the fix actions UpdateBook each one. An earlier draft counted
+	// len(ApprovedSuggestionIDs), which let 4,000 three-book merges through a
+	// 5,000 cap as 12,000 book writes, and counted IDs that matched no
+	// suggestion at all. Count the books behind the approved intersection, and
+	// do it here — after decode, before the first MergeBooks/UpdateBook.
+	bookWrites := 0
+	for _, suggestion := range suggestions {
+		if !approvedSet[suggestion.ID] {
+			continue
+		}
+		if n := len(suggestion.BookIDs); n > 0 {
+			bookWrites += n
+		} else {
+			bookWrites++
+		}
+	}
+	if ex := applycap.Refuse("diagnostics/apply-suggestions", bookWrites, config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
+		return
 	}
 
 	ms := h.mergeService

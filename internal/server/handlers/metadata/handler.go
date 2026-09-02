@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-02
 
@@ -876,6 +876,13 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 	}
 	if len(req.BookIDs) == 0 {
 		httputil.RespondWithBadRequest(c, "book_ids is required")
+		return
+	}
+	// Fail-safe cap (internal/applycap): every id here ends in an UpdateBook,
+	// and with only_missing=false the fetched fields overwrite existing ones.
+	// Same file as the gated batch-update; it must not be the one that isn't.
+	if ex := applycap.Refuse("metadata/bulk-fetch", len(req.BookIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
 
