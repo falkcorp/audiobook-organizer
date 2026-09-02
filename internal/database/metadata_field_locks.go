@@ -1,5 +1,5 @@
 // file: internal/database/metadata_field_locks.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0d1a2cd0-a75c-4990-bb1f-bac01864e50c
 // last-edited: 2026-09-02
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
@@ -136,6 +137,64 @@ func DeleteLegacyMetadataState(store LegacyMetadataStateDeleter, bookID string) 
 		return nil
 	}
 	return store.DeleteUserPreference(metastate.Key(bookID))
+}
+
+// UserOverrideRecorder is the store surface RecordUserOverrides needs: read the
+// book's existing rows (to preserve each field's fetched value) and write them
+// back.
+type UserOverrideRecorder interface {
+	MetadataFieldStateReader
+	UpsertMetadataFieldState(state *MetadataFieldState) error
+}
+
+// RecordUserOverrides marks each named field as the user's own: it stores the
+// value under OverrideValue and sets OverrideLocked, which is what every guard
+// in this file reads.
+//
+// Call it from EVERY path where a HUMAN sets a field's value. A user-authored
+// write that records no row is a write the very next fetch or scan is free to
+// overwrite -- the lock the UI promises exists only if something writes it.
+// Three paths did exactly that until 2026-09-02: merge.CombineOverride's
+// title/narrator/author, and both batch update paths.
+//
+// Keys are the FieldKey vocabulary (UserLockableFields); a key outside it is
+// rejected rather than written, because a row under an unknown key is a lock no
+// guard consults. FetchedValue is preserved so "what the provider said" is not
+// lost by the user disagreeing with it.
+func RecordUserOverrides(store UserOverrideRecorder, bookID string, values map[string]any) error {
+	if store == nil || bookID == "" || len(values) == 0 {
+		return nil
+	}
+	existing, err := store.GetMetadataFieldStates(bookID)
+	if err != nil {
+		return fmt.Errorf("read metadata field states for %s: %w", bookID, err)
+	}
+	byField := make(map[string]MetadataFieldState, len(existing))
+	for _, st := range existing {
+		byField[st.Field] = st
+	}
+	vocab := AllUserLockableFieldsLocked()
+
+	now := time.Now()
+	for field, value := range values {
+		if !vocab[field] {
+			return fmt.Errorf("cannot record a user override under %q: not a lockable field", field)
+		}
+		encoded, err := metastate.Encode(value)
+		if err != nil {
+			return fmt.Errorf("encode override for %s: %w", field, err)
+		}
+		state := byField[field]
+		state.BookID = bookID
+		state.Field = field
+		state.OverrideValue = encoded
+		state.OverrideLocked = true
+		state.UpdatedAt = now
+		if err := store.UpsertMetadataFieldState(&state); err != nil {
+			return fmt.Errorf("persist override for %s: %w", field, err)
+		}
+	}
+	return nil
 }
 
 // ErrFieldLocksUnavailable wraps every failure to read a book's locks. Callers

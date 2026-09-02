@@ -1,5 +1,5 @@
 // file: internal/batch/service_test.go
-// version: 1.1.1
+// version: 1.2.0
 // last-edited: 2026-08-20
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
@@ -22,12 +22,64 @@ type MockBookStore struct {
 	delCnt   int
 	updCnt   int
 	updateFn func(id string, book *database.Book) error
+
+	// Lock rows written by the batch update paths, newest value per field,
+	// keyed bookID -> field. Nil until something writes one.
+	locks    map[string]map[string]database.MetadataFieldState
+	lockErr  error
+	authors  map[int]string
+	seriesNm map[int]string
 }
 
 func NewMockBookStore() *MockBookStore {
 	return &MockBookStore{
 		books: make(map[string]*database.Book),
 	}
+}
+
+func (m *MockBookStore) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
+	if m.lockErr != nil {
+		return nil, m.lockErr
+	}
+	var out []database.MetadataFieldState
+	for _, st := range m.locks[bookID] {
+		out = append(out, st)
+	}
+	return out, nil
+}
+
+func (m *MockBookStore) GetUserPreference(string) (*database.UserPreference, error) {
+	return nil, nil
+}
+
+func (m *MockBookStore) UpsertMetadataFieldState(state *database.MetadataFieldState) error {
+	if m.lockErr != nil {
+		return m.lockErr
+	}
+	if m.locks == nil {
+		m.locks = map[string]map[string]database.MetadataFieldState{}
+	}
+	if m.locks[state.BookID] == nil {
+		m.locks[state.BookID] = map[string]database.MetadataFieldState{}
+	}
+	m.locks[state.BookID][state.Field] = *state
+	return nil
+}
+
+func (m *MockBookStore) GetAuthorByID(id int) (*database.Author, error) {
+	name, ok := m.authors[id]
+	if !ok {
+		return nil, nil
+	}
+	return &database.Author{ID: id, Name: name}, nil
+}
+
+func (m *MockBookStore) GetSeriesByID(id int) (*database.Series, error) {
+	name, ok := m.seriesNm[id]
+	if !ok {
+		return nil, nil
+	}
+	return &database.Series{ID: id, Name: name}, nil
 }
 
 func (m *MockBookStore) GetBookByID(id string) (*database.Book, error) {

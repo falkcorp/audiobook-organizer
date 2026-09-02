@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-02
 
@@ -924,6 +924,19 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 			} else {
 				slog.Info("combine applied metadata override", "id", fresh.ID,
 					"title", override.Title, "narrator", override.Narrator)
+				// The override is the user's explicit choice for the
+				// survivor. Record it as a lock, or the next metadata fetch
+				// is free to replace the value they just picked.
+				userSet := map[string]any{}
+				if override.Title != "" {
+					userSet[database.FieldKeyTitle] = override.Title
+				}
+				if override.Narrator != "" {
+					userSet[database.FieldKeyNarrator] = override.Narrator
+				}
+				if err := database.RecordUserOverrides(ms.db, fresh.ID, userSet); err != nil {
+					slog.Warn("combine override lock rows", "id", fresh.ID, "err", err)
+				}
 			}
 		}
 		// Author resolution: find or create by name, then link to the survivor.
@@ -946,6 +959,10 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 					b.AuthorID = &author.ID
 					if _, ubErr := ms.db.UpdateBook(b.ID, b); ubErr != nil {
 						slog.Warn("combine override author UpdateBook", "id", b.ID, "err", ubErr)
+					} else if lErr := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
+						database.FieldKeyAuthorName: override.Author,
+					}); lErr != nil {
+						slog.Warn("combine override author lock row", "id", b.ID, "err", lErr)
 					}
 				}
 			}
