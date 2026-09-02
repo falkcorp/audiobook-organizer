@@ -1,7 +1,7 @@
 // file: internal/oauth/oauth.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c2a9e14-6b38-4d05-8f71-3a0e5b9d2c46
-// last-edited: 2026-07-26
+// last-edited: 2026-09-02
 
 // Package oauth implements OAuth2 / OIDC single sign-on (GitHub, Google) and
 // Cloudflare Access identity verification for the audiobook organizer. It is the
@@ -22,6 +22,7 @@ package oauth
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -94,12 +95,7 @@ func (c *Config) IsEmailAllowed(email string) bool {
 	if email == "" {
 		return false
 	}
-	for _, a := range c.AllowedEmails {
-		if a == email {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.AllowedEmails, email)
 }
 
 // ProviderEnabled reports whether a given provider is configured.
