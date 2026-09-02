@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply_duplicateof_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d81b47a-52e9-4c6f-9a13-8be07f2c65d1
 // last-edited: 2026-09-02
 
@@ -237,9 +237,36 @@ func TestApplyDuplicateOf_DismissedCandidateDoesNotNominate(t *testing.T) {
 	}
 }
 
+// candidateMayNominate must agree with the store about what a verdict is. The
+// vocabulary is pending|dismissed|merged|stale-fp|stale-drain (embedding_store.go);
+// a hand-copied veto set once named "rejected" and "separate" instead, which no
+// writer produces, so this pins the gate to database.IsTerminalCandidateStatus
+// rather than to a list of strings.
+func TestCandidateMayNominate_AgreesWithStoreVocabulary(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{
+		{"pending", true},
+		{"dismissed", false},
+		{"merged", false},
+		{"stale-fp", false},
+		{"stale-drain", false},
+		{"", false},
+		{"rejected", false}, // not in the vocabulary; an unknown status is inert
+	} {
+		got := candidateMayNominate(database.DedupCandidate{Status: tc.status})
+		require.Equal(t, tc.want, got, "status %q", tc.status)
+		if database.IsTerminalCandidateStatus(tc.status) {
+			require.False(t, got, "a terminal status (%q) is a verdict and must never nominate", tc.status)
+		}
+	}
+}
+
 // The veto must hold in Go, not only in the store query. A lister that ignores
 // the status argument (or a row whose status flipped between the query and the
 // read) hands back every row; the caller must still refuse the dismissed one.
+// The statuses here are the store's real vocabulary minus "pending".
 func TestApplyDuplicateOf_VetoHoldsWhenListerIgnoresStatus(t *testing.T) {
 	store := newApplyTestStore(t)
 
@@ -248,7 +275,7 @@ func TestApplyDuplicateOf_VetoHoldsWhenListerIgnoresStatus(t *testing.T) {
 	mkDupBook(t, store, canonical, "The Real Book", "/lib/real/book.mp3")
 	mkDupBook(t, store, debris, "Debris", "/lib/junk/d1.mp3")
 
-	for _, status := range []string{"dismissed", "rejected", "separate", "merged", "stale-fp", ""} {
+	for _, status := range []string{"dismissed", "merged", "stale-fp", "stale-drain", ""} {
 		t.Run("status="+status, func(t *testing.T) {
 			cands := &fakeCandidates{
 				ignoreStatus: true,

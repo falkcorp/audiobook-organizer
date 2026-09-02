@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.15.1
+// version: 2.16.0
 // last-edited: 2026-09-02
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -515,7 +515,7 @@ func (s *EmbeddingStore) PutCachedEmbedding(textHash, model string, vector []flo
 
 // ─── Dedup candidate methods ──────────────────────────────────────────────────
 
-// isTerminalCandidateStatus reports whether a dedup candidate status records a
+// IsTerminalCandidateStatus reports whether a dedup candidate status records a
 // VERDICT rather than a machine-derived classification.
 //
 // "dismissed" and "merged" are decisions — a human reviewed the pair, or
@@ -525,7 +525,14 @@ func (s *EmbeddingStore) PutCachedEmbedding(textHash, model string, vector []flo
 //
 // "pending", "stale-drain" and "stale-fp" are deliberately NOT terminal: they
 // are reclassifications a rescan should be free to revise.
-func isTerminalCandidateStatus(status string) bool {
+//
+// Exported because this is the ONLY definition of the candidate-status
+// vocabulary. The regroup applier (internal/plugins/maintenance/regroup_apply.go)
+// vetoes terminal statuses before it will name a merge target; until 2026-09-02
+// it carried its own copy of this set, and that copy named two statuses
+// ("rejected", "separate") that no writer has ever produced. Consumers call
+// this instead of spelling the strings.
+func IsTerminalCandidateStatus(status string) bool {
 	return status == "dismissed" || status == "merged"
 }
 
@@ -751,7 +758,7 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 	// Machine-derived statuses (stale-drain, stale-fp) stay refreshable: they are
 	// reclassifications a rescan SHOULD be able to revise. Only another terminal
 	// verdict may replace a terminal verdict (e.g. dismissed -> merged).
-	if !isTerminalCandidateStatus(existing.Status) || isTerminalCandidateStatus(c.Status) {
+	if !IsTerminalCandidateStatus(existing.Status) || IsTerminalCandidateStatus(c.Status) {
 		existing.Status = c.Status
 	}
 	existing.UpdatedAt = now

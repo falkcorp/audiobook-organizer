@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-09-02
 
@@ -107,23 +107,27 @@ var nominatingCandidateStatuses = map[string]bool{
 	"pending": true,
 }
 
-// vetoedCandidateStatuses are the statuses a HUMAN puts a candidate into to say
-// "these are not the same book". They are checked in addition to the allow-list,
-// not instead of it: the allow-list is applied by the store query, the veto is
-// re-applied in Go on every row that comes back, so a lister that ignores the
-// status argument (or a row whose status was changed under us between the query
-// and the read) still cannot turn a human's "no" into a merge.
-var vetoedCandidateStatuses = map[string]bool{
-	"dismissed": true,
-	"rejected":  true,
-	"separate":  true,
-}
-
 // candidateMayNominate is the single gate between a dedup candidate row and a
-// merge target. The order matters: the veto is checked first so that a status
-// mistakenly present in both sets is still a veto.
+// merge target. Two checks, in this order:
+//
+//  1. Veto: a TERMINAL status (database.IsTerminalCandidateStatus — "dismissed",
+//     a human said "these are not the same book"; "merged", the pair was already
+//     acted on and its other half is debris) never nominates. The veto is
+//     re-applied in Go on every row that comes back, in addition to the status
+//     the store query asked for, so a lister that ignores the status argument
+//     (or a row whose status changed under us between the query and the read)
+//     still cannot turn a human's "no" into a merge. The vocabulary lives in
+//     ONE place, the store; this file used to carry its own copy and that copy
+//     named two statuses ("rejected", "separate") that nothing ever writes.
+//  2. Allow-list: only nominatingCandidateStatuses may nominate. "stale-fp" and
+//     "stale-drain" fall here — they are not verdicts, just machine
+//     reclassifications a rescan may revise, so they are not vetoed, but they
+//     are not evidence of a live duplicate either.
+//
+// The veto runs first so that a status mistakenly present in both sets is still
+// a veto.
 func candidateMayNominate(c database.DedupCandidate) bool {
-	if vetoedCandidateStatuses[c.Status] {
+	if database.IsTerminalCandidateStatus(c.Status) {
 		return false
 	}
 	return nominatingCandidateStatuses[c.Status]

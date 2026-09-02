@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
 // last-edited: 2026-09-02
 
@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -443,5 +444,49 @@ func TestListReviewItems_RefusesUnboundedOrOversizedLimit(t *testing.T) {
 	w := doReq(t, h.ListReviewItems, http.MethodGet, "/review/items", nil, nil)
 	if got := decodeBody(t, w)["limit"]; got != float64(50) {
 		t.Fatalf("default limit echoed as %v, want 50", got)
+	}
+}
+
+// offset gets the same treatment as limit: the store used to clamp a negative
+// offset to 0 and the handler used to turn a non-integer into 0, both silently,
+// so a paging client that trusted the echoed offset could walk page one forever.
+func TestListReviewItems_RefusesInvalidOffset(t *testing.T) {
+	s := newTestStore(t)
+	seed(t, s, "regroup.multidisc", "m1")
+	seed(t, s, "regroup.multidisc", "m2")
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+
+	for _, offset := range []string{"-1", "-50", "abc", "1.5", "1e3", " 1"} {
+		t.Run("offset="+offset, func(t *testing.T) {
+			w := doReq(t, h.ListReviewItems, http.MethodGet, "/review/items?offset="+url.QueryEscape(offset), nil, nil)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("offset=%q: code %d, want 400; body %s", offset, w.Code, w.Body.String())
+			}
+			body := decodeBody(t, w)
+			if body["code"] != "REVIEW_LIST_OFFSET_INVALID" {
+				t.Fatalf("offset=%q: code field = %v, want REVIEW_LIST_OFFSET_INVALID", offset, body["code"])
+			}
+		})
+	}
+
+	// 0, a positive offset, one past the end, and an absent offset are all fine,
+	// and the value is CONSUMED, not just parsed: offset=1 over two items yields
+	// one item and echoes 1.
+	for _, q := range []string{"?offset=0", "?offset=1", "?offset=2", "?offset=99", ""} {
+		w := doReq(t, h.ListReviewItems, http.MethodGet, "/review/items"+q, nil, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%q: code %d, want 200; body %s", q, w.Code, w.Body.String())
+		}
+	}
+	w := doReq(t, h.ListReviewItems, http.MethodGet, "/review/items?offset=1", nil, nil)
+	body := decodeBody(t, w)
+	if body["offset"] != float64(1) {
+		t.Fatalf("offset echoed as %v, want 1", body["offset"])
+	}
+	if got := len(body["items"].([]any)); got != 1 {
+		t.Fatalf("offset=1 over 2 items returned %d items, want 1", got)
+	}
+	if body["total"] != float64(2) {
+		t.Fatalf("total = %v, want 2 (offset must not shrink the total)", body["total"])
 	}
 }

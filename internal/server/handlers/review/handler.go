@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-09-02
 
@@ -307,12 +307,16 @@ func (h *Handler) ListReviewItems(c *gin.Context) {
 	if !ok {
 		return
 	}
+	offset, ok := parseReviewListOffset(c)
+	if !ok {
+		return
+	}
 	filter := database.ReviewFilter{
 		Status: status,
 		Kind:   c.Query("kind"),
 		Search: c.Query("q"),
 		Limit:  limit,
-		Offset: atoiDefault(c.Query("offset"), 0),
+		Offset: offset,
 	}
 	items, total, err := h.store.ListReviewItems(filter)
 	if err != nil {
@@ -654,6 +658,7 @@ const (
 	defaultReviewListLimit = 50
 	maxReviewListLimit     = 1000
 	reviewListLimitCode    = "REVIEW_LIST_LIMIT_INVALID"
+	reviewListOffsetCode   = "REVIEW_LIST_OFFSET_INVALID"
 )
 
 // parseReviewListLimit reads ?limit= and refuses anything the store would have
@@ -691,13 +696,28 @@ func parseReviewListLimit(c *gin.Context) (int, bool) {
 	return n, true
 }
 
-func atoiDefault(s string, def int) int {
-	if s == "" {
-		return def
+// parseReviewListOffset reads ?offset= under the same rule as the limit: an
+// absent offset is page one, anything else must be a non-negative integer, and
+// a value the store would have silently reinterpreted is refused with a 400
+// instead. The store clamps a negative offset to 0, so offset=-50 used to
+// return the first page with a body that echoed "offset": -50 — a paging client
+// that computed the next offset from that echo walked the same page forever.
+// A non-numeric offset used to fall to 0 the same silent way.
+func parseReviewListOffset(c *gin.Context) (int, bool) {
+	raw := c.Query("offset")
+	if raw == "" {
+		return 0, true
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
+	n, err := strconv.Atoi(raw)
+	switch {
+	case err != nil:
+		httputil.RespondWithError(c, http.StatusBadRequest,
+			fmt.Sprintf("offset %q is not an integer", raw), reviewListOffsetCode)
+		return 0, false
+	case n < 0:
+		httputil.RespondWithError(c, http.StatusBadRequest,
+			fmt.Sprintf("offset must be 0 or greater, got %d", n), reviewListOffsetCode)
+		return 0, false
 	}
-	return n
+	return n, true
 }
