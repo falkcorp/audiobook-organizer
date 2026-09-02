@@ -1,7 +1,7 @@
 // file: internal/linkintegrity/report_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b2f81ac-540d-4e37-a9c1-73e5920bd48f
-// last-edited: 2026-08-05
+// last-edited: 2026-09-02
 
 package linkintegrity
 
@@ -114,7 +114,7 @@ func TestSummaryDeterministic(t *testing.T) {
 			}},
 		}
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if a, b := mk().Summary(), mk().Summary(); a != b {
 			t.Fatalf("Summary() not deterministic:\n%q\nvs\n%q", a, b)
 		}
