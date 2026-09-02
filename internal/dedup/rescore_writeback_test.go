@@ -1,5 +1,5 @@
 // file: internal/dedup/rescore_writeback_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d7f4a16-08b5-4c93-91ae-5f6c3d20b784
 // last-edited: 2026-09-02
 
@@ -208,6 +208,28 @@ func TestRescore_SyncFailureIsAnError(t *testing.T) {
 	}
 }
 
+// cancelAtNthCheck is a context that reports Canceled only from its Nth Err()
+// call onward. Rescore checks ctx.Err() once per candidate, so this cancels the
+// pass at a KNOWN row — with the batch size (500) far above the seeded row
+// count, that row lands mid-buffer, which is the state the test needs. Cancelling
+// a normal context before the call instead cancels at row 1, when the buffer is
+// still empty, and the assertion below then holds trivially (0+0==0) no matter
+// what the production code does — that blind version of this test SURVIVED the
+// mutation it was written to catch.
+type cancelAtNthCheck struct {
+	context.Context
+	calls *int
+	n     int
+}
+
+func (c cancelAtNthCheck) Err() error {
+	*c.calls++
+	if *c.calls >= c.n {
+		return context.Canceled
+	}
+	return nil
+}
+
 // TestRescore_CancelledMidPassDoesNotClaimBufferedRows is the honest-counter
 // statement. Rescore buffers changed rows and writes them in batches, so a
 // cancellation between two flushes abandons whatever is buffered. Those rows
@@ -217,7 +239,7 @@ func TestRescore_SyncFailureIsAnError(t *testing.T) {
 // errors.
 //
 // Mutation check: drop the `result.WriteErrors += len(pending)` from the
-// ctx.Err() branch, or compute Written as Changed-WriteErrors, and this fails.
+// ctx.Err() branch and this fails — 4 buffered rows go unaccounted for.
 func TestRescore_CancelledMidPassDoesNotClaimBufferedRows(t *testing.T) {
 	eng, store := newRescoreTestEngine(t)
 	es := database.NewEmbeddingStore(store.DB())
@@ -232,13 +254,16 @@ func TestRescore_CancelledMidPassDoesNotClaimBufferedRows(t *testing.T) {
 		t.Fatalf("SetScoreConfig: %v", err)
 	}
 
-	// Cancel before the loop starts its second row: rows land in the buffer
-	// (batch size is 500, far above `rows`) and no flush ever happens.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// Cancel at the 5th row: rows 1-4 changed and are sitting in the buffer
+	// (batch size 500, so no flush has happened) and are abandoned.
+	calls := 0
+	ctx := cancelAtNthCheck{Context: context.Background(), calls: &calls, n: 5}
 	res, err := eng.Rescore(ctx, true)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Rescore err = %v, want context.Canceled", err)
+	}
+	if res.Changed != 4 {
+		t.Fatalf("Changed = %d, want 4 (the pass must reach 4 rows before the cancel so the buffer is NON-empty; an empty buffer cannot observe this bug)", res.Changed)
 	}
 	if res.Written != 0 {
 		t.Errorf("Written = %d, want 0 — nothing was flushed, so nothing was written", res.Written)
@@ -247,7 +272,7 @@ func TestRescore_CancelledMidPassDoesNotClaimBufferedRows(t *testing.T) {
 		t.Errorf("store saw %d batches, want 0", len(w.batches))
 	}
 	if res.Written+res.WriteErrors != res.Changed {
-		t.Errorf("Written(%d) + WriteErrors(%d) != Changed(%d): a cancelled run must account for every changed row it counted",
+		t.Errorf("Written(%d) + WriteErrors(%d) != Changed(%d): a cancelled run must account for every changed row it counted, including the ones abandoned in the buffer",
 			res.Written, res.WriteErrors, res.Changed)
 	}
 }
