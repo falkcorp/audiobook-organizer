@@ -1,6 +1,7 @@
 // file: internal/fingerprint/wholefile_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d5e6f7a8-b9c0-4d1e-2f3a-4b5c6d7e8f90
+// last-edited: 2026-09-02
 
 package fingerprint
 
@@ -14,7 +15,7 @@ import (
 // frames. Each frame value is f(i) so the byte stream is deterministic.
 func makeRawFingerprint(n int, f func(i int) uint32) []byte {
 	raw := make([]byte, n*4)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		binary.LittleEndian.PutUint32(raw[i*4:], f(i))
 	}
 	return raw
@@ -66,7 +67,7 @@ func TestDeriveSeg0_TruncatesTo5Min(t *testing.T) {
 		t.Fatalf("seg0 frame count: got %d, want 2400", len(frames))
 	}
 	// First 2400 frames of the whole-file fp must match seg0 verbatim.
-	for i := 0; i < 2400; i++ {
+	for i := range 2400 {
 		if frames[i] != uint32(i) {
 			t.Fatalf("frame %d mismatch: got %d, want %d", i, frames[i], i)
 		}
@@ -280,7 +281,7 @@ func TestEncodeWholeFingerprint_ChainedThroughDeriveSeg0(t *testing.T) {
 	if len(frames) != 2400 {
 		t.Fatalf("derived seg0 frames: got %d, want 2400", len(frames))
 	}
-	for i := 0; i < 2400; i++ {
+	for i := range 2400 {
 		if frames[i] != uint32(i*13) {
 			t.Fatalf("frame %d: got %d, want %d", i, frames[i], i*13)
 		}

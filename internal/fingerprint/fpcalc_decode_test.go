@@ -1,6 +1,7 @@
 // file: internal/fingerprint/fpcalc_decode_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e2c4a6b8-9d0e-4f1a-8b2c-3d4e5f6a7b8c
+// last-edited: 2026-09-02
 
 package fingerprint
 
@@ -24,7 +25,7 @@ func TestDecodeAnyFingerprint_URLSafeBase64(t *testing.T) {
 	// Header (4 bytes) + 15 uint32s = 64 bytes.
 	header := []byte{0xfb, 0x01, 0x00, 0x00}
 	payload = append(payload, header...)
-	for i := uint32(0); i < 15; i++ {
+	for i := range uint32(15) {
 		var b [4]byte
 		binary.LittleEndian.PutUint32(b[:], 0xFFFFFFF0|i)
 		payload = append(payload, b[:]...)
@@ -65,7 +66,7 @@ func TestDecodeAnyFingerprint_URLSafeBase64(t *testing.T) {
 func TestDecodeAnyFingerprint_BrokenPadding(t *testing.T) {
 	payload := make([]byte, 0, 64)
 	payload = append(payload, 0xfb, 0x01, 0x00, 0x00)
-	for i := uint32(0); i < 15; i++ {
+	for i := range uint32(15) {
 		var b [4]byte
 		binary.LittleEndian.PutUint32(b[:], 0xFFFFFFF0|i)
 		payload = append(payload, b[:]...)
