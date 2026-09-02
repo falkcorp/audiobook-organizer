@@ -1,7 +1,7 @@
 // file: internal/util/names.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a91c4e7-52bd-4f16-8c03-9e7d1b5a2f48
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package util
 
@@ -94,7 +94,7 @@ func SplitCreditNames(name string) []string {
 	for _, sep := range creditSeparators {
 		var next []string
 		for _, chunk := range work {
-			for _, piece := range strings.Split(chunk, sep) {
+			for piece := range strings.SplitSeq(chunk, sep) {
 				// Trimmed rather than merely TrimSpace'd so a stranded separator
 				// character cannot become part of a person's name, and so the
 				// emptiness check below sees a piece that is only punctuation
