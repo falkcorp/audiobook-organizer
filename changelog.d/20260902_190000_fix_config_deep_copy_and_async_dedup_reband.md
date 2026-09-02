@@ -38,6 +38,22 @@ impossible "dedup engine rejected the new score ladder". Five operator messages
 that told you to "run dedup.rescore", an operation that did not exist, now name
 the endpoint that does: `POST /api/v1/dedup/rescore {"apply":true}`.
 
+Making the re-band a queued operation exposed a second way it could silently
+not happen: the dispatcher collapses an enqueue onto an already-running
+operation when the parameters are byte-identical, and every ladder change
+queued the same parameters. A second ladder change arriving while the first
+re-band was still running was therefore handed the running operation's id and
+queued nothing — and that pass had already read its ladder when it started, so
+it would finish the whole backlog under the *old* ladder while the save
+reported success. The queued parameters now carry a fingerprint of the ladder
+that triggered them, so two different ladders always queue two re-bands (the
+second waits for the first) and re-queuing the same ladder still collapses.
+
+A re-band also now reports how many rows the store confirmed it wrote, rather
+than callers inferring it by subtracting the write failures from the changed
+count. A run cancelled between two batches abandons whatever it had buffered,
+so that subtraction credited rows the store never saw.
+
 **After deploying**, run `POST /api/v1/dedup/rescore {"apply":true}` once.
 27,123 of the 27,439 pending candidates are exact-layer rows, which a scan
 never re-bands (they are protected on upsert), so a ladder change reaches them
