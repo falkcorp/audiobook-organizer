@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-30
+// last-edited: 2026-09-02
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -447,12 +448,7 @@ func (ts *TaskScheduler) MaintenanceOrder() []string {
 // which is exactly how four tasks came to declare a maintenance-window toggle
 // that did nothing.
 func (ts *TaskScheduler) inMaintenanceOrder(name string) bool {
-	for _, n := range ts.maintenanceOrder {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ts.maintenanceOrder, name)
 }
 
 // reachableViaMaintenanceWindow reports whether the nightly window can actually

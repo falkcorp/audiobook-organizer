@@ -1,11 +1,12 @@
 // file: internal/scheduler/periodic_library_scan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c5b1e74-2d06-4f39-a7b8-0e93c5d18a42
-// last-edited: 2026-08-11
+// last-edited: 2026-09-02
 
 package scheduler
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,13 +110,7 @@ func TestLibraryScanEnabledPreservesLegacyScanOnStartup(t *testing.T) {
 func TestLibraryScanIsReachableFromMaintenanceWindow(t *testing.T) {
 	ts := NewTaskScheduler(testDeps())
 
-	found := false
-	for _, name := range ts.MaintenanceOrder() {
-		if name == "library_scan" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(ts.MaintenanceOrder(), "library_scan")
 	assert.True(t, found,
 		"library_scan must be in MaintenanceOrder(), otherwise the maintenance.library_scan setting is unreachable")
 }
