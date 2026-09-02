@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-08-06
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -273,7 +274,7 @@ func TestOrphanBookFilesCleanup_ChunksLargeOrphanSets(t *testing.T) {
 
 	books := []database.Book{{ID: "book-alive", Title: "Alive"}}
 	files := make([]database.BookFileCore, 0, orphanCount)
-	for i := 0; i < orphanCount; i++ {
+	for i := range orphanCount {
 		files = append(files, database.BookFileCore{
 			ID:       fmt.Sprintf("orphan-%04d", i),
 			BookID:   "book-ghost",
@@ -336,7 +337,7 @@ func TestOrphanBookFilesCleanup_RejectedChunkFallsBackToPerRowDeletes(t *testing
 	const orphanCount = 1200
 
 	files := make([]database.BookFileCore, 0, orphanCount)
-	for i := 0; i < orphanCount; i++ {
+	for i := range orphanCount {
 		files = append(files, database.BookFileCore{
 			ID:       fmt.Sprintf("orphan-%04d", i),
 			BookID:   "book-ghost",
@@ -396,10 +397,5 @@ func TestOrphanBookFilesCleanup_RejectedChunkFallsBackToPerRowDeletes(t *testing
 }
 
 func containsID(ids []string, want string) bool {
-	for _, id := range ids {
-		if id == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ids, want)
 }

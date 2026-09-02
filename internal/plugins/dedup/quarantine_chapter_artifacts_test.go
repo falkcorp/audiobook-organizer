@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9c2e7a14-5b80-4d36-8f21-3a6e0c9d5b18
-// last-edited: 2026-06-19
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -52,7 +52,7 @@ func TestQuarantineChapterArtifacts(t *testing.T) {
 
 	// 5 short single-file "Opening Credits" books → chapter artifacts (title collides ≥5).
 	var artifactIDs []string
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		artifactIDs = append(artifactIDs, mkBook(t, pebble, "Opening Credits", i, 30))
 	}
 	// A long single-file book with the SAME title → NOT an artifact (not short).
@@ -102,11 +102,11 @@ func TestQuarantineChapterArtifacts_UnscannedIdents(t *testing.T) {
 	p := &Plugin{store: pebble}
 
 	var identIDs []string
-	for i := 0; i < 10; i++ { // 10 unscanned "Big Finish Ident" → over the unscanned bar
+	for i := range 10 { // 10 unscanned "Big Finish Ident" → over the unscanned bar
 		identIDs = append(identIDs, mkBook(t, pebble, "Big Finish Ident", i, 0))
 	}
 	var nicheIDs []string
-	for i := 0; i < 5; i++ { // 5 unscanned "Niche Title" → under the unscanned bar (10)
+	for i := range 5 { // 5 unscanned "Niche Title" → under the unscanned bar (10)
 		nicheIDs = append(nicheIDs, mkBook(t, pebble, "Niche Title", i, 0))
 	}
 

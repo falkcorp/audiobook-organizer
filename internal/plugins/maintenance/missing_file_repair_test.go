@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repair_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c47f0a91-5e6b-4d28-93af-2b8054e17c6d
-// last-edited: 2026-08-17
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -131,7 +131,7 @@ func TestMissingFileRepair_MaxDeletesCaps(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	rows := []database.BookFileCore{{ID: "keep", BookID: "b", FilePath: live}}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rows = append(rows, database.BookFileCore{
 			ID:       filepath.Join("dead", string(rune('a'+i))),
 			BookID:   "b",

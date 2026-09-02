@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9e4b7f3a-2c1d-4e8b-b6a5-0d7c9e2f5b8a
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Table-driven tests for the dedup.purge-legacy-fp-candidates op (T015).
 //
@@ -186,7 +186,6 @@ func TestPurgeLegacyFP(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

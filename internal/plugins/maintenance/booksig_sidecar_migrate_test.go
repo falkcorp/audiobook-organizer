@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f3d1b58-6c24-4a09-8e57-3b90d2f6c418
-// last-edited: 2026-08-13
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -66,7 +66,7 @@ func migrateOpFixture(t *testing.T, n int) (*Plugin, *scriptedMigrator, []string
 	t.Cleanup(func() { _ = s.Close() })
 
 	want := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b, err := s.CreateBook(&database.Book{
 			Title:    fmt.Sprintf("Migrate Op %02d", i),
 			FilePath: fmt.Sprintf("/lib/migrate_op_%02d.m4b", i),

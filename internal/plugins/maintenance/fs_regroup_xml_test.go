@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-06-21
+// last-edited: 2026-09-02
 
 package maintenance
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,9 +18,9 @@ import (
 // resultLog returns the final "APPLIED — …" summary the apply path logs.
 func resultLog(t *testing.T, logs []string) string {
 	t.Helper()
-	for i := len(logs) - 1; i >= 0; i-- {
-		if strings.HasPrefix(logs[i], "APPLIED —") {
-			return logs[i]
+	for _, log := range slices.Backward(logs) {
+		if strings.HasPrefix(log, "APPLIED —") {
+			return log
 		}
 	}
 	t.Fatalf("no APPLIED summary in logs: %v", logs)

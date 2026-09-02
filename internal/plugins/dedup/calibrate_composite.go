@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -79,7 +79,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"runtime"
+	"slices"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -171,12 +173,7 @@ var primaryKinds = []unified.SignalKind{
 }
 
 func isPrimaryKind(k unified.SignalKind) bool {
-	for _, pk := range primaryKinds {
-		if pk == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(primaryKinds, k)
 }
 
 // cloneScoreConfig deep-copies a ScoreConfig, including its Signals map, so a
@@ -184,9 +181,7 @@ func isPrimaryKind(k unified.SignalKind) bool {
 func cloneScoreConfig(cfg unified.ScoreConfig) unified.ScoreConfig {
 	out := cfg
 	out.Signals = make(map[string]unified.KindConfig, len(cfg.Signals))
-	for k, v := range cfg.Signals {
-		out.Signals[k] = v
-	}
+	maps.Copy(out.Signals, cfg.Signals)
 	return out
 }
 
@@ -300,7 +295,6 @@ func sweepBandParallel(
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for i := range cands {
-		i := i
 		g.Go(func() error {
 			select {
 			case <-gctx.Done():
@@ -789,7 +783,6 @@ func sweepConfidenceAdvisory(
 			g, gctx := errgroup.WithContext(ctx)
 			g.SetLimit(runtime.NumCPU())
 			for i := range variants {
-				i := i
 				g.Go(func() error {
 					select {
 					case <-gctx.Done():

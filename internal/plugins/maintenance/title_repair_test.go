@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_repair_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1ca153f8-f8b3-40d5-871c-7959e39314ea
-// last-edited: 2026-07-17
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -21,10 +21,6 @@ func agreedStub(agreed string, multi bool, called *bool) func(string) (string, b
 		return agreed, multi
 	}
 }
-
-// trStrPtr is a task-unique string-pointer helper (strPtr already exists in
-// auto_match_transcribed_test.go in this package).
-func trStrPtr(s string) *string { return &s }
 
 func TestDecideTitleRepair_RetitleCase(t *testing.T) {
 	in := titleRepairBook{
@@ -84,11 +80,11 @@ func TestDecideTitleRepair_ProvenanceSkips(t *testing.T) {
 		in   titleRepairBook
 	}{
 		{"override value", titleRepairBook{Title: "T", FilePaths: paths,
-			TitleState: &database.MetadataFieldState{Field: "title", OverrideValue: trStrPtr(`"Custom"`)}}},
+			TitleState: &database.MetadataFieldState{Field: "title", OverrideValue: new(`"Custom"`)}}},
 		{"override locked", titleRepairBook{Title: "T", FilePaths: paths,
 			TitleState: &database.MetadataFieldState{Field: "title", OverrideLocked: true}}},
 		{"fetched value", titleRepairBook{Title: "T", FilePaths: paths,
-			TitleState: &database.MetadataFieldState{Field: "title", FetchedValue: trStrPtr(`"Fetched"`)}}},
+			TitleState: &database.MetadataFieldState{Field: "title", FetchedValue: new(`"Fetched"`)}}},
 		{"book metadata source", titleRepairBook{Title: "T", FilePaths: paths,
 			MetadataSource: "audible"}},
 	}

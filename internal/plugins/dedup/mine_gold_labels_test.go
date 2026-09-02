@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/mine_gold_labels_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c5a71e38-9b20-4d64-8f12-3e6a9c7b2d05
-// last-edited: 2026-07-05
+// last-edited: 2026-09-02
 
 // End-to-end test for the dedup.mine-gold-labels op against a real PebbleStore +
 // EmbeddingStore: a candidate whose two books share a file hash is labeled
@@ -137,7 +137,7 @@ func TestMineGoldLabels_ParallelMatchesSerialOutput(t *testing.T) {
 	hub := createBookWithHashedFile(t, pebble, "Hub", "hubsharedhash0001")
 
 	var wantTrueDup, wantUnlabeled []int64
-	for i := 0; i < numLeaves; i++ {
+	for i := range numLeaves {
 		fires := i%2 == 0
 		hash := "hubsharedhash0001" // shared with hub -> fires true_dup
 		if !fires {

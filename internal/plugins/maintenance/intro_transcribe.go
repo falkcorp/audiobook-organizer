@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.24.0
+// version: 3.24.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -411,10 +412,7 @@ func chunkIDs(ids []string, size int) [][]string {
 	}
 	chunks := make([][]string, 0, (len(ids)+size-1)/size)
 	for start := 0; start < len(ids); start += size {
-		end := start + size
-		if end > len(ids) {
-			end = len(ids)
-		}
+		end := min(start+size, len(ids))
 		chunks = append(chunks, ids[start:end])
 	}
 	return chunks
@@ -848,8 +846,8 @@ func ffmpegErrorTail(out string) string {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	// Walk back to the last non-empty line — that's almost always the error.
 	last := ""
-	for i := len(lines) - 1; i >= 0; i-- {
-		if s := strings.TrimSpace(lines[i]); s != "" {
+	for _, line := range slices.Backward(lines) {
+		if s := strings.TrimSpace(line); s != "" {
 			last = s
 			break
 		}

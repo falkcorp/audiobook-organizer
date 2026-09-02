@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c7e9f1a-b3d5-4f7e-9a1c-b3d5f7e9a1c3
-// last-edited: 2026-06-10
+// last-edited: 2026-09-02
 
 // Tests for dedup.bookfile-seg-drop op (T020).
 //
@@ -171,7 +171,7 @@ func TestBookfileSegDrop_DryRunNeverSetsFlag(t *testing.T) {
 	p := newSegDropPlugin(ms)
 
 	// Run dry-run three times — flag should never appear.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := p.runBookfileSegDrop(context.Background(), json.RawMessage(`{}`), &fakeReporter{})
 		if err != nil {
 			t.Fatalf("dry-run #%d failed: %v", i+1, err)

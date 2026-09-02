@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-09-01
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -189,9 +190,7 @@ func (p *Plugin) runIntroMigrateSingleFile(ctx context.Context, rawParams json.R
 
 	mu.Lock()
 	snapshot := make(map[string]int, len(counts))
-	for k, v := range counts {
-		snapshot[k] = v
-	}
+	maps.Copy(snapshot, counts)
 	mu.Unlock()
 
 	// Report EVERY bucket, including the zeros: a reader must be able to add the

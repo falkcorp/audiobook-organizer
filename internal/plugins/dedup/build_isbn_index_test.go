@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_isbn_index_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f1e2d3c4-b5a6-7890-fedc-ba0987654321
-// last-edited: 2026-07-07
+// last-edited: 2026-09-02
 
 // End-to-end tests for the build-isbn-index op.
 //
@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -77,16 +78,13 @@ func makePlugin(pebble *database.PebbleStore) *Plugin {
 	return &Plugin{store: adapter}
 }
 
-// strPtrDedup returns a pointer to s.
-func strPtrDedup(s string) *string { return &s }
-
 // createISBNBook inserts a book with the given ISBN13 and returns its ID.
 func createISBNBook(t *testing.T, pebble *database.PebbleStore, title, isbn13 string) string {
 	t.Helper()
 	b := &database.Book{
 		Title:    title,
 		FilePath: "/audio/" + title + ".m4b",
-		ISBN13:   strPtrDedup(isbn13),
+		ISBN13:   new(isbn13),
 	}
 	created, err := pebble.CreateBook(b)
 	if err != nil {
@@ -133,12 +131,7 @@ func TestBuildISBNIndex_EndToEnd_FlagAligned(t *testing.T) {
 		t.Fatalf("GetBookIDsByISBNASIN: %v", err)
 	}
 	containsIDDedup := func(s []string, target string) bool {
-		for _, v := range s {
-			if v == target {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(s, target)
 	}
 	if !containsIDDedup(ids, idA) {
 		t.Errorf("expected idA=%q in index, got %v", idA, ids)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a71c9e6-2b58-4d03-8f19-7c6e0b2a5d84
-// last-edited: 2026-08-06
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -281,7 +281,7 @@ func TestProbeAll_ParallelWritesAreIndexPartitioned(t *testing.T) {
 	const folders = 40
 	secs := map[string]float64{}
 	cands := make([]probeCandidate, 0, folders)
-	for i := 0; i < folders; i++ {
+	for i := range folders {
 		// Alternate the two shapes so the verdicts differ per index and a
 		// cross-worker write would show up as a wrong verdict, not just a race.
 		var files []string

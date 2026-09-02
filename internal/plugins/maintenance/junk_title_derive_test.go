@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_derive_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 51758d2b-4a45-4c0b-9bd0-5b22cc579c19
-// last-edited: 2026-08-04
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -166,7 +166,7 @@ func TestDeriveJunkTitleReplacement_RejectsNoOpRewrite(t *testing.T) {
 func TestMajorityDirOf_IsDeterministicOnTies(t *testing.T) {
 	paths := []string{"/b/zzz/1.mp3", "/a/aaa/2.mp3"}
 	first := majorityDirOf(paths)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if got := majorityDirOf(paths); got != first {
 			t.Fatalf("majorityDirOf is unstable: %q then %q", first, got)
 		}

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c1cf5590-1bc1-4f88-9031-62333bcb593f
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package dedup
 
@@ -25,7 +25,7 @@ import (
 func synthRawLSH(seed int64, frames int) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	raw := make([]byte, frames*4)
-	for i := 0; i < frames; i++ {
+	for i := range frames {
 		binary.LittleEndian.PutUint32(raw[i*4:], rng.Uint32())
 	}
 	return raw

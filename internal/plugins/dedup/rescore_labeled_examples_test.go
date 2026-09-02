@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d2b8f14-3a97-4e05-9c81-7f0a5d3e2c68
-// last-edited: 2026-07-13
+// last-edited: 2026-09-02
 
 // Tests for dedup.rescore-labeled-examples. A fake pairScorer stands in for the
 // real Engine so the persistence contract (below-band write, narrow write that
@@ -271,7 +271,7 @@ func TestRescoreLabeledExamples_ParallelManyGroups(t *testing.T) {
 	es := database.NewEmbeddingStore(pebble.DB())
 
 	const n = 200
-	for i := 0; i < n; i++ {
+	for i := range n {
 		class := "true_dup"
 		if i%2 == 0 {
 			class = "not_dup"
@@ -289,7 +289,7 @@ func TestRescoreLabeledExamples_ParallelManyGroups(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		got, err := es.GetLabeledExample(int64(1000 + i))
 		if err != nil {
 			t.Fatalf("GetLabeledExample(%d): %v", 1000+i, err)

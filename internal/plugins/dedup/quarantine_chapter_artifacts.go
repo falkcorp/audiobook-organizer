@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 // Package dedup — op dedup.quarantine-chapter-artifacts.
 //
@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,10 +86,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		params.MaxDurationSec = 1200
 	}
 	if params.MinTitleCollisionsUnscanned < params.MinTitleCollisions {
-		params.MinTitleCollisionsUnscanned = params.MinTitleCollisions
-		if params.MinTitleCollisionsUnscanned < 10 {
-			params.MinTitleCollisionsUnscanned = 10
-		}
+		params.MinTitleCollisionsUnscanned = max(params.MinTitleCollisions, 10)
 	}
 	reporter.Logger().Info("quarantine-chapter-artifacts start",
 		"apply", params.Apply, "min_collisions", params.MinTitleCollisions, "max_duration_sec", params.MaxDurationSec)
@@ -202,9 +200,9 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		samples = append(samples, tc{t, n})
 	}
 	sort.Slice(samples, func(i, j int) bool { return samples[i].N > samples[j].N })
-	sampleStr := ""
+	var sampleStr strings.Builder
 	for i := 0; i < len(samples) && i < 10; i++ {
-		sampleStr += fmt.Sprintf("%q×%d ", samples[i].Title, samples[i].N)
+		sampleStr.WriteString(fmt.Sprintf("%q×%d ", samples[i].Title, samples[i].N))
 	}
 
 	var quarantinedCount int64
@@ -241,12 +239,12 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	quarantined := int(quarantinedCount)
 
 	summary := fmt.Sprintf("examined=%d artifacts=%d quarantined=%d (apply=%v) top: %s",
-		examined, len(artifacts), quarantined, params.Apply, sampleStr)
+		examined, len(artifacts), quarantined, params.Apply, sampleStr.String())
 	reporter.Logger().Info("quarantine-chapter-artifacts complete", "summary", summary)
 	if !params.Apply {
 		_ = reporter.UpdateProgress(3, 3, fmt.Sprintf(
 			"Dry-run — %d chapter-artifact book(s) would be soft-deleted. Pass apply=true to quarantine. Top: %s",
-			len(artifacts), sampleStr))
+			len(artifacts), sampleStr.String()))
 	} else {
 		_ = reporter.UpdateProgress(3, 3, fmt.Sprintf("Soft-deleted %d chapter-artifact book(s). %s", quarantined, summary))
 	}

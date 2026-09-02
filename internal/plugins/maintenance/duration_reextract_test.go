@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-07-07
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -43,10 +43,7 @@ func newReextractPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 			if offset >= len(books) {
 				return nil, nil
 			}
-			end := offset + limit
-			if end > len(books) {
-				end = len(books)
-			}
+			end := min(offset+limit, len(books))
 			return books[offset:end], nil
 		},
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
@@ -65,7 +62,8 @@ func newReextractPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 	return New(fakeDeps{store: store}), &updates
 }
 
-func intPtr(v int) *int { return &v }
+//go:fix inline
+func intPtr(v int) *int { return new(v) }
 
 // pageBooksFullFrom mirrors PebbleStore.GetAllBooksFullFrom's afterID cursor
 // over a fixed fixture slice. STOREFID W5d-1 rerouted the SDK's PageBooks
@@ -146,8 +144,8 @@ func TestDurationReextract_DryRunWritesNothing(t *testing.T) {
 		t.Fatalf("write temp file: %v", err)
 	}
 	books := []database.Book{
-		{ID: "b1", Title: "Present file", FilePath: fp, Duration: intPtr(100)},
-		{ID: "b2", Title: "Missing file", FilePath: filepath.Join(dir, "gone.m4b"), Duration: intPtr(100)},
+		{ID: "b1", Title: "Present file", FilePath: fp, Duration: new(100)},
+		{ID: "b2", Title: "Missing file", FilePath: filepath.Join(dir, "gone.m4b"), Duration: new(100)},
 		{ID: "b3", Title: "No path", FilePath: ""},
 	}
 	p, updates := newReextractPlugin(books)
@@ -167,7 +165,7 @@ func TestDurationReextract_NilParamsDefaultsDryRun(t *testing.T) {
 	if err := os.WriteFile(fp, []byte("present"), 0o644); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
-	books := []database.Book{{ID: "b1", FilePath: fp, Duration: intPtr(100)}}
+	books := []database.Book{{ID: "b1", FilePath: fp, Duration: new(100)}}
 	p, updates := newReextractPlugin(books)
 
 	if err := p.runDurationReextract(context.Background(), nil, &fakeReporter{}); err != nil {
@@ -195,7 +193,7 @@ func TestDurationReextract_EmptyLibrary(t *testing.T) {
 // whole book is skipped — no Book or BookFile writes, even in apply mode.
 func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
 	writes := 0
-	books := []database.Book{{ID: "bm", Title: "Multi", FilePath: "/lib/Multi", Duration: intPtr(100)}}
+	books := []database.Book{{ID: "bm", Title: "Multi", FilePath: "/lib/Multi", Duration: new(100)}}
 	store := &database.MockStore{
 		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
 		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
@@ -232,7 +230,7 @@ func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
 // the drifted segment is written; the already-correct one is left alone.
 func TestDurationReextract_FingerprintDurationFirst(t *testing.T) {
 	var written []database.BookFile
-	books := []database.Book{{ID: "bf", Title: "Fingerprinted", FilePath: "/lib/Fingerprinted", Duration: intPtr(120)}}
+	books := []database.Book{{ID: "bf", Title: "Fingerprinted", FilePath: "/lib/Fingerprinted", Duration: new(120)}}
 	store := &database.MockStore{
 		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
 		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
@@ -278,7 +276,7 @@ func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 	writes := 0
 	itunesPID := "itunes-pid-mixed"
 	bookPID := itunesPID
-	books := []database.Book{{ID: "bm", Title: "Mixed", FilePath: "/lib/Mixed", Duration: intPtr(120), ITunesPersistentID: &bookPID}}
+	books := []database.Book{{ID: "bm", Title: "Mixed", FilePath: "/lib/Mixed", Duration: new(120), ITunesPersistentID: &bookPID}}
 	store := &database.MockStore{
 		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
 		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
@@ -318,7 +316,7 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 
 	books := make([]database.Book, n)
 	for i := range books {
-		books[i] = database.Book{ID: fmt.Sprintf("b%d", i), FilePath: fmt.Sprintf("/lib/b%d", i), Duration: intPtr(50)}
+		books[i] = database.Book{ID: fmt.Sprintf("b%d", i), FilePath: fmt.Sprintf("/lib/b%d", i), Duration: new(50)}
 	}
 
 	store := &database.MockStore{
@@ -328,10 +326,7 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 			if offset >= n {
 				return nil, nil
 			}
-			end := offset + limit
-			if end > n {
-				end = n
-			}
+			end := min(offset+limit, n)
 			return books[offset:end], nil
 		},
 		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
@@ -372,7 +367,7 @@ func TestProcessBookForReextract_StoredDuration_NonITunes(t *testing.T) {
 			}, nil
 		},
 	}
-	book := database.Book{ID: "b1", Duration: intPtr(100)}
+	book := database.Book{ID: "b1", Duration: new(100)}
 	res := processBookForReextract(context.Background(), store, book, time.Time{})
 
 	if !res.eligible {
@@ -403,7 +398,7 @@ func TestProcessBookForReextract_StoredDuration_ITunes(t *testing.T) {
 		},
 	}
 	bookPID := pid
-	book := database.Book{ID: "b1", Duration: intPtr(100), ITunesPersistentID: &bookPID}
+	book := database.Book{ID: "b1", Duration: new(100), ITunesPersistentID: &bookPID}
 	res := processBookForReextract(context.Background(), store, book, time.Time{})
 
 	if res.eligible {
@@ -430,7 +425,7 @@ func TestProcessBookForReextract_StoredDuration_BookITunesLinked(t *testing.T) {
 		},
 	}
 	bookPID := pid
-	book := database.Book{ID: "b1", Duration: intPtr(100), ITunesPersistentID: &bookPID}
+	book := database.Book{ID: "b1", Duration: new(100), ITunesPersistentID: &bookPID}
 	res := processBookForReextract(context.Background(), store, book, time.Time{})
 
 	if res.eligible {
@@ -446,7 +441,7 @@ func TestProcessBookForReextract_StoredDuration_BookITunesLinked(t *testing.T) {
 // fingerprint duration within tolerance, so there is nothing to correct.
 func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
 	writes := 0
-	books := []database.Book{{ID: "bi", Title: "Correct", FilePath: "/lib/Correct", Duration: intPtr(3600)}}
+	books := []database.Book{{ID: "bi", Title: "Correct", FilePath: "/lib/Correct", Duration: new(3600)}}
 	store := &database.MockStore{
 		CountAllBooksFunc:       func() (int, error) { return len(books), nil },
 		GetAllBooksFullFromFunc: pageBooksFullFrom(books),
@@ -482,7 +477,7 @@ func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
 // in "examined"), not how it was ultimately triaged.
 func onlyMissingDurationTestBooks() []database.Book {
 	return []database.Book{
-		{ID: "known", Title: "Known duration", Duration: intPtr(3600)},
+		{ID: "known", Title: "Known duration", Duration: new(3600)},
 		{ID: "unknown", Title: "Unknown duration", Duration: nil},
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a1d3f27-6c04-4e59-b2a7-9f5e1c8d0b46
-// last-edited: 2026-07-03
+// last-edited: 2026-09-02
 
 package maintenance
 
@@ -14,10 +14,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
-
-// strptr / timeptr are local helpers for building test Book rows.
-func strptr(s string) *string        { return &s }
-func timeptr(t time.Time) *time.Time { return &t }
 
 // snapshotOf serializes a Book into a BookSnapshot at ts (raw JSON, like Pebble).
 func snapshotOf(t *testing.T, id string, ts time.Time, b database.Book) database.BookSnapshot {
@@ -80,14 +76,14 @@ func TestBookSigRecoveryAudit_Scenarios(t *testing.T) {
 	//     row, so it must NOT be flagged despite what a memdb projection would show.
 	current := map[string]*database.Book{
 		"b1": {ID: "b1", Title: "Book One", Description: nil},
-		"b2": {ID: "b2", Title: "Book Two", Description: strptr("has desc"), BookSigBuiltAt: timeptr(built), BookSigV1: nil},
-		"b3": {ID: "b3", Title: "Book Three", Description: strptr("has desc"), BookSigBuiltAt: nil, BookSigV1: nil},
+		"b2": {ID: "b2", Title: "Book Two", Description: new("has desc"), BookSigBuiltAt: new(built), BookSigV1: nil},
+		"b3": {ID: "b3", Title: "Book Three", Description: new("has desc"), BookSigBuiltAt: nil, BookSigV1: nil},
 		"b4": {ID: "b4", Title: "Book Four", Description: nil},
-		"b5": {ID: "b5", Title: "Book Five", Description: strptr("intact"), BookSigBuiltAt: timeptr(built), BookSigV1: strptr("sig-present")},
+		"b5": {ID: "b5", Title: "Book Five", Description: new("intact"), BookSigBuiltAt: new(built), BookSigV1: new("sig-present")},
 	}
 	snaps := map[string][]database.BookSnapshot{
-		"b1": {snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: strptr("old description")})},
-		"b2": {snapshotOf(t, "b2", snapTS, database.Book{ID: "b2", Title: "Book Two", BookSigV1: strptr("old-signature"), BookSigBuiltAt: timeptr(built)})},
+		"b1": {snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: new("old description")})},
+		"b2": {snapshotOf(t, "b2", snapTS, database.Book{ID: "b2", Title: "Book Two", BookSigV1: new("old-signature"), BookSigBuiltAt: new(built)})},
 		// b3, b4, b5: no snapshots.
 	}
 	order := []string{"b1", "b2", "b3", "b4", "b5"}
@@ -131,7 +127,7 @@ func TestBookSigRecoveryAudit_Scenarios(t *testing.T) {
 func TestBookSigRecoveryAudit_MemdbNotFalseFlagged(t *testing.T) {
 	built := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	current := map[string]*database.Book{
-		"ok": {ID: "ok", Title: "Intact", Description: strptr("present"), BookSigBuiltAt: timeptr(built), BookSigV1: strptr("present")},
+		"ok": {ID: "ok", Title: "Intact", Description: new("present"), BookSigBuiltAt: new(built), BookSigV1: new("present")},
 	}
 	p, written := newAuditPlugin(current, map[string][]database.BookSnapshot{}, []string{"ok"})
 
@@ -145,7 +141,7 @@ func TestBookSigRecoveryAudit_MemdbNotFalseFlagged(t *testing.T) {
 		if offset > 0 {
 			return nil, nil
 		}
-		return []database.Book{{ID: "ok", Title: "Intact", Description: nil, BookSigBuiltAt: timeptr(built), BookSigV1: nil}}, nil
+		return []database.Book{{ID: "ok", Title: "Intact", Description: nil, BookSigBuiltAt: new(built), BookSigV1: nil}}, nil
 	}
 	rep := &fakeReporter{}
 
@@ -175,7 +171,7 @@ func TestBookSigRecoveryAudit_ApplyRestoresHappyPath(t *testing.T) {
 		"b1": {ID: "b1", Title: "Book One", Description: nil},
 	}
 	snaps := map[string][]database.BookSnapshot{
-		"b1": {snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: strptr("old description")})},
+		"b1": {snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: new("old description")})},
 	}
 	p, written := newAuditPlugin(current, snaps, []string{"b1"})
 	rep := &fakeReporter{}
@@ -209,7 +205,7 @@ func TestBookSigRecoveryAudit_ApplyRestoresHappyPath(t *testing.T) {
 func TestBookSigRecoveryAudit_ApplySkipsNonEmptyCurrent(t *testing.T) {
 	snapTS := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC)
 	scanRow := &database.Book{ID: "b1", Title: "Book One", Description: nil}
-	raceRow := &database.Book{ID: "b1", Title: "Book One", Description: strptr("filled concurrently")}
+	raceRow := &database.Book{ID: "b1", Title: "Book One", Description: new("filled concurrently")}
 
 	getCalls := 0
 	written := make([]database.Book, 0)
@@ -224,7 +220,7 @@ func TestBookSigRecoveryAudit_ApplySkipsNonEmptyCurrent(t *testing.T) {
 		},
 		GetBookVersionsFunc: func(id string, _ int) ([]database.BookSnapshot, error) {
 			return []database.BookSnapshot{
-				snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: strptr("old description")}),
+				snapshotOf(t, "b1", snapTS, database.Book{ID: "b1", Title: "Book One", Description: new("old description")}),
 			}, nil
 		},
 		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
@@ -289,8 +285,8 @@ func TestBookSigRecoveryAudit_ApplyPreservesOtherFields(t *testing.T) {
 			ID:          "b1",
 			Title:       "Current Title",
 			FilePath:    "/library/current/path.m4b",
-			Narrator:    strptr("Current Narrator"),
-			Edition:     strptr("Current Edition"),
+			Narrator:    new("Current Narrator"),
+			Edition:     new("Current Edition"),
 			Description: nil,
 		},
 	}
@@ -299,9 +295,9 @@ func TestBookSigRecoveryAudit_ApplyPreservesOtherFields(t *testing.T) {
 			ID:          "b1",
 			Title:       "STALE Title — must not land in write",
 			FilePath:    "/stale/path.m4b",
-			Narrator:    strptr("Stale Narrator"),
-			Edition:     strptr("Stale Edition"),
-			Description: strptr("old description"),
+			Narrator:    new("Stale Narrator"),
+			Edition:     new("Stale Edition"),
+			Description: new("old description"),
 		})},
 	}
 	p, written := newAuditPlugin(current, snaps, []string{"b1"})

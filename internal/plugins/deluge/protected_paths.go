@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/protected_paths.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-19
+// last-edited: 2026-09-02
 
 package deluge
 
@@ -28,7 +28,7 @@ func (p *Plugin) protectedPathsSyncDef() sdk.OperationDef {
 		Timeout:         5 * time.Minute,
 		Run:             p.runProtectedPathsSync,
 		// Scheduled to run every 30 minutes (matches the TTL of the cache).
-		Schedule: stringPtr("*/30 * * * *"),
+		Schedule: new("*/30 * * * *"),
 	}
 }
 
@@ -47,8 +47,4 @@ func (p *Plugin) runProtectedPathsSync(ctx context.Context, _ json.RawMessage, r
 	prog.Finalize("Writing results...")
 	prog.Done("Protected paths refreshed")
 	return nil
-}
-
-func stringPtr(s string) *string {
-	return &s
 }

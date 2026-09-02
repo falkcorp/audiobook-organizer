@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/optimize_backfill_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3a1c96-5b70-4d2f-9a41-c7f0d6b28e53
-// last-edited: 2026-08-12
+// last-edited: 2026-09-02
 
 package maintenance
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -46,12 +47,7 @@ func TestOptimize_AcoustIDBackfillRespectsTheFlag(t *testing.T) {
 	}
 
 	contains := func(hay []string, needle string) bool {
-		for _, s := range hay {
-			if s == needle {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(hay, needle)
 	}
 
 	t.Run("disabled excludes the child", func(t *testing.T) {
