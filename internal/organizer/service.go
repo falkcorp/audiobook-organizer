@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-02
 
@@ -1454,6 +1454,13 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 	dir := ""
 	if landing.IsDir() {
 		dir = landing.Path
+		if err := ensureUnderRoot(dir, root); err != nil {
+			// Same guard the files get. Only an EMPTY directory can be
+			// removed, so this is symmetry rather than a live hole, but a
+			// rollback that cannot prove a path is ours must not touch it.
+			log.Error("organize: rollback for %s will not remove directory %s: %v", newBookID, dir, err)
+			dir = ""
+		}
 	}
 	// Containment is ensureUnderRoot (separator-aware), not a bare prefix
 	// test: /library2/x is not under /library. Organize COPIES and the

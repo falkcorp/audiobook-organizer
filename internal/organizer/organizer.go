@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.37.0
+// version: 1.37.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-02
 
@@ -846,7 +846,7 @@ func (o *Organizer) organizeBookDirectory(book *database.Book, files []database.
 			// already wrote comes back out — until 2026-09-02 this return left
 			// the earlier files behind under RootDir with no row naming them.
 			leftover := unlinkCreated(created, targetDir, targetDir)
-			return nil, fmt.Errorf("failed to organize segment %s: %w%s", fileName, err, leftoverSuffix(leftover))
+			return nil, fmt.Errorf("failed to organize segment %s: %w%s%s", fileName, err, unlandedSuffix(unlanded), leftoverSuffix(leftover))
 		}
 		pathMap[srcPath] = dstPath
 		created = append(created, dstPath)
@@ -854,15 +854,8 @@ func (o *Organizer) organizeBookDirectory(book *database.Book, files []database.
 
 	if len(unlanded) > 0 {
 		leftover := unlinkCreated(created, targetDir, targetDir)
-		var b strings.Builder
-		for i, u := range unlanded {
-			if i > 0 {
-				b.WriteString("; ")
-			}
-			fmt.Fprintf(&b, "%s -> %s: %s", u.Source, u.Target, u.Reason)
-		}
 		return nil, fmt.Errorf("organize of %q (id=%s) did not land %d of %d file(s); nothing was kept: %s%s",
-			book.Title, book.ID, len(unlanded), len(planned), b.String(), leftoverSuffix(leftover))
+			book.Title, book.ID, len(unlanded), len(planned), joinUnlanded(unlanded), leftoverSuffix(leftover))
 	}
 
 	return &Landing{Path: targetDir, Files: pathMap, Created: created}, nil
@@ -900,7 +893,7 @@ func unlinkCreated(created []string, root, dir string) []string {
 	}
 	if dir != "" {
 		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			slog.Debug("organize: rollback left the target directory in place", "dir", dir, "error", err)
+			slog.Warn("organize: rollback left the target directory in place", "dir", dir, "error", err)
 		}
 	}
 	return leftover
@@ -908,6 +901,26 @@ func unlinkCreated(created []string, root, dir string) []string {
 
 // leftoverSuffix renders unlinkCreated's failures for an error message, or
 // nothing when the rollback was clean.
+func joinUnlanded(unlanded []unlandedFile) string {
+	var b strings.Builder
+	for i, u := range unlanded {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "%s -> %s: %s", u.Source, u.Target, u.Reason)
+	}
+	return b.String()
+}
+
+// unlandedSuffix names the files that had already failed to land when a later
+// segment failed fatally, so the fatal error does not swallow their reasons.
+func unlandedSuffix(unlanded []unlandedFile) string {
+	if len(unlanded) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d earlier file(s) had not landed: %s)", len(unlanded), joinUnlanded(unlanded))
+}
+
 func leftoverSuffix(leftover []string) string {
 	if len(leftover) == 0 {
 		return ""
