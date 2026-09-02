@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_ops_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b7e0a34-9c26-4d18-a0f7-3e9b2c41d685
-// last-edited: 2026-08-22
+// last-edited: 2026-09-02
 
 package metabatch_test
 
@@ -393,7 +393,7 @@ func TestCandidateFetchOps_QueuedRunSurvivesACrowdedOpsTable(t *testing.T) {
 
 	var rows []database.OperationV2Row
 	// 300 unrelated ops that have already STARTED, so they sort above anything queued.
-	for i := 0; i < 300; i++ {
+	for i := range 300 {
 		rows = append(rows, database.OperationV2Row{
 			ID: fmt.Sprintf("other-%d", i), DefID: "library.scan",
 			Status: "running", QueuedAt: now, StartedAt: &started,
@@ -422,7 +422,7 @@ func TestCandidateFetchOps_QueuedRunSurvivesACrowdedOpsTable(t *testing.T) {
 func TestCandidateFetchOps_LimitBoundsTheResult(t *testing.T) {
 	now := time.Now()
 	var rows []database.OperationV2Row
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rows = append(rows, database.OperationV2Row{
 			ID: fmt.Sprintf("f-%d", i), DefID: metabatch.CandidateFetchDefID,
 			Status: "completed", QueuedAt: now.Add(-time.Duration(i) * time.Minute),
