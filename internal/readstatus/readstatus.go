@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
-// last-edited: 2026-08-18
+// last-edited: 2026-09-02
 //
 // RecomputeUserBookState derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -113,10 +113,7 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 	}
 	state.TotalListenedSeconds = listened
 	if totalDuration > 0 {
-		pct := int((listened / totalDuration) * 100)
-		if pct < 0 {
-			pct = 0
-		}
+		pct := max(int((listened/totalDuration)*100), 0)
 		if pct > 100 {
 			pct = 100
 		}
