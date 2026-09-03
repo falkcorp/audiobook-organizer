@@ -1,13 +1,16 @@
 // file: internal/metafetch/source_chain_walk_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e91c7d4-8b52-4a06-9f13-6c8d2e5a70b4
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 
 package metafetch
 
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,4 +154,138 @@ func (r *recordingSource) SearchByTitle(_ context.Context, title string) ([]meta
 }
 func (r *recordingSource) SearchByTitleAndAuthor(ctx context.Context, title, _ string) ([]metadata.BookMetadata, error) {
 	return r.SearchByTitle(ctx, title)
+}
+
+// idSource is a fakeSource that also declares a provider id, so the throttle
+// registry can key holds on it. Name deliberately DIFFERS from the id — every
+// real client has that divergence ("Audible" vs "audible") and a fixture where
+// they match cannot tell which one the gate uses.
+type idSource struct {
+	id      string
+	results []metadata.BookMetadata
+	err     error
+	calls   *int
+}
+
+func (s idSource) Name() string       { return "Stub " + s.id }
+func (s idSource) ProviderID() string { return s.id }
+func (s idSource) SearchByTitle(context.Context, string) ([]metadata.BookMetadata, error) {
+	if s.calls != nil {
+		*s.calls++
+	}
+	return s.results, s.err
+}
+
+func (s idSource) SearchByTitleAndAuthor(ctx context.Context, _, _ string) ([]metadata.BookMetadata, error) {
+	return s.SearchByTitle(ctx, "")
+}
+
+const walkQuotaBody = `{"error":{"message":"Quota exceeded for quota metric 'Queries' and limit 'Queries per day'"}}`
+
+func walkThrottle(t *testing.T, id string, status int, body string) {
+	t.Helper()
+	resp := &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}
+	if _, ok := metadata.DefaultThrottleRegistry().RecordFailure(id, metadata.StatusError(id, resp)); !ok {
+		t.Fatalf("setup: %d did not throttle %s", status, id)
+	}
+}
+
+func resetWalkThrottles(t *testing.T) {
+	t.Helper()
+	metadata.ResetThrottlesForTesting()
+	t.Cleanup(metadata.ResetThrottlesForTesting)
+}
+
+// AllThrottled is the mid-run counterpart to the pre-flight refusal, and it is
+// what stops the incident this feature exists for. The chain is filtered once
+// before the worker pool starts; the quota that motivated this work ran out at
+// book 350 of 22,934, so without this flag the remaining ~22,584 books each got
+// a ledger row for work that provably could not happen.
+func TestWalkSourceChain_AllThrottledIsReportedMidRun(t *testing.T) {
+	resetWalkThrottles(t)
+	var googleCalls, hardcoverCalls int
+	chain := []metadata.MetadataSource{
+		metadata.NewChainSource(idSource{id: "google-books", calls: &googleCalls}),
+		metadata.NewChainSource(idSource{id: "hardcover", calls: &hardcoverCalls}),
+	}
+	sem := NewProviderSemaphore(chain, DefaultPerProviderFetchCap)
+
+	walkThrottle(t, "google-books", 429, walkQuotaBody)
+	walkThrottle(t, "hardcover", 401, "bad token")
+
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	if err != nil {
+		t.Fatalf("WalkSourceChain: %v", err)
+	}
+	if !out.AllThrottled {
+		t.Fatal("every provider refused on the throttle and AllThrottled was not set; the run would ledger a failure for this book and every one after it")
+	}
+	if googleCalls != 0 || hardcoverCalls != 0 {
+		t.Fatalf("a throttled provider was still called: google=%d hardcover=%d", googleCalls, hardcoverCalls)
+	}
+}
+
+// One live provider means the run can still do work — AllThrottled must stay
+// false or a partial throttle would abort a run that was making progress.
+func TestWalkSourceChain_PartialThrottleIsNotAllThrottled(t *testing.T) {
+	resetWalkThrottles(t)
+	chain := []metadata.MetadataSource{
+		metadata.NewChainSource(idSource{id: "google-books"}),
+		metadata.NewChainSource(idSource{id: "hardcover", results: []metadata.BookMetadata{{Title: "Dune"}}}),
+	}
+	sem := NewProviderSemaphore(chain, DefaultPerProviderFetchCap)
+	walkThrottle(t, "google-books", 429, walkQuotaBody)
+
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	if err != nil {
+		t.Fatalf("WalkSourceChain: %v", err)
+	}
+	if out.AllThrottled {
+		t.Fatal("a partial throttle reported AllThrottled; a run still making progress would be aborted")
+	}
+	if len(out.Results) != 1 {
+		t.Fatalf("the live provider's results were lost: %v", out.Results)
+	}
+}
+
+// A clean chain that simply finds nothing is not throttled — otherwise every
+// book absent from every catalog would abort the run.
+func TestWalkSourceChain_NoResultsIsNotAllThrottled(t *testing.T) {
+	resetWalkThrottles(t)
+	chain := []metadata.MetadataSource{metadata.NewChainSource(idSource{id: "google-books"})}
+	sem := NewProviderSemaphore(chain, DefaultPerProviderFetchCap)
+
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	if err != nil {
+		t.Fatalf("WalkSourceChain: %v", err)
+	}
+	if out.AllThrottled {
+		t.Fatal("an ordinary miss was reported as all-throttled")
+	}
+}
+
+// The first book to hit a quota is the one row an operator opens to find out
+// what happened. The query ladder retries up to four times, so attempts 2-4
+// return the throttle sentinel — which must not overwrite the real diagnosis.
+func TestWalkSourceChain_SentinelDoesNotDisplaceTheDiagnosis(t *testing.T) {
+	resetWalkThrottles(t)
+	resp := &http.Response{
+		StatusCode: 429,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(walkQuotaBody)),
+	}
+	quotaErr := metadata.StatusError("google-books", resp)
+	chain := []metadata.MetadataSource{metadata.NewChainSource(idSource{id: "google-books", err: quotaErr})}
+	sem := NewProviderSemaphore(chain, DefaultPerProviderFetchCap)
+
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	if err != nil {
+		t.Fatalf("WalkSourceChain: %v", err)
+	}
+	if out.Err == nil {
+		t.Fatal("no error recorded")
+	}
+	if !strings.Contains(out.Err.Error(), "Queries per day") {
+		t.Fatalf("the quota message was displaced by the throttle sentinel, so the ledger row cannot name the cause: %v", out.Err)
+	}
 }
