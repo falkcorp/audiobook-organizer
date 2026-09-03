@@ -1,7 +1,7 @@
 // file: internal/server/wire_metadata_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-defa-456789012345
-// last-edited: 2026-06-23
+// last-edited: 2026-09-03
 
 package server
 
@@ -38,4 +38,11 @@ func (s *Server) wireMetadataRoutes(
 	protected.PATCH("/audiobooks/:id/rating", s.perm(auth.PermLibraryEditMetadata), metadataH.HandleUpdateBookRating)
 	protected.POST("/audiobooks/batch-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.BatchWriteBackAudiobooks)
 	protected.POST("/audiobooks/bulk-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.HandleBulkWriteBack)
+
+	// Global provider throttles. Reading is a view permission; clearing a hold
+	// resumes outbound calls to a provider that refused us, so it takes the
+	// same edit permission as a fetch.
+	protected.GET("/metadata/providers/throttles", s.perm(auth.PermLibraryView), metadataH.ListProviderThrottles)
+	protected.DELETE("/metadata/providers/throttles", s.perm(auth.PermLibraryEditMetadata), metadataH.ClearAllProviderThrottles)
+	protected.DELETE("/metadata/providers/throttles/:id", s.perm(auth.PermLibraryEditMetadata), metadataH.ClearProviderThrottle)
 }

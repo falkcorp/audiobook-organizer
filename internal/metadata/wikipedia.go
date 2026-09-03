@@ -130,7 +130,7 @@ func (c *WikipediaClient) search(ctx context.Context, query string) ([]BookMetad
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("wikipedia API returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDWikipedia, resp)
 	}
 
 	var mwResp mediawikiSearchResponse

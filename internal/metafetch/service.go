@@ -276,6 +276,21 @@ type SearchOptions struct {
 	// MetadataLLMScoringEnabled is true on the server). When false, only
 	// the base scorer tier runs.
 	UseRerank bool
+
+	// BypassProviderThrottle lets this ONE search call a provider that is
+	// globally throttled.
+	//
+	// The rule the user set: automatic and bulk paths respect the hold; an
+	// explicit, user-initiated lookup on a single book goes through anyway.
+	// Bazarr draws the same line -- its throttle governs automatic searches,
+	// not the button a human just pressed. One extra request cannot re-trigger
+	// a quota block, and if it SUCCEEDS the registry clears the hold, so a
+	// provider that recovered early is released by evidence instead of waiting
+	// out a timer.
+	//
+	// Set it only where a human asked for exactly one book. Setting it on a
+	// batch path silently deletes the whole feature.
+	BypassProviderThrottle bool
 }
 
 // embedCoverInBookFiles embeds cover art into all audio files for a book.

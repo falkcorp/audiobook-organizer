@@ -182,7 +182,7 @@ func (c *AudibleClient) LookupByASIN(asin string) (*BookMetadata, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("audible API returned status %d for ASIN %s", resp.StatusCode, asin)
+		return nil, fmt.Errorf("ASIN %s: %w", asin, StatusError(SourceIDAudible, resp))
 	}
 
 	var result audibleProductResponse
@@ -212,7 +212,7 @@ func (c *AudibleClient) searchCatalog(ctx context.Context, searchURL string) ([]
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("audible API returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDAudible, resp)
 	}
 
 	body, err := io.ReadAll(resp.Body)

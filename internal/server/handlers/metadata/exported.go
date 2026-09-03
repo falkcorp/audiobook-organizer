@@ -69,3 +69,12 @@ func (h *Handler) GetMetadataFields(c *gin.Context) { h.getMetadataFieldsImpl(c)
 
 // HandleUpdateBookRating handles PATCH /api/v1/audiobooks/:id/rating.
 func (h *Handler) HandleUpdateBookRating(c *gin.Context) { h.handleUpdateBookRatingImpl(c) }
+
+// ListProviderThrottles handles GET /api/v1/metadata/providers/throttles.
+func (h *Handler) ListProviderThrottles(c *gin.Context) { h.listProviderThrottlesImpl(c) }
+
+// ClearProviderThrottle handles DELETE /api/v1/metadata/providers/throttles/:id.
+func (h *Handler) ClearProviderThrottle(c *gin.Context) { h.clearProviderThrottleImpl(c) }
+
+// ClearAllProviderThrottles handles DELETE /api/v1/metadata/providers/throttles.
+func (h *Handler) ClearAllProviderThrottles(c *gin.Context) { h.clearAllProviderThrottlesImpl(c) }

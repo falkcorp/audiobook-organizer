@@ -220,7 +220,7 @@ func (c *HardcoverClient) search(ctx context.Context, query string) ([]BookMetad
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hardcover API returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDHardcover, resp)
 	}
 
 	var gqlResp hardcoverGraphQLResponse

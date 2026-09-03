@@ -115,7 +115,7 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("google Books API returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDGoogleBooks, resp)
 	}
 
 	body, err := io.ReadAll(resp.Body)

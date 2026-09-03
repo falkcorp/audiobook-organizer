@@ -116,7 +116,7 @@ func (c *AudnexusClient) SearchByTitleAndAuthor(ctx context.Context, title, auth
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("audnexus author search returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDAudnexus, resp)
 	}
 
 	var authors []audnexusAuthor
@@ -237,7 +237,7 @@ func (c *AudnexusClient) lookupRegion(ctx context.Context, asin, region string) 
 		slog.Debug("Audnexus found ASIN in region", "asin", asin, "region", region)
 		return c.bookToMetadata(&book), true, nil
 	}
-	return nil, false, fmt.Errorf("audnexus book lookup returned status %d (region=%s)", resp.StatusCode, region)
+	return nil, false, fmt.Errorf("region=%s: %w", region, StatusError(SourceIDAudnexus, resp))
 }
 
 func (c *AudnexusClient) bookToMetadata(book *audnexusBook) *BookMetadata {
