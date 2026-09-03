@@ -1,58 +1,66 @@
 // file: internal/metadata/provider_keys.go
-// version: 1.0.0
+// version: 2.1.0
 // guid: 5a7c2f18-6d94-4e3b-8021-c9f5b47e6a03
 // last-edited: 2026-09-02
 
 package metadata
 
-import "strings"
+// Canonical provider ids.
+//
+// These are the SAME strings as config.MetadataSource.ID (see the defaults in
+// internal/config/config.go) and the same keys providerhttp budgets are stored
+// under. One vocabulary, defined once.
+//
+// It was briefly three. Config said "google-books", the HTTP client asked for
+// "googlebooks", and the client's display Name() was "Google Books", so a rate
+// limit stored under one spelling was read under another: written, never
+// consulted, provider silently left on its built-in budget while the settings
+// UI reported the configured number. Nothing errored. The fix is for everyone
+// to use the id the provider already has, not to translate between spellings.
+const (
+	SourceIDAudible     = "audible"
+	SourceIDAudnexus    = "audnexus"
+	SourceIDGoogleBooks = "google-books"
+	SourceIDHardcover   = "hardcover"
+	SourceIDOpenLibrary = "openlibrary"
+	SourceIDWikipedia   = "wikipedia"
+)
 
-// A provider is known by THREE different names in this codebase and they do not
-// agree with each other:
+// ProviderIdentified is implemented by sources that know their canonical
+// provider id.
 //
-//	config.MetadataSource.ID   "google-books"
-//	providerhttp budget key    "googlebooks"
-//	MetadataSource.Name()      "Google Books"
-//
-// Every one of those is load-bearing somewhere: config is what the user edits,
-// the budget key is what the rate limiter is stored under, and Name() is what
-// the per-provider concurrency semaphore keys on. Storing a rate limit under
-// the wrong spelling is SILENTLY INERT — the value is written, never read, the
-// provider quietly keeps its built-in budget, and the settings UI reports a
-// number that has no effect on anything.
-//
-// canonicalProviderKeys collapses all three vocabularies onto the single key
-// providerhttp budgets live under. Keys are lower-cased on lookup.
-var canonicalProviderKeys = map[string]string{
-	// openlibrary
-	"openlibrary":  "openlibrary",
-	"open library": "openlibrary",
-	"open-library": "openlibrary",
-	// googlebooks
-	"googlebooks":  "googlebooks",
-	"google-books": "googlebooks",
-	"google books": "googlebooks",
-	// audible
-	"audible": "audible",
-	// audnexus — Name() carries a parenthetical
-	"audnexus":           "audnexus",
-	"audnexus (audible)": "audnexus",
-	// hardcover
-	"hardcover": "hardcover",
-	// wikipedia
-	"wikipedia": "wikipedia",
-	// cover art downloads
-	"cover": "cover",
+// Deliberately OPTIONAL rather than folded into MetadataSource: the id is
+// needed for request budgeting and concurrency, not for searching, and the
+// search interface is implemented by a mockery mock plus a handful of test
+// stubs that have no meaningful id. Widening MetadataSource would force all of
+// them to answer a question they do not care about.
+type ProviderIdentified interface {
+	ProviderID() string
 }
 
-// CanonicalProviderKey resolves any known spelling of a provider — a config
-// source ID, a MetadataSource display name, or the budget key itself — to the
-// key providerhttp stores that provider's request budget under.
+// ProviderIDOf returns a source's canonical provider id, unwrapping decorators
+// such as ProtectedSource. It returns "" when the source does not declare one
+// (test stubs, mocks), which callers must treat as "use the default budget"
+// rather than as a usable key — a budget stored under "" applies to no traffic
+// at all, which looks exactly like a limit being honoured.
+func ProviderIDOf(src MetadataSource) string {
+	if p, ok := src.(ProviderIdentified); ok {
+		return p.ProviderID()
+	}
+	return ""
+}
+
+// ProviderKey returns the stable key for a source: its canonical provider id,
+// falling back to the display name only for sources that declare none (test
+// stubs and mocks).
 //
-// It returns "" for anything unrecognised. Callers must treat that as an error
-// worth reporting rather than inventing a key: a phantom budget under a
-// misspelled name applies to no traffic at all, which looks exactly like a
-// limit that is being respected.
-func CanonicalProviderKey(s string) string {
-	return canonicalProviderKeys[strings.ToLower(strings.TrimSpace(s))]
+// This is the ONE helper for "what do we key this source's data under". Both
+// the per-provider concurrency semaphore and the metadata-fetch cache use it,
+// so the two cannot drift onto different vocabularies -- which is exactly how
+// a configured limit ended up applying to no traffic.
+func ProviderKey(src MetadataSource) string {
+	if id := ProviderIDOf(src); id != "" {
+		return id
+	}
+	return src.Name()
 }

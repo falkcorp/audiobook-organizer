@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-09-02
 
@@ -118,7 +118,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 			maxAge := time.Duration(ttlDays) * 24 * time.Hour
 			hasFreshCache := false
 			for _, src := range sourceChain {
-				if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, b.ID, src.Name(), maxAge); cerr == nil && cached != nil {
+				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
 					hasFreshCache = true
 					break
 				}
@@ -163,15 +163,18 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 
 		var metaResults []metadata.BookMetadata
 		var sourceName string
+		// providerKey is what the cache row is written under (canonical id);
+		// sourceName stays the display name shown to a human in the result.
+		var providerKey string
 		cacheHit := false
 
 		maxAge := time.Duration(ttlDays) * 24 * time.Hour
 		for _, src := range sourceChain {
-			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, bookID, src.Name(), maxAge); cerr == nil && cached != nil {
+			if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
 				var cachedResults []metadata.BookMetadata
 				if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil && len(cachedResults) > 0 {
 					metaResults = cachedResults
-					sourceName = src.Name()
+					sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
 					cacheHit = true
 					break
 				}
@@ -180,26 +183,26 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 			if currentAuthor != "" {
 				metaResults, fetchErr = src.SearchByTitleAndAuthor(ctx, searchTitle, currentAuthor)
 				if fetchErr == nil && len(metaResults) > 0 {
-					sourceName = src.Name()
+					sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
 					break
 				}
 			}
 			metaResults, fetchErr = src.SearchByTitle(ctx, searchTitle)
 			if fetchErr == nil && len(metaResults) > 0 {
-				sourceName = src.Name()
+				sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
 				break
 			}
 			if searchTitle != w.book.Title {
 				if currentAuthor != "" {
 					metaResults, fetchErr = src.SearchByTitleAndAuthor(ctx, w.book.Title, currentAuthor)
 					if fetchErr == nil && len(metaResults) > 0 {
-						sourceName = src.Name()
+						sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
 						break
 					}
 				}
 				metaResults, fetchErr = src.SearchByTitle(ctx, w.book.Title)
 				if fetchErr == nil && len(metaResults) > 0 {
-					sourceName = src.Name()
+					sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
 					break
 				}
 			}
@@ -209,7 +212,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		if len(metaResults) > 0 && sourceName != "" {
 			if !cacheHit {
 				if blob, merr := json.Marshal(metaResults); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, sourceName, blob, 0)
+					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
 				}
 			}
 			found++

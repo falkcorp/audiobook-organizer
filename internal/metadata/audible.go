@@ -1,5 +1,5 @@
 // file: internal/metadata/audible.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
 // last-edited: 2026-08-30
 
@@ -30,7 +30,7 @@ type AudibleClient struct {
 func NewAudibleClient() *AudibleClient {
 	baseURL := resolveBaseURL("audible", "https://api.audible.com/1.0")
 	return &AudibleClient{
-		httpClient: providerhttp.Client("audible"),
+		httpClient: providerhttp.Client(SourceIDAudible),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
@@ -38,12 +38,17 @@ func NewAudibleClient() *AudibleClient {
 // NewAudibleClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewAudibleClientWithBaseURL(baseURL string) *AudibleClient {
 	return &AudibleClient{
-		httpClient: providerhttp.Client("audible"),
+		httpClient: providerhttp.Client(SourceIDAudible),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
 
 // Name returns the display name for this metadata source.
+// ProviderID is the canonical id shared by config, the request-budget
+// table and this client. Name() is a display string and must not be used
+// as a key.
+func (c *AudibleClient) ProviderID() string { return SourceIDAudible }
+
 func (c *AudibleClient) Name() string {
 	return "Audible"
 }

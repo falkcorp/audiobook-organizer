@@ -1,5 +1,5 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
 // last-edited: 2026-08-30
 
@@ -29,7 +29,7 @@ type GoogleBooksClient struct {
 func NewGoogleBooksClient(apiKey string) *GoogleBooksClient {
 	baseURL := resolveBaseURL("google-books", "https://www.googleapis.com/books/v1")
 	return &GoogleBooksClient{
-		httpClient: providerhttp.Client("googlebooks"),
+		httpClient: providerhttp.Client(SourceIDGoogleBooks),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiKey:     apiKey,
 	}
@@ -38,12 +38,17 @@ func NewGoogleBooksClient(apiKey string) *GoogleBooksClient {
 // NewGoogleBooksClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewGoogleBooksClientWithBaseURL(baseURL string) *GoogleBooksClient {
 	return &GoogleBooksClient{
-		httpClient: providerhttp.Client("googlebooks"),
+		httpClient: providerhttp.Client(SourceIDGoogleBooks),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
 
 // Name returns the display name for this metadata source.
+// ProviderID is the canonical id shared by config, the request-budget
+// table and this client. Name() is a display string and must not be used
+// as a key.
+func (c *GoogleBooksClient) ProviderID() string { return SourceIDGoogleBooks }
+
 func (c *GoogleBooksClient) Name() string {
 	return "Google Books"
 }

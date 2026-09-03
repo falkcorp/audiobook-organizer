@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-02
 
@@ -122,7 +122,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 		// fetch or a prior search dialog populates it, so a subsequent single-
 		// book fetch can return immediately without another network round-trip.
 		maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
-		if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), maxAge); cerr == nil && cached != nil {
+		if cached, _, cerr := database.CachedMetadataForProvider(mfs.db, id, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
 			var cachedResults []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil && len(cachedResults) > 0 {
 				// Self-correct stale entries: the fetch cache stores parsed
@@ -220,7 +220,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// for this book+source can skip the external API entirely.
 			if len(results) > 0 {
 				if blob, merr := json.Marshal(results); merr == nil {
-					if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), blob, 0); perr != nil {
+					if perr := database.PutCachedMetadataFetch(mfs.db, id, metadata.ProviderKey(src), blob, 0); perr != nil {
 						slog.Warn("metadata-fetch cache put failed for ( )", "id", id, "name", src.Name(), "error", perr)
 					}
 				}

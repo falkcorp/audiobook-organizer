@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
 // last-edited: 2026-08-15
 
@@ -63,7 +63,7 @@ var defaultLimits = map[string]Limits{
 	"audnexus": {RPS: 2.0, Burst: 2, MaxRetries: 3, Timeout: 30 * time.Second},
 	// Google Books' documented anonymous quota is per-day, not per-second; the
 	// practical constraint is per-IP throttling, so pace modestly.
-	"googlebooks": {RPS: 3.0, Burst: 3, MaxRetries: 3, Timeout: 30 * time.Second},
+	"google-books": {RPS: 3.0, Burst: 3, MaxRetries: 3, Timeout: 30 * time.Second},
 	// OpenLibrary asks for "reasonable" use and publishes no hard number.
 	"openlibrary": {RPS: 3.0, Burst: 3, MaxRetries: 3, Timeout: 30 * time.Second},
 	// Wikipedia's API policy asks for serial-ish access from one client.

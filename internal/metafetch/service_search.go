@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-08-15
 
@@ -149,12 +149,14 @@ func sourceChainFingerprint() string {
 // absolute number would be reckless for one provider and needlessly slow for
 // another.
 func applyProviderLimits(src config.MetadataSource) {
-	key := metadata.CanonicalProviderKey(src.ID)
+	// The config id IS the budget key -- providerhttp stores budgets under the
+	// same ids config uses, so nothing is translated here. An unrecognised but
+	// non-empty id still gets a budget (providerhttp falls back to a
+	// deliberately conservative default), which is the safe direction for a
+	// source we do not ship.
+	key := strings.TrimSpace(src.ID)
 	if key == "" {
-		// Not fatal, but the user's setting for this source will do nothing, so
-		// do not let that pass in silence.
-		slog.Warn("metadata source has no known rate-limit budget; leaving built-in defaults in place",
-			"source_id", src.ID)
+		slog.Warn("metadata source has no id; cannot apply a rate-limit budget")
 		return
 	}
 

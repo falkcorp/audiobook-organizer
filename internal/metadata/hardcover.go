@@ -1,5 +1,5 @@
 // file: internal/metadata/hardcover.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e7e02554-8931-49ba-9528-d3d51279da1d
 // last-edited: 2026-07-13
 
@@ -34,7 +34,7 @@ type HardcoverClient struct {
 // NewHardcoverClient creates a new Hardcover API client with the given token.
 func NewHardcoverClient(apiToken string) *HardcoverClient {
 	return &HardcoverClient{
-		httpClient: providerhttp.Client("hardcover"),
+		httpClient: providerhttp.Client(SourceIDHardcover),
 		baseURL:    "https://api.hardcover.app/v1/graphql",
 		apiToken:   apiToken,
 	}
@@ -43,13 +43,18 @@ func NewHardcoverClient(apiToken string) *HardcoverClient {
 // NewHardcoverClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewHardcoverClientWithBaseURL(baseURL, apiToken string) *HardcoverClient {
 	return &HardcoverClient{
-		httpClient: providerhttp.Client("hardcover"),
+		httpClient: providerhttp.Client(SourceIDHardcover),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiToken:   apiToken,
 	}
 }
 
 // Name returns the display name for this metadata source.
+// ProviderID is the canonical id shared by config, the request-budget
+// table and this client. Name() is a display string and must not be used
+// as a key.
+func (c *HardcoverClient) ProviderID() string { return SourceIDHardcover }
+
 func (c *HardcoverClient) Name() string {
 	return "Hardcover"
 }

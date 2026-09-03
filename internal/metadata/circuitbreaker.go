@@ -1,5 +1,5 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
 // last-edited: 2026-07-13
 
@@ -141,6 +141,11 @@ func NewProtectedSource(source MetadataSource, threshold int, cooldown time.Dura
 		breaker: NewCircuitBreaker(source.Name(), threshold, cooldown),
 	}
 }
+
+// ProviderID forwards the wrapped source's canonical id. Without this the
+// decorator swallows it and every chain-built source looks unidentified,
+// silently falling back to default budgets.
+func (ps *ProtectedSource) ProviderID() string { return ProviderIDOf(ps.source) }
 
 func (ps *ProtectedSource) Name() string {
 	return ps.source.Name()

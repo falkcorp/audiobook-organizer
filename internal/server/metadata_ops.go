@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-02
 //
@@ -135,31 +135,30 @@ func writeBackWorkers() int {
 // workers only ever touch a per-name buffered channel — never the map itself.
 type providerSemaphore struct{ byName map[string]chan struct{} }
 
-// newProviderSemaphore builds a per-source-name semaphore from a source chain.
+// newProviderSemaphore builds a per-provider semaphore from a source chain.
 // Duplicate names share one channel.
 //
 // Capacity is per provider: a provider with a configured max_concurrent gets
-// that, everything else gets defaultCap. The lookup goes through
-// metadata.CanonicalProviderKey because the chain keys on the client's display
-// name ("Google Books") while config keys on the source id ("google-books") --
-// comparing those directly would match nothing and silently hand every
-// provider the default.
+// that, everything else gets defaultCap.
+//
+// Both the map and the config lookup key on the canonical provider id, so the
+// two can never disagree -- which they would if one used the display name.
 func newProviderSemaphore(chain []metadata.MetadataSource, defaultCap int) *providerSemaphore {
 	configured := make(map[string]int)
 	for _, cs := range config.AppConfig.MetadataSources {
-		if k := metadata.CanonicalProviderKey(cs.ID); k != "" && cs.RateLimit.MaxConcurrent > 0 {
-			configured[k] = cs.RateLimit.MaxConcurrent
+		if cs.ID != "" && cs.RateLimit.MaxConcurrent > 0 {
+			configured[cs.ID] = cs.RateLimit.MaxConcurrent
 		}
 	}
 
 	m := make(map[string]chan struct{}, len(chain))
 	for _, src := range chain {
-		n := src.Name()
+		n := metadata.ProviderKey(src)
 		if _, ok := m[n]; ok {
 			continue
 		}
 		c := defaultCap
-		if v, ok := configured[metadata.CanonicalProviderKey(n)]; ok {
+		if v, ok := configured[n]; ok {
 			c = v
 		}
 		if c < 1 {
@@ -216,7 +215,11 @@ const (
 type chainOutcome struct {
 	results    []metadata.BookMetadata
 	sourceName string
-	cacheHit   bool
+	// providerKey is the canonical id the winning source's cache row is written
+	// under. sourceName stays the DISPLAY name: it is what the operation ledger
+	// and the review UI show a human.
+	providerKey string
+	cacheHit    bool
 
 	// err is the last live-call error seen while walking the chain, and
 	// errSource the provider that produced it.
@@ -271,23 +274,30 @@ func walkSourceChain(
 		if ctx.Err() != nil {
 			return out, ctx.Err()
 		}
+		// Two different keys on purpose. slotKey is the canonical provider id
+		// and governs concurrency. name is the DISPLAY name and is what the
+		// metadata-fetch cache rows are keyed under (normalized) -- that column
+		// is persisted, so re-keying it to the id would orphan every cached row
+		// and silently trigger a full-library refetch. Changing it needs a
+		// migration, not a rename.
+		slotKey := metadata.ProviderKey(src)
 		name := src.Name()
 
-		if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, bookID, name, maxAge); cerr == nil && cached != nil {
+		if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, slotKey, name, maxAge); cerr == nil && cached != nil {
 			var cr []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &cr); jerr == nil && len(cr) > 0 {
-				out.results, out.sourceName, out.cacheHit = cr, name, true
+				out.results, out.sourceName, out.providerKey, out.cacheHit = cr, name, slotKey, true
 				return out, nil
 			}
 		}
 
 		// Live calls only: bound concurrency per provider. A ctx cancel while
 		// waiting on the semaphore aborts the book with ctx.Err().
-		if err := sem.acquire(ctx, name); err != nil {
+		if err := sem.acquire(ctx, slotKey); err != nil {
 			return out, err
 		}
 		hit := func() bool {
-			defer sem.release(name)
+			defer sem.release(slotKey)
 
 			// Query ladder for this source, most specific first. The untrimmed
 			// retries are appended only when trimming actually changed the
@@ -319,7 +329,7 @@ func walkSourceChain(
 					continue
 				}
 				if len(res) > 0 {
-					out.results, out.sourceName = res, name
+					out.results, out.sourceName, out.providerKey = res, name, slotKey
 					return true
 				}
 			}
@@ -419,7 +429,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		if params.SkipCached {
 			hasFreshCache := false
 			for _, src := range s.metadataFetchService.BuildSourceChain() {
-				if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, b.ID, src.Name(), maxAge); cerr == nil && cached != nil {
+				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
 					hasFreshCache = true
 					break
 				}
@@ -547,12 +557,13 @@ func (s *Server) runBulkMetadataFetchAll(
 		}
 		resultStatus := out.status()
 		sourceName := out.sourceName
+		providerKey := out.providerKey
 		cacheHit := out.cacheHit
 		switch resultStatus {
 		case fetchStatusCached:
 			if !cacheHit {
 				if blob, merr := json.Marshal(out.results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, sourceName, blob, 0)
+					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
 				}
 			}
 			found.Add(1)
@@ -883,7 +894,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		if params.SkipCached {
 			hasFresh := false
 			for _, src := range s.metadataFetchService.BuildSourceChain() {
-				if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(store, id, src.Name(), maxAge); cerr == nil && cached != nil {
+				if cached, _, cerr := database.CachedMetadataForProvider(store, id, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
 					hasFresh = true
 					break
 				}
@@ -997,12 +1008,13 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		}
 		resultStatus := out.status()
 		sourceName := out.sourceName
+		providerKey := out.providerKey
 		cacheHit := out.cacheHit
 		switch resultStatus {
 		case fetchStatusCached:
 			if !cacheHit {
 				if blob, merr := json.Marshal(out.results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, sourceName, blob, 0)
+					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
 				}
 			}
 			found.Add(1)
