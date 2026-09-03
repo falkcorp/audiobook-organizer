@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9c1e4a77-5b2d-4f83-9a10-2e7c6b8d4f01
 // last-edited: 2026-09-02
 
@@ -229,7 +229,7 @@ func TestRunBulkMetadataFetchForBookIDs_CountersExactUnderConcurrency(t *testing
 	store := newRecordingStore(books)
 	srv := &Server{store: store.MockStore, metadataFetchService: metafetch.NewService(store)}
 
-	err := srv.runBulkMetadataFetchForBookIDs(
+	_, err := srv.runBulkMetadataFetchForBookIDs(
 		context.Background(), "op-counters", ids,
 		operations.BulkMetadataFetchParams{}, store, fastpathNoopProgress{},
 	)
@@ -263,7 +263,7 @@ func TestRunBulkMetadataFetchForBookIDs_ResumeSkipExact(t *testing.T) {
 	}
 	srv := &Server{store: store.MockStore, metadataFetchService: metafetch.NewService(store)}
 
-	err := srv.runBulkMetadataFetchForBookIDs(
+	_, err := srv.runBulkMetadataFetchForBookIDs(
 		context.Background(), "op-resume", ids,
 		operations.BulkMetadataFetchParams{}, store, fastpathNoopProgress{},
 	)
@@ -300,7 +300,7 @@ func TestRunBulkMetadataFetchForBookIDs_CtxCanceledReturnsErr(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := srv.runBulkMetadataFetchForBookIDs(
+	_, err := srv.runBulkMetadataFetchForBookIDs(
 		ctx, "op-cancel", ids,
 		operations.BulkMetadataFetchParams{}, store, fastpathNoopProgress{},
 	)

@@ -55,6 +55,33 @@ import (
 // per-deployment tuning is needed. Deliberately NOT config.
 const perProviderFetchCap = 2
 
+// bulkFetchContinuationMargin is how much of the operation's timeout budget is
+// reserved for winding down and enqueueing a successor. It must comfortably
+// exceed the slowest single book (a full source chain of timing-out providers),
+// or the run is killed mid-wind-down and the successor is never queued.
+const bulkFetchContinuationMargin = 10 * time.Minute
+
+// nextContinuationParams builds the successor's params for a fetch chain.
+//
+// Extracted so the property that keeps a chain alive is testable on the real
+// code path rather than restated in a test: the successor MUST carry the
+// predecessor's run key (it is the ledger key -- a fresh one resumes nothing)
+// and MUST differ from the predecessor's params in at least one serialized
+// byte, because EnqueueOp returns the existing op id for byte-identical params
+// while one is active, silently dropping the successor.
+func nextContinuationParams(p handlers.BulkMetadataFetchV2Params, runKey string) handlers.BulkMetadataFetchV2Params {
+	next := p
+	next.RunKey = runKey
+	next.Continuation = p.Continuation + 1
+	return next
+}
+
+// maxBulkFetchContinuations bounds a chain so a bug that always reports work
+// remaining cannot queue links forever. Exceeding it fails loudly rather than
+// silently stopping, because a chain that ends quietly is indistinguishable
+// from one that finished.
+const maxBulkFetchContinuations = 64
+
 // defaultBulkFetchWorkers is the fallback outer-loop pool size when
 // config.AppConfig.MetadataScoring.BulkFetchWorkers is unset (<=0). Network-bound,
 // deliberately smaller than NumCPU per the CLAUDE.md concurrency mandate.
@@ -311,7 +338,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	params operations.BulkMetadataFetchParams,
 	store bulkMetadataFetchStore,
 	progress operations.ProgressReporter,
-) error {
+) (incomplete bool, err error) {
 	// Create operation context for structured logging
 	op := &logging.OpContext{
 		ID:     opID,
@@ -327,7 +354,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	if err != nil {
 		op.SetStatus("failed")
 		logging.Error(ctx, "failed to load all books", "err", err)
-		return fmt.Errorf("GetAllBooksCore: %w", err)
+		return false, fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
 	maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
@@ -340,7 +367,7 @@ func (s *Server) runBulkMetadataFetchAll(
 
 	allAuthors, err := store.GetAllAuthors()
 	if err != nil {
-		return fmt.Errorf("GetAllAuthors: %w", err)
+		return false, fmt.Errorf("GetAllAuthors: %w", err)
 	}
 	authorByID := make(map[int]string, len(allAuthors))
 	for _, a := range allAuthors {
@@ -391,7 +418,7 @@ func (s *Server) runBulkMetadataFetchAll(
 
 	if len(work) == 0 {
 		_ = progress.UpdateProgress(totalBooks, totalBooks, "all books already cached")
-		return nil
+		return false, nil
 	}
 
 	sourceChain := s.metadataFetchService.BuildSourceChain()
@@ -413,6 +440,20 @@ func (s *Server) runBulkMetadataFetchAll(
 	// Counters shared across the worker pool: completed (running total, seeded
 	// with the already-cached count) plus found/notFound as atomics. The `done`
 	// resume map above is fully built before dispatch and read-only inside workers.
+	// Stop accepting new books shortly BEFORE the registry's def.Timeout and
+	// hand the remainder to a queued successor.
+	//
+	// Hitting the wall is not a survivable state for this op: worker.go maps
+	// context.DeadlineExceeded to the terminal status "canceled", which
+	// ListResumableOperationsV2 excludes -- so a run that times out is dead and
+	// every book it had left has no route back. Stopping early is what turns
+	// "the 6h run died at 95%" into "the 6h run handed 5% to the next link".
+	//
+	// A book skipped here writes NO ledger row and bumps NO counter, so the
+	// successor sees it as outstanding and picks it up.
+	var stoppedEarly atomic.Bool
+	deadline, hasDeadline := ctx.Deadline()
+
 	completed := int64(alreadyDone)
 	// errored counts books whose providers failed (throttled, broken, or
 	// circuit-open) as distinct from books genuinely absent from every
@@ -441,6 +482,10 @@ func (s *Server) runBulkMetadataFetchAll(
 	processOne := func(gctx context.Context, i int) error {
 		if gctx.Err() != nil {
 			return gctx.Err()
+		}
+		if hasDeadline && time.Until(deadline) < bulkFetchContinuationMargin {
+			stoppedEarly.Store(true)
+			return nil
 		}
 		w := work[i]
 		bookID := w.book.ID
@@ -521,18 +566,19 @@ func (s *Server) runBulkMetadataFetchAll(
 	}
 
 	if err := runBookFetchPool(ctx, bulkFetchWorkers(), len(work), processOne); err != nil {
-		return err
+		return false, err
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 
 	finalCount := atomic.LoadInt64(&completed)
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
 		fmt.Sprintf("complete — cached:%d not_found:%d errors:%d", found.Load(), notFound.Load(), errored.Load()))
 	op.SetStatus("success")
-	logging.Info(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load())
-	return nil
+	logging.Info(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
+		"errors", errored.Load(), "stopped_early", stoppedEarly.Load())
+	return stoppedEarly.Load(), nil
 }
 
 // registryProgressAdapter bridges registry.Reporter → operations.ProgressReporter
@@ -671,14 +717,29 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 				return fmt.Errorf("bulk_metadata_fetch: database not initialized")
 			}
 
-			// Generate a stable opID for OperationResult rows (resume key).
-			// The registry assigns its own run ID; we derive a deterministic
-			// sub-ID so OperationResult rows survive restarts.
-			opID := ulid.Make().String()
+			// The ledger key for this fetch CHAIN. Every OperationResult row is
+			// written under it and every continuation carries it forward, so a
+			// successor reads the same ledger its predecessor wrote.
+			//
+			// This was ulid.Make() until 2026-09-02 -- random on every run,
+			// directly beneath a comment asserting it was deterministic "so
+			// OperationResult rows survive restarts". They never did:
+			// GetOperationResults(opID) always missed, the `done` map was always
+			// empty, and this operation has never once resumed anything.
+			runKey := strings.TrimSpace(p.RunKey)
+			if runKey == "" {
+				runKey = ulid.Make().String()
+			}
+			opID := runKey
+
+			if p.Continuation > maxBulkFetchContinuations {
+				return fmt.Errorf("bulk_metadata_fetch: chain %s exceeded %d continuations; refusing to queue another",
+					runKey, maxBulkFetchContinuations)
+			}
 
 			fetchParams := operations.BulkMetadataFetchParams{
 				PreferAudible: p.PreferAudible,
-				SkipCached:    p.SkipCached,
+				SkipCached:    p.ResolveSkipCached(),
 			}
 
 			progress := registryProgressAdapter{r: reporter}
@@ -690,10 +751,44 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 				return fmt.Errorf("bulk_metadata_fetch: resolve selection: %w", err)
 			}
 
+			var incomplete bool
 			if len(bookIDs) > 0 {
-				return s.runBulkMetadataFetchForBookIDs(ctx, opID, bookIDs, fetchParams, store, progress)
+				incomplete, err = s.runBulkMetadataFetchForBookIDs(ctx, opID, bookIDs, fetchParams, store, progress)
+			} else {
+				incomplete, err = s.runBulkMetadataFetchAll(ctx, opID, fetchParams, store, progress)
 			}
-			return s.runBulkMetadataFetchAll(ctx, opID, fetchParams, store, progress)
+			if err != nil {
+				return err
+			}
+			if !incomplete {
+				return nil
+			}
+
+			// Work was left behind because the timeout was approaching. Queue the
+			// next link. ctx.Err() guards the case where the run stopped because
+			// the USER canceled it -- continuing that chain would resurrect work
+			// somebody deliberately killed.
+			if ctx.Err() != nil {
+				return nil
+			}
+			next := nextContinuationParams(p, runKey)
+			nextID, eerr := reg.EnqueueOp(ctx, "library.bulk-metadata-fetch", next)
+			if eerr != nil {
+				// Not fatal to THIS run -- the books it did fetch are cached and
+				// ledgered -- but it does end the chain, so say so loudly rather
+				// than reporting a clean finish.
+				logging.Error(ctx, "bulk-metadata-fetch: could not queue continuation; chain ends here",
+					"run_key", runKey, "continuation", next.Continuation, "err", eerr)
+				return fmt.Errorf("bulk_metadata_fetch: queue continuation %d: %w", next.Continuation, eerr)
+			}
+			if nextID == "" {
+				return fmt.Errorf("bulk_metadata_fetch: continuation %d returned an empty op id", next.Continuation)
+			}
+			logging.Info(ctx, "bulk-metadata-fetch: queued continuation",
+				"run_key", runKey, "continuation", next.Continuation, "next_op_id", nextID)
+			_ = reporter.Log(slog.LevelInfo, "stopped before timeout; queued continuation",
+				slog.String("next_op_id", nextID), slog.Int("continuation", next.Continuation))
+			return nil
 		},
 	})
 }
@@ -712,7 +807,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	params operations.BulkMetadataFetchParams,
 	store bulkMetadataFetchByIDStore,
 	progress operations.ProgressReporter,
-) error {
+) (incomplete bool, err error) {
 	// Create operation context for structured logging
 	op := &logging.OpContext{
 		ID:     opID,
@@ -799,6 +894,20 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	// Counters shared across the worker pool: completed (running total, seeded with
 	// the already-done count) plus found/notFound as atomics. The `done` resume map
 	// above is fully built before dispatch and read-only inside workers.
+	// Stop accepting new books shortly BEFORE the registry's def.Timeout and
+	// hand the remainder to a queued successor.
+	//
+	// Hitting the wall is not a survivable state for this op: worker.go maps
+	// context.DeadlineExceeded to the terminal status "canceled", which
+	// ListResumableOperationsV2 excludes -- so a run that times out is dead and
+	// every book it had left has no route back. Stopping early is what turns
+	// "the 6h run died at 95%" into "the 6h run handed 5% to the next link".
+	//
+	// A book skipped here writes NO ledger row and bumps NO counter, so the
+	// successor sees it as outstanding and picks it up.
+	var stoppedEarly atomic.Bool
+	deadline, hasDeadline := ctx.Deadline()
+
 	completed := int64(alreadyDone)
 	// errored counts books whose providers failed (throttled, broken, or
 	// circuit-open) as distinct from books genuinely absent from every
@@ -825,6 +934,10 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	processOne := func(gctx context.Context, i int) error {
 		if gctx.Err() != nil {
 			return gctx.Err()
+		}
+		if hasDeadline && time.Until(deadline) < bulkFetchContinuationMargin {
+			stoppedEarly.Store(true)
+			return nil
 		}
 		w := work[i]
 		bookID := w.book.ID
@@ -901,18 +1014,19 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	}
 
 	if err := runBookFetchPool(ctx, bulkFetchWorkers(), len(work), processOne); err != nil {
-		return err
+		return false, err
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 
 	finalCount := atomic.LoadInt64(&completed)
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
 		fmt.Sprintf("complete — cached:%d not_found:%d errors:%d", found.Load(), notFound.Load(), errored.Load()))
 	op.SetStatus("success")
-	logging.Info(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load())
-	return nil
+	logging.Info(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
+		"errors", errored.Load(), "stopped_early", stoppedEarly.Load())
+	return stoppedEarly.Load(), nil
 }
 
 // runBulkWriteBack writes tags (and optionally renames) for each book in bookIDs,

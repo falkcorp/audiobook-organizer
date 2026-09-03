@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops_fastpath_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7d6c8a2e-9f3b-4a1d-8e5c-2b6f4a9d1c3e
 // last-edited: 2026-09-02
 
@@ -102,7 +102,7 @@ func TestRunBulkMetadataFetchForBookIDs_FastPath_UnderThreshold(t *testing.T) {
 	mfs := metafetch.NewService(store)
 	srv := &Server{store: store, metadataFetchService: mfs}
 
-	err := srv.runBulkMetadataFetchForBookIDs(
+	_, err := srv.runBulkMetadataFetchForBookIDs(
 		context.Background(),
 		"op-fastpath-under",
 		[]string{"b1", "b2", "b3"},
@@ -150,7 +150,7 @@ func TestRunBulkMetadataFetchForBookIDs_MapPath_AtThreshold(t *testing.T) {
 	mfs := metafetch.NewService(store)
 	srv := &Server{store: store, metadataFetchService: mfs}
 
-	err := srv.runBulkMetadataFetchForBookIDs(
+	_, err := srv.runBulkMetadataFetchForBookIDs(
 		context.Background(),
 		"op-fastpath-at-threshold",
 		ids,
@@ -181,7 +181,7 @@ func TestRunBulkMetadataFetchForBookIDs_NilAuthorID_BothBranches(t *testing.T) {
 	mfs := metafetch.NewService(store)
 	srv := &Server{store: store, metadataFetchService: mfs}
 
-	err := srv.runBulkMetadataFetchForBookIDs(
+	_, err := srv.runBulkMetadataFetchForBookIDs(
 		context.Background(),
 		"op-fastpath-nil-author",
 		[]string{"solo"},
