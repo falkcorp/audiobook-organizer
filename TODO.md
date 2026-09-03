@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.46.1 -->
+<!-- version: 10.46.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-02 -->
+<!-- last-edited: 2026-09-03 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,188 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **CFG-VALIDATE-AFTER-PERSIST** `PUT /api/v1/config` still calls
+      `Config.Validate()` AFTER `UpdateService.UpdateConfig` has persisted the
+      blob (`internal/server/handlers/system/handler.go`), so for every field
+      other than `dedup.signals` a value that `Validate()` rejects is already in
+      the DB by the time the handler answers 400 — and `cmd/root.go` runs the
+      same `Validate()` as a hard startup error, so the next restart fails
+      closed on a setting the API appeared to reject. PR #3052 closed this for
+      the dedup score ladder only (validated inside `UpdateConfig` before the
+      save, with a memory/blob rollback). Move the whole `Validate()` call
+      inside `UpdateConfig` (before `SaveConfigToDatabase`) for every field, or
+      delete the post-persist call in the handler and make the pre-persist one
+      authoritative. Blocked on: several config tests drive `UpdateConfig`
+      against a zero `AppConfig` that `Validate()` rejects for unrelated
+      reasons (empty `database_type`, etc.), so those fixtures need a valid
+      baseline first.
+
+- [ ] **`dedup.MergeBooks` hard-delete path has no audio-route guard** — surfaced by the
+  #3053 review (gate count L1). `merge.Service.MergeBooks` now refuses to keep a
+  primary with no audio route while a loser has one (`FilelessPrimaryError`), and
+  elects the survivor with `HasAudioRoute`. The legacy `internal/dedup/book_dedup.go`
+  `MergeBooks` (kept solely for `internal/reconcile/itunes_heal.go:314`) still takes
+  `keepID` as given, hard-deletes every `mergeIDs` row via `store.DeleteBook`, and
+  never asks whether `keepID` has files: a heal that picks a row with no `book_file`
+  rows and an empty `FilePath` as the keeper deletes the only rows that reached the
+  audio. It also still carries the ext-ID / ITL gap its own doc comment records.
+  Fix shape: either route `itunes_heal` through `merge.Service.MergeBooks` (soft
+  delete + version group + `FollowMerge`) and delete the legacy function, or — if the
+  hard-collapse semantics are genuinely required — call `merge.HasAudioRoute` on the
+  keeper and each loser before any delete and return a typed refusal. Add a test that
+  seeds a file-less keeper with a file-bearing loser and asserts nothing is deleted.
+
+- [ ] **`extractSeriesName` truncates an album on the first `,`, `-` or `:`.**
+      `internal/itunes/service/importer.go`'s `extractSeriesName` splits the
+      album title on the first `,`, `-` or `:` and keeps only the left half, so
+      the series name is shortened *before* any normalizer sees it:
+      `86—EIGHTY-SIX` is stored as `86—EIGHTY`. Found while moving the series
+      position out of the series name (PR for
+      `fix/strip-series-position-at-write-time`); left unfixed there because it
+      is a separate pre-existing defect on a different function, and pinned by
+      `TestITunesImport_ExtractSeriesNameTruncatesOnHyphen` so the short name in
+      prod is not misattributed to the de-numbering change. Any fix needs to
+      decide what a legitimate hyphen/colon in a series name means — the split
+      is presumably there to drop a subtitle — so it wants real album samples
+      from the library before changing behaviour.
+
+- [ ] **~17 maintenance/regroup ops write `Book` columns without consulting a field
+  lock** — the one write-path class the #3054 review's gate table (row 19, M2) found
+  unguarded that PR #3054 deliberately did not close: it had already reached 72 changed
+  files, past the review's own >40-file stop threshold, so the remaining rows were
+  deferred rather than rushed. Every other unguarded row in that table (ISBN
+  enrichment, scanner AI nomination, diagnostics AI apply, iTunes reconcile, dedup
+  merge, dedup split/series merge, undo/revert) is now guarded.
+
+  These write a lockable column (title, author, series, narrator, publisher, …)
+  straight through `UpdateBook`, so a maintenance run silently undoes a user's locked
+  edit:
+  - `internal/maintenance/jobs/cleanup_series.go:240-242`, `:301-302`
+  - `internal/maintenance/jobs/fix_read_by_narrator.go:201-205`
+  - `internal/maintenance/jobs/fix_author_narrator_swap.go:85-86`
+  - `internal/maintenance/jobs/refetch_missing_authors.go:177-178`
+  - `internal/scheduler/extra_ops.go:398`, `:407` + `internal/plugins/maintenance/author.go:233`, `:242`
+  - `internal/plugins/maintenance/fs_regroup_xml.go:332`, `:336`
+  - `internal/plugins/maintenance/itunes_regroup.go:316`
+  - `internal/plugins/maintenance/repair_junk_titles.go:184`
+  - `internal/plugins/maintenance/title_backfill.go:150`
+  - `internal/plugins/maintenance/title_repair.go:304`
+  - `internal/plugins/maintenance/series_denumber_op.go:310`, `:314`
+  - `internal/plugins/maintenance/author_conjunction_repair.go:355`
+  - `internal/plugins/maintenance/booksig_recovery_audit.go:360`
+  - `internal/plugins/maintenance/intro_transcribe.go:370`, `:722`, `:835`
+  - `internal/server/entities_ops.go:153`, `:336`, `:363`
+  - `internal/server/server_metadata.go:304`
+  - `internal/server/handlers/entities/handler.go:469`, `:1095`
+  - `internal/server/duplicates_helpers.go:360`, `:728`
+
+  Fix shape: wrap each mutation in `database.ApplyRespectingLocks(store, book, mutate)`
+  and count the returned kept-field names into the op's summary, exactly as
+  `revert_metadata_fetch.go` does. The interface plumbing is already in place —
+  `internal/plugins/maintenance/deps.go`'s `opsHousekeeping` and
+  `internal/maintenance/job.go`'s `jobBookStore` both already embed
+  `database.MetadataFieldStateReader` — so most sites are a call-shape change, not a
+  signature change. Two need care rather than a mechanical wrap: the
+  `entities`/`entities_ops` renames are arguably user-authored (a user renaming an
+  author *is* the edit), so they likely belong in `database.RecordUserOverrides`
+  instead of behind the guard; and `intro_transcribe.go` writes from transcription,
+  which is automated and should be guarded.
+
+  Each site needs a test on a non-empty fixture: lock the field, run the op with a
+  different value, assert the stored value did not move AND that an unlocked sibling
+  field did — an all-locked fixture cannot tell a working guard from an op that writes
+  nothing.
+
+- [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** — none of these
+  lose data; they are clarity and drift risks the review (L1–L4) named:
+  - **L1: a third field vocabulary.** `internal/metafetch/service_apply.go`'s
+    `fields`/`allowed` apply-selection allowlist uses `author`, `series`, `year`,
+    `isbn`, `cover_url` — caller-supplied *selection* names, not lock names, so it is
+    legitimately a different vocabulary. But it is spelled close enough to the lock
+    keys to be misread as one, and `RecordChangeHistory` (`series`) and
+    `persistFetchedMetadata` (`print_year`, `cover_url`) add two more spellings.
+    Either give the selection vocabulary its own named constants or document at each
+    site that it is deliberately not `database.FieldKey*`.
+  - **L2: the UI locks 12 keys, the backend 13.** `FIELD_TO_API` has no `asin`, so a
+    user cannot lock ASIN from the edit dialog even though the backend honours it.
+    Decide whether to expose it or to document the asymmetry in the conformance test,
+    which currently pins the UI list as literals without saying why it is short.
+  - **L3: `series_position` can be locked while `series_name` is not.**
+    `FieldLocks.Apply` protects `SeriesSequence` when `series_name` is locked, so the
+    pair is consistent in that direction; the reverse (position locked, name free) lets
+    a fetch move the book to a different series while pinning its number. Decide
+    whether that combination should be rejected at write time or is intentional.
+  - **L4: the hand-written `database.MockStore` reads as "nothing locked."**
+    `GetMetadataFieldStatesFunc` unset returns `(nil, nil)`, so any test using the
+    hand-written mock without seeding lock rows silently exercises the unlocked path.
+    That is the right default, but it means a guard test that forgets to seed passes
+    for the wrong reason. Worth a comment on the field, and worth preferring the
+    mockery mock (which fails on an unexpected call) in new lock tests.
+
+- [ ] **Organize landing follow-ups accepted as non-blocking in the #3051 review** —
+  none is a data-loss path; each is a hardening the reviewers agreed can land separately:
+  - **Stranded-temp identity is size only.** `internal/organizer/pipeline.go`
+    `strandedTempMismatch` adopts a parked `.tmp-rename` temp when its size matches the
+    row's `FileSize`; `BookFile.FileHash` is on the row `planPass` reads but is not
+    carried into `FileRenameEntry`. The codebase's own `adoptExistingDestination` standard
+    says equal size is not identity. Before adding it, confirm which hash field tracks
+    on-disk bytes after write-back (tags change the file; a stale hash would refuse every
+    resume).
+  - **Nonce-named orphan beside a PRESENT source** (`pipeline.go` phase-0 check looks at
+    the legacy `<target>.tmp-rename` name only) is proceeded past; it surfaces later only
+    through the other entry's source-missing path. Extend the refusal to "any stranded
+    temp for this target while its source is present".
+  - **`unlinkCreated` can remove an EMPTY target directory another worker's `MkdirAll`
+    just created** (`organizer.go`), so that worker's exclusive copy fails ENOENT, takes
+    the fatal branch, and the book fails with "failed to write temp file". Transient and
+    retry-safe; either retry the `MkdirAll`+open once on ENOENT or skip the directory
+    removal when the rollback removed nothing.
+  - **`linkMoveExclusive` post-link verification failure** (`saferename.go`) leaves dst
+    published but returns an error, so dst is not in `Landing.Created` and the rollback
+    cannot see it — an orphan under RootDir. Rare (EIO between `link` and `Lstat`); add
+    dst to the rollback set before verifying, or unlink it on verification failure.
+  - **`metafetch/service.go` `RunApplyPipelineRenameOnly` reads `GetBookFiles` twice**
+    and discards `bf.Missing`; a scan adding a row between the two reads could yield a
+    version row outside RootDir, and the Warn for unlanded rows conflates expected
+    Missing rows with unexpected ones. Read once, pass the same slice to both uses,
+    and split the log by `Missing`.
+
+### A `rapid` property test can poison every later run in the same working tree
+
+`TestProp_ChromemMatchesSqlite` (`internal/server/dedup_engine_prop_test.go`) is a
+`pgregory.net/rapid` property test. When it finds a failing input it **persists the
+seed** to `internal/server/testdata/rapid/<TestName>/<TestName>-<ts>-<pid>.fail`,
+and rapid **replays saved failures first** on every subsequent run. The directory
+is untracked, so nothing cleans it up.
+
+Consequences, in increasing order of nastiness:
+
+1. The test flips from nondeterministically-failing to **deterministically**
+   failing, in that tree only, until someone deletes the file.
+2. `go test ./internal/server/` then fails for a reason unrelated to whatever the
+   developer is working on.
+3. **Inside `scripts/mutation-matrix.sh` it manufactures FALSE KILLS.** The
+   harness verifies the baseline is green *once, at the start*, and never
+   re-checks. If a property test persists a failure partway through, every
+   remaining mutant is reported KILLED — indistinguishable from a real kill.
+
+Observed for real on 2026-09-02 during the `series-denumber-writetime` server
+table: the `.fail` file appeared at 18:27:23, and the two mutants that ran after
+it (M06, M07) both listed `TestProp_ChromemMatchesSqlite` among their killers.
+M06 is a **documented equivalent mutant that cannot be killed**, which is what
+exposed the taint — without a known-unkillable row in the table, a fully tainted
+run reads as a clean 7/7.
+
+Fixes worth considering, cheapest first:
+
+- Clear `*/testdata/rapid` before a harness run (and/or `.gitignore` it).
+- **Have `mutation-matrix.sh` re-verify the baseline between mutants**, or at
+  least once at the end, and fail the run if the unmutated suite is no longer
+  green. This is the transferable fix — it closes the whole class, not this one
+  test.
+- Consider whether a known-equivalent "canary" row belongs in every table, since
+  that is what caught this one.
 
 ## `TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code
 
