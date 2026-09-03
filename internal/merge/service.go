@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 
 package merge
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -940,10 +941,30 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 			}
 		}
 		// Author resolution: find or create by name, then link to the survivor.
+		//
+		// Creation gate. The override is often PREFILLED from one of the books
+		// being combined rather than typed, so a book already carrying an
+		// author row like "Track 01" would otherwise propagate that name onto
+		// the survivor. Logged at Warn rather than dropped quietly: every
+		// sibling override on this path surfaces its failures, and a rejected
+		// author is a change the caller asked for that did not happen.
+		//
+		// The predicate lives in internal/personname, not internal/dedup: six
+		// dedup files import this package, so anything reachable from here has
+		// to sit in a leaf.
+		cleanedAuthor := ""
 		if override.Author != "" {
-			author, err := ms.db.GetAuthorByName(override.Author)
+			if c, ok := personname.CleanAuthorNameForCreation(override.Author); ok {
+				cleanedAuthor = c
+			} else {
+				slog.Warn("combine override author rejected as unusable; survivor left unchanged",
+					"id", primaryID, "author", override.Author)
+			}
+		}
+		if cleanedAuthor != "" {
+			author, err := ms.db.GetAuthorByName(cleanedAuthor)
 			if err == nil && author == nil {
-				author, err = ms.db.CreateAuthor(override.Author)
+				author, err = ms.db.CreateAuthor(cleanedAuthor)
 			}
 			if err == nil && author != nil {
 				// Surface failures instead of swallowing them: a dropped write here
@@ -960,7 +981,12 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 					if _, ubErr := ms.db.UpdateBook(b.ID, b); ubErr != nil {
 						slog.Warn("combine override author UpdateBook", "id", b.ID, "err", ubErr)
 					} else if lErr := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
-						database.FieldKeyAuthorName: override.Author,
+						// The CLEANED name, not the raw override: this row is
+						// the lock that protects the field from later scans, so
+						// it has to name the author actually linked above.
+						// Recording the raw "001-147 Kevin J Anderson" would
+						// lock the field to a value nothing else agrees with.
+						database.FieldKeyAuthorName: cleanedAuthor,
 					}); lErr != nil {
 						slog.Warn("combine override author lock row", "id", b.ID, "err", lErr)
 					}
