@@ -1,9 +1,9 @@
-// file: internal/dedup/author_positional_test.go
+// file: internal/personname/author_positional_test.go
 // version: 1.0.0
 // guid: bc1746c3-d397-429e-b281-08413635332a
 // last-edited: 2026-09-03
 
-package dedup
+package personname
 
 import "testing"
 

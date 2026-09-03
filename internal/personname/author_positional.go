@@ -1,9 +1,9 @@
-// file: internal/dedup/author_positional.go
-// version: 1.0.0
+// file: internal/personname/author_positional.go
+// version: 1.1.0
 // guid: 1b54b5ba-45b5-4f3a-8674-43ad240b4c53
 // last-edited: 2026-09-03
 
-package dedup
+package personname
 
 import (
 	"regexp"
