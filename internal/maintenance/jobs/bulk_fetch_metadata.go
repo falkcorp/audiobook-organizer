@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-09-02
 
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -21,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 func init() { maintenance.Register(&bulkFetchMetadataJob{}) }
@@ -151,6 +151,12 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	completed := int64(alreadyDone)
 	found := 0
 	notFound := 0
+	errored := 0
+
+	maxAge := time.Duration(ttlDays) * 24 * time.Hour
+	// Bound concurrent calls per provider exactly as the v2 operation does, so
+	// this path cannot stampede a provider the other path is being polite to.
+	sem := metafetch.NewProviderSemaphore(sourceChain, metafetch.DefaultPerProviderFetchCap)
 
 	for i, w := range work {
 		if ctx.Err() != nil {
@@ -159,65 +165,29 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 
 		bookID := w.book.ID
 		currentAuthor := w.authorName
-		searchTitle := bmf_stripChapterFromTitle(w.book.Title)
-
-		var metaResults []metadata.BookMetadata
-		var sourceName string
-		// providerKey is what the cache row is written under (canonical id);
-		// sourceName stays the display name shown to a human in the result.
-		var providerKey string
-		cacheHit := false
-
-		maxAge := time.Duration(ttlDays) * 24 * time.Hour
-		for _, src := range sourceChain {
-			if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
-				var cachedResults []metadata.BookMetadata
-				if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil && len(cachedResults) > 0 {
-					metaResults = cachedResults
-					sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
-					cacheHit = true
-					break
-				}
-			}
-			var fetchErr error
-			if currentAuthor != "" {
-				metaResults, fetchErr = src.SearchByTitleAndAuthor(ctx, searchTitle, currentAuthor)
-				if fetchErr == nil && len(metaResults) > 0 {
-					sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
-					break
-				}
-			}
-			metaResults, fetchErr = src.SearchByTitle(ctx, searchTitle)
-			if fetchErr == nil && len(metaResults) > 0 {
-				sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
-				break
-			}
-			if searchTitle != w.book.Title {
-				if currentAuthor != "" {
-					metaResults, fetchErr = src.SearchByTitleAndAuthor(ctx, w.book.Title, currentAuthor)
-					if fetchErr == nil && len(metaResults) > 0 {
-						sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
-						break
-					}
-				}
-				metaResults, fetchErr = src.SearchByTitle(ctx, w.book.Title)
-				if fetchErr == nil && len(metaResults) > 0 {
-					sourceName, providerKey = src.Name(), metadata.ProviderKey(src)
-					break
-				}
-			}
+		out, werr := metafetch.WalkSourceChain(ctx, store, sourceChain, sem,
+			bookID, w.book.Title, currentAuthor, maxAge)
+		if werr != nil {
+			return werr
 		}
+		sourceName := out.SourceName
+		cacheHit := out.CacheHit
 
-		resultStatus := "not_found"
-		if len(metaResults) > 0 && sourceName != "" {
+		resultStatus := out.Status()
+		switch resultStatus {
+		case metafetch.FetchStatusCached:
 			if !cacheHit {
-				if blob, merr := json.Marshal(metaResults); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
+				if blob, merr := json.Marshal(out.Results); merr == nil {
+					_ = database.PutCachedMetadataFetch(store, bookID, out.ProviderKey, blob, 0)
 				}
 			}
 			found++
-			resultStatus = "cached"
-		} else {
+		case metafetch.FetchStatusFetchError:
+			// A provider failure is not a missing book. Recording it as not_found
+			// here would put false misses in the ledger from THIS path even though
+			// the v2 operation stopped doing so.
+			errored++
+		default:
 			notFound++
 		}
 
@@ -234,7 +204,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		reporter.Increment()
 
 		// Rate-limit live API calls.
-		if !cacheHit && sourceName != "" && i < len(work)-1 {
+		if !cacheHit && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -244,8 +214,8 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	}
 
 	finalCount := atomic.LoadInt64(&completed)
-	slog.Info("bulk-fetch-metadata done books — cached not_found", "opID", opID, "finalCount", finalCount, "found", found, "notFound", notFound)
-	slog.Info("complete — cached not_found", "found", found, "notFound", notFound)
+	slog.Info("bulk-fetch-metadata done", "opID", opID, "finalCount", finalCount, "found", found, "notFound", notFound, "errors", errored)
+	slog.Info("complete", "found", found, "notFound", notFound, "errors", errored)
 	return nil
 }
 
@@ -303,29 +273,6 @@ func bmf_buildSourceChain() []metadata.MetadataSource {
 		}
 	}
 	return chain
-}
-
-// bmf_stripChapterFromTitle removes common track/chapter prefixes and suffixes from a title.
-func bmf_stripChapterFromTitle(title string) string {
-	cleaned := title
-	trackNumPrefix := regexp.MustCompile(`^\d{1,3}\s*[-–.]\s*`)
-	cleaned = trackNumPrefix.ReplaceAllString(cleaned, "")
-	bareNumPrefix := regexp.MustCompile(`^\d{1,3}\s+`)
-	if stripped := strings.TrimSpace(bareNumPrefix.ReplaceAllString(cleaned, "")); stripped != "" {
-		cleaned = stripped
-	}
-	trackWordPrefix := regexp.MustCompile(`(?i)^[Tt]rack\s*\d+\s*[-–.]\s*`)
-	cleaned = trackWordPrefix.ReplaceAllString(cleaned, "")
-	discWordPrefix := regexp.MustCompile(`(?i)^[Dd]is[ck]\s*\d+\s*[-–.]\s*`)
-	cleaned = discWordPrefix.ReplaceAllString(cleaned, "")
-	bracketPrefix := regexp.MustCompile(`^\[.*?\]\s*[-–]?\s*`)
-	cleaned = bracketPrefix.ReplaceAllString(cleaned, "")
-	bracketSuffix := regexp.MustCompile(`\s*\[.*?\]\s*$`)
-	cleaned = bracketSuffix.ReplaceAllString(cleaned, "")
-	if strings.TrimSpace(cleaned) == "" {
-		return title
-	}
-	return strings.TrimSpace(cleaned)
 }
 
 // Policy: ResumeRestart. This was ResumeRequeue until 2026-08-23, on the reasoning

@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 9c1e4a77-5b2d-4f83-9a10-2e7c6b8d4f01
 // last-edited: 2026-09-02
 
@@ -8,7 +8,7 @@
 // tests pin the concurrency contract that is otherwise invisible to CI:
 //
 //   - the worker pool never exceeds its configured limit (and actually reaches it);
-//   - the per-provider semaphore never allows more than perProviderFetchCap
+//   - the per-provider semaphore never allows more than metafetch.DefaultPerProviderFetchCap
 //     in-flight calls to one source (and actually reaches it);
 //   - two concurrent calls through a ProtectedSource are race-free;
 //   - resume-skip, counter-exactness, and context cancellation still hold when
@@ -74,27 +74,27 @@ func (f *concurrentFakeSource) SearchByTitleAndAuthor(_ context.Context, _, _ st
 func TestProviderSemaphore_CapRespectedAndReached(t *testing.T) {
 	src := &concurrentFakeSource{name: "fake", delay: 15 * time.Millisecond}
 	chain := []metadata.MetadataSource{src}
-	sem := newProviderSemaphore(chain, perProviderFetchCap)
+	sem := metafetch.NewProviderSemaphore(chain, metafetch.DefaultPerProviderFetchCap)
 
 	const goroutines = 24
 	var wg sync.WaitGroup
 	ctx := context.Background()
 	for range goroutines {
 		wg.Go(func() {
-			if err := sem.acquire(ctx, src.name); err != nil {
+			if err := sem.Acquire(ctx, src.name); err != nil {
 				return
 			}
-			defer sem.release(src.name)
+			defer sem.Release(src.name)
 			_, _ = src.SearchByTitle(ctx, "t")
 		})
 	}
 	wg.Wait()
 
-	if got := src.maxSeen.Load(); int(got) > perProviderFetchCap {
-		t.Fatalf("per-provider cap exceeded: max in-flight %d > cap %d", got, perProviderFetchCap)
+	if got := src.maxSeen.Load(); int(got) > metafetch.DefaultPerProviderFetchCap {
+		t.Fatalf("per-provider cap exceeded: max in-flight %d > cap %d", got, metafetch.DefaultPerProviderFetchCap)
 	}
-	if got := src.maxSeen.Load(); int(got) < perProviderFetchCap {
-		t.Fatalf("per-provider cap never reached: max in-flight %d < cap %d (pool may be serialized)", got, perProviderFetchCap)
+	if got := src.maxSeen.Load(); int(got) < metafetch.DefaultPerProviderFetchCap {
+		t.Fatalf("per-provider cap never reached: max in-flight %d < cap %d (pool may be serialized)", got, metafetch.DefaultPerProviderFetchCap)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestRunBookFetchPool_CtxCancelStopsPromptly(t *testing.T) {
 func TestProtectedSource_ConcurrentCallsRaceFree(t *testing.T) {
 	ps := metadata.NewProtectedSource(&concurrentFakeSource{name: "fake", delay: 2 * time.Millisecond}, 5, 30*time.Second)
 	var wg sync.WaitGroup
-	for range perProviderFetchCap * 8 {
+	for range metafetch.DefaultPerProviderFetchCap * 8 {
 		wg.Go(func() {
 			_, _ = ps.SearchByTitle(context.Background(), "t")
 			_, _ = ps.SearchByTitleAndAuthor(context.Background(), "t", "a")
