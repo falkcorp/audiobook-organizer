@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 
 package metafetch
 
@@ -17,6 +17,7 @@ package metafetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -133,6 +134,18 @@ type ChainOutcome struct {
 	// the only safe recovery is a full re-scan of the library.
 	Err       error
 	ErrSource string
+
+	// AllThrottled is set when EVERY source in the chain refused before making
+	// a call because it is under a global throttle.
+	//
+	// This is the mid-run counterpart to the pre-flight check in
+	// prepareFetchChain. The chain is filtered once, before the worker pool
+	// starts; a provider whose quota runs out at book 350 is still in the
+	// captured chain for books 351..N. Without this flag those books each get a
+	// ledger row, a warn line and a 200ms pause for work that provably cannot
+	// happen -- which is the incident the throttle exists to prevent, minus only
+	// the outbound HTTP. The caller aborts the run on this.
+	AllThrottled bool
 }
 
 // status maps a completed walk onto the ledger status. Order matters: results
@@ -170,6 +183,10 @@ func WalkSourceChain(
 	var out ChainOutcome
 	searchTitle := stripChapterFromTitle(bookTitle)
 
+	// live counts sources that were actually callable this book; throttledAll
+	// stays true only while every one of them refused on the throttle.
+	live, throttledAll := 0, true
+
 	for _, src := range sourceChain {
 		if ctx.Err() != nil {
 			return out, ctx.Err()
@@ -196,6 +213,8 @@ func WalkSourceChain(
 		if err := sem.Acquire(ctx, slotKey); err != nil {
 			return out, err
 		}
+		live++
+		throttled := 0
 		hit := func() bool {
 			defer sem.Release(slotKey)
 
@@ -225,7 +244,22 @@ func WalkSourceChain(
 					// source may still succeed, but if nothing does, this is
 					// the difference between "not in the catalog" and "we
 					// never got a usable answer".
-					out.Err, out.ErrSource = err, name
+					//
+					// A CONTROL-PLANE sentinel must not displace a diagnosis.
+					// The first book to exhaust a quota gets the real message
+					// ("Quota exceeded ... 'Queries per day'") on attempt 1 and
+					// ErrProviderThrottled on attempts 2-4; overwriting blindly
+					// meant the one ledger row that could name the cause said
+					// only "provider is throttled" and the quota text appeared
+					// nowhere in the operation's output.
+					if errors.Is(err, metadata.ErrProviderThrottled) {
+						throttled++
+						if out.Err == nil {
+							out.Err, out.ErrSource = err, name
+						}
+					} else {
+						out.Err, out.ErrSource = err, name
+					}
 					continue
 				}
 				if len(res) > 0 {
@@ -238,9 +272,16 @@ func WalkSourceChain(
 		if hit {
 			return out, nil
 		}
+		// A source counts as throttled only when EVERY attempt for it was
+		// refused by the gate. One real call means the provider was reachable.
+		if throttled == 0 {
+			throttledAll = false
+		}
 	}
 	if ctx.Err() != nil {
 		return out, ctx.Err()
 	}
+	// A cache-only walk (live == 0) is not "all throttled" -- nothing refused.
+	out.AllThrottled = live > 0 && throttledAll
 	return out, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/metadata/throttle_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 31722b4f-1d15-4404-a9f4-7a792efd86f0
 // last-edited: 2026-09-03
 
@@ -202,11 +202,12 @@ func TestClassify_ThrottleSentinelCannotExtendItself(t *testing.T) {
 // --- registry ---------------------------------------------------------------
 
 type fakeThrottleStore struct {
-	mu      sync.Mutex
-	rows    map[string][]byte
-	loadErr error
-	saves   int
-	deletes int
+	mu        sync.Mutex
+	rows      map[string][]byte
+	loadErr   error
+	deleteErr error
+	saves     int
+	deletes   int
 }
 
 func newFakeThrottleStore() *fakeThrottleStore {
@@ -237,6 +238,9 @@ func (f *fakeThrottleStore) SaveProviderThrottle(id string, payload []byte) erro
 func (f *fakeThrottleStore) DeleteProviderThrottle(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	delete(f.rows, id)
 	f.deletes++
 	return nil
@@ -427,7 +431,12 @@ type stubSource struct {
 	err   error
 }
 
-func (s *stubSource) Name() string       { return s.id }
+// Name deliberately DIFFERS from ProviderID. Every real client has this
+// divergence ("Audible" vs "audible"), and a stub where the two are equal makes
+// the whole package blind to which one the throttle is keyed on: replacing
+// ProviderID() with Name() throughout the gate passed the entire metadata
+// package. Holds are keyed by id, so the display name must never be the key.
+func (s *stubSource) Name() string       { return "Stub " + s.id }
 func (s *stubSource) ProviderID() string { return s.id }
 func (s *stubSource) SearchByTitle(ctx context.Context, title string) ([]BookMetadata, error) {
 	s.calls++
@@ -552,5 +561,227 @@ func TestUnthrottledSources_ExcludesHeldProviders(t *testing.T) {
 	}
 	if len(skipped) != 2 {
 		t.Fatalf("skipped = %v, want both", skipped)
+	}
+}
+
+// --- review-driven regressions ----------------------------------------------
+
+// Google returns 403 for quota and rate limiting at least as often as 429. Read
+// as a bare auth failure, a burst overrun earned a SIX HOUR hold and told the
+// operator to go fix an API key that was never broken.
+func TestClassify_403CarriesQuotaAndRateLimitMeaning(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantReason ThrottleReason
+		wantHold   time.Duration
+	}{
+		{
+			name:       "403 dailyLimitExceeded is a day quota, not an auth failure",
+			body:       `{"error":{"code":403,"errors":[{"reason":"dailyLimitExceeded"}],"message":"Daily Limit Exceeded"}}`,
+			wantReason: ThrottleDailyQuota,
+			wantHold:   4 * time.Hour,
+		},
+		{
+			name:       "403 rateLimitExceeded is a burst limit, not an auth failure",
+			body:       `{"error":{"code":403,"errors":[{"reason":"rateLimitExceeded"}]}}`,
+			wantReason: ThrottleRateLimit,
+			wantHold:   15 * time.Minute,
+		},
+		{
+			name:       "403 userRateLimitExceeded likewise",
+			body:       `{"error":{"code":403,"errors":[{"reason":"userRateLimitExceeded"}]}}`,
+			wantReason: ThrottleRateLimit,
+			wantHold:   15 * time.Minute,
+		},
+		{
+			// The control: a 403 with no rate-limit vocabulary really IS auth.
+			name:       "bare 403 is still an auth failure",
+			body:       `{"error":{"code":403,"message":"The caller does not have permission"}}`,
+			wantReason: ThrottleAuth,
+			wantHold:   6 * time.Hour,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, hold, ok := ClassifyProviderError(statusErrorFrom(t, 403, tc.body, nil))
+			if !ok {
+				t.Fatal("403 did not classify at all")
+			}
+			if reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", reason, tc.wantReason)
+			}
+			if hold != tc.wantHold {
+				t.Errorf("hold = %v, want %v", hold, tc.wantHold)
+			}
+		})
+	}
+}
+
+// A misconfigured CDN answering with a far-future Retry-After would otherwise
+// write a multi-year hold, persist it, and have AttachStore restore it forever.
+func TestClassify_RetryAfterIsClamped(t *testing.T) {
+	far := time.Now().Add(365 * 24 * time.Hour).UTC().Format(http.TimeFormat)
+	_, hold, ok := ClassifyProviderError(statusErrorFrom(t, 429, "slow down", map[string]string{"Retry-After": far}))
+	if !ok {
+		t.Fatal("did not classify")
+	}
+	if hold != maxThrottleHold {
+		t.Fatalf("hold = %v, want the %v clamp", hold, maxThrottleHold)
+	}
+}
+
+// A 429 whose body could not be read must not silently look like a burst limit
+// classified on evidence — the flag is what lets a caller tell the two apart.
+func TestStatusError_UnreadableBodyIsMarked(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: 429,
+		Header:     http.Header{},
+		Body:       io.NopCloser(errReader{}),
+	}
+	se := StatusError("google-books", resp)
+	if !se.BodyUnreadable {
+		t.Fatal("a body read failure was not recorded; a guessed classification is indistinguishable from a measured one")
+	}
+	if !strings.Contains(se.Body, "unreadable") {
+		t.Fatalf("body = %q", se.Body)
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+// AttachStore must attach even when the initial READ fails: a store that cannot
+// be read is usually still writable, and returning early left the registry
+// permanently store-less with no retry path.
+func TestRegistry_AttachStoreAttachesEvenIfTheLoadFails(t *testing.T) {
+	store := newFakeThrottleStore()
+	store.loadErr = errors.New("transient iterator error")
+	r := NewThrottleRegistry()
+	if _, err := r.AttachStore(store); err == nil {
+		t.Fatal("expected the load error to be reported")
+	}
+	store.loadErr = nil
+	r.RecordFailure("google-books", statusErrorFrom(t, 429, prodGoogleQuotaBody, nil))
+	if store.rowCount() != 1 {
+		t.Fatal("a hold set after a failed initial load was not persisted; the feature silently reverted to memory-only")
+	}
+}
+
+// A partial ClearAll failure must leave the un-deleted rows ADDRESSABLE, or a
+// retry finds an empty map, reports success, and the rows resurrect on restart.
+func TestRegistry_ClearAllKeepsUndeletedRowsRetryable(t *testing.T) {
+	store := newFakeThrottleStore()
+	r := NewThrottleRegistry()
+	if _, err := r.AttachStore(store); err != nil {
+		t.Fatalf("AttachStore: %v", err)
+	}
+	r.RecordFailure("google-books", statusErrorFrom(t, 429, prodGoogleQuotaBody, nil))
+
+	store.deleteErr = errors.New("pebble write failed")
+	if _, err := r.ClearAll(); err == nil {
+		t.Fatal("expected the delete failure to be reported")
+	}
+	if !r.Throttled("google-books") {
+		t.Fatal("the hold was dropped from memory despite the store delete failing; a retry can no longer reach the row")
+	}
+
+	// The operator retries and it now succeeds.
+	store.deleteErr = nil
+	n, err := r.ClearAll()
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("retry cleared %d, want 1", n)
+	}
+	if store.rowCount() != 0 {
+		t.Fatal("row survived the successful retry and would resurrect on restart")
+	}
+}
+
+// A success can only release a hold that already existed when the call STARTED.
+func TestRegistry_InFlightSuccessDoesNotClearANewerHold(t *testing.T) {
+	r := NewThrottleRegistry()
+	callStart := time.Now()
+	time.Sleep(2 * time.Millisecond)
+	// The hold lands after the call was issued — 503 so the reason is one a
+	// success is normally allowed to release.
+	r.RecordFailure("hardcover", statusErrorFor(t, "hardcover", 503, "down", nil))
+
+	r.RecordSuccess("hardcover", callStart)
+	if !r.Throttled("hardcover") {
+		t.Fatal("a request already in flight when the hold landed deleted it")
+	}
+
+	// A call that started after the hold does release it.
+	r.RecordSuccess("hardcover", time.Now())
+	if r.Throttled("hardcover") {
+		t.Fatal("a genuinely later success did not release the hold")
+	}
+}
+
+// Release is reason-blind ON PURPOSE, and this pins the reasoning: once a hold
+// exists, allowThrottle stops every non-bypassed call, so the only call that can
+// succeed is a deliberate single-book lookup by a human. A 200 from the provider
+// is then direct evidence it is serving us again — for a quota especially, since
+// while we are over it EVERY call 429s.
+func TestRegistry_SuccessReleasesEveryReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"daily quota", 429, prodGoogleQuotaBody},
+		{"auth", 401, "bad key"},
+		{"unavailable", 503, "down"},
+		{"rate limit", 429, "slow down"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewThrottleRegistry()
+			r.RecordFailure("p", statusErrorFor(t, "p", tc.status, tc.body, nil))
+			if !r.Throttled("p") {
+				t.Fatal("setup: no hold")
+			}
+			r.RecordSuccess("p", time.Now())
+			if r.Throttled("p") {
+				t.Fatalf("a live success did not release the %s hold", tc.name)
+			}
+		})
+	}
+}
+
+// A GraphQL API answers 200 for everything, so its refusals arrive in the body.
+// Before GraphQLRefusal, Hardcover could never be throttled through that route.
+func TestGraphQLRefusal(t *testing.T) {
+	tests := []struct {
+		name       string
+		message    string
+		wantReason ThrottleReason
+		wantOK     bool
+	}{
+		{"rate limit", "Rate limit exceeded, retry later", ThrottleRateLimit, true},
+		{"daily quota", "You have exceeded your daily limit", ThrottleDailyQuota, true},
+		{"bad token", "Unauthorized: invalid api key", ThrottleAuth, true},
+		// A schema error is OUR bug, not a refusal. Throttling on it would take
+		// a healthy provider out of the chain until somebody noticed.
+		{"schema error is not a refusal", `Cannot query field "titles" on type "Book"`, "", false},
+		{"empty result is not a refusal", "no results", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := GraphQLRefusal(SourceIDHardcover, tc.message)
+			reason, _, ok := ClassifyProviderError(err)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (err=%v)", ok, tc.wantOK, err)
+			}
+			if tc.wantOK && reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", reason, tc.wantReason)
+			}
+			if !strings.Contains(err.Error(), tc.message) {
+				t.Errorf("the provider's own message was lost: %v", err)
+			}
+		})
 	}
 }

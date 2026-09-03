@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.5.1
+// version: 2.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -63,6 +63,10 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	gin.SetMode(gin.TestMode)
 
 	origCfg := config.AppConfig
+
+	// A fresh test server stands in for a fresh PROCESS, so it must not inherit
+	// provider throttles an earlier test installed — see the helper's comment.
+	metadata.ResetThrottlesForTesting()
 
 	// Create temporary directory for test database
 	tempDir, err := os.MkdirTemp("", "audiobook-test-*")
@@ -160,6 +164,10 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 	// cross-iteration) config pollution, so pin it to "" instead of trusting
 	// ambient state.
 	origCfg := config.AppConfig
+
+	// A fresh test server stands in for a fresh PROCESS, so it must not inherit
+	// provider throttles an earlier test installed — see the helper's comment.
+	metadata.ResetThrottlesForTesting()
 	config.AppConfig.RootDir = ""
 
 	// Boot registers every OperationDef unconditionally (it used to be gated

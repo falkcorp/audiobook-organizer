@@ -1,7 +1,7 @@
 // file: internal/testutil/integration.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-20
+// last-edited: 2026-09-03
 
 package testutil
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -40,6 +41,10 @@ func SetupIntegration(t *testing.T) (*IntegrationEnv, func()) {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
+
+	// A fresh integration env stands in for a fresh PROCESS: it must not inherit
+	// provider throttles installed by an earlier test in the same binary.
+	metadata.ResetThrottlesForTesting()
 
 	tmpBase := t.TempDir()
 	dbPath := filepath.Join(tmpBase, "test.pebble")

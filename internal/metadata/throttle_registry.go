@@ -1,5 +1,5 @@
 // file: internal/metadata/throttle_registry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0317e94d-7c76-4a4b-97a3-3cdfbf327945
 // last-edited: 2026-09-03
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -40,6 +41,23 @@ var ErrProviderThrottled = errors.New("provider is throttled: skipping call unti
 // every call, and chain filtering (UnthrottledSources) is a per-run convenience
 // for reporting and the all-throttled early stop, never the enforcement point.
 type ThrottleRegistry struct {
+	// persistMu serializes a whole (memory mutation + store write) pair.
+	//
+	// mu alone was not enough. Persistence happened AFTER mu was released, so
+	// two callers could interleave into a state where memory and disk disagree:
+	// a RecordFailure that had mutated the map but not yet written, overtaken by
+	// a user's manual Clear, ends with no hold in memory and a hold on disk --
+	// and AttachStore faithfully restores it on the next boot, silently undoing
+	// a reset the user performed while the run was live. The same interleaving
+	// let a 4h daily-quota hold persist as a 15m rate-limit row.
+	//
+	// It is a separate lock from mu so the read paths (Get/Throttled/List, hit
+	// on every provider call) stay on the RWMutex and never wait behind a
+	// pebble.Sync write.
+	//
+	// LOCK ORDER: persistMu, then mu. Never the reverse.
+	persistMu sync.Mutex
+
 	mu      sync.RWMutex
 	entries map[string]ProviderThrottle
 	store   ThrottleStore
@@ -70,6 +88,16 @@ func (r *ThrottleRegistry) AttachStore(store ThrottleStore) (int, error) {
 	if store == nil {
 		return 0, nil
 	}
+	// Attach FIRST, read second. A store that cannot be READ can almost always
+	// still be WRITTEN, and returning before the assignment left the registry
+	// permanently store-less after one transient iterator error -- with no retry
+	// and no re-attach path, so the feature silently reverted to memory-only for
+	// the life of the process. The only trace would have been a one-shot
+	// "no throttle store attached" warning that reads like a config choice.
+	r.mu.Lock()
+	r.store = store
+	r.mu.Unlock()
+
 	payloads, err := store.LoadProviderThrottles()
 	if err != nil {
 		return 0, err
@@ -77,7 +105,6 @@ func (r *ThrottleRegistry) AttachStore(store ThrottleStore) (int, error) {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.store = store
 	restored := 0
 	for id, raw := range payloads {
 		var t ProviderThrottle
@@ -130,6 +157,9 @@ func (r *ThrottleRegistry) Throttled(providerID string) bool {
 
 // sweep drops an expired entry from memory and from the store.
 func (r *ThrottleRegistry) sweep(providerID string) {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+
 	r.mu.Lock()
 	t, ok := r.entries[providerID]
 	if ok && !t.Active(time.Now()) {
@@ -192,6 +222,9 @@ func (r *ThrottleRegistry) RecordFailure(providerID string, err error) (Provider
 		SetAt:      now,
 	}
 
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+
 	r.mu.Lock()
 	// An existing ACTIVE hold is only ever replaced by a STRICTLY LONGER one of
 	// a different kind.
@@ -243,22 +276,61 @@ func (r *ThrottleRegistry) RecordFailure(providerID string, err error) (Provider
 // RecordSuccess releases a hold after a call actually succeeded. This is how a
 // manual single-book lookup that bypasses the throttle also ENDS it: proof of
 // life beats a timer.
-func (r *ThrottleRegistry) RecordSuccess(providerID string) {
+//
+// startedAt is when the call was ISSUED. A hold installed AFTER that instant
+// says nothing about this call's result, and clearing on it is the mirror of the
+// in-flight-failure case RecordFailure already guards: a bulk pool has requests
+// in flight when the first 429 lands, and one of them returning 200 a moment
+// later would delete the hold that 429 had just installed.
+//
+// Release is deliberately REASON-BLIND, which looks wrong and is not. The
+// objection is that one success is weak evidence a per-day allowance was
+// replenished or a credential repaired -- but once a hold exists, allowThrottle
+// stops every non-bypassed call, so the ONLY call that can reach the provider
+// and succeed is a bypassed one: a human deliberately looking up one book. That
+// is not incidental traffic, it is a person demonstrating the provider answers.
+// And for a quota specifically the evidence is direct rather than weak, because
+// the gate is per-request: while we are over quota EVERY call 429s, so a 200
+// means we are under it again.
+//
+// The same reasoning is why the flapping case does not arise: a provider held
+// for intermittent 5xx is not being called, so its successes and failures cannot
+// interleave.
+func (r *ThrottleRegistry) RecordSuccess(providerID string, startedAt time.Time) {
 	r.mu.RLock()
-	_, held := r.entries[providerID]
+	cur, held := r.entries[providerID]
 	r.mu.RUnlock()
-	if !held {
+	if !held || cur.SetAt.After(startedAt) {
 		return
 	}
-	if err := r.Clear(providerID); err != nil {
+
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+	// Re-check under the transaction: the hold may have been replaced between
+	// the read above and here.
+	r.mu.RLock()
+	cur, held = r.entries[providerID]
+	r.mu.RUnlock()
+	if !held || cur.SetAt.After(startedAt) {
+		return
+	}
+	if err := r.clearLocked(providerID); err != nil {
 		slog.Warn("could not clear provider throttle after a successful call", "provider", providerID, "error", err)
 		return
 	}
-	slog.Info("provider throttle released after a successful call", "provider", providerID)
+	slog.Info("provider throttle released after a successful call",
+		"provider", providerID, "reason", string(cur.Reason))
 }
 
 // Clear removes one hold (the manual reset).
 func (r *ThrottleRegistry) Clear(providerID string) error {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+	return r.clearLocked(providerID)
+}
+
+// clearLocked is Clear's body; the caller must hold persistMu.
+func (r *ThrottleRegistry) clearLocked(providerID string) error {
 	r.mu.Lock()
 	delete(r.entries, providerID)
 	store := r.store
@@ -269,27 +341,60 @@ func (r *ThrottleRegistry) Clear(providerID string) error {
 	return store.DeleteProviderThrottle(providerID)
 }
 
-// ClearAll removes every hold, returning how many were active.
+// ClearAll removes every hold, returning how many ACTIVE ones were cleared
+// (expired-but-unswept entries are removed too, but not counted).
 func (r *ThrottleRegistry) ClearAll() (int, error) {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+
+	now := time.Now()
 	r.mu.Lock()
 	ids := make([]string, 0, len(r.entries))
-	for id := range r.entries {
+	active := 0
+	for id, t := range r.entries {
 		ids = append(ids, id)
+		if t.Active(now) {
+			active++
+		}
 	}
-	r.entries = make(map[string]ProviderThrottle)
 	store := r.store
 	r.mu.Unlock()
 
-	if store == nil {
-		return len(ids), nil
-	}
+	// Delete from the STORE first, and keep in memory anything whose delete
+	// failed.
+	//
+	// Wiping memory first made a partial failure unrecoverable: the handler
+	// returned 500, the operator retried, the second ClearAll found an empty map
+	// and returned 200 with nothing to delete, and the orphaned rows came back on
+	// the next restart -- undoing a reset the operator had performed twice and
+	// been told had failed. The single-provider Clear never had this bug because
+	// it deletes unconditionally, so a retry reaches the row.
+	failed := make(map[string]bool)
 	var firstErr error
-	for _, id := range ids {
-		if err := store.DeleteProviderThrottle(id); err != nil && firstErr == nil {
-			firstErr = err
+	if store != nil {
+		for _, id := range ids {
+			if err := store.DeleteProviderThrottle(id); err != nil {
+				failed[id] = true
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
 		}
 	}
-	return len(ids), firstErr
+
+	r.mu.Lock()
+	for _, id := range ids {
+		if !failed[id] {
+			delete(r.entries, id)
+		}
+	}
+	r.mu.Unlock()
+
+	if firstErr != nil {
+		return active - len(failed), fmt.Errorf("cleared %d of %d provider throttles; %d failed (first: %w)",
+			len(ids)-len(failed), len(ids), len(failed), firstErr)
+	}
+	return active, nil
 }
 
 // truncateDetail bounds the stored provider message.
@@ -365,4 +470,27 @@ func joinComma(parts []string) string {
 		out += p
 	}
 	return out
+}
+
+// ResetThrottlesForTesting clears every hold from the process-global registry.
+//
+// A test binary is ONE process, so the registry that makes a hold global also
+// makes it survive from test to test. That is not hypothetical: one stub server
+// answering 500 installs a 30-minute `unavailable` hold on openlibrary, and
+// every later test in the package then gets an empty chain and no results --
+// five tests in internal/server failed exactly this way, passing individually
+// and failing together.
+//
+// Production does not need an equivalent because a fresh process starts with
+// only what the STORE holds, and a test attaches no store. So calling this from
+// a test-server setup helper restores the production invariant rather than
+// papering over one, which is why it sits beside those helpers' existing reset
+// of config.AppConfig.
+func ResetThrottlesForTesting() {
+	r := DefaultThrottleRegistry()
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = make(map[string]ProviderThrottle)
 }

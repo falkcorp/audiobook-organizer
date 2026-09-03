@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -161,35 +161,18 @@ func runBookFetchPool(ctx context.Context, workers, n int, processOne func(conte
 // It returns an error rather than reporting incomplete: incomplete queues a
 // CONTINUATION, and a chain of successors each re-discovering the same
 // four-hour hold is the hammering this feature exists to stop.
+// prepareFetchChain wraps metafetch.PrepareFetchChain with this operation's
+// logging context. The policy itself is shared with the maintenance job -- see
+// that function's comment for why it is not duplicated here.
 func prepareFetchChain(ctx context.Context, chain []metadata.MetadataSource, preferAudible bool) ([]metadata.MetadataSource, error) {
-	if preferAudible {
-		// NewChainSource, not the bare client: a raw prepend would be the ONE
-		// source in the chain with neither a circuit breaker nor a throttle, and
-		// prefer_audible is exactly what the quota-exhausted run was dispatched
-		// with.
-		audible := metadata.NewChainSource(metadata.NewAudibleClient())
-		var rest []metadata.MetadataSource
-		for _, src := range chain {
-			if src.Name() != audible.Name() {
-				rest = append(rest, src)
-			}
-		}
-		chain = append([]metadata.MetadataSource{audible}, rest...)
-	}
-
-	live, skipped := metadata.UnthrottledSources(chain)
+	live, skipped, err := metafetch.PrepareFetchChain(chain, preferAudible)
 	if len(skipped) > 0 {
 		logging.Warn(ctx, "bulk-metadata-fetch: skipping throttled providers",
 			"skipped", strings.Join(skipped, ","), "detail", metadata.ThrottleSummary(skipped),
 			"remaining_providers", len(live))
 	}
-	if len(live) == 0 {
-		if len(skipped) == 0 {
-			return nil, fmt.Errorf("bulk_metadata_fetch: no metadata sources are enabled")
-		}
-		return nil, fmt.Errorf(
-			"bulk_metadata_fetch: every configured metadata provider is throttled, so no book would be fetched; not starting. Holds: %s. Reset one at DELETE /api/v1/metadata/providers/throttles/{id}",
-			metadata.ThrottleSummary(skipped))
+	if err != nil {
+		return nil, fmt.Errorf("bulk_metadata_fetch: %w", err)
 	}
 	return live, nil
 }
@@ -370,6 +353,11 @@ func (s *Server) runBulkMetadataFetchAll(
 		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, currentAuthor, maxAge)
 		if werr != nil {
 			return werr
+		}
+		// Every provider refused before making a call. Stop the run rather than
+		// ledger a failure against this book and every one after it.
+		if out.AllThrottled {
+			return fmt.Errorf("bulk_metadata_fetch: %w", metafetch.AllThrottledMidRunError(sourceChain))
 		}
 		resultStatus := out.Status()
 		sourceName := out.SourceName
@@ -815,6 +803,11 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, w.authorName, maxAge)
 		if werr != nil {
 			return werr
+		}
+		// Every provider refused before making a call. Stop the run rather than
+		// ledger a failure against this book and every one after it.
+		if out.AllThrottled {
+			return fmt.Errorf("bulk_metadata_fetch: %w", metafetch.AllThrottledMidRunError(sourceChain))
 		}
 		resultStatus := out.Status()
 		sourceName := out.SourceName

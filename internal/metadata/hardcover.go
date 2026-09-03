@@ -1,7 +1,7 @@
 // file: internal/metadata/hardcover.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e7e02554-8931-49ba-9528-d3d51279da1d
-// last-edited: 2026-07-13
+// last-edited: 2026-09-03
 
 package metadata
 
@@ -235,7 +235,13 @@ func (c *HardcoverClient) search(ctx context.Context, query string) ([]BookMetad
 		for _, e := range gqlResp.Errors {
 			slog.Warn("Hardcover GraphQL error", "e", e.Message)
 		}
-		return nil, fmt.Errorf("hardcover GraphQL error: %s", gqlResp.Errors[0].Message)
+		// A GraphQL API delivers auth and rate-limit refusals as HTTP 200 with an
+		// errors array, so this message is the ONLY place a Hardcover refusal
+		// appears. Returned as a plain error it carries no *ProviderStatusError
+		// and satisfies no net.Error, so ClassifyProviderError declined it and
+		// Hardcover could never be throttled through this route -- this repo's
+		// own recorded lesson that a 200 can carry the failure in its body.
+		return nil, GraphQLRefusal(SourceIDHardcover, gqlResp.Errors[0].Message)
 	}
 
 	if gqlResp.Data == nil || gqlResp.Data.SearchBooks == nil || gqlResp.Data.SearchBooks.Results == nil {
