@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-08-15
 
@@ -9,16 +9,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
-	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
-	"golang.org/x/sync/errgroup"
-	"golang.org/x/time/rate"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
+	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 // defaultSourceFanout is the fallback for how many metadata sources are queried
@@ -135,6 +138,68 @@ func sourceChainFingerprint() string {
 	return string(b)
 }
 
+// applyProviderLimits resolves one provider's configured request budget and
+// installs it, so the client built moments later picks it up.
+//
+// Resolution order, most specific first: an explicit advanced value for a
+// field, else the tier-scaled built-in for that field, else the built-in. The
+// tier is a MULTIPLIER over the provider's own built-in figure rather than an
+// absolute rate, because the built-ins differ for real reasons -- Hardcover
+// documents 60 requests/minute, Audible is an unofficial surface -- and one
+// absolute number would be reckless for one provider and needlessly slow for
+// another.
+func applyProviderLimits(src config.MetadataSource) {
+	key := metadata.CanonicalProviderKey(src.ID)
+	if key == "" {
+		// Not fatal, but the user's setting for this source will do nothing, so
+		// do not let that pass in silence.
+		slog.Warn("metadata source has no known rate-limit budget; leaving built-in defaults in place",
+			"source_id", src.ID)
+		return
+	}
+
+	base := providerhttp.BuiltinLimitsFor(key)
+	rl := src.RateLimit
+	mult := rl.Tier.Multiplier()
+
+	eff := providerhttp.Limits{
+		RPS:        base.RPS * mult,
+		Burst:      base.Burst,
+		MaxRetries: base.MaxRetries,
+		Timeout:    base.Timeout,
+	}
+	// Scale burst with the tier too. Raising RPS while leaving Burst at 1 is
+	// close to a no-op for the bursty, one-request-per-book traffic a bulk
+	// fetch generates.
+	if mult != 1.0 {
+		if scaled := int(math.Round(float64(base.Burst) * mult)); scaled >= 1 {
+			eff.Burst = scaled
+		}
+	}
+
+	// Advanced overrides win per field, so entering only an RPS keeps the
+	// tier-derived burst rather than silently resetting it.
+	if rl.RPS > 0 {
+		eff.RPS = rl.RPS
+	}
+	if rl.Burst > 0 {
+		eff.Burst = rl.Burst
+	}
+	if rl.MaxRetries > 0 {
+		eff.MaxRetries = rl.MaxRetries
+	}
+	if rl.TimeoutSeconds > 0 {
+		eff.Timeout = time.Duration(rl.TimeoutSeconds) * time.Second
+	}
+
+	providerhttp.SetLimits(key, eff)
+	// Drop the cached client/limiter so the next Client() rebuilds on the new
+	// budget. Without this the setting is stored and never takes effect.
+	providerhttp.ResetProvider(key)
+	slog.Debug("applied provider rate limit", "provider", key, "tier", rl.Tier,
+		"rps", eff.RPS, "burst", eff.Burst, "timeout", eff.Timeout)
+}
+
 // buildSourceChainFromConfig constructs a fresh source chain from the current
 // config. Extracted from BuildSourceChain so the memoization wrapper stays small;
 // olStore is passed explicitly (rather than reading mfs) to keep it a pure builder.
@@ -151,6 +216,11 @@ func buildSourceChainFromConfig(olStore *openlibrary.OLStore) []metadata.Metadat
 		if !src.Enabled {
 			continue
 		}
+		// Apply this provider's configured request budget BEFORE its client is
+		// constructed. providerhttp.Client caches per provider and a client
+		// keeps the limiter it was built with, so a budget applied afterwards
+		// would never reach the client actually issuing requests.
+		applyProviderLimits(src)
 		var rawSource metadata.MetadataSource
 		switch src.ID {
 		case "openlibrary":

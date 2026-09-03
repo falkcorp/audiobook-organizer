@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-02
 //
@@ -48,11 +48,17 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// perProviderFetchCap bounds the number of concurrent live search calls issued
-// to any single metadata provider during a bulk fetch. It is a FIXED internal
-// constant (INIT-3-T3, reviewed): the ProtectedSource circuit breaker and the
-// per-provider limiters (e.g. Hardcover's 60-rpm limiter) sit beneath it, so no
-// per-deployment tuning is needed. Deliberately NOT config.
+// perProviderFetchCap is the DEFAULT bound on concurrent live search calls to a
+// single metadata provider during a bulk fetch, used when that provider has no
+// configured max_concurrent.
+//
+// It was a fixed constant applying one number to every provider on the grounds
+// that the circuit breaker and rate limiters beneath it made tuning
+// unnecessary. That reasoning held for safety but not for throughput: providers
+// differ (Hardcover documents 60 requests/minute, others are unofficial
+// surfaces), so a single cap is simultaneously too generous for one and too
+// conservative for another. Per-provider values now come from
+// config.MetadataSource.RateLimit.MaxConcurrent; this remains the fallback.
 const perProviderFetchCap = 2
 
 // bulkFetchContinuationMargin is how much of the operation's timeout budget is
@@ -129,15 +135,39 @@ func writeBackWorkers() int {
 // workers only ever touch a per-name buffered channel — never the map itself.
 type providerSemaphore struct{ byName map[string]chan struct{} }
 
-// newProviderSemaphore builds a per-source-name semaphore (capacity cap per name)
-// from a source chain. Duplicate names share one channel.
-func newProviderSemaphore(chain []metadata.MetadataSource, cap int) *providerSemaphore {
+// newProviderSemaphore builds a per-source-name semaphore from a source chain.
+// Duplicate names share one channel.
+//
+// Capacity is per provider: a provider with a configured max_concurrent gets
+// that, everything else gets defaultCap. The lookup goes through
+// metadata.CanonicalProviderKey because the chain keys on the client's display
+// name ("Google Books") while config keys on the source id ("google-books") --
+// comparing those directly would match nothing and silently hand every
+// provider the default.
+func newProviderSemaphore(chain []metadata.MetadataSource, defaultCap int) *providerSemaphore {
+	configured := make(map[string]int)
+	for _, cs := range config.AppConfig.MetadataSources {
+		if k := metadata.CanonicalProviderKey(cs.ID); k != "" && cs.RateLimit.MaxConcurrent > 0 {
+			configured[k] = cs.RateLimit.MaxConcurrent
+		}
+	}
+
 	m := make(map[string]chan struct{}, len(chain))
 	for _, src := range chain {
 		n := src.Name()
-		if _, ok := m[n]; !ok {
-			m[n] = make(chan struct{}, cap)
+		if _, ok := m[n]; ok {
+			continue
 		}
+		c := defaultCap
+		if v, ok := configured[metadata.CanonicalProviderKey(n)]; ok {
+			c = v
+		}
+		if c < 1 {
+			// A zero-capacity channel would block every worker forever, turning
+			// a misconfiguration into a hang rather than a slow fetch.
+			c = 1
+		}
+		m[n] = make(chan struct{}, c)
 	}
 	return &providerSemaphore{byName: m}
 }

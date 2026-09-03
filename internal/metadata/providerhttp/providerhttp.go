@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
 // last-edited: 2026-08-15
 
@@ -26,6 +26,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -90,6 +91,73 @@ func SetLimits(provider string, l Limits) {
 	mu.Lock()
 	defer mu.Unlock()
 	overrides[provider] = l
+}
+
+// ResetProvider drops the cached client AND limiter for one provider so the
+// next Client() call rebuilds both from the current limits.
+//
+// This is what makes SetLimits usable after startup. Client() caches per
+// provider for the life of the process and a handed-out client keeps the
+// limiter it was constructed with, so a SetLimits call on its own changes
+// nothing that is already running: the settings UI would move a slider, store
+// a number, report success, and leave the actual request rate untouched.
+//
+// Callers should SetLimits first, then ResetProvider, so the rebuild picks up
+// the new budget rather than racing the old one.
+func ResetProvider(provider string) {
+	mu.Lock()
+	defer mu.Unlock()
+	delete(clients, provider)
+	delete(limiters, provider)
+}
+
+// BuiltinLimitsFor returns the compiled-in budget for a provider, ignoring any
+// override. Callers scaling a budget (e.g. a low/medium/high tier) need the
+// built-in figure as the anchor, because the built-ins differ per provider for
+// real reasons and a tier expressed in absolute terms would be wrong for most
+// of them.
+func BuiltinLimitsFor(provider string) Limits {
+	if l, ok := defaultLimits[provider]; ok {
+		return l
+	}
+	return fallbackLimits
+}
+
+// KnownProviders lists every provider with a compiled-in budget. Used by tests
+// to prove that the names other packages resolve to actually exist here — a
+// budget stored under a name nothing requests is silently inert.
+func KnownProviders() []string {
+	out := make([]string, 0, len(defaultLimits))
+	for k := range defaultLimits {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// HasOverride reports whether SetLimits has stored a budget for this provider.
+//
+// Exported because "was an override created?" is not answerable from
+// KnownProviders (which lists compiled-in budgets) or from EffectiveLimitsFor
+// (which falls back to the built-in and so reads the same either way). A test
+// that cannot see a spurious override cannot catch a caller that stores one
+// under a misspelled or empty key -- a budget that then applies to no traffic.
+func HasOverride(provider string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	_, ok := overrides[provider]
+	return ok
+}
+
+// EffectiveLimitsFor returns the budget a provider would actually be built
+// with right now: an override if one was set, else the built-in, normalized.
+// Exported so callers and tests can assert on the limits that were really
+// INSTALLED rather than recomputing the expected value -- recomputation passes
+// even when the value never reached this package.
+func EffectiveLimitsFor(provider string) Limits {
+	mu.Lock()
+	defer mu.Unlock()
+	return limitsFor(provider)
 }
 
 // limitsFor resolves the effective budget for a provider. Caller holds mu.

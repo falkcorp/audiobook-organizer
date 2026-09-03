@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.101.0
+// version: 1.102.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-02
 
@@ -145,6 +145,70 @@ type MetadataSource struct {
 	// BaseURL overrides the provider client's default API base URL, e.g. for
 	// self-hosted mirrors or test doubles. Empty means "use the client's built-in default."
 	BaseURL string `json:"base_url,omitempty" mapstructure:"base_url"`
+
+	// RateLimit tunes how hard this provider may be hit. Zero value means
+	// "use the built-in budget", which is what every provider did before this
+	// existed.
+	RateLimit MetadataSourceRateLimit `json:"rate_limit,omitzero" mapstructure:"rate_limit"`
+}
+
+// RateLimitTier is the coarse, non-expert control: a multiplier over a
+// provider's built-in budget rather than an absolute number.
+//
+// It is deliberately relative. The built-in numbers differ per provider for
+// real reasons -- Hardcover documents 60 requests/minute, Audible is an
+// unofficial surface -- so a tier expressed as an absolute RPS would be
+// simultaneously reckless for one provider and pointlessly slow for another.
+// A multiplier keeps each provider's own known-good figure as the anchor.
+type RateLimitTier string
+
+const (
+	RateLimitTierLow    RateLimitTier = "low"
+	RateLimitTierMedium RateLimitTier = "medium"
+	RateLimitTierHigh   RateLimitTier = "high"
+)
+
+// Multiplier maps a tier onto its scaling factor. Medium is 1.0 -- the built-in
+// budget, which is the documented or deliberately-polite figure. An unknown or
+// empty tier is also 1.0 so a typo slows nothing down and speeds nothing up.
+func (t RateLimitTier) Multiplier() float64 {
+	switch t {
+	case RateLimitTierLow:
+		return 0.5
+	case RateLimitTierHigh:
+		return 2.0
+	default:
+		return 1.0
+	}
+}
+
+// MetadataSourceRateLimit is the per-provider request budget.
+//
+// Two levels by design. Tier is the control most people want. The explicit
+// fields are the advanced escape hatch for someone who knows the provider's
+// documented limit and wants to enter it directly; any explicit field wins over
+// the tier for that one value, so entering only RPS keeps tier-derived burst.
+//
+// Every field is optional and zero means "not set" -- NOT "zero requests".
+// A zero RPS on a token bucket blocks forever, so the resolver treats zero as
+// absent rather than passing it through.
+type MetadataSourceRateLimit struct {
+	Tier RateLimitTier `json:"tier,omitempty" mapstructure:"tier"`
+
+	// RPS is sustained requests per second. Advanced override.
+	RPS float64 `json:"rps,omitempty" mapstructure:"rps"`
+	// Burst is how many requests may go back-to-back before pacing applies.
+	Burst int `json:"burst,omitempty" mapstructure:"burst"`
+	// MaxRetries bounds retries of throttling responses.
+	MaxRetries int `json:"max_retries,omitempty" mapstructure:"max_retries"`
+	// TimeoutSeconds is the per-request client timeout.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty" mapstructure:"timeout_seconds"`
+
+	// MaxConcurrent bounds simultaneous in-flight searches to this provider
+	// during a bulk fetch. This replaces the former process-wide
+	// perProviderFetchCap constant, which applied one number to every provider
+	// regardless of what that provider could take.
+	MaxConcurrent int `json:"max_concurrent,omitempty" mapstructure:"max_concurrent"`
 }
 
 // DownloadClientConfig represents download client connection settings.
