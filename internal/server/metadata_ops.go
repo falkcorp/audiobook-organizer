@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-02
 //
@@ -40,6 +40,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
@@ -47,19 +48,6 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 )
-
-// perProviderFetchCap is the DEFAULT bound on concurrent live search calls to a
-// single metadata provider during a bulk fetch, used when that provider has no
-// configured max_concurrent.
-//
-// It was a fixed constant applying one number to every provider on the grounds
-// that the circuit breaker and rate limiters beneath it made tuning
-// unnecessary. That reasoning held for safety but not for throughput: providers
-// differ (Hardcover documents 60 requests/minute, others are unofficial
-// surfaces), so a single cap is simultaneously too generous for one and too
-// conservative for another. Per-provider values now come from
-// config.MetadataSource.RateLimit.MaxConcurrent; this remains the fallback.
-const perProviderFetchCap = 2
 
 // bulkFetchContinuationMargin is how much of the operation's timeout budget is
 // reserved for winding down and enqueueing a successor. It must comfortably
@@ -128,221 +116,6 @@ func writeBackWorkers() int {
 		return w
 	}
 	return defaultWriteBackWorkers
-}
-
-// providerSemaphore bounds in-flight live search calls per source name. The map
-// is built ONCE before dispatch and is read-only thereafter, so concurrent
-// workers only ever touch a per-name buffered channel — never the map itself.
-type providerSemaphore struct{ byName map[string]chan struct{} }
-
-// newProviderSemaphore builds a per-provider semaphore from a source chain.
-// Duplicate names share one channel.
-//
-// Capacity is per provider: a provider with a configured max_concurrent gets
-// that, everything else gets defaultCap.
-//
-// Both the map and the config lookup key on the canonical provider id, so the
-// two can never disagree -- which they would if one used the display name.
-func newProviderSemaphore(chain []metadata.MetadataSource, defaultCap int) *providerSemaphore {
-	configured := make(map[string]int)
-	for _, cs := range config.AppConfig.MetadataSources {
-		if cs.ID != "" && cs.RateLimit.MaxConcurrent > 0 {
-			configured[cs.ID] = cs.RateLimit.MaxConcurrent
-		}
-	}
-
-	m := make(map[string]chan struct{}, len(chain))
-	for _, src := range chain {
-		n := metadata.ProviderKey(src)
-		if _, ok := m[n]; ok {
-			continue
-		}
-		c := defaultCap
-		if v, ok := configured[n]; ok {
-			c = v
-		}
-		if c < 1 {
-			// A zero-capacity channel would block every worker forever, turning
-			// a misconfiguration into a hang rather than a slow fetch.
-			c = 1
-		}
-		m[n] = make(chan struct{}, c)
-	}
-	return &providerSemaphore{byName: m}
-}
-
-// acquire blocks until a slot for name is free or ctx is done. An unknown name
-// (no channel) is treated as unbounded and acquire is a no-op — release then
-// matches. Returns ctx.Err() when the context is canceled while waiting.
-func (p *providerSemaphore) acquire(ctx context.Context, name string) error {
-	if p == nil {
-		return nil
-	}
-	ch := p.byName[name]
-	if ch == nil {
-		return nil
-	}
-	select {
-	case ch <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// release returns a slot previously taken by acquire. Paired with acquire via
-// defer, so the channel always holds a token to drain; a no-op for unknown names.
-func (p *providerSemaphore) release(name string) {
-	if p == nil {
-		return
-	}
-	if ch := p.byName[name]; ch != nil {
-		<-ch
-	}
-}
-
-// Ledger statuses recorded on OperationResult rows by the bulk-fetch paths.
-// They are the resume ledger's vocabulary, so a later pass can select exactly
-// the books worth retrying rather than re-walking the whole library.
-const (
-	fetchStatusCached          = "cached"
-	fetchStatusNotFound        = "not_found"
-	fetchStatusFetchError      = "fetch_error"
-	fetchStatusSkippedFragment = "skipped_fragment"
-)
-
-// chainOutcome is the result of walking the metadata source chain for one book.
-type chainOutcome struct {
-	results    []metadata.BookMetadata
-	sourceName string
-	// providerKey is the canonical id the winning source's cache row is written
-	// under. sourceName stays the DISPLAY name: it is what the operation ledger
-	// and the review UI show a human.
-	providerKey string
-	cacheHit    bool
-
-	// err is the last live-call error seen while walking the chain, and
-	// errSource the provider that produced it.
-	//
-	// Capturing this is what makes a THROTTLED (or broken, or circuit-broken)
-	// provider distinguishable from a book that genuinely is not in any
-	// catalog. Both end the walk with zero results, so collapsing them into
-	// "not_found" -- which is what this code did until 2026-09-02 -- records a
-	// false miss for every book that was merely rate-limited. The practical
-	// cost is that "fetch the ones we are missing" becomes untrustworthy and
-	// the only safe recovery is a full re-scan of the library.
-	err       error
-	errSource string
-}
-
-// status maps a completed walk onto the ledger status. Order matters: results
-// win over an error (an earlier provider erroring does not invalidate a later
-// provider's hit), and an error beats "not found".
-func (o chainOutcome) status() string {
-	if len(o.results) > 0 && o.sourceName != "" {
-		return fetchStatusCached
-	}
-	if o.err != nil {
-		return fetchStatusFetchError
-	}
-	return fetchStatusNotFound
-}
-
-// walkSourceChain runs the priority-ordered source chain for one book and stops
-// at the first source that yields results. Cache is consulted per source before
-// any live call. It returns a non-nil error ONLY for context cancellation; a
-// provider failure is reported inside the outcome so a single bad book (or a
-// single throttled provider) never fails the whole operation.
-//
-// Both bulk-fetch entry points call this. They previously carried near-identical
-// private copies of the walk, and the copies had ALREADY DRIFTED: only the
-// all-books copy retried with the untrimmed title when stripChapterFromTitle had
-// changed it. Unifying them fixes that divergence in passing -- the by-IDs path
-// gains the retry it was silently missing.
-func walkSourceChain(
-	ctx context.Context,
-	store database.RawKVStore,
-	sourceChain []metadata.MetadataSource,
-	sem *providerSemaphore,
-	bookID, bookTitle, author string,
-	maxAge time.Duration,
-) (chainOutcome, error) {
-	var out chainOutcome
-	searchTitle := stripChapterFromTitle(bookTitle)
-
-	for _, src := range sourceChain {
-		if ctx.Err() != nil {
-			return out, ctx.Err()
-		}
-		// Two different keys on purpose. slotKey is the canonical provider id
-		// and governs concurrency. name is the DISPLAY name and is what the
-		// metadata-fetch cache rows are keyed under (normalized) -- that column
-		// is persisted, so re-keying it to the id would orphan every cached row
-		// and silently trigger a full-library refetch. Changing it needs a
-		// migration, not a rename.
-		slotKey := metadata.ProviderKey(src)
-		name := src.Name()
-
-		if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, slotKey, name, maxAge); cerr == nil && cached != nil {
-			var cr []metadata.BookMetadata
-			if jerr := json.Unmarshal(cached.Results, &cr); jerr == nil && len(cr) > 0 {
-				out.results, out.sourceName, out.providerKey, out.cacheHit = cr, name, slotKey, true
-				return out, nil
-			}
-		}
-
-		// Live calls only: bound concurrency per provider. A ctx cancel while
-		// waiting on the semaphore aborts the book with ctx.Err().
-		if err := sem.acquire(ctx, slotKey); err != nil {
-			return out, err
-		}
-		hit := func() bool {
-			defer sem.release(slotKey)
-
-			// Query ladder for this source, most specific first. The untrimmed
-			// retries are appended only when trimming actually changed the
-			// title, so an unchanged title is not searched twice.
-			attempts := make([]func() ([]metadata.BookMetadata, error), 0, 4)
-			add := func(title string) {
-				if author != "" {
-					attempts = append(attempts, func() ([]metadata.BookMetadata, error) {
-						return src.SearchByTitleAndAuthor(ctx, title, author)
-					})
-				}
-				attempts = append(attempts, func() ([]metadata.BookMetadata, error) {
-					return src.SearchByTitle(ctx, title)
-				})
-			}
-			add(searchTitle)
-			if searchTitle != bookTitle {
-				add(bookTitle)
-			}
-
-			for _, attempt := range attempts {
-				res, err := attempt()
-				if err != nil {
-					// Remember it and keep trying: a later query or a later
-					// source may still succeed, but if nothing does, this is
-					// the difference between "not in the catalog" and "we
-					// never got a usable answer".
-					out.err, out.errSource = err, name
-					continue
-				}
-				if len(res) > 0 {
-					out.results, out.sourceName, out.providerKey = res, name, slotKey
-					return true
-				}
-			}
-			return false
-		}()
-		if hit {
-			return out, nil
-		}
-	}
-	if ctx.Err() != nil {
-		return out, ctx.Err()
-	}
-	return out, nil
 }
 
 // runBookFetchPool runs processOne over indices [0,n) on a bounded errgroup pool
@@ -503,7 +276,7 @@ func (s *Server) runBulkMetadataFetchAll(
 
 	// Per-provider semaphore (fixed cap 2) shared by all workers so N pool workers
 	// can never stampede a single provider. Built from the read-only sourceChain.
-	sem := newProviderSemaphore(sourceChain, perProviderFetchCap)
+	sem := metafetch.NewProviderSemaphore(sourceChain, metafetch.DefaultPerProviderFetchCap)
 
 	// progressMu serializes ProgressReporter calls — the reporter is not assumed
 	// concurrency-safe (see runBulkWriteBack for the same precaution).
@@ -540,7 +313,7 @@ func (s *Server) runBulkMetadataFetchAll(
 				OperationID: opID,
 				BookID:      bookID,
 				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
-				Status:      fetchStatusSkippedFragment,
+				Status:      metafetch.FetchStatusSkippedFragment,
 			})
 			notFound.Add(1)
 			n := atomic.AddInt64(&completed, 1)
@@ -551,30 +324,30 @@ func (s *Server) runBulkMetadataFetchAll(
 			return nil
 		}
 
-		out, werr := walkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, currentAuthor, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, currentAuthor, maxAge)
 		if werr != nil {
 			return werr
 		}
-		resultStatus := out.status()
-		sourceName := out.sourceName
-		providerKey := out.providerKey
-		cacheHit := out.cacheHit
+		resultStatus := out.Status()
+		sourceName := out.SourceName
+		providerKey := out.ProviderKey
+		cacheHit := out.CacheHit
 		switch resultStatus {
-		case fetchStatusCached:
+		case metafetch.FetchStatusCached:
 			if !cacheHit {
-				if blob, merr := json.Marshal(out.results); merr == nil {
+				if blob, merr := json.Marshal(out.Results); merr == nil {
 					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
 				}
 			}
 			found.Add(1)
-		case fetchStatusFetchError:
+		case metafetch.FetchStatusFetchError:
 			// Deliberately NOT counted as not_found. Nothing was cached for this
 			// book, so a later "fetch only what is missing" pass will retry it --
 			// but only if the ledger says the provider failed rather than that the
 			// book is absent from every catalog.
 			errored.Add(1)
 			logging.Warn(gctx, "bulk-metadata-fetch: provider error; book left retryable",
-				"book_id", bookID, "provider", out.errSource, "error", out.err)
+				"book_id", bookID, "provider", out.ErrSource, "error", out.Err)
 		default:
 			notFound.Add(1)
 		}
@@ -596,7 +369,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		// The condition covers a FAILED live call too (sourceName is empty then):
 		// gating on success alone meant the pause was skipped exactly when a
 		// provider was throttling us, which is when backing off matters most.
-		if !cacheHit && (sourceName != "" || out.err != nil) && i < len(work)-1 {
+		if !cacheHit && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
 			select {
 			case <-gctx.Done():
 				return gctx.Err()
@@ -958,7 +731,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 
 	// Per-provider semaphore (fixed cap 2) shared by all workers, built from the
 	// read-only sourceChain — see runBulkMetadataFetchAll.
-	sem := newProviderSemaphore(sourceChain, perProviderFetchCap)
+	sem := metafetch.NewProviderSemaphore(sourceChain, metafetch.DefaultPerProviderFetchCap)
 
 	var progressMu sync.Mutex
 	reportProgress := func(current, total int, message string) {
@@ -991,7 +764,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 				OperationID: opID,
 				BookID:      bookID,
 				ResultJSON:  `{"status":"skipped_fragment","source":""}`,
-				Status:      fetchStatusSkippedFragment,
+				Status:      metafetch.FetchStatusSkippedFragment,
 			})
 			notFound.Add(1)
 			n := atomic.AddInt64(&completed, 1)
@@ -1002,30 +775,30 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			return nil
 		}
 
-		out, werr := walkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, w.authorName, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, w.authorName, maxAge)
 		if werr != nil {
 			return werr
 		}
-		resultStatus := out.status()
-		sourceName := out.sourceName
-		providerKey := out.providerKey
-		cacheHit := out.cacheHit
+		resultStatus := out.Status()
+		sourceName := out.SourceName
+		providerKey := out.ProviderKey
+		cacheHit := out.CacheHit
 		switch resultStatus {
-		case fetchStatusCached:
+		case metafetch.FetchStatusCached:
 			if !cacheHit {
-				if blob, merr := json.Marshal(out.results); merr == nil {
+				if blob, merr := json.Marshal(out.Results); merr == nil {
 					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
 				}
 			}
 			found.Add(1)
-		case fetchStatusFetchError:
+		case metafetch.FetchStatusFetchError:
 			// Deliberately NOT counted as not_found. Nothing was cached for this
 			// book, so a later "fetch only what is missing" pass will retry it --
 			// but only if the ledger says the provider failed rather than that the
 			// book is absent from every catalog.
 			errored.Add(1)
 			logging.Warn(gctx, "bulk-metadata-fetch: provider error; book left retryable",
-				"book_id", bookID, "provider", out.errSource, "error", out.err)
+				"book_id", bookID, "provider", out.ErrSource, "error", out.Err)
 		default:
 			notFound.Add(1)
 		}
@@ -1045,7 +818,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		// The condition covers a FAILED live call too (sourceName is empty then):
 		// gating on success alone meant the pause was skipped exactly when a
 		// provider was throttling us, which is when backing off matters most.
-		if !cacheHit && (sourceName != "" || out.err != nil) && i < len(work)-1 {
+		if !cacheHit && (sourceName != "" || out.Err != nil) && i < len(work)-1 {
 			select {
 			case <-gctx.Done():
 				return gctx.Err()

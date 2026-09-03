@@ -1,9 +1,9 @@
-// file: internal/server/metadata_fetch_error_status_test.go
+// file: internal/metafetch/source_chain_walk_test.go
 // version: 1.0.0
 // guid: 3e91c7d4-8b52-4a06-9f13-6c8d2e5a70b4
 // last-edited: 2026-09-02
 
-package server
+package metafetch
 
 import (
 	"context"
@@ -60,13 +60,13 @@ func TestWalkSourceChain_ErrorIsNotAMiss(t *testing.T) {
 		{
 			name:       "provider throttled is a retryable fetch_error, never not_found",
 			chain:      []metadata.MetadataSource{fakeSource{name: "hardcover", err: throttled}},
-			wantStatus: fetchStatusFetchError,
+			wantStatus: FetchStatusFetchError,
 			wantErr:    true,
 		},
 		{
 			name:       "clean empty answer from every source is a genuine miss",
 			chain:      []metadata.MetadataSource{fakeSource{name: "hardcover"}},
-			wantStatus: fetchStatusNotFound,
+			wantStatus: FetchStatusNotFound,
 			wantErr:    false,
 		},
 		{
@@ -75,7 +75,7 @@ func TestWalkSourceChain_ErrorIsNotAMiss(t *testing.T) {
 				fakeSource{name: "hardcover", err: throttled},
 				fakeSource{name: "audible", results: []metadata.BookMetadata{{Title: "Dune"}}},
 			},
-			wantStatus: fetchStatusCached,
+			wantStatus: FetchStatusCached,
 			wantErr:    true, // recorded, but does not change the status
 		},
 		{
@@ -84,26 +84,26 @@ func TestWalkSourceChain_ErrorIsNotAMiss(t *testing.T) {
 				fakeSource{name: "hardcover", err: throttled},
 				fakeSource{name: "audible", err: errors.New("circuit open")},
 			},
-			wantStatus: fetchStatusFetchError,
+			wantStatus: FetchStatusFetchError,
 			wantErr:    true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sem := newProviderSemaphore(tc.chain, 2)
-			out, err := walkSourceChain(context.Background(), emptyKV{}, tc.chain, sem,
+			sem := NewProviderSemaphore(tc.chain, 2)
+			out, err := WalkSourceChain(context.Background(), emptyKV{}, tc.chain, sem,
 				"01BOOK", "Dune", "Frank Herbert", time.Hour)
 			if err != nil {
 				t.Fatalf("walkSourceChain returned a hard error: %v", err)
 			}
-			if got := out.status(); got != tc.wantStatus {
+			if got := out.Status(); got != tc.wantStatus {
 				t.Errorf("status = %q, want %q", got, tc.wantStatus)
 			}
-			if (out.err != nil) != tc.wantErr {
-				t.Errorf("outcome.err = %v, wantErr = %v", out.err, tc.wantErr)
+			if (out.Err != nil) != tc.wantErr {
+				t.Errorf("outcome.err = %v, wantErr = %v", out.Err, tc.wantErr)
 			}
-			if tc.wantErr && out.errSource == "" {
+			if tc.wantErr && out.ErrSource == "" {
 				t.Error("an error was recorded but errSource is empty — the provider that failed must be identifiable")
 			}
 		})
@@ -119,16 +119,16 @@ func TestWalkSourceChain_UntrimmedTitleRetry(t *testing.T) {
 	var seen []string
 	src := &recordingSource{name: "audible", hitOn: "01 Chapter 1 Dune"}
 	chain := []metadata.MetadataSource{src}
-	sem := newProviderSemaphore(chain, 2)
+	sem := NewProviderSemaphore(chain, 2)
 
-	out, err := walkSourceChain(context.Background(), emptyKV{}, chain, sem,
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
 		"01BOOK", "01 Chapter 1 Dune", "", time.Hour)
 	if err != nil {
 		t.Fatalf("walkSourceChain: %v", err)
 	}
 	seen = src.queries
-	if out.status() != fetchStatusCached {
-		t.Fatalf("status = %q, want %q (queries tried: %v)", out.status(), fetchStatusCached, seen)
+	if out.Status() != FetchStatusCached {
+		t.Fatalf("status = %q, want %q (queries tried: %v)", out.Status(), FetchStatusCached, seen)
 	}
 	if len(seen) < 2 {
 		t.Errorf("expected a retry with the untrimmed title; only tried %v", seen)
