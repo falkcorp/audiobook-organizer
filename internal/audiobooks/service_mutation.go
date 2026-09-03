@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 
 package audiobooks
 
@@ -160,7 +160,14 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 				if aName == "" {
 					continue
 				}
-				normalizedName := dedup.NormalizeAuthorName(aName)
+				// Creation gate. This is a direct user edit, so a rejected name
+				// is reported rather than silently dropped -- see the error
+				// returned below when nothing usable survives.
+				normalizedName, nameOK := dedup.CleanAuthorNameForCreation(aName)
+				if !nameOK {
+					slog.Warn("author name rejected as unusable", "book_id", id, "name", aName)
+					continue
+				}
 				author, err := svc.store.GetAuthorByName(normalizedName)
 				if err != nil {
 					return nil, fmt.Errorf("failed to resolve author")
@@ -182,14 +189,19 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 					primaryAuthorID = author.ID
 				}
 			}
+			// Every part was rejected by the gate. Say so instead of writing
+			// AuthorID = 0: that is not "no author", it is a reference to an
+			// id no row has, and the caller asked for a specific change that
+			// did not happen.
+			if len(bookAuthors) == 0 {
+				return nil, fmt.Errorf("no usable author name in %q", name)
+			}
 			// Set primary author on the book for backward compat
 			payload.AuthorID = &primaryAuthorID
 			resolvedAuthorName = name // Keep the combined name for display
 			// Save multiple authors to join table
-			if len(bookAuthors) > 0 {
-				if err := svc.store.SetBookAuthors(id, bookAuthors); err != nil {
-					slog.Warn("failed to set book authors", "err", err)
-				}
+			if err := svc.store.SetBookAuthors(id, bookAuthors); err != nil {
+				slog.Warn("failed to set book authors", "err", err)
 			}
 		} else {
 			payload.AuthorID = nil
