@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -141,12 +142,30 @@ func TestClassifyProviderError(t *testing.T) {
 		{name: "403", err: statusErrorFrom(t, 403, "forbidden", nil), wantReason: ThrottleAuth, wantHold: 6 * time.Hour, wantOK: true},
 		{name: "503", err: statusErrorFrom(t, 503, "unavailable", nil), wantReason: ThrottleUnavailable, wantHold: 30 * time.Minute, wantOK: true},
 		{name: "dial failure", err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}, wantReason: ThrottleTransport, wantHold: 5 * time.Minute, wantOK: true},
+		{
+			// The known-good twin for the two url.Error cases below: the guard
+			// must exclude OUR cancellation without also excluding every
+			// transport failure that arrives in the same wrapper.
+			name:       "url.Error wrapping a real dial failure",
+			err:        &url.Error{Op: "Get", URL: "https://example.test", Err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}},
+			wantReason: ThrottleTransport,
+			wantHold:   5 * time.Minute,
+			wantOK:     true,
+		},
 
 		// Everything below must NOT throttle.
 		{name: "404 is about the query", err: statusErrorFrom(t, 404, "not found", nil)},
 		{name: "400 is about the query", err: statusErrorFrom(t, 400, "bad request", nil)},
 		{name: "our own cancellation", err: fmt.Errorf("fetch: %w", context.Canceled)},
 		{name: "our own deadline", err: fmt.Errorf("fetch: %w", context.DeadlineExceeded)},
+		// The shapes these ACTUALLY arrive in. net/http wraps a cancelled or
+		// timed-out request in *url.Error, which reports Timeout() == true and
+		// therefore satisfies net.Error — so without the errors.Is guards ahead
+		// of the net.Error check, our own cancellation would throttle a healthy
+		// provider for five minutes. A bare context.Canceled is not a net.Error
+		// at all, so a test using only that would pass with the guard deleted.
+		{name: "url.Error wrapping our cancellation", err: &url.Error{Op: "Get", URL: "https://example.test", Err: context.Canceled}},
+		{name: "url.Error wrapping our deadline", err: &url.Error{Op: "Get", URL: "https://example.test", Err: context.DeadlineExceeded}},
 		{name: "the breaker's own sentinel", err: ErrCircuitOpen},
 		{name: "the throttle's own sentinel", err: ErrProviderThrottled},
 		{name: "plain error", err: errors.New("decode failed")},
