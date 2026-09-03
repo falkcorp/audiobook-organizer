@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-03-when-a-source-says-no-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 82d093cc-9210-46ea-9c4e-ef3fab0d3a54 -->
 <!-- last-edited: 2026-09-03 -->
 
 # When a source says no
 
-**Pull request:** PR_URL_PLACEHOLDER
+**Pull request:** https://github.com/falkcorp/audiobook-organizer/pull/3066
 
 ## Executive Summary
 
