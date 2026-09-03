@@ -526,6 +526,23 @@ func NewServer(store database.Store) *Server {
 		changelogService:   activity.NewChangelogService(resolvedStore),
 	}
 
+	// Restore any metadata-provider throttles the previous process left behind.
+	//
+	// A capability assertion, not a Store method: the three persistence methods
+	// live on *PebbleStore only, so nothing here widens a 398-method interface
+	// or forces a mock regeneration. A store without them still throttles --
+	// just in memory, and it says so once rather than silently.
+	if ts, ok := resolvedStore.(metadata.ThrottleStore); ok {
+		if restored, terr := metadata.DefaultThrottleRegistry().AttachStore(ts); terr != nil {
+			slog.Warn("could not load persisted provider throttles", "err", terr)
+		} else if restored > 0 {
+			slog.Info("restored provider throttles from a previous run", "count", restored)
+		}
+	} else {
+		slog.Warn("store does not persist provider throttles; a provider hold will be lost on restart",
+			"store_type", fmt.Sprintf("%T", resolvedStore))
+	}
+
 	// SERVER-PLUGIN-REG: build the service registry container.
 	// Production wires services by named group (REGISTRY-NAMED-GROUPS,
 	// PR #886). Adding a new service is just `Groups: []string{"core"}`

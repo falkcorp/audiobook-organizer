@@ -1,7 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
-// last-edited: 2026-07-13
+// last-edited: 2026-09-03
 
 package metadata
 
@@ -142,6 +142,68 @@ func NewProtectedSource(source MetadataSource, threshold int, cooldown time.Dura
 	}
 }
 
+// Default breaker settings for a chain-built provider.
+//
+// These numbers were literals repeated at two call sites that had already
+// drifted apart in other ways (one applies rate-limit budgets, the other does
+// not), so the pair now lives in one place.
+//
+// ⚠️ The cooldown is SHORT ON PURPOSE and is not the quota control. A breaker
+// exists to ride out a transient blip; it has no idea WHY a provider is
+// failing, and a 30-second re-probe against an exhausted daily quota produced
+// 635 open events in 12 minutes on prod. The long, reason-aware, persisted hold
+// is the throttle registry (throttle.go) -- do not "fix" quota hammering by
+// growing these constants, because a 4-hour breaker would also blind us to a
+// provider that recovered in a minute.
+const (
+	defaultBreakerThreshold = 5
+	defaultBreakerCooldown  = 30 * time.Second
+)
+
+// NewChainSource wraps a raw provider client the way every configured metadata
+// chain should: circuit breaker for transient blips, throttle registry for
+// deliberate refusals.
+func NewChainSource(source MetadataSource) *ProtectedSource {
+	return NewProtectedSource(source, defaultBreakerThreshold, defaultBreakerCooldown)
+}
+
+// allowThrottle is the call-time gate. It returns ErrProviderThrottled when the
+// provider is on hold and this context is not exempt.
+func (ps *ProtectedSource) allowThrottle(ctx context.Context) error {
+	if ThrottleBypassed(ctx) {
+		return nil
+	}
+	id := ps.ProviderID()
+	if id == "" {
+		return nil
+	}
+	if t, ok := DefaultThrottleRegistry().Get(id); ok {
+		slog.Debug("skipping throttled provider",
+			"provider", id, "reason", string(t.Reason),
+			"remaining", t.Remaining(time.Now()).String())
+		return ErrProviderThrottled
+	}
+	return nil
+}
+
+// recordOutcome updates both controls after a real call.
+//
+// The throttle is recorded on the FAILING CALL, during the breaker's first few
+// failures -- not when the breaker trips. AllowRequest returns ErrCircuitOpen
+// before the source is touched, and that sentinel classifies as "says nothing
+// about the provider", so recording on trip would classify our own sentinel
+// forever and never write a throttle.
+func (ps *ProtectedSource) recordOutcome(err error) {
+	id := ps.ProviderID()
+	if err != nil {
+		ps.breaker.RecordFailure()
+		DefaultThrottleRegistry().RecordFailure(id, err)
+		return
+	}
+	ps.breaker.RecordSuccess()
+	DefaultThrottleRegistry().RecordSuccess(id)
+}
+
 // ProviderID forwards the wrapped source's canonical id. Without this the
 // decorator swallows it and every chain-built source looks unidentified,
 // silently falling back to default budgets.
@@ -152,28 +214,32 @@ func (ps *ProtectedSource) Name() string {
 }
 
 func (ps *ProtectedSource) SearchByTitle(ctx context.Context, title string) ([]BookMetadata, error) {
+	if err := ps.allowThrottle(ctx); err != nil {
+		return nil, err
+	}
 	if err := ps.breaker.AllowRequest(); err != nil {
 		return nil, err
 	}
 	results, err := ps.source.SearchByTitle(ctx, title)
+	ps.recordOutcome(err)
 	if err != nil {
-		ps.breaker.RecordFailure()
 		return nil, err
 	}
-	ps.breaker.RecordSuccess()
 	return results, nil
 }
 
 func (ps *ProtectedSource) SearchByTitleAndAuthor(ctx context.Context, title, author string) ([]BookMetadata, error) {
+	if err := ps.allowThrottle(ctx); err != nil {
+		return nil, err
+	}
 	if err := ps.breaker.AllowRequest(); err != nil {
 		return nil, err
 	}
 	results, err := ps.source.SearchByTitleAndAuthor(ctx, title, author)
+	ps.recordOutcome(err)
 	if err != nil {
-		ps.breaker.RecordFailure()
 		return nil, err
 	}
-	ps.breaker.RecordSuccess()
 	return results, nil
 }
 
@@ -196,14 +262,16 @@ func (ps *ProtectedSource) SearchByContext(ctx context.Context, sc *SearchContex
 	if !ok {
 		return nil, nil
 	}
+	if err := ps.allowThrottle(ctx); err != nil {
+		return nil, err
+	}
 	if err := ps.breaker.AllowRequest(); err != nil {
 		return nil, err
 	}
 	results, err := inner.SearchByContext(ctx, sc)
+	ps.recordOutcome(err)
 	if err != nil {
-		ps.breaker.RecordFailure()
 		return nil, err
 	}
-	ps.breaker.RecordSuccess()
 	return results, nil
 }

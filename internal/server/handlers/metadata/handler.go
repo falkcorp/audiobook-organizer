@@ -533,7 +533,10 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 	// cache stays warm. Alt-query searches use the bare search path
 	// because they're exploring outside the canonical fetch.
 	if plainFetch && h.metadataFetchService != nil {
-		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series, metafetch.SearchOptions{UseRerank: body.UseRerank})
+		// BypassProviderThrottle: this handler is the interactive per-book
+		// search dialog — a human is waiting on one book. Bulk paths (the
+		// batch apply loop below, the v2 fetch ops) deliberately do NOT set it.
+		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series, metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true})
 		if err != nil {
 			httputil.RespondWithError(c, 404, err.Error(), "NOT_FOUND")
 			return
@@ -547,7 +550,7 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 
 	resp, err := h.metadataFetchService.SearchMetadataForBookWithOptions(
 		id, body.Query, body.Author, body.Narrator, body.Series,
-		metafetch.SearchOptions{UseRerank: body.UseRerank},
+		metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true},
 	)
 	if err != nil {
 		httputil.RespondWithError(c, 404, err.Error(), "NOT_FOUND")

@@ -203,7 +203,7 @@ func (c *OpenLibraryClient) SearchByTitle(ctx context.Context, title string) ([]
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("open Library API returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDOpenLibrary, resp)
 	}
 
 	// Parse response
@@ -267,7 +267,7 @@ func (c *OpenLibraryClient) SearchByTitleAndAuthor(ctx context.Context, title, a
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("open Library API returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDOpenLibrary, resp)
 	}
 
 	// Parse response
@@ -342,7 +342,7 @@ func (c *OpenLibraryClient) GetBookByISBN(ctx context.Context, isbn string) (*Bo
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("open Library API returned status %d", resp.StatusCode)
+		return nil, StatusError(SourceIDOpenLibrary, resp)
 	}
 
 	// Parse response

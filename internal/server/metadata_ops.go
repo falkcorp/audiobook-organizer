@@ -145,6 +145,55 @@ func runBookFetchPool(ctx context.Context, workers, n int, processOne func(conte
 // Results land in PutCachedMetadataFetch so the per-book review UI can show
 // them immediately when the user clicks "apply". Idempotent: books with an
 // existing OperationResult row are skipped on resume.
+// prepareFetchChain applies the bulk-fetch chain policy that both entry points
+// need: honour prefer_audible, then drop providers under a global throttle.
+//
+// 🔴 THE ALL-THROTTLED EARLY STOP IS THE POINT OF THIS FUNCTION.
+//
+// On 2026-09-03 a run over 22,934 books was cancelled after producing
+// `cached:0 not_found:2 errors:348` at book 350 and holding ~99% errors: Google
+// Books' DAILY quota was exhausted, and the chain kept calling it once per book
+// because a circuit breaker leaves a failing provider in place. Every one of
+// those books got a ledger row recording a failure that says nothing about the
+// book. Refusing to start is the difference between "22,934 books wrongly
+// ledgered" and "0 books touched, and the operation says exactly why".
+//
+// It returns an error rather than reporting incomplete: incomplete queues a
+// CONTINUATION, and a chain of successors each re-discovering the same
+// four-hour hold is the hammering this feature exists to stop.
+func prepareFetchChain(ctx context.Context, chain []metadata.MetadataSource, preferAudible bool) ([]metadata.MetadataSource, error) {
+	if preferAudible {
+		// NewChainSource, not the bare client: a raw prepend would be the ONE
+		// source in the chain with neither a circuit breaker nor a throttle, and
+		// prefer_audible is exactly what the quota-exhausted run was dispatched
+		// with.
+		audible := metadata.NewChainSource(metadata.NewAudibleClient())
+		var rest []metadata.MetadataSource
+		for _, src := range chain {
+			if src.Name() != audible.Name() {
+				rest = append(rest, src)
+			}
+		}
+		chain = append([]metadata.MetadataSource{audible}, rest...)
+	}
+
+	live, skipped := metadata.UnthrottledSources(chain)
+	if len(skipped) > 0 {
+		logging.Warn(ctx, "bulk-metadata-fetch: skipping throttled providers",
+			"skipped", strings.Join(skipped, ","), "detail", metadata.ThrottleSummary(skipped),
+			"remaining_providers", len(live))
+	}
+	if len(live) == 0 {
+		if len(skipped) == 0 {
+			return nil, fmt.Errorf("bulk_metadata_fetch: no metadata sources are enabled")
+		}
+		return nil, fmt.Errorf(
+			"bulk_metadata_fetch: every configured metadata provider is throttled, so no book would be fetched; not starting. Holds: %s. Reset one at DELETE /api/v1/metadata/providers/throttles/{id}",
+			metadata.ThrottleSummary(skipped))
+	}
+	return live, nil
+}
+
 func (s *Server) runBulkMetadataFetchAll(
 	ctx context.Context,
 	opID string,
@@ -236,18 +285,12 @@ func (s *Server) runBulkMetadataFetchAll(
 
 	sourceChain := s.metadataFetchService.BuildSourceChain()
 	if len(sourceChain) == 0 {
-		sourceChain = []metadata.MetadataSource{metadata.NewAudibleClient()}
+		sourceChain = []metadata.MetadataSource{metadata.NewChainSource(metadata.NewAudibleClient())}
 	}
-	// Move Audible to front of chain when preferred.
-	if params.PreferAudible {
-		audible := metadata.NewAudibleClient()
-		var rest []metadata.MetadataSource
-		for _, src := range sourceChain {
-			if src.Name() != audible.Name() {
-				rest = append(rest, src)
-			}
-		}
-		sourceChain = append([]metadata.MetadataSource{audible}, rest...)
+	// Move Audible to front of chain when preferred, then drop throttled providers.
+	sourceChain, err = prepareFetchChain(ctx, sourceChain, params.PreferAudible)
+	if err != nil {
+		return false, err
 	}
 
 	// Counters shared across the worker pool: completed (running total, seeded
@@ -694,15 +737,9 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		fmt.Sprintf("resuming: %d/%d already done", alreadyDone, totalBooks))
 
 	sourceChain := s.metadataFetchService.BuildSourceChain()
-	if params.PreferAudible {
-		audible := metadata.NewAudibleClient()
-		var rest []metadata.MetadataSource
-		for _, src := range sourceChain {
-			if src.Name() != audible.Name() {
-				rest = append(rest, src)
-			}
-		}
-		sourceChain = append([]metadata.MetadataSource{audible}, rest...)
+	sourceChain, err = prepareFetchChain(ctx, sourceChain, params.PreferAudible)
+	if err != nil {
+		return false, err
 	}
 
 	// Counters shared across the worker pool: completed (running total, seeded with

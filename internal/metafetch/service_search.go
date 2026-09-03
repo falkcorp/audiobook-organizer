@@ -264,7 +264,7 @@ func buildSourceChainFromConfig(olStore *openlibrary.OLStore) []metadata.Metadat
 			slog.Warn("Unknown metadata source", "id", src.ID)
 		}
 		if rawSource != nil {
-			chain = append(chain, metadata.NewProtectedSource(rawSource, 5, 30*time.Second))
+			chain = append(chain, metadata.NewChainSource(rawSource))
 		}
 	}
 	return chain
@@ -318,6 +318,14 @@ func (mfs *Service) searchMetadataForBook(
 	id, query, author, narrator, series string,
 	opts SearchOptions,
 ) (*SearchMetadataResponse, error) {
+	// A user-initiated single-book lookup is exempt from the global provider
+	// throttle. Applied here, in the one core the entry points all funnel
+	// through, so no caller can honour the flag on one path and drop it on
+	// another.
+	if opts.BypassProviderThrottle {
+		ctx = metadata.WithThrottleBypass(ctx)
+	}
+
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
