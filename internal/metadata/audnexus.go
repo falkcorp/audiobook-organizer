@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
 // last-edited: 2026-08-20
 
@@ -31,7 +31,7 @@ type AudnexusClient struct {
 func NewAudnexusClient() *AudnexusClient {
 	baseURL := resolveBaseURL("audnexus", "https://api.audnex.us")
 	return &AudnexusClient{
-		httpClient: providerhttp.Client("audnexus"),
+		httpClient: providerhttp.Client(SourceIDAudnexus),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
@@ -39,12 +39,17 @@ func NewAudnexusClient() *AudnexusClient {
 // NewAudnexusClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewAudnexusClientWithBaseURL(baseURL string) *AudnexusClient {
 	return &AudnexusClient{
-		httpClient: providerhttp.Client("audnexus"),
+		httpClient: providerhttp.Client(SourceIDAudnexus),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
 
 // Name returns the display name for this metadata source.
+// ProviderID is the canonical id shared by config, the request-budget
+// table and this client. Name() is a display string and must not be used
+// as a key.
+func (c *AudnexusClient) ProviderID() string { return SourceIDAudnexus }
+
 func (c *AudnexusClient) Name() string {
 	return "Audnexus (Audible)"
 }

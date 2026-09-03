@@ -1,5 +1,5 @@
 // file: internal/metafetch/provider_limits_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b6f9a34-c07e-4d81-95a2-e34b7c018df6
 // last-edited: 2026-09-02
 
@@ -69,24 +69,25 @@ func TestApplyProviderLimits_AdvancedOverridesWinPerField(t *testing.T) {
 	}
 }
 
-// TestApplyProviderLimits_UnknownSourceIsInert: an unrecognised source id must
-// not invent a budget key. A budget stored under a name nothing requests looks
-// exactly like a limit that is being honoured.
-func TestApplyProviderLimits_UnknownSourceIsInert(t *testing.T) {
+// TestApplyProviderLimits_EmptyIDCreatesNoBudget.
+//
+// A source with no id must not get a budget stored under "": that budget
+// applies to no traffic at all, while reading back as a configured limit.
+//
+// Note what is deliberately NOT asserted here any more: an *unknown but
+// non-empty* id now legitimately gets a budget. Nothing translates provider
+// spellings, so an id that we do not ship is simply a provider we do not ship,
+// and providerhttp gives unknown providers a conservative default. The phantom
+// key this test originally guarded could only arise from the spelling
+// translation that no longer exists.
+func TestApplyProviderLimits_EmptyIDCreatesNoBudget(t *testing.T) {
 	applyProviderLimits(config.MetadataSource{
-		ID:        "goodreads",
+		ID:        "",
 		RateLimit: config.MetadataSourceRateLimit{Tier: config.RateLimitTierHigh},
 	})
-
-	// Assert on the overrides map, which is what SetLimits actually writes.
-	// An earlier version of this test compared KnownProviders() before/after
-	// and could never fail: KnownProviders lists COMPILED-IN budgets, which
-	// SetLimits does not touch, so a phantom override was invisible to it.
-	for _, key := range []string{"", "goodreads"} {
-		if providerhttp.HasOverride(key) {
-			t.Errorf("an unknown source id stored a budget under %q; it applies to no traffic "+
-				"but reads as a configured limit", key)
-		}
+	if providerhttp.HasOverride("") {
+		t.Error("a source with no id stored a budget under \"\"; it applies to no traffic " +
+			"but reads as a configured limit")
 	}
 }
 

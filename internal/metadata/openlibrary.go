@@ -1,5 +1,5 @@
 // file: internal/metadata/openlibrary.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-08-20
 
@@ -35,12 +35,17 @@ func NewOpenLibraryClient() *OpenLibraryClient {
 // NewOpenLibraryClientWithBaseURL creates a client with a custom base URL.
 func NewOpenLibraryClientWithBaseURL(baseURL string) *OpenLibraryClient {
 	return &OpenLibraryClient{
-		httpClient: providerhttp.Client("openlibrary"),
+		httpClient: providerhttp.Client(SourceIDOpenLibrary),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
 
 // Name returns the display name for this metadata source.
+// ProviderID is the canonical id shared by config, the request-budget
+// table and this client. Name() is a display string and must not be used
+// as a key.
+func (c *OpenLibraryClient) ProviderID() string { return SourceIDOpenLibrary }
+
 func (c *OpenLibraryClient) Name() string {
 	return "Open Library"
 }

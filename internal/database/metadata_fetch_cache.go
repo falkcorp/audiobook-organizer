@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-08-17
 
@@ -59,6 +59,32 @@ type CachedMetadataEntry struct {
 // "Hardcover" vs "hardcover" drift.
 func metadataFetchCacheKey(bookID, source string) string {
 	return "metadata_fetch_cache:" + bookID + ":" + util.NormalizeString(source)
+}
+
+// CachedMetadataForProvider reads a provider's cache row, preferring the
+// canonical provider id and falling back to the legacy display-name key.
+//
+// These rows were originally keyed by the source's DISPLAY name ("Google
+// Books", normalized to "google books"). Display names are human-facing labels
+// -- rewording one would have silently orphaned every row written under the old
+// wording, and an orphaned row is not an error: it is a cache miss, so the only
+// symptom is the library quietly re-fetching itself from every provider.
+//
+// Writes now use the provider id. Reads try the id first and fall back to the
+// legacy name, so existing rows stay reachable and converge to the id key as
+// books are refetched. That makes the switch free of a big-bang migration --
+// pass legacyDisplayName="" once no legacy rows remain.
+func CachedMetadataForProvider(store RawKVStore, bookID, providerID, legacyDisplayName string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
+	if providerID != "" {
+		entry, fresh, err := GetCachedMetadataFetchWithMaxAge(store, bookID, providerID, maxAge)
+		if err == nil && entry != nil {
+			return entry, fresh, nil
+		}
+	}
+	if legacyDisplayName == "" || util.NormalizeString(legacyDisplayName) == util.NormalizeString(providerID) {
+		return nil, false, nil
+	}
+	return GetCachedMetadataFetchWithMaxAge(store, bookID, legacyDisplayName, maxAge)
 }
 
 // GetCachedMetadataFetchWithMaxAge looks up a cache entry and enforces
