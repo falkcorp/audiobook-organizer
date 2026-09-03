@@ -1,5 +1,5 @@
 // file: internal/database/provider_throttle_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b66678de-73cb-4f2b-8d84-94bea576add7
 // last-edited: 2026-09-03
 
@@ -7,7 +7,10 @@ package database
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 func newThrottleTestStore(t *testing.T) *PebbleStore {
@@ -80,13 +83,20 @@ func TestProviderThrottle_EmptyIDRejected(t *testing.T) {
 }
 
 // The keyspace must not collect rows belonging to a neighbouring prefix.
+//
+// The seeded key has to sort ABOVE the prefix or the upper bound is never
+// exercised. This test originally used SetUserPreference, which stores under
+// "preference:..." -- "pre" sorts below "pro", so the row was outside the LOWER
+// bound and deleting UpperBound entirely left the test passing.
+// "provider_throttle_v2:" is the realistic hazard: '_' (0x5f) sorts above ':'
+// (0x3a), so it lands inside an unbounded scan.
 func TestProviderThrottle_LoadIsScopedToItsPrefix(t *testing.T) {
 	s := newThrottleTestStore(t)
 	if err := s.SaveProviderThrottle("google-books", []byte("{}")); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if err := s.SetUserPreference("provider_throttle_lookalike", "x"); err != nil {
-		t.Fatalf("preference: %v", err)
+	if err := s.db.Set([]byte("provider_throttle_v2:google-books"), []byte("{}"), pebble.Sync); err != nil {
+		t.Fatalf("seed neighbour: %v", err)
 	}
 	rows, err := s.LoadProviderThrottles()
 	if err != nil {
@@ -94,6 +104,13 @@ func TestProviderThrottle_LoadIsScopedToItsPrefix(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1: %v", len(rows), keysOf(rows))
+	}
+	// A foreign key that slipped through would surface under its FULL Pebble
+	// key, because TrimPrefix no-ops when the prefix does not match.
+	for k := range rows {
+		if strings.Contains(k, ":") {
+			t.Fatalf("key %q is a raw Pebble key, not a provider id", k)
+		}
 	}
 }
 

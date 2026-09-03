@@ -1,5 +1,5 @@
 // file: internal/metadata/throttle.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 589d6eef-182c-4245-9722-d24bbd3dcf06
 // last-edited: 2026-09-03
 
@@ -8,6 +8,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -78,6 +79,42 @@ var dailyQuotaMarkers = []string{
 	"quotaexceeded",
 }
 
+// rateLimitMarkers are the machine-readable reasons for a BURST overrun.
+//
+// They matter because Google delivers rate limiting as 403 at least as often as
+// 429 (`{"error":{"code":403,"errors":[{"reason":"rateLimitExceeded"}]}}`), and a
+// 403 read as a credential problem earns a 6-hour hold on a provider that needed
+// fifteen minutes -- while telling the operator, in the API, the UI and the log,
+// to go and fix an API key that was never broken.
+var rateLimitMarkers = []string{
+	"ratelimitexceeded",
+	"userratelimitexceeded",
+	"rate limit exceeded",
+	"too many requests",
+}
+
+// maxThrottleHold bounds a provider-supplied Retry-After.
+//
+// The 429 branch clamps the hold from BELOW so a provider saying "retry in 1s"
+// cannot reproduce the hammering. It needs a ceiling for the same reason: a
+// misconfigured CDN answering `Retry-After: Sun, 01 Jan 2040 ...` would otherwise
+// write a 14-year hold, persist it with pebble.Sync, and have AttachStore
+// faithfully restore it on every boot -- a permanent, silent removal of that
+// provider whose only escape is an operator who happens to know the reset
+// endpoint exists.
+const maxThrottleHold = 24 * time.Hour
+
+// bodyNames reports whether a provider's message contains any of these markers.
+func bodyNames(body string, markers []string) bool {
+	low := strings.ToLower(body)
+	for _, m := range markers {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // ProviderThrottle is one provider's hold.
 type ProviderThrottle struct {
 	ProviderID string         `json:"provider_id"`
@@ -124,23 +161,43 @@ func ClassifyProviderError(err error) (reason ThrottleReason, hold time.Duration
 
 	var se *ProviderStatusError
 	if errors.As(err, &se) {
-		switch {
-		case se.Status == 429:
-			low := strings.ToLower(se.Body)
-			for _, m := range dailyQuotaMarkers {
-				if strings.Contains(low, m) {
-					return ThrottleDailyQuota, throttleDurations[ThrottleDailyQuota], true
+		// READ THE BODY BEFORE THE STATUS CODE.
+		//
+		// The status alone is ambiguous for the exact provider that motivated
+		// this feature: Google returns BOTH 429 and 403 for quota and rate
+		// limiting, so keying on the code first classified a 403 day-quota as an
+		// auth failure -- a 6-hour hold and a diagnosis pointing at a credential
+		// that was fine. The body is the only thing that actually names the
+		// problem, so it is consulted for every refusal status.
+		if se.Status == 429 || se.Status == 403 {
+			if bodyNames(se.Body, dailyQuotaMarkers) {
+				return ThrottleDailyQuota, throttleDurations[ThrottleDailyQuota], true
+			}
+			if se.BodyUnreadable {
+				// The distinguishing evidence is missing. Say so: this hold's
+				// length is a guess, and the guess is the SHORT one.
+				slog.Warn("provider refusal classified without its body; the hold length is a guess",
+					"provider", se.Provider, "status", se.Status)
+			}
+			if se.Status == 429 || bodyNames(se.Body, rateLimitMarkers) {
+				// Honour Retry-After when the provider tells us how long, but
+				// never shorter than the burst default (a server saying "1
+				// second" while refusing every call just reproduces the
+				// hammering) and never longer than maxThrottleHold.
+				hold := throttleDurations[ThrottleRateLimit]
+				if se.RetryAfter > hold {
+					hold = se.RetryAfter
 				}
+				if hold > maxThrottleHold {
+					hold = maxThrottleHold
+				}
+				return ThrottleRateLimit, hold, true
 			}
-			// Honour Retry-After when the provider tells us how long, but never
-			// shorter than the burst default -- a server that says "1 second"
-			// while refusing every call just reproduces the hammering.
-			hold := throttleDurations[ThrottleRateLimit]
-			if se.RetryAfter > hold {
-				hold = se.RetryAfter
-			}
-			return ThrottleRateLimit, hold, true
+		}
+		switch {
 		case se.Status == 401 || se.Status == 403:
+			// A bare 403 with no rate-limit vocabulary really is a permissions
+			// problem.
 			return ThrottleAuth, throttleDurations[ThrottleAuth], true
 		case se.Status >= 500:
 			return ThrottleUnavailable, throttleDurations[ThrottleUnavailable], true

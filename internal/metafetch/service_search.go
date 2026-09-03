@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-08-15
+// last-edited: 2026-09-03
 
 package metafetch
 
@@ -724,19 +724,45 @@ func (mfs *Service) searchMetadataForBook(
 		// to keep the per-request rate ceiling honest. The Audnexus lookup is now
 		// ctx-aware — a batch cancel aborts its 9-region loop promptly instead of
 		// burning up to 9×30s.
-		audibleClient := metadata.NewAudibleClient()
+		// LookupByASIN is not on the MetadataSource interface, so these calls
+		// cannot go through ProtectedSource and are invisible to both the
+		// circuit breaker and the throttle. Gate and record them by hand.
+		//
+		// Without this, one function held two live paths to the same provider
+		// where one honoured a global hold and the other did not — and a 429
+		// here, now well-shaped as a ProviderStatusError, reached no classifier
+		// at all. Bypassed contexts skip the gate here exactly as they do in
+		// ProtectedSource.
+		bypass := metadata.ThrottleBypassed(ctx)
+		reg := metadata.DefaultThrottleRegistry()
+
 		var result *metadata.BookMetadata
-		err := waitForLimiter(ctx, limiter)
-		if err == nil {
-			result, err = audibleClient.LookupByASIN(asinToLookup)
+		var err error
+		if !bypass && reg.Throttled(metadata.SourceIDAudible) {
+			err = metadata.ErrProviderThrottled
+		} else if err = waitForLimiter(ctx, limiter); err == nil {
+			startedAt := time.Now()
+			result, err = metadata.NewAudibleClient().LookupByASIN(asinToLookup)
+			if err != nil {
+				reg.RecordFailure(metadata.SourceIDAudible, err)
+			} else {
+				reg.RecordSuccess(metadata.SourceIDAudible, startedAt)
+			}
 		}
 		if err != nil || result == nil {
 			slog.Debug("metadata-search Audible API lookup for failed, trying Audnexus", "value", asinToLookup, "error", err)
-			audnexus := metadata.NewAudnexusClient()
-			if werr := waitForLimiter(ctx, limiter); werr != nil {
+			if !bypass && reg.Throttled(metadata.SourceIDAudnexus) {
+				err = metadata.ErrProviderThrottled
+			} else if werr := waitForLimiter(ctx, limiter); werr != nil {
 				err = werr
 			} else {
-				result, err = audnexus.LookupByASIN(ctx, asinToLookup)
+				startedAt := time.Now()
+				result, err = metadata.NewAudnexusClient().LookupByASIN(ctx, asinToLookup)
+				if err != nil {
+					reg.RecordFailure(metadata.SourceIDAudnexus, err)
+				} else {
+					reg.RecordSuccess(metadata.SourceIDAudnexus, startedAt)
+				}
 			}
 		}
 		if err == nil && result != nil {

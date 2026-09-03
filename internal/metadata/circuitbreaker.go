@@ -1,5 +1,5 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
 // last-edited: 2026-09-03
 
@@ -193,7 +193,11 @@ func (ps *ProtectedSource) allowThrottle(ctx context.Context) error {
 // before the source is touched, and that sentinel classifies as "says nothing
 // about the provider", so recording on trip would classify our own sentinel
 // forever and never write a throttle.
-func (ps *ProtectedSource) recordOutcome(err error) {
+// startedAt is when the call was ISSUED, not when it returned. A success can
+// only release a hold that already existed when the call started -- otherwise a
+// request already in flight when the first 429 lands would return 200 a moment
+// later and delete the hold that 429 had just installed.
+func (ps *ProtectedSource) recordOutcome(startedAt time.Time, err error) {
 	id := ps.ProviderID()
 	if err != nil {
 		ps.breaker.RecordFailure()
@@ -201,7 +205,7 @@ func (ps *ProtectedSource) recordOutcome(err error) {
 		return
 	}
 	ps.breaker.RecordSuccess()
-	DefaultThrottleRegistry().RecordSuccess(id)
+	DefaultThrottleRegistry().RecordSuccess(id, startedAt)
 }
 
 // ProviderID forwards the wrapped source's canonical id. Without this the
@@ -220,8 +224,9 @@ func (ps *ProtectedSource) SearchByTitle(ctx context.Context, title string) ([]B
 	if err := ps.breaker.AllowRequest(); err != nil {
 		return nil, err
 	}
+	startedAt := time.Now()
 	results, err := ps.source.SearchByTitle(ctx, title)
-	ps.recordOutcome(err)
+	ps.recordOutcome(startedAt, err)
 	if err != nil {
 		return nil, err
 	}
@@ -235,8 +240,9 @@ func (ps *ProtectedSource) SearchByTitleAndAuthor(ctx context.Context, title, au
 	if err := ps.breaker.AllowRequest(); err != nil {
 		return nil, err
 	}
+	startedAt := time.Now()
 	results, err := ps.source.SearchByTitleAndAuthor(ctx, title, author)
-	ps.recordOutcome(err)
+	ps.recordOutcome(startedAt, err)
 	if err != nil {
 		return nil, err
 	}
@@ -268,8 +274,9 @@ func (ps *ProtectedSource) SearchByContext(ctx context.Context, sc *SearchContex
 	if err := ps.breaker.AllowRequest(); err != nil {
 		return nil, err
 	}
+	startedAt := time.Now()
 	results, err := inner.SearchByContext(ctx, sc)
-	ps.recordOutcome(err)
+	ps.recordOutcome(startedAt, err)
 	if err != nil {
 		return nil, err
 	}

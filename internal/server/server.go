@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.45.0
+// version: 2.46.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-03
 
 package server
 
@@ -524,23 +524,6 @@ func NewServer(store database.Store) *Server {
 		// wireServerFromContainer populates the fields.
 		diagnosticsService: diagnostics.NewService(resolvedStore, nil, config.AppConfig.ITunes.LibraryReadPath),
 		changelogService:   activity.NewChangelogService(resolvedStore),
-	}
-
-	// Restore any metadata-provider throttles the previous process left behind.
-	//
-	// A capability assertion, not a Store method: the three persistence methods
-	// live on *PebbleStore only, so nothing here widens a 398-method interface
-	// or forces a mock regeneration. A store without them still throttles --
-	// just in memory, and it says so once rather than silently.
-	if ts, ok := resolvedStore.(metadata.ThrottleStore); ok {
-		if restored, terr := metadata.DefaultThrottleRegistry().AttachStore(ts); terr != nil {
-			slog.Warn("could not load persisted provider throttles", "err", terr)
-		} else if restored > 0 {
-			slog.Info("restored provider throttles from a previous run", "count", restored)
-		}
-	} else {
-		slog.Warn("store does not persist provider throttles; a provider hold will be lost on restart",
-			"store_type", fmt.Sprintf("%T", resolvedStore))
 	}
 
 	// SERVER-PLUGIN-REG: build the service registry container.

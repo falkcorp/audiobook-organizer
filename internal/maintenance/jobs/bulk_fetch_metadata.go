@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 
 package jobs
 
@@ -93,33 +93,16 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	if len(sourceChain) == 0 {
 		sourceChain = []metadata.MetadataSource{metadata.NewChainSource(metadata.NewAudibleClient())}
 	}
-	if preferAudible {
-		// Wrapped, not bare: an unwrapped prepend would be the one source in the
-		// chain with neither a circuit breaker nor a throttle.
-		audible := metadata.NewChainSource(metadata.NewAudibleClient())
-		var rest []metadata.MetadataSource
-		for _, src := range sourceChain {
-			if src.Name() != audible.Name() {
-				rest = append(rest, src)
-			}
-		}
-		sourceChain = append([]metadata.MetadataSource{audible}, rest...)
-	}
 
-	// Drop globally throttled providers, and refuse to walk the library at all
-	// when that leaves nothing. Same reasoning as the v2 op's prepareFetchChain:
-	// calling a provider that is refusing us writes one meaningless ledger row
-	// per book. This job builds its own chain, so the gate has to be here too --
-	// a guard placed only on the other path is a guard that never fires on this
-	// one.
-	live, skipped := metadata.UnthrottledSources(sourceChain)
+	// Same policy as the v2 op, from the same function -- this job builds its own
+	// chain, so a guard placed only on the other path would never fire here.
+	live, skipped, perr := metafetch.PrepareFetchChain(sourceChain, preferAudible)
 	if len(skipped) > 0 {
 		slog.Warn("bulk-fetch-metadata: skipping throttled providers",
 			"skipped", strings.Join(skipped, ","), "detail", metadata.ThrottleSummary(skipped))
 	}
-	if len(live) == 0 {
-		return fmt.Errorf("every configured metadata provider is throttled, so no book would be fetched; not starting. Holds: %s",
-			metadata.ThrottleSummary(skipped))
+	if perr != nil {
+		return perr
 	}
 	sourceChain = live
 
@@ -188,6 +171,9 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 			bookID, w.book.Title, currentAuthor, maxAge)
 		if werr != nil {
 			return werr
+		}
+		if out.AllThrottled {
+			return metafetch.AllThrottledMidRunError(sourceChain)
 		}
 		sourceName := out.SourceName
 		cacheHit := out.CacheHit
