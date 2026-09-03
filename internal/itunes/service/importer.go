@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-03
 
 package itunesservice
 
@@ -2157,7 +2157,24 @@ func (imp *Importer) ensureAuthorIDs(name string) ([]int, error) {
 		if part == "" {
 			continue
 		}
-		part = dedup.NormalizeAuthorName(part)
+		// Creation gate for positional shrapnel. iTunes tracks carry the
+		// chapter file's own numbering in the artist tag, so this path mints
+		// rows like "Track 01", "001_Celestia" and "000m_00s__056m_16s_43h".
+		// CleanAuthorNameForCreation strips the numbering rather than
+		// rejecting outright, because "001-147 Kevin J Anderson" carries a
+		// real person that a blanket reject would discard.
+		//
+		// The older IsDirtyAuthorName gate (C413) does NOT cover this class:
+		// measured against the 2,793 leading-digit author rows in production
+		// it recognised 435 of them, so calling it here would guard a sixth
+		// of the problem and look from this line like guarding all of it.
+		cleaned, ok := dedup.CleanAuthorNameForCreation(part)
+		if !ok {
+			slog.Warn("itunes import: artist fragment rejected as author name",
+				"fragment", part, "full_name", name)
+			continue
+		}
+		part = cleaned
 		author, err := imp.store.GetAuthorByName(part)
 		if err != nil {
 			return nil, err
