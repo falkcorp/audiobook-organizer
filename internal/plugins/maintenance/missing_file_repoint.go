@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-08-20
+// last-edited: 2026-09-05
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -46,6 +46,9 @@ import (
 // missingFileRepointDefaultMax bounds how many rows one run will rewrite, so a first
 // production run is a sample rather than a 35k-row leap. 0 in params means this.
 const missingFileRepointDefaultMax = 500
+
+// bookPageSize bounds each GetAllBooksCore read while building bookPathByID.
+const bookPageSize = 1000
 
 type missingFileRepointParams struct {
 	// Apply must be explicitly true to write. Default false = report only.
@@ -226,6 +229,7 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 // files (to rehydrate the full BookFile before writing), and write it back.
 type repointStore interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	UpdateBookFile(id string, file *database.BookFile) error
 }
@@ -245,6 +249,25 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 		return repointPlan{}, fmt.Errorf("load book files: %w", err)
 	}
 	plan := repointPlan{Apply: params.Apply, ScannedRows: len(files)}
+
+	// bookPathByID maps each book to its recorded FilePath, so a missing row can
+	// fall back to its owning single-file book's own location (see the second
+	// derivation below). Loaded in bounded pages rather than one unbounded read.
+	bookPathByID := make(map[string]string)
+	for offset := 0; ; offset += bookPageSize {
+		page, perr := store.GetAllBooksCore(bookPageSize, offset)
+		if perr != nil {
+			return repointPlan{}, fmt.Errorf("load books: %w", perr)
+		}
+		for i := range page {
+			if p := strings.TrimSpace(page[i].FilePath); p != "" {
+				bookPathByID[page[i].ID] = p
+			}
+		}
+		if len(page) < bookPageSize {
+			break
+		}
+	}
 
 	// claimed holds EVERY path any row currently points at, missing or not. A repoint
 	// target that is already in here would create two rows pointing at one file, which
@@ -297,30 +320,54 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 		missingCount.Add(1)
 		out := rowOutcome{missing: true}
 
-		cands, matched := deriveTrackSlashCandidates(it.file.FilePath)
-		if !matched {
-			out.reason = "no-shape"
-			outcomes[it.idx] = out
-			return nil
-		}
 		var found []string
 		var foundSize int64
-		for _, c := range cands {
-			st, serr := os.Stat(c)
-			if serr == nil && !st.IsDir() {
-				found = append(found, c)
-				foundSize = st.Size()
+
+		cands, matched := deriveTrackSlashCandidates(it.file.FilePath)
+		if matched {
+			for _, c := range cands {
+				st, serr := os.Stat(c)
+				if serr == nil && !st.IsDir() {
+					found = append(found, c)
+					foundSize = st.Size()
+				}
+			}
+			// Two derived candidates both existing means padded AND unpadded
+			// files are both on disk; which one this row meant is unknowable.
+			// Refuse.
+			if len(found) > 1 {
+				out.reason = "ambiguous-candidates"
+				outcomes[it.idx] = out
+				return nil
 			}
 		}
+
+		// Second derivation: the owning single-file book's OWN path. When an
+		// apply renames a single-file book, ReOrganizeInPlace moves the file and
+		// (as of 2026-09-05) repoints the row — but rows broken BEFORE that fix
+		// still point at the pre-move location while the bytes sit at the book's
+		// current FilePath. The track-slash shape never matches these, so they
+		// were all landing in "no-shape" with no route back. bookPathByID is a
+		// single-file book's audio file (a directory book's FilePath stats as a
+		// dir and is rejected by the !IsDir guard), so this can never point a
+		// row at a directory or at another book's file.
 		if len(found) == 0 {
-			out.reason = "no-candidate-bytes"
-			outcomes[it.idx] = out
-			return nil
+			if bp := bookPathByID[it.file.BookID]; bp != "" && bp != it.file.FilePath {
+				if st, serr := os.Stat(bp); serr == nil && !st.IsDir() {
+					found = append(found, bp)
+					foundSize = st.Size()
+				}
+			}
 		}
-		// Two derived candidates both existing means padded AND unpadded files are
-		// both on disk; which one this row meant is unknowable. Refuse.
-		if len(found) > 1 {
-			out.reason = "ambiguous-candidates"
+
+		if len(found) == 0 {
+			// Distinguish "the row's own shape yielded nothing" from "the row's
+			// shape never matched at all", so the report still says which.
+			if matched {
+				out.reason = "no-candidate-bytes"
+			} else {
+				out.reason = "no-shape"
+			}
 			outcomes[it.idx] = out
 			return nil
 		}

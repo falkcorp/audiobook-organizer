@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-08-20
+// last-edited: 2026-09-05
 
 package maintenance
 
@@ -22,6 +22,7 @@ import (
 type repointFakeStore struct {
 	mu      sync.Mutex // UpdateBookFile is called from RunItems' worker pool
 	cores   []database.BookFileCore
+	books   []database.BookCore // owning books, for the book-path fallback derivation
 	full    map[string][]database.BookFile // bookID → rows
 	updates []database.BookFile
 	getErr  error
@@ -29,6 +30,16 @@ type repointFakeStore struct {
 
 func (f *repointFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.cores, nil
+}
+func (f *repointFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	if offset >= len(f.books) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(f.books) {
+		end = len(f.books)
+	}
+	return f.books[offset:end], nil
 }
 func (f *repointFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	if f.getErr != nil {
@@ -328,4 +339,82 @@ func TestRepoint_WriteReportRoundTrips(t *testing.T) {
 		require.Len(t, strings.Split(l, "\t"), 6, "row %d has the wrong column count: %q", i, l)
 	}
 	require.Contains(t, lines[1], "would repoint")
+}
+
+// The book-path fallback: a single-file book was renamed by an apply BEFORE the
+// 2026-09-05 organizer fix, so the row still points at the pre-move path (which
+// does not match the track-slash shape) while the bytes sit at the book's own
+// current FilePath. The repoint must recover it via the owning book's path.
+func TestRepoint_FallsBackToOwningBookPath(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "[PZG]", "Disciple Vol 01.m4b")
+	writeFile(t, real, 4096)
+	broken := filepath.Join(dir, "Mark Sanderlin", "Disciple Vol 01.m4b") // gone, no track-slash shape
+
+	core := database.BookFileCore{ID: "f1", BookID: "b1", FilePath: broken, FileSize: 4096}
+	store := &repointFakeStore{
+		cores: []database.BookFileCore{core},
+		books: []database.BookCore{{ID: "b1", FilePath: real}}, // book already moved to the new path
+		full: map[string][]database.BookFile{"b1": {{
+			ID: "f1", BookID: "b1", FilePath: broken, FileSize: 4096,
+		}}},
+	}
+
+	plan, err := planMissingFileRepoint(context.Background(), store,
+		missingFileRepointParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.Repointable, "the book-path fallback should recover this row")
+	require.Equal(t, 1, plan.Repointed)
+	require.Len(t, store.updates, 1)
+	require.Equal(t, real, store.updates[0].FilePath, "row must point at the book's real path")
+}
+
+// A directory book's FilePath is a directory, not an audio file, so the book-path
+// fallback must refuse it (repointing a row at a directory would be nonsense).
+func TestRepoint_BookPathFallback_RefusesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	bookDir := filepath.Join(dir, "Some Author", "Some Book")
+	require.NoError(t, os.MkdirAll(bookDir, 0o755))
+	broken := filepath.Join(dir, "Old", "track.mp3") // gone, no track-slash shape
+
+	core := database.BookFileCore{ID: "f1", BookID: "b1", FilePath: broken, FileSize: 10}
+	store := &repointFakeStore{
+		cores: []database.BookFileCore{core},
+		books: []database.BookCore{{ID: "b1", FilePath: bookDir}}, // FilePath is a directory
+		full: map[string][]database.BookFile{"b1": {{
+			ID: "f1", BookID: "b1", FilePath: broken, FileSize: 10,
+		}}},
+	}
+
+	plan, err := planMissingFileRepoint(context.Background(), store,
+		missingFileRepointParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 0, plan.Repointable, "a directory must never be a repoint target")
+	require.Equal(t, 1, plan.NoShape)
+	require.Len(t, store.updates, 0)
+}
+
+// A size mismatch on the book-path fallback is refused, just as on the track-slash
+// path: the file at the book's location must be the same size the row recorded.
+func TestRepoint_BookPathFallback_RefusesSizeMismatch(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "New", "book.m4b")
+	writeFile(t, real, 500) // disk size differs from the row's recorded 4096
+	broken := filepath.Join(dir, "Old", "book.m4b")
+
+	core := database.BookFileCore{ID: "f1", BookID: "b1", FilePath: broken, FileSize: 4096}
+	store := &repointFakeStore{
+		cores: []database.BookFileCore{core},
+		books: []database.BookCore{{ID: "b1", FilePath: real}},
+		full: map[string][]database.BookFile{"b1": {{
+			ID: "f1", BookID: "b1", FilePath: broken, FileSize: 4096,
+		}}},
+	}
+
+	plan, err := planMissingFileRepoint(context.Background(), store,
+		missingFileRepointParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 0, plan.Repointable)
+	require.Equal(t, 1, plan.SizeMismatch)
+	require.Len(t, store.updates, 0)
 }
