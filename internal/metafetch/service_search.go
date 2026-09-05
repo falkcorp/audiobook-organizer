@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-09-05
 
@@ -549,10 +549,12 @@ func (mfs *Service) searchMetadataForBook(
 				// Nothing under the literal titles: retry with the book's own
 				// name and the decoration-free title (see extraTitleVariants),
 				// stopping at the first variant that answers. The answers are
-				// anchored exactly as on the bulk path: this search also feeds
-				// POST /api/v1/metadata/bulk-fetch, which applies the first
-				// candidate unseen. A book the literal queries found pays
-				// nothing here.
+				// anchored exactly as on the bulk path: this search shares its
+				// result path with POST /api/v1/metadata/bulk-fetch, which
+				// applies the first candidate unseen. The author OR the
+				// narrator may vouch for an answer, as in the literal ladder's
+				// narrator-as-author retry. A book the literal queries found
+				// pays nothing here.
 				if len(allResults) == 0 {
 					for _, v := range extraTitleVariants(book.Title, searchTitle) {
 						if !open() {
@@ -563,7 +565,7 @@ func (mfs *Service) searchMetadataForBook(
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 								return src.SearchByTitleAndAuthor(c, v.Query, searchAuthor)
 							}); serr == nil {
-								hits = keepAnchored(results, v.Anchor, searchAuthor)
+								hits = keepAnchored(results, v.Anchor, searchAuthor+" "+bookNarrator)
 							} else {
 								note(serr)
 							}
@@ -572,7 +574,7 @@ func (mfs *Service) searchMetadataForBook(
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 								return src.SearchByTitle(c, v.Query)
 							}); serr == nil {
-								hits = keepAnchored(results, v.Anchor, searchAuthor)
+								hits = keepAnchored(results, v.Anchor, searchAuthor+" "+bookNarrator)
 							} else {
 								note(serr)
 							}
