@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.24.1
+// version: 3.25.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package maintenance
 
@@ -15,12 +15,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -162,9 +165,10 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	if err != nil {
 		return fmt.Errorf("list book ids: %w", err)
 	}
-	total := len(allIDs)
 
 	// Resume support: skip past the last book ID checkpointed by a prior run.
+	// The checkpoint is searched in the FULL list, not the work list: a book
+	// checkpointed by an earlier run has a transcript now and is no longer work.
 	startIdx := 0
 	if params.LastBookID != "" {
 		for i, id := range allIDs {
@@ -174,19 +178,35 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			}
 		}
 	}
-
-	log.Info("transcribe-book-intros: starting batch run",
-		"only_missing", onlyMissing, "total_books", total,
-		"start_index", startIdx, "page_size", introTranscribePageSize)
-
-	if startIdx >= total {
-		_ = reporter.UpdateProgress(1, 1, "Done — nothing to transcribe")
-		return nil
+	if startIdx > len(allIDs) {
+		startIdx = len(allIDs)
 	}
 
-	// Chunk the remaining IDs into pages. Each page → one Whisper batch process
-	// (the whole point of batch mode: load the model once per 200 books).
-	pages := chunkIDs(allIDs[startIdx:], introTranscribePageSize)
+	// Decide up front which books this run will attempt. The denominator of
+	// every progress line and of stats:transcribe is the WORK, not the library:
+	// with only_missing (the default) a library of 83k books with 2k missing
+	// used to report "1,200/83,228" for a run that was 60% done — the numerator
+	// counted attempts and the denominator counted everything, including the
+	// 81k books that were skipped before any page ran.
+	sel, err := selectTranscribeWork(ctx, store, allIDs[startIdx:], transcribeSelect{
+		onlyMissing:  onlyMissing,
+		retrySilence: retrySilence,
+		extractOnly:  extractOnly,
+	})
+	if err != nil {
+		return err
+	}
+	total := len(sel.work)
+
+	log.Info("transcribe-book-intros: starting batch run",
+		"only_missing", onlyMissing, "library_books", len(allIDs),
+		"total_books", total, "skipped_existing", sel.skipped,
+		"unreadable", sel.unreadable,
+		"start_index", startIdx, "page_size", introTranscribePageSize)
+	if sel.unreadable > 0 {
+		log.Warn("transcribe-book-intros: books listed but not readable, left out of this run",
+			"unreadable", sel.unreadable)
+	}
 
 	// Live aggregate: the op records per-outcome counts into accum and flushes
 	// them to the stats:transcribe PebbleDB key after each page so an external
@@ -200,7 +220,19 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	statsSink, _ := database.AsCapability[database.TranscribeStatsStore](store)
 	startedAt := time.Now()
 	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
+	accum.recordSkipped(sel.skipped)
+
+	if total == 0 {
+		accum.flush(true) // the monitor still sees the run, its skip count and that it is over
+		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
+			"Done — nothing to transcribe (%d already transcribed)", sel.skipped))
+		return nil
+	}
 	accum.flush(false) // initial write: monitor sees the run has started
+
+	// Chunk the work into pages. Each page → one Whisper batch process
+	// (the whole point of batch mode: load the model once per 200 books).
+	pages := chunkIDs(sel.work, introTranscribePageSize)
 
 	// processed and lastID are written by concurrent page goroutines — must be
 	// thread-safe. processed uses atomic arithmetic; lastID uses a mutex because
@@ -226,14 +258,14 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			lastIDMu.Lock()
 			lastID = id
 			lastIDMu.Unlock()
-			// extract-only ignores onlyMissing: the whole point is to (re)build the
-			// WAV cache for EVERY book, regardless of transcription status.
-			if !extractOnly && onlyMissing && b.IntroTranscription != nil && *b.IntroTranscription != "" {
-				// [SILENCE] books are skipped normally; retry_silence=true includes them.
-				if *b.IntroTranscription != silenceSentinel || !retrySilence {
-					skipped++
-					continue
-				}
+			// Re-checked at page time: selection ran at the start of the run, and
+			// a book transcribed since (another op, a manual apply) must not be
+			// redone. Normally a no-op — the work list already excludes these.
+			if !needsTranscribeWork(b, transcribeSelect{
+				onlyMissing: onlyMissing, retrySilence: retrySilence, extractOnly: extractOnly,
+			}) {
+				skipped++
+				continue
 			}
 			books = append(books, *b)
 		}
@@ -403,6 +435,87 @@ func eqStrPtr(a, b *string) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// transcribeSelect is the per-run policy for which books are work.
+type transcribeSelect struct {
+	onlyMissing  bool // skip books that already carry a transcript
+	retrySilence bool // ...except [SILENCE] ones, which are retried
+	extractOnly  bool // (re)build the WAV cache for EVERY book; ignores onlyMissing
+}
+
+// needsTranscribeWork is the single predicate for "this run attempts this
+// book". Selection and the page loop both use it so they can never disagree.
+func needsTranscribeWork(b *database.Book, sel transcribeSelect) bool {
+	// extract-only ignores onlyMissing: the whole point is to (re)build the
+	// WAV cache for EVERY book, regardless of transcription status.
+	if sel.extractOnly || !sel.onlyMissing {
+		return true
+	}
+	if b.IntroTranscription == nil || *b.IntroTranscription == "" {
+		return true
+	}
+	// [SILENCE] books are skipped normally; retry_silence=true includes them.
+	return *b.IntroTranscription == silenceSentinel && sel.retrySilence
+}
+
+// transcribeSelection is what selectTranscribeWork decided.
+type transcribeSelection struct {
+	work       []string // ids this run attempts, in library (ListBookIDs) order
+	skipped    int      // ids that already carry a transcript (only_missing)
+	unreadable int      // ids the store listed but could not return a row for
+}
+
+// selectTranscribeWork reads every listed book once and keeps the ones
+// needsTranscribeWork accepts, preserving order. Reads fan out over a bounded
+// worker pool (a library-scale loop with a store read per item); each worker
+// owns its own slot so no lock is needed. A book the store lists but cannot
+// return is counted, not silently dropped — on a cold memdb every such miss
+// is a real row, and a run that quietly shrinks is the failure this counter
+// exists to expose.
+func selectTranscribeWork(ctx context.Context, store interface {
+	GetBookByID(string) (*database.Book, error)
+}, ids []string, sel transcribeSelect) (transcribeSelection, error) {
+	const (
+		verdictUnreadable = iota
+		verdictSkip
+		verdictWork
+	)
+	verdicts := make([]uint8, len(ids))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.NumCPU())
+	for i, id := range ids {
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			b, err := store.GetBookByID(id)
+			switch {
+			case err != nil || b == nil:
+				verdicts[i] = verdictUnreadable
+			case needsTranscribeWork(b, sel):
+				verdicts[i] = verdictWork
+			default:
+				verdicts[i] = verdictSkip
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return transcribeSelection{}, fmt.Errorf("select transcribe work: %w", err)
+	}
+	out := transcribeSelection{}
+	for i, v := range verdicts {
+		switch v {
+		case verdictWork:
+			out.work = append(out.work, ids[i])
+		case verdictSkip:
+			out.skipped++
+		default:
+			out.unreadable++
+		}
+	}
+	return out, nil
 }
 
 // chunkIDs splits ids into consecutive slices of at most size elements.
