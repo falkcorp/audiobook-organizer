@@ -6,6 +6,7 @@
 package abs_test
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -171,5 +172,60 @@ func TestSearch_GenresComeFromFilterData(t *testing.T) {
 	search(t, h, tok, "another")
 	if got := seed.lib.genreScanCalls(); got != 1 {
 		t.Fatalf("two searches ran the genre scan %d times, want 1 (one filterdata build)", got)
+	}
+}
+
+// 🔴 A DEGRADED SEARCH DOCUMENT IS NEVER CACHED. When an optional source
+// fails, the request is still served (with that list empty) but the next
+// request must rebuild, so the phone does not retry into the same quietly
+// empty answer for two minutes.
+func TestSearch_DegradedDocumentIsNotCached(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	login := h.login(t, "oracle", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, login), "accessToken")
+	_, seriesName := firstSeries(t, h, tok)
+
+	seed.lib.setSeriesCountsErr(errors.New("counts unavailable"))
+	body := search(t, h, tok, seriesName)
+	if len(body["series"].([]any)) == 0 {
+		t.Fatal("a degraded search should still serve the series it could build")
+	}
+	search(t, h, tok, seriesName)
+	if got := seed.lib.searchCalls(); got != 2 {
+		t.Fatalf("degraded document was replayed from cache (%d store searches, want 2)", got)
+	}
+
+	seed.lib.setSeriesCountsErr(nil)
+	search(t, h, tok, seriesName)
+	search(t, h, tok, seriesName)
+	if got := seed.lib.searchCalls(); got != 3 {
+		t.Fatalf("once the sources are healthy the document should be cached again (%d store searches, want 3)", got)
+	}
+}
+
+// 🔴 A HYDRATION FAILURE IS A 500, NOT AN EMPTY LIST. The same body carries
+// numBooks from the index; "12 books" beside "libraryItems: []" is the empty
+// author page this route exists to fix, with no error to show for it.
+func TestAuthorDetail_HydrationFailureIsAnError(t *testing.T) {
+	h, seed, tok := newBrowseHarness(t)
+	_, listed := h.do(t, request{
+		method: http.MethodGet, path: "/api/libraries/" + h.libraryID() + "/authors", headers: bearer(tok),
+	})
+	author := listed["authors"].([]any)[0].(map[string]any)
+	id := author["id"].(string)
+
+	seed.lib.setBooksByIDsErr(errors.New("pebble: closed"))
+	code, body := h.doAny(t, request{
+		method: http.MethodGet, path: "/api/authors/" + id + "?include=items", headers: bearer(tok),
+	})
+	if code != http.StatusInternalServerError {
+		t.Fatalf("author detail with a failing store = %d, want 500; body=%#v", code, body)
+	}
+	// Without the include nothing is hydrated, so the bare row still serves.
+	code, _ = h.doAny(t, request{method: http.MethodGet, path: "/api/authors/" + id, headers: bearer(tok)})
+	if code != http.StatusOK {
+		t.Fatalf("bare author detail should not depend on hydration; got %d", code)
 	}
 }
