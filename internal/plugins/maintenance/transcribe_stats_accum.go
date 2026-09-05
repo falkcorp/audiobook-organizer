@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-07-18
+// last-edited: 2026-09-05
 
 package maintenance
 
@@ -85,6 +85,29 @@ func (a *transcribeStatsAccum) recordOutcome(status string, now time.Time) {
 func (a *transcribeStatsAccum) recordSkipped(n int) {
 	a.mu.Lock()
 	a.stats.SkippedExisting += n
+	a.mu.Unlock()
+}
+
+// recordDeferred counts books that were in this run's work but got no outcome
+// — an endpoint outage, a failed temp dir, a row unreadable at page time. They
+// keep their missing transcript and the next run picks them up.
+func (a *transcribeStatsAccum) recordDeferred(n int) {
+	if n == 0 {
+		return
+	}
+	a.mu.Lock()
+	a.stats.Deferred += n
+	a.mu.Unlock()
+}
+
+// recordUnreadable counts listed books the selection could not read at all.
+// They are outside TotalBooks: never work, never attempted.
+func (a *transcribeStatsAccum) recordUnreadable(n int) {
+	if n == 0 {
+		return
+	}
+	a.mu.Lock()
+	a.stats.Unreadable += n
 	a.mu.Unlock()
 }
 
