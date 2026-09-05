@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/search_author_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c1f0d2e-7b3a-4c5d-9e8f-2a1b3c4d5e6f
 // last-edited: 2026-09-05
 
@@ -303,5 +303,26 @@ func TestSearch_CountsFailureIsDegradedNotCached(t *testing.T) {
 	search(t, h, tok, "odyssey")
 	if got := seed.lib.searchCalls() - before; got != 2 {
 		t.Fatalf("degraded document was cached: %d builds for 2 requests, want 2", got)
+	}
+}
+
+// When the grouping source fails the filter cannot run: the empty rows are
+// served without books (a degraded document) and NOT cached, so the first
+// request after recovery filters again.
+func TestSearch_GroupingsFailureServesUnfilteredUncached(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	seed.lib.series[30] = &database.Series{ID: 30, Name: "Odyssey Cycle"}
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	login := h.login(t, "oracle", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, login), "accessToken")
+
+	seed.lib.setListErr(errors.New("book listing unavailable"))
+	if n := len(search(t, h, tok, "odyssey")["series"].([]any)); n != 2 {
+		t.Fatalf("degraded search returned %d series, want both (unfiltered)", n)
+	}
+	seed.lib.setListErr(nil)
+	if n := len(search(t, h, tok, "odyssey")["series"].([]any)); n != 1 {
+		t.Fatalf("after recovery search returned %d series, want 1 — the degraded document was cached", n)
 	}
 }
