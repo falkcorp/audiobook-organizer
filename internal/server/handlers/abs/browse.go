@@ -8,6 +8,8 @@ package abs
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -1457,6 +1459,7 @@ func (h *Handler) AuthorDetail(c *gin.Context) {
 
 	idx, err := h.contributorsCached(c.Request.Context())
 	if err != nil {
+		slog.Warn("abs: author detail: contributor index unavailable", "author_id", authorID, "err", err)
 		respondError(c, http.StatusInternalServerError, "could not load author")
 		return
 	}
@@ -1487,8 +1490,22 @@ func (h *Handler) AuthorDetail(c *gin.Context) {
 		return
 	}
 
-	id, _ := strconv.Atoi(authorID)
-	views := h.itemViewsByIDs(c.Request.Context(), idx.authorBooks[id])
+	id, err := strconv.Atoi(authorID)
+	if err != nil {
+		// Unreachable while ids are minted by strconv.Itoa above, and a 404
+		// rather than a silent authorBooks[0] lookup if that ever changes.
+		respondError(c, http.StatusNotFound, "author not found")
+		return
+	}
+	views, err := h.itemViewsByIDs(c.Request.Context(), idx.authorBooks[id])
+	if err != nil {
+		// 🔴 NOT an empty list. The same body carries numBooks from the index;
+		// "12 books" beside "libraryItems: []" is a contradiction the client
+		// renders as an empty page with no error, which is the report this fixes.
+		slog.Warn("abs: author detail: could not hydrate items", "author_id", authorID, "err", err)
+		respondError(c, http.StatusInternalServerError, "could not load author's items")
+		return
+	}
 	if includeItems {
 		resp.LibraryItems = make([]any, 0, len(views))
 		for i := range views {
@@ -1542,22 +1559,21 @@ func (h *Handler) authorSeriesGroups(views []itemView) []any {
 }
 
 // itemViewsByIDs hydrates a list of book ids into item views, in the order
-// given, dropping ids that no longer resolve. On a store failure it returns
-// what it has rather than nothing, matching seriesPageBooks: a page missing
-// hydration is worth serving, a 500 is not.
-func (h *Handler) itemViewsByIDs(ctx context.Context, ids []string) []itemView {
+// given, dropping only ids that no longer resolve. A store or hydration
+// failure is returned, not swallowed: the caller decides whether an empty
+// list is an honest answer, and for an author whose numBooks says otherwise
+// it is not.
+func (h *Handler) itemViewsByIDs(ctx context.Context, ids []string) ([]itemView, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	books, err := h.library.GetBooksByIDs(ids)
 	if err != nil {
-		slog.Warn("abs: could not load books by id", "count", len(ids), "err", err)
-		return nil
+		return nil, fmt.Errorf("load %d books by id: %w", len(ids), err)
 	}
 	views, err := h.loadItemViews(ctx, books)
 	if err != nil {
-		slog.Warn("abs: could not hydrate items", "count", len(books), "err", err)
-		return nil
+		return nil, fmt.Errorf("hydrate %d items: %w", len(books), err)
 	}
 	byID := make(map[string]int, len(views))
 	for i := range views {
@@ -1569,7 +1585,7 @@ func (h *Handler) itemViewsByIDs(ctx context.Context, ids []string) []itemView {
 			out = append(out, views[i])
 		}
 	}
-	return out
+	return out, nil
 }
 
 // authorLess returns the comparator for an author-list sort, or nil when this
@@ -2024,14 +2040,18 @@ func (h *Handler) searchStore(key string, resp *searchResponse) {
 	now := h.now()
 	if len(h.searchCache) >= absSearchCacheMax {
 		// Expired entries first; if none, the oldest. One pass either way —
-		// the map is small by construction.
-		oldestKey, oldestAt := "", now
+		// the map is small by construction. The oldest is tracked from the
+		// first survivor, not from now: seeded at now, entries built in the
+		// same instant (a frozen test clock, or a burst) are never "before"
+		// it and the map would grow past the bound.
+		var oldestKey string
+		var oldestAt time.Time
 		for k, e := range h.searchCache {
 			if now.Sub(e.builtAt) >= absSearchCacheTTL {
 				delete(h.searchCache, k)
 				continue
 			}
-			if e.builtAt.Before(oldestAt) {
+			if oldestKey == "" || e.builtAt.Before(oldestAt) {
 				oldestKey, oldestAt = k, e.builtAt
 			}
 		}
@@ -2040,6 +2060,34 @@ func (h *Handler) searchStore(key string, resp *searchResponse) {
 		}
 	}
 	h.searchCache[key] = searchCacheEntry{resp: resp, builtAt: now}
+}
+
+// rankSeriesMatches returns up to limit series whose name contains the
+// lowercased query, best matches first: an exact name, then names that start
+// with the query, then the rest, each tier in the input (name) order.
+//
+// Ranked BEFORE the cap. GetAllSeries is name-sorted, so cutting the first 25
+// substring matches of a common word ("hunter") could drop "The Primal Hunter"
+// behind twenty-four series that merely contain it — the one the user typed
+// would not be in the list at all.
+func rankSeriesMatches(all []database.Series, lower string, limit int) []database.Series {
+	var exact, prefix, rest []database.Series
+	for _, s := range all {
+		name := strings.ToLower(s.Name)
+		switch {
+		case name == lower:
+			exact = append(exact, s)
+		case strings.HasPrefix(name, lower):
+			prefix = append(prefix, s)
+		case strings.Contains(name, lower):
+			rest = append(rest, s)
+		}
+	}
+	out := append(append(exact, prefix...), rest...)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // LibrarySearch handles GET /api/libraries/:libraryId/search.
@@ -2069,14 +2117,22 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 		if resp, ok := h.searchCached(key); ok {
 			return resp, nil
 		}
-		resp, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query)
+		resp, complete, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query)
 		if err != nil {
 			return nil, err
 		}
-		h.searchStore(key, resp)
+		// 🔴 A DEGRADED DOCUMENT IS NEVER CACHED. buildSearch serves a list
+		// empty rather than failing the request when one of its optional
+		// sources errors — the right cost per request, and the wrong thing to
+		// pin for two minutes: the phone would retry into the same quietly
+		// empty list with nothing in the log. Same rule as filterDataCached.
+		if complete {
+			h.searchStore(key, resp)
+		}
 		return resp, nil
 	})
 	if err != nil {
+		slog.Warn("abs: search failed", "query", query, "err", err)
 		respondError(c, http.StatusInternalServerError, "search failed")
 		return
 	}
@@ -2095,16 +2151,24 @@ func emptySearchResponse() *searchResponse {
 // for one field, 1.6s the book search, 0.5s sorting every series name. Genres
 // now come from the /filterdata document, which already caches exactly that
 // scan; the series and book work is what the result cache amortizes.
-func (h *Handler) buildSearch(ctx context.Context, query string) (*searchResponse, error) {
-	resp := emptySearchResponse()
+//
+// complete is false when any optional source degraded to an empty list; the
+// document is still served, but the caller must not cache it.
+func (h *Handler) buildSearch(ctx context.Context, query string) (resp *searchResponse, complete bool, err error) {
+	resp = emptySearchResponse()
+	complete = true
+	degraded := func(what string, err error) {
+		complete = false
+		slog.Warn("abs: search source unavailable, serving that list empty", "source", what, "query", query, "err", err)
+	}
 
 	books, err := h.library.SearchBooks(query, searchResultLimit, 0)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	views, err := h.loadItemViews(ctx, books)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for i := range views {
 		// Search hits carry the EXPANDED item, which is what real ABS returns and
@@ -2113,15 +2177,22 @@ func (h *Handler) buildSearch(ctx context.Context, query string) (*searchRespons
 	}
 
 	lower := strings.ToLower(query)
-	if authors, err := h.authorDTOsCached(ctx); err == nil {
-		for i := range authors {
-			if strings.Contains(strings.ToLower(authors[i].Name), lower) {
-				resp.Authors = append(resp.Authors, authors[i])
+	idx, err := h.contributorsCached(ctx)
+	if err != nil {
+		degraded("contributors", err)
+	} else {
+		for i := range idx.authors {
+			if strings.Contains(strings.ToLower(idx.authors[i].Name), lower) {
+				resp.Authors = append(resp.Authors, idx.authors[i])
 			}
 		}
 	}
-	resp.Series = h.searchSeriesHits(ctx, lower)
-	if idx, err := h.contributorsCached(ctx); err == nil {
+	var seriesOK bool
+	resp.Series, seriesOK = h.searchSeriesHits(ctx, lower)
+	if !seriesOK {
+		complete = false
+	}
+	if idx != nil {
 		for i := range idx.narrators {
 			if strings.Contains(strings.ToLower(idx.narrators[i].Name), lower) {
 				// §6.3: the client's Narrator.id is non-optional and ONE element
@@ -2148,14 +2219,24 @@ func (h *Handler) buildSearch(ctx context.Context, query string) (*searchRespons
 	}
 	// From the cached /filterdata document, NOT h.library.GetDistinctGenres():
 	// that call is a full scan of the book keyspace and was 64% of every search.
-	if fd := h.filterDataCached(ctx); fd != nil {
+	//
+	// filterDataCached hands back a degraded, UNCACHED document when a source
+	// failed and nothing fresh exists; filterDataFresh returns only a published
+	// one. A document that is not the published one is degraded, and a search
+	// built on it must not be cached either — /filterdata would self-heal on
+	// its next request while /search kept asserting "no genres" for the TTL.
+	fd := h.filterDataCached(ctx)
+	if fd == nil || fd != h.filterDataFresh() {
+		degraded("filterdata", errors.New("degraded or unpublished filterdata document"))
+	}
+	if fd != nil {
 		for _, g := range fd.Genres {
 			if strings.Contains(strings.ToLower(g), lower) {
 				resp.Genres = append(resp.Genres, g)
 			}
 		}
 	}
-	return resp, nil
+	return resp, complete, nil
 }
 
 // searchSeriesHits returns the series whose name contains the (lowercased)
@@ -2172,32 +2253,33 @@ func (h *Handler) buildSearch(ctx context.Context, query string) (*searchRespons
 //
 // Capped at searchResultLimit: every hit hydrates its books, and a one-word
 // query can match thousands of the library's 43k series names.
-func (h *Handler) searchSeriesHits(ctx context.Context, lower string) []any {
+//
+// The bool is false when the list was degraded by a store failure (no series,
+// or series with no books); the caller must not cache such a document.
+func (h *Handler) searchSeriesHits(ctx context.Context, lower string) ([]any, bool) {
 	out := []any{}
 	all, err := h.library.GetAllSeries()
 	if err != nil {
-		return out
+		slog.Warn("abs: series unavailable for search, serving none", "err", err)
+		return out, false
 	}
-	var matched []database.Series
-	for _, s := range all {
-		if strings.Contains(strings.ToLower(s.Name), lower) {
-			matched = append(matched, s)
-			if len(matched) >= searchResultLimit {
-				break
-			}
-		}
-	}
+	matched := rankSeriesMatches(all, lower, searchResultLimit)
 	if len(matched) == 0 {
-		return out
+		return out, true
 	}
+	complete := true
 	bySeries, err := h.seriesBooksCached()
 	if err != nil {
+		// Served without books — the black tile — but NOT cached as such.
 		slog.Warn("abs: series books unavailable for search, serving series without books", "err", err)
 		bySeries = map[int]seriesBooksBuilt{}
+		complete = false
 	}
 	counts, err := h.library.GetAllSeriesBookCounts()
 	if err != nil {
+		slog.Warn("abs: series book counts unavailable for search", "err", err)
 		counts = map[int]int{}
+		complete = false
 	}
 	for _, row := range h.seriesRows(ctx, matched, bySeries, counts) {
 		hit, ok := row.(gin.H)
@@ -2213,7 +2295,7 @@ func (h *Handler) searchSeriesHits(ctx context.Context, lower string) []any {
 		hit["series"] = nested
 		out = append(out, hit)
 	}
-	return out
+	return out, complete
 }
 
 // ── shared item resolution ──────────────────────────────────────────────────

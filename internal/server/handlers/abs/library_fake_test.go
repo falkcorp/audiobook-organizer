@@ -99,6 +99,24 @@ type fakeLibrary struct {
 	// failSeriesCounts injects an error on GetAllSeriesBookCounts() for testing.
 	failSeriesCounts bool
 	seriesCountsErr  error
+
+	// booksByIDsErr, when set, fails GetBooksByIDs — the author-detail and
+	// series hydration path — so a test can prove a hydration failure is a
+	// 500 rather than an empty list beside a nonzero numBooks.
+	booksByIDsErr error
+}
+
+func (f *fakeLibrary) setBooksByIDsErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.booksByIDsErr = err
+}
+
+func (f *fakeLibrary) setSeriesCountsErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failSeriesCounts = err != nil
+	f.seriesCountsErr = err
 }
 
 // authorCountCalls reports how many times the full author-count scan ran. The
@@ -273,6 +291,9 @@ func (f *fakeLibrary) GetBookByID(id string) (*database.Book, error) {
 func (f *fakeLibrary) GetBooksByIDs(ids []string) ([]database.Book, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.booksByIDsErr != nil {
+		return nil, f.booksByIDsErr
+	}
 	out := make([]database.Book, 0, len(ids))
 	for _, id := range ids {
 		if b, ok := f.books[id]; ok {
