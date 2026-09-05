@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-09-05
 
@@ -127,7 +127,9 @@ func TestSearchMetadataForBook_SeriesDecoratedTitleFallsBackToVariants(t *testin
 	svc := NewService(mock)
 	svc.SetOverrideSources([]metadata.MetadataSource{src})
 
-	resp, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "", "", "", SearchOptions{})
+	// With an author, every variant costs a SearchByTitleAndAuthor call, so a
+	// search that did not stop at the hit would be seen querying "Assertions".
+	resp, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "Bern Dean", "", "", SearchOptions{})
 	if err != nil {
 		t.Fatalf("searchMetadataForBook: %v", err)
 	}
@@ -149,7 +151,8 @@ func TestSearchMetadataForBook_LiteralHitSkipsVariants(t *testing.T) {
 	svc := NewService(mock)
 	svc.SetOverrideSources([]metadata.MetadataSource{src})
 
-	if _, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "", "", "", SearchOptions{}); err != nil {
+	// The author makes a variant query observable (see the fallback test).
+	if _, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "Bern Dean", "", "", SearchOptions{}); err != nil {
 		t.Fatalf("searchMetadataForBook: %v", err)
 	}
 	for _, q := range src.queries {
