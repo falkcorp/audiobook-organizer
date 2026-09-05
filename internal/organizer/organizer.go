@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-05
 
@@ -339,7 +339,13 @@ func (o *Organizer) resolveAuthorName(book *database.Book) string {
 	// Called ~twice per organize (folder pattern + file pattern), not per file
 	// segment: pathVars is evaluated once and its PathVars struct is reused
 	// across a multi-file book's segments, so this is not a per-track store hit.
-	if book != nil && o.store != nil {
+	// It IS reached once per book via HasResolvedAuthor in the whole-library
+	// organize filter loop (service.go), so this adds one O(1) join point-get per
+	// book per sweep — alongside the GetAuthorByID that path already did.
+	if book == nil {
+		return ""
+	}
+	if o.store != nil {
 		if name := o.authorNameFromJoin(book.ID); name != "" {
 			return name
 		}
@@ -374,7 +380,18 @@ func (o *Organizer) resolveAuthorName(book *database.Book) string {
 // "simplify" to a bare index.
 func (o *Organizer) authorNameFromJoin(bookID string) string {
 	authors, err := o.store.GetBookAuthors(bookID)
-	if err != nil || len(authors) == 0 {
+	if err != nil {
+		// A join READ failure is distinct from "no rows": the organizer is about
+		// to fall back to the rescan-clobberable scalar, which is the exact
+		// misfiling this path exists to prevent. Fall through (no regression vs
+		// the pre-join behaviour) but log so a persistent read fault is visible
+		// rather than silently degrading every book to the scalar. Logged here,
+		// not at the caller, which cannot tell a read fault from an empty join.
+		slog.Warn("organizer: book_authors join read failed; falling back to scalar author (may be rescan-reverted)",
+			"book_id", bookID, "error", err)
+		return ""
+	}
+	if len(authors) == 0 {
 		return ""
 	}
 	primary := authors[0]
@@ -384,7 +401,13 @@ func (o *Organizer) authorNameFromJoin(bookID string) string {
 		}
 	}
 	author, err := o.store.GetAuthorByID(primary.AuthorID)
-	if err != nil || author == nil {
+	if err != nil {
+		slog.Warn("organizer: join primary author lookup failed; falling back to scalar author",
+			"book_id", bookID, "author_id", primary.AuthorID, "error", err)
+		return ""
+	}
+	if author == nil {
+		// Dangling AuthorID (the known leak) -- fall through to the scalar, tested.
 		return ""
 	}
 	name := strings.TrimSpace(author.Name)

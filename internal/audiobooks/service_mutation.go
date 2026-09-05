@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-09-03
+// last-edited: 2026-09-05
 
 package audiobooks
 
@@ -209,6 +209,27 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	} else if payload.AuthorID != nil {
 		if author, err := svc.store.GetAuthorByID(*payload.AuthorID); err == nil && author != nil {
 			resolvedAuthorName = author.Name
+			// Keep the book_authors join in step with an ID-based author change.
+			// The name path above writes BOTH the scalar and the join; this
+			// branch historically wrote only the scalar, leaving the join stale
+			// -- and the organizer now trusts the join over the scalar (see
+			// organizer.authorNameFromJoin), so a stale join would misfile the
+			// book under the old author on the next organize. An ID-based set is
+			// single-author by definition (same as typing one name), so the join
+			// becomes exactly that one author at Position 0.
+			//
+			// Guarded on the CLIENT actually sending author_id (req.Updates,
+			// not the pre-existing scalar that any unrelated update carries) and
+			// a real positive id -- id 0 is the dangling-reference shape the read
+			// side already treats as "no author", so never write it into the join.
+			if req.Updates.AuthorID != nil && *req.Updates.AuthorID > 0 {
+				if err := svc.store.SetBookAuthors(id, []database.BookAuthor{
+					{BookID: id, AuthorID: *req.Updates.AuthorID, Role: "author", Position: 0},
+				}); err != nil {
+					slog.Warn("failed to sync book_authors join for ID-based author edit",
+						"book_id", id, "author_id", *req.Updates.AuthorID, "err", err)
+				}
+			}
 		}
 	}
 

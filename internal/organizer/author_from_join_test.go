@@ -1,5 +1,5 @@
 // file: internal/organizer/author_from_join_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e2d94-6a3f-4b81-9d20-3e5a8c7f1b64
 // last-edited: 2026-09-05
 
@@ -86,6 +86,32 @@ func TestResolveAuthorName_JoinPrimaryIsLowestPosition(t *testing.T) {
 	book := &database.Book{ID: "b1"}
 	if got := o.resolveAuthorName(book); got != "Primary" {
 		t.Fatalf("resolveAuthorName = %q, want %q", got, "Primary")
+	}
+}
+
+// The load-bearing tie-break: organizer-copied books have EVERY join row at
+// Position 0 (service.go copies AuthorID+Role but not Position), so lowest-
+// Position alone cannot pick a primary -- the code relies on GetBookAuthors
+// preserving stored order and apply appending the primary FIRST. This pins that
+// claim: two rows both at Position 0, stored [primary, coauthor], primary wins.
+// If someone "simplifies" the loop to a bare index or re-sorts, this fails.
+func TestResolveAuthorName_AllPositionZeroPicksFirstStored(t *testing.T) {
+	o := &Organizer{}
+	o.SetStore(&authorJoinStore{
+		joins: map[string][]database.BookAuthor{
+			"b1": {
+				{BookID: "b1", AuthorID: 1, Position: 0}, // primary, stored first
+				{BookID: "b1", AuthorID: 2, Position: 0}, // co-author, same position
+			},
+		},
+		authorsByID: map[int]*database.Author{
+			1: {ID: 1, Name: "Primary"},
+			2: {ID: 2, Name: "CoAuthor"},
+		},
+	})
+	book := &database.Book{ID: "b1"}
+	if got := o.resolveAuthorName(book); got != "Primary" {
+		t.Fatalf("resolveAuthorName = %q, want first-stored primary %q at an all-zero-Position join", got, "Primary")
 	}
 }
 

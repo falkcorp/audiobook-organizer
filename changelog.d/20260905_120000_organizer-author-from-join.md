@@ -10,3 +10,8 @@
   one you chose. The organizer now reads the applied author from the join table
   first and only falls back to the scalar when the join has nothing usable, so a
   book with only a scanned author (the common case) is unaffected.
+- Editing a book's author by ID (not by name) now updates the `book_authors`
+  join table too, keeping it in step with the scalar field. Previously the ID
+  path wrote only the scalar, which — now that the organizer trusts the join —
+  could have refiled the book under a stale author. An ID-based author edit is
+  single-author by definition, so the join becomes exactly that one author.
