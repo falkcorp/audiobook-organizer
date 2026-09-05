@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
 // last-edited: 2026-09-05
 
@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -135,6 +136,12 @@ type ChainOutcome struct {
 	Err       error
 	ErrSource string
 
+	// Variant is the query that produced Results when it was one of the
+	// decoration-free retries (extraTitleVariants) rather than the book's
+	// literal title; "" for a literal hit or a cache hit. Ledgered so a
+	// bulk run's rescues can be told apart from its literal hits.
+	Variant string
+
 	// AllThrottled is set when EVERY source in the chain refused before making
 	// a call because it is under a global throttle.
 	//
@@ -221,56 +228,65 @@ func WalkSourceChain(
 			// Query ladder for this source, most specific first. The untrimmed
 			// retries are appended only when trimming actually changed the
 			// title, so an unchanged title is not searched twice.
-			attempts := make([]func() ([]metadata.BookMetadata, error), 0, 4)
-			add := func(title string) {
+			type attempt struct {
+				query  string
+				anchor map[string]bool // non-nil: a variant, results gated on it
+				run    func() ([]metadata.BookMetadata, error)
+			}
+			attempts := make([]attempt, 0, 8)
+			add := func(title string, anchor map[string]bool) {
 				if author != "" {
-					attempts = append(attempts, func() ([]metadata.BookMetadata, error) {
+					attempts = append(attempts, attempt{title, anchor, func() ([]metadata.BookMetadata, error) {
 						return src.SearchByTitleAndAuthor(ctx, title, author)
-					})
+					}})
 				}
-				attempts = append(attempts, func() ([]metadata.BookMetadata, error) {
+				attempts = append(attempts, attempt{title, anchor, func() ([]metadata.BookMetadata, error) {
 					return src.SearchByTitle(ctx, title)
-				})
+				}})
 			}
-			add(searchTitle)
+			add(searchTitle, nil)
 			if searchTitle != bookTitle {
-				add(bookTitle)
+				add(bookTitle, nil)
 			}
-			// Series-decorated titles ("Eternal Dominion, Book 04 - Assertions",
-			// "Path Of The Voidwalker - BK07") miss on every provider verbatim;
-			// the attempts loop returns on the first hit, so these cost calls
-			// only for a book the two literal queries did not find.
-			for _, variant := range extraTitleVariants(bookTitle, searchTitle) {
-				add(variant)
+			// Series-decorated titles ("Eternal Dominion, Book 04 - Assertions")
+			// miss on every provider verbatim; the loop below returns on the
+			// first hit, so these cost calls only for a book the two literal
+			// queries did not find, and their results are anchored on the
+			// book's own name so a series-name answer cannot be cached as it.
+			for _, v := range extraTitleVariants(bookTitle, searchTitle, true) {
+				add(v.Query, v.Anchor)
 			}
-
-			for _, attempt := range attempts {
-				res, err := attempt()
+			for _, a := range attempts {
+				// A cancelled walk makes no further calls: each one would fail
+				// fast and count against the shared circuit breaker.
+				if ctx.Err() != nil {
+					return false
+				}
+				res, err := a.run()
 				if err != nil {
-					// Remember it and keep trying: a later query or a later
-					// source may still succeed, but if nothing does, this is
-					// the difference between "not in the catalog" and "we
-					// never got a usable answer".
-					//
-					// A CONTROL-PLANE sentinel must not displace a diagnosis.
-					// The first book to exhaust a quota gets the real message
-					// ("Quota exceeded ... 'Queries per day'") on attempt 1 and
-					// ErrProviderThrottled on attempts 2-4; overwriting blindly
-					// meant the one ledger row that could name the cause said
-					// only "provider is throttled" and the quota text appeared
-					// nowhere in the operation's output.
 					if errors.Is(err, metadata.ErrProviderThrottled) {
 						throttled++
-						if out.Err == nil {
-							out.Err, out.ErrSource = err, name
-						}
-					} else {
-						out.Err, out.ErrSource = err, name
+					}
+					if next := keepDiagnosis(out.Err, err); next != out.Err {
+						out.Err, out.ErrSource = next, name
+					}
+					if providerSentinel(err) {
+						// Every later attempt in this ladder returns the same
+						// refusal; stop instead of paying for it up to 8 times.
+						return false
 					}
 					continue
 				}
+				if a.anchor != nil {
+					res = keepAnchored(res, a.anchor)
+				}
 				if len(res) > 0 {
 					out.Results, out.SourceName, out.ProviderKey = res, name, slotKey
+					if a.anchor != nil {
+						out.Variant = a.query
+						slog.Info("metadata-fetch: hit on title variant",
+							"book_id", bookID, "provider", name, "variant", a.query, "count", len(res))
+					}
 					return true
 				}
 			}
