@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package abs_test
 
@@ -67,10 +67,15 @@ type fakeLibrary struct {
 	// genreScans counts GetDistinctGenres calls: the whole book:* keyspace,
 	// json.Unmarshalling every row to read one field.
 	//
-	// ⚠️ It is the /filterdata build counter ONLY for tests that do not touch
-	// /search — LibrarySearch calls GetDistinctGenres too (browse.go), and a
-	// test that hits it would inflate this and silently weaken the assertion.
+	// Since 2026-09-05 /search reads genres from the cached /filterdata
+	// document instead of calling this directly, so this IS the filterdata
+	// build counter on every route; TestSearch_GenresComeFromFilterData pins
+	// that.
 	genreScans int
+
+	// searchScans counts SearchBooks calls, so a test can prove a repeated
+	// query inside absSearchCacheTTL is answered from the cache.
+	searchScans int
 
 	// genreGate, when non-nil, blocks every genre scan until closed. Because
 	// GetDistinctGenres runs once per /filterdata build, holding it lets a test
@@ -419,9 +424,22 @@ func (f *fakeLibrary) CountAllBooks() (int, error) {
 	return len(f.order), nil
 }
 
+func (f *fakeLibrary) searchCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.searchScans
+}
+
+func (f *fakeLibrary) genreScanCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.genreScans
+}
+
 func (f *fakeLibrary) SearchBooks(query string, limit, offset int) ([]database.Book, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.searchScans++
 	q := strings.ToLower(query)
 	out := []database.Book{}
 	for i, id := range f.order {

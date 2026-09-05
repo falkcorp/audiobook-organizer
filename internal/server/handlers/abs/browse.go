@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package abs
 
@@ -1426,11 +1426,28 @@ func (h *Handler) LibraryAuthors(c *gin.Context) {
 	})
 }
 
+// authorDetailDTO is the author row plus the two optional expansions real ABS
+// serves for ?include=items,series. omitzero, not omitempty: an author whose
+// include was requested but who has no visible books must still get
+// "libraryItems": [] — the client asked for the list, and an absent key reads
+// as "this server has no such list", which is the black page this fixes.
+type authorDetailDTO struct {
+	authorDTO
+	LibraryItems []any `json:"libraryItems,omitzero"`
+	Series       []any `json:"series,omitzero"`
+}
+
 // AuthorDetail handles GET /api/authors/:id.
 //
 // Book items reference authors by this endpoint rather than by the library
 // listing route. Resolving from the same cached projection keeps the identity
 // and fields consistent across both UI paths without adding another store read.
+//
+// 🔴 THE APP'S AUTHOR PAGE IS BUILT FROM THE INCLUDES. Tapping an author on a
+// book requests ?include=items,series and renders libraryItems; the bare
+// author row was a 200 that drew nothing. The items come from the SAME
+// contributor index the /authors tile count and the ?filter=authors.<id>
+// drill-down read, so all three agree on which books this author has.
 func (h *Handler) AuthorDetail(c *gin.Context) {
 	authorID := strings.TrimSpace(c.Param("id"))
 	if authorID == "" {
@@ -1438,19 +1455,121 @@ func (h *Handler) AuthorDetail(c *gin.Context) {
 		return
 	}
 
-	authors, err := h.authorDTOsCached(c.Request.Context())
+	idx, err := h.contributorsCached(c.Request.Context())
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not load author")
 		return
 	}
-	for _, author := range authors {
-		if author.ID == authorID {
-			respondJSON(c, http.StatusOK, author)
-			return
+	var found *authorDTO
+	for i := range idx.authors {
+		if idx.authors[i].ID == authorID {
+			found = &idx.authors[i]
+			break
 		}
 	}
+	if found == nil {
+		respondError(c, http.StatusNotFound, "author not found")
+		return
+	}
 
-	respondError(c, http.StatusNotFound, "author not found")
+	includeItems, includeSeries := false, false
+	for _, part := range strings.Split(c.Query("include"), ",") {
+		switch strings.TrimSpace(strings.ToLower(part)) {
+		case "items":
+			includeItems = true
+		case "series":
+			includeSeries = true
+		}
+	}
+	resp := authorDetailDTO{authorDTO: *found}
+	if !includeItems && !includeSeries {
+		respondJSON(c, http.StatusOK, resp)
+		return
+	}
+
+	id, _ := strconv.Atoi(authorID)
+	views := h.itemViewsByIDs(c.Request.Context(), idx.authorBooks[id])
+	if includeItems {
+		resp.LibraryItems = make([]any, 0, len(views))
+		for i := range views {
+			resp.LibraryItems = append(resp.LibraryItems, h.minifiedItem(&views[i]))
+		}
+	}
+	if includeSeries {
+		resp.Series = h.authorSeriesGroups(views)
+	}
+	respondJSON(c, http.StatusOK, resp)
+}
+
+// authorSeriesGroups groups an author's hydrated books by series, in the shape
+// real ABS puts under author.series: one entry per series with its items. Books
+// in no series are not listed here; they are in libraryItems already.
+func (h *Handler) authorSeriesGroups(views []itemView) []any {
+	order := []int{}
+	byID := map[int][]any{}
+	for i := range views {
+		sid := views[i].Book.SeriesID
+		if sid == nil {
+			continue
+		}
+		if _, seen := byID[*sid]; !seen {
+			order = append(order, *sid)
+		}
+		byID[*sid] = append(byID[*sid], h.minifiedItem(&views[i]))
+	}
+	out := make([]any, 0, len(order))
+	if len(order) == 0 {
+		return out
+	}
+	names, err := h.library.GetSeriesByIDs(order)
+	if err != nil {
+		slog.Warn("abs: series names unavailable for author detail", "err", err)
+		names = map[int]*database.Series{}
+	}
+	for _, sid := range order {
+		name := ""
+		if s := names[sid]; s != nil {
+			name = s.Name
+		}
+		out = append(out, gin.H{
+			"id":               strconv.Itoa(sid),
+			"name":             name,
+			"nameIgnorePrefix": ignorePrefix(name),
+			"items":            byID[sid],
+		})
+	}
+	return out
+}
+
+// itemViewsByIDs hydrates a list of book ids into item views, in the order
+// given, dropping ids that no longer resolve. On a store failure it returns
+// what it has rather than nothing, matching seriesPageBooks: a page missing
+// hydration is worth serving, a 500 is not.
+func (h *Handler) itemViewsByIDs(ctx context.Context, ids []string) []itemView {
+	if len(ids) == 0 {
+		return nil
+	}
+	books, err := h.library.GetBooksByIDs(ids)
+	if err != nil {
+		slog.Warn("abs: could not load books by id", "count", len(ids), "err", err)
+		return nil
+	}
+	views, err := h.loadItemViews(ctx, books)
+	if err != nil {
+		slog.Warn("abs: could not hydrate items", "count", len(books), "err", err)
+		return nil
+	}
+	byID := make(map[string]int, len(views))
+	for i := range views {
+		byID[views[i].Book.ID] = i
+	}
+	out := make([]itemView, 0, len(ids))
+	for _, id := range ids {
+		if i, ok := byID[id]; ok {
+			out = append(out, views[i])
+		}
+	}
+	return out
 }
 
 // authorLess returns the comparator for an author-list sort, or nil when this
@@ -1864,35 +1983,128 @@ func (h *Handler) publishedDecades() ([]string, error) {
 // searchResultLimit caps a search. Both clients paginate nothing here.
 const searchResultLimit = 25
 
+// absSearchCacheTTL is how long a finished search document is replayed for the
+// same (library, query). The user's number: "the same for the next minute ...
+// or maybe 2-3 minutes". A library edit inside that window is invisible to a
+// repeated search until it expires; that is the trade the user chose.
+const absSearchCacheTTL = 2 * time.Minute
+
+// absSearchCacheMax bounds the number of cached queries. The key is user input,
+// so without a bound a client typing character by character grows the map
+// forever; at the bound the oldest entry is dropped.
+const absSearchCacheMax = 256
+
+type searchCacheEntry struct {
+	resp    *searchResponse
+	builtAt time.Time
+}
+
+// searchCacheKey folds case and surrounding space so "Primal Hunter" and
+// "primal hunter " share a document — the search itself is case-insensitive.
+func searchCacheKey(libraryID, query string) string {
+	return libraryID + "\x00" + strings.ToLower(strings.TrimSpace(query))
+}
+
+func (h *Handler) searchCached(key string) (*searchResponse, bool) {
+	h.searchCacheMu.Lock()
+	defer h.searchCacheMu.Unlock()
+	e, ok := h.searchCache[key]
+	if !ok || h.now().Sub(e.builtAt) >= absSearchCacheTTL {
+		return nil, false
+	}
+	return e.resp, true
+}
+
+func (h *Handler) searchStore(key string, resp *searchResponse) {
+	h.searchCacheMu.Lock()
+	defer h.searchCacheMu.Unlock()
+	if h.searchCache == nil {
+		h.searchCache = map[string]searchCacheEntry{}
+	}
+	now := h.now()
+	if len(h.searchCache) >= absSearchCacheMax {
+		// Expired entries first; if none, the oldest. One pass either way —
+		// the map is small by construction.
+		oldestKey, oldestAt := "", now
+		for k, e := range h.searchCache {
+			if now.Sub(e.builtAt) >= absSearchCacheTTL {
+				delete(h.searchCache, k)
+				continue
+			}
+			if e.builtAt.Before(oldestAt) {
+				oldestKey, oldestAt = k, e.builtAt
+			}
+		}
+		if len(h.searchCache) >= absSearchCacheMax && oldestKey != "" {
+			delete(h.searchCache, oldestKey)
+		}
+	}
+	h.searchCache[key] = searchCacheEntry{resp: resp, builtAt: now}
+}
+
 // LibrarySearch handles GET /api/libraries/:libraryId/search.
 //
 // An empty or unmatched query returns 200 with empty arrays, never a 4xx: a 4xx here
 // reads as "search unsupported" and hides the feature (§1.7.3 item 10). Every one of
 // the six keys is a non-nil array — a null fails the decode.
+//
+// The document is built once per (library, query) and replayed for
+// absSearchCacheTTL. Readers only serialize the cached value, never mutate it.
 func (h *Handler) LibrarySearch(c *gin.Context) {
 	if !h.knownLibrary(c) {
 		return
 	}
-	resp := searchResponse{
-		Authors: []any{}, Book: []searchBookHitDTO{}, Genres: []any{},
-		Narrators: []narratorDTO{}, Series: []any{}, Tags: []any{},
-	}
-
 	query := strings.TrimSpace(c.Query("q"))
 	if query == "" {
+		respondJSON(c, http.StatusOK, emptySearchResponse())
+		return
+	}
+
+	key := searchCacheKey(h.libraryID(), query)
+	if resp, ok := h.searchCached(key); ok {
 		respondJSON(c, http.StatusOK, resp)
 		return
 	}
-
-	books, err := h.library.SearchBooks(query, searchResultLimit, 0)
+	v, err, _ := h.searchSF.Do(key, func() (any, error) {
+		if resp, ok := h.searchCached(key); ok {
+			return resp, nil
+		}
+		resp, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query)
+		if err != nil {
+			return nil, err
+		}
+		h.searchStore(key, resp)
+		return resp, nil
+	})
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "search failed")
 		return
 	}
-	views, err := h.loadItemViews(c.Request.Context(), books)
+	respondJSON(c, http.StatusOK, v.(*searchResponse))
+}
+
+func emptySearchResponse() *searchResponse {
+	return &searchResponse{
+		Authors: []any{}, Book: []searchBookHitDTO{}, Genres: []any{},
+		Narrators: []narratorDTO{}, Series: []any{}, Tags: []any{},
+	}
+}
+
+// buildSearch computes one search document. Profiled on production 2026-09-05
+// (7.45s per call): 4.79s was GetDistinctGenres walking the whole book keyspace
+// for one field, 1.6s the book search, 0.5s sorting every series name. Genres
+// now come from the /filterdata document, which already caches exactly that
+// scan; the series and book work is what the result cache amortizes.
+func (h *Handler) buildSearch(ctx context.Context, query string) (*searchResponse, error) {
+	resp := emptySearchResponse()
+
+	books, err := h.library.SearchBooks(query, searchResultLimit, 0)
 	if err != nil {
-		respondError(c, http.StatusInternalServerError, "search failed")
-		return
+		return nil, err
+	}
+	views, err := h.loadItemViews(ctx, books)
+	if err != nil {
+		return nil, err
 	}
 	for i := range views {
 		// Search hits carry the EXPANDED item, which is what real ABS returns and
@@ -1901,23 +2113,15 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 	}
 
 	lower := strings.ToLower(query)
-	if authors, err := h.authorDTOsCached(c.Request.Context()); err == nil {
+	if authors, err := h.authorDTOsCached(ctx); err == nil {
 		for i := range authors {
 			if strings.Contains(strings.ToLower(authors[i].Name), lower) {
 				resp.Authors = append(resp.Authors, authors[i])
 			}
 		}
 	}
-	if series, err := h.library.GetAllSeries(); err == nil {
-		for _, s := range series {
-			if strings.Contains(strings.ToLower(s.Name), lower) {
-				resp.Series = append(resp.Series, gin.H{
-					"id": strconv.Itoa(s.ID), "name": s.Name, "books": []any{},
-				})
-			}
-		}
-	}
-	if idx, err := h.contributorsCached(c.Request.Context()); err == nil {
+	resp.Series = h.searchSeriesHits(ctx, lower)
+	if idx, err := h.contributorsCached(ctx); err == nil {
 		for i := range idx.narrators {
 			if strings.Contains(strings.ToLower(idx.narrators[i].Name), lower) {
 				// §6.3: the client's Narrator.id is non-optional and ONE element
@@ -1942,14 +2146,74 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 			}
 		}
 	}
-	if genres, err := h.library.GetDistinctGenres(); err == nil {
-		for _, g := range genres {
+	// From the cached /filterdata document, NOT h.library.GetDistinctGenres():
+	// that call is a full scan of the book keyspace and was 64% of every search.
+	if fd := h.filterDataCached(ctx); fd != nil {
+		for _, g := range fd.Genres {
 			if strings.Contains(strings.ToLower(g), lower) {
 				resp.Genres = append(resp.Genres, g)
 			}
 		}
 	}
-	respondJSON(c, http.StatusOK, resp)
+	return resp, nil
+}
+
+// searchSeriesHits returns the series whose name contains the (lowercased)
+// query, each carrying its books.
+//
+// 🔴 THE BOOKS ARE THE TILE. The client draws a series search hit from the
+// covers of its books; an empty books array — which is what this served
+// before — renders as a black tile that still opens the series when tapped,
+// because the id was right and the books were not there. The rows come from
+// seriesRows, the SAME renderer /series and /series/:id use, so a hit and the
+// page it opens agree on the books. Each hit also carries a nested "series"
+// object with the row's identity fields, which is where real ABS puts them,
+// so a client reading either shape finds the id and name.
+//
+// Capped at searchResultLimit: every hit hydrates its books, and a one-word
+// query can match thousands of the library's 43k series names.
+func (h *Handler) searchSeriesHits(ctx context.Context, lower string) []any {
+	out := []any{}
+	all, err := h.library.GetAllSeries()
+	if err != nil {
+		return out
+	}
+	var matched []database.Series
+	for _, s := range all {
+		if strings.Contains(strings.ToLower(s.Name), lower) {
+			matched = append(matched, s)
+			if len(matched) >= searchResultLimit {
+				break
+			}
+		}
+	}
+	if len(matched) == 0 {
+		return out
+	}
+	bySeries, err := h.seriesBooksCached()
+	if err != nil {
+		slog.Warn("abs: series books unavailable for search, serving series without books", "err", err)
+		bySeries = map[int]seriesBooksBuilt{}
+	}
+	counts, err := h.library.GetAllSeriesBookCounts()
+	if err != nil {
+		counts = map[int]int{}
+	}
+	for _, row := range h.seriesRows(ctx, matched, bySeries, counts) {
+		hit, ok := row.(gin.H)
+		if !ok {
+			continue
+		}
+		nested := gin.H{}
+		for k, v := range hit {
+			if k != "books" {
+				nested[k] = v
+			}
+		}
+		hit["series"] = nested
+		out = append(out, hit)
+	}
+	return out
 }
 
 // ── shared item resolution ──────────────────────────────────────────────────
