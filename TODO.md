@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.46.2 -->
+<!-- version: 10.46.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-03 -->
+<!-- last-edited: 2026-09-05 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,88 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+## Provider throttling — follow-ups
+
+- [ ] **Throttle panel in the UI.** `GET /api/v1/metadata/providers/throttles` returns
+  `provider_id`, `reason`, `detail`, `until` and `seconds_remaining`; `DELETE
+  .../throttles/{id}` and `DELETE .../throttles` are the resets. Poll on a slow cadence
+  (~4h was the ask) and show a "reset now" control. Endpoints shipped in the provider
+  throttle PR; the panel was explicitly out of scope for it.
+- [ ] **Unify the two metadata source-chain builders.** `metafetch.buildSourceChainFromConfig`
+  and `jobs.bmf_buildSourceChain` are near-copies that have already drifted: only the
+  metafetch one calls `applyProviderLimits` (so the maintenance job's providers run on
+  built-in budgets, ignoring configured rate limits) and only it supports the OpenLibrary
+  store. Unifying changes the job's rate-limiting behaviour, so it needs its own PR rather
+  than riding inside an unrelated one.
+- [ ] **`internal/metadata/wikipedia.go` drops three non-200s on the floor** (lines ~173,
+  ~199, ~266): the secondary enrichment calls `return` with no error, so a Wikipedia block
+  is invisible to the throttle classifier. The primary search path does report. Decide
+  whether those helpers should surface a `StatusError`.
+- [ ] **`internal/metadata/cover.go` still returns a bare status error.** Cover downloads
+  go to whatever URL a provider handed back, so there is no provider identity to key a
+  hold on. If cover hosts turn out to rate-limit us, this needs a host-keyed throttle
+  rather than a provider-keyed one.
+- [ ] **Chase the Google Books quota itself.** Re-tested from prod past the Pacific
+  midnight rollover on 2026-09-03 and still 429, so time alone is not the remedy — check
+  the Cloud console quota page for `project_number:624717413613` for another consumer or a
+  very low limit.
+
+## Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)
+
+- [ ] `PebbleStore.DeleteAuthor` → `sweepAuthorFromBookAuthors` scans the whole
+      `book_authors:` junction (~296k rows) per delete; 1,610 deletes took ~28 min.
+      When memdb is warm, resolve the author's book ids from the in-memory index and
+      delete only those junction keys (~40 lines + tests). Keep the full scan as the
+      cold-memdb fallback.
+- [ ] 3,372 books were left with no author row (`books-left-authorless` 896 + 2,476).
+      After the bulk metadata fetch, measure how many still have none and decide
+      whether they need the placeholder `Unknown Author` or a path-derived guess.
+- [ ] 662 `out-of-scope` rows (publisher/copyright/translator shrapnel that fails
+      `CleanAuthorNameForCreation` for a non-numbering reason) are untouched. Some
+      name real people ("Alex A. Ryans - translator"). Needs its own classifier
+      before any delete.
+
+## `TestCopyFile_PinnedNonce_OnlyOneWriterOpensTheTemp` is flaky in CI (2026-09-05)
+
+- [ ] `internal/organizer/copyfile_race_test.go:201` failed once on PR #3072's
+      `Go Tests (short, race)` job — the losing writer got a link `ErrExist` instead
+      of the expected outcome — and passed 30/30 locally and on re-run. The test races
+      two writers on a pinned temp-file nonce; on the CI runner's filesystem the
+      loser's `os.Link` can observe the winner's rename before its own open fails.
+      Decide whether the assertion is too strict for the real contract (exactly one
+      writer opens the temp; the loser may fail at open OR at link) and fix the test,
+      or fix the code if two writers can both reach `link`. Do not `t.Skip` it.
+
+## Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)
+
+- [ ] Prod has 43,592 `series` rows for 83,229 books. "The Primal Hunter" exists 8
+      times; 16 of the 25 search hits for "primal hunter" had no visible books (orphan
+      duplicates, numbered variants like "01 The Primal Hunter 9_", "(Unabridged)"
+      variants). ABS search now hides empty series (#3072) but `/api/libraries/:id/series`
+      still lists every one with `numBooks: 0`. Census the rows with zero referencing
+      books, then decide merge-into-canonical vs delete; the series-number-in-name
+      cases are the `series that were really book numbers` defect again.
+- [ ] `GET /api/v1/series?search=…` (also `q=`, `name=`) ignores its filter and returns
+      all 43,592 rows. Verify the param is consumed, not just parsed.
+
+## Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)
+
+- [ ] The weekly `library.scan` (`01M1M51FCKD1KA4XQ9AQ63XZWD`) organized a book at 02:31
+      EDT, which tripped the 6-hourly organizer auto-backup (`autoBackupMinInterval`,
+      `backup.CreateBackupWithCheckpoint`: Pebble checkpoint → `vfs.CopyAcrossFS` of the
+      27 GB store to `/mnt/bigdata/.../.backups` → tar). The copy phase reports no
+      progress, so after the registry's 5-minute `ProgressTimeout` the watchdog recorded
+      a `stuck` strike, cancelled the op at 02:37 and spawned a replacement worker; the
+      scan went `interrupted_quiesced` (it resumes at the next restart) while the
+      abandoned goroutine kept archiving until 03:41 (tarball closed 03:37, 26.05 GB).
+      Two defects: (1) a backup started from inside an op must report progress through
+      the op's reporter or run outside the op's watchdog window — the archive phase
+      already logs `Backing up: archived N files`, the checkpoint-copy phase before it
+      is silent; (2) cancelling the op does not stop the backup, so the "replacement
+      worker" runs beside a 27 GB copy it knows nothing about. Add a regression test
+      that drives an organize with the backup interval elapsed and asserts the op is
+      not cancelled.
 
 - [ ] **CFG-VALIDATE-AFTER-PERSIST** `PUT /api/v1/config` still calls
       `Config.Validate()` AFTER `UpdateService.UpdateConfig` has persisted the
