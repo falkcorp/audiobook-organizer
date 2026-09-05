@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-05
 //
@@ -386,7 +386,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		_ = store.CreateOperationResult(&database.OperationResult{
 			OperationID: opID,
 			BookID:      bookID,
-			ResultJSON:  fmt.Sprintf(`{"status":%q,"source":%q,"variant":%q}`, resultStatus, sourceName, out.Variant),
+			ResultJSON:  metafetch.LedgerResultJSON(resultStatus, sourceName, out.Variant),
 			Status:      resultStatus,
 		})
 
@@ -836,7 +836,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		_ = store.CreateOperationResult(&database.OperationResult{
 			OperationID: opID,
 			BookID:      bookID,
-			ResultJSON:  fmt.Sprintf(`{"status":%q,"source":%q,"variant":%q}`, resultStatus, sourceName, out.Variant),
+			ResultJSON:  metafetch.LedgerResultJSON(resultStatus, sourceName, out.Variant),
 			Status:      resultStatus,
 		})
 

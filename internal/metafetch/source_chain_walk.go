@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
 // last-edited: 2026-09-05
 
@@ -234,27 +234,29 @@ func WalkSourceChain(
 				run    func() ([]metadata.BookMetadata, error)
 			}
 			attempts := make([]attempt, 0, 8)
-			add := func(title string, anchor map[string]bool) {
+			add := func(title string, anchor map[string]bool, titleOnly bool) {
 				if author != "" {
 					attempts = append(attempts, attempt{title, anchor, func() ([]metadata.BookMetadata, error) {
 						return src.SearchByTitleAndAuthor(ctx, title, author)
 					}})
 				}
-				attempts = append(attempts, attempt{title, anchor, func() ([]metadata.BookMetadata, error) {
-					return src.SearchByTitle(ctx, title)
-				}})
+				if titleOnly {
+					attempts = append(attempts, attempt{title, anchor, func() ([]metadata.BookMetadata, error) {
+						return src.SearchByTitle(ctx, title)
+					}})
+				}
 			}
-			add(searchTitle, nil)
+			add(searchTitle, nil, true)
 			if searchTitle != bookTitle {
-				add(bookTitle, nil)
+				add(bookTitle, nil, true)
 			}
 			// Series-decorated titles ("Eternal Dominion, Book 04 - Assertions")
 			// miss on every provider verbatim; the loop below returns on the
 			// first hit, so these cost calls only for a book the two literal
 			// queries did not find, and their results are anchored on the
 			// book's own name so a series-name answer cannot be cached as it.
-			for _, v := range extraTitleVariants(bookTitle, searchTitle, true) {
-				add(v.Query, v.Anchor)
+			for _, v := range extraTitleVariants(bookTitle, searchTitle) {
+				add(v.Query, v.Anchor, v.titleOnlyAllowed())
 			}
 			for _, a := range attempts {
 				// A cancelled walk makes no further calls: each one would fail
@@ -278,7 +280,7 @@ func WalkSourceChain(
 					continue
 				}
 				if a.anchor != nil {
-					res = keepAnchored(res, a.anchor)
+					res = keepAnchored(res, a.anchor, author)
 				}
 				if len(res) > 0 {
 					out.Results, out.SourceName, out.ProviderKey = res, name, slotKey

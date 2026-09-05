@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-09-05
 
@@ -200,7 +200,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 			_ = store.CreateOperationResult(&database.OperationResult{
 				OperationID: opID,
 				BookID:      bookID,
-				ResultJSON:  fmt.Sprintf(`{"status":%q,"source":%q,"variant":%q}`, resultStatus, sourceName, out.Variant),
+				ResultJSON:  metafetch.LedgerResultJSON(resultStatus, sourceName, out.Variant),
 				Status:      resultStatus,
 			})
 		}
