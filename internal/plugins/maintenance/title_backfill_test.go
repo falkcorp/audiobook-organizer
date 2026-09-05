@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package maintenance
 
@@ -41,6 +41,7 @@ var _ sdk.Reporter = (*fakeReporter)(nil)
 // type, not in what is handed over.
 type fakeDeps struct{ store database.Store }
 
+func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
 func (d fakeDeps) OpsStore() OpsStore                        { return d.store }
 func (d fakeDeps) ReconcileStore() ReconcileStore            { return d.store }
 func (d fakeDeps) PlaylistStore() database.UserPlaylistStore { return d.store }

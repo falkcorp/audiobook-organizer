@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -408,6 +408,16 @@ type OpEnqueuer interface {
 	WaitForOp(ctx context.Context, opID string) error
 }
 
+// BookMerger merges duplicate book records into a single version group, keeping
+// primaryID as the survivor (losers soft-deleted, external IDs reassigned, iTunes
+// ITL entries cleaned up). Implemented on *server.Server via merge.Service, so the
+// maintenance plugin never imports internal/merge or internal/server.
+type BookMerger interface {
+	// MergeBooks merges bookIDs (which must include primaryID) into primaryID and
+	// returns the number of records soft-deleted as losers.
+	MergeBooks(bookIDs []string, primaryID string) (mergedCount int, err error)
+}
+
 // ServerDeps is the narrow interface that *server.Server satisfies implicitly.
 // All operations are expressed as methods so there is no import cycle.
 //
@@ -439,6 +449,7 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	CapabilityProbes
 	RuntimeConfig
 	OpEnqueuer
+	BookMerger
 }
 
 // ----- reporter adapter -----

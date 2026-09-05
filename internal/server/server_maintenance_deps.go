@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
@@ -708,4 +709,16 @@ func (s *Server) WaitForOp(ctx context.Context, opID string) error {
 			// queued or running — continue polling.
 		}
 	}
+}
+
+// MergeBooks implements maintenance.BookMerger. It routes through the same
+// merge.Service the UI merge and dedup paths use (soft-delete losers, reassign
+// external IDs, clean up iTunes ITL entries, one version group), built from the
+// full store so every capability method resolves. Returns the loser count.
+func (s *Server) MergeBooks(bookIDs []string, primaryID string) (int, error) {
+	res, err := merge.NewService(s.storeForWiring()).MergeBooks(bookIDs, primaryID)
+	if err != nil {
+		return 0, err
+	}
+	return res.MergedCount, nil
 }
