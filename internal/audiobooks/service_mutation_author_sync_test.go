@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation_author_sync_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f9a0c71-6d24-4e83-b1a7-5c8e9f0a2d13
 // last-edited: 2026-09-05
 
@@ -83,6 +83,8 @@ func TestUpdateAudiobook_SyncsJoinTableOnIDChange(t *testing.T) {
 
 	oldAuthor, err := ps.CreateAuthor("Old Author")
 	require.NoError(t, err)
+	oldCoauthor, err := ps.CreateAuthor("Old Coauthor")
+	require.NoError(t, err)
 	newAuthor, err := ps.CreateAuthor("New Author")
 	require.NoError(t, err)
 
@@ -92,9 +94,14 @@ func TestUpdateAudiobook_SyncsJoinTableOnIDChange(t *testing.T) {
 		Author:   &database.Author{ID: oldAuthor.ID, Name: "Old Author"},
 	})
 	require.NoError(t, err)
-	// Seed the join to the OLD author, matching the scalar (a normal applied state).
+	// Seed a TWO-row join (primary + co-author). The seed must have more than one
+	// row so this test can tell replace-semantics from an upsert: the comment on
+	// the fix claims the join "becomes exactly that one author", which is only
+	// true if the write REPLACES the whole set and drops the stale co-author. A
+	// single-row seed would pass either way and would not pin the claim.
 	require.NoError(t, ps.SetBookAuthors(book.ID, []database.BookAuthor{
 		{BookID: book.ID, AuthorID: oldAuthor.ID, Role: "author", Position: 0},
+		{BookID: book.ID, AuthorID: oldCoauthor.ID, Role: "co-author", Position: 1},
 	}))
 
 	svc := NewAudiobookService(ps)
@@ -108,7 +115,8 @@ func TestUpdateAudiobook_SyncsJoinTableOnIDChange(t *testing.T) {
 
 	joins, err := ps.GetBookAuthors(book.ID)
 	require.NoError(t, err)
-	require.Len(t, joins, 1, "an ID-based author set is single-author; the join should hold exactly one row")
+	require.Len(t, joins, 1,
+		"an ID-based author set is single-author and REPLACES the join; the stale co-author must be gone, not upserted alongside")
 	require.Equal(t, newAuthor.ID, joins[0].AuthorID,
 		"join still points at the OLD author — the organizer would misfile under it on the next scan")
 }
