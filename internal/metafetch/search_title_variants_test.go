@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-09-05
 
@@ -7,8 +7,10 @@ package metafetch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -49,9 +51,24 @@ func TestSplitSeriesDecoration(t *testing.T) {
 		{"Eternal Dominion, Book 04 - Assertions", "Eternal Dominion", "Assertions", true},
 		{"Pip & Flinx - Book 1 For Love of Mother Not", "Pip & Flinx", "For Love of Mother Not", true},
 		{"Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart Book 6)", "Spellheart", "Champion of Deania: A Cultivating Gamelit Harem Adventure", true},
+		// "Book 1 of <series>": the book comes first.
+		{"A Game of Thrones: Book 1 of A Song of Ice and Fire", "A Song of Ice and Fire", "A Game of Thrones", true},
+		// The series occurrence ADJACENT to the slot is removed, not the first
+		// one in the title.
+		{"Foundation and Empire (Foundation Book 2)", "Foundation", "Foundation and Empire", true},
+		// Bare "Series NN - Title".
+		{"The Expanse 04 - Cibola Burn", "The Expanse", "Cibola Burn", true},
+		{"Bobiverse 2 - For We Are Many", "Bobiverse", "For We Are Many", true},
 		// Series and number only: the book has no name of its own.
 		{"Path Of The Voidwalker - BK07", "Path Of The Voidwalker", "", true},
 		{"The Way of Kings, Book 1", "The Way of Kings", "", true},
+		// A bare "(Book 1)" names no series, so nothing can be derived.
+		{"Mistborn: The Final Empire (Book 1)", "", "", true},
+		// A book name made only of kind-of-book words anchors nothing.
+		{"The Girl on the Train: A Novel (Book 1)", "", "", true},
+		// "A Novel" is read as the slot's series text; the book name is right and
+		// its anchor ignores the generic word.
+		{"Something Wicked This Way Comes: A Novel, Book 1", "A Novel", "Something Wicked This Way Comes", true},
 		{"Dune", "", "", false},
 	}
 	for _, tt := range tests {
@@ -73,60 +90,86 @@ func queries(vs []titleVariant) []string {
 	return out
 }
 
-func TestExtraTitleVariants_BulkIsAnchoredOnTheBookName(t *testing.T) {
+func TestExtraTitleVariants_AreAnchoredOnTheBookName(t *testing.T) {
 	tests := []struct {
-		raw  string
-		want []string
+		raw    string
+		want   []string
+		anchor []string
 	}{
-		{"Eternal Dominion, Book 04 - Assertions", []string{"Assertions", "Eternal Dominion - Assertions"}},
-		{"Pip & Flinx - Book 1 For Love of Mother Not", []string{"For Love of Mother Not", "Pip & Flinx - For Love of Mother Not"}},
-		{"Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart Book 6)", []string{"Champion of Deania: A Cultivating Gamelit Harem Adventure", "Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart)"}},
-		// No book name → nothing on the bulk path: a series-name query would
-		// return the series' OTHER books, and the walk caches unseen.
-		{"Path Of The Voidwalker - BK07", nil},
-		{"The Way of Kings, Book 1", nil},
-		// No decoration → nothing: the literal queries already covered it.
-		{"A Plain Title", nil},
-		{"Dune - Frank Herbert", nil},
+		{"Eternal Dominion, Book 04 - Assertions", []string{"Assertions", "Eternal Dominion - Assertions"}, []string{"assertions"}},
+		{"Pip & Flinx - Book 1 For Love of Mother Not", []string{"For Love of Mother Not", "Pip & Flinx - For Love of Mother Not"}, []string{"love", "mother"}}, // "not" is a stopword
+		{"A Game of Thrones: Book 1 of A Song of Ice and Fire", []string{"A Game of Thrones", "A Game of Thrones of A Song of Ice and Fire"}, []string{"game", "thrones"}},
+		// The series word is not an anchor: every sibling carries it.
+		{"Foundation and Empire (Foundation Book 2)", []string{"Foundation and Empire", "Foundation and Empire (Foundation)"}, []string{"empire"}},
+		{"The Expanse 04 - Cibola Burn", []string{"Cibola Burn"}, []string{"cibola", "burn"}},
+		// No book name, a bare slot, a generic name, no slot → nothing.
+		{"Path Of The Voidwalker - BK07", nil, nil},
+		{"The Way of Kings, Book 1", nil, nil},
+		{"Mistborn: The Final Empire (Book 1)", nil, nil},
+		{"The Girl on the Train: A Novel (Book 1)", nil, nil},
+		{"A Plain Title", nil, nil},
+		{"Dune - Frank Herbert", nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
-			got := extraTitleVariants(tt.raw, stripChapterFromTitle(tt.raw), true)
+			got := extraTitleVariants(tt.raw, stripChapterFromTitle(tt.raw))
 			if !reflect.DeepEqual(queries(got), tt.want) {
-				t.Errorf("bulk variants(%q) = %v, want %v", tt.raw, queries(got), tt.want)
+				t.Fatalf("variants(%q) = %v, want %v", tt.raw, queries(got), tt.want)
 			}
 			for _, v := range got {
-				if len(v.Anchor) == 0 {
-					t.Errorf("bulk variant %q has no anchor", v.Query)
+				var words []string
+				for w := range v.Anchor {
+					words = append(words, w)
+				}
+				sort.Strings(words)
+				want := append([]string(nil), tt.anchor...)
+				sort.Strings(want)
+				if !reflect.DeepEqual(words, want) {
+					t.Errorf("anchor of %q = %v, want %v", v.Query, words, want)
 				}
 			}
 		})
 	}
 }
 
-func TestExtraTitleVariants_InteractiveIsBroaderAndUnanchored(t *testing.T) {
-	tests := []struct {
-		raw  string
-		want []string
-	}{
-		{"Eternal Dominion, Book 04 - Assertions", []string{"Assertions", "Eternal Dominion - Assertions", "Eternal Dominion"}},
-		{"Path Of The Voidwalker - BK07", []string{"Path Of The Voidwalker"}},
-		{"Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart Book 6)", []string{"Champion of Deania: A Cultivating Gamelit Harem Adventure", "Champion of Deania: A Cultivating Gamelit Harem Adventure (Spellheart)", "Champion of Deania", "A Cultivating Gamelit Harem Adventure (Spellheart)"}},
-		{"A Plain Title", nil},
-		{"Dune", nil},
+func TestTitleVariant_SingleAnchorWordIsAuthorOnly(t *testing.T) {
+	one := titleVariant{Anchor: map[string]bool{"assertions": true}}
+	two := titleVariant{Anchor: map[string]bool{"cibola": true, "burn": true}}
+	if one.titleOnlyAllowed() || !two.titleOnlyAllowed() {
+		t.Fatalf("titleOnlyAllowed: one-word %v, two-word %v", one.titleOnlyAllowed(), two.titleOnlyAllowed())
 	}
-	for _, tt := range tests {
-		t.Run(tt.raw, func(t *testing.T) {
-			got := extraTitleVariants(tt.raw, stripChapterFromTitle(tt.raw), false)
-			if !reflect.DeepEqual(queries(got), tt.want) {
-				t.Errorf("interactive variants(%q) = %v, want %v", tt.raw, queries(got), tt.want)
-			}
-			for _, v := range got {
-				if v.Anchor != nil {
-					t.Errorf("interactive variant %q must not be anchored", v.Query)
-				}
-			}
-		})
+}
+
+func TestKeepAnchored(t *testing.T) {
+	anchor := map[string]bool{"assertions": true}
+	results := []metadata.BookMetadata{
+		{Title: "Assertions", Author: "Bern Dean"},
+		{Title: "Eternal Dominion: Ascension", Author: "Bern Dean"}, // wrong sibling
+		{Title: "Assertions of Faith", Author: "Someone Else"},      // right word, wrong author
+		{Title: "Assertions: Eternal Dominion, Book 4", Author: ""}, // no author to check
+	}
+	got := keepAnchored(results, anchor, "Bern Dean")
+	if len(got) != 2 || got[0].Title != "Assertions" || got[1].Author != "" {
+		t.Fatalf("keepAnchored kept %v", got)
+	}
+	if got := keepAnchored(results, anchor, ""); len(got) != 3 {
+		t.Fatalf("without a book author every anchored title should pass, kept %d", len(got))
+	}
+}
+
+func TestLedgerResultJSON_IsAlwaysValidJSON(t *testing.T) {
+	for _, variant := range []string{"", "Assertions", "odd \x7f byte", "bad \xff utf8", `quote " and \ slash`} {
+		row := LedgerResultJSON("cached", "Audible", variant)
+		var back map[string]string
+		if err := json.Unmarshal([]byte(row), &back); err != nil {
+			t.Fatalf("row %s is not JSON: %v", row, err)
+		}
+		if back["status"] != "cached" || back["source"] != "Audible" {
+			t.Fatalf("row %s lost its fields", row)
+		}
+	}
+	if row := LedgerResultJSON("not_found", "", ""); strings.Contains(row, "variant") {
+		t.Fatalf("empty variant must be omitted, got %s", row)
 	}
 }
 
@@ -179,13 +222,13 @@ func TestWalkSourceChain_SeriesDecoratedTitleFallsBackToBookName(t *testing.T) {
 // other books must never be cached and ledgered as this one.
 func TestWalkSourceChain_VariantAnswerMustNameTheBook(t *testing.T) {
 	src := &answeringSource{name: "audible", answers: map[string][]metadata.BookMetadata{
-		"Eternal Dominion - Assertions": {{Title: "Eternal Dominion: Ascension"}, {Title: "Foundations (Eternal Dominion 1)"}},
+		"Eternal Dominion - Assertions": {{Title: "Eternal Dominion: Ascension", Author: "Bern Dean"}, {Title: "Foundations (Eternal Dominion 1)", Author: "Bern Dean"}},
 	}}
 	chain := []metadata.MetadataSource{src}
 	sem := NewProviderSemaphore(chain, 2)
 
 	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "", time.Hour)
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -194,6 +237,52 @@ func TestWalkSourceChain_VariantAnswerMustNameTheBook(t *testing.T) {
 	}
 	if out.Variant != "" {
 		t.Fatalf("Variant = %q on a miss", out.Variant)
+	}
+}
+
+// A variant answer by another author is not this book either.
+func TestWalkSourceChain_VariantAnswerMustMatchTheAuthor(t *testing.T) {
+	src := &answeringSource{name: "audible", answers: map[string][]metadata.BookMetadata{
+		"Assertions": {{Title: "Assertions", Author: "Someone Else"}},
+	}}
+	chain := []metadata.MetadataSource{src}
+	sem := NewProviderSemaphore(chain, 2)
+
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", time.Hour)
+	if err != nil {
+		t.Fatalf("WalkSourceChain: %v", err)
+	}
+	if out.Status() != FetchStatusNotFound {
+		t.Fatalf("another author's book was accepted: %v", out.Results)
+	}
+}
+
+// A one-word book name is searched only with the author: without one there is
+// too little to accept a title-only answer on, so no variant call is made.
+func TestWalkSourceChain_OneWordBookNameNeedsAnAuthor(t *testing.T) {
+	src := &recordingSource{name: "audible"}
+	chain := []metadata.MetadataSource{src}
+	sem := NewProviderSemaphore(chain, 2)
+
+	if _, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "", time.Hour); err != nil {
+		t.Fatalf("WalkSourceChain: %v", err)
+	}
+	for _, q := range src.queries {
+		if q != "Eternal Dominion, Book 04 - Assertions" {
+			t.Fatalf("title-only variant %q was queried without an author; queries: %v", q, src.queries)
+		}
+	}
+	// A two-word book name is searched title-only.
+	src = &recordingSource{name: "audible"}
+	chain = []metadata.MetadataSource{src}
+	if _, err := WalkSourceChain(context.Background(), emptyKV{}, chain, NewProviderSemaphore(chain, 2),
+		"01BOOK", "The Expanse 04 - Cibola Burn", "", time.Hour); err != nil {
+		t.Fatalf("WalkSourceChain: %v", err)
+	}
+	if len(src.queries) != 2 || src.queries[1] != "Cibola Burn" {
+		t.Fatalf("expected the literal then the two-word book name, got %v", src.queries)
 	}
 }
 
@@ -350,6 +439,43 @@ func TestSearchMetadataForBook_LiteralHitSkipsVariants(t *testing.T) {
 		if q != "Eternal Dominion, Book 04 - Assertions" {
 			t.Fatalf("variant %q was queried after a literal hit; queries: %v", q, src.queries)
 		}
+	}
+}
+
+// The interactive path anchors too: it feeds the auto-apply bulk-fetch
+// endpoint, so a series-name answer must not surface as a candidate.
+func TestSearchMetadataForBook_VariantAnswerIsAnchored(t *testing.T) {
+	src := &answeringSource{name: "audible", answers: map[string][]metadata.BookMetadata{
+		"Assertions": {{Title: "Assertions", Author: "Bern Dean"}, {Title: "Eternal Dominion: Ascension", Author: "Bern Dean"}},
+	}}
+	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
+
+	resp, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "Bern Dean", "", "", SearchOptions{})
+	if err != nil {
+		t.Fatalf("searchMetadataForBook: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Title != "Assertions" {
+		t.Fatalf("expected only the anchored answer, got %+v", resp.Results)
+	}
+}
+
+// A ladder cut short by cancellation still reports why.
+func TestSearchMetadataForBook_CancelIsRecordedAsTheFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	src := &scriptedSource{name: "audible", steps: []func() ([]metadata.BookMetadata, error){
+		func() ([]metadata.BookMetadata, error) { cancel(); return nil, nil },
+	}}
+	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
+
+	resp, err := svc.searchMetadataForBook(ctx, nil, "b1", "", "Bern Dean", "", "", SearchOptions{})
+	if err != nil {
+		return // a cancelled search may also surface as an error; that names the cause too
+	}
+	if src.calls != 1 {
+		t.Fatalf("calls = %d, want 1", src.calls)
+	}
+	if !strings.Contains(resp.SourcesFailed["audible"], "context canceled") {
+		t.Fatalf("sources_failed = %v, want the cancellation named", resp.SourcesFailed)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-05
 
@@ -138,121 +138,155 @@ func stripSeriesDecoration(title string) string {
 	return tidyTitle(seriesDecoration.ReplaceAllString(title, ""), title)
 }
 
-// splitSeriesDecoration locates the series slot in rawTitle and reads the
-// title around it: base is the decoration-free title, series the name the slot
-// was attached to, and bookName the book's own name — base with the series
-// name removed — or "" when the title names nothing but the series and its
-// number. found is false when there is no decoration at all.
+// bareSeriesNumber is the other folder convention: "The Expanse 04 - Cibola
+// Burn", "Bobiverse 2 - For We Are Many" — a series name, a bare number, a
+// separator, the book's own name.
+var bareSeriesNumber = regexp.MustCompile(`^([^-–—:]+?)\s+(\d{1,3})\s*[-–—:]\s+(.+)$`)
+
+// slotOfSeries matches " of <series>" right after a decoration: "A Game of
+// Thrones: Book 1 of A Song of Ice and Fire" names the BOOK first and the
+// series after the slot.
+var slotOfSeries = regexp.MustCompile(`^\s+of\s+(.+?)(?:\s+[-–—]\s+|:\s+|\)|$)`)
+
+// genericTitleWords are words that name a KIND of book, not a book: an anchor
+// made only of these ("A Novel") would accept any book of that kind.
+var genericTitleWords = map[string]bool{
+	"novel": true, "novella": true, "story": true, "stories": true, "book": true, "books": true,
+	"series": true, "edition": true, "unabridged": true, "abridged": true, "audiobook": true,
+	"collection": true, "volume": true, "complete": true, "tale": true, "tales": true,
+	"trilogy": true, "saga": true, "chronicles": true, "omnibus": true, "anthology": true,
+}
+
+// splitSeriesDecoration reads the series slot out of rawTitle: base is the
+// decoration-free title, series the name the slot belongs to, and bookName the
+// book's own name — or "" when the title names nothing but the series and its
+// number, or when no series can be told apart. found is false when there is no
+// slot at all.
 //
-//	"Eternal Dominion, Book 04 - Assertions"  → series "Eternal Dominion", book "Assertions"
+//	"Eternal Dominion, Book 04 - Assertions"      → series "Eternal Dominion", book "Assertions"
 //	"Pip & Flinx - Book 1 For Love of Mother Not" → "Pip & Flinx", "For Love of Mother Not"
-//	"Champion of Deania: A Cultivating… (Spellheart Book 6)" → "Spellheart", "Champion of Deania: A Cultivating…"
-//	"Path Of The Voidwalker - BK07"          → "Path Of The Voidwalker", "" (no book name)
+//	"Champion of Deania: A Cult… (Spellheart Book 6)" → "Spellheart", "Champion of Deania: A Cult…"
+//	"A Game of Thrones: Book 1 of A Song of Ice and Fire" → "A Song of Ice and Fire", "A Game of Thrones"
+//	"Foundation and Empire (Foundation Book 2)"   → "Foundation", "Foundation and Empire"
+//	"The Expanse 04 - Cibola Burn"                → "The Expanse", "Cibola Burn"
+//	"Path Of The Voidwalker - BK07"               → "Path Of The Voidwalker", "" (no book name)
+//	"Mistborn: The Final Empire (Book 1)"         → "", "" (a bare slot names no series)
 func splitSeriesDecoration(rawTitle string) (base, series, bookName string, found bool) {
 	base = stripChapterFromTitle(stripSeriesDecoration(rawTitle))
 	loc := seriesDecoration.FindStringIndex(rawTitle)
 	if loc == nil {
+		if m := bareSeriesNumber.FindStringSubmatch(rawTitle); m != nil {
+			series = strings.TrimSpace(m[1])
+			bookName = tidyTitle(stripChapterFromTitle(stripSeriesDecoration(m[3])), "")
+			return base, series, usableBookName(bookName, series, base), true
+		}
 		return base, "", "", false
 	}
-	// The series name is the tail of the segment the decoration sits in; when
-	// the decoration opens its segment ("… - Book 1 For Love…"), the series is
-	// the segment before it.
-	segs := titleSegment.Split(rawTitle[:loc[0]], -1)
+	before, after := rawTitle[:loc[0]], rawTitle[loc[1]:]
+	// "Book 1 of <series>": the book is what precedes the slot.
+	if m := slotOfSeries.FindStringSubmatch(after); m != nil {
+		series = strings.Trim(strings.TrimSpace(m[1]), " -–—:,()")
+		bookName = tidyTitle(stripChapterFromTitle(stripSeriesDecoration(before)), "")
+		return base, series, usableBookName(bookName, series, base), true
+	}
+	// Otherwise the series is the tail of the segment the slot sits in.
+	segs := titleSegment.Split(before, -1)
 	tail := segs[len(segs)-1]
 	if i := strings.LastIndex(tail, "("); i >= 0 {
 		tail = tail[i+1:]
 	}
-	tail = strings.Trim(strings.TrimSpace(tail), " -–—:,(")
-	if tail == "" && len(segs) > 1 {
-		tail = strings.Trim(strings.TrimSpace(segs[len(segs)-2]), " -–—:,")
-	}
-	series = tail
+	series = strings.Trim(strings.TrimSpace(tail), " -–—:,(")
 	if series == "" {
 		return base, "", "", true
 	}
-	if i := strings.Index(strings.ToLower(base), strings.ToLower(series)); i >= 0 {
-		bookName = tidyTitle(base[:i]+base[i+len(series):], "")
+	// Remove THAT occurrence of the series name — the one adjacent to the slot,
+	// not the first one in the title ("Foundation and Empire (Foundation Book 2)").
+	at := strings.LastIndex(strings.ToLower(before), strings.ToLower(series))
+	bookName = tidyTitle(stripChapterFromTitle(stripSeriesDecoration(rawTitle[:at]+after)), "")
+	return base, series, usableBookName(bookName, series, base), true
+}
+
+// usableBookName returns bookName when it can anchor a search, else "".
+func usableBookName(bookName, series, base string) string {
+	if len(bookName) < 3 || bareSlot.MatchString(bookName) || strings.EqualFold(bookName, base) || strings.EqualFold(bookName, series) {
+		return ""
 	}
-	if len(bookName) < 3 || bareSlot.MatchString(bookName) || strings.EqualFold(bookName, base) {
-		bookName = ""
+	if len(anchorWords(bookName, series)) == 0 {
+		return ""
 	}
-	return base, series, bookName, true
+	return bookName
+}
+
+// anchorWords are the significant words of bookName that name THIS book: not
+// the series' own words (every sibling carries those) and not a kind-of-book
+// word. An empty set means the name cannot tell the book from another.
+func anchorWords(bookName, series string) map[string]bool {
+	seriesWords := SignificantWords(series)
+	anchor := map[string]bool{}
+	for w := range SignificantWords(bookName) {
+		if !seriesWords[w] && !genericTitleWords[w] {
+			anchor[w] = true
+		}
+	}
+	return anchor
 }
 
 // titleVariant is one further query to try after the literal titles miss.
 type titleVariant struct {
 	Query string
-	// Anchor is the set of significant words a result's title must contain
-	// for the bulk walk to accept it (see keepAnchored). The bulk path caches
-	// and ledgers a hit unscored and unseen, so a variant that names the
-	// SERIES ("Eternal Dominion") would cache the series' other books against
-	// this one and count it found; anchoring every bulk variant on the book's
-	// own name closes that. Nil on the interactive path, whose results are
-	// scored and shown to a person.
+	// Anchor is the set of words a result's title must carry for the result
+	// to count (see keepAnchored). Every variant is anchored on BOTH search
+	// paths: the bulk walk caches and ledgers a hit unseen, and the review
+	// dialog's search also feeds POST /api/v1/metadata/bulk-fetch, which
+	// applies the first candidate with no score floor. Neither may be handed
+	// the series' other books as this one.
 	Anchor map[string]bool
 }
 
+// titleOnlyAllowed reports whether the variant may be searched WITHOUT an
+// author: a single anchor word ("Assertions") is too little to accept a
+// title-only answer on, so such a variant is tried only with the author.
+func (v titleVariant) titleOnlyAllowed() bool { return len(v.Anchor) >= 2 }
+
 // extraTitleVariants returns the further search titles worth trying, in
 // order, after searchTitle (the chapter-stripped title) and rawTitle have both
-// come back empty from a provider. Callers try them only on that miss, so a
-// book the first two queries find costs no extra provider calls.
-//
-// bulk=true (WalkSourceChain) is the conservative set: the book's own name
-// and then the decoration-free title, both anchored on the book name, and
-// NOTHING when the title carries no decoration or names only a series and a
-// number ("Path Of The Voidwalker - BK07" cannot be told from its siblings by
-// any query, so the book stays not_found and retryable).
-//
-// bulk=false (the review dialog, scored and human-reviewed) adds the
-// decoration-free title unanchored and each side of its subtitle separator.
-//
-// At most two (bulk) or four (interactive) variants come back, so a miss
-// costs a bounded number of extra calls per source.
-func extraTitleVariants(rawTitle, searchTitle string, bulk bool) []titleVariant {
+// come back empty from a provider: the book's own name, then the
+// decoration-free title, both anchored on the book name's distinguishing
+// words. Callers try them only on that miss, so a book the first two queries
+// find costs no extra provider calls. Nothing comes back when the title has
+// no series slot, or names only a series and a number ("Path Of The
+// Voidwalker - BK07" cannot be told from its siblings by any query, so the
+// book stays not_found and retryable), or has a book name made only of
+// generic words ("A Novel").
+func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
+	base, series, bookName, found := splitSeriesDecoration(rawTitle)
+	if !found || bookName == "" {
+		return nil
+	}
+	anchor := anchorWords(bookName, series)
 	seen := map[string]bool{
 		strings.ToLower(strings.TrimSpace(searchTitle)): true,
 		strings.ToLower(strings.TrimSpace(rawTitle)):    true,
 	}
 	var out []titleVariant
-	add := func(q string, anchor map[string]bool) {
+	for _, q := range []string{bookName, base} {
 		q = strings.Trim(strings.TrimSpace(q), " -–—:,")
-		if len(q) < 3 || bareSlot.MatchString(q) {
-			return
-		}
 		key := strings.ToLower(q)
-		if seen[key] {
-			return
+		if len(q) < 3 || seen[key] {
+			continue
 		}
 		seen[key] = true
 		out = append(out, titleVariant{Query: q, Anchor: anchor})
 	}
-	base, _, bookName, found := splitSeriesDecoration(rawTitle)
-	if bulk {
-		if !found || bookName == "" {
-			return nil
-		}
-		anchor := SignificantWords(bookName)
-		if len(anchor) == 0 {
-			return nil
-		}
-		add(bookName, anchor)
-		add(base, anchor)
-		return out
-	}
-	if bookName != "" {
-		add(bookName, nil)
-	}
-	add(base, nil)
-	segments := titleSegment.Split(base, -1)
-	if len(segments) > 1 {
-		add(segments[0], nil)
-		add(segments[len(segments)-1], nil)
-	}
 	return out
 }
 
-// keepAnchored returns the results whose title carries every anchor word.
-func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool) []metadata.BookMetadata {
+// keepAnchored returns the results that name this book: every anchor word in
+// the title, and — when both sides carry one — an author in common with
+// bookAuthor, so a title-only query cannot bring back another author's
+// "Assertions".
+func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool, bookAuthor string) []metadata.BookMetadata {
+	authorWords := SignificantWords(bookAuthor)
 	var kept []metadata.BookMetadata
 	for _, r := range results {
 		words := SignificantWords(r.Title)
@@ -263,11 +297,35 @@ func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool) []met
 				break
 			}
 		}
+		if ok && bookAuthor != "" && r.Author != "" {
+			ok = false
+			for w := range SignificantWords(r.Author) {
+				if authorWords[w] {
+					ok = true
+					break
+				}
+			}
+		}
 		if ok {
 			kept = append(kept, r)
 		}
 	}
 	return kept
+}
+
+// LedgerResultJSON is the per-book ledger row the bulk fetchers write. Built
+// with the JSON encoder because variant is library title data: %q would turn
+// a stray byte into an escape JSON does not have.
+func LedgerResultJSON(status, source, variant string) string {
+	b, err := json.Marshal(struct {
+		Status  string `json:"status"`
+		Source  string `json:"source"`
+		Variant string `json:"variant,omitempty"`
+	}{status, source, variant})
+	if err != nil {
+		return `{"status":"","source":""}`
+	}
+	return string(b)
 }
 
 // providerSentinel reports a control-plane refusal — a throttle hold or an

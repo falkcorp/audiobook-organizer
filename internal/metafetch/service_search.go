@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-09-05
 
@@ -547,39 +547,46 @@ func (mfs *Service) searchMetadataForBook(
 				}
 
 				// Nothing under the literal titles: retry with the book's own
-				// name, the series decoration stripped, and each side of the
-				// subtitle separator (see extraTitleVariants), stopping at the
-				// first variant that answers. These results are scored and
-				// shown to a person like any other, so they are not anchored.
-				// A book the literal queries found pays nothing here.
+				// name and the decoration-free title (see extraTitleVariants),
+				// stopping at the first variant that answers. The answers are
+				// anchored exactly as on the bulk path: this search also feeds
+				// POST /api/v1/metadata/bulk-fetch, which applies the first
+				// candidate unseen. A book the literal queries found pays
+				// nothing here.
 				if len(allResults) == 0 {
-					for _, v := range extraTitleVariants(book.Title, searchTitle, false) {
+					for _, v := range extraTitleVariants(book.Title, searchTitle) {
 						if !open() {
 							break
 						}
+						var hits []metadata.BookMetadata
 						if searchAuthor != "" {
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 								return src.SearchByTitleAndAuthor(c, v.Query, searchAuthor)
 							}); serr == nil {
-								allResults = append(allResults, results...)
+								hits = keepAnchored(results, v.Anchor, searchAuthor)
 							} else {
 								note(serr)
 							}
 						}
-						if len(allResults) == 0 && open() {
+						if len(hits) == 0 && open() && v.titleOnlyAllowed() {
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 								return src.SearchByTitle(c, v.Query)
 							}); serr == nil {
-								allResults = append(allResults, results...)
+								hits = keepAnchored(results, v.Anchor, searchAuthor)
 							} else {
 								note(serr)
 							}
 						}
-						if len(allResults) > 0 {
-							slog.Debug("metadata-search hit on title variant", "name", src.Name(), "variant", v.Query, "count", len(allResults))
+						if len(hits) > 0 {
+							allResults = append(allResults, hits...)
+							slog.Debug("metadata-search hit on title variant", "name", src.Name(), "variant", v.Query, "count", len(hits))
 							break
 						}
 					}
+				}
+				// A ladder cut short by cancellation still names its cause.
+				if lastErr == nil && ctx.Err() != nil {
+					lastErr = ctx.Err()
 				}
 				// If all calls failed (no results and there was an error), record it
 				if len(allResults) == 0 && lastErr != nil {
