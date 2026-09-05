@@ -1,7 +1,7 @@
 // file: internal/organizer/reorganize_inplace_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a1c9e4b-2f6d-4a83-9e0c-5b8d3f7a1c62
-// last-edited: 2026-07-13
+// last-edited: 2026-09-05
 
 package organizer
 
@@ -188,4 +188,60 @@ func TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow(t *testing.T) {
 		t.Fatalf("row points at %q but nothing is there: %v", wroteRow.FilePath, statErr)
 	}
 	mockStore.AssertNotCalled(t, "MarkNeedsRescan", mock.Anything)
+}
+
+// TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling pins the separator
+// in the directory prefix match: a book at ".../Book 2" must not drag a sibling
+// row at ".../Book 20/..." along with it. Without the trailing separator,
+// HasPrefix(".../Book 20/x", ".../Book 2") is true and the sibling's path is
+// corrupted.
+func TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling(t *testing.T) {
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{
+		RootDir:             rootDir,
+		FolderNamingPattern: "{author}/{title}",
+		FileNamingPattern:   "{title}",
+	}
+
+	oldPath := filepath.Join(rootDir, "Book 2") // the directory book that moves
+	if err := os.MkdirAll(oldPath, 0775); err != nil {
+		t.Fatalf("setup: mkdir: %v", err)
+	}
+	child := filepath.Join(oldPath, "ch1.mp3")
+	if err := os.WriteFile(child, []byte("audio"), 0644); err != nil {
+		t.Fatalf("setup: write child: %v", err)
+	}
+	sibling := filepath.Join(rootDir, "Book 20", "ch1.mp3") // shares the "Book 2" prefix
+
+	book := &database.Book{
+		ID:       "book-dir",
+		Title:    "NewTitle",
+		FilePath: oldPath,
+		Author:   &database.Author{Name: "NewAuthor"},
+	}
+
+	var updated []string
+	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookByID", "book-dir").Return(book, nil)
+	mockStore.On("UpdateBook", "book-dir", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.On("GetBookFiles", "book-dir").Return([]database.BookFile{
+		{ID: "child", FilePath: child},
+		{ID: "sibling", FilePath: sibling},
+	}, nil)
+	mockStore.On("UpdateBookFile", mock.Anything, mock.AnythingOfType("*database.BookFile")).
+		Run(func(args mock.Arguments) { updated = append(updated, args.Get(0).(string)) }).
+		Return(nil)
+
+	svc := NewService(mockStore)
+	if _, err := svc.ReOrganizeInPlace(book, &noopLogger{}); err != nil {
+		t.Fatalf("ReOrganizeInPlace: %v", err)
+	}
+	for _, id := range updated {
+		if id == "sibling" {
+			t.Fatalf("the sibling row ('Book 20') was rewritten by a 'Book 2' move — prefix separator missing")
+		}
+	}
+	if len(updated) != 1 || updated[0] != "child" {
+		t.Fatalf("expected only the child row rewritten, got %v", updated)
+	}
 }
