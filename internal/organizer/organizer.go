@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package organizer
 
@@ -58,6 +58,11 @@ type OrganizerStore interface {
 	GetSeriesByID(id int) (*database.Series, error)
 	GetBookByFileHash(hash string) (*database.Book, error)
 	GetBookByFilePath(path string) (*database.Book, error)
+	// GetBookAuthors reads the book_authors join table — the durable record of
+	// an applied author, which resolveAuthorName prefers over the scalar
+	// AuthorID a rescan can revert. Every production/test store passed to
+	// SetStore (database.Store, MockStore) already implements it.
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 }
 
 // SetStore wires the database used for duplicate-file + author/series
@@ -321,6 +326,24 @@ const placeholderAuthor = authorname.Placeholder
 // author is UNRESOLVED and any generated path would fall back to
 // placeholderAuthor.
 func (o *Organizer) resolveAuthorName(book *database.Book) string {
+	// The book_authors join table is the durable record of an applied author.
+	// The scalar book.AuthorID -- and book.Author, which is hydrated FROM it
+	// (audiobooks/service_filtering.go hydrateAuthorSeriesNames) -- is a
+	// backward-compat mirror that a rescan REVERTS from file tags whenever
+	// FieldKeyAuthorName is unlocked (scanner.go copies scanned.AuthorID over
+	// dst.AuthorID), while the scanner never writes the join. So an applied-
+	// then-rescanned book carries the correct author ONLY in the join. Prefer
+	// it, but fall through to the scalar on any non-real result so a book with
+	// only a scalar author (the scan-created common case) is unaffected.
+	//
+	// Called ~twice per organize (folder pattern + file pattern), not per file
+	// segment: pathVars is evaluated once and its PathVars struct is reused
+	// across a multi-file book's segments, so this is not a per-track store hit.
+	if book != nil && o.store != nil {
+		if name := o.authorNameFromJoin(book.ID); name != "" {
+			return name
+		}
+	}
 	if book.Author != nil {
 		if trimmed := strings.TrimSpace(book.Author.Name); trimmed != "" {
 			return trimmed
@@ -334,6 +357,41 @@ func (o *Organizer) resolveAuthorName(book *database.Book) string {
 		}
 	}
 	return ""
+}
+
+// authorNameFromJoin resolves the primary (lowest Position) author from the
+// book_authors join table to a real, non-placeholder name, or "" when the join
+// is absent, errors, dangles (GetAuthorByID nil -- the dangling-AuthorID leak),
+// or resolves only to the placeholder. Empty means "the join has nothing
+// usable"; resolveAuthorName then falls back to the scalar unchanged. Every
+// fall-through preserves today's behaviour, which is what makes this safe.
+//
+// The first-encountered tie-break is load-bearing: the organizer's copy path
+// duplicates join rows WITHOUT copying Position (service.go copies only
+// AuthorID+Role), so copied books have every row at Position 0. GetBookAuthors
+// preserves the stored slice order (a JSON-unmarshalled slice) and apply
+// appends the primary first, so first-at-min-position is the primary. Do not
+// "simplify" to a bare index.
+func (o *Organizer) authorNameFromJoin(bookID string) string {
+	authors, err := o.store.GetBookAuthors(bookID)
+	if err != nil || len(authors) == 0 {
+		return ""
+	}
+	primary := authors[0]
+	for _, ba := range authors[1:] {
+		if ba.Position < primary.Position {
+			primary = ba
+		}
+	}
+	author, err := o.store.GetAuthorByID(primary.AuthorID)
+	if err != nil || author == nil {
+		return ""
+	}
+	name := strings.TrimSpace(author.Name)
+	if name == "" || authorname.IsPlaceholder(name) {
+		return ""
+	}
+	return name
 }
 
 // HasResolvedAuthor reports whether organizing this book would use a real
