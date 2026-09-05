@@ -40,6 +40,9 @@ func (f *organizeStoreFake) GetBookByFileHash(string) (*database.Book, error)  {
 func (f *organizeStoreFake) GetBookByFilePath(string) (*database.Book, error)  { return nil, nil }
 func (f *organizeStoreFake) AddSystemActivityLog(string, string, string) error { return nil }
 func (f *organizeStoreFake) GetBookFiles(string) ([]database.BookFile, error)  { return nil, nil }
+func (f *organizeStoreFake) GetBookAuthors(string) ([]database.BookAuthor, error) {
+	return nil, nil
+}
 func (f *organizeStoreFake) CreateOperationChange(ch *database.OperationChange) error {
 	f.changes = append(f.changes, ch)
 	return nil
