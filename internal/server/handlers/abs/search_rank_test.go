@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/search_rank_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3d9b7e1a-5c2f-4a8e-b6d1-9f0e2c4a7b3d
 // last-edited: 2026-09-05
 
@@ -53,14 +53,27 @@ func TestRankSeriesMatches_DropsEmptyAndPrefersPopulatedExact(t *testing.T) {
 		{ID: 193157, Name: "The Primal Hunter 10"},
 		{ID: 201343, Name: "The Primal Hunter 11"},
 	}
-	counts := map[int]int{206295: 1, 211617: 1, 145783: 12, 193157: 1}
-	got := idsOf(rankSeriesMatches(all, "primal hunter", counts, 25))
+	visible := map[int]int{206295: 1, 211617: 1, 145783: 12, 193157: 1}
+	got := idsOf(rankSeriesMatches(all, "primal hunter", visible, 25))
 	if want := []int{145783, 211617, 206295, 193157}; !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v (empty 220015 and 201343 dropped)", got, want)
 	}
 	// The user typing the article changes nothing.
-	if got2 := idsOf(rankSeriesMatches(all, "the primal hunter", counts, 25)); !slices.Equal(got2, got) {
+	if got2 := idsOf(rankSeriesMatches(all, "the primal hunter", visible, 25)); !slices.Equal(got2, got) {
 		t.Fatalf("with article: got %v, want %v", got2, got)
+	}
+}
+
+// matchSeriesNames is the cheap pre-filter: article-insensitive substring, in
+// input order, nothing dropped.
+func TestMatchSeriesNames_ArticleInsensitiveSubstring(t *testing.T) {
+	all := []database.Series{
+		{ID: 1, Name: "Zebra"},
+		{ID: 2, Name: "The Primal Hunter"},
+		{ID: 3, Name: "primal HUNTER 12"},
+	}
+	if got := idsOf(matchSeriesNames(all, "the primal hunter")); !slices.Equal(got, []int{2, 3}) {
+		t.Fatalf("got %v, want [2 3]", got)
 	}
 }
 
