@@ -1,5 +1,5 @@
 // file: internal/organizer/reorganize_inplace_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a1c9e4b-2f6d-4a83-9e0c-5b8d3f7a1c62
 // last-edited: 2026-09-05
 
@@ -244,4 +244,50 @@ func TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling(t *testing.T) {
 	if len(updated) != 1 || updated[0] != "child" {
 		t.Fatalf("expected only the child row rewritten, got %v", updated)
 	}
+}
+
+// TestReOrganizeInPlace_SingleFile_StaleRow_MarksNeedsRescan covers the case a
+// reviewer flagged: a single-file book whose row FilePath had ALREADY drifted from
+// book.FilePath before this run. The move rewrites no row (none matches oldPath),
+// so the file lands somewhere no row points — the exact 404 this fix prevents. The
+// book must be flagged for rescan rather than returning a silent success.
+func TestReOrganizeInPlace_SingleFile_StaleRow_MarksNeedsRescan(t *testing.T) {
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{
+		RootDir:             rootDir,
+		FolderNamingPattern: "{author}/{title}",
+		FileNamingPattern:   "{title}",
+	}
+
+	oldDir := filepath.Join(rootDir, "Old Folder")
+	if err := os.MkdirAll(oldDir, 0775); err != nil {
+		t.Fatalf("setup: mkdir: %v", err)
+	}
+	oldPath := filepath.Join(oldDir, "old.mp3")
+	if err := os.WriteFile(oldPath, []byte("audio"), 0644); err != nil {
+		t.Fatalf("setup: write: %v", err)
+	}
+
+	book := &database.Book{
+		ID:       "book-stale",
+		Title:    "NewTitle",
+		FilePath: oldPath,
+		Author:   &database.Author{Name: "NewAuthor"},
+	}
+
+	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookByID", "book-stale").Return(book, nil)
+	mockStore.On("UpdateBook", "book-stale", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	// The one row's path does NOT match oldPath — it drifted earlier.
+	mockStore.On("GetBookFiles", "book-stale").Return([]database.BookFile{
+		{ID: "bf-stale", FilePath: filepath.Join(rootDir, "somewhere", "else.mp3")},
+	}, nil)
+	mockStore.On("MarkNeedsRescan", "book-stale").Return(nil)
+
+	svc := NewService(mockStore)
+	if _, err := svc.ReOrganizeInPlace(book, &noopLogger{}); err != nil {
+		t.Fatalf("ReOrganizeInPlace: %v", err)
+	}
+	mockStore.AssertCalled(t, "MarkNeedsRescan", "book-stale")
+	mockStore.AssertNotCalled(t, "UpdateBookFile", mock.Anything, mock.Anything)
 }
