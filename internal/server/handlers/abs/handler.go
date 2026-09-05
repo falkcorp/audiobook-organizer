@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-27
+// last-edited: 2026-09-05
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -386,6 +386,19 @@ type Handler struct {
 	filterDataCache    *filterDataResponse
 	filterDataCachedAt time.Time
 	filterDataSF       singleflight.Group
+
+	// searchCache holds finished /search documents per (library, query).
+	//
+	// Measured on production 2026-09-05: 7.6–8.7s per search, and the phone
+	// re-issues the same query as the user backs out and taps again. The
+	// user asked for a repeat within a couple of minutes to be answered from
+	// the previous result; see absSearchCacheTTL. Bounded (absSearchCacheMax)
+	// because the key is user input. Single-flighted for the same reason the
+	// other caches are: the TTL bounds how often a query is recomputed, not
+	// how many identical computations run at once.
+	searchCacheMu sync.Mutex
+	searchCache   map[string]searchCacheEntry
+	searchSF      singleflight.Group
 
 	// now and newID are injectable for deterministic tests.
 	now   func() time.Time
