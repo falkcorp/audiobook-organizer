@@ -66,7 +66,9 @@ type authorStripMergeParams struct {
 	Apply bool `json:"apply"`
 
 	// Limit caps how many rows are mutated in one run (0 = no cap), so a first
-	// apply can be run small and inspected rather than all-or-nothing.
+	// apply can be run small and inspected rather than all-or-nothing. The cap
+	// applies to the ID-ordered plan across every enabled kind of change, so
+	// turning on delete_unmatched changes which rows a limited run reaches.
 	Limit int `json:"limit"`
 
 	// DeleteJunk, when true (the DEFAULT), deletes rows the name predicate
@@ -118,10 +120,13 @@ type authorStripMergeReport struct {
 	Merged       int
 	Deleted      int
 	BooksTouched int
-	// BooksLeftAuthorless counts books whose ONLY credit is a row this run
+	// BooksLeftAuthorless counts books whose EVERY credit is a row this run
 	// deletes. Computed in the dry run too, through the same code the apply
 	// uses, so the report says what the apply will do to books and not just
-	// to author rows.
+	// to author rows. Counted as distinct books, judged against the whole
+	// run's delete set: a book credited by two doomed rows is one authorless
+	// book, and the dry run must say so even though it never sees the first
+	// deletion land.
 	BooksLeftAuthorless int
 	Failed              int
 	Sample              []string
@@ -193,7 +198,8 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	}
 	log := reporter.Logger()
 	log.Info("author-strip-merge start",
-		"apply", params.Apply, "delete_junk", params.deleteJunk(), "limit", params.Limit)
+		"apply", params.Apply, "delete_junk", params.deleteJunk(),
+		"delete_unmatched", params.DeleteUnmatched, "limit", params.Limit)
 
 	_ = reporter.UpdateProgress(0, 2, "Listing authors…")
 	authors, err := store.GetAllAuthors()
@@ -281,12 +287,36 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		plans = plans[:params.Limit]
 	}
 
+	// Every row this run will delete, so that "is this book left authorless"
+	// is judged the same way whether or not the earlier deletes have landed
+	// yet. Without this the apply sees row A's removal before it evaluates row
+	// B and the dry run does not — and the dry run is the number the operator
+	// reads before enabling the flag.
+	doomed := make(map[int]bool, len(plans))
+	for _, pl := range plans {
+		if pl.into == nil {
+			doomed[pl.from.ID] = true
+		}
+	}
+	authorlessBooks := map[string]struct{}{}
+
 	for i, pl := range plans {
 		if ctx.Err() != nil {
+			// A destructive op that stops at 700/812 must say where it
+			// stopped; the summary is the only record of what landed.
+			log.Info("author-strip-merge cancelled", "at", i, "of", len(plans), "summary", report.summary())
 			return ctx.Err()
 		}
 		if i%25 == 0 {
 			_ = reporter.UpdateProgress(i, len(plans), "Applying author repairs…")
+		}
+		if !params.Apply && pl.reason == "unmatched" {
+			// The control on delete_unmatched is "read the list first", and a
+			// 60-line sample is not the list. Report-only runs log every row
+			// the flag would delete; the apply keeps the sample so its log
+			// stays the size of a summary, not of the change.
+			log.Info("author-strip-merge would delete unmatched row",
+				"author_id", pl.from.ID, "name", pl.from.Name)
 		}
 		if len(report.Sample) < authorStripMergeSampleLimit {
 			if pl.into != nil {
@@ -344,20 +374,27 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		// set it reads every credit and reports what it WOULD do, so the
 		// authorless count in a report-only run is the apply's own number
 		// rather than a second estimate that could drift from it.
-		n, authorless, err := p.unlinkAndDeleteAuthor(ctx, pl.from, !params.Apply, log)
+		n, authorless, err := p.unlinkAndDeleteAuthor(ctx, pl.from, doomed, !params.Apply, log)
+		// Partial counts are still real work (or real prediction): a row that
+		// failed on its third book did rewrite two, and the report must not
+		// shrink because of it.
+		for _, id := range authorless {
+			authorlessBooks[id] = struct{}{}
+		}
+		if params.Apply {
+			report.BooksTouched += n
+		}
 		if err != nil {
 			report.Failed++
 			log.Warn("author-strip-merge: delete failed",
 				"author_id", pl.from.ID, "name", pl.from.Name, "reason", pl.reason, "err", err)
 			continue
 		}
-		report.BooksLeftAuthorless += authorless
-		if !params.Apply {
-			continue
+		if params.Apply {
+			report.Deleted++
 		}
-		report.BooksTouched += n
-		report.Deleted++
 	}
+	report.BooksLeftAuthorless = len(authorlessBooks)
 
 	_ = reporter.UpdateProgress(len(plans), len(plans), report.summary())
 	log.Info("author-strip-merge done", "summary", report.summary())
@@ -372,8 +409,11 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 
 // unlinkAndDeleteAuthor removes a junk author from every book that credits it
 // and then deletes the row, returning the number of books rewritten and the
-// number of those books left with no credit at all. With dryRun set it walks
-// the same credits and returns the same counts without writing anything.
+// IDs of those books left with no credit once every row in doomed (the run's
+// whole delete set) is gone. With dryRun set it walks the same credits and
+// returns the same answer without writing anything. The write itself removes
+// only from's credit: rows still doomed but not yet processed keep theirs
+// until their own turn, so their primary-author rewrite still finds the book.
 //
 // This is mergeAuthorInto's shape without a destination, and it exists because
 // store.DeleteAuthor alone is NOT safe for an author that has books: it sweeps
@@ -386,12 +426,12 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 // credit being removed was never a person, and a book with no author is honest
 // where one named "Track 01" is a repair job. A future scan recreates it
 // correctly, now that the creation path is gated.
-func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, dryRun bool, log *slog.Logger) (unlinked, authorless int, err error) {
+func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, doomed map[int]bool, dryRun bool, log *slog.Logger) (unlinked int, authorless []string, err error) {
 	store := p.deps.OpsStore()
 
 	books, err := store.GetBooksByAuthorIDWithRoleCore(from.ID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("get books for author %d: %w", from.ID, err)
+		return 0, nil, fmt.Errorf("get books for author %d: %w", from.ID, err)
 	}
 
 	for _, book := range books {
@@ -407,15 +447,24 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 		}
 
 		var remaining []database.BookAuthor
+		survivors := 0
 		for _, ba := range bookAuthors {
 			if ba.AuthorID == from.ID {
 				continue
 			}
+			if !doomed[ba.AuthorID] {
+				survivors++
+			}
 			ba.Position = len(remaining)
 			remaining = append(remaining, ba)
 		}
-		if len(remaining) == 0 {
-			authorless++
+		// A book is authorless only if nothing survives in the junction AND
+		// its denormalized primary does not name some third, living author
+		// (junction and AuthorID are known to diverge on this library; a book
+		// whose primary is not being touched keeps that credit).
+		keepsPrimary := book.AuthorID != nil && *book.AuthorID != from.ID && !doomed[*book.AuthorID]
+		if survivors == 0 && !keepsPrimary {
+			authorless = append(authorless, book.ID)
 		}
 		if dryRun {
 			unlinked++
@@ -431,23 +480,35 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 		// fields are nil and whose guard-preserved Author would still name the
 		// deleted row (STOREFID W5d-1).
 		if book.AuthorID != nil && *book.AuthorID == from.ID {
-			if full, err := store.GetBookByID(book.ID); err == nil && full != nil {
-				full.AuthorID = nil
-				full.Author = nil
-				if len(remaining) > 0 {
-					if promoted, err := store.GetAuthorByID(remaining[0].AuthorID); err == nil && promoted != nil {
-						id := promoted.ID
-						full.AuthorID = &id
-						full.Author = promoted
-					}
+			// Every failure below returns BEFORE DeleteAuthor. The junction
+			// row is already gone, but the author row still exists, and
+			// GetBooksByAuthorIDWithRoleCore unions the junction with the
+			// legacy AuthorID, so a re-run finds this book again and retries
+			// the rewrite. Logging and deleting anyway would leave AuthorID
+			// pointing at a row that no longer exists — the exact 2026-08-24
+			// mechanism — while the summary reported failed=0.
+			full, err := store.GetBookByID(book.ID)
+			if err != nil {
+				return unlinked, authorless, fmt.Errorf("hydrate book %s for primary rewrite: %w", book.ID, err)
+			}
+			if full == nil {
+				return unlinked, authorless, fmt.Errorf("hydrate book %s for primary rewrite: not found", book.ID)
+			}
+			full.AuthorID = nil
+			full.Author = nil
+			if len(remaining) > 0 {
+				promoted, err := store.GetAuthorByID(remaining[0].AuthorID)
+				if err != nil {
+					return unlinked, authorless, fmt.Errorf("load surviving author %d for %s: %w", remaining[0].AuthorID, book.ID, err)
 				}
-				if _, err := store.UpdateBook(book.ID, full); err != nil {
-					log.Warn("author-strip-merge: primary author rewrite failed",
-						"book_id", book.ID, "err", err)
+				if promoted != nil {
+					id := promoted.ID
+					full.AuthorID = &id
+					full.Author = promoted
 				}
-			} else {
-				log.Warn("author-strip-merge: hydrate failed, primary author left stale",
-					"book_id", book.ID, "err", err)
+			}
+			if _, err := store.UpdateBook(book.ID, full); err != nil {
+				return unlinked, authorless, fmt.Errorf("rewrite primary author of %s: %w", book.ID, err)
 			}
 		}
 		unlinked++
