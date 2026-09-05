@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
 // last-edited: 2026-09-05
 
@@ -297,8 +297,10 @@ func WalkSourceChain(
 		if hit {
 			return out, nil
 		}
-		// A source counts as throttled only when EVERY attempt for it was
-		// refused by the gate. One real call means the provider was reachable.
+		// A source counts as throttled when its first refusal was a throttle
+		// hold: the ladder closes on that refusal, so no later attempt is made.
+		// One real call means the provider was reachable. An open circuit
+		// breaker is a different, 30-second mechanism and does not count.
 		if throttled == 0 {
 			throttledAll = false
 		}

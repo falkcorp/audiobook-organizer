@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-05
 
@@ -217,16 +217,27 @@ func usableBookName(bookName, series, base string) string {
 	return bookName
 }
 
-// anchorWords are the significant words of bookName that name THIS book: not
-// the series' own words (every sibling carries those) and not a kind-of-book
-// word. An empty set means the name cannot tell the book from another.
+// anchorWords are the significant words of bookName, minus kind-of-book
+// words, that a result must carry. The set is usable only if at least one of
+// them is not the series' own word — every sibling carries those, so a name
+// made of nothing else ("Foundation") cannot tell the book from another. When
+// it is usable the series words stay IN the anchor: "Foundation and Empire"
+// must match both, or "The Complete Empire Trilogy" would do.
 func anchorWords(bookName, series string) map[string]bool {
 	seriesWords := SignificantWords(series)
 	anchor := map[string]bool{}
+	distinguishing := false
 	for w := range SignificantWords(bookName) {
-		if !seriesWords[w] && !genericTitleWords[w] {
-			anchor[w] = true
+		if genericTitleWords[w] {
+			continue
 		}
+		anchor[w] = true
+		if !seriesWords[w] {
+			distinguishing = true
+		}
+	}
+	if !distinguishing {
+		return map[string]bool{}
 	}
 	return anchor
 }
@@ -236,10 +247,10 @@ type titleVariant struct {
 	Query string
 	// Anchor is the set of words a result's title must carry for the result
 	// to count (see keepAnchored). Every variant is anchored on BOTH search
-	// paths: the bulk walk caches and ledgers a hit unseen, and the review
-	// dialog's search also feeds POST /api/v1/metadata/bulk-fetch, which
-	// applies the first candidate with no score floor. Neither may be handed
-	// the series' other books as this one.
+	// paths: the bulk walk caches and ledgers a hit unseen, and the
+	// interactive search shares its result path with POST
+	// /api/v1/metadata/bulk-fetch, which applies the first candidate with no
+	// score floor. Neither may be handed the series' other books as this one.
 	Anchor map[string]bool
 }
 
@@ -282,11 +293,13 @@ func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
 }
 
 // keepAnchored returns the results that name this book: every anchor word in
-// the title, and — when both sides carry one — an author in common with
-// bookAuthor, so a title-only query cannot bring back another author's
-// "Assertions".
-func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool, bookAuthor string) []metadata.BookMetadata {
-	authorWords := SignificantWords(bookAuthor)
+// the title, and a person in common with people (the book's author and
+// narrator — the two are often swapped in audiobook tags) whenever the result
+// names one. A one-word anchor ("Assertions") is too little on its own, so
+// such a result must ALSO name a matching person; a provider that omits the
+// author cannot vouch for it.
+func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool, people string) []metadata.BookMetadata {
+	peopleWords := SignificantWords(people)
 	var kept []metadata.BookMetadata
 	for _, r := range results {
 		words := SignificantWords(r.Title)
@@ -297,14 +310,19 @@ func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool, bookA
 				break
 			}
 		}
-		if ok && bookAuthor != "" && r.Author != "" {
+		if !ok {
+			continue
+		}
+		if r.Author != "" && strings.TrimSpace(people) != "" {
 			ok = false
 			for w := range SignificantWords(r.Author) {
-				if authorWords[w] {
+				if peopleWords[w] {
 					ok = true
 					break
 				}
 			}
+		} else if len(anchor) < 2 {
+			ok = false
 		}
 		if ok {
 			kept = append(kept, r)

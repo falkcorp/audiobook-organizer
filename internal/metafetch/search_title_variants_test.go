@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.0.1
+// version: 3.1.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-09-05
 
@@ -101,8 +101,9 @@ func TestExtraTitleVariants_AreAnchoredOnTheBookName(t *testing.T) {
 		{"Eternal Dominion, Book 04 - Assertions", []string{"Assertions", "Eternal Dominion - Assertions"}, []string{"assertions"}},
 		{"Pip & Flinx - Book 1 For Love of Mother Not", []string{"For Love of Mother Not", "Pip & Flinx - For Love of Mother Not"}, []string{"love", "mother"}}, // "not" is a stopword
 		{"A Game of Thrones: Book 1 of A Song of Ice and Fire", []string{"A Game of Thrones", "A Game of Thrones of A Song of Ice and Fire"}, []string{"game", "thrones"}},
-		// The series word is not an anchor: every sibling carries it.
-		{"Foundation and Empire (Foundation Book 2)", []string{"Foundation and Empire", "Foundation and Empire (Foundation)"}, []string{"empire"}},
+		// The series word stays in the anchor once a distinguishing word exists:
+		// "The Complete Empire Trilogy" must not do for "Foundation and Empire".
+		{"Foundation and Empire (Foundation Book 2)", []string{"Foundation and Empire", "Foundation and Empire (Foundation)"}, []string{"empire", "foundation"}},
 		{"The Expanse 04 - Cibola Burn", []string{"Cibola Burn"}, []string{"cibola", "burn"}},
 		// No book name, a bare slot, a generic name, no slot → nothing.
 		{"Path Of The Voidwalker - BK07", nil, nil},
@@ -144,19 +145,35 @@ func TestTitleVariant_SingleAnchorWordIsAuthorOnly(t *testing.T) {
 }
 
 func TestKeepAnchored(t *testing.T) {
-	anchor := map[string]bool{"assertions": true}
+	one := map[string]bool{"assertions": true}
 	results := []metadata.BookMetadata{
 		{Title: "Assertions", Author: "Bern Dean"},
 		{Title: "Eternal Dominion: Ascension", Author: "Bern Dean"}, // wrong sibling
 		{Title: "Assertions of Faith", Author: "Someone Else"},      // right word, wrong author
-		{Title: "Assertions: Eternal Dominion, Book 4", Author: ""}, // no author to check
+		{Title: "Assertions: Eternal Dominion, Book 4", Author: ""}, // nobody vouches for a one-word match
 	}
-	got := keepAnchored(results, anchor, "Bern Dean")
-	if len(got) != 2 || got[0].Title != "Assertions" || got[1].Author != "" {
-		t.Fatalf("keepAnchored kept %v", got)
+	got := keepAnchored(results, one, "Bern Dean")
+	if len(got) != 1 || got[0].Title != "Assertions" {
+		t.Fatalf("one-word anchor kept %v, want only the author-confirmed title", got)
 	}
-	if got := keepAnchored(results, anchor, ""); len(got) != 3 {
-		t.Fatalf("without a book author every anchored title should pass, kept %d", len(got))
+	if got := keepAnchored(results, one, ""); len(got) != 0 {
+		t.Fatalf("a one-word anchor with nobody to vouch must keep nothing, kept %v", got)
+	}
+	// The narrator vouches too: tags often swap the two.
+	if got := keepAnchored(results, one, "R.C. Bray Bern Dean"); len(got) != 1 {
+		t.Fatalf("narrator vouching kept %v", got)
+	}
+
+	two := map[string]bool{"foundation": true, "empire": true}
+	siblings := []metadata.BookMetadata{
+		{Title: "Foundation and Empire", Author: "Isaac Asimov"},
+		{Title: "The Complete Empire Trilogy", Author: "Isaac Asimov"},   // same author, missing a word
+		{Title: "Foundation and Empire (Foundation Book 2)", Author: ""}, // two words vouch without an author
+		{Title: "Foundation and Empire", Author: "Someone Else"},
+	}
+	got = keepAnchored(siblings, two, "Isaac Asimov")
+	if len(got) != 2 || got[0].Author != "Isaac Asimov" || got[1].Author != "" {
+		t.Fatalf("two-word anchor kept %v", got)
 	}
 }
 
@@ -415,7 +432,7 @@ func newVariantService(t *testing.T, title string, src metadata.MetadataSource) 
 // with an author every variant costs a SearchByTitleAndAuthor call, so a search
 // that did not stop at the hit would be seen querying the next variant.
 func TestSearchMetadataForBook_SeriesDecoratedTitleFallsBackToVariants(t *testing.T) {
-	src := &recordingSource{name: "audible", hitOn: "Assertions"}
+	src := &recordingSource{name: "audible", hitOn: "Assertions", author: "Bern Dean"}
 	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
 
 	resp, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "Bern Dean", "", "", SearchOptions{})
@@ -459,6 +476,23 @@ func TestSearchMetadataForBook_VariantAnswerIsAnchored(t *testing.T) {
 	}
 	if len(resp.Results) != 1 || resp.Results[0].Title != "Assertions" {
 		t.Fatalf("expected only the anchored answer, got %+v", resp.Results)
+	}
+}
+
+// A swapped tag (the book's author field holds the narrator) still rescues:
+// the narrator vouches for the answer.
+func TestSearchMetadataForBook_NarratorVouchesForAVariantAnswer(t *testing.T) {
+	src := &answeringSource{name: "audible", answers: map[string][]metadata.BookMetadata{
+		"Assertions": {{Title: "Assertions", Author: "Bern Dean"}},
+	}}
+	svc := newVariantService(t, "Eternal Dominion, Book 04 - Assertions", src)
+
+	resp, err := svc.searchMetadataForBook(context.Background(), nil, "b1", "", "R.C. Bray", "Bern Dean", "", SearchOptions{})
+	if err != nil {
+		t.Fatalf("searchMetadataForBook: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected the narrator-vouched answer, got %+v (queries %v)", resp.Results, src.queries)
 	}
 }
 
