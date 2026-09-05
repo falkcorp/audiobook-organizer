@@ -25,9 +25,11 @@ type stripMergeCalls struct {
 }
 
 // stripFixture: one real author, one numbered row carrying that real author,
-// one pure-junk row that OWNS A BOOK, one publisher row (out of scope), and one
+// one pure-junk row that OWNS A BOOK, one publisher row (out of scope), one
 // numbered row whose residue matches nothing and which co-credits a book with
-// the real author.
+// the real author, a second unmatched row that co-credits ANOTHER book with the
+// first (so both of that book's credits are doomed), and an ambiguous row whose
+// residue names two existing authors.
 func stripFixture() []database.Author {
 	return []database.Author{
 		{ID: 1, Name: "Kevin J Anderson"},
@@ -35,6 +37,10 @@ func stripFixture() []database.Author {
 		{ID: 3, Name: "Track 01"},
 		{ID: 4, Name: "Penguin Books"},
 		{ID: 5, Name: "001_Head of the Dragon"},
+		{ID: 6, Name: "002_Head of the Dragon"},
+		{ID: 7, Name: "Jane Roe"},
+		{ID: 8, Name: "Jane Roe"},
+		{ID: 9, Name: "003_Jane Roe"},
 	}
 }
 
@@ -42,6 +48,15 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 	calls.setAuthors = map[string][]database.BookAuthor{}
 	calls.updated = map[string]*database.Book{}
 	junkBookAuthorID := 3
+	// currentPrimary mirrors the real store: once the op has rewritten a
+	// book's primary, the BookCore projection a later author lookup returns
+	// carries the NEW primary, not the fixture's seed.
+	currentPrimary := func(bookID string, seed int) *int {
+		if b, ok := calls.updated[bookID]; ok {
+			return b.AuthorID
+		}
+		return &seed
+	}
 	store := &database.MockStore{
 		GetAllAuthorsFunc: func() ([]database.Author, error) { return authors, nil },
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
@@ -63,11 +78,24 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 			}
 			if authorID == 5 {
 				id := 5
-				return []database.BookCore{{ID: "bk-title", Title: "Head of the Dragon", AuthorID: &id}}, nil
+				return []database.BookCore{
+					{ID: "bk-title", Title: "Head of the Dragon", AuthorID: &id},
+					{ID: "bk-twice", Title: "Head of the Dragon 2", AuthorID: currentPrimary("bk-twice", 5)},
+				}, nil
+			}
+			if authorID == 6 {
+				return []database.BookCore{{ID: "bk-twice", Title: "Head of the Dragon 2", AuthorID: currentPrimary("bk-twice", 5)}}, nil
 			}
 			return nil, nil
 		},
 		GetBookAuthorsFunc: func(bookID string) ([]database.BookAuthor, error) {
+			// Stateful: once the op has written a book's credits, later reads
+			// see that write, as the real store does. Without this a second
+			// doomed co-credit looks identical in apply and dry-run mode and
+			// the parity test would pass for the wrong reason.
+			if written, ok := calls.setAuthors[bookID]; ok {
+				return written, nil
+			}
 			switch bookID {
 			case "bk-junk":
 				return []database.BookAuthor{{BookID: bookID, AuthorID: 3, Role: "author"}}, nil
@@ -77,6 +105,11 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 				return []database.BookAuthor{
 					{BookID: bookID, AuthorID: 5, Role: "author"},
 					{BookID: bookID, AuthorID: 1, Role: "author", Position: 1},
+				}, nil
+			case "bk-twice":
+				return []database.BookAuthor{
+					{BookID: bookID, AuthorID: 5, Role: "author"},
+					{BookID: bookID, AuthorID: 6, Role: "author", Position: 1},
 				}, nil
 			}
 			return nil, nil
@@ -94,6 +127,13 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 				a := 2
 				return &database.Book{ID: id, AuthorID: &a}, nil
 			case "bk-title":
+				a := 5
+				return &database.Book{ID: id, AuthorID: &a}, nil
+			case "bk-twice":
+				if b, ok := calls.updated[id]; ok {
+					c := *b
+					return &c, nil
+				}
 				a := 5
 				return &database.Book{ID: id, AuthorID: &a}, nil
 			}
@@ -249,16 +289,32 @@ func TestAuthorStripMerge_DeleteUnmatchedDeletesNoTargetRow(t *testing.T) {
 	if !ok || updated.AuthorID == nil || *updated.AuthorID != 1 {
 		t.Errorf("bk-title primary was not promoted to the surviving author 1: %+v (present=%v)", updated, ok)
 	}
-	// Still in scope: the publisher row stays, the merge still happens.
+	// Still in scope: the publisher row stays, the merge still happens, and
+	// the ambiguous row (two "Jane Roe" targets) is neither deleted nor merged.
 	if containsInt(calls.deleted, 4) {
 		t.Error("delete_unmatched deleted the out-of-scope publisher row")
 	}
 	if !containsInt(calls.deleted, 2) {
 		t.Error("delete_unmatched suppressed the merge")
 	}
-	// bk-junk loses its only credit (row 3); bk-title keeps author 1.
-	if !strings.Contains(summary, "books-left-authorless=1") {
-		t.Errorf("summary should report exactly one book left authorless: %s", summary)
+	if containsInt(calls.deleted, 9) {
+		t.Error("delete_unmatched deleted the AMBIGUOUS row 9; its residue names real authors")
+	}
+	if !strings.Contains(summary, "ambiguous=1") {
+		t.Errorf("summary should still count the ambiguous row: %s", summary)
+	}
+	// bk-junk loses its only credit (row 3); bk-twice loses both (rows 5 and
+	// 6); bk-title keeps author 1. Two books, counted once each.
+	if !strings.Contains(summary, "books-left-authorless=2") {
+		t.Errorf("summary should report exactly two books left authorless: %s", summary)
+	}
+	// bk-twice ends with no credits and no primary, whichever order rows 5
+	// and 6 were processed in.
+	if got := calls.setAuthors["bk-twice"]; len(got) != 0 {
+		t.Errorf("bk-twice still has credits after both doomed rows went: %+v", got)
+	}
+	if b := calls.updated["bk-twice"]; b == nil || b.AuthorID != nil {
+		t.Errorf("bk-twice primary should be cleared once both doomed rows are gone: %+v", b)
 	}
 }
 
@@ -273,14 +329,50 @@ func TestAuthorStripMerge_DeleteUnmatchedDryRunReportsWithoutWriting(t *testing.
 	if len(calls.setAuthors) != 0 || len(calls.updated) != 0 {
 		t.Errorf("dry run wrote book links: setAuthors=%v updated=%v", calls.setAuthors, calls.updated)
 	}
-	if !strings.Contains(summary, "stripped-no-target=1") {
+	if !strings.Contains(summary, "stripped-no-target=2") {
 		t.Errorf("summary should still count the bucket: %s", summary)
 	}
-	if !strings.Contains(summary, "books-left-authorless=1") {
-		t.Errorf("dry run should predict the same authorless count as the apply: %s", summary)
+	// 🔴 PARITY WITH THE APPLY. bk-twice is credited by two doomed rows. The
+	// apply sees row 5's removal before it judges row 6; the dry run never
+	// does. Both must still report the book, or the operator's number is low
+	// in the unsafe direction.
+	if !strings.Contains(summary, "books-left-authorless=2") {
+		t.Errorf("dry run should predict the same authorless count as the apply (2): %s", summary)
 	}
 	if !strings.Contains(summary, "deleted=0") || !strings.Contains(summary, "books-touched=0") {
 		t.Errorf("dry run must report nothing applied: %s", summary)
+	}
+}
+
+// 🔴 A FAILED PRIMARY REWRITE MUST ABORT THE DELETE. The junction is already
+// rewritten; deleting the author row anyway leaves book.AuthorID pointing at
+// nothing while the summary says failed=0 — the 2026-08-24 incident with a
+// green report on top.
+func TestAuthorStripMerge_PrimaryRewriteFailureKeepsAuthorRow(t *testing.T) {
+	calls := &stripMergeCalls{}
+	p := newStripPlugin(stripFixture(), calls)
+	store := p.deps.OpsStore().(*database.MockStore)
+	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == "bk-junk" {
+			return nil, context.DeadlineExceeded
+		}
+		calls.updated[id] = b
+		return b, nil
+	}
+	rep := &summaryReporter{}
+	if err := p.runAuthorStripMerge(context.Background(), json.RawMessage(`{"apply":true}`), rep); err != nil {
+		t.Fatalf("runAuthorStripMerge: %v", err)
+	}
+	if containsInt(calls.deleted, 3) {
+		t.Fatal("junk author 3 was deleted although its book's primary rewrite failed")
+	}
+	summary := rep.summary(t)
+	if !strings.Contains(summary, "failed=1") {
+		t.Errorf("the failed rewrite must be counted: %s", summary)
+	}
+	// The other rows are unaffected: the merge still lands.
+	if !containsInt(calls.deleted, 2) {
+		t.Error("an unrelated failure suppressed the merge")
 	}
 }
 
