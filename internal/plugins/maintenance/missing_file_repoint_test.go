@@ -22,7 +22,7 @@ import (
 type repointFakeStore struct {
 	mu      sync.Mutex // UpdateBookFile is called from RunItems' worker pool
 	cores   []database.BookFileCore
-	books   []database.BookCore // owning books, for the book-path fallback derivation
+	books   []database.BookCore            // owning books, for the book-path fallback derivation
 	full    map[string][]database.BookFile // bookID → rows
 	updates []database.BookFile
 	getErr  error
