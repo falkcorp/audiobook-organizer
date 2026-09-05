@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-09-05
 
@@ -482,14 +482,28 @@ func (mfs *Service) searchMetadataForBook(
 			}
 
 			if !cacheHit {
+				// One ladder per source. A throttle hold or an open breaker
+				// answers every later rung the same way, and a cancelled
+				// context would fail each rung fast while counting against the
+				// shared breaker — both close the ladder. A sentinel never
+				// displaces a real diagnosis already held (keepDiagnosis).
+				ladderOpen := true
+				note := func(serr error) {
+					lastErr = keepDiagnosis(lastErr, serr)
+					if providerSentinel(serr) {
+						ladderOpen = false
+					}
+				}
+				open := func() bool { return ladderOpen && ctx.Err() == nil }
+
 				// If author hint provided, use title+author search for better results
-				if searchAuthor != "" {
+				if open() && searchAuthor != "" {
 					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 						return src.SearchByTitleAndAuthor(c, searchTitle, searchAuthor)
 					}); serr == nil {
 						allResults = append(allResults, results...)
 					} else {
-						lastErr = serr
+						note(serr)
 						slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "searchTitle", searchTitle, "searchAuthor", searchAuthor, "error", serr)
 					}
 				}
@@ -497,67 +511,77 @@ func (mfs *Service) searchMetadataForBook(
 				// Narrator-as-author fallback: author/narrator fields are frequently
 				// swapped in audiobook metadata. Try searching with the narrator as
 				// author to catch these cases.
-				if bookNarrator != "" && bookNarrator != searchAuthor {
+				if open() && bookNarrator != "" && bookNarrator != searchAuthor {
 					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 						return src.SearchByTitleAndAuthor(c, searchTitle, bookNarrator)
 					}); serr == nil {
 						allResults = append(allResults, results...)
 					} else {
+						if providerSentinel(serr) {
+							ladderOpen = false
+						}
 						slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", searchTitle, "narrator", bookNarrator, "error", serr)
 					}
 				}
 
 				// Always also search by title only to get broader results
-				if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-					return src.SearchByTitle(c, searchTitle)
-				}); serr == nil {
-					allResults = append(allResults, results...)
-				} else {
-					lastErr = serr
-					slog.Debug("metadata-search SearchByTitle() error", "name", src.Name(), "value", searchTitle, "error", serr)
+				if open() {
+					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+						return src.SearchByTitle(c, searchTitle)
+					}); serr == nil {
+						allResults = append(allResults, results...)
+					} else {
+						note(serr)
+						slog.Debug("metadata-search SearchByTitle() error", "name", src.Name(), "value", searchTitle, "error", serr)
+					}
 				}
 				// SearchByTitle with original title if different
-				if searchTitle != book.Title {
+				if open() && searchTitle != book.Title {
 					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 						return src.SearchByTitle(c, book.Title)
 					}); serr == nil {
 						allResults = append(allResults, results...)
 					} else {
-						lastErr = serr
+						note(serr)
 					}
 				}
 
-				// If all calls failed (no results and there was an error), record it
-				// Nothing under the literal titles: retry with the series
-				// decoration stripped and each side of the subtitle separator
-				// (see extraTitleVariants), stopping at the first variant that
-				// answers. A book the literal queries found pays nothing here.
+				// Nothing under the literal titles: retry with the book's own
+				// name, the series decoration stripped, and each side of the
+				// subtitle separator (see extraTitleVariants), stopping at the
+				// first variant that answers. These results are scored and
+				// shown to a person like any other, so they are not anchored.
+				// A book the literal queries found pays nothing here.
 				if len(allResults) == 0 {
-					for _, variant := range extraTitleVariants(book.Title, searchTitle) {
+					for _, v := range extraTitleVariants(book.Title, searchTitle, false) {
+						if !open() {
+							break
+						}
 						if searchAuthor != "" {
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-								return src.SearchByTitleAndAuthor(c, variant, searchAuthor)
+								return src.SearchByTitleAndAuthor(c, v.Query, searchAuthor)
 							}); serr == nil {
 								allResults = append(allResults, results...)
 							} else {
-								lastErr = serr
+								note(serr)
 							}
 						}
-						if len(allResults) == 0 {
+						if len(allResults) == 0 && open() {
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-								return src.SearchByTitle(c, variant)
+								return src.SearchByTitle(c, v.Query)
 							}); serr == nil {
 								allResults = append(allResults, results...)
 							} else {
-								lastErr = serr
+								note(serr)
 							}
 						}
 						if len(allResults) > 0 {
-							slog.Debug("metadata-search hit on title variant", "name", src.Name(), "variant", variant, "count", len(allResults))
+							slog.Debug("metadata-search hit on title variant", "name", src.Name(), "variant", v.Query, "count", len(allResults))
 							break
 						}
 					}
 				}
+				// If all calls failed (no results and there was an error), record it
 				if len(allResults) == 0 && lastErr != nil {
 					failedErr = lastErr.Error()
 				}

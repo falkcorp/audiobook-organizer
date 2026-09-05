@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-05
 
@@ -7,6 +7,7 @@ package metafetch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"log/slog"
@@ -97,16 +98,15 @@ func stripSubtitle(title string) string {
 
 // seriesDecoration matches a series-position decoration wherever it sits in a
 // title: ", Book 04", "BK07", " Vol. 3", "(Spellheart Book 6)" → "(Spellheart)".
+// Library titles carry these because the folder or tag named the series slot,
+// but no provider indexes them, so a literal search for "Eternal Dominion, Book
+// 04 - Assertions" returns nothing from all four providers while "Assertions" +
+// author is an exact Audible hit (measured on prod 2026-09-05: the first 100
+// books of a bulk fetch came back 73% not_found with every provider live, and
+// each spot-checked miss was a real, findable book carrying a decoration).
 // It deliberately leaves a preceding " - " alone so "Pip & Flinx - Book 1 For
 // Love of Mother Not" keeps its separator ("Pip & Flinx - For Love of Mother
-// Not") and extraTitleVariants can still split it; a separator left dangling at
-// either end is trimmed afterwards. Library titles carry these because the folder or tag named the
-// series slot, but no provider indexes them, so a literal search for
-// "Eternal Dominion, Book 04 - Assertions" returns nothing from all four
-// providers while "Assertions" + author is an exact Audible hit (measured on
-// prod 2026-09-05: the first 100 books of a bulk fetch came back 73% not_found
-// with every provider live, and each spot-checked miss was a real, findable
-// book carrying a decoration like this).
+// Not") and can still be split; a separator left dangling is trimmed afterwards.
 var seriesDecoration = regexp.MustCompile(`(?i)[\s,:]*\b(?:book|bk|vol(?:ume)?|part|pt|episode|ep)\.?\s*#?\d+(?:[.\d]*)\b`)
 
 // separatorRun collapses the " - - " / " - : " debris a decoration removal
@@ -119,19 +119,77 @@ var titleSegment = regexp.MustCompile(`\s+[-–—]\s+|:\s+`)
 // bareSlot is a segment that is nothing but a series slot ("BK07", "Book 4", "3").
 var bareSlot = regexp.MustCompile(`(?i)^(?:book|bk|vol(?:ume)?|part|pt)?\.?\s*#?\d+(?:[.\d]*)$`)
 
-// stripSeriesDecoration removes every series-position decoration from title and
-// tidies the separators it leaves behind. It never returns "": a title that was
-// nothing but a decoration comes back unchanged.
-func stripSeriesDecoration(title string) string {
-	cleaned := seriesDecoration.ReplaceAllString(title, "")
+// tidyTitle cleans the debris a removal leaves behind and never returns "":
+// a title that was nothing but the removed text comes back as orig.
+func tidyTitle(cleaned, orig string) string {
 	cleaned = separatorRun.ReplaceAllString(cleaned, " - ")
 	cleaned = strings.ReplaceAll(cleaned, "()", "")
 	cleaned = strings.Join(strings.Fields(cleaned), " ")
 	cleaned = strings.Trim(cleaned, " -–—:,")
 	if cleaned == "" {
-		return strings.TrimSpace(title)
+		return strings.TrimSpace(orig)
 	}
 	return cleaned
+}
+
+// stripSeriesDecoration removes every series-position decoration from title and
+// tidies the separators it leaves behind. It never returns "".
+func stripSeriesDecoration(title string) string {
+	return tidyTitle(seriesDecoration.ReplaceAllString(title, ""), title)
+}
+
+// splitSeriesDecoration locates the series slot in rawTitle and reads the
+// title around it: base is the decoration-free title, series the name the slot
+// was attached to, and bookName the book's own name — base with the series
+// name removed — or "" when the title names nothing but the series and its
+// number. found is false when there is no decoration at all.
+//
+//	"Eternal Dominion, Book 04 - Assertions"  → series "Eternal Dominion", book "Assertions"
+//	"Pip & Flinx - Book 1 For Love of Mother Not" → "Pip & Flinx", "For Love of Mother Not"
+//	"Champion of Deania: A Cultivating… (Spellheart Book 6)" → "Spellheart", "Champion of Deania: A Cultivating…"
+//	"Path Of The Voidwalker - BK07"          → "Path Of The Voidwalker", "" (no book name)
+func splitSeriesDecoration(rawTitle string) (base, series, bookName string, found bool) {
+	base = stripChapterFromTitle(stripSeriesDecoration(rawTitle))
+	loc := seriesDecoration.FindStringIndex(rawTitle)
+	if loc == nil {
+		return base, "", "", false
+	}
+	// The series name is the tail of the segment the decoration sits in; when
+	// the decoration opens its segment ("… - Book 1 For Love…"), the series is
+	// the segment before it.
+	segs := titleSegment.Split(rawTitle[:loc[0]], -1)
+	tail := segs[len(segs)-1]
+	if i := strings.LastIndex(tail, "("); i >= 0 {
+		tail = tail[i+1:]
+	}
+	tail = strings.Trim(strings.TrimSpace(tail), " -–—:,(")
+	if tail == "" && len(segs) > 1 {
+		tail = strings.Trim(strings.TrimSpace(segs[len(segs)-2]), " -–—:,")
+	}
+	series = tail
+	if series == "" {
+		return base, "", "", true
+	}
+	if i := strings.Index(strings.ToLower(base), strings.ToLower(series)); i >= 0 {
+		bookName = tidyTitle(base[:i]+base[i+len(series):], "")
+	}
+	if len(bookName) < 3 || bareSlot.MatchString(bookName) || strings.EqualFold(bookName, base) {
+		bookName = ""
+	}
+	return base, series, bookName, true
+}
+
+// titleVariant is one further query to try after the literal titles miss.
+type titleVariant struct {
+	Query string
+	// Anchor is the set of significant words a result's title must contain
+	// for the bulk walk to accept it (see keepAnchored). The bulk path caches
+	// and ledgers a hit unscored and unseen, so a variant that names the
+	// SERIES ("Eternal Dominion") would cache the series' other books against
+	// this one and count it found; anchoring every bulk variant on the book's
+	// own name closes that. Nil on the interactive path, whose results are
+	// scored and shown to a person.
+	Anchor map[string]bool
 }
 
 // extraTitleVariants returns the further search titles worth trying, in
@@ -139,43 +197,94 @@ func stripSeriesDecoration(title string) string {
 // come back empty from a provider. Callers try them only on that miss, so a
 // book the first two queries find costs no extra provider calls.
 //
-// The variants, each skipped when it duplicates an earlier query:
+// bulk=true (WalkSourceChain) is the conservative set: the book's own name
+// and then the decoration-free title, both anchored on the book name, and
+// NOTHING when the title carries no decoration or names only a series and a
+// number ("Path Of The Voidwalker - BK07" cannot be told from its siblings by
+// any query, so the book stays not_found and retryable).
 //
-//  1. the title with every series decoration removed —
-//     "Path Of The Voidwalker - BK07" → "Path Of The Voidwalker";
-//  2. its leading segment — "Eternal Dominion, Book 04 - Assertions" →
-//     "Eternal Dominion", which with the author is enough for Audible;
-//  3. its trailing segment — the same title → "Assertions", the book's own
-//     name when the library named the series first.
+// bulk=false (the review dialog, scored and human-reviewed) adds the
+// decoration-free title unanchored and each side of its subtitle separator.
 //
-// At most three variants are returned, so a miss costs a bounded number of
-// extra calls per source (see WalkSourceChain and searchMetadataForBook).
-func extraTitleVariants(rawTitle, searchTitle string) []string {
+// At most two (bulk) or four (interactive) variants come back, so a miss
+// costs a bounded number of extra calls per source.
+func extraTitleVariants(rawTitle, searchTitle string, bulk bool) []titleVariant {
 	seen := map[string]bool{
 		strings.ToLower(strings.TrimSpace(searchTitle)): true,
 		strings.ToLower(strings.TrimSpace(rawTitle)):    true,
 	}
-	var out []string
-	add := func(s string) {
-		s = strings.Trim(strings.TrimSpace(s), " -–—:,")
-		if len(s) < 3 || bareSlot.MatchString(s) {
+	var out []titleVariant
+	add := func(q string, anchor map[string]bool) {
+		q = strings.Trim(strings.TrimSpace(q), " -–—:,")
+		if len(q) < 3 || bareSlot.MatchString(q) {
 			return
 		}
-		key := strings.ToLower(s)
+		key := strings.ToLower(q)
 		if seen[key] {
 			return
 		}
 		seen[key] = true
-		out = append(out, s)
+		out = append(out, titleVariant{Query: q, Anchor: anchor})
 	}
-	base := stripChapterFromTitle(stripSeriesDecoration(rawTitle))
-	add(base)
+	base, _, bookName, found := splitSeriesDecoration(rawTitle)
+	if bulk {
+		if !found || bookName == "" {
+			return nil
+		}
+		anchor := SignificantWords(bookName)
+		if len(anchor) == 0 {
+			return nil
+		}
+		add(bookName, anchor)
+		add(base, anchor)
+		return out
+	}
+	if bookName != "" {
+		add(bookName, nil)
+	}
+	add(base, nil)
 	segments := titleSegment.Split(base, -1)
 	if len(segments) > 1 {
-		add(segments[0])
-		add(segments[len(segments)-1])
+		add(segments[0], nil)
+		add(segments[len(segments)-1], nil)
 	}
 	return out
+}
+
+// keepAnchored returns the results whose title carries every anchor word.
+func keepAnchored(results []metadata.BookMetadata, anchor map[string]bool) []metadata.BookMetadata {
+	var kept []metadata.BookMetadata
+	for _, r := range results {
+		words := SignificantWords(r.Title)
+		ok := true
+		for w := range anchor {
+			if !words[w] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
+// providerSentinel reports a control-plane refusal — a throttle hold or an
+// open circuit breaker — that every later attempt against the same source in
+// this ladder would repeat verbatim. Callers stop the ladder on one.
+func providerSentinel(err error) bool {
+	return errors.Is(err, metadata.ErrProviderThrottled) || errors.Is(err, metadata.ErrCircuitOpen)
+}
+
+// keepDiagnosis is the error to carry forward after next: a sentinel never
+// displaces a real diagnosis (the 4xx body, the decode failure) already held,
+// so what the ledger and the dialog show is what the provider actually said.
+func keepDiagnosis(cur, next error) error {
+	if cur != nil && providerSentinel(next) {
+		return cur
+	}
+	return next
 }
 
 // isProtectedPath returns true if the file path is within import or iTunes paths.
