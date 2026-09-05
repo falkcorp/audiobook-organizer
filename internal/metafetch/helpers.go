@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package metafetch
 
@@ -93,6 +93,89 @@ func stripSubtitle(title string) string {
 		return strings.TrimSpace(title[:idx])
 	}
 	return title
+}
+
+// seriesDecoration matches a series-position decoration wherever it sits in a
+// title: ", Book 04", "BK07", " Vol. 3", "(Spellheart Book 6)" → "(Spellheart)".
+// It deliberately leaves a preceding " - " alone so "Pip & Flinx - Book 1 For
+// Love of Mother Not" keeps its separator ("Pip & Flinx - For Love of Mother
+// Not") and extraTitleVariants can still split it; a separator left dangling at
+// either end is trimmed afterwards. Library titles carry these because the folder or tag named the
+// series slot, but no provider indexes them, so a literal search for
+// "Eternal Dominion, Book 04 - Assertions" returns nothing from all four
+// providers while "Assertions" + author is an exact Audible hit (measured on
+// prod 2026-09-05: the first 100 books of a bulk fetch came back 73% not_found
+// with every provider live, and each spot-checked miss was a real, findable
+// book carrying a decoration like this).
+var seriesDecoration = regexp.MustCompile(`(?i)[\s,:]*\b(?:book|bk|vol(?:ume)?|part|pt|episode|ep)\.?\s*#?\d+(?:[.\d]*)\b`)
+
+// separatorRun collapses the " - - " / " - : " debris a decoration removal
+// leaves behind into a single " - ".
+var separatorRun = regexp.MustCompile(`\s*[-–:,]\s*(?:[-–:,]\s*)+`)
+
+// titleSegment splits a title at its subtitle separators.
+var titleSegment = regexp.MustCompile(`\s+[-–—]\s+|:\s+`)
+
+// bareSlot is a segment that is nothing but a series slot ("BK07", "Book 4", "3").
+var bareSlot = regexp.MustCompile(`(?i)^(?:book|bk|vol(?:ume)?|part|pt)?\.?\s*#?\d+(?:[.\d]*)$`)
+
+// stripSeriesDecoration removes every series-position decoration from title and
+// tidies the separators it leaves behind. It never returns "": a title that was
+// nothing but a decoration comes back unchanged.
+func stripSeriesDecoration(title string) string {
+	cleaned := seriesDecoration.ReplaceAllString(title, "")
+	cleaned = separatorRun.ReplaceAllString(cleaned, " - ")
+	cleaned = strings.ReplaceAll(cleaned, "()", "")
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	cleaned = strings.Trim(cleaned, " -–—:,")
+	if cleaned == "" {
+		return strings.TrimSpace(title)
+	}
+	return cleaned
+}
+
+// extraTitleVariants returns the further search titles worth trying, in
+// order, after searchTitle (the chapter-stripped title) and rawTitle have both
+// come back empty from a provider. Callers try them only on that miss, so a
+// book the first two queries find costs no extra provider calls.
+//
+// The variants, each skipped when it duplicates an earlier query:
+//
+//  1. the title with every series decoration removed —
+//     "Path Of The Voidwalker - BK07" → "Path Of The Voidwalker";
+//  2. its leading segment — "Eternal Dominion, Book 04 - Assertions" →
+//     "Eternal Dominion", which with the author is enough for Audible;
+//  3. its trailing segment — the same title → "Assertions", the book's own
+//     name when the library named the series first.
+//
+// At most three variants are returned, so a miss costs a bounded number of
+// extra calls per source (see WalkSourceChain and searchMetadataForBook).
+func extraTitleVariants(rawTitle, searchTitle string) []string {
+	seen := map[string]bool{
+		strings.ToLower(strings.TrimSpace(searchTitle)): true,
+		strings.ToLower(strings.TrimSpace(rawTitle)):    true,
+	}
+	var out []string
+	add := func(s string) {
+		s = strings.Trim(strings.TrimSpace(s), " -–—:,")
+		if len(s) < 3 || bareSlot.MatchString(s) {
+			return
+		}
+		key := strings.ToLower(s)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	base := stripChapterFromTitle(stripSeriesDecoration(rawTitle))
+	add(base)
+	segments := titleSegment.Split(base, -1)
+	if len(segments) > 1 {
+		add(segments[0])
+		add(segments[len(segments)-1])
+	}
+	return out
 }
 
 // isProtectedPath returns true if the file path is within import or iTunes paths.

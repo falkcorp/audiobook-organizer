@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-03
+// last-edited: 2026-09-05
 
 package metafetch
 
@@ -528,6 +528,36 @@ func (mfs *Service) searchMetadataForBook(
 				}
 
 				// If all calls failed (no results and there was an error), record it
+				// Nothing under the literal titles: retry with the series
+				// decoration stripped and each side of the subtitle separator
+				// (see extraTitleVariants), stopping at the first variant that
+				// answers. A book the literal queries found pays nothing here.
+				if len(allResults) == 0 {
+					for _, variant := range extraTitleVariants(book.Title, searchTitle) {
+						if searchAuthor != "" {
+							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+								return src.SearchByTitleAndAuthor(c, variant, searchAuthor)
+							}); serr == nil {
+								allResults = append(allResults, results...)
+							} else {
+								lastErr = serr
+							}
+						}
+						if len(allResults) == 0 {
+							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+								return src.SearchByTitle(c, variant)
+							}); serr == nil {
+								allResults = append(allResults, results...)
+							} else {
+								lastErr = serr
+							}
+						}
+						if len(allResults) > 0 {
+							slog.Debug("metadata-search hit on title variant", "name", src.Name(), "variant", variant, "count", len(allResults))
+							break
+						}
+					}
+				}
 				if len(allResults) == 0 && lastErr != nil {
 					failedErr = lastErr.Error()
 				}

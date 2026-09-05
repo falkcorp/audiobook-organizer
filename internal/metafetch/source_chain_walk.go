@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
-// last-edited: 2026-09-03
+// last-edited: 2026-09-05
 
 package metafetch
 
@@ -235,6 +235,13 @@ func WalkSourceChain(
 			add(searchTitle)
 			if searchTitle != bookTitle {
 				add(bookTitle)
+			}
+			// Series-decorated titles ("Eternal Dominion, Book 04 - Assertions",
+			// "Path Of The Voidwalker - BK07") miss on every provider verbatim;
+			// the attempts loop returns on the first hit, so these cost calls
+			// only for a book the two literal queries did not find.
+			for _, variant := range extraTitleVariants(bookTitle, searchTitle) {
+				add(variant)
 			}
 
 			for _, attempt := range attempts {
