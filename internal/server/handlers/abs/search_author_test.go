@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/search_author_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c1f0d2e-7b3a-4c5d-9e8f-2a1b3c4d5e6f
 // last-edited: 2026-09-05
 
@@ -227,5 +227,53 @@ func TestAuthorDetail_HydrationFailureIsAnError(t *testing.T) {
 	code, _ = h.doAny(t, request{method: http.MethodGet, path: "/api/authors/" + id, headers: bearer(tok)})
 	if code != http.StatusOK {
 		t.Fatalf("bare author detail should not depend on hydration; got %d", code)
+	}
+}
+
+// A series row no book references is not a search result. The oracle seed
+// holds "Odyssey Cycle" (id 10, with books); an orphan duplicate "Odyssey
+// Cycle" (id 30, no books) is added beside it — the production shape where
+// 16 of 25 "primal hunter" hits were empty duplicates rendering as black
+// tiles. Search returns only the populated row, and returns it first.
+func TestSearch_EmptyDuplicateSeriesIsNotAHit(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	seed.lib.series[30] = &database.Series{ID: 30, Name: "Odyssey Cycle"}
+	seed.lib.series[31] = &database.Series{ID: 31, Name: "Odyssey Cycle 2: Nothing"}
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	login := h.login(t, "oracle", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, login), "accessToken")
+
+	hits := search(t, h, tok, "odyssey")["series"].([]any)
+	if len(hits) != 1 {
+		ids := []any{}
+		for _, x := range hits {
+			ids = append(ids, x.(map[string]any)["id"])
+		}
+		t.Fatalf("search returned %d series %v, want only the populated id 10", len(hits), ids)
+	}
+	hit := hits[0].(map[string]any)
+	if hit["id"] != "10" || len(hit["books"].([]any)) == 0 {
+		t.Fatalf("hit = id %v with %d books, want id 10 with books", hit["id"], len(hit["books"].([]any)))
+	}
+}
+
+// When the count source fails the filter cannot run: the empty rows are served
+// (a degraded document, not cached) rather than every series vanishing.
+func TestSearch_CountsFailureServesUnfilteredSeriesUncached(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	seed.lib.series[30] = &database.Series{ID: 30, Name: "Odyssey Cycle"}
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	login := h.login(t, "oracle", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, login), "accessToken")
+
+	seed.lib.setSeriesCountsErr(errors.New("counts index unavailable"))
+	if n := len(search(t, h, tok, "odyssey")["series"].([]any)); n != 2 {
+		t.Fatalf("degraded search returned %d series, want both (unfiltered)", n)
+	}
+	seed.lib.setSeriesCountsErr(nil)
+	if n := len(search(t, h, tok, "odyssey")["series"].([]any)); n != 1 {
+		t.Fatalf("after recovery search returned %d series, want 1 — the degraded document was cached", n)
 	}
 }
