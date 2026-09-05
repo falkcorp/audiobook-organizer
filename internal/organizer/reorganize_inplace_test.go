@@ -125,3 +125,67 @@ func TestReOrganizeInPlace_UpdateBookFileSuccess_NoRescan(t *testing.T) {
 
 	mockStore.AssertNotCalled(t, "MarkNeedsRescan", mock.Anything)
 }
+
+// TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow pins the download-breakage
+// fix: a SINGLE-FILE book that moves must have its book_file row repointed to the
+// new path. Before 2026-09-05 the row update ran only for directory books, so the
+// row kept the pre-move path and the download/stream endpoint 404'd on every
+// single-file book an apply had renamed.
+func TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow(t *testing.T) {
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{
+		RootDir:             rootDir,
+		FolderNamingPattern: "{author}/{title}",
+		FileNamingPattern:   "{title}",
+	}
+
+	// A real single audio file living at a "wrong" path under the library root.
+	oldDir := filepath.Join(rootDir, "Old Folder")
+	if err := os.MkdirAll(oldDir, 0775); err != nil {
+		t.Fatalf("setup: mkdir: %v", err)
+	}
+	oldPath := filepath.Join(oldDir, "old.mp3")
+	if err := os.WriteFile(oldPath, []byte("audio"), 0644); err != nil {
+		t.Fatalf("setup: write file: %v", err)
+	}
+
+	book := &database.Book{
+		ID:       "book-sf",
+		Title:    "NewTitle",
+		FilePath: oldPath,
+		Author:   &database.Author{Name: "NewAuthor"},
+	}
+
+	var wroteRow *database.BookFile
+	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookByID", "book-sf").Return(book, nil)
+	mockStore.On("UpdateBook", "book-sf", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.On("GetBookFiles", "book-sf").Return([]database.BookFile{
+		{ID: "bf-sf", FilePath: oldPath},
+	}, nil)
+	mockStore.On("UpdateBookFile", "bf-sf", mock.AnythingOfType("*database.BookFile")).
+		Run(func(args mock.Arguments) { wroteRow = args.Get(1).(*database.BookFile) }).
+		Return(nil)
+
+	svc := NewService(mockStore)
+	log := &noopLogger{}
+
+	newPath, err := svc.ReOrganizeInPlace(book, log)
+	if err != nil {
+		t.Fatalf("ReOrganizeInPlace: %v", err)
+	}
+	if newPath == oldPath {
+		t.Fatalf("expected the book to move; target == source == %s", oldPath)
+	}
+	if wroteRow == nil {
+		t.Fatal("UpdateBookFile was never called — the single-file row was left pointing at the old path")
+	}
+	if wroteRow.FilePath != newPath {
+		t.Fatalf("row repointed to %q, want the moved-to path %q", wroteRow.FilePath, newPath)
+	}
+	// The bytes must actually be at the path the row now names.
+	if _, statErr := os.Stat(wroteRow.FilePath); statErr != nil {
+		t.Fatalf("row points at %q but nothing is there: %v", wroteRow.FilePath, statErr)
+	}
+	mockStore.AssertNotCalled(t, "MarkNeedsRescan", mock.Anything)
+}

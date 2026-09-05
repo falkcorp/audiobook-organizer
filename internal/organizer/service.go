@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package organizer
 
@@ -849,40 +849,57 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 		log.Warn("Failed to update book path for %s: %s", book.ID, err.Error())
 	}
 
-	// Update book_files paths if this is a directory book
-	if info.IsDir() {
-		if bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID); bfErr == nil {
-			// rescanNeeded is set if any book_files row fails to update below.
-			// The physical move already succeeded at this point, so a failed
-			// row update leaves the DB pointing at the old (now-nonexistent)
-			// path; MarkNeedsRescan (called once, after the loop) self-heals
-			// it on the next library scan instead of leaving the file
-			// silently missing/unplayable. Mirrors the MarkNeedsRescan idiom
-			// used elsewhere in this file (see CreateOrganizedVersion).
-			var rescanNeeded bool
-			for _, bf := range bookFiles {
-				if strings.HasPrefix(bf.FilePath, oldPath) {
-					bf.FilePath = filepath.Join(targetPath, strings.TrimPrefix(bf.FilePath, oldPath+"/"))
-					if bf.FilePath != "" {
-						bf.ITunesPath = orgSvc.ComputeITunesPath(bf.FilePath)
-					}
-					if err := orgSvc.db.UpdateBookFile(bf.ID, &bf); err != nil {
-						log.Warn("ReOrganizeInPlace: failed to update book_file %s path for book %s: %s", bf.ID, book.ID, err.Error())
-						rescanNeeded = true
-					}
-				}
+	// Keep the book_files rows in step with the move — for a single-file book
+	// as well as a directory book.
+	//
+	// 🔴 Until 2026-09-05 this ran ONLY under `if info.IsDir()`, so a
+	// single-file book's row kept pointing at the pre-move path after the file
+	// moved. The download/stream endpoint (abs.serveItemFile) resolves the
+	// bytes THROUGH the book_file row, not through book.FilePath, so every
+	// single-file book that an apply renamed answered 404 ("bytes_missing")
+	// for download and playback while its book record looked correct. The
+	// stale row also made the next scan mint a DUPLICATE book at the new path,
+	// because GetBookByFilePath(newPath) found nothing. Both symptoms trace to
+	// this one row not being rewritten.
+	//
+	// A row-update failure is not fatal here: the physical move already
+	// succeeded, so MarkNeedsRescan (once, after the loop) lets the next scan
+	// self-heal the pointer rather than leaving the file silently unplayable.
+	// Mirrors the MarkNeedsRescan idiom used elsewhere in this file (see
+	// CreateOrganizedVersion).
+	if bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID); bfErr == nil {
+		var rescanNeeded bool
+		for _, bf := range bookFiles {
+			var newFilePath string
+			switch {
+			case !info.IsDir() && bf.FilePath == oldPath:
+				// Single-file book: the row names the file that just moved.
+				newFilePath = targetPath
+			case info.IsDir() && strings.HasPrefix(bf.FilePath, oldPath+string(os.PathSeparator)):
+				// Directory book: rebase each track under the new directory.
+				// The trailing separator in the prefix keeps a sibling whose
+				// path merely starts with oldPath ("…/Book 2" vs "…/Book 20")
+				// from being rewritten.
+				newFilePath = filepath.Join(targetPath, strings.TrimPrefix(bf.FilePath, oldPath+string(os.PathSeparator)))
+			default:
+				continue
 			}
-			if rescanNeeded {
-				_ = orgSvc.db.MarkNeedsRescan(book.ID)
+			bf.FilePath = newFilePath
+			bf.ITunesPath = orgSvc.ComputeITunesPath(newFilePath)
+			if err := orgSvc.db.UpdateBookFile(bf.ID, &bf); err != nil {
+				log.Warn("ReOrganizeInPlace: failed to update book_file %s path for book %s: %s", bf.ID, book.ID, err.Error())
+				rescanNeeded = true
 			}
-		} else {
-			// Same failure class as above, one level up: the directory move
-			// already succeeded, but we couldn't even read the book_files
-			// rows to rewrite them, so every one of them now points at the
-			// old (moved-away) path. Mark for rescan so it self-heals.
-			log.Warn("ReOrganizeInPlace: failed to load book_files for %s after move, marking for rescan: %s", book.ID, bfErr.Error())
+		}
+		if rescanNeeded {
 			_ = orgSvc.db.MarkNeedsRescan(book.ID)
 		}
+	} else {
+		// The move already succeeded, but we could not even read the rows to
+		// rewrite them, so every one now points at the old (moved-away) path.
+		// Mark for rescan so it self-heals.
+		log.Warn("ReOrganizeInPlace: failed to load book_files for %s after move, marking for rescan: %s", book.ID, bfErr.Error())
+		_ = orgSvc.db.MarkNeedsRescan(book.ID)
 	}
 
 	// Try to remove the now-empty parent directory tree
