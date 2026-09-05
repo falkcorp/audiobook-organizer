@@ -1300,6 +1300,7 @@ func TestPreviewRename_Success(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewRenameService(mockStore)
 
 	book := &database.Book{
@@ -1553,6 +1554,7 @@ func TestPreviewOrganize_Success(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
 	book := &database.Book{
@@ -1619,6 +1621,7 @@ func TestPreviewOrganize_AlreadyAtTarget(t *testing.T) {
 	os.WriteFile(targetPath, []byte("audio"), 0644)
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
 	book := &database.Book{
@@ -1659,6 +1662,7 @@ func TestPreviewOrganize_InRootNeedsRename(t *testing.T) {
 	os.WriteFile(wrongPath, []byte("audio"), 0644)
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
 	book := &database.Book{
@@ -1708,6 +1712,7 @@ func TestPreviewOrganize_WithCoverURL(t *testing.T) {
 	os.WriteFile(targetPath, []byte("x"), 0644)
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
 	coverURL := "https://example.com/cover.jpg"
@@ -1753,6 +1758,7 @@ func TestPreviewOrganize_ProtectedPath(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 	svc.IsProtectedPath = func(path string) bool { return true }
 
@@ -1800,6 +1806,7 @@ func TestPreviewOrganize_MultiFileProtected(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 	svc.IsProtectedPath = func(path string) bool { return true }
 
@@ -1999,6 +2006,7 @@ func TestBookNeedsReOrganize_FileAtCorrectPath(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewService(mockStore)
 	noopLog := &noopLogger{}
 
@@ -2028,6 +2036,7 @@ func TestBookNeedsReOrganize_FileAtWrongPath(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewService(mockStore)
 	noopLog := &noopLogger{}
 
@@ -2054,6 +2063,7 @@ func TestBookNeedsReOrganize_DirectoryBook(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewService(mockStore)
 	noopLog := &noopLogger{}
 

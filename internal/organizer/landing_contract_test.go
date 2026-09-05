@@ -610,6 +610,7 @@ func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
 		Author:   &database.Author{Name: "New Author"},
 	}
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.EXPECT().GetBookFiles("book-inplace").Return([]database.BookFile{
 		{ID: "bf-1", BookID: "book-inplace", FilePath: stale},
 	}, nil).Maybe()

@@ -51,6 +51,7 @@ func TestReOrganizeInPlace_UpdateBookFileError_MarksNeedsRescan(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-1").Return(book, nil)
 	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-1").Return([]database.BookFile{
@@ -109,6 +110,7 @@ func TestReOrganizeInPlace_UpdateBookFileSuccess_NoRescan(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-2").Return(book, nil)
 	mockStore.On("UpdateBook", "book-2", mock.AnythingOfType("*database.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-2").Return([]database.BookFile{
