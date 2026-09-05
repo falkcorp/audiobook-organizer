@@ -376,6 +376,35 @@ func TestAuthorStripMerge_PrimaryRewriteFailureKeepsAuthorRow(t *testing.T) {
 	}
 }
 
+// 🔴 PARTIAL WORK IS STILL WORK. Row 5 rewrites bk-title, then fails on
+// bk-twice. That first rewrite happened and must be in books-touched; the
+// report must not shrink because the row later errored.
+func TestAuthorStripMerge_PartialWorkOnErroringRowIsReported(t *testing.T) {
+	calls := &stripMergeCalls{}
+	p := newStripPlugin(stripFixture(), calls)
+	store := p.deps.OpsStore().(*database.MockStore)
+	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == "bk-twice" && !containsInt(calls.deleted, 5) {
+			return nil, context.DeadlineExceeded
+		}
+		calls.updated[id] = b
+		return b, nil
+	}
+	rep := &summaryReporter{}
+	if err := p.runAuthorStripMerge(context.Background(), json.RawMessage(`{"apply":true,"delete_unmatched":true}`), rep); err != nil {
+		t.Fatalf("runAuthorStripMerge: %v", err)
+	}
+	if containsInt(calls.deleted, 5) {
+		t.Fatal("row 5 was deleted although its second book's rewrite failed")
+	}
+	summary := rep.summary(t)
+	// bk-merge (merge) + bk-junk (junk) + bk-title (row 5, before the
+	// failure) + bk-twice (row 6) = 4 books rewritten; row 5 counts as failed.
+	if !strings.Contains(summary, "books-touched=4") || !strings.Contains(summary, "failed=1") {
+		t.Errorf("want books-touched=4 failed=1, got: %s", summary)
+	}
+}
+
 // delete_unmatched composes with delete_junk=false: only the unmatched rows go.
 func TestAuthorStripMerge_DeleteUnmatchedWithoutJunk(t *testing.T) {
 	calls := runStripMerge(t, `{"apply":true,"delete_junk":false,"delete_unmatched":true}`)
