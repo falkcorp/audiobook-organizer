@@ -7,6 +7,9 @@ package maintenance
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,8 +18,9 @@ import (
 )
 
 type mergeFakeStore struct {
-	books []database.BookCore
-	rows  map[string][]database.BookFile // bookID → rows
+	books       []database.BookCore
+	rows        map[string][]database.BookFile // bookID → rows
+	getFilesErr error                          // when non-nil, GetBookFiles fails for every book
 }
 
 func (f *mergeFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
@@ -30,6 +34,9 @@ func (f *mergeFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore
 	return f.books[offset:end], nil
 }
 func (f *mergeFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	if f.getFilesErr != nil {
+		return nil, f.getFilesErr
+	}
 	return f.rows[bookID], nil
 }
 
@@ -207,4 +214,80 @@ func TestElectPrimary_PrefersOrganizedThenOldest(t *testing.T) {
 		{ID: "matched", MetadataReviewStatus: strptr("matched"), CreatedAt: &newer},
 	}
 	require.Equal(t, "matched", electPrimary(group3).ID)
+}
+
+// A GetBookFiles read failure is an I/O signal, not "no hash recorded": it must
+// land in the read-error bucket (so an unhealthy store cannot masquerade as a
+// clean "nothing to merge" dry run), never in unverified-hash, and never merge.
+func TestMergeSamePath_ReadErrorIsItsOwnBucket(t *testing.T) {
+	path := "/lib/Author/Book.m4b"
+	store := &mergeFakeStore{
+		books: []database.BookCore{{ID: "a", FilePath: path}, {ID: "b", FilePath: path}},
+		rows: map[string][]database.BookFile{
+			"a": {{ID: "r1", BookID: "a", FilePath: path, FileHash: "H"}},
+			"b": {{ID: "r2", BookID: "b", FilePath: path, FileHash: "H"}},
+		},
+		getFilesErr: fmt.Errorf("pebble: closed"),
+	}
+	m := &recordingMerge{}
+	plan, err := planMergeSamePathDupes(context.Background(), store, m.fn,
+		mergeSamePathParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.ReadError, "a store read failure is its own bucket")
+	require.Equal(t, 0, plan.UnverifiedHash, "a read failure must NOT be counted as 'no hash'")
+	require.Equal(t, 0, plan.Mergeable)
+	require.Empty(t, m.calls)
+}
+
+// Mergeable groups beyond the per-run cap are DEFERRED, not silently dropped:
+// they must be counted in Capped and appear in the report (plan.all) so an
+// operator can see every group that was eligible but held back.
+func TestMergeSamePath_CappedGroupsAreReportedNotDropped(t *testing.T) {
+	mk := func(id, path string) database.BookCore {
+		return database.BookCore{ID: id, FilePath: path}
+	}
+	store := &mergeFakeStore{
+		books: []database.BookCore{
+			mk("a1", "/lib/A.m4b"), mk("a2", "/lib/A.m4b"),
+			mk("b1", "/lib/B.m4b"), mk("b2", "/lib/B.m4b"),
+			mk("c1", "/lib/C.m4b"), mk("c2", "/lib/C.m4b"),
+		},
+		rows: map[string][]database.BookFile{
+			"a1": {{FilePath: "/lib/A.m4b", FileHash: "HA"}}, "a2": {{FilePath: "/lib/A.m4b", FileHash: "HA"}},
+			"b1": {{FilePath: "/lib/B.m4b", FileHash: "HB"}}, "b2": {{FilePath: "/lib/B.m4b", FileHash: "HB"}},
+			"c1": {{FilePath: "/lib/C.m4b", FileHash: "HC"}}, "c2": {{FilePath: "/lib/C.m4b", FileHash: "HC"}},
+		},
+	}
+	m := &recordingMerge{}
+	plan, err := planMergeSamePathDupes(context.Background(), store, m.fn,
+		mergeSamePathParams{Apply: true, Max: 1}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 3, plan.Mergeable, "all three groups pass the hash gate")
+	require.Equal(t, 1, plan.CappedAt)
+	require.Equal(t, 2, plan.Capped, "two groups deferred by the cap")
+	require.Len(t, m.calls, 1, "only one group merged under the cap")
+	// The two deferred groups must be visible in the full report, not absent.
+	capped := 0
+	for _, d := range plan.all {
+		if d.Bucket == "capped" {
+			capped++
+		}
+	}
+	require.Equal(t, 2, capped, "capped groups must appear in the report")
+}
+
+// A merge (soft-delete) must not proceed on an apply run when its audit report
+// cannot be written: preflightReportPath fails, and the caller refuses.
+func TestPreflightReportPath_RefusesUnwritablePath(t *testing.T) {
+	// Parent is a FILE, so MkdirAll of the "directory" fails.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+	err := preflightReportPath(filepath.Join(blocker, "report.tsv"))
+	require.Error(t, err, "a report path whose parent is a file must fail preflight")
+
+	// A normal path under a temp dir preflights cleanly and leaves a file behind.
+	ok := filepath.Join(t.TempDir(), "sub", "report.tsv")
+	require.NoError(t, preflightReportPath(ok))
+	_, statErr := os.Stat(ok)
+	require.NoError(t, statErr, "preflight should have created the file")
 }

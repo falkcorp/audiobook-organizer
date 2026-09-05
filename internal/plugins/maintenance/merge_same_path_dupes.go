@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-09-05
 
@@ -77,8 +77,10 @@ type mergeSamePathParams struct {
 // lands in exactly one bucket and is reported, so a group that is NOT merged is
 // visible rather than silently dropped.
 type mergeGroupDecision struct {
-	Path      string   `json:"path"`
-	Bucket    string   `json:"bucket"` // "mergeable" | "hash-mismatch" | "unverified-hash" | "merged" | "merge-failed"
+	Path string `json:"path"`
+	// Bucket is one of: "mergeable" | "hash-mismatch" | "unverified-hash" |
+	// "read-error" | "capped" | "merged" | "merge-failed".
+	Bucket    string   `json:"bucket"`
 	PrimaryID string   `json:"primary_id,omitempty"`
 	LoserIDs  []string `json:"loser_ids,omitempty"`
 	Reason    string   `json:"reason"`
@@ -91,11 +93,13 @@ type mergeSamePathPlan struct {
 	RecordsInShared int  `json:"records_in_shared"` // total records across those paths
 	Mergeable       int  `json:"mergeable"`         // groups that pass the hash gate
 	HashMismatch    int  `json:"hash_mismatch"`
-	UnverifiedHash  int  `json:"unverified_hash"`
-	Merged          int  `json:"merged"`         // groups actually merged (apply)
-	RecordsMerged   int  `json:"records_merged"` // loser records soft-deleted (apply)
+	UnverifiedHash  int  `json:"unverified_hash"` // a record had no stored hash for the shared file
+	ReadError       int  `json:"read_error"`      // GetBookFiles failed — a store-health signal, NOT "no hash"
+	Merged          int  `json:"merged"`          // groups actually merged (apply)
+	RecordsMerged   int  `json:"records_merged"`  // loser records soft-deleted (apply)
 	MergeFailed     int  `json:"merge_failed"`
-	CappedAt        int  `json:"capped_at,omitempty"`
+	CappedAt        int  `json:"capped_at,omitempty"` // the cap value, when it bit
+	Capped          int  `json:"capped,omitempty"`    // mergeable groups deferred by the cap
 
 	ReportPath string `json:"report_path,omitempty"`
 
@@ -125,9 +129,9 @@ func (p mergeSamePathPlan) summary() string {
 		mode = "APPLIED"
 	}
 	return fmt.Sprintf(
-		"%s books=%d shared-paths=%d records-in-shared=%d mergeable=%d merged=%d records-merged=%d | refused: hash-mismatch=%d unverified-hash=%d merge-failed=%d",
-		mode, p.BooksScanned, p.SharedPaths, p.RecordsInShared, p.Mergeable,
-		p.Merged, p.RecordsMerged, p.HashMismatch, p.UnverifiedHash, p.MergeFailed)
+		"%s books=%d shared-paths=%d records-in-shared=%d mergeable=%d capped=%d merged=%d records-merged=%d | refused: hash-mismatch=%d unverified-hash=%d read-error=%d merge-failed=%d",
+		mode, p.BooksScanned, p.SharedPaths, p.RecordsInShared, p.Mergeable, p.Capped,
+		p.Merged, p.RecordsMerged, p.HashMismatch, p.UnverifiedHash, p.ReadError, p.MergeFailed)
 }
 
 // mergeSamePathStore is the narrow read surface this op needs.
@@ -172,10 +176,6 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	plan, err := planMergeSamePathDupes(ctx, store, p.deps.MergeBooks, params, reporter)
-	if err != nil {
-		return err
-	}
 	log := reporter.Logger()
 
 	reportPath := params.ReportPath
@@ -186,6 +186,23 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 		}
 		reportPath = filepath.Join("reports", "merge-same-path-dupes-"+name+".tsv")
 	}
+
+	// The report is the ONLY complete record of which losers were soft-deleted
+	// (the JSON log line samples only mergeSamplesPerBucket per bucket). On an
+	// apply run, prove it is writable BEFORE any merge happens: a destructive op
+	// must not soft-delete records it then cannot account for. A dry run does not
+	// destroy anything, so a report failure there is logged, not fatal.
+	if params.Apply {
+		if err := preflightReportPath(reportPath); err != nil {
+			return fmt.Errorf("merge-same-path-dupes: refusing to apply — the audit report path %q is not writable: %w", reportPath, err)
+		}
+	}
+
+	plan, err := planMergeSamePathDupes(ctx, store, p.deps.MergeBooks, params, reporter)
+	if err != nil {
+		return err
+	}
+
 	if wErr := writeMergeReport(reportPath, plan.all); wErr != nil {
 		log.Error("merge-same-path-dupes: FAILED to write the per-group report",
 			"path", reportPath, "err", wErr, "groups", len(plan.all))
@@ -197,6 +214,13 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 
 	if b, mErr := json.Marshal(plan); mErr == nil {
 		log.Info("merge-same-path-dupes report (JSON)", "report", string(b))
+	} else {
+		log.Error("merge-same-path-dupes: could not marshal the JSON report line", "err", mErr)
+	}
+	if plan.ReadError > 0 {
+		log.Error("merge-same-path-dupes: groups skipped because book_files could not be READ — the store may be unhealthy; "+
+			"these are NOT 'no hash', they are I/O failures. Re-run once the store is healthy.",
+			"groups", plan.ReadError, "report", reportPath)
 	}
 	if plan.HashMismatch > 0 {
 		log.Warn("merge-same-path-dupes: groups REFUSED because the stored hash disagrees across records "+
@@ -268,9 +292,6 @@ func isOrganized(b database.BookCore) bool {
 func isPrimary(b database.BookCore) bool {
 	return b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
 }
-func isDeleted(b database.BookCore) bool {
-	return b.MarkedForDeletion != nil && *b.MarkedForDeletion
-}
 
 func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, mergeFn bookMergeFunc, params mergeSamePathParams, reporter sdk.Reporter) (mergeSamePathPlan, error) {
 	log := reporter.Logger()
@@ -291,7 +312,7 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 		for i := range page {
 			scanned++
 			b := page[i]
-			if isDeleted(b) {
+			if b.IsSoftDeleted() {
 				continue // a soft-deleted loser must not pull a live book into a merge
 			}
 			path := strings.TrimSpace(b.FilePath)
@@ -358,9 +379,13 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 		for _, b := range g.books {
 			files, ferr := store.GetBookFiles(b.ID)
 			if ferr != nil {
+				// A store read failure is NOT "no hash recorded" — conflating the
+				// two would let an unhealthy store (every GetBookFiles failing)
+				// report as a clean "nothing to merge" dry run. Its own bucket,
+				// logged at Error by the caller.
 				verified = false
-				results[idx] = classified{g: g, bucket: "unverified-hash",
-					reason: "could not read book_files: " + ferr.Error()}
+				results[idx] = classified{g: g, bucket: "read-error",
+					reason: "could not read book_files for " + b.ID + ": " + ferr.Error()}
 				break
 			}
 			h := hashForPath(files, g.path)
@@ -411,14 +436,43 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 		case "unverified-hash":
 			plan.UnverifiedHash++
 			plan.record(mergeGroupDecision{Path: r.g.path, Bucket: r.bucket, Reason: r.reason})
+		case "read-error":
+			plan.ReadError++
+			plan.record(mergeGroupDecision{Path: r.g.path, Bucket: r.bucket, Reason: r.reason})
 		case "mergeable":
 			plan.Mergeable++
 			mergeable = append(mergeable, r)
+		default:
+			// A group that fell through classify with no bucket set (the idx<0
+			// guard, unreachable today) would otherwise vanish from every count
+			// and the report. Make that loud rather than a silent drop.
+			log.Error("merge-same-path-dupes: group classified into no bucket — REPORT THIS",
+				"path", r.g.path)
+			plan.record(mergeGroupDecision{Path: r.g.path, Bucket: "unclassified",
+				Reason: "internal: group produced no classification"})
 		}
+	}
+
+	// Every shared path must land in exactly one classification bucket. If this
+	// invariant breaks, a group was silently dropped — fail loud.
+	if sum := plan.HashMismatch + plan.UnverifiedHash + plan.ReadError + plan.Mergeable; sum != plan.SharedPaths {
+		log.Error("merge-same-path-dupes: bucket counts do not sum to shared paths — a group was dropped",
+			"sum", sum, "shared_paths", plan.SharedPaths,
+			"hash_mismatch", plan.HashMismatch, "unverified_hash", plan.UnverifiedHash,
+			"read_error", plan.ReadError, "mergeable", plan.Mergeable)
 	}
 
 	if len(mergeable) > maxMerges {
 		plan.CappedAt = maxMerges
+		plan.Capped = len(mergeable) - maxMerges
+		// Record the deferred groups BEFORE truncating so the "full TSV on every
+		// run" promise holds — a capped-but-mergeable group must be visible, not
+		// silently absent from the report.
+		for _, r := range mergeable[maxMerges:] {
+			plan.record(mergeGroupDecision{Path: r.g.path, Bucket: "capped",
+				PrimaryID: r.primaryID, LoserIDs: r.loserIDs,
+				Reason: "mergeable but beyond this run's cap; re-run to continue"})
+		}
 		mergeable = mergeable[:maxMerges]
 	}
 
@@ -455,6 +509,24 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 			Reason: fmt.Sprintf("merged %d loser(s) into primary", merged)})
 	}
 	return plan, nil
+}
+
+// preflightReportPath proves the report can be written before any destructive
+// work: it creates the parent directory and touches the file. Any failure
+// (relative dir under a read-only working directory, permission denied) surfaces
+// here, where the caller can refuse to apply, rather than after the merges when
+// the loser IDs would already be gone from the DB and unrecordable.
+func preflightReportPath(path string) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o775); err != nil {
+			return err
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o664)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func writeMergeReport(path string, decisions []mergeGroupDecision) error {

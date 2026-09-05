@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-03
+// last-edited: 2026-09-05
 
 package merge
 
@@ -76,7 +76,16 @@ func (ms *Service) SetSyncFollower(f SyncFollower) {
 type Result struct {
 	PrimaryID      string `json:"primary_id"`
 	VersionGroupID string `json:"version_group_id"`
-	MergedCount    int    `json:"merged_count"`
+	// MergedCount is the number of participant books in the merge, primary
+	// INCLUDED. It is not the number of records destroyed — a caller reporting
+	// "how many records were soft-deleted" must use SoftDeleted, not this.
+	MergedCount int `json:"merged_count"`
+	// SoftDeleted is the number of loser records this call actually soft-deleted
+	// — the true blast radius. It excludes the primary and any loser that was
+	// already soft-deleted (whose cleanup is skipped) or left live by a
+	// per-loser error. On a fully successful clean-group merge it is
+	// len(participants)-1.
+	SoftDeleted int `json:"soft_deleted"`
 }
 
 // NewService creates a new Service. The sync-identity follower is wired
@@ -623,6 +632,7 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 	// soft-deleted-loser skip below would then make that permanent.
 	eidStore := AsExternalIDReassigner(ms.db)
 	var loserErrs []error
+	softDeleted := 0
 	for _, book := range books {
 		if book.ID == resolvedPrimaryID {
 			continue
@@ -690,7 +700,9 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 			slog.Error("merge soft-delete failed; loser left live as a non-primary version",
 				"id", book.ID, "primary", resolvedPrimaryID, "err", err)
 			loserErrs = append(loserErrs, fmt.Errorf("soft-delete loser %s: %w", book.ID, err))
+			continue
 		}
+		softDeleted++
 	}
 	if len(loserErrs) > 0 {
 		return nil, fmt.Errorf("merge into %s applied but %d loser(s) could not be cleaned up and remain live: %w",
@@ -729,6 +741,7 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		PrimaryID:      resolvedPrimaryID,
 		VersionGroupID: versionGroupID,
 		MergedCount:    len(books),
+		SoftDeleted:    softDeleted,
 	}, nil
 }
 

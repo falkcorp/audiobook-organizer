@@ -60,6 +60,10 @@ func TestService_MergeBooks(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, result.MergedCount)
+	// SoftDeleted is the true blast radius: one loser soft-deleted, the primary
+	// kept. A caller reporting "records destroyed" must read this, not
+	// MergedCount (which counts the primary too) — the two must not be conflated.
+	assert.Equal(t, 1, result.SoftDeleted, "exactly one loser should be soft-deleted; the primary is kept")
 	assert.NotEmpty(t, result.VersionGroupID)
 	// M4B should be selected as primary since it's the preferred format
 	assert.Equal(t, book2.ID, result.PrimaryID)
