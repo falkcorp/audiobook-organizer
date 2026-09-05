@@ -1,7 +1,7 @@
 // file: internal/database/transcribe_stats.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f2a9c14-3b6d-4e81-9a05-2c8e1d4f6b73
-// last-edited: 2026-07-01
+// last-edited: 2026-09-05
 
 package database
 
@@ -24,11 +24,16 @@ const statsTranscribeKey = "stats:transcribe"
 // cumulative across the run identified by RunOpID. Persisted as JSON under
 // statsTranscribeKey. A monitor reads it via GET /api/v1/maintenance/transcribe-stats.
 type TranscribeStats struct {
-	RunOpID    string    `json:"run_op_id"`   // op that produced these counters
-	StartedAt  time.Time `json:"started_at"`  // when the run began
-	UpdatedAt  time.Time `json:"updated_at"`  // last counter write
-	Done       bool      `json:"done"`        // run finished (success or error)
-	TotalBooks int       `json:"total_books"` // library size at run start
+	RunOpID   string    `json:"run_op_id"`  // op that produced these counters
+	StartedAt time.Time `json:"started_at"` // when the run began
+	UpdatedAt time.Time `json:"updated_at"` // last counter write
+	Done      bool      `json:"done"`       // run finished (success or error)
+	// TotalBooks is the number of books this run set out to attempt — the
+	// denominator of every progress line. Under only_missing (the default)
+	// that is the books WITHOUT a transcript at run start, not the library
+	// size: books already transcribed are counted in SkippedExisting and are
+	// never part of TotalBooks. Attempted reaches TotalBooks when the run ends.
+	TotalBooks int `json:"total_books"`
 
 	// Per-outcome cumulative counts. Attempted = sum of the outcome buckets
 	// below; SkippedExisting is books skipped because they already had a
