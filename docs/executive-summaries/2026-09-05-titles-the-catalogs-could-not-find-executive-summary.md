@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-05-titles-the-catalogs-could-not-find-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7c2f9a4e-5d1b-4b8e-a6c3-2e9f0d7b1a54 -->
 <!-- last-edited: 2026-09-05 -->
 
@@ -38,13 +38,17 @@
   for that first, with the author. "Eternal Dominion, Book 04 - Assertions" becomes
   "Assertions" by Bern Dean. Audible answers first, so far fewer books ever reach
   Google and its thousand-a-day limit.
-- **It only accepts an answer that names the book.** When the app fetches in bulk, no
-  one is watching, and what it fetches is remembered for a week. Asking for a series
-  name would bring back the series' other books, and those could have been filed
-  against the wrong title and never asked about again. So a rescued answer is kept
-  only if its title really names this book. A folder name that is nothing but a
-  series and a number — "Path Of The Voidwalker - BK07" — is left as "not found" and
-  will be tried again later, because no question can tell that book from its siblings.
+- **It only accepts an answer that names the book.** What the app fetches is
+  remembered for a week, and one of the ways it fetches applies the first answer with
+  no one watching. Asking for a series name would bring back the series' other books,
+  and those could have been filed against the wrong title and never asked about
+  again. So a rescued answer is kept only if its title carries the words that name
+  this book — not the series' own words, not "novel" or "edition" — and its author
+  agrees. A folder name that is nothing but a series and a number — "Path Of The
+  Voidwalker - BK07" — is left as "not found" and will be tried again later, because
+  no question can tell that book from its siblings. Reviewers caught both of these
+  gaps before the change went live; the first version would have accepted a series
+  name's answer on the bulk path.
 - **A closed door is not knocked on eight times.** When a catalog has said "you have
   used your allowance" or is switched off for being unwell, the app stops asking it
   about that book straight away, and what it reports is the catalog's own words, not
