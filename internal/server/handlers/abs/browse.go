@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-05
 
@@ -2062,32 +2062,78 @@ func (h *Handler) searchStore(key string, resp *searchResponse) {
 	h.searchCache[key] = searchCacheEntry{resp: resp, builtAt: now}
 }
 
-// rankSeriesMatches returns up to limit series whose name contains the
-// lowercased query, best matches first: an exact name, then names that start
-// with the query, then the rest, each tier in the input (name) order.
-//
-// Ranked BEFORE the cap. GetAllSeries is name-sorted, so cutting the first 25
-// substring matches of a common word ("hunter") could drop "The Primal Hunter"
-// behind twenty-four series that merely contain it — the one the user typed
-// would not be in the list at all.
-func rankSeriesMatches(all []database.Series, lower string, limit int) []database.Series {
-	var exact, prefix, rest []database.Series
-	for _, s := range all {
-		name := strings.ToLower(s.Name)
-		switch {
-		case name == lower:
-			exact = append(exact, s)
-		case strings.HasPrefix(name, lower):
-			prefix = append(prefix, s)
-		case strings.Contains(name, lower):
-			rest = append(rest, s)
+// stripArticle drops one leading sort article ("the ", "a ", "an ") from an
+// already-lowercased string, so "the primal hunter" and "primal hunter" match
+// each other the way ABS's own nameIgnorePrefix sorting treats them.
+func stripArticle(lower string) string {
+	for _, p := range ignorePrefixes {
+		if strings.HasPrefix(lower, p) {
+			return strings.TrimSpace(lower[len(p):])
 		}
 	}
-	out := append(append(exact, prefix...), rest...)
+	return lower
+}
+
+// rankSeriesMatches returns up to limit series whose name contains the
+// lowercased query, best matches first.
+//
+// Series with no books are left out when counts is known (non-nil). A series
+// row nobody references renders as an empty tile — on 2026-09-05 "primal
+// hunter" returned 25 series of which 16 had zero books, all duplicates of
+// the one real row, and the phone showed a wall of black tiles above it. A
+// nil counts means the count source failed; the caller serves the unfiltered
+// list as a degraded document and does not cache it.
+//
+// Tiers: an exact name (article-insensitive: "The Primal Hunter" is exact for
+// "primal hunter"), then names that start with the query, then the rest. Inside
+// a tier, more books first, then the input (name) order. Ranked BEFORE the cap:
+// GetAllSeries is name-sorted, so cutting the first 25 substring matches of a
+// common word could drop the series the user typed behind twenty-four that
+// merely contain it.
+func rankSeriesMatches(all []database.Series, lower string, counts map[int]int, limit int) []database.Series {
+	query := stripArticle(lower)
+	type ranked struct {
+		s    database.Series
+		tier int
+		pos  int
+	}
+	var out []ranked
+	for i, s := range all {
+		if counts != nil && counts[s.ID] == 0 {
+			continue
+		}
+		name := strings.ToLower(s.Name)
+		bare := stripArticle(name)
+		var tier int
+		switch {
+		case name == lower || bare == query:
+			tier = 0
+		case strings.HasPrefix(name, lower) || strings.HasPrefix(bare, query):
+			tier = 1
+		case strings.Contains(name, lower) || strings.Contains(name, query):
+			tier = 2
+		default:
+			continue
+		}
+		out = append(out, ranked{s: s, tier: tier, pos: i})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].tier != out[j].tier {
+			return out[i].tier < out[j].tier
+		}
+		if counts != nil && counts[out[i].s.ID] != counts[out[j].s.ID] {
+			return counts[out[i].s.ID] > counts[out[j].s.ID]
+		}
+		return out[i].pos < out[j].pos
+	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
-	return out
+	res := make([]database.Series, 0, len(out))
+	for _, r := range out {
+		res = append(res, r.s)
+	}
+	return res
 }
 
 // LibrarySearch handles GET /api/libraries/:libraryId/search.
@@ -2263,11 +2309,20 @@ func (h *Handler) searchSeriesHits(ctx context.Context, lower string) ([]any, bo
 		slog.Warn("abs: series unavailable for search, serving none", "err", err)
 		return out, false
 	}
-	matched := rankSeriesMatches(all, lower, searchResultLimit)
-	if len(matched) == 0 {
-		return out, true
-	}
 	complete := true
+	// Counts come first: they decide which series are shown at all (a series
+	// with no books is not a result) and how ties rank. Without them the list
+	// is served unfiltered and NOT cached.
+	counts, err := h.library.GetAllSeriesBookCounts()
+	if err != nil {
+		slog.Warn("abs: series book counts unavailable for search, serving unfiltered series", "err", err)
+		counts = nil
+		complete = false
+	}
+	matched := rankSeriesMatches(all, lower, counts, searchResultLimit)
+	if len(matched) == 0 {
+		return out, complete
+	}
 	bySeries, err := h.seriesBooksCached()
 	if err != nil {
 		// Served without books — the black tile — but NOT cached as such.
@@ -2275,11 +2330,8 @@ func (h *Handler) searchSeriesHits(ctx context.Context, lower string) ([]any, bo
 		bySeries = map[int]seriesBooksBuilt{}
 		complete = false
 	}
-	counts, err := h.library.GetAllSeriesBookCounts()
-	if err != nil {
-		slog.Warn("abs: series book counts unavailable for search", "err", err)
+	if counts == nil {
 		counts = map[int]int{}
-		complete = false
 	}
 	for _, row := range h.seriesRows(ctx, matched, bySeries, counts) {
 		hit, ok := row.(gin.H)
