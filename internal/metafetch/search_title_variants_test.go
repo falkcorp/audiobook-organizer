@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-09-05
 
@@ -69,6 +69,8 @@ func TestSplitSeriesDecoration(t *testing.T) {
 		// "A Novel" is read as the slot's series text; the book name is right and
 		// its anchor ignores the generic word.
 		{"Something Wicked This Way Comes: A Novel, Book 1", "A Novel", "Something Wicked This Way Comes", true},
+		// A book name made only of kind-of-book words cannot anchor a search.
+		{"Eternal Dominion, Book 04 - A Novel", "Eternal Dominion", "", true},
 		{"Dune", "", "", false},
 	}
 	for _, tt := range tests {
@@ -107,6 +109,7 @@ func TestExtraTitleVariants_AreAnchoredOnTheBookName(t *testing.T) {
 		{"The Way of Kings, Book 1", nil, nil},
 		{"Mistborn: The Final Empire (Book 1)", nil, nil},
 		{"The Girl on the Train: A Novel (Book 1)", nil, nil},
+		{"Eternal Dominion, Book 04 - A Novel", nil, nil},
 		{"A Plain Title", nil, nil},
 		{"Dune - Frank Herbert", nil, nil},
 	}
