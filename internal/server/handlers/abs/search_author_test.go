@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/search_author_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6c1f0d2e-7b3a-4c5d-9e8f-2a1b3c4d5e6f
 // last-edited: 2026-09-05
 
@@ -306,9 +306,16 @@ func TestSearch_CountsFailureIsDegradedNotCached(t *testing.T) {
 	}
 }
 
-// When the grouping source fails the filter cannot run: the empty rows are
+// When the book listing fails the filter cannot run: the empty rows are
 // served without books (a degraded document) and NOT cached, so the first
 // request after recovery filters again.
+//
+// What this does NOT isolate: the series branch's own complete=false. The
+// groupings, the book hits and the contributor index all read the same
+// listing, so a listing failure degrades the document through every branch
+// at once; mutating the series branch alone to keep complete=true survives
+// this test. That flag is kept as defence for a future branch split, not
+// because a test can reach it today.
 func TestSearch_GroupingsFailureServesUnfilteredUncached(t *testing.T) {
 	seed := absSeedTwoSeries(t)
 	seed.lib.series[30] = &database.Series{ID: 30, Name: "Odyssey Cycle"}
