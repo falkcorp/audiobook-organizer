@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"time"
 )
 
