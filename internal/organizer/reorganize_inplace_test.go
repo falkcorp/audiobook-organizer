@@ -1,5 +1,5 @@
 // file: internal/organizer/reorganize_inplace_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a1c9e4b-2f6d-4a83-9e0c-5b8d3f7a1c62
 // last-edited: 2026-09-05
 
@@ -160,6 +160,7 @@ func TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow(t *testing.T) {
 
 	var wroteRow *database.BookFile
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-sf").Return(book, nil)
 	mockStore.On("UpdateBook", "book-sf", mock.AnythingOfType("*database.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-sf").Return([]database.BookFile{
@@ -224,6 +225,7 @@ func TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling(t *testing.T) {
 
 	var updated []string
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-dir").Return(book, nil)
 	mockStore.On("UpdateBook", "book-dir", mock.AnythingOfType("*database.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-dir").Return([]database.BookFile{
@@ -278,6 +280,7 @@ func TestReOrganizeInPlace_SingleFile_StaleRow_MarksNeedsRescan(t *testing.T) {
 	}
 
 	mockStore := mocks.NewMockStore(t)
+	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-stale").Return(book, nil)
 	mockStore.On("UpdateBook", "book-stale", mock.AnythingOfType("*database.Book")).Return(book, nil)
 	// The one row's path does NOT match oldPath — it drifted earlier.
