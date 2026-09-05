@@ -11,3 +11,8 @@
   number of books the run set out to attempt. Books the store lists but cannot return
   are counted and warned about rather than silently dropped. A run with nothing to do
   still publishes its skip count and marks itself done.
+  The aggregate gains `deferred` (books inside `total_books` that got no outcome —
+  an endpoint outage, a failed temp dir, a row unreadable at page time; retried next
+  run) and `unreadable` (listed books the selection could not read), so
+  `attempted + deferred == total_books` at the end of a complete run. A store that
+  fails every read is a run error, never a successful "nothing to transcribe".

@@ -32,7 +32,8 @@ type TranscribeStats struct {
 	// denominator of every progress line. Under only_missing (the default)
 	// that is the books WITHOUT a transcript at run start, not the library
 	// size: books already transcribed are counted in SkippedExisting and are
-	// never part of TotalBooks. Attempted reaches TotalBooks when the run ends.
+	// never part of TotalBooks. At the end of a run that reached every page,
+	// Attempted + Deferred == TotalBooks.
 	TotalBooks int `json:"total_books"`
 
 	// Per-outcome cumulative counts. Attempted = sum of the outcome buckets
@@ -52,7 +53,16 @@ type TranscribeStats struct {
 	WhisperError    int `json:"whisper_error"`
 	Empty           int `json:"empty"`
 	SkippedExisting int `json:"skipped_existing"`
-	CacheHits       int `json:"cache_hits"`
+	// Deferred counts books inside TotalBooks that got no outcome this run:
+	// an endpoint outage (the whole page is retried next run rather than
+	// marked whisper_error), a page whose temp dir could not be created, or a
+	// row that was readable at selection but not at page time. They still
+	// lack a transcript and the next only_missing run picks them up.
+	Deferred int `json:"deferred"`
+	// Unreadable counts books the index listed that the selection could not
+	// read — no row behind the id, or a store error. Outside TotalBooks.
+	Unreadable int `json:"unreadable"`
+	CacheHits  int `json:"cache_hits"`
 	// Extracted counts books whose WAV clip was (re)built in extract-only mode —
 	// cache rebuilt without invoking the GPU. Zero in normal transcription runs.
 	Extracted int `json:"extracted"`

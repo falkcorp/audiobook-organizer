@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.25.0
+// version: 3.26.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-09-05
 
@@ -167,19 +167,25 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	}
 
 	// Resume support: skip past the last book ID checkpointed by a prior run.
-	// The checkpoint is searched in the FULL list, not the work list: a book
-	// checkpointed by an earlier run has a transcript now and is no longer work.
+	// The checkpoint is searched in the FULL list, not the work list: the
+	// checkpointed book was attempted, so under only_missing it is no longer
+	// work and would not be found there. The checkpoint is the most recently
+	// touched id across introTranscribePageConc concurrent pages, so resuming
+	// by position can skip the unfinished remainder of a slower page; those
+	// books still lack a transcript and are picked up by the next run.
 	startIdx := 0
 	if params.LastBookID != "" {
+		found := false
 		for i, id := range allIDs {
 			if id == params.LastBookID {
-				startIdx = i + 1
+				startIdx, found = i+1, true
 				break
 			}
 		}
-	}
-	if startIdx > len(allIDs) {
-		startIdx = len(allIDs)
+		if !found {
+			log.Warn("transcribe-book-intros: checkpointed book is no longer listed, starting from the beginning",
+				"last_book_id", params.LastBookID)
+		}
 	}
 
 	// Decide up front which books this run will attempt. The denominator of
@@ -188,6 +194,11 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// used to report "1,200/83,228" for a run that was 60% done — the numerator
 	// counted attempts and the denominator counted everything, including the
 	// 81k books that were skipped before any page ran.
+	//
+	// The selection reads every listed book before the first page runs, so it
+	// reports progress once up front: the watchdog otherwise sees an op that
+	// has never reported and cancels it as unwired rather than stuck.
+	_ = reporter.UpdateProgress(0, 1, fmt.Sprintf("Selecting work — reading %d books", len(allIDs)-startIdx))
 	sel, err := selectTranscribeWork(ctx, store, allIDs[startIdx:], transcribeSelect{
 		onlyMissing:  onlyMissing,
 		retrySilence: retrySilence,
@@ -201,11 +212,12 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	log.Info("transcribe-book-intros: starting batch run",
 		"only_missing", onlyMissing, "library_books", len(allIDs),
 		"total_books", total, "skipped_existing", sel.skipped,
-		"unreadable", sel.unreadable,
+		"not_found", sel.notFound, "read_errors", sel.readErrors,
 		"start_index", startIdx, "page_size", introTranscribePageSize)
-	if sel.unreadable > 0 {
+	if sel.unreadable() > 0 {
 		log.Warn("transcribe-book-intros: books listed but not readable, left out of this run",
-			"unreadable", sel.unreadable)
+			"not_found", sel.notFound, "read_errors", sel.readErrors,
+			"samples", sel.samples)
 	}
 
 	// Live aggregate: the op records per-outcome counts into accum and flushes
@@ -221,11 +233,13 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	startedAt := time.Now()
 	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
 	accum.recordSkipped(sel.skipped)
+	accum.recordUnreadable(sel.unreadable())
 
 	if total == 0 {
 		accum.flush(true) // the monitor still sees the run, its skip count and that it is over
 		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-			"Done — nothing to transcribe (%d already transcribed)", sel.skipped))
+			"Done — nothing to transcribe (%d already transcribed, %d unreadable)",
+			sel.skipped, sel.unreadable()))
 		return nil
 	}
 	accum.flush(false) // initial write: monitor sees the run has started
@@ -249,10 +263,17 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// batches far more efficiently than one large serial one.
 	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
 		books := make([]database.Book, 0, len(ids))
-		skipped := 0
+		skipped, deferred := 0, 0
 		for _, id := range ids {
 			b, gerr := store.GetBookByID(id)
 			if gerr != nil || b == nil {
+				// Selection read this book moments ago; it is in the
+				// denominator. It gets no outcome this run and is retried by
+				// the next one — counted as deferred so the aggregate still
+				// adds up, and named so the anomaly is findable.
+				deferred++
+				log.Warn("transcribe-book-intros: book readable at selection but not at page time, deferred",
+					"book_id", id, "err", gerr)
 				continue
 			}
 			lastIDMu.Lock()
@@ -270,6 +291,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			books = append(books, *b)
 		}
 		accum.recordSkipped(skipped)
+		accum.recordDeferred(deferred)
 		if len(books) == 0 {
 			accum.flush(false)
 			return nil
@@ -320,13 +342,15 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	st := accum.snapshot()
 	total64 := int(processed.Load())
 	log.Info("transcribe-book-intros: complete",
-		"processed", total64, "total_books", total,
+		"processed", total64, "total_books", total, "attempted", st.Attempted,
 		"ok", st.OK, "source_missing", st.SourceMissing, "no_audio", st.NoAudio,
 		"ffmpeg_error", st.FFmpegError, "whisper_error", st.WhisperError,
-		"empty", st.Empty, "skipped_existing", st.SkippedExisting, "cache_hits", st.CacheHits)
+		"empty", st.Empty, "deferred", st.Deferred, "skipped_existing", st.SkippedExisting,
+		"unreadable", st.Unreadable, "cache_hits", st.CacheHits)
 	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty (of %d total)",
-		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, total))
+		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty, %d deferred (of %d total; %d skipped, %d unreadable)",
+		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, st.Deferred, total,
+		st.SkippedExisting, st.Unreadable))
 	return nil
 }
 
@@ -463,25 +487,41 @@ func needsTranscribeWork(b *database.Book, sel transcribeSelect) bool {
 type transcribeSelection struct {
 	work       []string // ids this run attempts, in library (ListBookIDs) order
 	skipped    int      // ids that already carry a transcript (only_missing)
-	unreadable int      // ids the store listed but could not return a row for
+	notFound   int      // ids listed by the index but with no row behind them
+	readErrors int      // ids whose read failed (I/O, decode) — a store fault
+	samples    []string // first few "id: err" / "id: not found", for the log
 }
+
+// unreadable is every listed id this run could not read, for any reason.
+func (s transcribeSelection) unreadable() int { return s.notFound + s.readErrors }
+
+// selectSampleLimit caps how many unreadable ids are named in the log.
+const selectSampleLimit = 5
 
 // selectTranscribeWork reads every listed book once and keeps the ones
 // needsTranscribeWork accepts, preserving order. Reads fan out over a bounded
 // worker pool (a library-scale loop with a store read per item); each worker
-// owns its own slot so no lock is needed. A book the store lists but cannot
-// return is counted, not silently dropped — on a cold memdb every such miss
-// is a real row, and a run that quietly shrinks is the failure this counter
-// exists to expose.
+// owns its own slot so no lock is needed.
+//
+// A book the store lists but cannot return is counted, never silently
+// dropped: a run that quietly shrinks is the failure the counters exist to
+// expose. The two shapes are kept apart because they mean different things.
+// (nil, nil) is index/row drift — a real gap in the library, count it and go
+// on. A non-nil error is the STORE failing (closed DB, I/O, decode), and when
+// it fails for every id the honest answer is not "nothing to transcribe,
+// done": that is the run this function refuses to return, because it would
+// be recorded as a success.
 func selectTranscribeWork(ctx context.Context, store interface {
 	GetBookByID(string) (*database.Book, error)
 }, ids []string, sel transcribeSelect) (transcribeSelection, error) {
 	const (
-		verdictUnreadable = iota
+		verdictNotFound = iota
+		verdictReadError
 		verdictSkip
 		verdictWork
 	)
 	verdicts := make([]uint8, len(ids))
+	errs := make([]error, len(ids))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for i, id := range ids {
@@ -491,8 +531,10 @@ func selectTranscribeWork(ctx context.Context, store interface {
 			}
 			b, err := store.GetBookByID(id)
 			switch {
-			case err != nil || b == nil:
-				verdicts[i] = verdictUnreadable
+			case err != nil:
+				verdicts[i], errs[i] = verdictReadError, err
+			case b == nil:
+				verdicts[i] = verdictNotFound
 			case needsTranscribeWork(b, sel):
 				verdicts[i] = verdictWork
 			default:
@@ -505,15 +547,32 @@ func selectTranscribeWork(ctx context.Context, store interface {
 		return transcribeSelection{}, fmt.Errorf("select transcribe work: %w", err)
 	}
 	out := transcribeSelection{}
+	var firstErr error
 	for i, v := range verdicts {
 		switch v {
 		case verdictWork:
 			out.work = append(out.work, ids[i])
 		case verdictSkip:
 			out.skipped++
+		case verdictNotFound:
+			out.notFound++
+			if len(out.samples) < selectSampleLimit {
+				out.samples = append(out.samples, ids[i]+": not found")
+			}
 		default:
-			out.unreadable++
+			out.readErrors++
+			if firstErr == nil {
+				firstErr = errs[i]
+			}
+			if len(out.samples) < selectSampleLimit {
+				out.samples = append(out.samples, ids[i]+": "+errs[i].Error())
+			}
 		}
+	}
+	if len(ids) > 0 && out.readErrors == len(ids) {
+		return transcribeSelection{}, fmt.Errorf(
+			"select transcribe work: every one of %d book reads failed, refusing to report an empty run as done: %w",
+			len(ids), firstErr)
 	}
 	return out, nil
 }
@@ -568,7 +627,8 @@ func (p *Plugin) processTranscribePage(
 	// tmpDir holds WAVs for books whose source file has no stored hash (no caching).
 	tmpDir, err := os.MkdirTemp("", "ao-transcribe-*")
 	if err != nil {
-		log.Warn("transcribe: create temp dir failed", "err", err)
+		log.Warn("transcribe: create temp dir failed, page deferred (no status written)", "books", len(books), "err", err)
+		accum.recordDeferred(len(books))
 		return 0
 	}
 	defer os.RemoveAll(tmpDir)
@@ -720,6 +780,7 @@ func (p *Plugin) processTranscribePage(
 		// false per-book whisper_error verdicts.
 		log.Warn("transcribe: endpoints unreachable, page deferred (no status written)",
 			"jobs", len(batchJobs), "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err)
+		accum.recordDeferred(len(batchJobs))
 		return 0
 	case err != nil:
 		// Whole-batch failure: every book that had a WAV is a whisper_error.
