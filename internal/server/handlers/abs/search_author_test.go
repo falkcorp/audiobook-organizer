@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/search_author_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c1f0d2e-7b3a-4c5d-9e8f-2a1b3c4d5e6f
 // last-edited: 2026-09-05
 
@@ -260,9 +260,34 @@ func TestSearch_EmptyDuplicateSeriesIsNotAHit(t *testing.T) {
 	}
 }
 
-// When the count source fails the filter cannot run: the empty rows are served
-// (a degraded document, not cached) rather than every series vanishing.
-func TestSearch_CountsFailureServesUnfilteredSeriesUncached(t *testing.T) {
+// The filter runs on what the TILE shows, not on the store's count. A series
+// whose only book is unorganized has a store count of 1 and an empty tile;
+// it is not a result.
+func TestSearch_SeriesWithOnlyInvisibleBooksIsNotAHit(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	seed.lib.series[30] = &database.Series{ID: 30, Name: "Odyssey Shadow"}
+	seed.lib.books["ghost"] = &database.Book{
+		ID: "ghost", Title: "Ghost Volume", SeriesID: new(30), SeriesSequence: new(1),
+		LibraryState: new("unorganized"), IsPrimaryVersion: new(true),
+	}
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	login := h.login(t, "oracle", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, login), "accessToken")
+
+	hits := search(t, h, tok, "odyssey")["series"].([]any)
+	if len(hits) != 1 || hits[0].(map[string]any)["id"] != "10" {
+		ids := []any{}
+		for _, x := range hits {
+			ids = append(ids, x.(map[string]any)["id"])
+		}
+		t.Fatalf("search returned series %v, want only id 10 (30's one book is unorganized)", ids)
+	}
+}
+
+// When the count source fails the document is degraded (served, not cached);
+// the empty-row filter still runs because it reads the groupings, not counts.
+func TestSearch_CountsFailureIsDegradedNotCached(t *testing.T) {
 	seed := absSeedTwoSeries(t)
 	seed.lib.series[30] = &database.Series{ID: 30, Name: "Odyssey Cycle"}
 	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
@@ -271,11 +296,12 @@ func TestSearch_CountsFailureServesUnfilteredSeriesUncached(t *testing.T) {
 	tok := str(t, userObj(t, login), "accessToken")
 
 	seed.lib.setSeriesCountsErr(errors.New("counts index unavailable"))
-	if n := len(search(t, h, tok, "odyssey")["series"].([]any)); n != 2 {
-		t.Fatalf("degraded search returned %d series, want both (unfiltered)", n)
-	}
-	seed.lib.setSeriesCountsErr(nil)
+	before := seed.lib.searchCalls()
 	if n := len(search(t, h, tok, "odyssey")["series"].([]any)); n != 1 {
-		t.Fatalf("after recovery search returned %d series, want 1 — the degraded document was cached", n)
+		t.Fatalf("degraded search returned %d series, want 1 (filter still runs on groupings)", n)
+	}
+	search(t, h, tok, "odyssey")
+	if got := seed.lib.searchCalls() - before; got != 2 {
+		t.Fatalf("degraded document was cached: %d builds for 2 requests, want 2", got)
 	}
 }

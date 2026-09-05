@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-05
 
@@ -2074,23 +2074,45 @@ func stripArticle(lower string) string {
 	return lower
 }
 
+// matchSeriesNames returns every series whose name contains the lowercased
+// query, in input order — no filtering, no ranking, no cap. Cheap (a string
+// scan over the series list), so the caller can find out whether anything
+// matched before paying for the book groupings.
+func matchSeriesNames(all []database.Series, lower string) []database.Series {
+	query := stripArticle(lower)
+	var out []database.Series
+	for _, s := range all {
+		name := strings.ToLower(s.Name)
+		if strings.Contains(name, lower) || strings.Contains(name, query) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // rankSeriesMatches returns up to limit series whose name contains the
 // lowercased query, best matches first.
 //
-// Series with no books are left out when counts is known (non-nil). A series
-// row nobody references renders as an empty tile — on 2026-09-05 "primal
-// hunter" returned 25 series of which 16 had zero books, all duplicates of
-// the one real row, and the phone showed a wall of black tiles above it. A
-// nil counts means the count source failed; the caller serves the unfiltered
+// visible is the number of books the series TILE will show — the size of the
+// grouping seriesRows draws from — not the store's book count. The two differ:
+// the store counts every primary, untrashed book, while the tile shows only
+// organized, unquarantined, sync-addressable ones, so a series can have a
+// store count of 3 and a tile of nothing. Filtering on the store count would
+// keep exactly the black tiles this exists to remove. Series with no visible
+// books are left out when visible is known (non-nil). On 2026-09-05 "primal
+// hunter" returned 25 series of which 16 had no books, all duplicates of the
+// one real row, and the phone showed a wall of black tiles above it. A nil
+// visible means the grouping source failed; the caller serves the unfiltered
 // list as a degraded document and does not cache it.
 //
 // Tiers: an exact name (article-insensitive: "The Primal Hunter" is exact for
 // "primal hunter"), then names that start with the query, then the rest. Inside
-// a tier, more books first, then the input (name) order. Ranked BEFORE the cap:
-// GetAllSeries is name-sorted, so cutting the first 25 substring matches of a
-// common word could drop the series the user typed behind twenty-four that
-// merely contain it.
-func rankSeriesMatches(all []database.Series, lower string, counts map[int]int, limit int) []database.Series {
+// a tier, more visible books first, then the input (name) order, then the id
+// so equal-name duplicates order the same on every backend. Ranked BEFORE the
+// cap: GetAllSeries is name-sorted, so cutting the first 25 substring matches
+// of a common word could drop the series the user typed behind twenty-four
+// that merely contain it.
+func rankSeriesMatches(all []database.Series, lower string, visible map[int]int, limit int) []database.Series {
 	query := stripArticle(lower)
 	type ranked struct {
 		s    database.Series
@@ -2099,7 +2121,7 @@ func rankSeriesMatches(all []database.Series, lower string, counts map[int]int, 
 	}
 	var out []ranked
 	for i, s := range all {
-		if counts != nil && counts[s.ID] == 0 {
+		if visible != nil && visible[s.ID] == 0 {
 			continue
 		}
 		name := strings.ToLower(s.Name)
@@ -2121,10 +2143,13 @@ func rankSeriesMatches(all []database.Series, lower string, counts map[int]int, 
 		if out[i].tier != out[j].tier {
 			return out[i].tier < out[j].tier
 		}
-		if counts != nil && counts[out[i].s.ID] != counts[out[j].s.ID] {
-			return counts[out[i].s.ID] > counts[out[j].s.ID]
+		if visible != nil && visible[out[i].s.ID] != visible[out[j].s.ID] {
+			return visible[out[i].s.ID] > visible[out[j].s.ID]
 		}
-		return out[i].pos < out[j].pos
+		if out[i].pos != out[j].pos {
+			return out[i].pos < out[j].pos
+		}
+		return out[i].s.ID < out[j].s.ID
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
@@ -2309,29 +2334,37 @@ func (h *Handler) searchSeriesHits(ctx context.Context, lower string) ([]any, bo
 		slog.Warn("abs: series unavailable for search, serving none", "err", err)
 		return out, false
 	}
-	complete := true
-	// Counts come first: they decide which series are shown at all (a series
-	// with no books is not a result) and how ties rank. Without them the list
-	// is served unfiltered and NOT cached.
-	counts, err := h.library.GetAllSeriesBookCounts()
-	if err != nil {
-		slog.Warn("abs: series book counts unavailable for search, serving unfiltered series", "err", err)
-		counts = nil
-		complete = false
+	// Name match first, so a query that matches nothing pays for nothing: the
+	// groupings and counts below are library-wide walks on a cold memdb.
+	candidates := matchSeriesNames(all, lower)
+	if len(candidates) == 0 {
+		return out, true
 	}
-	matched := rankSeriesMatches(all, lower, counts, searchResultLimit)
+	complete := true
+	// The groupings decide which series are shown at all — a series whose tile
+	// would be empty is not a result — and how ties rank. Without them the
+	// list is served unfiltered, without books, and NOT cached.
+	var visible map[int]int
+	bySeries, err := h.seriesBooksCached()
+	if err != nil {
+		slog.Warn("abs: series books unavailable for search, serving unfiltered series without books", "err", err)
+		bySeries = map[int]seriesBooksBuilt{}
+		complete = false
+	} else {
+		visible = make(map[int]int, len(candidates))
+		for _, s := range candidates {
+			visible[s.ID] = len(bySeries[s.ID].bookIDs)
+		}
+	}
+	matched := rankSeriesMatches(candidates, lower, visible, searchResultLimit)
 	if len(matched) == 0 {
 		return out, complete
 	}
-	bySeries, err := h.seriesBooksCached()
+	counts, err := h.library.GetAllSeriesBookCounts()
 	if err != nil {
-		// Served without books — the black tile — but NOT cached as such.
-		slog.Warn("abs: series books unavailable for search, serving series without books", "err", err)
-		bySeries = map[int]seriesBooksBuilt{}
-		complete = false
-	}
-	if counts == nil {
+		slog.Warn("abs: series book counts unavailable for search", "err", err)
 		counts = map[int]int{}
+		complete = false
 	}
 	for _, row := range h.seriesRows(ctx, matched, bySeries, counts) {
 		hit, ok := row.(gin.H)
