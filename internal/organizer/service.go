@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-05
 
@@ -869,6 +869,7 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 	// CreateOrganizedVersion).
 	if bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID); bfErr == nil {
 		var rescanNeeded bool
+		var matchedAny bool
 		for _, bf := range bookFiles {
 			var newFilePath string
 			switch {
@@ -884,12 +885,26 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 			default:
 				continue
 			}
+			matchedAny = true
 			bf.FilePath = newFilePath
 			bf.ITunesPath = orgSvc.ComputeITunesPath(newFilePath)
 			if err := orgSvc.db.UpdateBookFile(bf.ID, &bf); err != nil {
 				log.Warn("ReOrganizeInPlace: failed to update book_file %s path for book %s: %s", bf.ID, book.ID, err.Error())
 				rescanNeeded = true
 			}
+		}
+		// A single-file book whose row was ALREADY stale before this run (its
+		// FilePath had drifted from book.FilePath, a known divergence class) has
+		// no row matching oldPath, so the loop above rewrites nothing and the
+		// file just moved out from under a row that still points elsewhere. That
+		// is the very 404 this function exists to prevent, so flag it for the
+		// next scan to self-heal rather than returning a silent success. (A
+		// directory book with no matching row is left alone: its tracks may live
+		// outside oldPath by design, and MarkNeedsRescan on every such book would
+		// be noise.)
+		if len(bookFiles) > 0 && !matchedAny && !info.IsDir() {
+			log.Warn("ReOrganizeInPlace: single-file book %s moved but no book_file row matched the old path; marking for rescan", book.ID)
+			rescanNeeded = true
 		}
 		if rescanNeeded {
 			_ = orgSvc.db.MarkNeedsRescan(book.ID)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
 // last-edited: 2026-09-05
 
@@ -414,7 +414,64 @@ func TestRepoint_BookPathFallback_RefusesSizeMismatch(t *testing.T) {
 	plan, err := planMissingFileRepoint(context.Background(), store,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
+	// The fallback checks size inline and never offers a mismatched candidate, so
+	// the row is refused as no-shape (no track-slash match either) rather than
+	// reaching the phase-2 size gate. Either way it must not be repointed.
 	require.Equal(t, 0, plan.Repointable)
-	require.Equal(t, 1, plan.SizeMismatch)
+	require.Equal(t, 1, plan.NoShape)
 	require.Len(t, store.updates, 0)
+}
+
+// The book-path fallback must be refused when a positive size cannot be verified.
+// A zero recorded size cannot prove the file at the book's path is this row's file,
+// so — unlike the track-slash path, whose candidate is derived from the row's own
+// name — the fallback refuses rather than risk repointing at the wrong bytes. This
+// holds even though requireSizeMatch defaults to true (the default gate skips a
+// zero size; the fallback's own gate does not).
+func TestRepoint_BookPathFallback_RefusesZeroSize(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "New", "book.m4b")
+	writeFile(t, real, 4096)
+	broken := filepath.Join(dir, "Old", "book.m4b")
+
+	core := database.BookFileCore{ID: "f1", BookID: "b1", FilePath: broken, FileSize: 0} // no recorded size
+	store := &repointFakeStore{
+		cores: []database.BookFileCore{core},
+		books: []database.BookCore{{ID: "b1", FilePath: real}},
+		full: map[string][]database.BookFile{"b1": {{
+			ID: "f1", BookID: "b1", FilePath: broken, FileSize: 0,
+		}}},
+	}
+
+	plan, err := planMissingFileRepoint(context.Background(), store,
+		missingFileRepointParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 0, plan.Repointable, "a zero-size row must not be repointed via the book path")
+	require.Empty(t, store.updates)
+}
+
+// The book-path fallback is still subject to the already-claimed guard: if a
+// healthy sibling row of the same book already points at the book's path, the
+// broken row must not be repointed onto it (two rows, one file).
+func TestRepoint_BookPathFallback_RefusesAlreadyClaimedTarget(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "New", "book.m4b")
+	writeFile(t, real, 4096)
+	broken := filepath.Join(dir, "Old", "book.m4b")
+
+	store := &repointFakeStore{
+		cores: []database.BookFileCore{
+			{ID: "broken", BookID: "b1", FilePath: broken, FileSize: 4096},
+			{ID: "healthy", BookID: "b1", FilePath: real, FileSize: 4096}, // already at the book path
+		},
+		books: []database.BookCore{{ID: "b1", FilePath: real}},
+		full:  map[string][]database.BookFile{"b1": {{ID: "broken", BookID: "b1"}}},
+	}
+
+	plan, err := planMissingFileRepoint(context.Background(), store,
+		missingFileRepointParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.TargetClaimed)
+	require.Equal(t, 0, plan.Repointable)
+	require.Empty(t, store.updates)
 }

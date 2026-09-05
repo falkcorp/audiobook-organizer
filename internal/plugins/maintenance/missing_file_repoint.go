@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-09-05
 
@@ -347,13 +347,24 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 		// (as of 2026-09-05) repoints the row — but rows broken BEFORE that fix
 		// still point at the pre-move location while the bytes sit at the book's
 		// current FilePath. The track-slash shape never matches these, so they
-		// were all landing in "no-shape" with no route back. bookPathByID is a
-		// single-file book's audio file (a directory book's FilePath stats as a
-		// dir and is rejected by the !IsDir guard), so this can never point a
-		// row at a directory or at another book's file.
+		// were all landing in "no-shape" with no route back.
+		//
+		// This derivation points the row at a DIFFERENT file (the book's path),
+		// not one derived from the row's own name, so it carries a stronger proof
+		// of identity than the track-slash path: an UNCONDITIONAL size match. The
+		// later size gate can be waived by requireSizeMatch=false or skipped for a
+		// zero FileSize, and the "100% of rows carry a size" measurement was taken
+		// on the track-slash population only — so relying on it here could repoint
+		// a row at the wrong bytes (e.g. a multi-file book whose FilePath happens
+		// to name one track). We refuse unless the row has a positive recorded
+		// size that equals the book file's size on disk. The !IsDir guard also
+		// keeps a directory-book path (a directory) from ever being a target; the
+		// collision and already-claimed guards below are the backstop against two
+		// rows sharing one file.
 		if len(found) == 0 {
 			if bp := bookPathByID[it.file.BookID]; bp != "" && bp != it.file.FilePath {
-				if st, serr := os.Stat(bp); serr == nil && !st.IsDir() {
+				if st, serr := os.Stat(bp); serr == nil && !st.IsDir() &&
+					it.file.FileSize > 0 && st.Size() == it.file.FileSize {
 					found = append(found, bp)
 					foundSize = st.Size()
 				}
