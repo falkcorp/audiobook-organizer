@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-09-03
+// last-edited: 2026-09-04
 
 package maintenance
 
@@ -37,14 +37,21 @@ import (
 //   - STRIPPED and the residue names an EXISTING author -> merged into it.
 //     This is the 603-row "001-147 Kevin J Anderson" cluster, where a real
 //     person is wrapped in numbering.
-//   - STRIPPED but no existing author has that name -> LEFT ALONE.
+//   - STRIPPED but no existing author has that name -> LEFT ALONE by default,
+//     DELETED when delete_unmatched=true.
 //
-// That last case is deliberate and must not be "finished" by renaming the row.
-// "001_Head of the Dragon" strips to "Head of the Dragon", which is a book
-// title, not a person. Renaming would launder an obviously-corrupt row into a
-// plausible one and take it out of reach of every future audit — the same
-// reasoning author_conjunction_repair.go gives for leaving "and Thanks for All
-// the Fish" alone.
+// That last case must never be "finished" by renaming the row. "001_Head of
+// the Dragon" strips to "Head of the Dragon", which is a book title, not a
+// person. Renaming would launder an obviously-corrupt row into a plausible one
+// and take it out of reach of every future audit — the same reasoning
+// author_conjunction_repair.go gives for leaving "and Thanks for All the Fish"
+// alone. Deleting it is a different act: the row stays obviously wrong right up
+// until it is gone, and the books it credited lose a title masquerading as a
+// person. It is opt-in rather than the default because the residue CAN name a
+// real person the library has no other row for ("kitchener_George Orwell"), so
+// the operator reviews the dry run's list before turning it on. Measured on the
+// live library 2026-09-04: 812 such rows, 187 distinct residues, every one a
+// chapter or book title, a track name, or bitrate shrapnel.
 
 // authorStripMergeSampleLimit bounds how many per-row decisions are surfaced in
 // the report, so a reviewer can eyeball the plan without the report becoming the
@@ -67,6 +74,14 @@ type authorStripMergeParams struct {
 	// first apply, where consolidating the unambiguous cases is lower risk than
 	// deleting.
 	DeleteJunk *bool `json:"delete_junk,omitempty"`
+
+	// DeleteUnmatched, when true (default FALSE), also deletes the rows that
+	// carry numbering but whose residue names no existing author — the
+	// "stripped, no target" bucket the report otherwise only counts. Off by
+	// default because that residue is usually a chapter or book title but can
+	// be a person; run apply=false with this set and read the list first.
+	// Renaming those rows stays off the table (see the file comment).
+	DeleteUnmatched bool `json:"delete_unmatched"`
 }
 
 // deleteJunk resolves the tri-state pointer to its default of TRUE.
@@ -103,15 +118,21 @@ type authorStripMergeReport struct {
 	Merged       int
 	Deleted      int
 	BooksTouched int
-	Failed       int
-	Sample       []string
+	// BooksLeftAuthorless counts books whose ONLY credit is a row this run
+	// deletes. Computed in the dry run too, through the same code the apply
+	// uses, so the report says what the apply will do to books and not just
+	// to author rows.
+	BooksLeftAuthorless int
+	Failed              int
+	Sample              []string
 }
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d merged=%d deleted=%d books-touched=%d failed=%d",
+		"authors=%d junk=%d mergeable=%d ambiguous=%d target-is-junk=%d stripped-no-target=%d out-of-scope=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d",
 		r.TotalAuthors, r.Junk, r.Mergeable, r.Ambiguous, r.TargetIsJunk,
-		r.StrippedNoTarget, r.OutOfScope, r.Merged, r.Deleted, r.BooksTouched, r.Failed)
+		r.StrippedNoTarget, r.OutOfScope, r.Merged, r.Deleted, r.BooksTouched,
+		r.BooksLeftAuthorless, r.Failed)
 }
 
 func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
@@ -124,7 +145,9 @@ func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 			"'Track 01', '000m_00s__056m_16s_43h'). Strips the numbering; when the residue names " +
 			"an existing author the row is MERGED into it ('001-147 Kevin J Anderson'), and rows " +
 			"that carry no usable name are DELETED. Rows whose residue matches nothing are left " +
-			"alone rather than renamed. Measured 2,793 of 19,972 authors on this library. " +
+			"alone rather than renamed; pass delete_unmatched=true to delete those too (review " +
+			"the dry run first: 812 on this library, chapter and book titles). Measured 2,793 " +
+			"of 19,972 authors on this library. " +
 			"REPORT-ONLY BY DEFAULT: pass apply=true to write. Idempotent.",
 		// ResumeDrop, not Requeue: this deletes rows, and a half-finished run
 		// that silently resumes after a restart is harder to reason about than
@@ -231,6 +254,9 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		switch {
 		case len(targets) == 0:
 			report.StrippedNoTarget++
+			if params.DeleteUnmatched {
+				plans = append(plans, authorStripPlan{from: a, reason: "unmatched"})
+			}
 		case len(targets) > 1:
 			report.Ambiguous++
 		default:
@@ -267,14 +293,15 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 				report.Sample = append(report.Sample,
 					fmt.Sprintf("merge %q -> %q", pl.from.Name, pl.into.Name))
 			} else {
-				report.Sample = append(report.Sample, fmt.Sprintf("delete %q", pl.from.Name))
+				report.Sample = append(report.Sample,
+					fmt.Sprintf("delete %q (%s)", pl.from.Name, pl.reason))
 			}
-		}
-		if !params.Apply {
-			continue
 		}
 
 		if pl.into != nil {
+			if !params.Apply {
+				continue
+			}
 			// mergeAuthorInto rewrites the book_authors junction, moves the
 			// denormalized book.AuthorID when it named the row being removed,
 			// and only then deletes. Reused rather than reimplemented: the
@@ -313,14 +340,22 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			continue
 		}
 
-		n, err := p.unlinkAndDeleteAuthor(ctx, pl.from, log)
-		report.BooksTouched += n
+		// Deletes go through the same function in both modes: with dryRun
+		// set it reads every credit and reports what it WOULD do, so the
+		// authorless count in a report-only run is the apply's own number
+		// rather than a second estimate that could drift from it.
+		n, authorless, err := p.unlinkAndDeleteAuthor(ctx, pl.from, !params.Apply, log)
 		if err != nil {
 			report.Failed++
 			log.Warn("author-strip-merge: delete failed",
-				"author_id", pl.from.ID, "name", pl.from.Name, "err", err)
+				"author_id", pl.from.ID, "name", pl.from.Name, "reason", pl.reason, "err", err)
 			continue
 		}
+		report.BooksLeftAuthorless += authorless
+		if !params.Apply {
+			continue
+		}
+		report.BooksTouched += n
 		report.Deleted++
 	}
 
@@ -336,7 +371,9 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 }
 
 // unlinkAndDeleteAuthor removes a junk author from every book that credits it
-// and then deletes the row, returning the number of books rewritten.
+// and then deletes the row, returning the number of books rewritten and the
+// number of those books left with no credit at all. With dryRun set it walks
+// the same credits and returns the same counts without writing anything.
 //
 // This is mergeAuthorInto's shape without a destination, and it exists because
 // store.DeleteAuthor alone is NOT safe for an author that has books: it sweeps
@@ -349,25 +386,24 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 // credit being removed was never a person, and a book with no author is honest
 // where one named "Track 01" is a repair job. A future scan recreates it
 // correctly, now that the creation path is gated.
-func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, log *slog.Logger) (int, error) {
+func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, dryRun bool, log *slog.Logger) (unlinked, authorless int, err error) {
 	store := p.deps.OpsStore()
 
 	books, err := store.GetBooksByAuthorIDWithRoleCore(from.ID)
 	if err != nil {
-		return 0, fmt.Errorf("get books for author %d: %w", from.ID, err)
+		return 0, 0, fmt.Errorf("get books for author %d: %w", from.ID, err)
 	}
 
-	unlinked := 0
 	for _, book := range books {
 		if ctx.Err() != nil {
-			return unlinked, ctx.Err()
+			return unlinked, authorless, ctx.Err()
 		}
 		bookAuthors, err := store.GetBookAuthors(book.ID)
 		if err != nil {
 			// Do NOT fall through to DeleteAuthor after this: dropping the row
 			// while a book still credits it is precisely the orphaning this
 			// function exists to avoid.
-			return unlinked, fmt.Errorf("get book authors for %s: %w", book.ID, err)
+			return unlinked, authorless, fmt.Errorf("get book authors for %s: %w", book.ID, err)
 		}
 
 		var remaining []database.BookAuthor
@@ -378,8 +414,15 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			ba.Position = len(remaining)
 			remaining = append(remaining, ba)
 		}
+		if len(remaining) == 0 {
+			authorless++
+		}
+		if dryRun {
+			unlinked++
+			continue
+		}
 		if err := store.SetBookAuthors(book.ID, remaining); err != nil {
-			return unlinked, fmt.Errorf("set book authors for %s: %w", book.ID, err)
+			return unlinked, authorless, fmt.Errorf("set book authors for %s: %w", book.ID, err)
 		}
 
 		// Move the denormalized primary off the row being deleted: promote the
@@ -410,8 +453,11 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 		unlinked++
 	}
 
-	if err := store.DeleteAuthor(from.ID); err != nil {
-		return unlinked, fmt.Errorf("delete author %d: %w", from.ID, err)
+	if dryRun {
+		return unlinked, authorless, nil
 	}
-	return unlinked, nil
+	if err := store.DeleteAuthor(from.ID); err != nil {
+		return unlinked, authorless, fmt.Errorf("delete author %d: %w", from.ID, err)
+	}
+	return unlinked, authorless, nil
 }
