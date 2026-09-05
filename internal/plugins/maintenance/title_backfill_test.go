@@ -42,9 +42,9 @@ var _ sdk.Reporter = (*fakeReporter)(nil)
 type fakeDeps struct{ store database.Store }
 
 func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
-func (d fakeDeps) OpsStore() OpsStore                        { return d.store }
-func (d fakeDeps) ReconcileStore() ReconcileStore            { return d.store }
-func (d fakeDeps) PlaylistStore() database.UserPlaylistStore { return d.store }
+func (d fakeDeps) OpsStore() OpsStore                                         { return d.store }
+func (d fakeDeps) ReconcileStore() ReconcileStore                             { return d.store }
+func (d fakeDeps) PlaylistStore() database.UserPlaylistStore                  { return d.store }
 
 // FileProvenanceStore mirrors Server's accessor: the provenance methods are not
 // part of database.Store, so this asserts and yields nil for a store that does

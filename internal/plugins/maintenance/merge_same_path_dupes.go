@@ -92,7 +92,7 @@ type mergeSamePathPlan struct {
 	Mergeable       int  `json:"mergeable"`         // groups that pass the hash gate
 	HashMismatch    int  `json:"hash_mismatch"`
 	UnverifiedHash  int  `json:"unverified_hash"`
-	Merged          int  `json:"merged"`      // groups actually merged (apply)
+	Merged          int  `json:"merged"`         // groups actually merged (apply)
 	RecordsMerged   int  `json:"records_merged"` // loser records soft-deleted (apply)
 	MergeFailed     int  `json:"merge_failed"`
 	CappedAt        int  `json:"capped_at,omitempty"`
@@ -395,7 +395,7 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 	}, registry.RunItemsOptions{
 		Concurrency: missingFileStatConcurrency,
 		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string { return fmt.Sprintf("Classified %d/%d groups", i+1, t) },
+		Label:       func(i, t int) string { return fmt.Sprintf("Classified %d/%d groups", i+1, t) },
 	})
 	if err != nil {
 		return mergeSamePathPlan{}, fmt.Errorf("classify: %w", err)

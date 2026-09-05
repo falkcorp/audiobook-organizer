@@ -55,7 +55,7 @@ func diff(ids []string, primary string) []string {
 }
 
 func strptr(s string) *string { return &s }
-func boolptr(b bool) *bool     { return &b }
+func boolptr(b bool) *bool    { return &b }
 
 // Two single-file records on the same file with matching hashes merge, keeping the
 // metadata-bearing record as primary.
@@ -63,8 +63,8 @@ func TestMergeSamePath_MergesHashConfirmedDuplicate(t *testing.T) {
 	path := "/lib/Author/Book.m4b"
 	store := &mergeFakeStore{
 		books: []database.BookCore{
-			{ID: "shell", FilePath: path},                                            // bare rescanned shell
-			{ID: "meta", FilePath: path, MetadataReviewStatus: strptr("matched")},    // the applied record
+			{ID: "shell", FilePath: path},                                         // bare rescanned shell
+			{ID: "meta", FilePath: path, MetadataReviewStatus: strptr("matched")}, // the applied record
 		},
 		rows: map[string][]database.BookFile{
 			"shell": {{ID: "r1", BookID: "shell", FilePath: path, FileHash: "HASH-A"}},
