@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
 // last-edited: 2026-09-05
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// errFakeUpdate is the injected write failure for the update-error path test.
+var errFakeUpdate = errors.New("fake update failure")
+
 // recoverFakeStore implements recoverStore. It records every UpdateBookFile so a test
 // can assert BOTH what was written and that nothing else was. It reuses the package's
 // writeFile helper for the on-disk fixtures (os.Stat / filepath.WalkDir are the whole
@@ -26,6 +30,9 @@ type recoverFakeStore struct {
 	cores   []database.BookFileCore
 	full    map[string][]database.BookFile
 	updates []database.BookFile
+	// updateErr, when set, is returned by UpdateBookFile instead of writing — to exercise
+	// the write phase's update-error branch (UpdateErrs++, row not counted as repointed).
+	updateErr error
 }
 
 func (f *recoverFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
@@ -37,6 +44,9 @@ func (f *recoverFakeStore) GetBookFiles(bookID string) ([]database.BookFile, err
 func (f *recoverFakeStore) UpdateBookFile(id string, file *database.BookFile) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.updateErr != nil {
+		return f.updateErr // do not record — a failed write must not read as a success
+	}
 	f.updates = append(f.updates, *file)
 	return nil
 }
@@ -312,6 +322,69 @@ func TestRecover_ReportCoversEveryBucket(t *testing.T) {
 	}
 	require.Equal(t, 1, seen["repointable"])
 	require.Equal(t, 1, seen["nowhere"])
+}
+
+// A RootDir that does not exist (unmounted NAS, wrong --dir) must be a HARD ERROR, never
+// a silent empty inventory that would report every missing row as "nowhere" — a
+// confident-but-wrong census we might then act on. This is the blind-instrument guard.
+func TestRecover_NonexistentRootIsFatal(t *testing.T) {
+	missingRoot := filepath.Join(t.TempDir(), "not-mounted") // never created
+	store := &recoverFakeStore{
+		cores: []database.BookFileCore{{ID: "f1", BookID: "b1", FilePath: filepath.Join(missingRoot, "gone.mp3"), FileSize: 100}},
+		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1"}}},
+	}
+
+	plan, err := planRecoverMissingFiles(context.Background(), store, missingRoot,
+		recoverMissingParams{Apply: true}, &fakeReporter{})
+	require.Error(t, err, "an unreadable RootDir must fail, not proceed with an empty inventory")
+	require.Equal(t, 0, plan.Repointable, "no plan should be produced from a dead root")
+	require.Empty(t, store.updates)
+}
+
+// Write-phase interlock, branch 1 of 2: the row vanishes between plan and write (GetBookFiles
+// no longer returns the row's ID) ⇒ full==nil ⇒ counted as an update error, not written.
+// (The re-stat size-changed branch is exercised structurally by the os.Stat guard but is not
+// reachable in a single-call unit test — plan and write see the same on-disk file.)
+func TestRecover_RowVanishedBeforeWriteCountsError(t *testing.T) {
+	root := t.TempDir()
+	gone := filepath.Join(root, "gone.mp3")
+	writeFile(t, filepath.Join(root, "real.mp3"), 4242)
+	store := &recoverFakeStore{
+		cores: []database.BookFileCore{{ID: "f1", BookID: "b1", FilePath: gone, FileSize: 4242}},
+		// GetBookFiles returns a sibling with a DIFFERENT id → the target row is not found.
+		full: map[string][]database.BookFile{"b1": {{ID: "other", BookID: "b1"}}},
+	}
+
+	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+		recoverMissingParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, plan.Repointable, "it planned the repoint")
+	require.Equal(t, 0, plan.Repointed, "but the row was gone at write time")
+	require.Equal(t, 1, plan.UpdateErrs)
+	require.Empty(t, store.updates)
+}
+
+// Write-phase interlock, branch 2 of 2: UpdateBookFile itself fails ⇒ counted as an update
+// error, not a repoint. The store returns the error and records nothing.
+func TestRecover_UpdateFailureCountsError(t *testing.T) {
+	root := t.TempDir()
+	gone := filepath.Join(root, "gone.mp3")
+	writeFile(t, filepath.Join(root, "real.mp3"), 4242)
+	store := &recoverFakeStore{
+		cores:     []database.BookFileCore{{ID: "f1", BookID: "b1", FilePath: gone, FileSize: 4242}},
+		full:      map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1"}}},
+		updateErr: errFakeUpdate,
+	}
+
+	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+		recoverMissingParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err, "one row's write failure must not fail the whole op")
+
+	require.Equal(t, 1, plan.Repointable)
+	require.Equal(t, 0, plan.Repointed)
+	require.Equal(t, 1, plan.UpdateErrs)
+	require.Empty(t, store.updates, "a failed write records nothing")
 }
 
 // The TSV must round-trip: one header + one line per decision, tabs intact.
