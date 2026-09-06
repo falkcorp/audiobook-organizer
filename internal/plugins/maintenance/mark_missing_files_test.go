@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
 // last-edited: 2026-09-05
 
@@ -221,8 +221,8 @@ func TestMarkMissing_BooksBrokenCountsDistinctBooks(t *testing.T) {
 
 	store := &markFakeStore{
 		cores: []database.BookFileCore{
-			{ID: "a1", BookID: "b1", FilePath: filepath.Join(dir, "g1.mp3"), Missing: false}, // gone
-			{ID: "a2", BookID: "b1", FilePath: filepath.Join(dir, "g2.mp3"), Missing: false}, // gone (same book)
+			{ID: "a1", BookID: "b1", FilePath: filepath.Join(dir, "g1.mp3"), Missing: false},  // gone
+			{ID: "a2", BookID: "b1", FilePath: filepath.Join(dir, "g2.mp3"), Missing: false},  // gone (same book)
 			{ID: "b1f", BookID: "b2", FilePath: filepath.Join(dir, "g3.mp3"), Missing: false}, // gone (other book)
 			{ID: "ok", BookID: "b3", FilePath: present, Missing: false},                       // present
 		},
@@ -255,7 +255,7 @@ func TestMarkMissing_BooksBrokenExcludesNonPrimary(t *testing.T) {
 			{ID: "n", BookID: "b2", FilePath: filepath.Join(dir, "g2.mp3"), Missing: false}, // gone, NON-primary book
 		},
 		books: []database.BookCore{
-			{ID: "b1"},                                // nil IsPrimaryVersion → primary
+			{ID: "b1"}, // nil IsPrimaryVersion → primary
 			{ID: "b2", IsPrimaryVersion: &nonPrimary}, // explicitly non-primary
 		},
 		full: map[string][]database.BookFile{
@@ -309,7 +309,7 @@ func TestMarkMissing_ReportRecordsFlipsAndUnreadableOnly(t *testing.T) {
 
 	store := &markFakeStore{
 		cores: []database.BookFileCore{
-			{ID: "gone", BookID: "b1", FilePath: filepath.Join(dir, "gone.mp3"), Missing: false},  // → mark-missing
+			{ID: "gone", BookID: "b1", FilePath: filepath.Join(dir, "gone.mp3"), Missing: false},   // → mark-missing
 			{ID: "stale", BookID: "b2", FilePath: present, Missing: true},                          // → clear-stale
 			{ID: "ok", BookID: "b3", FilePath: present, Missing: false},                            // unchanged (not recorded)
 			{ID: "weird", BookID: "b4", FilePath: filepath.Join(notADir, "x.mp3"), Missing: false}, // unreadable
