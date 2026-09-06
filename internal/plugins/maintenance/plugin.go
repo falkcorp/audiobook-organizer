@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-05
 
@@ -63,6 +63,11 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.missingFileAuditDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),
+		// mark-missing-files is the WRITER for the book_file.Missing flag that the
+		// dashboard's BrokenFiles counter now reads. missing-file-audit measures the
+		// same disk truth but is read-only; this op persists it so the counter is
+		// honest without a full stat sweep on every stats refresh.
+		p.markMissingFilesDef(),
 		p.mergeSamePathDupesDef(),
 		p.metadataCacheReapDef(),
 		p.fileProvenanceCaptureDef(),
