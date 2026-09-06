@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.46.4 -->
+<!-- version: 10.46.5 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-06 -->
 
@@ -110,31 +110,21 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   `ServerDeps` (its first caller) and implemented on `*Server`. The old "don't run
   while a scan is active" precondition text in their doc comments is replaced.
 
-Remaining — Branch B, its own PR:
-
-- **Branch B op** — reflink an outside source file into the in-tree destination
-  (`fileops.ReflinkOrCopy`), gated on `HasResolvedAuthor` + an under-root check,
-  then repoint the `outside`-census `book_file` rows with the `missing_file_repoint`
-  claimed/collision guards. Because Branch B *creates* the destination path, it needs
-  a `maintenance → organizer` route: export `organizer.EnsureUnderRoot` and add a
-  single `BuildInTreeDestination(bookID, src) (dest, err)` on `ServerDeps` (one method
-  so the author + under-root gates can't be half-applied), implemented on `*Server`.
-- Re-apply the bidirectional size(+ext) uniqueness the census deliberately skips
-  (it reports the `outside` candidate as a *sample* only) and dedup **destinations** in
-  the **planning phase**: `RunItems` is a plain semaphore, **not** disjoint-by-row-id,
-  so two rows could otherwise target one path. The repoint write rehydrates the full
-  row and calls `UpdateBookFile` (a full-record replace; there is no field-only
-  `FilePath` updater).
-- Declare `CapLibraryRead` + `CapLibraryWrite` + `CapFilesRead` + `CapFilesWrite`;
-  acquire the stand-down for the apply run and renew it per write batch (reflink+walk
-  is slower than a DB-only repoint, so the 5-min lease *will* lapse without renewal).
-- ZFS block-cloning probe (read-only on prod, 2026-09-06): `bigdata` (the library
-  pool) and `rpool` are `active`; `bpool` disabled (boot); `nvmecache` enabled-not-yet.
-  Block cloning is **intra-pool**, so the "a clone is free" premise holds only when a
-  Branch B source (`SourceDirs`) and its in-tree destination (`RootDir`) are **both on
-  `bigdata`** — a cross-pool `FICLONE` falls back to a full byte copy (larger lease
-  budget). Confirm the source/dest pool topology before budgeting; don't assume every
-  `SourceDirs` entry is on `bigdata`.
+- [x] **Branch B — reflink outside sources (opt-in `reflinkOutside` mode on
+  `recover-missing-files`)**: for a missing row whose bytes exist only under a
+  `SourceDir`, clone (`fileops.ReflinkOrCopy`, CoW) the source back to the row's **own**
+  `FilePath` so the row resolves again. **Simpler than the plan above:** because the row
+  already points at its dest, the reflink target IS `FilePath` — so there is **no DB
+  write, no repoint, and no organizer seam** (the planned `organizer.EnsureUnderRoot` /
+  `BuildInTreeDestination(bookID, src)` route was dropped; a local `filepath.Rel`
+  under-root check replaces it, and no `maintenance → organizer` coupling was added).
+  Re-applies the bidirectional size(+ext) uniqueness the census only samples (source
+  dedup + dest dedup in the planning phase; `RunItems` is a plain semaphore, not
+  disjoint-by-row-id). Declares `CapFilesRead`/`CapFilesWrite`; acquires the stand-down
+  for the write phase and renews per item. `ReflinkOrCopy` refuses an existing dst, so a
+  concurrent restore is skipped, never clobbered. ZFS block cloning is intra-pool, so a
+  cross-pool `SourceDirs`→`RootDir` clone falls back to a byte copy — correctness is
+  identical, only the lease budget grows.
 
 ## Provider throttling — follow-ups
 
