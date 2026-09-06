@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/scan_standdown_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8e1a94-2d76-4f03-9b6e-1a4c7e0d258f
 // last-edited: 2026-09-06
 
@@ -163,7 +163,10 @@ func TestMarkMissing_Apply_HoldsScanStandDownAndRenews(t *testing.T) {
 	acq, rel, ren := c.counts()
 	require.Equal(t, 1, acq, "acquired exactly once for the apply")
 	require.Equal(t, 1, rel, "released exactly once (deferred)")
-	require.Equal(t, n, ren, "renewed once per write item (the per-item heartbeat)")
+	// The contract is "renewed at least once per written item so the lease never
+	// lapses" — not "exactly n". Asserting >= keeps a future extra renew site (a
+	// walk tick, say) from failing a correct change.
+	require.GreaterOrEqual(t, ren, n, "renewed at least once per write item (the per-item heartbeat)")
 	require.Equal(t, "mark-missing-files apply", c.lastReason)
 }
 
@@ -179,6 +182,13 @@ func TestMarkMissing_Apply_AbortsWhenLeaseLost(t *testing.T) {
 	require.Contains(t, err.Error(), "lease lapsed")
 	require.Equal(t, 0, plan.MarkedMissing)
 	require.Empty(t, store.updates, "no row is written once the lease is lost")
+
+	// The abort returns an error AND a plan whose per-row decisions are fully
+	// populated (the plan phase records every row before the write phase runs). runX
+	// writes the report from plan.all before it propagates this error, so the
+	// operator still gets the per-row artifact for the run that most needs it — this
+	// asserts the report would have rows to emit on that path.
+	require.Len(t, plan.all, n, "every row's decision is recorded even when the apply aborts")
 
 	acq, rel, _ := c.counts()
 	require.Equal(t, 1, acq)
