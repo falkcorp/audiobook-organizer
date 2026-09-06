@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.46.3 -->
+<!-- version: 10.46.4 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-05 -->
+<!-- last-edited: 2026-09-06 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,112 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **After the download-fix set (#3075/#3076/#3077) is deployed, run the two repair ops** to clean up books already broken by the stale `book_file` pointer. Order and both report-only first:
+  1. `maintenance.missing-file-repoint` — report-only, review, then apply. Repoints books whose file pointer was orphaned when an apply moved the file.
+  2. `maintenance.merge-same-path-dupes` — report-only, review, then apply. Collapses the phantom duplicate book pairs the stale pointers created (same exact file, requires matching stored hash).
+  - Deploy is the user's call (it resumes the weekly scan). Do NOT start a library scan to trigger this.
+
+- [ ] **Provider quota + "last resort" tier refactor (big — scan change + provider-model change).** Google Books enforces a hard **1,000 requests/day** quota per API key (project 157967346493) and is unforgiving about it — once exhausted, every lookup 429s for the rest of the day and the scan/backfill silently stalls on that provider. The 2026-09-05 throttle (#3066) only *slows* a provider after it reports a limit; it does not budget a finite daily quota or let us prefer cheaper providers first. We need a real provider-economics model:
+  - **Add quota fields to the provider config/model.** Per provider: a daily request budget (e.g. `daily_quota`), optional per-minute/rate cap, and a *persisted* running count with a day-boundary reset (in the provider's own timezone/UTC as the API defines it). The count must survive restarts — an in-memory counter resets on every deploy and the process restarts many times a day, so the budget would never actually bind (same failure class as the in-memory-ticker note in memory). Track "requests spent today" and "requests remaining" and expose them (the throttles API is the natural place).
+  - **Add a "last resort" provider flag/priority tier.** A provider marked last-resort is only queried when *every* non-last-resort provider has been tried and returned no usable match (not merely no cache hit). Today the chain does not truly fall back — the "no fallback past Google Books" symptom was traced to literal-title misses (#3074), but the ordering model is still flat. Introduce an explicit priority/tier ordering: normal providers first, last-resort only if all normal ones miss or are quota-exhausted.
+  - **Change how we scan so we stop burning the daily quota.** A full-library scan/backfill must budget provider calls against the remaining daily quota (stop/queue-for-tomorrow when a provider is spent rather than hammering 429s), dedupe identical lookups within a run, prefer cache, and spread expensive-provider calls across days if the backlog exceeds the daily budget. Consider a persistent "needs-metadata" queue drained at the daily budget rate instead of a single blocking pass.
+  - Context / prior art: `internal/metadata` provider chain + the throttle from #3066 (`GET/DELETE /api/v1/metadata/providers/throttles[/{id}]`); single-book lookups currently bypass the throttle. Related memory: google-books daily quota (1,000/day, no per-minute cap at 3 rps), and the "no fallback" literal-title-miss finding (#3074). Raising the Google quota is a Cloud Console request, not a `rate_limit` change.
+
+- [ ] **Series identity fragmented by (name, author-combo) instead of name — PRIORITY 1 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`docs/audits/` / scratchpad `library-health-audit-2026-09-05.md`) found **8,530 distinct series names with >1 series ID and 15,448 redundant series rows** — the largest raw-count data-quality problem in the library. Series appear to be keyed on the (name, author/narrator combination) rather than the name alone, so any installment credited to a different co-author/narrator combination mints a brand-new series entity for what a human calls one series. Worst cases: "Doctor Who" ~90 series IDs, "Night of the Hunter" 118 IDs (nearly all `book_count:2` — one row minted per book pair), "KGUniverse" ~70 IDs, "Doctor Who BF Monthly Range" ~50. Clean spot-check cases: "Discworld" 4 IDs (1 real @128 books + 3 near-empty), "The Dresden Files" 2 IDs (107 vs 2), "Eldest" 2 IDs (349 vs 0). Also: 51.8% of series have `book_count:0` and 35.3% have exactly 1 book → 87% of series entities hold 0 or 1 books; 91% of primary books belong to *some* series (suspiciously high, consistent with auto-create-per-book). Work: (1) find the series-create/resolve path and change the identity key from (name,author-combo) to a normalized name (with a deliberate co-author/narrator disambiguation rule only where genuinely distinct); (2) a plan-first, dry-run-first merge op to collapse the redundant rows and re-point book→series FKs; (3) prune the 0-book series. Note the `series[].book_count` field drifts low vs a direct census tally (cached counter) — measure from the book census, not the field. Plan-first + dry-run before any prod write; NEVER during a scan.
+
+- [ ] **Author table is ~half junk — PRIORITY 2 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`library-health-audit-2026-09-05.md`) over all 17,498 author rows: (1) **7,890 (45.1%) have `book_count == 0`** — dead weight; (2) **1,204 (6.9%) are book/chapter titles mis-filed as author names** (e.g. `"[PZG] Arifureta, Vol. 01 (Audiobook) [JNC Audio]"`, heuristic: len>45 + digit/`:`/`-`); (3) **221 are narrator credits mis-filed as authors** (`read by|narrated by|narrator`, e.g. `"- Bag of Bones (read by Stephen King)"`); (4) **"Unknown Author" is ≥12 distinct rows** (`"- Unknown Author"`, `"Unknown Author"`, `"Author Unknown Note 01"`, plus `"Unknown Title"`/`"Unknown Album"`/`"Unknown Artist"` used as the same dumping ground), ~260+ book rows attributed; (5) **24 author-name clusters (180 rows) match the known `CreateAuthor` check-then-create race** — "Mythos" 41 IDs (40 empty), two `jennsen, gs_…` clusters 9 & 12 IDs, "cthulhu armageddon (unabridged)" 25 IDs; (6) **6 clean two-way splits need a HUMAN merge decision** (both sides have real books): "Terry Pratchett" 375 vs 1, "Tamora Pierce" 63 vs 7, "Ian Irvine" 7 vs 5, "James A. Hunter" 18 vs 14, "Gardner Dozois" 4 vs 2, "Daniel José Older" 1 vs 1. Related memory: [[project_createauthor_check_then_create_race]], [[project_author_dangling_authorid_leak]] (dangling AuthorID improved to 140/33-primary from ~212). Work: canonicalize the CreateAuthor race (upsert-by-normalized-name, not check-then-create) so it stops minting; a plan-first dry-run merge/prune op for empty dupes and race clusters; a classifier + repair for title-as-author and narrator-as-author rows (re-parse from path/folder or move narrator→narrator field). The `authors[].book_count` field drifts low — count from the book census. Plan-first + dry-run; NEVER during a scan.
+
+- [ ] **Duplicate & placeholder book records — PRIORITY 3 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`library-health-audit-2026-09-05.md`). (1) **8,235 redundant primary book rows are true content/metadata duplicates** (same normalized title+author, placeholders excluded; 5,671 distinct clean (title,author) pairs with >1 primary) — top clusters: "PZG" bundle 57 copies, Jim Butcher "Skin Game" **51 rows split per-chapter as separate books** (`Skin Game - 1`, `Skin Game - 11`, …), "For We Are Many" (Bobiverse 2) 39, "Prince of Fools" 31. (2) **839 distinct `file_path`s are shared by >1 primary book** (1,334 redundant rows) — strongest duplicate signal; includes front-matter minted as its own book: `.../Unknown Author/Introduction` (37 book IDs), `/Prologue` (35), `/About the Author` (20), `/Audible Opening Message` (19). (3) **Front-matter tracks stored as their own books** (37 "Introduction", 35 "Prologue", 20 "About the Author", 19 "Audible Opening Message" under Unknown Author) — these should be chapters/tracks of their parent book, not standalone records. (4) **5,421 primary books (12.5%) carry placeholder title/author** (`"read by narrator"` ×1,182+520, `"unknown title"`/`"unknown author"` ×153) — folder-parser fallback strings persisted as real metadata; re-parse or re-fetch. (5) 414 book rows (333 primary) have an empty `title` even though most have a usable `transcribed_title` fallback. Related: [[project_repoint_collision_bucket_is_duplicate_books]] (repoint collisions ARE duplicate books — dedup is upstream), the dedup sandbox work. Do AFTER the missing-file recovery and series/author cleanup, because merging duplicate books changes which rows the missing-file repointer must consider. Work: a plan-first dry-run merge op keyed on `file_path` collision first (exact, safe), then normalized title+author with hash confirmation; fold per-chapter split books back into one book with track/chapter files; a placeholder-title re-parse/re-fetch pass. Plan-first + dry-run; NEVER during a scan (a scan re-mints duplicates).
+
+- [ ] **Evaluate store-level optimistic concurrency (compare-and-swap) for DB writes — a general "recheck before write" guard.** Raised by the user 2026-09-05 while building the missing-file recovery ops: "can we guard at [the central write] level making everything idempotent." Findings from that session: (1) **Filesystem writes are already centrally guarded** — `internal/fileops` refuses clobber (`ReflinkOrCopy` → `TestReflinkOrCopyRefusesExistingDestination`, `reflink_test.go:51`; plus `CopyFileExclusive` O_EXCL and `CopyFileAtomic` write-temp-then-rename). New file-moving ops should ROUTE through fileops and inherit that idempotency rather than reimplement it. (2) **DB writes have NO concurrency guard** — `PebbleStore.UpdateBookFile(id, *BookFile)` (`pebble_store_bookfiles.go:519`) is an unconditional full-record replace; `BookFile` carries no CAS revision. A per-op stat-recheck (as added to mark-missing/recover) CANNOT be centralized into the write function, because it rechecks a **disk fact** the store can't see — the store writes rows, not files. The centralizable mechanism is different: **optimistic concurrency** — add a monotonic `rev` to `BookFile`, have `UpdateBookFile` take the expected rev and reject the write if the row changed since it was read (compare-and-swap). That makes every DB write *conflict-detecting* for all ops at once. Scope/cost: a rev field on the model + threading expected-rev through the write surface (`UpdateBookFile`, `BatchCreateBookFiles`, `UpdateBookFileHashes`, and the memdb sync path) + deciding fail-closed (reject) vs fail-open (retry-read-merge) per caller. Wide but bounded; its own PR with its own plan. Related: the per-op stat-interlock in `mark_missing_files.go` / the recover op is the disk↔row coherence tool and stays; this todo is the row↔row (concurrent-writer) tool. Consider whether the CoW `book_ver:` history already gives a natural rev to CAS on. Plan-first; no behavior change until reviewed.
+
+### Make `library.scan` declare its `Writes` so the ops-v2 gate is real, not operational
+
+**Problem.** `library.scan` declares an empty `Writes` set. Gate 3b in the ops-v2
+dispatcher is `Writes ∩ Writes` (dispatcher.go:125,283), so an op with an empty
+`Writes` set is invisible to the gate in *both* directions: a maintenance op that
+mutates `book_file`/`book` rows cannot be blocked from running concurrently with a
+scan by declaring a conflicting `Writes` set, because the scan declares nothing to
+conflict with. Today the scan/apply interlock for every write op
+(mark-missing-files, missing-file-repoint, recover-missing-files, …) is therefore
+**operational only**: the deploy boundary (scan resumes on deploy), a documented
+precondition, an apply-start `log.Warn`, and a per-row re-stat before write. That is
+adequate but load-bearing on discipline, not on the scheduler.
+
+**Fix.** Give `library.scan` a real `Writes` conflict-set naming the row families it
+mutates (books, book_files, authors, aggregates, …). Then any op that declares an
+overlapping `Writes` set is genuinely gated — queued behind the scan instead of
+racing it — and the operational interlocks become defense-in-depth rather than the
+only line.
+
+**Why it's separate.** Wide blast radius: `library.scan`'s `ConcurrencyKey` is
+load-bearing (see [[project_scan_concurrency_key_is_load_bearing]] — do NOT split
+it), and adding `Writes` to it changes queueing for every op that touches the same
+families, including targeted scans that currently queue by param-comparison. Needs
+its own PR with a matrix of which maintenance ops start queueing behind a scan, a
+review that no op deadlocks against the scan, and a check that the existing
+byte-compared targeted-scan queueing is preserved. Must not be smuggled into a
+feature PR.
+
+Related: [[project_scan_clobbers_applied_metadata]],
+[[project_scan_concurrency_key_is_load_bearing]],
+[[feedback_two_endpoints_one_store_method_is_one_instrument]].
+
+### Admin API-key management: all-keys view + generate-for-a-user + email delivery
+
+Admins need to (a) see **every** user's API keys with usage metadata, and (b) generate a
+key *on behalf of another user* and have it delivered to that user by email without the
+admin ever seeing the full token (a short reference prefix is fine).
+
+**Already built (do NOT rebuild):**
+- `database.APIKey` already carries `LastUsedAt`, `LastUsedIP`, `UseCount`, `Status`,
+  `ExpiresAt`, `CreatedAt`, revoke/deactivate timestamps, and stores only `TokenHash`
+  (raw token is never persisted — hash-only, so "admin can't read it back" is the default).
+- Store already has `ListAllAPIKeys()`, `ListAPIKeysForUser`, `CreateAPIKey`,
+  `RevokeAPIKey`, `SetAPIKeyStatus`, `SetAPIKeyExpiry`, `TouchAPIKeyLastUsed(id, at, ip)`.
+- HTTP routes today (`wire_auth_routes.go`) are all current-user scoped:
+  `POST/GET /api-keys`, `GET/DELETE /api-keys/:id`, `POST /api-keys/:id/rotate`.
+- Frontend: `web/src/components/settings/APIKeysTab.tsx` (per-user only).
+
+**Three independent slices (ship separately):**
+1. **Admin all-keys view (small).** Expose `ListAllAPIKeys()` behind an `adminOnly` route
+   (e.g. `GET /api/v1/admin/api-keys`) returning owner + last-used + IP + use-count +
+   status + expiry; add an admin frontend table. Almost entirely wiring — the data already
+   accrues on every authenticated request.
+2. **Generate-for-a-user + reference prefix (medium).** `APIKey` has **no prefix field** —
+   add a `KeyPrefix` (first N chars of the raw token, or a separate random public ref)
+   persisted at create time so the admin sees a 4–8 char reference without the token.
+   Add an admin create-on-behalf endpoint that sets `UserID` = target user and returns
+   only the prefix to the admin (never the raw token).
+3. **Email delivery without the admin seeing the key (larger — new dependency).** There is
+   **no SMTP/email transport** in the codebase (`auth_temp_login.go` says so explicitly).
+   Needs a mail transport + config (SMTP creds or a provider), and a one-time delivery flow
+   that emails the raw token straight to the recipient. Design the flow so the raw token
+   never lands in the admin's HTTP response — it goes only into the outbound email.
+
+**Open questions:** email transport choice (self-hosted SMTP vs provider); whether the
+reference prefix should be token-derived or an independent random public id; whether
+generate-on-behalf should force a short expiry / first-use rotation for safety.
+
+### Scan stand-down: Branch B + retrofit existing applies (follow-up to the control PR)
+
+The scan stand-down control (registry `AcquireScanStandDown`) has landed with no
+caller. Follow-up work, in one PR:
+
+- **Branch B op** — reflink an outside source file into the in-tree destination
+  (`fileops.ReflinkOrCopy`, cheap on ZFS block cloning), gated on
+  `HasResolvedAuthor` + `ensureUnderRoot`, then repoint the `outside`-census
+  `book_file` rows (full-record, `FilePath` only) with the
+  `missing_file_repoint` claimed/collision guards. Re-apply bidirectional
+  size+ext uniqueness at apply time. Declare `CapFilesWrite` + `CapLibraryWrite`;
+  `RunItems` pool disjoint by row id. Wire a `ScanController` method onto
+  `ServerDeps` (its first caller) and have the op acquire the stand-down for the
+  apply run, checking `ScanStandDownValid` per batch and aborting on a lapsed
+  lease.
+- **Retrofit** `recover-missing-files`, `missing-file-repoint`, and
+  `mark-missing-files` to acquire the stand-down for their apply runs, replacing
+  the "don't run while a scan is active" precondition in their doc comments.
 
 ## Provider throttling — follow-ups
 
