@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package database
 
@@ -493,14 +493,20 @@ func TestMemStore_ComputeLibraryStats(t *testing.T) {
 	}
 	files := []BookFile{
 		// b1: 2 files, one fingerprinted (AcoustIDSeg0, the primary/non-fallback
-		// path) and one not → partially fingerprinted.
-		{ID: "f1", BookID: "b1", AcoustIDSeg0: "seg0-data"},
-		{ID: "f2", BookID: "b1"},
+		// path) and one not → partially fingerprinted. BOTH are Missing (bytes gone)
+		// → b1 is broken, and must count ONCE toward BrokenFiles even though two of
+		// its files are missing. Marking Missing does not change the file count or
+		// the fingerprint tally — the row still exists; only its bytes are gone.
+		{ID: "f1", BookID: "b1", AcoustIDSeg0: "seg0-data", Missing: true},
+		{ID: "f2", BookID: "b1", Missing: true},
 		// b2: 1 file, fingerprinted via the memdb-safe duration fallback proxy
 		// (AcoustIDSeg0 stripped, AcoustIDFingerprintDurationSec retained) →
-		// fully fingerprinted.
-		{ID: "f3", BookID: "b2", AcoustIDFingerprintDurationSec: 42.0},
-		// b3 has no file rows → counted as 1, and as unfingerprinted.
+		// fully fingerprinted. Also Missing → b2 is broken.
+		{ID: "f3", BookID: "b2", AcoustIDFingerprintDurationSec: 42.0, Missing: true},
+		// b4 is NON-primary; its Missing file must NOT count toward BrokenFiles —
+		// the stats pass tallies files only for primary books.
+		{ID: "f4", BookID: "b4", Missing: true},
+		// b3 has no file rows → counted as 1, unfingerprinted, and NOT broken.
 	}
 	authors := []Author{{ID: 1, Name: "A"}, {ID: 2, Name: "B"}}
 	series := []Series{{ID: 1, Name: "S1"}}
@@ -571,6 +577,14 @@ func TestMemStore_ComputeLibraryStats(t *testing.T) {
 	}
 	if stats.FingerprintCoveragePercent != 25 {
 		t.Errorf("FingerprintCoveragePercent = %d, want 25 (1/4 books)", stats.FingerprintCoveragePercent)
+	}
+	// BrokenFiles = distinct PRIMARY books with ≥1 book_file whose bytes are gone
+	// (Missing==true): b1 (two missing files, counted once) and b2. b3 has no file
+	// rows so it cannot be broken; b4's missing file is excluded as non-primary.
+	// This is the counter the dashboard's "Broken Files" tile reads — proving it
+	// is derived from the Missing flag, not the dead book_file_errors_by_book: index.
+	if stats.BrokenFiles != 2 {
+		t.Errorf("BrokenFiles = %d, want 2 (b1, b2; b4 non-primary excluded, b3 has no files)", stats.BrokenFiles)
 	}
 }
 

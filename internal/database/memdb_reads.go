@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-09-02
+// last-edited: 2026-09-05
 
 package database
 
@@ -851,8 +851,11 @@ func (m *MemStore) CountBooksByPathPrefix(prefix string) (int, error) {
 // library root (organized vs unorganized classification); importPaths is the
 // resolved import-path list used for per-folder counts.
 //
-// Caller must populate stats.BrokenFiles separately — that count lives in the
-// Pebble book_file_errors_by_book: secondary index, not in memdb.
+// BrokenFiles is computed here from the book_file.Missing flag — the count of
+// distinct primary books that own ≥1 file whose bytes are gone. (It formerly
+// had to be filled in by the caller from the Pebble book_file_errors_by_book:
+// index, but that index has no live writer and always reported 0; the Missing
+// flag, populated by maintenance.mark-missing-files, is the real source.)
 func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath) (*LibraryStats, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
@@ -926,6 +929,9 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 	// already falls back to the memdb-safe AcoustIDFingerprintDurationSec
 	// proxy when AcoustIDSeg0 has been stripped — see bookfile_fingerprint.go).
 	bookFingerprintedFiles := make(map[string]int, len(primaryBookIDs))
+	// booksWithMissing is the set of primary books that own ≥1 book_file whose
+	// bytes are gone (Missing==true). Its size is stats.BrokenFiles.
+	booksWithMissing := make(map[string]struct{}, len(primaryBookIDs))
 	fIter, err := txn.Get(memTableBookFiles, memIdxID)
 	if err != nil {
 		return nil, fmt.Errorf("memdb book_files scan: %w", err)
@@ -939,7 +945,11 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 		if bf.GetAcoustIDSeg0() != "" {
 			bookFingerprintedFiles[bf.BookID]++
 		}
+		if bf.Missing {
+			booksWithMissing[bf.BookID] = struct{}{}
+		}
 	}
+	stats.BrokenFiles = len(booksWithMissing)
 	for id := range primaryBookIDs {
 		if n := bookActiveFiles[id]; n > 0 {
 			stats.TotalFiles += n

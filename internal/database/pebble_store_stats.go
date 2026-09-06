@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-08-14
+// last-edited: 2026-09-05
 
 package database
 
@@ -256,9 +256,15 @@ func (p *PebbleStore) GetDashboardStats() (*DashboardStats, error) {
 // Pass 2 (book_file:): counts active files without any per-book point lookups.
 func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 	// Fast path: when memdb is published, aggregate from RAM. ~150× faster
-	// than the Pebble scan below (no JSON unmarshal, no disk I/O). Memdb
-	// can't see the book_file_errors_by_book: index, so we still need a
-	// short Pebble call for BrokenFiles.
+	// than the Pebble scan below (no JSON unmarshal, no disk I/O).
+	//
+	// BrokenFiles is now derived from the book_file.Missing flag (distinct
+	// primary books with ≥1 file whose bytes are gone), which memdb carries on
+	// every row — so the fast path computes it itself and no longer needs a
+	// supplementary Pebble call. The old source (ListBooksWithFileErrors over
+	// the book_file_errors_by_book: index) had no live writer, so it reported 0
+	// on a library that in fact has ~16k broken books; see
+	// maintenance.mark-missing-files, the op that populates Missing.
 	//
 	// Gated on UseMemDB as well as publication: dispatching on publication alone
 	// made the Pebble scan below unreachable whenever memdb was up, even with
@@ -268,9 +274,6 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 		importPaths, _ := p.GetAllImportPaths()
 		stats, err := p.mem().ComputeLibraryStats(p.rootDir, importPaths)
 		if err == nil {
-			if booksWithErrors, berr := p.ListBooksWithFileErrors(); berr == nil {
-				stats.BrokenFiles = len(booksWithErrors)
-			}
 			return stats, nil
 		}
 		// Fall through to Pebble scan on memdb error (shouldn't happen).
@@ -364,6 +367,10 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 	if err == nil {
 		bookActiveFiles := make(map[string]int, len(primaryBookIDs))
 		bookFingerprintedFiles := make(map[string]int, len(primaryBookIDs))
+		// booksWithMissing is the set of primary books that own ≥1 book_file whose
+		// bytes are gone (Missing==true). Its size is BrokenFiles — see the Missing
+		// note on the fast path above.
+		booksWithMissing := make(map[string]struct{}, len(primaryBookIDs))
 		for fileIter.First(); fileIter.Valid(); fileIter.Next() {
 			parts := strings.SplitN(string(fileIter.Key()), ":", 4)
 			if len(parts) != 3 {
@@ -381,8 +388,12 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 			if bf.GetAcoustIDSeg0() != "" {
 				bookFingerprintedFiles[bookID]++
 			}
+			if bf.Missing {
+				booksWithMissing[bookID] = struct{}{}
+			}
 		}
 		fileIter.Close()
+		stats.BrokenFiles = len(booksWithMissing)
 		for id := range primaryBookIDs {
 			if n := bookActiveFiles[id]; n > 0 {
 				stats.TotalFiles += n
@@ -412,11 +423,11 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 		stats.TotalSeries = sc
 	}
 
-	// Pass 3: book_file_errors_by_book: key-only scan — count distinct books with errors.
-	// Reuses the secondary index written by RecordFileError so no JSON deserialization needed.
-	if booksWithErrors, err := p.ListBooksWithFileErrors(); err == nil {
-		stats.BrokenFiles = len(booksWithErrors)
-	}
+	// BrokenFiles was tallied inline in Pass 2 from the book_file.Missing flag.
+	// It formerly came from a Pass-3 key-only scan of book_file_errors_by_book:
+	// (ListBooksWithFileErrors), but that index has no live writer — RecordFileError
+	// is never called — so it always reported 0. The Missing flag, populated by
+	// maintenance.mark-missing-files, is the real source.
 
 	if stats.TotalBooks > 0 {
 		stats.FingerprintCoveragePercent = stats.FingerprintedBooks * 100 / stats.TotalBooks
