@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -408,6 +408,31 @@ type OpEnqueuer interface {
 	WaitForOp(ctx context.Context, opID string) error
 }
 
+// ScanController lets a write op cooperatively quiesce the library scanner for
+// the duration of its apply phase, so its row writes cannot race the scanner's
+// own writes to the same rows. Implemented on *server.Server, which delegates to
+// the operations registry's scan stand-down control (added in PR #3080). The
+// signatures carry only context/strings/bool/func() so the maintenance package
+// never imports internal/operations/registry types — same boundary discipline as
+// OpEnqueuer above.
+type ScanController interface {
+	// AcquireScanStandDown cooperatively quiesces any running library.scan and
+	// holds a refcounted, leased gate under holderOpID until the returned release
+	// func is called (at which point the scan resumes from its checkpoint). It
+	// blocks until the scan has parked, bounded by ctx and the lease. reason is
+	// recorded for observability. A degraded caller with no registry gets a no-op
+	// release and a nil error, so ops run unchanged where there is no scanner.
+	AcquireScanStandDown(ctx context.Context, holderOpID, reason string) (release func(), err error)
+	// RenewScanStandDown extends the holder's lease (call it on the progress
+	// heartbeat) and reports whether holderOpID is still a registered holder.
+	// false means the lease was reaped or released and the caller MUST abort its
+	// remaining writes: a lapsed lease means the scanner has resumed.
+	RenewScanStandDown(holderOpID string) bool
+	// ScanStandDownValid reports whether holderOpID still holds a live (unexpired)
+	// lease, without extending it.
+	ScanStandDownValid(holderOpID string) bool
+}
+
 // BookMerger merges duplicate book records into a single version group, keeping
 // primaryID as the survivor (losers soft-deleted, external IDs reassigned, iTunes
 // ITL entries cleaned up). Implemented on *server.Server via merge.Service, so the
@@ -434,7 +459,8 @@ type BookMerger interface {
 // ServerDeps stub": an op needing only CapabilityProbes and RuntimeConfig can now
 // take those two rather than stubbing all 43.
 type ServerDeps interface { //nolint:interfacebloat // transitional composition of the
-	// 14 interfaces above, deleted once each op takes only the pieces it uses.
+	// 15 interfaces above (ScanController added 2026-09-06), deleted once each op
+	// takes only the pieces it uses.
 	StoreProvider
 	MetadataRunners
 	SeriesRunners
@@ -449,6 +475,7 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	CapabilityProbes
 	RuntimeConfig
 	OpEnqueuer
+	ScanController
 	BookMerger
 }
 

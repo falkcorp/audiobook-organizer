@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 package maintenance
 
@@ -42,9 +42,19 @@ var _ sdk.Reporter = (*fakeReporter)(nil)
 type fakeDeps struct{ store database.Store }
 
 func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
-func (d fakeDeps) OpsStore() OpsStore                                         { return d.store }
-func (d fakeDeps) ReconcileStore() ReconcileStore                             { return d.store }
-func (d fakeDeps) PlaylistStore() database.UserPlaylistStore                  { return d.store }
+
+// ScanController (no-op): these fakes drive plan functions directly and pass a nil
+// controller, so the stand-down is never held in these tests. The methods exist
+// only to satisfy ServerDeps; Acquire hands back a no-op release, and renew/valid
+// answer "still valid" so an op reaching them would proceed rather than abort.
+func (d fakeDeps) AcquireScanStandDown(_ context.Context, _, _ string) (func(), error) {
+	return func() {}, nil
+}
+func (d fakeDeps) RenewScanStandDown(_ string) bool          { return true }
+func (d fakeDeps) ScanStandDownValid(_ string) bool          { return true }
+func (d fakeDeps) OpsStore() OpsStore                        { return d.store }
+func (d fakeDeps) ReconcileStore() ReconcileStore            { return d.store }
+func (d fakeDeps) PlaylistStore() database.UserPlaylistStore { return d.store }
 
 // FileProvenanceStore mirrors Server's accessor: the provenance methods are not
 // part of database.Store, so this asserts and yields nil for a store that does

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 package maintenance
 
@@ -86,7 +86,7 @@ func TestRepoint_RewritesPathAndPreservesFingerprint(t *testing.T) {
 	broken := filepath.Join(dir, "Stem - 2", "35.mp3")
 
 	store := seedRepoint(t, broken, 1234)
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -106,7 +106,7 @@ func TestRepoint_DryRunWritesNothing(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "Stem - 02.mp3"), 10)
 	store := seedRepoint(t, filepath.Join(dir, "Stem - 2", "35.mp3"), 10)
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{}, &fakeReporter{}) // Apply defaults to false
 	require.NoError(t, err)
 
@@ -135,7 +135,7 @@ func TestRepoint_RefusesWhenSeveralRowsDeriveTheSameFile(t *testing.T) {
 		}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -160,7 +160,7 @@ func TestRepoint_RefusesTargetAlreadyClaimedByAnotherRow(t *testing.T) {
 		full: map[string][]database.BookFile{"b1": {{ID: "broken", BookID: "b1"}}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -176,7 +176,7 @@ func TestRepoint_RefusesOnSizeMismatch(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "Stem - 02.mp3"), 500)
 	store := seedRepoint(t, filepath.Join(dir, "Stem - 2", "35.mp3"), 999) // row says 999, disk 500
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -187,7 +187,7 @@ func TestRepoint_RefusesOnSizeMismatch(t *testing.T) {
 	// ...and the escape hatch works when the operator opts out explicitly.
 	off := false
 	store2 := seedRepoint(t, filepath.Join(dir, "Stem - 2", "35.mp3"), 999)
-	plan2, err := planMissingFileRepoint(context.Background(), store2,
+	plan2, err := planMissingFileRepoint(context.Background(), store2, nil,
 		missingFileRepointParams{Apply: true, RequireSizeMatch: &off}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan2.Repointed, "requireSizeMatch=false must allow the repoint")
@@ -200,7 +200,7 @@ func TestRepoint_LeavesUnrecoverableRowsUntouched(t *testing.T) {
 	dir := t.TempDir() // nothing written to disk at all
 	store := seedRepoint(t, filepath.Join(dir, "Stem - 2", "35.mp3"), 10)
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -225,7 +225,7 @@ func TestRepoint_IgnoresPresentFilesAndUnknownShapes(t *testing.T) {
 		full: map[string][]database.BookFile{"b1": {{ID: "weird", BookID: "b1"}}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -249,7 +249,7 @@ func TestRepoint_CapIsBoundedAndDeterministic(t *testing.T) {
 	}
 	store := &repointFakeStore{cores: cores, full: map[string][]database.BookFile{"b1": full}}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true, Max: 2}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -290,7 +290,7 @@ func TestRepoint_ReportAccountsForEveryMissingRow(t *testing.T) {
 		full["b1"] = append(full["b1"], database.BookFile{ID: c.ID, BookID: c.BookID})
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), &repointFakeStore{cores: cores, full: full},
+	plan, err := planMissingFileRepoint(context.Background(), &repointFakeStore{cores: cores, full: full}, nil,
 		missingFileRepointParams{Apply: false}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -360,7 +360,7 @@ func TestRepoint_FallsBackToOwningBookPath(t *testing.T) {
 		}}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.Repointable, "the book-path fallback should recover this row")
@@ -386,7 +386,7 @@ func TestRepoint_BookPathFallback_RefusesDirectory(t *testing.T) {
 		}}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 0, plan.Repointable, "a directory must never be a repoint target")
@@ -411,7 +411,7 @@ func TestRepoint_BookPathFallback_RefusesSizeMismatch(t *testing.T) {
 		}}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	// The fallback checks size inline and never offers a mismatched candidate, so
@@ -443,7 +443,7 @@ func TestRepoint_BookPathFallback_RefusesZeroSize(t *testing.T) {
 		}}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 0, plan.Repointable, "a zero-size row must not be repointed via the book path")
@@ -468,7 +468,7 @@ func TestRepoint_BookPathFallback_RefusesAlreadyClaimedTarget(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "broken", BookID: "b1"}}},
 	}
 
-	plan, err := planMissingFileRepoint(context.Background(), store,
+	plan, err := planMissingFileRepoint(context.Background(), store, nil,
 		missingFileRepointParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.TargetClaimed)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -236,7 +236,7 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 			"is written, so concurrent changes are skipped.")
 	}
 
-	plan, err := planRecoverMissingFiles(ctx, store, rootDir, params, reporter)
+	plan, err := planRecoverMissingFiles(ctx, store, p.deps, rootDir, params, reporter)
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,7 @@ type rewriteRow struct {
 
 func extOf(path string) string { return strings.ToLower(filepath.Ext(path)) }
 
-func planRecoverMissingFiles(ctx context.Context, store recoverStore, rootDir string, params recoverMissingParams, reporter sdk.Reporter) (recoverPlan, error) {
+func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanController, rootDir string, params recoverMissingParams, reporter sdk.Reporter) (recoverPlan, error) {
 	log := reporter.Logger()
 	maxRewrites := params.Max
 	if maxRewrites <= 0 {
@@ -578,14 +578,37 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, rootDir st
 		return plan, nil
 	}
 
+	// Acquire the scan stand-down for the write phase: cooperatively quiesce any
+	// running library.scan so our FilePath rewrites can't race the scanner's own
+	// writes to the same rows. Released — and the scan resumed from its checkpoint —
+	// when this function returns. Dry-run returned above, so it never stands the
+	// scanner down.
+	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "recover-missing-files apply")
+	if sdErr != nil {
+		return plan, fmt.Errorf("recover-missing-files: acquire scan stand-down: %w", sdErr)
+	}
+	defer releaseStandDown()
+
 	// --- Phase 4 — write (Branch A only). Rehydrate the FULL BookFile and change only
 	// FilePath: UpdateBookFile is a full-record replacement, so a partial record would
 	// wipe the fingerprint/transcript/tags that make these rows worth recovering. Re-stat
 	// the target immediately before writing (the interlock): if it is gone or its size no
 	// longer matches, skip rather than write a value a concurrent scan just invalidated. ---
 	var repointed, skippedChanged, updateErrs atomic.Int64
+	var standDownLost atomic.Bool
 	var mu sync.Mutex // guards plan.record (RunItems runs the callback concurrently)
 	err = registry.RunItems(ctx, reporter, rewrites, func(_ context.Context, rw rewriteRow) error {
+		// Heartbeat + hard-abort guard: RunItems stamps op progress but does NOT
+		// renew the stand-down lease, so renew it here and stop writing if it is
+		// lost (a lapsed lease resumes the scanner into ungated concurrent writes).
+		if standDownLost.Load() {
+			return nil
+		}
+		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+			standDownLost.Store(true)
+			log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining writes")
+			return nil
+		}
 		st, serr := os.Stat(rw.target)
 		if serr != nil || st.IsDir() || st.Size() != rw.file.FileSize {
 			skippedChanged.Add(1)
@@ -635,6 +658,9 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, rootDir st
 	plan.Repointed = int(repointed.Load())
 	plan.SkippedChanged = int(skippedChanged.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+	if standDownLost.Load() {
+		return plan, fmt.Errorf("recover-missing-files: scan stand-down lease lapsed mid-apply after %d repoints — aborted (re-run after the scan is idle)", plan.Repointed)
+	}
 	return plan, nil
 }
 

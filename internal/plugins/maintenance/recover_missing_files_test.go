@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 package maintenance
 
@@ -69,7 +69,7 @@ func TestRecover_RepointsUniqueInTreeMatch(t *testing.T) {
 		}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -92,7 +92,7 @@ func TestRecover_DryRunWritesNothing(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1", FilePath: gone, FileSize: 100}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{}, &fakeReporter{}) // Apply defaults false
 	require.NoError(t, err)
 
@@ -113,7 +113,7 @@ func TestRecover_AmbiguousTwoInTreeCandidates(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1"}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -137,7 +137,7 @@ func TestRecover_SizeCollisionTwoRowsOneFile(t *testing.T) {
 		},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -162,7 +162,7 @@ func TestRecover_ExtMismatchVsForcedMatch(t *testing.T) {
 	}
 
 	// Default: extension must match → refused as ext-mismatch, not nowhere.
-	plan, err := planRecoverMissingFiles(context.Background(), newStore(), root,
+	plan, err := planRecoverMissingFiles(context.Background(), newStore(), nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.ExtMismatch)
@@ -172,7 +172,7 @@ func TestRecover_ExtMismatchVsForcedMatch(t *testing.T) {
 	// Forced: requireExtMatch=false → the .jpg is accepted as the unique size match.
 	no := false
 	store2 := newStore()
-	plan2, err := planRecoverMissingFiles(context.Background(), store2, root,
+	plan2, err := planRecoverMissingFiles(context.Background(), store2, nil, root,
 		recoverMissingParams{Apply: true, RequireExtMatch: &no}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan2.Repointable)
@@ -192,7 +192,7 @@ func TestRecover_OutsideCensusNotRepointed(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1"}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true, SourceDirs: []string{src}}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -211,7 +211,7 @@ func TestRecover_NowhereWhenNoSizeMatch(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1"}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -239,7 +239,7 @@ func TestRecover_NeverStealsAClaimedFile(t *testing.T) {
 		},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -259,7 +259,7 @@ func TestRecover_NoSizeRowCannotMatch(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1"}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -284,7 +284,7 @@ func TestRecover_CapIsBoundedAndDeterministic(t *testing.T) {
 	}
 	store := &recoverFakeStore{cores: cores, full: full}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true, Max: 2}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -310,7 +310,7 @@ func TestRecover_ReportCoversEveryBucket(t *testing.T) {
 		full: map[string][]database.BookFile{"b1": {{ID: "rep", BookID: "b1"}}, "b2": {{ID: "now", BookID: "b2"}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: false}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -334,7 +334,7 @@ func TestRecover_NonexistentRootIsFatal(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1"}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, missingRoot,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, missingRoot,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.Error(t, err, "an unreadable RootDir must fail, not proceed with an empty inventory")
 	require.Equal(t, 0, plan.Repointable, "no plan should be produced from a dead root")
@@ -355,7 +355,7 @@ func TestRecover_RowVanishedBeforeWriteCountsError(t *testing.T) {
 		full: map[string][]database.BookFile{"b1": {{ID: "other", BookID: "b1"}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 
@@ -377,7 +377,7 @@ func TestRecover_UpdateFailureCountsError(t *testing.T) {
 		updateErr: errFakeUpdate,
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, root,
+	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err, "one row's write failure must not fail the whole op")
 
