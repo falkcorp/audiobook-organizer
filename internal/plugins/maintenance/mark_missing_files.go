@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -184,14 +184,15 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 	}
 	log := reporter.Logger()
 	if params.Apply {
-		// Log the precondition at apply-start, so the journal records that the
-		// operator was told. A documented hazard is not a control; the deploy
-		// boundary and the write-time re-stat are the controls.
-		log.Warn("mark-missing-files: APPLY — writing the Missing flag. Precondition: no library scan " +
-			"should be active. The op re-stats each row before writing, so concurrent changes are skipped.")
+		// The apply phase now cooperatively stands the library scanner down for its
+		// duration (PR #3080) — the real control that replaces the old "no scan
+		// should be active" documented precondition. The write-time re-stat remains
+		// as a second line of defense so a concurrent change is skipped, not written.
+		log.Warn("mark-missing-files: APPLY — writing the Missing flag. The library scan is stood down " +
+			"for the write phase and each row is re-stat'd before writing.")
 	}
 
-	plan, err := planMarkMissingFiles(ctx, store, params, reporter)
+	plan, err := planMarkMissingFiles(ctx, store, p.deps, params, reporter)
 	if err != nil {
 		return err
 	}
@@ -243,7 +244,7 @@ type flip struct {
 	toValue bool // the Missing value to write
 }
 
-func planMarkMissingFiles(ctx context.Context, store markMissingStore, params markMissingParams, reporter sdk.Reporter) (markMissingPlan, error) {
+func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan ScanController, params markMissingParams, reporter sdk.Reporter) (markMissingPlan, error) {
 	log := reporter.Logger()
 	log.Info("mark-missing-files start",
 		"apply", params.Apply, "path_prefix", params.PathPrefix, "max", params.Max)
@@ -387,13 +388,33 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, params ma
 		return plan, nil
 	}
 
+	// Acquire the scan stand-down for the write phase: both this op and a running
+	// library.scan write the Missing flag on the same rows, so quiesce the scanner
+	// to keep our flips from racing its. Released (scan resumes) on return; dry-run
+	// returned above so it never stands the scanner down.
+	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "mark-missing-files apply")
+	if sdErr != nil {
+		return plan, fmt.Errorf("mark-missing-files: acquire scan stand-down: %w", sdErr)
+	}
+	defer releaseStandDown()
+
 	// Phase 3 — write. Rehydrate the FULL BookFile and change only Missing:
 	// UpdateBookFile is a full-record replacement, so a partial record would wipe
 	// the fingerprint/transcript/tags. Re-stat immediately before writing (the
 	// interlock): if disk no longer agrees with the planned value, skip the row
 	// rather than write a value a concurrent scan just invalidated.
 	var markedMissing, clearedStale, skippedChanged, updateErrs atomic.Int64
+	var standDownLost atomic.Bool
 	err = registry.RunItems(ctx, reporter, flips, func(_ context.Context, fl flip) error {
+		// Heartbeat + hard-abort guard (RunItems does not renew the lease).
+		if standDownLost.Load() {
+			return nil
+		}
+		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+			standDownLost.Store(true)
+			log.Warn("mark-missing-files: scan stand-down lease lost — aborting remaining writes")
+			return nil
+		}
 		// Interlock: fresh truth at write time.
 		switch _, serr := os.Stat(fl.file.FilePath); {
 		case serr == nil:
@@ -460,6 +481,9 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, params ma
 	plan.ClearedStale = int(clearedStale.Load())
 	plan.SkippedChanged = int(skippedChanged.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+	if standDownLost.Load() {
+		return plan, fmt.Errorf("mark-missing-files: scan stand-down lease lapsed mid-apply after %d flips — aborted (re-run after the scan is idle)", plan.MarkedMissing+plan.ClearedStale)
+	}
 	return plan, nil
 }
 

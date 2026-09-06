@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -174,7 +174,7 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	plan, err := planMissingFileRepoint(ctx, store, params, reporter)
+	plan, err := planMissingFileRepoint(ctx, store, p.deps, params, reporter)
 	if err != nil {
 		return err
 	}
@@ -234,7 +234,7 @@ type repointStore interface {
 	UpdateBookFile(id string, file *database.BookFile) error
 }
 
-func planMissingFileRepoint(ctx context.Context, store repointStore, params missingFileRepointParams, reporter sdk.Reporter) (repointPlan, error) {
+func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanController, params missingFileRepointParams, reporter sdk.Reporter) (repointPlan, error) {
 	log := reporter.Logger()
 	maxRewrites := params.Max
 	if maxRewrites <= 0 {
@@ -484,12 +484,31 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 		return plan, nil
 	}
 
+	// Acquire the scan stand-down for the write phase: cooperatively quiesce any
+	// running library.scan so our FilePath rewrites can't race its own writes.
+	// Released (scan resumes from checkpoint) on return. Dry-run returned above.
+	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "missing-file-repoint apply")
+	if sdErr != nil {
+		return plan, fmt.Errorf("missing-file-repoint: acquire scan stand-down: %w", sdErr)
+	}
+	defer releaseStandDown()
+
 	// Phase 3 — write. Rehydrate the FULL BookFile and change only FilePath:
 	// UpdateBookFile does a full-record replacement, so constructing a partial
 	// BookFile here would wipe the fingerprint, transcript and tags that make these
 	// rows worth recovering in the first place.
 	var repointed, updateErrs atomic.Int64
+	var standDownLost atomic.Bool
 	err = registry.RunItems(ctx, reporter, rewrites, func(_ context.Context, rw rewrite) error {
+		// Heartbeat + hard-abort guard (RunItems does not renew the lease).
+		if standDownLost.Load() {
+			return nil
+		}
+		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+			standDownLost.Store(true)
+			log.Warn("missing-file-repoint: scan stand-down lease lost — aborting remaining writes")
+			return nil
+		}
 		siblings, gerr := store.GetBookFiles(rw.item.file.BookID)
 		if gerr != nil {
 			updateErrs.Add(1)
@@ -528,6 +547,9 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 	}
 	plan.Repointed = int(repointed.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+	if standDownLost.Load() {
+		return plan, fmt.Errorf("missing-file-repoint: scan stand-down lease lapsed mid-apply after %d repoints — aborted (re-run after the scan is idle)", plan.Repointed)
+	}
 	return plan, nil
 }
 

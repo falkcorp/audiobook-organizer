@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-05
+// last-edited: 2026-09-06
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -376,6 +376,40 @@ func (s *Server) EnqueueOp(ctx context.Context, defID string, params any) (strin
 		return "", fmt.Errorf("operations registry not initialized")
 	}
 	return s.opRegistry.EnqueueOp(ctx, defID, params)
+}
+
+// ---- scan stand-down (maintenance.ScanController) ----
+//
+// These delegate to the operations registry's scan stand-down control (PR #3080)
+// so a write op can quiesce a running library.scan for its apply phase. Unlike
+// EnqueueOp, a nil registry is NOT an error here: no registry means no scanner to
+// race, so the safe degraded answer is "granted, nothing to stand down" — a no-op
+// release and, for renew/valid, true (the lease can't be lost because there is
+// none). That keeps ops running unchanged in test/degraded contexts while still
+// enforcing the interlock wherever a real scanner exists.
+
+// AcquireScanStandDown implements maintenance.ScanController.
+func (s *Server) AcquireScanStandDown(ctx context.Context, holderOpID, reason string) (func(), error) {
+	if s.opRegistry == nil {
+		return func() {}, nil
+	}
+	return s.opRegistry.AcquireScanStandDown(ctx, holderOpID, reason)
+}
+
+// RenewScanStandDown implements maintenance.ScanController.
+func (s *Server) RenewScanStandDown(holderOpID string) bool {
+	if s.opRegistry == nil {
+		return true
+	}
+	return s.opRegistry.RenewScanStandDown(holderOpID)
+}
+
+// ScanStandDownValid implements maintenance.ScanController.
+func (s *Server) ScanStandDownValid(holderOpID string) bool {
+	if s.opRegistry == nil {
+		return true
+	}
+	return s.opRegistry.ScanStandDownValid(holderOpID)
 }
 
 // DedupTriageExactPending implements maintenance.ServerDeps. It pages all
