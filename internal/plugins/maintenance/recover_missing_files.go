@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-05
 
@@ -134,6 +134,9 @@ type recoverPlan struct {
 	SizeCollision int `json:"size_collision"`
 	ExtMismatch   int `json:"ext_mismatch"`
 	NoSize        int `json:"no_size"`
+
+	InventoryKeys int `json:"inventory_keys"` // distinct sizes seen — a degenerate (near-zero) value warns the inventory is empty
+	WalkErrors    int `json:"walk_errors"`    // per-entry walk failures skipped; >0 means the inventory is partial
 
 	Repointed      int `json:"repointed"`
 	SkippedChanged int `json:"skipped_changed"`
@@ -380,7 +383,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, rootDir st
 	// by the orphan count, not the whole library. ---
 	unclaimedBySize := make(map[int64][]invFile)
 	seen := make(map[string]struct{}) // dedupe overlapping roots
-	var walked int64
+	var walked, walkErrs int64
 	walkRoot := func(root string, inTree bool) error {
 		root = strings.TrimSpace(root)
 		if root == "" {
@@ -392,7 +395,11 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, rootDir st
 			}
 			if werr != nil {
 				// A single unreadable subtree must not abort the whole walk — skip it and
-				// keep going, so one bad mount point does not sink the census.
+				// keep going, so one bad mount point does not sink the census. But COUNT it:
+				// a walk that skipped a large subtree yields a partial inventory, so rows
+				// that live there would wrongly classify "nowhere". WalkErrors surfaces that
+				// so a degraded run is not mistaken for a clean one.
+				walkErrs++
 				if d != nil && d.IsDir() {
 					return fs.SkipDir
 				}
@@ -425,13 +432,38 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, rootDir st
 			return nil
 		})
 	}
+	// The RootDir walk is FATAL if the root itself is unreadable. filepath.WalkDir hands
+	// a stat failure on the root to the callback with d==nil, where the skip-and-continue
+	// branch above swallows it and WalkDir returns nil — so an unmounted NAS or a wrong
+	// --dir would otherwise leave an EMPTY inventory and classify every missing row as
+	// "nowhere", reporting a confident-but-wrong census (worse than a crash, because we'd
+	// act on it). Precheck the root explicitly so that case is a hard error, not silence.
+	if st, serr := os.Stat(rootDir); serr != nil || !st.IsDir() {
+		return recoverPlan{}, fmt.Errorf("recover-missing-files: RootDir %q is not a readable directory "+
+			"(unmounted or wrong --dir?): %v — refusing to build an empty inventory", rootDir, serr)
+	}
 	if werr := walkRoot(rootDir, true); werr != nil && ctx.Err() != nil {
 		return recoverPlan{}, fmt.Errorf("inventory walk canceled: %w", werr)
 	}
+	// A bad SourceDir, unlike a bad RootDir, is NOT fatal: it only degrades the
+	// outside/nowhere split (a reflink census for the deferred Branch B), so warn and
+	// carry on rather than abort the in-tree repoint the run exists to do.
 	for _, sd := range params.SourceDirs {
+		if st, serr := os.Stat(sd); serr != nil || !st.IsDir() {
+			log.Warn("recover-missing-files: skipping unreadable source dir (outside/nowhere split degraded)",
+				"dir", sd, "err", serr)
+			continue
+		}
 		if werr := walkRoot(sd, false); werr != nil && ctx.Err() != nil {
 			return recoverPlan{}, fmt.Errorf("inventory walk canceled: %w", werr)
 		}
+	}
+	plan.InventoryKeys = len(unclaimedBySize)
+	plan.WalkErrors = int(walkErrs)
+	if walkErrs > 0 {
+		log.Warn("recover-missing-files: inventory walk skipped unreadable entries — inventory is PARTIAL, so "+
+			"some 'nowhere' rows may have bytes in a subtree that could not be read",
+			"walk_errors", walkErrs, "unclaimed_seen", plan.UnclaimedSeen)
 	}
 
 	// --- Phase 3, pass A — resolve each missing row's candidate set (size, then the ext
@@ -500,7 +532,11 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, rootDir st
 			}
 		case len(r.inTree) == 0:
 			// Candidate(s) exist only under a SourceDir → a reflink target for Branch B,
-			// not an in-tree repoint. Census only.
+			// not an in-tree repoint. Census only. NewPath reports r.outside[0] as a SAMPLE,
+			// not a chosen target: it is intentionally NOT deduped or uniqueness-checked here.
+			// ⚠️ Branch B MUST apply the same bidirectional-uniqueness gate the in-tree path
+			// uses (one unclaimed candidate, wanted by one row) before it reflinks — it must
+			// NOT adopt "first outside candidate wins" from this census line.
 			plan.Outside++
 			plan.record(recoverDecision{FileID: f.ID, BookID: f.BookID, Bucket: "outside",
 				Size: f.FileSize, OldPath: f.FilePath, NewPath: r.outside[0].path, CandSeen: len(r.outside),
