@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.16.1
+// version: 2.17.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-30
+// last-edited: 2026-09-06
 
 package registry
 
@@ -90,6 +90,19 @@ type runHandle struct {
 	// that guards the write — before registering the full handle, and drops
 	// the run without ever invoking Run (C-1). Guarded by Registry.mu.
 	queuedCancel bool
+	// quiescing records that this run's context was canceled by a scan
+	// stand-down (AcquireScanStandDown), NOT by a user cancel or shutdown. It is
+	// checked in finalStatusForCanceledRun BEFORE the shutdown branch so the run
+	// is recorded interrupted_quiesced (a RESUMABLE status) rather than
+	// "canceled" (deliberately non-resumable). Distinct from userCanceled so a
+	// genuine Registry.Cancel of the same op still wins and stays canceled.
+	quiescing atomic.Bool
+	// parked is closed at the TRUE exit of the run goroutine (deferred, so it
+	// fires on panic too). AcquireScanStandDown waits on it to know a quiesced
+	// scan has actually stopped — r.running membership cannot tell "parked" from
+	// "abandoned but still writing". A full handle always has a non-nil parked;
+	// dispatcher STUB handles do not (no goroutine to wait on).
+	parked chan struct{}
 }
 
 // cancelIfActive cancels the run's context if it has been wired up.
@@ -215,6 +228,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		resumePolicy:   qr.resumePolicy,
 		writes:         def.Writes,
 		cancel:         cancel,
+		parked:         make(chan struct{}),
 	}
 	h.attemptStartedAt.Store(attemptStartedAt.UnixNano())
 	r.mu.Lock()
@@ -234,6 +248,26 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	}
 	r.running[qr.opID] = h
 	r.mu.Unlock()
+
+	// Scan stand-down pickup gate: a maintenance op may have raised the scan gate
+	// after this scan was CLAIMED by the dispatcher but before this worker picked
+	// it up. Dropping it here (as interrupted_quiesced, resumable) rather than
+	// running it is what closes the stub-race window that Gate 3.5 alone cannot:
+	// Gate 3.5 blocks dispatch, but a row already in the nextRun channel has
+	// passed it. The scan resumes from its checkpoint when the gate clears.
+	if qr.defID == scanStandDownDefID && r.scanStandDownActive() {
+		close(h.parked)
+		r.releaseRunHandle(qr.opID)
+		quiescedAt := time.Now().UTC()
+		status := interruptedStatus(qr.resumePolicy)
+		msg := "quiesced before start: scan gate held by a maintenance op"
+		if err := r.store.UpdateOperationV2Status(qr.opID, status, nil, &quiescedAt, &msg); err != nil {
+			r.logger.Warn("registry: failed to mark scan quiesced-before-start", "op_id", qr.opID, "error", err)
+		}
+		r.publishOpTerminal(qr.opID, qr.defID, status)
+		r.logger.Info("registry: scan quiesced before start (scan gate held)", "op_id", qr.opID, "status", status)
+		return false
+	}
 
 	// Mark running in DB.
 	now := attemptStartedAt
@@ -315,6 +349,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// be observed at zero by a concurrent Wait().
 	done := make(chan error, 1)
 	r.goroutineWG.Go(func() {
+		// Close parked at the TRUE goroutine exit so a scan stand-down waiting on
+		// it unblocks whether the run returns normally, errors, is canceled, or
+		// panics (safeRun recovers, but the deferred close covers every path and
+		// the abandonment case where the handle is released before this returns).
+		defer close(h.parked)
 		done <- r.safeRun(runCtx, def, qr.params, reporter)
 	})
 
@@ -605,14 +644,20 @@ func (r *Registry) safeRun(ctx context.Context, def OperationDef, params json.Ra
 //     killing a stuck op must stay canceled. Deciding this from the shutdown flag
 //     alone would resurrect deliberately-killed work on the next boot -- and for
 //     the watchdog case would produce a stuck -> cancel -> resume -> stuck loop.
-//  3. SHUTDOWN. Only now is a resumable status correct: the run was making
-//     progress and the server stopped it.
-//  4. Otherwise a plain cancel, which is the pre-existing behaviour.
+//  3. SCAN STAND-DOWN. A run quiesced by AcquireScanStandDown must be RESUMABLE:
+//     it was making progress and a maintenance op deliberately stood it down to
+//     do filesystem work, intending it to continue afterward. Placed after user
+//     intent so a genuine Registry.Cancel of a scan still wins and stays canceled.
+//  4. SHUTDOWN. Also a resumable status: the run was making progress and the
+//     server stopped it.
+//  5. Otherwise a plain cancel, which is the pre-existing behaviour.
 //
-// Note what this does NOT do: it records a resumable status, it does not make
-// anything resume. resumeAfterStartup still reads only the queued|running active
-// index, so an interrupted_* row remains invisible to it. Turning that into an
-// actual resume is deliberately a separate change.
+// A resumable status (interrupted_quiesced) DOES come back: resumeAfterStartup
+// reads ListResumableOperationsV2, which includes interrupted_quiesced rows (see
+// resume.go), and for a scan stand-down releaseScanStandDown also re-queues the
+// row immediately via resumeQuiescedOp. (This comment previously claimed the
+// status recorded here never resumes; that predated the ListResumableOperationsV2
+// change and was stale.)
 func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandle, qr *queuedRun, timeout time.Duration) (string, *string) {
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		msg := fmt.Sprintf("timeout: run exceeded %s", timeout)
@@ -622,6 +667,13 @@ func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandl
 	}
 	if h != nil && h.userCanceled.Load() {
 		return "canceled", nil
+	}
+	if h != nil && h.quiescing.Load() {
+		status := interruptedStatus(qr.resumePolicy)
+		msg := "quiesced: stood down for a maintenance op holding the scan gate"
+		r.logger.Info("registry: run quiesced for scan stand-down",
+			"op_id", qr.opID, "def_id", qr.defID, "status", status)
+		return status, &msg
 	}
 	if r.shuttingDown.Load() {
 		status := interruptedStatus(qr.resumePolicy)

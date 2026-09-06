@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-09-06
 
 package registry
 
@@ -47,6 +47,23 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 		return
 	}
 
+	// Scan stand-down boot-consult (BLOCKING reboot-safety): if a stand-down
+	// marker survived a restart, a maintenance op held the scan gate when the
+	// process died. Its filesystem work is half-applied and the op goroutine is
+	// gone — resuming the scan now would run it over that half-applied state, the
+	// exact concurrency the gate prevents. Do NOT resume that scan this boot;
+	// clear the marker and warn. The row stays interrupted_quiesced and a
+	// subsequent marker-free boot resumes it (fail-safe: scan stopped is safe).
+	deferredScanOpID := ""
+	if marker, ok := r.readScanStandDownMarker(); ok {
+		deferredScanOpID = marker.ScanOpID
+		r.logger.Warn("registry: scan stand-down marker present at boot; deferring scan resume for reconcile",
+			"holder_op_id", marker.HolderOpID, "scan_op_id", marker.ScanOpID,
+			"hint", "an apply op holding the scan gate did not release before restart; "+
+				"reconcile its partial writes before the next deploy resumes the scan")
+		r.clearScanStandDown()
+	}
+
 	rows, superseded := supersedeStaleQuiesced(rows)
 	for _, sup := range superseded {
 		r.resumeDrop(sup.ID, "superseded: a newer run of this op exists")
@@ -58,6 +75,15 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 	r.logger.Info("registry: resumeAfterStartup: processing resumable ops", "count", len(rows))
 
 	for _, row := range rows {
+
+		// Scan stand-down deferral (see boot-consult above): leave this exact scan
+		// row interrupted_quiesced this boot rather than resuming it. Not dropped —
+		// a later marker-free boot resumes it from its checkpoint.
+		if deferredScanOpID != "" && row.ID == deferredScanOpID {
+			r.logger.Info("registry: leaving quiesced scan un-resumed this boot (stand-down reconcile)",
+				"op_id", row.ID)
+			continue
+		}
 
 		// Always drop reconcile_scan.
 		if row.DefID == reconcileScanDefID {
@@ -191,6 +217,35 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 	r.publishOpCreated(row, true)
 
 	r.pingDispatch()
+}
+
+// resumeQuiescedOp re-queues a single interrupted_quiesced op from its
+// checkpoint at runtime, used by releaseScanStandDown when the last gate holder
+// releases. It reuses resumeRestart — the same verified checkpoint-merge path the
+// boot sweep uses — rather than hand-rolling param reconstruction, so an op
+// resumed after a stand-down and one resumed after a reboot take an identical
+// path. A no-op if the row is missing, no longer quiesced (already terminal or
+// resumed by another path), or its def is unknown.
+func (r *Registry) resumeQuiescedOp(opID string) {
+	row, err := r.store.GetOperationV2(opID)
+	if err != nil || row == nil {
+		r.logger.Warn("registry: resumeQuiescedOp: op row missing", "op_id", opID, "error", err)
+		return
+	}
+	if row.Status != "interrupted_quiesced" {
+		r.logger.Info("registry: resumeQuiescedOp: op not quiesced, skipping",
+			"op_id", opID, "status", row.Status)
+		return
+	}
+	r.mu.RLock()
+	def, ok := r.defs[row.DefID]
+	r.mu.RUnlock()
+	if !ok {
+		r.logger.Warn("registry: resumeQuiescedOp: unknown def, cannot resume",
+			"op_id", opID, "def_id", row.DefID)
+		return
+	}
+	r.resumeRestart(context.Background(), *row, def)
 }
 
 // mergeJSONParams overlays checkpoint keys onto base params. Keys present in

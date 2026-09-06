@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-06
 
 package registry
 
@@ -115,6 +115,14 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 			}
 		}
 
+		// Gate 3.5: scan stand-down. While a maintenance op holds the scan gate
+		// (AcquireScanStandDown), do NOT dispatch library.scan — leave it queued
+		// so it resumes from its checkpoint once the gate clears. Only library.scan
+		// is affected; all other ops pass. Mirrored in the claim block below.
+		if def.ID == scanStandDownDefID && r.scanStandDownActive() {
+			continue
+		}
+
 		// Gate 3b: declared write-set conflict? An op with a non-empty Writes
 		// declaration must not start while any RUNNING op declares an
 		// overlapping write-set — whole-row read-modify-write on both sides
@@ -156,6 +164,12 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 				r.mu.Unlock()
 				continue
 			}
+		}
+		// Gate 3.5 mirror (see read pass above): re-check the scan gate under the
+		// write lock to close the TOCTOU window this file guards against.
+		if def.ID == scanStandDownDefID && r.scanStandDownActive() {
+			r.mu.Unlock()
+			continue
 		}
 		if len(def.Writes) > 0 {
 			if holder, _ := r.writeSetConflictLocked(row.ID, def.Writes); holder != nil {
