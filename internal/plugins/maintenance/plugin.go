@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-05
 
@@ -68,6 +68,13 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// same disk truth but is read-only; this op persists it so the counter is
 		// honest without a full stat sweep on every stats refresh.
 		p.markMissingFilesDef(),
+		// recover-missing-files is missing-file-repoint's COMPLEMENT: repoint recovers a
+		// missing row when it can DERIVE the new path from the old one's shape; this op
+		// recovers the residue by matching the row's recorded FileSize to an unclaimed
+		// file anywhere in the tree. Run repoint FIRST — its fixes drop out of this op's
+		// population automatically. In-tree repoint + outside/nowhere census (Branch A+C);
+		// reflink from a source dir (Branch B) is a separate follow-up op.
+		p.recoverMissingFilesDef(),
 		p.mergeSamePathDupesDef(),
 		p.metadataCacheReapDef(),
 		p.fileProvenanceCaptureDef(),
