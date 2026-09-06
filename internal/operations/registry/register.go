@@ -1,7 +1,7 @@
 // file: internal/operations/registry/register.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-19
+// last-edited: 2026-09-06
 
 package registry
 
@@ -85,6 +85,17 @@ func init() {
 			store := serviceregistry.Get[opRegistryStore](c, serviceregistry.KeyStore)
 			hub := serviceregistry.Get[*EventHub](c, serviceregistry.KeyOpHub)
 			reg := New(store, slog.Default(), 8, hub)
+
+			// Persist the scan stand-down marker (reboot-safety). The concrete
+			// store is *PebbleStore, which implements GetSetting/SetSetting; the
+			// narrow opRegistryStore interface does not carry those methods, so
+			// type-assert rather than widen it. Must be set BEFORE Start().
+			if ss, ok := store.(standDownPersister); ok {
+				reg.SetScanStandDownStore(ss)
+			} else {
+				slog.Default().Warn("registry: store does not implement SettingsStore; " +
+					"scan stand-down marker will be in-memory only (NOT reboot-safe)")
+			}
 
 			// Wire the book store for dep evaluation (ReqFieldSet).
 			// prodSchedulerStore adds BookFiles (nil shim).

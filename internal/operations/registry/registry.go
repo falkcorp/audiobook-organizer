@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.17.1
+// version: 3.18.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-30
+// last-edited: 2026-09-06
 
 package registry
 
@@ -105,6 +105,9 @@ type Registry struct {
 	// sweepInterval controls how often DepsScheduler.SweepTick fires.
 	// Zero means use the default (5m).
 	sweepInterval time.Duration
+	// scanStandDownLease overrides the scan stand-down lease TTL. Zero means use
+	// defaultScanStandDownLease. Set via Options; tunable for tests.
+	scanStandDownLease time.Duration
 
 	// sweepStopped is closed by the DepsScheduler sweep-ticker goroutine when
 	// it exits. Shutdown joins on it UNCONDITIONALLY (after canceling the
@@ -116,6 +119,20 @@ type Registry struct {
 	// PEBBLE-CLOSED-SWEEPTICK-RESIDUAL). nil when no scheduler was wired at
 	// Start (no ticker goroutine spawned). Set fresh in each Start().
 	sweepStopped chan struct{}
+
+	// scanGate coordinates maintenance ops standing the library scanner down
+	// (see scan_standdown.go). A maintenance op that writes to files under the
+	// library root acquires the gate, which cooperatively quiesces any running
+	// library.scan and blocks new ones from dispatching until the op releases.
+	scanGate scanStandDown
+
+	// scanStandDownStore optionally persists the scan stand-down marker so a
+	// reboot while an op holds the gate is visible to the boot resume sweep and
+	// the interrupted scan is NOT auto-resumed over the op's half-applied work.
+	// Set via SetScanStandDownStore before Start(), mirroring depBookStore's
+	// optional post-construction wiring. Nil is safe but NOT reboot-safe: the
+	// marker is then in-memory only (correct for tests; production MUST wire it).
+	scanStandDownStore standDownPersister
 }
 
 // Options contains optional tunable parameters for a Registry. Zero values
@@ -134,6 +151,9 @@ type Options struct {
 	// SweepInterval overrides how often DepsScheduler.SweepTick is called.
 	// Zero = default (5m). Only meaningful when a DepsScheduler is wired.
 	SweepInterval time.Duration
+	// ScanStandDownLease overrides the scan stand-down lease TTL (default 5m).
+	// Zero = default. Primarily used in tests to observe lease expiry quickly.
+	ScanStandDownLease time.Duration
 }
 
 // New creates a new Registry. workers controls the in-process worker pool size.
@@ -150,24 +170,38 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 		workers = 8
 	}
 	return &Registry{
-		defs:             make(map[string]OperationDef),
-		running:          make(map[string]*runHandle),
-		pluginRunning:    make(map[string]int),
-		pluginMax:        make(map[string]int),
-		concurrencyKeys:  make(map[string]string),
-		writeSetDeferred: make(map[string]string),
-		nextRun:          make(chan *queuedRun, workers*2),
-		dispatch:         make(chan struct{}, 1),
-		store:            store,
-		bus:              opts.Bus,
-		logger:           logger,
-		workers:          workers,
-		abandoned:        newAbandonedTracker(opts.AbandonedCap),
-		watchdogInterval: opts.WatchdogInterval,
-		abandonGrace:     opts.AbandonGrace,
-		sweepInterval:    opts.SweepInterval,
-		batch:            newBatchManager(),
+		defs:               make(map[string]OperationDef),
+		running:            make(map[string]*runHandle),
+		pluginRunning:      make(map[string]int),
+		pluginMax:          make(map[string]int),
+		concurrencyKeys:    make(map[string]string),
+		writeSetDeferred:   make(map[string]string),
+		nextRun:            make(chan *queuedRun, workers*2),
+		dispatch:           make(chan struct{}, 1),
+		store:              store,
+		bus:                opts.Bus,
+		logger:             logger,
+		workers:            workers,
+		abandoned:          newAbandonedTracker(opts.AbandonedCap),
+		watchdogInterval:   opts.WatchdogInterval,
+		abandonGrace:       opts.AbandonGrace,
+		sweepInterval:      opts.SweepInterval,
+		batch:              newBatchManager(),
+		scanGate:           scanStandDown{holders: make(map[string]time.Time)},
+		scanStandDownLease: opts.ScanStandDownLease,
 	}
+}
+
+// SetScanStandDownStore wires the persistent store used to record the scan
+// stand-down marker (see scan_standdown.go). Must be called BEFORE Start(),
+// mirroring SetDepBookStore. When nil (default), the marker is in-memory only:
+// correct for tests, but a reboot while an op holds the gate would then let the
+// boot resume sweep restart the scan over the op's half-applied work. Production
+// wiring in register.go type-asserts the concrete store to standDownPersister.
+func (r *Registry) SetScanStandDownStore(s standDownPersister) {
+	r.mu.Lock()
+	r.scanStandDownStore = s
+	r.mu.Unlock()
 }
 
 // SetDepsScheduler wires the dependency scheduler. Must be called BEFORE
