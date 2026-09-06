@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-06
 
@@ -40,13 +40,14 @@
 //   - Branch B — REFLINK from a source dir into the tree — is a SEPARATE follow-up op.
 //     This op only CENSUSES its population ("outside").
 //
-// ⚠️ SCAN PRECONDITION (operational, not enforced), same as mark-missing/repoint: do
-// NOT run apply=true while a library scan is active. This op matches against an
-// inventory SNAPSHOT that may be minutes stale, and a scan may be moving files
-// underneath it. The controls are the deploy boundary (the scan only resumes on the
-// operator's deploy) and the write-time re-stat interlock below (each candidate is
-// re-stat'd immediately before its row is written; a disagreement skips the row rather
-// than writing it stale).
+// ⚠️ SCAN INTERLOCK (enforced at runtime as of PR #3080), same as mark-missing/repoint:
+// on apply=true this op cooperatively stands the library scanner down for its write
+// phase (acquires the scan stand-down, renews it per write, aborts if the lease lapses).
+// This op matches against an inventory SNAPSHOT that may be minutes stale, so standing
+// the scan down while it writes stops a scan from moving files underneath the rewrite.
+// The write-time re-stat interlock below is the second line of defense: each candidate
+// is re-stat'd immediately before its row is written; a disagreement skips the row
+// rather than writing it stale.
 package maintenance
 
 import (
@@ -186,13 +187,14 @@ func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 			"IN-TREE (rewrites FilePath, never moves or deletes) only when the match is bidirectionally " +
 			"unique — exactly one unclaimed file of that size and extension, wanted by exactly one row. " +
 			"Censuses the rest (outside=reflink-later, nowhere=residue). Run missing-file-repoint FIRST. " +
-			"Default dry-run; pass {\"apply\": true} to write. Do NOT run apply=true while a library scan " +
-			"is active (the op re-stats each candidate before writing, so concurrent changes are skipped).",
+			"Default dry-run; pass {\"apply\": true} to write. On apply it cooperatively stands the library " +
+			"scanner down for the write phase (PR #3080) and re-stats each candidate before writing, so a " +
+			"concurrent scan can no longer clobber the rewrite.",
 		DefaultPriority: sdk.PriorityLow,
 		// Its OWN ConcurrencyKey, like every maintenance op. It declares no Writes for the
 		// same reason mark-missing/repoint do: library.scan declares no Writes either, so a
 		// Writes conflict-set gates against nothing (Gate 3b is Writes∩Writes). The
-		// scan/apply interlock is operational — see the SCAN PRECONDITION note up top.
+		// scan/apply interlock is the runtime scan stand-down — see the SCAN INTERLOCK note up top.
 		ConcurrencyKey: "maintenance.recover-missing-files",
 		// ResumeDrop, matching the other missing-file ops: this WRITES, and an apply
 		// interrupted midway must not silently resume. Re-running is cheap and safe (a
@@ -228,21 +230,17 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 	}
 	log := reporter.Logger()
 	if params.Apply {
-		// Log the precondition at apply-start so the journal records that the operator
-		// was told. A documented hazard is not a control; the deploy boundary and the
-		// write-time re-stat are the controls.
+		// Log at apply-start so the journal records that the scanner was stood down for
+		// the write phase (PR #3080) — a real runtime interlock, not just a documented
+		// hazard. The write-time re-stat is the second line of defense.
 		log.Warn("recover-missing-files: APPLY — rewriting FilePath on bidirectionally-unique rows. " +
-			"Precondition: no library scan should be active. Each candidate is re-stat'd before its row " +
-			"is written, so concurrent changes are skipped.")
+			"The library scan is stood down for the write phase (PR #3080) — the real control that replaces " +
+			"the old \"no scan should be active\" precondition. Each candidate is also re-stat'd before its " +
+			"row is written, so a concurrent change is skipped, not written.")
 	}
 
 	plan, err := planRecoverMissingFiles(ctx, store, p.deps, rootDir, params, reporter)
-	if err != nil {
-		return err
-	}
 
-	// Write the report BEFORE the summary log lines, so a run killed mid-summary still
-	// leaves the artifact behind.
 	reportPath := params.ReportPath
 	if reportPath == "" {
 		name := registry.ReporterOpID(reporter)
@@ -251,12 +249,24 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 		}
 		reportPath = filepath.Join("reports", "recover-missing-files-"+name+".tsv")
 	}
-	if wErr := writeRecoverReport(reportPath, plan.all); wErr != nil {
-		log.Error("recover-missing-files: FAILED to write the per-row report",
-			"path", reportPath, "err", wErr, "rows", len(plan.all))
-	} else {
-		plan.ReportPath = reportPath
-		log.Info("recover-missing-files: per-row report written", "path", reportPath, "rows", len(plan.all))
+
+	// Write the report BEFORE returning any error, so a run that aborts mid-apply
+	// (e.g. the scan stand-down lease lapsed after k writes) still leaves the
+	// per-row artifact — exactly the run where an operator most needs it. The
+	// planning phase populates plan.all in full regardless of how the write phase
+	// ends; skip the write only for an early error that produced no rows.
+	if err == nil || len(plan.all) > 0 {
+		if wErr := writeRecoverReport(reportPath, plan.all); wErr != nil {
+			log.Error("recover-missing-files: FAILED to write the per-row report",
+				"path", reportPath, "err", wErr, "rows", len(plan.all))
+		} else {
+			plan.ReportPath = reportPath
+			log.Info("recover-missing-files: per-row report written", "path", reportPath, "rows", len(plan.all))
+		}
+	}
+
+	if err != nil {
+		return err
 	}
 
 	if b, mErr := json.Marshal(plan); mErr == nil {

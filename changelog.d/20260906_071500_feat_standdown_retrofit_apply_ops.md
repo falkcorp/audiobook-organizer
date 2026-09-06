@@ -11,4 +11,6 @@
   `ScanController` interface on the maintenance plugin's `ServerDeps` carries the
   control across the plugin boundary (no registry types leak in), and the shared
   acquire/renew/abort contract lives in one helper so the ops cannot drift apart on
-  it.
+  it. When an apply aborts on a lapsed lease, the per-row report is still written
+  before the error propagates, so the operator keeps the artifact for the run that
+  most needs it.

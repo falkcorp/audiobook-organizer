@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-09-06
 
@@ -175,13 +175,8 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 		return fmt.Errorf("database not initialized")
 	}
 	plan, err := planMissingFileRepoint(ctx, store, p.deps, params, reporter)
-	if err != nil {
-		return err
-	}
 	log := reporter.Logger()
 
-	// Write the full per-row report BEFORE the log lines, so a run that is killed
-	// while emitting its summary still leaves the artifact behind.
 	reportPath := params.ReportPath
 	if reportPath == "" {
 		name := registry.ReporterOpID(reporter)
@@ -190,16 +185,28 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 		}
 		reportPath = filepath.Join("reports", "missing-file-repoint-"+name+".tsv")
 	}
-	if wErr := writeRepointReport(reportPath, plan.all); wErr != nil {
-		// Not fatal: the scan already happened and the counts are still worth
-		// having. But say so loudly -- a silently missing report reads as "there
-		// was nothing to report".
-		log.Error("missing-file-repoint: FAILED to write the per-row report",
-			"path", reportPath, "err", wErr, "rows", len(plan.all))
-	} else {
-		plan.ReportPath = reportPath
-		log.Info("missing-file-repoint: per-row report written",
-			"path", reportPath, "rows", len(plan.all))
+
+	// Write the full per-row report BEFORE returning any error, so a run that
+	// aborts mid-apply (e.g. the scan stand-down lease lapsed after k writes) still
+	// leaves the artifact behind — exactly the run where an operator most needs it.
+	// The planning phase populates plan.all in full regardless of how the write
+	// phase ends; skip the write only for an early error that produced no rows.
+	if err == nil || len(plan.all) > 0 {
+		if wErr := writeRepointReport(reportPath, plan.all); wErr != nil {
+			// Not fatal: the scan already happened and the counts are still worth
+			// having. But say so loudly -- a silently missing report reads as "there
+			// was nothing to report".
+			log.Error("missing-file-repoint: FAILED to write the per-row report",
+				"path", reportPath, "err", wErr, "rows", len(plan.all))
+		} else {
+			plan.ReportPath = reportPath
+			log.Info("missing-file-repoint: per-row report written",
+				"path", reportPath, "rows", len(plan.all))
+		}
+	}
+
+	if err != nil {
+		return err
 	}
 
 	if b, mErr := json.Marshal(plan); mErr == nil {

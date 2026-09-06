@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-09-06
 
@@ -26,14 +26,15 @@
 // full-record replacement (rehydrate → mutate one field → write back), so the
 // fingerprint, transcript and tags on the row are preserved.
 //
-// ⚠️ SCAN PRECONDITION (operational, not enforced). Do NOT run with apply=true
-// while a library scan is active. There is no runtime "is a scan running" query
-// to gate on, and Missing is a boolean the next run reconciles, so a transient
-// wrong value is self-healing — but a scan mutating rows underneath the write is
-// still avoidable churn. The real control is the deploy boundary (the scan only
-// resumes on the operator's deploy); this op additionally re-stats each row
-// immediately before writing it (the interlock below), so a row whose disk state
-// changed since the plan phase is skipped rather than written stale.
+// ⚠️ SCAN INTERLOCK (enforced at runtime as of PR #3080). On apply=true this op
+// cooperatively stands the library scanner down for its write phase (acquires the
+// scan stand-down, renews it per write, aborts the run if the lease lapses), so a
+// scan can no longer mutate the same rows underneath the write. This replaces the
+// old "operational, not enforced" precondition. As a second line of defense the
+// op also re-stats each row immediately before writing it, so a row whose disk
+// state changed since the plan phase is skipped rather than written stale. Missing
+// is a boolean the next run reconciles, so any transient wrong value is
+// self-healing regardless.
 package maintenance
 
 import (
@@ -149,15 +150,14 @@ func (p *Plugin) markMissingFilesDef() sdk.OperationDef {
 			"Missing=true where the bytes are gone, clears it where they are present again. This is what " +
 			"makes the dashboard's Broken Files counter true (it reads the flag, not a live stat). WRITES " +
 			"only the Missing boolean — never moves or deletes anything. Default dry-run; pass {\"apply\": " +
-			"true} to write. Do NOT run with apply=true while a library scan is active (the op re-stats each " +
-			"row before writing it, so concurrent changes are skipped rather than written stale, but a scan " +
-			"still causes avoidable churn).",
+			"true} to write. On apply it cooperatively stands the library scanner down for the write phase " +
+			"(PR #3080) and re-stats each row before writing, so a concurrent scan can no longer clobber the write.",
 		DefaultPriority: sdk.PriorityLow,
 		// Its OWN ConcurrencyKey, like every other maintenance op. It deliberately
 		// does NOT share "library.scan"'s key and declares no Writes: library.scan
 		// declares no Writes either, so a Writes conflict-set would gate against
-		// nothing (Gate 3b is Writes∩Writes). The scan/apply interlock is
-		// operational — see the SCAN PRECONDITION note at the top of this file.
+		// nothing (Gate 3b is Writes∩Writes). The scan/apply interlock is the runtime
+		// scan stand-down — see the SCAN INTERLOCK note at the top of this file.
 		ConcurrencyKey: "maintenance.mark-missing-files",
 		// ResumeDrop, matching the other missing-file ops: this WRITES, and an apply
 		// interrupted midway must not silently resume. Re-running is cheap and safe
@@ -193,26 +193,32 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 	}
 
 	plan, err := planMarkMissingFiles(ctx, store, p.deps, params, reporter)
-	if err != nil {
-		return err
+
+	// Write the report BEFORE returning any error, so a run that aborts mid-apply
+	// (e.g. the scan stand-down lease lapsed after k writes) still leaves the
+	// per-row artifact — exactly the run where an operator most needs it. The
+	// planning phase populates plan.all in full regardless of how the write phase
+	// ends; skip the write only for an early error that produced no decisions.
+	if err == nil || len(plan.all) > 0 {
+		reportPath := params.ReportPath
+		if reportPath == "" {
+			name := registry.ReporterOpID(reporter)
+			if name == "" {
+				name = "unknown-op"
+			}
+			reportPath = filepath.Join("reports", "mark-missing-files-"+name+".tsv")
+		}
+		if wErr := writeMarkMissingReport(reportPath, plan.all); wErr != nil {
+			log.Error("mark-missing-files: FAILED to write the per-row report",
+				"path", reportPath, "err", wErr, "rows", len(plan.all))
+		} else {
+			plan.ReportPath = reportPath
+			log.Info("mark-missing-files: per-row report written", "path", reportPath, "rows", len(plan.all))
+		}
 	}
 
-	// Write the report BEFORE the summary log lines, so a run killed mid-summary
-	// still leaves the artifact behind.
-	reportPath := params.ReportPath
-	if reportPath == "" {
-		name := registry.ReporterOpID(reporter)
-		if name == "" {
-			name = "unknown-op"
-		}
-		reportPath = filepath.Join("reports", "mark-missing-files-"+name+".tsv")
-	}
-	if wErr := writeMarkMissingReport(reportPath, plan.all); wErr != nil {
-		log.Error("mark-missing-files: FAILED to write the per-row report",
-			"path", reportPath, "err", wErr, "rows", len(plan.all))
-	} else {
-		plan.ReportPath = reportPath
-		log.Info("mark-missing-files: per-row report written", "path", reportPath, "rows", len(plan.all))
+	if err != nil {
+		return err
 	}
 
 	if b, mErr := json.Marshal(plan); mErr == nil {
