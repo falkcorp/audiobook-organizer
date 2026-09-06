@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-06
 
@@ -29,16 +29,19 @@
 // file, an extension mismatch) is refused and reported, never guessed. This generalizes
 // repoint's `claimed`/collision guards from "derived target" to "size-keyed candidate".
 //
-// SCOPE (this op = Branch A + C):
+// SCOPE (this op = Branch A + B + C):
 //   - Branch A — IN-TREE REPOINT (DB-only, zero I/O): the unique unclaimed candidate is
 //     under RootDir. Rewrite FilePath; never move bytes, never delete a row.
+//   - Branch B — REFLINK (opt-in via reflinkOutside, file-I/O, zero DB writes): the unique
+//     unclaimed candidate lives ONLY under a source dir (SourceDirs). Clone (reflink, CoW)
+//     the source bytes back to the row's own in-tree FilePath so the row resolves again.
+//     Same bidirectional-uniqueness gate as Branch A. Never moves/deletes/overwrites (an
+//     existing dst is refused) and never writes the row — it already points at that path.
 //   - Branch C — CENSUS: everything else is classified and reported, not acted on:
-//     "outside"  — the only candidate(s) live under a source dir (SourceDirs), i.e. a
-//     REFLINK candidate for the deferred Branch B, not an in-tree repoint.
+//     "outside"  — the only candidate(s) live under a source dir; a reflink candidate.
+//     Acted on only when reflinkOutside is set (Branch B), otherwise just censused.
 //     "nowhere"  — no file of that size exists anywhere walked. Residue.
 //     "ambiguous"/"size-collision"/"ext-mismatch"/"no-size" — refused, with the reason.
-//   - Branch B — REFLINK from a source dir into the tree — is a SEPARATE follow-up op.
-//     This op only CENSUSES its population ("outside").
 //
 // ⚠️ SCAN INTERLOCK (enforced at runtime as of PR #3080), same as mark-missing/repoint:
 // on apply=true this op cooperatively stands the library scanner down for its write
@@ -53,6 +56,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -63,6 +67,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -86,8 +91,18 @@ type recoverMissingParams struct {
 	// Empty means only RootDir is walked, so "outside" and "nowhere" cannot be
 	// distinguished and a size found nowhere in-tree is reported as "nowhere".
 	SourceDirs []string `json:"sourceDirs,omitempty"`
-	// Max bounds in-tree repoints per run. <=0 uses recoverDefaultMax.
+	// Max bounds in-tree repoints per run. <=0 uses recoverDefaultMax. When
+	// ReflinkOutside is set it independently bounds the reflinks per run too.
 	Max int `json:"max"`
+	// ReflinkOutside turns on Branch B: for a row whose bytes exist ONLY under a
+	// SourceDir (the "outside" bucket), clone (reflink, CoW) the source file back to
+	// the row's own in-tree FilePath so the row resolves again. Same bidirectional
+	// uniqueness gate as the in-tree repoint (exactly one unclaimed source of the
+	// size+ext, wanted by exactly one row); non-unique rows stay in
+	// size-collision/ambiguous. NEVER deletes/moves/overwrites (an existing dst is
+	// refused) and writes NO DB row — the row already points at the recreated path.
+	// Off by default, so recover-missing-files' behavior is unchanged unless asked.
+	ReflinkOutside bool `json:"reflinkOutside"`
 	// RequireExtMatch, default TRUE, refuses to match a candidate whose file extension
 	// differs from the missing row's recorded path — a .jpg the same byte size as a
 	// .mp3 is never the row's audio. Set false only to recover rows whose extension is
@@ -108,12 +123,19 @@ func (p recoverMissingParams) requireExt() bool {
 type recoverDecision struct {
 	FileID string `json:"file_id"`
 	BookID string `json:"book_id"`
-	// Bucket is the coarse outcome; Reason carries specifics. Buckets: "repointable"
-	// (unique in-tree candidate → would rewrite FilePath), "outside" (candidate only
-	// under a source dir → reflink later), "nowhere" (no candidate of that size),
-	// "ambiguous" (>1 in-tree candidate), "size-collision" (>1 missing row wants the one
-	// candidate), "ext-mismatch" (a same-size candidate exists but the extension differs
-	// and RequireExtMatch is on), "no-size" (row has no recorded size to match on).
+	// Bucket is the coarse outcome; Reason carries specifics. Buckets:
+	//   "repointable"    unique in-tree candidate → would rewrite FilePath (Branch A)
+	//   "reflinkable"    unique outside candidate → would reflink to FilePath (Branch B, reflinkOutside)
+	//   "outside"        candidate only under a source dir; census only (reflinkOutside off)
+	//   "nowhere"        no candidate of that size anywhere walked
+	//   "ambiguous"      >1 unclaimed candidate of that size (in-tree, or outside under reflinkOutside)
+	//   "size-collision" >1 missing row wants the one candidate (in-tree or outside)
+	//   "ext-mismatch"   a same-size candidate exists but the extension differs and RequireExtMatch is on
+	//   "no-size"        row has no recorded size to match on
+	// Apply-phase-only buckets (recorded per exception, never on a dry run):
+	//   "skipped-changed"         Branch A: the target changed between plan and write
+	//   "reflink-skipped-exists"  Branch B: the destination already existed — left untouched
+	//   "reflink-error"           Branch B: dst not under root, source changed, mkdir, or clone failed
 	Bucket   string `json:"bucket"`
 	Size     int64  `json:"size"`
 	OldPath  string `json:"old_path"`
@@ -144,6 +166,16 @@ type recoverPlan struct {
 	UpdateErrs     int `json:"update_errs"`
 	CappedAt       int `json:"capped_at,omitempty"`
 
+	// Branch B (reflinkOutside). Reflinkable is the post-uniqueness count of
+	// "outside" rows with exactly one unclaimed source of their size wanted by
+	// exactly one row; Reflinked/ReflinkSkippedExists/ReflinkErrs are the apply
+	// results (0 on a dry run). ReflinkCappedAt records the Max cap if it bit.
+	Reflinkable          int `json:"reflinkable"`
+	Reflinked            int `json:"reflinked"`
+	ReflinkSkippedExists int `json:"reflink_skipped_exists"`
+	ReflinkErrs          int `json:"reflink_errs"`
+	ReflinkCappedAt      int `json:"reflink_capped_at,omitempty"`
+
 	ReportPath string `json:"report_path,omitempty"`
 
 	// Samples is a per-bucket-capped subset for the JSON log line; all holds every
@@ -171,9 +203,10 @@ func (p recoverPlan) summary() string {
 		mode = "APPLIED"
 	}
 	return fmt.Sprintf(
-		"%s scanned=%d missing=%d | in-tree repointable=%d repointed=%d | census: outside=%d nowhere=%d | "+
-			"refused: ambiguous=%d size-collision=%d ext-mismatch=%d no-size=%d | skipped-changed=%d update_errs=%d",
+		"%s scanned=%d missing=%d | in-tree repointable=%d repointed=%d | outside reflinkable=%d reflinked=%d (skipped-exists=%d errs=%d) | "+
+			"census: outside=%d nowhere=%d | refused: ambiguous=%d size-collision=%d ext-mismatch=%d no-size=%d | skipped-changed=%d update_errs=%d",
 		mode, p.ScannedRows, p.MissingRows, p.Repointable, p.Repointed,
+		p.Reflinkable, p.Reflinked, p.ReflinkSkippedExists, p.ReflinkErrs,
 		p.Outside, p.Nowhere, p.Ambiguous, p.SizeCollision, p.ExtMismatch, p.NoSize,
 		p.SkippedChanged, p.UpdateErrs)
 }
@@ -186,10 +219,12 @@ func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 			"missing-file-repoint, matches the row's recorded file size to a real file on disk. Repoints " +
 			"IN-TREE (rewrites FilePath, never moves or deletes) only when the match is bidirectionally " +
 			"unique — exactly one unclaimed file of that size and extension, wanted by exactly one row. " +
-			"Censuses the rest (outside=reflink-later, nowhere=residue). Run missing-file-repoint FIRST. " +
-			"Default dry-run; pass {\"apply\": true} to write. On apply it cooperatively stands the library " +
-			"scanner down for the write phase (PR #3080) and re-stats each candidate before writing, so a " +
-			"concurrent scan can no longer clobber the rewrite.",
+			"With {\"reflinkOutside\": true} it also RECOVERS rows whose only unique candidate lives under a " +
+			"source dir, by cloning (reflink/CoW) the source bytes back to the row's own in-tree path — no DB " +
+			"write, never overwriting an existing file. Censuses the rest (nowhere=residue). Run " +
+			"missing-file-repoint FIRST. Default dry-run; pass {\"apply\": true} to write. On apply it " +
+			"cooperatively stands the library scanner down for the write phase (PR #3080) and re-stats each " +
+			"candidate before writing, so a concurrent scan can no longer clobber the rewrite.",
 		DefaultPriority: sdk.PriorityLow,
 		// Its OWN ConcurrencyKey, like every maintenance op. It declares no Writes for the
 		// same reason mark-missing/repoint do: library.scan declares no Writes either, so a
@@ -205,8 +240,11 @@ func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 		// them is not a RunItems phase, so it emits reporter.UpdateProgress itself every
 		// recoverWalkProgressEvery files — the watchdog reads lastProgressAt regardless of
 		// which phase stamped it, so that keeps a heavy walk from tripping never_reported.
-		Liveness:     sdk.LivenessRunItems,
-		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Liveness: sdk.LivenessRunItems,
+		// CapFilesRead/Write are for the opt-in reflinkOutside (Branch B) path, which reads a
+		// source file and clones it back into the tree. Branch A (in-tree repoint) writes only
+		// the DB, but the capability set is static per def, so both are declared regardless.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapFilesRead, sdk.CapFilesWrite},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 			return p.runRecoverMissingFiles(ctx, raw, reporter)
 		},
@@ -311,7 +349,29 @@ type rewriteRow struct {
 	target string
 }
 
+// reflinkRow is one "outside" row the Branch B apply phase will restore, with the
+// unique unclaimed source file to clone back into the tree. The destination is the
+// row's OWN FilePath (already recorded), so there is no DB write — cloning the bytes
+// back to where the row already points makes it resolve again.
+type reflinkRow struct {
+	file   database.BookFileCore
+	source string
+}
+
 func extOf(path string) string { return strings.ToLower(filepath.Ext(path)) }
+
+// underRoot reports whether p resolves to a location inside root. It guards the
+// reflink destination: some rows carry a mangled FilePath (a doubled
+// /mnt/.../mnt/... prefix has been seen), and cloning bytes to such a path would
+// create a file OUTSIDE the library tree. A path that escapes root via ".." (or is
+// root's parent) is refused.
+func underRoot(p, root string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
 
 func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanController, rootDir string, params recoverMissingParams, reporter sdk.Reporter) (recoverPlan, error) {
 	log := reporter.Logger()
@@ -489,6 +549,11 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	}
 	var res []resolved
 	targetClaimants := make(map[string]int)
+	// sourceClaimants mirrors targetClaimants for the Branch B (reflinkOutside) path: it
+	// counts how many missing rows each single unclaimed SOURCE file is wanted by, so a
+	// source wanted by two rows is a size-collision rather than a race won by iteration
+	// order. Only populated when reflinkOutside is set.
+	sourceClaimants := make(map[string]int)
 	for i := range items {
 		if !gone[i] {
 			continue
@@ -514,11 +579,18 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		if len(r.inTree) == 1 {
 			targetClaimants[r.inTree[0].path]++
 		}
+		// A reflink candidate is only considered when the row has NO in-tree candidate
+		// (an in-tree match is a Branch-A repoint and always preferred) and exactly one
+		// unclaimed source of its size. Count that source's claimants for the collision gate.
+		if params.ReflinkOutside && len(r.inTree) == 0 && len(r.outside) == 1 {
+			sourceClaimants[r.outside[0].path]++
+		}
 		res = append(res, r)
 	}
 
 	// --- Phase 3, pass B — classify. ---
 	var rewrites []rewriteRow
+	var reflinks []reflinkRow
 	for _, r := range res {
 		f := r.row
 		switch {
@@ -540,17 +612,34 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 				plan.record(recoverDecision{FileID: f.ID, BookID: f.BookID, Bucket: "nowhere",
 					Size: f.FileSize, OldPath: f.FilePath, Reason: "no file of this size found in any walked tree"})
 			}
-		case len(r.inTree) == 0:
+		case len(r.inTree) == 0 && !params.ReflinkOutside:
 			// Candidate(s) exist only under a SourceDir → a reflink target for Branch B,
-			// not an in-tree repoint. Census only. NewPath reports r.outside[0] as a SAMPLE,
-			// not a chosen target: it is intentionally NOT deduped or uniqueness-checked here.
-			// ⚠️ Branch B MUST apply the same bidirectional-uniqueness gate the in-tree path
-			// uses (one unclaimed candidate, wanted by one row) before it reflinks — it must
-			// NOT adopt "first outside candidate wins" from this census line.
+			// not an in-tree repoint. Census only (reflinkOutside is off). NewPath reports
+			// r.outside[0] as a SAMPLE, not a chosen target: it is intentionally NOT deduped
+			// or uniqueness-checked here.
 			plan.Outside++
 			plan.record(recoverDecision{FileID: f.ID, BookID: f.BookID, Bucket: "outside",
 				Size: f.FileSize, OldPath: f.FilePath, NewPath: r.outside[0].path, CandSeen: len(r.outside),
-				Reason: "bytes of this size exist only outside RootDir (reflink candidate — Branch B)"})
+				Reason: "bytes of this size exist only outside RootDir (reflink candidate — pass reflinkOutside to recover)"})
+		case len(r.inTree) == 0 && len(r.outside) > 1:
+			// reflinkOutside on, but more than one unclaimed source of this size — which one
+			// is the row's is unknowable on size alone, so refuse it (needs content match).
+			plan.Ambiguous++
+			plan.record(recoverDecision{FileID: f.ID, BookID: f.BookID, Bucket: "ambiguous",
+				Size: f.FileSize, OldPath: f.FilePath, CandSeen: len(r.outside),
+				Reason: fmt.Sprintf("%d unclaimed source files share this size; which one is the row's is unknowable", len(r.outside))})
+		case len(r.inTree) == 0 && sourceClaimants[r.outside[0].path] > 1:
+			// One unclaimed source, but two missing rows want it — assigning it is unknowable.
+			plan.SizeCollision++
+			plan.record(recoverDecision{FileID: f.ID, BookID: f.BookID, Bucket: "size-collision",
+				Size: f.FileSize, OldPath: f.FilePath, NewPath: r.outside[0].path, CandSeen: 1,
+				Reason: fmt.Sprintf("%d missing rows want this one source file; assigning it is unknowable", sourceClaimants[r.outside[0].path])})
+		case len(r.inTree) == 0:
+			// Bidirectionally unique outside match: exactly one unclaimed source of this
+			// size(+ext), wanted by exactly one missing row. Safe to reflink back to the
+			// row's own FilePath (Branch B).
+			plan.Reflinkable++
+			reflinks = append(reflinks, reflinkRow{file: f, source: r.outside[0].path})
 		case len(r.inTree) > 1:
 			plan.Ambiguous++
 			plan.record(recoverDecision{FileID: f.ID, BookID: f.BookID, Bucket: "ambiguous",
@@ -583,8 +672,25 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 			Reason: "unique in-tree size match — would repoint"})
 	}
 
+	// Cap and record the Branch B reflinks the same way (Max bounds each independently).
+	// The recorded new_path is the file that WOULD be created (the row's own FilePath), so
+	// a rollback can delete exactly the files an apply added; the source is named in the reason.
+	sort.Slice(reflinks, func(a, b int) bool { return reflinks[a].file.ID < reflinks[b].file.ID })
+	if len(reflinks) > maxRewrites {
+		plan.ReflinkCappedAt = maxRewrites
+		log.Warn("recover-missing-files: more reflinkable rows than the cap — taking the first N by file ID",
+			"reflinkable", len(reflinks), "cap", maxRewrites)
+		reflinks = reflinks[:maxRewrites]
+	}
+	for _, rl := range reflinks {
+		plan.record(recoverDecision{FileID: rl.file.ID, BookID: rl.file.BookID, Bucket: "reflinkable",
+			Size: rl.file.FileSize, OldPath: rl.source, NewPath: rl.file.FilePath, CandSeen: 1,
+			Reason: fmt.Sprintf("unique outside size match — would reflink from %s", rl.source)})
+	}
+
 	if !params.Apply {
-		log.Info("recover-missing-files: DRY RUN — no rows written", "would_repoint", len(rewrites))
+		log.Info("recover-missing-files: DRY RUN — no rows written",
+			"would_repoint", len(rewrites), "would_reflink", len(reflinks))
 		return plan, nil
 	}
 
@@ -668,8 +774,96 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	plan.Repointed = int(repointed.Load())
 	plan.SkippedChanged = int(skippedChanged.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
+
+	// --- Phase 5 — reflink write (Branch B, only when reflinkOutside). For each unique
+	// outside match, clone the source bytes back to the row's OWN FilePath so the row
+	// resolves again. NO DB write: the row already points there. Runs under the SAME scan
+	// stand-down acquired above (renewed per item), and is skipped entirely if the lease
+	// was already lost in Phase 4. ReflinkOrCopy refuses an existing dst, so a file some
+	// other process restored is never clobbered — it is counted skipped, not an error. ---
+	if params.ReflinkOutside && !standDownLost.Load() {
+		var reflinked, reflinkSkipped, reflinkErrs atomic.Int64
+		err = registry.RunItems(ctx, reporter, reflinks, func(_ context.Context, rl reflinkRow) error {
+			if standDownLost.Load() {
+				return nil
+			}
+			if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+				standDownLost.Store(true)
+				log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining reflinks")
+				return nil
+			}
+			dst := rl.file.FilePath
+			// Refuse a destination that is not genuinely under RootDir (a mangled/doubled
+			// path would otherwise create a file outside the library tree).
+			if !underRoot(dst, rootDir) {
+				reflinkErrs.Add(1)
+				mu.Lock()
+				plan.record(recoverDecision{FileID: rl.file.ID, BookID: rl.file.BookID, Bucket: "reflink-error",
+					Size: rl.file.FileSize, OldPath: rl.source, NewPath: dst,
+					Reason: "destination path is not under RootDir (mangled path?) — refused"})
+				mu.Unlock()
+				return nil
+			}
+			// Re-stat the source immediately before cloning (the interlock): if it is gone
+			// or its size no longer matches, skip rather than restore stale/wrong bytes.
+			st, serr := os.Stat(rl.source)
+			if serr != nil || st.IsDir() || st.Size() != rl.file.FileSize {
+				reflinkErrs.Add(1)
+				mu.Lock()
+				plan.record(recoverDecision{FileID: rl.file.ID, BookID: rl.file.BookID, Bucket: "reflink-error",
+					Size: rl.file.FileSize, OldPath: rl.source, NewPath: dst,
+					Reason: "source changed between plan and write (gone, directory, or size differs) — skipped"})
+				mu.Unlock()
+				return nil
+			}
+			if mkerr := os.MkdirAll(filepath.Dir(dst), 0o755); mkerr != nil {
+				reflinkErrs.Add(1)
+				log.Warn("recover-missing-files: mkdir for reflink dst failed", "dst", dst, "err", mkerr)
+				mu.Lock()
+				plan.record(recoverDecision{FileID: rl.file.ID, BookID: rl.file.BookID, Bucket: "reflink-error",
+					Size: rl.file.FileSize, OldPath: rl.source, NewPath: dst,
+					Reason: fmt.Sprintf("mkdir parent failed: %v", mkerr)})
+				mu.Unlock()
+				return nil
+			}
+			switch cerr := fileops.ReflinkOrCopy(rl.source, dst); {
+			case cerr == nil:
+				reflinked.Add(1)
+			case errors.Is(cerr, fs.ErrExist):
+				// Some other process already restored the file; never clobber it.
+				reflinkSkipped.Add(1)
+				mu.Lock()
+				plan.record(recoverDecision{FileID: rl.file.ID, BookID: rl.file.BookID, Bucket: "reflink-skipped-exists",
+					Size: rl.file.FileSize, OldPath: rl.source, NewPath: dst,
+					Reason: "destination already exists — left untouched"})
+				mu.Unlock()
+			default:
+				reflinkErrs.Add(1)
+				log.Warn("recover-missing-files: reflink failed", "src", rl.source, "dst", dst, "err", cerr)
+				mu.Lock()
+				plan.record(recoverDecision{FileID: rl.file.ID, BookID: rl.file.BookID, Bucket: "reflink-error",
+					Size: rl.file.FileSize, OldPath: rl.source, NewPath: dst,
+					Reason: fmt.Sprintf("reflink/copy failed: %v", cerr)})
+				mu.Unlock()
+			}
+			return nil
+		}, registry.RunItemsOptions{
+			Concurrency: missingFileStatConcurrency,
+			ErrMode:     registry.ErrModeCollect,
+			Label: func(i, t int) string {
+				return fmt.Sprintf("Reflinked %d/%d rows (skipped=%d errs=%d)", i+1, t, reflinkSkipped.Load(), reflinkErrs.Load())
+			},
+		})
+		if err != nil {
+			return plan, fmt.Errorf("reflink writes: %w", err)
+		}
+		plan.Reflinked = int(reflinked.Load())
+		plan.ReflinkSkippedExists = int(reflinkSkipped.Load())
+		plan.ReflinkErrs = int(reflinkErrs.Load())
+	}
+
 	if standDownLost.Load() {
-		return plan, fmt.Errorf("recover-missing-files: scan stand-down lease lapsed mid-apply after %d repoints — aborted (re-run after the scan is idle)", plan.Repointed)
+		return plan, fmt.Errorf("recover-missing-files: scan stand-down lease lapsed mid-apply after %d repoints / %d reflinks — aborted (re-run after the scan is idle)", plan.Repointed, plan.Reflinked)
 	}
 	return plan, nil
 }
