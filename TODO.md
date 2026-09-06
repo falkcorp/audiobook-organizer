@@ -101,24 +101,40 @@ admin ever seeing the full token (a short reference prefix is fine).
 reference prefix should be token-derived or an independent random public id; whether
 generate-on-behalf should force a short expiry / first-use rotation for safety.
 
-### Scan stand-down: Branch B + retrofit existing applies (follow-up to the control PR)
+### Scan stand-down: Branch B (reflink outside sources in-tree)
 
-The scan stand-down control (registry `AcquireScanStandDown`) has landed with no
-caller. Follow-up work, in one PR:
+- [x] **Retrofit `recover-missing-files`, `missing-file-repoint`, `mark-missing-files`
+  onto the stand-down** (PR #3081): they acquire the stand-down for their apply runs,
+  renew it per write item, hard-abort on a lapsed lease, and write the per-row report
+  before propagating an abort error. The `ScanController` interface is wired onto
+  `ServerDeps` (its first caller) and implemented on `*Server`. The old "don't run
+  while a scan is active" precondition text in their doc comments is replaced.
+
+Remaining — Branch B, its own PR:
 
 - **Branch B op** — reflink an outside source file into the in-tree destination
-  (`fileops.ReflinkOrCopy`, cheap on ZFS block cloning), gated on
-  `HasResolvedAuthor` + `ensureUnderRoot`, then repoint the `outside`-census
-  `book_file` rows (full-record, `FilePath` only) with the
-  `missing_file_repoint` claimed/collision guards. Re-apply bidirectional
-  size+ext uniqueness at apply time. Declare `CapFilesWrite` + `CapLibraryWrite`;
-  `RunItems` pool disjoint by row id. Wire a `ScanController` method onto
-  `ServerDeps` (its first caller) and have the op acquire the stand-down for the
-  apply run, checking `ScanStandDownValid` per batch and aborting on a lapsed
-  lease.
-- **Retrofit** `recover-missing-files`, `missing-file-repoint`, and
-  `mark-missing-files` to acquire the stand-down for their apply runs, replacing
-  the "don't run while a scan is active" precondition in their doc comments.
+  (`fileops.ReflinkOrCopy`), gated on `HasResolvedAuthor` + an under-root check,
+  then repoint the `outside`-census `book_file` rows with the `missing_file_repoint`
+  claimed/collision guards. Because Branch B *creates* the destination path, it needs
+  a `maintenance → organizer` route: export `organizer.EnsureUnderRoot` and add a
+  single `BuildInTreeDestination(bookID, src) (dest, err)` on `ServerDeps` (one method
+  so the author + under-root gates can't be half-applied), implemented on `*Server`.
+- Re-apply the bidirectional size(+ext) uniqueness the census deliberately skips
+  (it reports the `outside` candidate as a *sample* only) and dedup **destinations** in
+  the **planning phase**: `RunItems` is a plain semaphore, **not** disjoint-by-row-id,
+  so two rows could otherwise target one path. The repoint write rehydrates the full
+  row and calls `UpdateBookFile` (a full-record replace; there is no field-only
+  `FilePath` updater).
+- Declare `CapLibraryRead` + `CapLibraryWrite` + `CapFilesRead` + `CapFilesWrite`;
+  acquire the stand-down for the apply run and renew it per write batch (reflink+walk
+  is slower than a DB-only repoint, so the 5-min lease *will* lapse without renewal).
+- ZFS block-cloning probe (read-only on prod, 2026-09-06): `bigdata` (the library
+  pool) and `rpool` are `active`; `bpool` disabled (boot); `nvmecache` enabled-not-yet.
+  Block cloning is **intra-pool**, so the "a clone is free" premise holds only when a
+  Branch B source (`SourceDirs`) and its in-tree destination (`RootDir`) are **both on
+  `bigdata`** — a cross-pool `FICLONE` falls back to a full byte copy (larger lease
+  budget). Confirm the source/dest pool topology before budgeting; don't assume every
+  `SourceDirs` entry is on `bigdata`.
 
 ## Provider throttling — follow-ups
 
