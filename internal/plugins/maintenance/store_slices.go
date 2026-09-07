@@ -52,6 +52,14 @@ type bookFileLister interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
+// transcribeSelectStore is what selectTranscribeWork needs: read a book row, and
+// (for the durable-failure self-heal recheck) list its files so it can stat the
+// source. Both are read-only.
+type transcribeSelectStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	bookFileLister
+}
+
 // bookFileCoreScanner reads the whole book_file table in its core projection.
 // Three read-only audit helpers share it; none of them may write.
 type bookFileCoreScanner interface {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.26.0
+// version: 3.27.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-05
+// last-edited: 2026-09-07
 
 package maintenance
 
@@ -66,6 +66,14 @@ type introTranscribeParams struct {
 	// RetrySilence includes books marked [SILENCE] for another attempt. Useful
 	// after adding more audio files or tuning the VAD threshold.
 	RetrySilence *bool `json:"retry_silence,omitempty"`
+	// RetryFailed includes books whose last attempt ended in a DURABLE failure
+	// (source_file_missing / no_audio / ffmpeg_error) that selection otherwise
+	// skips. Selection already self-heals those the moment the source file is
+	// back on disk (see transcribeInputChanged), so this flag is only needed to
+	// force a re-attempt while the file is still absent/unchanged — e.g. to
+	// re-probe after fixing something outside the row the stat can't see. Mirrors
+	// RetrySilence. Defaults false.
+	RetryFailed *bool `json:"retry_failed,omitempty"`
 	// ReparseOnly re-runs the classifier over the ALREADY-STORED
 	// IntroTranscription text and UPGRADES TranscribedTitle/Author/Narrator —
 	// no ffmpeg, no Whisper. Use after a parser fix to correct existing books
@@ -100,7 +108,7 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply.",
+		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
@@ -136,6 +144,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	}
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 	retrySilence := params.RetrySilence != nil && *params.RetrySilence
+	retryFailed := params.RetryFailed != nil && *params.RetryFailed
 	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
 	extractOnly := params.ExtractOnly != nil && *params.ExtractOnly
 
@@ -202,6 +211,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	sel, err := selectTranscribeWork(ctx, store, allIDs[startIdx:], transcribeSelect{
 		onlyMissing:  onlyMissing,
 		retrySilence: retrySilence,
+		retryFailed:  retryFailed,
 		extractOnly:  extractOnly,
 	})
 	if err != nil {
@@ -210,8 +220,10 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	total := len(sel.work)
 
 	log.Info("transcribe-book-intros: starting batch run",
-		"only_missing", onlyMissing, "library_books", len(allIDs),
+		"only_missing", onlyMissing, "retry_failed", retryFailed,
+		"library_books", len(allIDs),
 		"total_books", total, "skipped_existing", sel.skipped,
+		"skipped_known_broken", sel.failedSkipped,
 		"not_found", sel.notFound, "read_errors", sel.readErrors,
 		"start_index", startIdx, "page_size", introTranscribePageSize)
 	if sel.unreadable() > 0 {
@@ -281,8 +293,11 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			lastIDMu.Unlock()
 			// Re-checked at page time: selection ran at the start of the run, and
 			// a book transcribed since (another op, a manual apply) must not be
-			// redone. Normally a no-op — the work list already excludes these.
-			if !needsTranscribeWork(b, transcribeSelect{
+			// redone. hasTranscriptAlready — not needsTranscribeWork — so a
+			// durable-failure book that selection promoted via the self-heal
+			// recheck (its source is back) is NOT re-excluded here. Normally a
+			// no-op: the work list already excludes completed books.
+			if hasTranscriptAlready(b, transcribeSelect{
 				onlyMissing: onlyMissing, retrySilence: retrySilence, extractOnly: extractOnly,
 			}) {
 				skipped++
@@ -346,11 +361,13 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		"ok", st.OK, "source_missing", st.SourceMissing, "no_audio", st.NoAudio,
 		"ffmpeg_error", st.FFmpegError, "whisper_error", st.WhisperError,
 		"empty", st.Empty, "deferred", st.Deferred, "skipped_existing", st.SkippedExisting,
+		"skipped_known_broken", sel.failedSkipped,
 		"unreadable", st.Unreadable, "cache_hits", st.CacheHits)
 	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty, %d deferred (of %d total; %d skipped, %d unreadable)",
+		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty, %d deferred "+
+			"(of %d total; %d skipped, %d of them known-broken not retried, %d unreadable)",
 		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, st.Deferred, total,
-		st.SkippedExisting, st.Unreadable))
+		st.SkippedExisting, sel.failedSkipped, st.Unreadable))
 	return nil
 }
 
@@ -465,31 +482,147 @@ func eqStrPtr(a, b *string) bool {
 type transcribeSelect struct {
 	onlyMissing  bool // skip books that already carry a transcript
 	retrySilence bool // ...except [SILENCE] ones, which are retried
+	retryFailed  bool // ...and durable-failure ones, which are otherwise skipped
 	extractOnly  bool // (re)build the WAV cache for EVERY book; ignores onlyMissing
 }
 
-// needsTranscribeWork is the single predicate for "this run attempts this
-// book". Selection and the page loop both use it so they can never disagree.
+// needsTranscribeWork is the in-memory predicate for "selection attempts this
+// book". It reads only the row (no I/O) so it is unit-testable without a
+// filesystem. selectTranscribeWork is the ONLY caller: the page loop uses the
+// narrower hasTranscriptAlready instead, because a book selection promoted via
+// the self-heal recheck (transcribeInputChanged) must not be re-excluded here.
+//
+// A book that failed its last attempt for a DURABLE reason
+// (source_file_missing / no_audio / ffmpeg_error) is skipped by default: without
+// this, every run re-selects the same broken books and re-runs ffmpeg on them —
+// 9,151 of 9,922 work items on the 2026-09-05 run were last-run failures. The
+// [SILENCE] sentinel already handled that one class via IntroTranscription; the
+// other durable classes have no sentinel and are handled here off
+// TranscribeStatus, which applyOutcome already records. retry_failed=true forces
+// them back in; and selectTranscribeWork re-promotes any whose source file has
+// reappeared or changed, so a repoint self-heals with no flag.
+//
+// whisper_error and empty stay retryable: those are usually a transient endpoint
+// or clip-extraction defect (a whole-batch TransportError is deferred with no
+// status written at all), and skipping them would bury a recoverable failure.
 func needsTranscribeWork(b *database.Book, sel transcribeSelect) bool {
 	// extract-only ignores onlyMissing: the whole point is to (re)build the
 	// WAV cache for EVERY book, regardless of transcription status.
 	if sel.extractOnly || !sel.onlyMissing {
 		return true
 	}
-	if b.IntroTranscription == nil || *b.IntroTranscription == "" {
-		return true
+	// Already carries a transcript (or the [SILENCE] sentinel).
+	if b.IntroTranscription != nil && *b.IntroTranscription != "" {
+		// [SILENCE] books are skipped normally; retry_silence=true includes them.
+		return *b.IntroTranscription == silenceSentinel && sel.retrySilence
 	}
-	// [SILENCE] books are skipped normally; retry_silence=true includes them.
-	return *b.IntroTranscription == silenceSentinel && sel.retrySilence
+	// No transcript. Skip durable failures unless retry_failed forces a retry.
+	if !sel.retryFailed && b.TranscribeStatus != nil && isDurableTranscribeFailure(*b.TranscribeStatus) {
+		return false
+	}
+	return true
+}
+
+// isDurableTranscribeFailure reports whether a stored TranscribeStatus means the
+// last attempt failed for a reason that re-running the exact same input cannot
+// fix: the source file is gone, the book has no audio file, or ffmpeg could not
+// decode the bytes. Selection skips these (needsTranscribeWork) and only
+// re-attempts them when transcribeInputChanged sees the underlying file back.
+func isDurableTranscribeFailure(status string) bool {
+	switch status {
+	case statusSourceMissing, statusNoAudio, statusFFmpegError:
+		return true
+	default:
+		return false
+	}
+}
+
+// isDurableSkip reports whether a book selection is skipping specifically
+// because its last attempt was a durable failure whose input has not returned —
+// i.e. known-broken, not already-transcribed. Used only to attribute the
+// skipped count so those books surface in the run log instead of silently
+// shrinking the denominator. Callers reach it only after needsTranscribeWork
+// returned false and transcribeInputChanged returned false.
+func isDurableSkip(b *database.Book, sel transcribeSelect) bool {
+	if !sel.onlyMissing || sel.extractOnly || sel.retryFailed {
+		return false
+	}
+	if b.IntroTranscription != nil && *b.IntroTranscription != "" {
+		return false
+	}
+	return b.TranscribeStatus != nil && isDurableTranscribeFailure(*b.TranscribeStatus)
+}
+
+// hasTranscriptAlready is the page-time recheck: a book that gained a real (or
+// [SILENCE]) transcript between selection and page time is skipped so it is not
+// redone. It is deliberately NARROWER than needsTranscribeWork — it never
+// re-applies the durable-failure skip — so a durable book that selection
+// promoted via transcribeInputChanged (its source is back) still runs at page
+// time. It equals the previous `!needsTranscribeWork`, preserving the old
+// page-time behaviour exactly.
+func hasTranscriptAlready(b *database.Book, sel transcribeSelect) bool {
+	if sel.extractOnly || !sel.onlyMissing {
+		return false
+	}
+	if b.IntroTranscription == nil || *b.IntroTranscription == "" {
+		return false
+	}
+	// A [SILENCE] book counts as "already done" unless retry_silence re-includes it.
+	return *b.IntroTranscription != silenceSentinel || !sel.retrySilence
+}
+
+// transcribeInputChanged reports whether a durable-failure book that
+// needsTranscribeWork skipped should nonetheless be retried because its source
+// audio has reappeared or changed since the failed attempt. This is the
+// self-heal path: after the missing-file repoint restores a source file, the
+// next run picks the book up with no flag. Best-effort I/O — any error (no file,
+// stat failure) means "still broken, keep skipping".
+//
+// For source_file_missing / no_audio the file being present again IS the change.
+// For ffmpeg_error the file was present at failure time too, so require the bytes
+// to have changed — mtime after the failed attempt (a re-encode or replace).
+// TranscribeAttemptedAt holds the FIRST-failure time (applyOutcome's change-guard
+// does not refresh it on a repeat, and selection skips the book on later runs so
+// it never re-enters applyOutcome), which is exactly the reference the mtime
+// compare wants.
+func transcribeInputChanged(store bookFileLister, b *database.Book) bool {
+	// Only the no-transcript durable-failure case self-heals. A book that already
+	// carries a transcript is done regardless of a stale durable TranscribeStatus.
+	if b.IntroTranscription != nil && *b.IntroTranscription != "" {
+		return false
+	}
+	if b.TranscribeStatus == nil || !isDurableTranscribeFailure(*b.TranscribeStatus) {
+		return false
+	}
+	ref, err := firstAudioFile(store, *b)
+	if err != nil || ref.Path == "" {
+		return false
+	}
+	fi, err := os.Stat(ref.Path)
+	if err != nil {
+		return false // source still absent
+	}
+	if *b.TranscribeStatus == statusFFmpegError {
+		if b.TranscribeAttemptedAt == nil {
+			return false
+		}
+		return fi.ModTime().After(*b.TranscribeAttemptedAt)
+	}
+	return true
 }
 
 // transcribeSelection is what selectTranscribeWork decided.
 type transcribeSelection struct {
-	work       []string // ids this run attempts, in library (ListBookIDs) order
-	skipped    int      // ids that already carry a transcript (only_missing)
-	notFound   int      // ids listed by the index but with no row behind them
-	readErrors int      // ids whose read failed (I/O, decode) — a store fault
-	samples    []string // first few "id: err" / "id: not found", for the log
+	work    []string // ids this run attempts, in library (ListBookIDs) order
+	skipped int      // ids not attempted this run (already done OR known-broken)
+	// failedSkipped is the subset of skipped that were skipped because their last
+	// attempt was a DURABLE failure (source gone / no audio / ffmpeg) whose input
+	// has not come back — i.e. known-broken, not already-transcribed. Surfaced in
+	// the run log so those books do not silently vanish from the denominator.
+	failedSkipped int
+	notFound      int      // ids listed by the index but with no row behind them
+	readErrors    int      // ids whose read failed (I/O, decode) — a store fault
+	samples       []string // first few "id: err" / "id: not found", for the log
 }
 
 // unreadable is every listed id this run could not read, for any reason.
@@ -511,13 +644,12 @@ const selectSampleLimit = 5
 // it fails for every id the honest answer is not "nothing to transcribe,
 // done": that is the run this function refuses to return, because it would
 // be recorded as a success.
-func selectTranscribeWork(ctx context.Context, store interface {
-	GetBookByID(string) (*database.Book, error)
-}, ids []string, sel transcribeSelect) (transcribeSelection, error) {
+func selectTranscribeWork(ctx context.Context, store transcribeSelectStore, ids []string, sel transcribeSelect) (transcribeSelection, error) {
 	const (
 		verdictNotFound = iota
 		verdictReadError
-		verdictSkip
+		verdictSkip       // already transcribed / [SILENCE]
+		verdictFailedSkip // durable failure whose input has not come back
 		verdictWork
 	)
 	verdicts := make([]uint8, len(ids))
@@ -537,6 +669,13 @@ func selectTranscribeWork(ctx context.Context, store interface {
 				verdicts[i] = verdictNotFound
 			case needsTranscribeWork(b, sel):
 				verdicts[i] = verdictWork
+			case transcribeInputChanged(store, b):
+				// Durable failure whose source file is back on disk (or was
+				// re-encoded): self-heal it into work with no flag. This is what
+				// makes a missing-file repoint restore transcription on its own.
+				verdicts[i] = verdictWork
+			case isDurableSkip(b, sel):
+				verdicts[i] = verdictFailedSkip
 			default:
 				verdicts[i] = verdictSkip
 			}
@@ -552,6 +691,9 @@ func selectTranscribeWork(ctx context.Context, store interface {
 		switch v {
 		case verdictWork:
 			out.work = append(out.work, ids[i])
+		case verdictFailedSkip:
+			out.skipped++
+			out.failedSkipped++
 		case verdictSkip:
 			out.skipped++
 		case verdictNotFound:
