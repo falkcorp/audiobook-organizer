@@ -15,7 +15,16 @@ over or giving up. Progress keeps counting against the batch you actually
 started, so a resumed run reads "480 of 699" rather than restarting the count at
 a smaller number and looking like a different, smaller job.
 
-Two details worth knowing, because both are deliberate:
+A second batch waiting in the queue no longer cancels the first. The startup
+logic that decides which interrupted runs to bring back was written for the
+library scan, where only one run of a job exists at a time and the newest is
+always the one you want. An apply run is not like that — each one carries its own
+list of books — so "a newer run exists" was throwing away a half-finished batch
+whenever a second one happened to be queued at restart, which is an ordinary
+deploy rather than a rare accident. Jobs that carry their own list of items are
+now exempt from that rule.
+
+Three details worth knowing, because all three are deliberate:
 
 - **A book that could not be applied is not retried forever.** If a book has no
   cached metadata to apply, it is counted, logged, and passed over; a restart
@@ -27,4 +36,18 @@ Two details worth knowing, because both are deliberate:
 - **Approving more books while a run is waiting still works.** The new books are
   added to the run rather than replacing what it had left to do, and the run's
   record of what it already finished is preserved. Adding work to an
-  already-restarted run used to be the situation most likely to lose it.
+  already-restarted run used to be the situation most likely to lose it, and a
+  second restart at exactly the wrong moment could still have undone it — the
+  saved progress note is now cleared once it has been folded into the run, so it
+  cannot come back later and overwrite newer work.
+- **One busy moment no longer fails the whole batch.** When many files are being
+  written at once, a book can wait too long for its turn and give up. That used
+  to end the entire run as failed, discarding the report for every book that had
+  already applied. Those books are now counted and named in the summary
+  ("gate unavailable"), the run finishes normally, and re-running the apply
+  picks them up.
+
+One number in the summary is knowingly imprecise: after a restart, books an
+earlier attempt had already applied can look like books with nothing to apply,
+because applying clears the saved suggestion that would distinguish them. The
+summary says so rather than presenting the count as exact.

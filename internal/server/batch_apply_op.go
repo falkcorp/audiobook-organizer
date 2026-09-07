@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-07
 //
@@ -223,6 +223,12 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			_ = progress.UpdateProgress(priorDone, originalTotal, "starting metadata apply")
 
 			var applied, noCandidates, decodeFailed, applyFailed, writeFailed atomic.Int64
+			// gateUnavailable counts books never ATTEMPTED because the write-back
+			// gate stayed saturated past this item's own timeout. Kept separate
+			// from writeFailed: nothing was applied for these, not even the
+			// database half, so the summary must not let them read as partial
+			// successes.
+			var gateUnavailable atomic.Int64
 			// skippedLocked counts BOOKS where at least one user-locked field was
 			// left alone. It is not subtracted from applied: the unlocked fields
 			// landed. It exists so the summary cannot read "applied 500 of 500"
@@ -253,7 +259,29 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				if p.WriteBack {
 					releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
 					if gateErr != nil {
-						return gateErr
+						// ctx here is the PER-ITEM context (PerItemTimeout: 3m),
+						// not the run context, so gateErr is DeadlineExceeded
+						// whenever the write-back gate stays saturated for three
+						// minutes. That is a load condition affecting the whole
+						// batch, not a property of this book.
+						//
+						// Returning it would end the run: ErrModeCollect still
+						// joins per-item errors and RunItems returns the join, so
+						// ONE gate timeout out of 699 books marks the op failed
+						// and terminal, and the summary naming every successful
+						// apply never prints. Count it as a per-book outcome
+						// instead, exactly like the other non-apply reasons.
+						//
+						// Genuine cancellation is unaffected: RunItems checks the
+						// RUN context itself and stops the loop, so swallowing
+						// this per-item deadline cannot make a cancelled batch
+						// look like a completed one.
+						gateUnavailable.Add(1)
+						reporter.Log(slog.LevelWarn, "book not applied",
+							slog.String("book_id", id),
+							slog.String("reason", "write-back gate unavailable"),
+							slog.String("error", gateErr.Error()))
+						return nil
 					}
 					defer releaseFileWrite()
 				}
@@ -351,19 +379,37 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				// is the 2026-08-21 production incident shape (registry/types.go)
 				// — new books discarded while the run reported success.
 				//
-				// Every field is carried. Checkpoint JSON is MERGED into the
-				// resumed params, so anything omitted returns as its zero value:
-				// dropping WriteBack would silently downgrade a live run to a
-				// database-only one on restart.
+				// Every field is carried, deliberately, even though today's
+				// merge would not strictly require it. Checkpoint JSON is
+				// OVERLAID on the resumed params by mergeJSONParams, which is a
+				// maps.Copy: a key absent from the overlay keeps the base
+				// params' value rather than reverting to a zero value. So
+				// omitting WriteBack would currently be survivable — but only by
+				// accident of the base row still holding it, and only while no
+				// `omitempty` sits on the field. Writing the full state keeps
+				// the checkpoint self-describing and independent of that.
+				//
+				// The direction that DOES bite is the opposite one: an
+				// `omitempty` on BookIDs would drop an empty remaining-set from
+				// the overlay and let the base params' original 699 IDs show
+				// through, re-applying the entire batch. That is why BookIDs
+				// carries no omitempty and OriginalTotal does.
 				CheckpointStateFn: func(_ context.Context, watermark int) error {
 					return reporter.Checkpoint(batchApplyCheckpointState(
 						bookIDs, p.WriteBack, originalTotal, watermark))
 				},
 			})
 			// Return BEFORE the "complete" row, so a canceled batch does not report
-			// success on its way out. runOne never returns a non-nil error (per-book
-			// failures land in the counters), so runErr is exactly ctx.Err() on
-			// cancellation and nil otherwise.
+			// success on its way out.
+			//
+			// runOne returns nil on EVERY path — every per-book outcome, including
+			// a write-back gate timeout, lands in a counter instead. That is load
+			// bearing rather than incidental: ErrModeCollect does not suppress
+			// errors, it joins them and RunItems returns the join, so any non-nil
+			// return from runOne would fail the whole op. With that invariant,
+			// runErr is exactly the run context's cancellation error and nothing
+			// else. If a future edit adds an error return to runOne, it must
+			// either be a genuine whole-batch abort or go in a counter.
 			if runErr != nil {
 				return runErr
 			}
@@ -373,11 +419,21 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// attempt examined and names the earlier work separately, rather than
 			// printing "applied 120 of 699" — which would read as 579 failures.
 			summary := fmt.Sprintf(
-				"applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d, kept user-locked fields on %d)",
+				"applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d)",
 				applied.Load(), total, noCandidates.Load(), decodeFailed.Load(),
-				applyFailed.Load(), writeFailed.Load(), skippedLocked.Load())
+				applyFailed.Load(), writeFailed.Load(), gateUnavailable.Load(),
+				skippedLocked.Load())
 			if priorDone > 0 {
-				summary = fmt.Sprintf("%s; %d more were completed by earlier attempts before a restart, %d in the batch overall",
+				// State the known ambiguity rather than implying a clean count.
+				// The watermark is the contiguous completed PREFIX, so a resumed
+				// attempt re-examines any book a faster worker finished past a
+				// gap. Applying invalidates that book's cached candidates, so on
+				// the second look it is indistinguishable from a book that never
+				// had any and it lands in "no candidates". The number cannot be
+				// recovered here; saying so beats a count that reads as failures.
+				summary = fmt.Sprintf(
+					"%s; %d more were completed by earlier attempts before a restart, %d in the batch overall"+
+						" (some of this attempt's \"no candidates\" may be books an earlier attempt already applied)",
 					summary, priorDone, originalTotal)
 			}
 			_ = progress.UpdateProgress(originalTotal, originalTotal, "complete: "+summary)
