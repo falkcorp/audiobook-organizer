@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package jobs
 
@@ -535,19 +535,34 @@ func (r *nopReporter) SetTotal(_ int)                    {}
 func (r *nopReporter) Increment()                        {}
 func (r *nopReporter) Log(_ string, _ string, _ *string) {}
 
-// opstateSweepMock builds a MockStore holding opstate keys for four operations:
-// one running (must be KEPT — the resume path may still load it), one completed
-// (delete), one whose operation record is gone (delete), and one with a status
-// the sweep does not recognize (must be KEPT — fail toward keeping). The
-// completed op has BOTH key forms so the test also pins that the count is
+// opstateSweepMock builds a MockStore holding opstate keys for six operations,
+// spanning BOTH operation keyspaces:
+//
+//	v1 (`operation:`)   RUN1    running       -> KEEP (resume may still load it)
+//	                    DONE1   completed     -> delete
+//	                    WEIRD1  quarantined   -> KEEP (unknown status fails toward keeping)
+//	v2 (`opv2:op:`)     V2RUN1  running       -> KEEP
+//	                    V2DONE1 completed     -> delete
+//	(neither)           GONE1                 -> delete (genuinely orphaned)
+//
+// The v2 pair is the load-bearing addition. Until 2026-09-07 this fixture held
+// only v1 operations, so it could not see that the sweep's liveness check read
+// the v1 keyspace exclusively — every op minted since the v1 id minter was
+// retired on 2026-08-23 looks "missing" to it and takes the orphan branch. A
+// fixture that only contains the old shape cannot fail on the new one.
+//
+// DONE1 has BOTH key forms so the test also pins that the count is
 // per-operation, not per-key.
 func opstateSweepMock() (*database.MockStore, *[]string) {
 	deleted := &[]string{}
-	ops := map[string]*database.Operation{
+	v1 := map[string]*database.Operation{
 		"RUN1":   {ID: "RUN1", Status: "running"},
 		"DONE1":  {ID: "DONE1", Status: "completed"},
 		"WEIRD1": {ID: "WEIRD1", Status: "quarantined"},
-		// "GONE1" has opstate keys but no operation record.
+	}
+	v2 := map[string]*database.OperationV2Row{
+		"V2RUN1":  {ID: "V2RUN1", Status: "running"},
+		"V2DONE1": {ID: "V2DONE1", Status: "completed"},
 	}
 	m := &database.MockStore{}
 	m.ScanPrefixFunc = func(prefix string) ([]database.KVPair, error) {
@@ -561,10 +576,15 @@ func opstateSweepMock() (*database.MockStore, *[]string) {
 			{Key: "opstate:DONE1:params", Value: []byte("{}")},
 			{Key: "opstate:GONE1:params", Value: []byte("{}")},
 			{Key: "opstate:WEIRD1:params", Value: []byte("{}")},
+			{Key: "opstate:V2RUN1", Value: []byte("{}")},
+			{Key: "opstate:V2DONE1", Value: []byte("{}")},
 		}, nil
 	}
 	m.GetOperationByIDFunc = func(id string) (*database.Operation, error) {
-		return ops[id], nil // nil for GONE1, matching PebbleStore's not-found contract
+		return v1[id], nil // nil for GONE1 and the v2 ids, matching PebbleStore's not-found contract
+	}
+	m.GetOperationV2Func = func(id string) (*database.OperationV2Row, error) {
+		return v2[id], nil
 	}
 	m.DeleteOperationStateFunc = func(opID string) error {
 		*deleted = append(*deleted, opID)
@@ -579,10 +599,10 @@ func TestDeleteStaleOperationState_DryRunCountsWithoutDeleting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run sweep: %v", err)
 	}
-	// DONE1 (terminal) + GONE1 (orphaned) — counted per OPERATION, so DONE1's
-	// two keys contribute 1, not 2.
-	if count != 2 {
-		t.Fatalf("dry-run count = %d, want 2 (per-operation, not per-key)", count)
+	// DONE1 (terminal v1) + V2DONE1 (terminal v2) + GONE1 (orphaned in both
+	// keyspaces) — counted per OPERATION, so DONE1's two keys contribute 1, not 2.
+	if count != 3 {
+		t.Fatalf("dry-run count = %d, want 3 (per-operation, not per-key)", count)
 	}
 	if len(*deleted) != 0 {
 		t.Fatalf("dry-run deleted state for %v, want none", *deleted)
@@ -595,17 +615,17 @@ func TestDeleteStaleOperationState_DeletesTerminalAndOrphanedOnly(t *testing.T) 
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("count = %d, want 2", count)
+	if count != 3 {
+		t.Fatalf("count = %d, want 3", count)
 	}
 	got := map[string]bool{}
 	for _, id := range *deleted {
 		got[id] = true
 	}
-	if !got["DONE1"] || !got["GONE1"] || len(got) != 2 {
-		t.Fatalf("deleted %v, want exactly {DONE1, GONE1}", *deleted)
+	if !got["DONE1"] || !got["V2DONE1"] || !got["GONE1"] || len(got) != 3 {
+		t.Fatalf("deleted %v, want exactly {DONE1, V2DONE1, GONE1}", *deleted)
 	}
-	// The two keep cases are the load-bearing half of this test: a running op's
+	// The keep cases are the load-bearing half of this test: a running op's
 	// state feeds the restart-resume path, and an unrecognized status must fail
 	// toward keeping.
 	if got["RUN1"] {
@@ -613,5 +633,12 @@ func TestDeleteStaleOperationState_DeletesTerminalAndOrphanedOnly(t *testing.T) 
 	}
 	if got["WEIRD1"] {
 		t.Fatal("sweep deleted state for an unrecognized status — must fail toward keeping")
+	}
+	// V2RUN1 is the case the pre-2026-09-07 predicate got wrong. Its checkpoint
+	// is live, but it has no v1 `operation:` row — and nothing has minted one
+	// since 2026-08-23 — so a v1-only liveness check saw "op record missing"
+	// and took the orphan branch on every checkpoint in the database.
+	if got["V2RUN1"] {
+		t.Fatal("sweep deleted state for a RUNNING v2 op — a v1-only liveness check reads every v2 op as orphaned")
 	}
 }

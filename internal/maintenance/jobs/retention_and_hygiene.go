@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e7c9d4a2-f1b3-49a8-8c4f-7d2e5a1f3c9e
-// last-edited: 2026-08-17
+// last-edited: 2026-09-07
 
 package jobs
 
@@ -255,6 +255,39 @@ func deleteDeadPrefixes(ctx context.Context, store retentionKVStore, dryRun bool
 	return total, nil
 }
 
+// opStateStillNeeded reports whether the operation owning an `opstate:<id>`
+// blob might still be resumed, and therefore whether the blob must be kept.
+//
+// v2 is checked first because it is where every id minted since 2026-08-23
+// lives; v1 is the fallback for checkpoints written before that. An id present
+// in neither is orphaned, and the caller deletes it.
+//
+// The v2 arm uses database.IsTerminalV2Status rather than adding the v2 status
+// strings to terminalOpStatuses below. The two vocabularies are genuinely
+// different, not two spellings of one thing: v2's interrupted_quiesced,
+// interrupted_ask and interrupted_restart all stamp completed_at, so they read
+// as "finished" to anything keying off that timestamp, yet all three are
+// precisely the states whose checkpoint the resume path is about to load.
+// Folding them into one map is how that distinction gets lost.
+func opStateStillNeeded(store retentionOpStateStore, id string) (bool, error) {
+	v2, err := store.GetOperationV2(id)
+	if err != nil {
+		return false, fmt.Errorf("get operation v2 %s: %w", id, err)
+	}
+	if v2 != nil {
+		return !database.IsTerminalV2Status(v2.Status), nil
+	}
+
+	op, err := store.GetOperationByID(id)
+	if err != nil {
+		return false, fmt.Errorf("get operation %s: %w", id, err)
+	}
+	if op != nil {
+		return !terminalOpStatuses[op.Status], nil
+	}
+	return false, nil // in neither keyspace — orphaned
+}
+
 // terminalOpStatuses are the operation statuses from which the resume path can
 // never pick an operation back up: GetInterruptedOperations selects only
 // "running", "queued", and "interrupted", so state for anything here is dead.
@@ -274,13 +307,30 @@ var terminalOpStatuses = map[string]bool{
 // forever (small but unbounded growth).
 //
 // The decision is per-operation, and it deliberately fails toward KEEPING:
-//   - op record missing            -> state is orphaned (phase (1) may have just
-//     deleted the op)              -> delete
-//   - status in terminalOpStatuses -> resume can never fire -> delete
-//   - anything else — running, queued, interrupted, or a status this map does
-//     not know — -> KEEP. Deleting on "status not recognized" would silently
-//     break resume for any status value added later; an unknown status keeps
-//     its state until the operation itself ages out of retention.
+//   - operation found in EITHER keyspace and terminal there -> delete
+//   - operation found and not terminal — running, queued, interrupted, or a
+//     status the predicate does not know — -> KEEP. Deleting on "status not
+//     recognized" would silently break resume for any status value added later;
+//     an unknown status keeps its state until the operation itself ages out.
+//   - operation in NEITHER keyspace -> state is orphaned (phase (1) may have
+//     just deleted the op) -> delete
+//
+// Both keyspaces have to be consulted, and that is the 2026-09-07 fix. This
+// used to call GetOperationByID alone, which reads the v1 `operation:` keyspace.
+// The v1 id minter was retired on 2026-08-23, so from that day forward every
+// checkpoint under `opstate:` was written by an operation with a v2 id — and
+// GetOperationByID answers (nil, nil) for a v2 id rather than erroring. That is
+// byte-identical to "this operation was purged", so the orphan branch fired on
+// every live checkpoint in the database. The registry never cleans `opstate:`
+// itself (its resume paths call DeleteOpStateV2, which is the separate v2 state
+// keyspace), so this sweep is the only writer that touches these keys.
+//
+// Latent rather than fired: the job is manual-only — it is not in the
+// maintenance window's task list (scheduler/maintenance.go) — and DefaultParams
+// sets DryRun: true. A real run would have dropped the resume checkpoints of
+// itunes.import, dedup:drain-stale, maintenance:backfill-file-hashes and
+// maintenance:recompute-book-aggregates, each of which reloads its checkpoint at
+// the top of its run and would silently redo a whole-library pass from zero.
 //
 // Returns the number of operations whose state was (or in dry-run, would be)
 // cleared — counting operations, not raw keys, so the dry-run count matches
@@ -308,11 +358,11 @@ func deleteStaleOperationState(ctx context.Context, store retentionOpStateStore,
 		if ctx.Err() != nil {
 			return count, ctx.Err()
 		}
-		op, err := store.GetOperationByID(id)
+		live, err := opStateStillNeeded(store, id)
 		if err != nil {
-			return count, fmt.Errorf("get operation %s: %w", id, err)
+			return count, err
 		}
-		if op != nil && !terminalOpStatuses[op.Status] {
+		if live {
 			continue // live or unknown status — resume may still need this state
 		}
 		if dryRun {

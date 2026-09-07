@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.15.0
+// version: 3.16.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-07
 
@@ -955,6 +955,18 @@ func isTerminalV2Status(status string) bool {
 		return false
 	}
 }
+
+// IsTerminalV2Status is the exported form of isTerminalV2Status, for callers
+// outside this package that must make the same finished/not-finished call.
+//
+// It delegates rather than duplicating the switch on purpose: the allowlist
+// above is load-bearing (see its comment) and a second copy is a second thing
+// to forget when a status is added. The first outside caller was the retention
+// job's opstate sweep (2026-09-07), which deletes an operation's resume state
+// and therefore needs exactly this question — NOT "is completed_at set", which
+// is true for interrupted_quiesced/_ask/_restart even though all three are
+// still waiting to be resumed.
+func IsTerminalV2Status(status string) bool { return isTerminalV2Status(status) }
 
 // RepairOpsV2MissingCompletedAt stamps completed_at on every operation row that
 // holds a terminal status but has completed_at null, and returns the number of
