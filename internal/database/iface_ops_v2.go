@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-07
 
@@ -114,11 +114,49 @@ type OpDefV2Store interface {
 }
 
 // OpV2LifecycleStore creates a v2 operation and moves it through its statuses.
+//
+// Composed of two leaves rather than declared flat: the method set is
+// byte-identical, but a flat declaration is 9 entries and `interfacebloat` caps
+// a declaration at 8. The seam is semantic, not arbitrary -- OpV2StatusStore is
+// exactly the writers of the status/completed_at pair, which is the field group
+// with the subtle invariant (see isTerminalV2Status in pebble_store_ops_v2.go).
 type OpV2LifecycleStore interface {
+	OpV2RunStore
+	OpV2StatusStore
+}
+
+// OpV2RunStore creates a run row and updates the payload fields hanging off it.
+// Nothing here decides whether an operation is live or finished.
+type OpV2RunStore interface {
 	// InsertOperationV2 inserts a new queued run.
 	InsertOperationV2(row OperationV2Row) error
 	// GetOperationV2 returns a single run by id.
 	GetOperationV2(id string) (*OperationV2Row, error)
+	// UpdateOperationV2Params replaces the params blob on an operation row.
+	// Used by resumeRestart to inject checkpoint state before re-dispatch.
+	UpdateOperationV2Params(id string, params []byte) error
+	// IncrementResumeCountV2 atomically increments resume_count for the given op.
+	IncrementResumeCountV2(id string) error
+	// SetOperationV2Result stores an operation's final result payload.
+	//
+	// This is a first-class v2 capability rather than an optional one discovered by
+	// type assertion (the pattern legacyOpStore uses): an implementation that
+	// silently lacked it would DROP results, and this method exists precisely to
+	// give v2 ops somewhere to put output that today only the v1 row can hold.
+	// Widening this interface makes the compiler name every fake that needs it.
+	//
+	// Returns an error when the row does not exist. Callers must not discard it —
+	// a swallowed "operation not found" is how a result goes missing with no signal.
+	SetOperationV2Result(id string, resultData string) error
+}
+
+// OpV2StatusStore holds every writer of an operation's status and its
+// completed_at stamp -- the pair that decides whether the rest of the system
+// treats the op as live. Grouping them makes that invariant reviewable in one
+// place: CompletedAt is the canonical liveness signal (see
+// ListOperationsV2Since), so a status write that forgets the stamp produces a
+// row that is dead to the worker and alive to every reader.
+type OpV2StatusStore interface {
 	// UpdateOperationV2Status sets the status (and optional timestamps).
 	// startedAt / completedAt are set when non-nil.
 	UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error
@@ -136,22 +174,6 @@ type OpV2LifecycleStore interface {
 	// terminal status with completed_at null -- rows that are dead to the worker
 	// but read as in-flight to every consumer. Returns the number written.
 	RepairOpsV2MissingCompletedAt() (int, error)
-	// UpdateOperationV2Params replaces the params blob on an operation row.
-	// Used by resumeRestart to inject checkpoint state before re-dispatch.
-	UpdateOperationV2Params(id string, params []byte) error
-	// IncrementResumeCountV2 atomically increments resume_count for the given op.
-	IncrementResumeCountV2(id string) error
-	// SetOperationV2Result stores an operation's final result payload.
-	//
-	// This is a first-class v2 capability rather than an optional one discovered by
-	// type assertion (the pattern legacyOpStore uses): an implementation that
-	// silently lacked it would DROP results, and this method exists precisely to
-	// give v2 ops somewhere to put output that today only the v1 row can hold.
-	// Widening this interface makes the compiler name every fake that needs it.
-	//
-	// Returns an error when the row does not exist. Callers must not discard it —
-	// a swallowed "operation not found" is how a result goes missing with no signal.
-	SetOperationV2Result(id string, resultData string) error
 }
 
 // OpV2QueueStore covers queue and scheduling reads.
