@@ -61,10 +61,38 @@ go chasing `GetBooksByIDs`.
 - [ ] **Add a test that a non-`organized` book is reachable wherever it is
   playable**, so the two surfaces cannot drift apart again.
 
-**Causal link worth recording:** books remain `imported` because the
-organize/write-back step has not moved them, and that step is currently failing
-on rename collisions (see the apply-path collision resolver work). Fixing the
-collisions should convert `imported` → `organized` and make these books appear
-without touching the ABS filter at all — so **fix collisions first and re-measure
-before changing this filter**, or the filter change may be solving a symptom that
-is about to disappear on its own.
+## Why the books are `imported` is NOT yet established
+
+An earlier draft of this note asserted they are `imported` because
+organize/write-back had not moved them yet, and that fixing the rename collisions
+would flip them to `organized`. **That claim is not supported by the evidence and
+is retracted.** Measured file paths for all 9:
+
+```
+imported   seq=1  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign/...
+imported   seq=2  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign 2 - Unknown Author/...
+organized  seq=3  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign 3 - A Cultivation Prog...
+imported   seq=6  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign/Nameless Sovereign, Bo...
+```
+
+**Every one of the 9 — organized and imported alike — is already physically
+inside the organized tree**, and both states appear under both flat
+(`Author/Title`) and nested (`Author/Series/Title`) shapes. So `library_state`
+does not track physical location, and these books are not sitting outside
+awaiting a move that collisions are blocking.
+
+- [ ] **Determine what `library_state` actually means and why these 6 are
+  `imported`.** Candidates: the book was scanned in place and never *claimed* by
+  an organize run (so `imported` means "not placed by us", regardless of where it
+  sits), or the state is simply stale and was never updated after a successful
+  placement. These imply completely different fixes — one is a state-repair
+  backfill, the other is a bug in organize's state write.
+- [ ] **Re-measure after the collision resolver lands** before changing the ABS
+  filter. Not because the causal link is established — it is not — but because
+  the population of `imported` books may shift and the filter change should be
+  decided against current data.
+
+Side observation from the same paths: one book sits under a directory named
+`Nameless Sovereign 2 - Unknown Author` — an "Unknown Author" string baked into a
+path for a book whose author is known. Separate junk-metadata artifact, not the
+cause here.
