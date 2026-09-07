@@ -23,11 +23,16 @@
   Nothing is destroyed on any branch. When the occupant holds the same bytes it
   wins — it is already at the organized path — and our copy is **moved into a
   quarantine tree under `.failed/_collisions`, never unlinked**, with the
-  `book_file` row **repointed at the kept file, never deleted**. When the two
-  differ, the rename falls back to the same `_copyN` ladder organize has always
-  used, so a genuine name clash resolves identically whichever path reaches it.
-  Every one of those pre-flight actions is journalled and undone if a later file
-  in the same book fails.
+  `book_file` row **repointed at the kept file, never deleted** — unless some
+  other row already points at that file, in which case the row is marked missing
+  instead, which it genuinely now is. Two rows are never allowed to claim one
+  path: a file's path is what the database looks it up by, and a second claim on
+  it would make the first row unfindable and leave the library minting fresh
+  duplicate rows for that file on every later scan. When the two files differ,
+  the rename falls back to the same `_copyN` ladder organize has always used, so
+  a genuine name clash resolves identically whichever path reaches it. Every one
+  of those pre-flight actions is journalled and undone if a later file in the
+  same book fails.
 
 - **One unresolvable book no longer breaks every later run.** A rename that
   failed used to skip its checkpoint deliberately, so the same doomed rename was

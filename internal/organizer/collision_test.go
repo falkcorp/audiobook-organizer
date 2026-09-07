@@ -1,5 +1,5 @@
 // file: internal/organizer/collision_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e07b5c9-1a26-4f83-b0d7-92c1e6438af5
 // last-edited: 2026-09-07
 
@@ -345,9 +345,75 @@ func TestRenameFiles_InLibraryIdentical_SameBookSiblingRowTombstones(t *testing.
 	if !loser.Missing {
 		t.Fatalf("expected the losing row to be tombstoned (Missing=true), got %+v", loser)
 	}
+	if loser.FilePath != src {
+		t.Fatalf("the tombstoned row's FilePath must be left ALONE (see the cross-book test for why), got %q want %q", loser.FilePath, src)
+	}
 	survivor, _ := store.GetBookFileByID("b1", "f2")
 	if survivor == nil || survivor.FilePath != dst {
 		t.Fatalf("the surviving row must be left pointing at the kept file, got %+v", survivor)
+	}
+}
+
+// TestRenameFiles_InLibraryIdentical_CrossBookOccupantTombstones is the
+// regression test for the index-corruption bug: the occupant row belongs to a
+// DIFFERENT book. That case used to fall through to the repoint branch, because
+// the tombstone branch was gated on the occupant sharing our book id.
+//
+// Repointing there is unrepairable corruption, not a cosmetic duplicate.
+// book_file_path is a SINGLE-SLOT index — one path maps to exactly one
+// "<bookID>:<fileID>" — so our write silently steals the slot from the other
+// book's row, and because UpdateBookFile drops the indexes keyed on the OLD
+// values before writing new ones, the next write that moves our row off that
+// path (this file's own journal rollback does exactly that) deletes the slot
+// and never rewrites it. The path is then held by a live row with NO index
+// entry, and the scanner's path lookup misses and mints a fresh third row for
+// it on every subsequent scan. Nothing in the codebase rebuilds these indexes.
+//
+// So the assertion that actually guards the bug is on FilePath, NOT on Missing:
+// the corruption is caused by the FilePath write, and a Missing-only assertion
+// would still pass if someone later re-added a FilePath write beside the flag.
+func TestRenameFiles_InLibraryIdentical_CrossBookOccupantTombstones(t *testing.T) {
+	root := t.TempDir()
+	src := writeCollisionFile(t, filepath.Join(root, "incoming", "book.m4b"), "identical-bytes")
+	dst := writeCollisionFile(t, filepath.Join(root, "Author", "Title.m4b"), "identical-bytes")
+
+	store := newFakeCollisionStore()
+	store.add(&database.BookFile{ID: "f1", BookID: "b1", FilePath: src, FileSize: 15})
+	// The occupant belongs to ANOTHER book.
+	store.add(&database.BookFile{ID: "f2", BookID: "b2", FilePath: dst, FileSize: 15})
+
+	if _, err := RenameFiles(
+		[]FileRenameEntry{{SegmentID: "f1", SourcePath: src, TargetPath: dst, ExpectedSize: 15}},
+		&CollisionPolicy{RootDir: root, BookID: "b1", Store: store},
+	); err != nil {
+		t.Fatalf("RenameFiles: %v", err)
+	}
+
+	loser, _ := store.GetBookFileByID("b1", "f1")
+	if loser == nil {
+		t.Fatal("the losing row was DELETED; it must only be tombstoned")
+	}
+	// THE assertion. Two rows must never both claim one path.
+	if loser.FilePath == dst {
+		t.Fatalf("row f1 (book b1) was repointed at %q, which book b2's row f2 already holds — "+
+			"this overwrites the single-slot book_file_path index and orphans f2", dst)
+	}
+	if loser.FilePath != src {
+		t.Fatalf("the tombstoned row's FilePath must be left untouched so UpdateBookFile never "+
+			"rewrites the occupant's index slot, got %q want %q", loser.FilePath, src)
+	}
+	if !loser.Missing {
+		t.Fatalf("expected the losing row to be tombstoned (Missing=true) — its bytes were just "+
+			"quarantined, so the flag is a true statement, got %+v", loser)
+	}
+	// The other book's row is untouched in every field that matters.
+	survivor, _ := store.GetBookFileByID("b2", "f2")
+	if survivor == nil || survivor.FilePath != dst || survivor.Missing {
+		t.Fatalf("the other book's row must be left exactly as it was, got %+v", survivor)
+	}
+	// And the kept file itself is intact.
+	if got := readCollisionFile(t, dst); got != "identical-bytes" {
+		t.Fatalf("occupant was modified: %q", got)
 	}
 }
 
