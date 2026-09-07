@@ -36,12 +36,20 @@ but will not list it. Whatever the intent, "playable but unlistable" is not it.
   streamable/resumable either. **Blast radius is wide**: this filter feeds the
   shared contributor index, so authors, series, counts and browse all change
   together. Not a drive-by fix.
-- [ ] **Fix `libraryItems: []` separately.** Even the 3 `organized` books do not
-  appear in `libraryItems` — a different defect from the count. Suspected
-  memdb/Pebble ID drift in `GetBooksByIDs` (`internal/database/pebble_store.go:1285-1298`),
-  which does a silent `continue` on `ErrNotFound` with no memdb dispatch, so
-  unresolvable IDs disappear without an error. Verify whether the 3 IDs in
-  `idx.authorBooks[40260]` resolve against Pebble directly.
+**`libraryItems: []` is NOT a bug — ruled out by measurement.** An earlier draft
+of this note claimed it was a second defect (suspected memdb/Pebble ID drift in
+`GetBooksByIDs`). That is **wrong** and was disproved directly:
+
+```
+GET /api/authors/40260               -> numBooks 3, libraryItems 0
+GET /api/authors/40260?include=items -> numBooks 3, libraryItems 3
+```
+
+and all three organized book IDs resolve individually with **HTTP 200**. Omitting
+items unless `?include=items` is asked for is correct Audiobookshelf behaviour and
+is implemented deliberately (`internal/server/handlers/abs/browse.go:1432,1449,1478-1482`).
+There is exactly **one** bug here — the `library_state` filter — not two. Do not
+go chasing `GetBooksByIDs`.
 - [ ] **Add a test that a non-`organized` book is reachable wherever it is
   playable**, so the two surfaces cannot drift apart again.
 
