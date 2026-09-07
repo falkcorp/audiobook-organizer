@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-07
 
@@ -125,14 +125,24 @@ const sqlActInsert = `INSERT INTO activity
 	(src_key, ts, tier, type, level, source, operation_id, book_id, summary, details, tags, pruned_at)
 	VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// sqlActInsertIgnore is the idempotent insert used by EVERY write path (live
-// Record, RecordBatch, and the Pebble→SQLite backfill). Because src_key is a
-// deterministic content hash of the entry (see activitySrcKey), presenting the
+// sqlActInsertIgnore is the idempotent insert used by every EVENT-write path
+// (live Record, RecordBatch, and the Pebble→SQLite backfill). Because src_key is
+// a deterministic content hash of the entry (see activitySrcKey), presenting the
 // same event twice — a live dual-write and the backfill's copy of the same
 // Pebble row, or a resumed/re-run backfill — conflicts on src_key and is
-// skipped, so no path can ever duplicate an event. The WHERE clause must match
-// the partial unique index (idx_act_srckey) for SQLite to accept src_key as the
-// conflict target.
+// skipped, so no event-write path can ever duplicate an event. The WHERE clause
+// must match the partial unique index (idx_act_srckey) for SQLite to accept
+// src_key as the conflict target.
+//
+// The maintenance digest/summary writes (commitDayDigest, Summarize) do NOT use
+// this constant: they insert via the bare sqlActInsert with a nil src_key on
+// purpose. A digest is not an event and its content legitimately CHANGES across
+// recompaction, so a content key would be wrong for it. Those rows are made
+// idempotent instead by identity: commitDayDigest DELETEs any existing digest
+// for the day before inserting the merged one (one digest per day), Summarize
+// deletes its source rows in the same tx, and RecompactDigests only UPDATEs in
+// place — never inserts. A nil src_key is exempt from idx_act_srckey (the index
+// is partial), which is exactly why those rows are free to repeat by day-key.
 const sqlActInsertIgnore = sqlActInsert + ` ON CONFLICT(src_key) WHERE src_key IS NOT NULL DO NOTHING`
 
 // activitySrcKey derives the deterministic content key that makes activity
