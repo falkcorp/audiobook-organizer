@@ -1,5 +1,5 @@
 // file: internal/server/reconcile_ops_index_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d0a3c84-1b57-4e92-8f36-9c2e5a710db4
 // last-edited: 2026-09-07
 
@@ -23,6 +23,11 @@ type reconcileIndexStore struct {
 	v2Err  error
 	v2ByID map[string]*database.OperationV2Row
 	v1ByID map[string]*database.Operation
+
+	// The v1 methods are still implemented so the fake can prove they are never
+	// reached. A fake that simply dropped them would let a reintroduced v1 read
+	// fail to compile in the test while compiling fine in production.
+	v1Calls int
 }
 
 // Honours limit. It sorts on CreatedAt, which is never nil, so it lacks the
@@ -31,6 +36,7 @@ type reconcileIndexStore struct {
 // rows behind newer rows of other types. Ignoring limit here would leave the v1
 // half of storeScanBound guarded by nothing.
 func (s *reconcileIndexStore) ListOperations(limit, offset int) ([]database.Operation, int, error) {
+	s.v1Calls++
 	if s.v1Err != nil {
 		return nil, 0, s.v1Err
 	}
@@ -76,6 +82,7 @@ func (s *reconcileIndexStore) GetOperationV2(id string) (*database.OperationV2Ro
 }
 
 func (s *reconcileIndexStore) GetOperationByID(id string) (*database.Operation, error) {
+	s.v1Calls++
 	if s.v1ByID == nil {
 		return nil, nil
 	}
@@ -115,7 +122,14 @@ func TestReconcileV2RowAsOperation_PreservesTheResponseShape(t *testing.T) {
 	}
 }
 
-func TestReconcileOperationView_ResolvesFromEitherKeyspace(t *testing.T) {
+// This test used to be _ResolvesFromEitherKeyspace and asserted that a v1-keyed
+// id still resolved through the GetOperationByID fallback. That fallback was
+// removed on 2026-09-07 with the rest of the v1 reads, so the assertion is
+// inverted rather than deleted: an id minted before the v1 minter was retired on
+// 2026-08-23 now resolves to nil, and that is the accepted, authorized cost of
+// dropping v1 history. Keeping the case (rather than dropping it) is what makes
+// a silent re-introduction of the fallback fail here.
+func TestReconcileOperationView_ResolvesV2AndNoLongerV1(t *testing.T) {
 	store := &reconcileIndexStore{
 		v2ByID: map[string]*database.OperationV2Row{
 			"v2": {ID: "v2", DefID: reconcileScanDefIDV2, Status: "queued"},
@@ -127,8 +141,11 @@ func TestReconcileOperationView_ResolvesFromEitherKeyspace(t *testing.T) {
 	if op := reconcileOperationView(store, "v2", reconcileScanLegacyType); op == nil || op.ID != "v2" {
 		t.Errorf("a v2-keyed run must resolve, got %+v", op)
 	}
-	if op := reconcileOperationView(store, "v1", reconcileScanLegacyType); op == nil || op.ID != "v1" {
-		t.Errorf("a v1-keyed run must still resolve, got %+v", op)
+	if op := reconcileOperationView(store, "v1", reconcileScanLegacyType); op != nil {
+		t.Errorf("a v1-keyed run must no longer resolve, got %+v", op)
+	}
+	if store.v1Calls != 0 {
+		t.Errorf("the v1 keyspace must not be consulted at all, got %d calls", store.v1Calls)
 	}
 	if op := reconcileOperationView(store, "nope", reconcileScanLegacyType); op != nil {
 		t.Errorf("an unknown id must resolve to nil, got %+v", op)
