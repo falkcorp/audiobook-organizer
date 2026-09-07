@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6d0a3c84-1b57-4e92-8f36-9c2e5a710db4
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package server
 
@@ -162,59 +162,26 @@ func TestRecentReconcileScans_QueuedScanSurvivesACrowdedOpsTable(t *testing.T) {
 	}
 }
 
-func TestRecentReconcileScans_UnionsBothKeyspacesNewestFirst(t *testing.T) {
+func TestRecentReconcileScans_ListsScansNewestFirstExcludingOtherDefs(t *testing.T) {
 	now := time.Now()
 	store := &reconcileIndexStore{
 		v2: []database.OperationV2Row{
 			{ID: "new", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now},
 			{ID: "apply", DefID: reconcileApplyDefIDV2, Status: "completed", QueuedAt: now},
-		},
-		v1: []database.Operation{
-			{ID: "old", Type: reconcileScanLegacyType, Status: "completed", CreatedAt: now.Add(-time.Hour)},
-			{ID: "unrelated", Type: "scan", Status: "completed", CreatedAt: now},
+			{ID: "old", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour)},
 		},
 	}
 	got := recentReconcileScans(store, 50)
 	if len(got) != 2 {
-		t.Fatalf("want exactly the 2 reconcile SCANS (apply and unrelated excluded), got %d", len(got))
+		t.Fatalf("want exactly the 2 reconcile SCANS (apply excluded), got %d", len(got))
 	}
 	if got[0].ID != "new" || got[1].ID != "old" {
 		t.Fatalf("want newest-first [new old], got [%s %s]", got[0].ID, got[1].ID)
 	}
 }
 
-// History keyed under a v1 id must stay visible — otherwise the last completed
-// scan's preview vanishes from the UI the moment this ships.
-func TestRecentReconcileScans_KeepsLegacyHistoryVisible(t *testing.T) {
-	store := &reconcileIndexStore{
-		v1: []database.Operation{
-			{ID: "historical", Type: reconcileScanLegacyType, Status: "completed", CreatedAt: time.Now()},
-		},
-	}
-	if got := recentReconcileScans(store, 50); len(got) != 1 || got[0].ID != "historical" {
-		t.Fatalf("legacy-only history must still be listed, got %+v", got)
-	}
-}
-
-// The v1 half of the same trap. ListOperations truncates to its limit before
-// this code can filter by Type, so an OLD reconcile scan sitting behind a wall
-// of newer rows of other types is dropped by a small limit. The caller's limit
-// bounds the answer; only storeScanBound may bound the store scan.
-func TestRecentReconcileScans_OldLegacyScanSurvivesACrowdedV1Table(t *testing.T) {
-	now := time.Now()
-
-	// The reconcile scan is the OLDEST row, so a truncating limit loses it first.
-	v1 := []database.Operation{
-		{ID: "old-scan", Type: reconcileScanLegacyType, Status: "completed", CreatedAt: now.Add(-72 * time.Hour)},
-	}
-	for range 300 {
-		v1 = append(v1, database.Operation{
-			ID: "noise", Type: "scan", Status: "completed", CreatedAt: now,
-		})
-	}
-
-	got := recentReconcileScans(&reconcileIndexStore{v1: v1}, 50)
-	if len(got) != 1 || got[0].ID != "old-scan" {
-		t.Fatalf("an old reconcile scan must survive a crowded v1 table, got %d rows", len(got))
-	}
-}
+// TestRecentReconcileScans_KeepsLegacyHistoryVisible and
+// _OldLegacyScanSurvivesACrowdedV1Table were deleted on 2026-09-07 with the v1
+// listing pass they covered. Their concern — that the scan-bound must not
+// truncate the answer before the type filter runs — still applies to the v2
+// pass and is covered by _OldScanSurvivesACrowdedTable above.

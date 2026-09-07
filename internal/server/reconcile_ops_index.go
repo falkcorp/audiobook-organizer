@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c8f5b91-7a34-4e60-b9d2-1f6e0a83c574
-// last-edited: 2026-08-22
+// last-edited: 2026-09-07
 
 package server
 
@@ -16,24 +16,28 @@ import (
 // minted; the run's preview payload was written back onto it and read out by
 // latestReconcileScan. New runs write to their own v2 row instead.
 //
-// These two helpers are the whole of the transitional seam. Both keyspaces are
-// read until the v1 rows age out, and keeping that decision in one file means
-// dropping v1 later is a single deletion rather than an archaeology exercise.
+// The transitional seam that read BOTH keyspaces was removed on 2026-09-07:
+// nothing has minted a v1 row since the minter was retired, so the v1 side could
+// only ever return pre-2026-08-23 history, and dropping that history is
+// deliberate and authorized. What remains is the v1 SHAPE — these helpers still
+// return database.Operation because the reconcile endpoints put that object
+// straight into their response bodies and the frontend parses it. The shape is a
+// wire contract; the keyspace is not.
 const (
 	reconcileScanDefIDV2  = "reconcile.scan"
 	reconcileApplyDefIDV2 = "reconcile.apply"
 
-	// v1 type strings. New runs no longer write these.
+	// The `type` strings the responses advertise. A run's KIND did not change
+	// when its id did, and the frontend keys off these — they are part of the
+	// wire contract, not leftovers of the v1 keyspace.
 	reconcileScanLegacyType  = "reconcile_scan"
 	reconcileApplyLegacyType = "reconcile"
 )
 
 // reconcileOpLister is the store slice these helpers read.
 type reconcileOpLister interface {
-	ListOperations(limit int, offset int) ([]database.Operation, int, error)
 	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
 	GetOperationV2(id string) (*database.OperationV2Row, error)
-	GetOperationByID(id string) (*database.Operation, error)
 }
 
 // reconcileV2RowAsOperation maps a v2 row onto the v1 shape.
@@ -75,18 +79,18 @@ func reconcileV2RowAsOperation(row *database.OperationV2Row, legacyType string) 
 // created. EnqueueOp may return the id of an ALREADY-ACTIVE op when it merges a
 // duplicate request, which is why this reads the row back rather than
 // synthesising one from what the handler happens to know.
+//
+// The v1 GetOperationByID fallback that followed was removed on 2026-09-07 with
+// the rest of the v1 reads. An id minted before 2026-08-23 no longer resolves
+// here; that is the accepted cost of dropping v1 history.
 func reconcileOperationView(store reconcileOpLister, opID, legacyType string) *database.Operation {
 	if row, err := store.GetOperationV2(opID); err == nil && row != nil {
 		return reconcileV2RowAsOperation(row, legacyType)
 	}
-	if op, err := store.GetOperationByID(opID); err == nil && op != nil {
-		return op
-	}
 	return nil
 }
 
-// recentReconcileScans returns reconcile scans from both keyspaces, newest
-// first.
+// recentReconcileScans returns reconcile scans, newest first.
 //
 // The limit bounds the ANSWER, not the store scan. ListOperationsV2Since sorts
 // StartedAt DESC NULLS LAST and truncates BEFORE this function can filter by
@@ -113,16 +117,10 @@ func recentReconcileScans(store reconcileOpLister, limit int) []*database.Operat
 		}
 	}
 
-	if ops, _, err := store.ListOperations(storeScanBound, 0); err == nil {
-		for i := range ops {
-			op := ops[i]
-			if op.Type != reconcileScanLegacyType || seen[op.ID] {
-				continue
-			}
-			seen[op.ID] = true
-			out = append(out, &op)
-		}
-	}
+	// The v1 fallback that used to follow is gone (2026-09-07). It scanned the
+	// `operation:` keyspace for rows this index could still show, but nothing has
+	// minted a v1 row since the minter was retired, so it could only ever return
+	// pre-2026-08-23 history. Dropping that history is deliberate and authorized.
 
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)

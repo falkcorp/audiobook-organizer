@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-22
+// last-edited: 2026-09-07
 
 package metabatch_test
 
@@ -252,20 +252,22 @@ func TestLatestMatchedBookIDs_LegacyErrorDoesNotHideV2Results(t *testing.T) {
 }
 
 // The mirror of the above: a v2 failure must not hide history keyed under v1.
-func TestLatestMatchedBookIDs_V2ErrorDoesNotHideLegacyResults(t *testing.T) {
+// Was TestLatestMatchedBookIDs_V2ErrorDoesNotHideLegacyResults until 2026-09-07:
+// it asserted that a v1-keyed match survived a v2 listing error. With the v1
+// listing pass removed there is no second source to fall back to, so a listing
+// error now yields an empty set. That is the correct degradation here — callers
+// use this for a dedup guard, where an empty set re-fetches (wasteful but
+// correct) rather than wrongly skipping a book.
+func TestLatestMatchedBookIDs_ListingErrorYieldsNothing(t *testing.T) {
 	now := time.Now()
 	store := &latestMatchedStore{
 		v2Err: fmt.Errorf("v2 unavailable"),
-		ops: []database.Operation{
-			{ID: "op-v1", Type: "metadata_candidate_fetch", CreatedAt: now},
-		},
 		results: map[string][]database.OperationResult{
 			"op-v1": {{BookID: "book-old", Status: "matched", CreatedAt: now}},
 		},
 	}
-	result := metabatch.LatestMatchedBookIDs(store)
-	if !result["book-old"] {
-		t.Errorf("v1-keyed match must survive a v2 listing error, got %v", result)
+	if result := metabatch.LatestMatchedBookIDs(store); len(result) != 0 {
+		t.Errorf("a failed listing must yield nothing, got %v", result)
 	}
 }
 
@@ -280,8 +282,8 @@ func TestLatestMatchedBookIDs_NoOps(t *testing.T) {
 func TestLatestMatchedBookIDs_MatchedAndUnmatched(t *testing.T) {
 	now := time.Now()
 	store := &latestMatchedStore{
-		ops: []database.Operation{
-			{ID: "op-1", Type: "metadata_candidate_fetch"},
+		v2Rows: []database.OperationV2Row{
+			{ID: "op-1", DefID: metabatch.CandidateFetchDefID},
 		},
 		results: map[string][]database.OperationResult{
 			"op-1": {
@@ -330,9 +332,9 @@ func TestLatestMatchedBookIDs_LatestWins(t *testing.T) {
 func TestLatestMatchedBookIDs_IgnoresNonCandidateFetchOps(t *testing.T) {
 	now := time.Now()
 	store := &latestMatchedStore{
-		ops: []database.Operation{
-			{ID: "op-scan", Type: "scan"},
-			{ID: "op-fetch", Type: "metadata_candidate_fetch"},
+		v2Rows: []database.OperationV2Row{
+			{ID: "op-scan", DefID: "library.scan"},
+			{ID: "op-fetch", DefID: metabatch.CandidateFetchDefID},
 		},
 		results: map[string][]database.OperationResult{
 			"op-scan": {
