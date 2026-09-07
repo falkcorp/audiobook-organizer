@@ -734,13 +734,25 @@ type ScheduledTasksConfig struct {
 // Config holds application configuration
 type Config struct {
 	// Core paths
-	RootDir       string      `json:"root_dir"`
-	PathAliases   []PathAlias `json:"path_aliases"   mapstructure:"path_aliases"`
-	DatabasePath  string      `json:"database_path"`
-	DatabaseType  string      `json:"database_type"` // "pebble" (default) or "sqlite"
-	EnableSQLite  bool        `json:"enable_sqlite"` // Must be true to use SQLite (safety flag)
-	PlaylistDir   string      `json:"playlist_dir"`
-	SetupComplete bool        `json:"setup_complete"`
+	RootDir      string      `json:"root_dir"`
+	PathAliases  []PathAlias `json:"path_aliases"   mapstructure:"path_aliases"`
+	DatabasePath string      `json:"database_path"`
+	DatabaseType string      `json:"database_type"` // "pebble" (default) or "sqlite"
+	EnableSQLite bool        `json:"enable_sqlite"` // Must be true to use SQLite (safety flag)
+
+	// ActivityBackend selects the activity-log store backend, independent of the
+	// main DatabaseType. "sqlite" (default, empty ⇒ sqlite) engages the SQLite
+	// activity store behind a Pebble→SQLite migration wrapper: writes go to both,
+	// reads stay on Pebble until a one-time backfill copies history and verifies
+	// per-tier parity, then reads flip to SQLite (bounded compaction, no index
+	// leak). "pebble" is the escape hatch — Pebble-only, no SQLite opened — and
+	// is the instant rollback for the migration.
+	ActivityBackend string `json:"activity_backend" mapstructure:"activity_backend"`
+	// ActivityDBPath is the SQLite activity file. Empty ⇒ "activity.sqlite"
+	// beside the main database (DatabasePath's directory).
+	ActivityDBPath string `json:"activity_db_path" mapstructure:"activity_db_path"`
+	PlaylistDir    string `json:"playlist_dir"`
+	SetupComplete  bool   `json:"setup_complete"`
 
 	// Library organization
 	OrganizationStrategy    string `json:"organization_strategy"` // 'auto', 'copy', 'hardlink', 'reflink', 'symlink'
