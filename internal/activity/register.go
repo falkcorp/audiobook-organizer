@@ -17,6 +17,8 @@ package activity
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -74,8 +76,49 @@ func init() {
 				return nil, fmt.Errorf("activitystore: pebble activity store not available")
 			}
 
-			slog.Info("[activity] Pebble-only activity store wired")
-			return pebbleStore, nil
+			// ActivityBackend selects the store. "pebble" is the escape hatch /
+			// rollback (Pebble-only, no SQLite opened). Empty or "sqlite"
+			// (default) engages the SQLite backend behind a migration wrapper:
+			// writes dual to both, reads stay on Pebble until the backfill copies
+			// history + verifies parity, then flip (see activity-sql-migration).
+			backend := strings.ToLower(strings.TrimSpace(cfg.ActivityBackend))
+			if backend == "pebble" {
+				slog.Info("[activity] Pebble-only activity store wired (ActivityBackend=pebble)")
+				return pebbleStore, nil
+			}
+
+			sqlPath := cfg.ActivityDBPath
+			if sqlPath == "" {
+				sqlPath = filepath.Join(filepath.Dir(cfg.DatabasePath), "activity.sqlite")
+			}
+			sqlStore, err := database.OpenSQLiteActivityStore(sqlPath)
+			if err != nil {
+				// Fail OPEN to Pebble: a SQLite open failure must not take the
+				// activity log offline. Loud, then degrade to the proven backend.
+				slog.Error("[activity] SQLite activity store failed to open — falling back to Pebble-only",
+					"path", sqlPath, "err", err)
+				return pebbleStore, nil
+			}
+			readSecondary := pebbleStore.SQLBackfillDone()
+			slog.Info("[activity] SQLite activity migration wired",
+				"sqlite_path", sqlPath, "read_secondary", readSecondary)
+			return database.NewMigratingActivityStore(pebbleStore, sqlStore, readSecondary), nil
+		},
+	})
+
+	// activity-sql-migration: a Starter that runs the one-time Pebble→SQLite
+	// backfill in the background and flips reads to SQLite once per-tier parity
+	// is verified. A no-op when the store is not a migration wrapper (pebble
+	// escape hatch, or a SQLite-open fallback) or when the migration already
+	// completed on a prior boot.
+	serviceregistry.Register(serviceregistry.ServiceDef{
+		Name:   "activity-sql-migration",
+		Needs:  []string{serviceregistry.KeyActivityStore},
+		Groups: []string{serviceregistry.KeyActivity},
+		Build: func(c *serviceregistry.Container) (any, error) {
+			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
+			mig, _ := store.(*database.MigratingActivityStore)
+			return &sqlMigrationStarter{mig: mig}, nil
 		},
 	})
 
