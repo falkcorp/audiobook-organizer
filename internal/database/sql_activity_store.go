@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-07
 
@@ -183,7 +183,10 @@ func rowArgs(e ActivityEntry, srcKey any) ([]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("sql_activity: marshal details: %w", err)
 		}
-		det = string(b)
+		// Store the details JSON compressed (see sql_activity_details_codec.go):
+		// this is the only large column and raw JSON blew activity.sqlite past
+		// 30 GB on prod. Stored as a tagged BLOB.
+		det = encodeActivityDetails(b)
 	}
 	if len(e.Tags) > 0 {
 		b, err := json.Marshal(e.Tags)
@@ -224,7 +227,11 @@ func scanEntries(rows *sql.Rows) ([]ActivityEntry, error) {
 		e.Timestamp = time.Unix(0, ts).UTC()
 		e.OperationID, e.BookID = op.String, bk.String
 		if det.Valid && det.String != "" {
-			if err := json.Unmarshal([]byte(det.String), &e.Details); err != nil {
+			raw, derr := decodeActivityDetails([]byte(det.String))
+			if derr != nil {
+				return nil, derr
+			}
+			if err := json.Unmarshal(raw, &e.Details); err != nil {
 				return nil, fmt.Errorf("sql_activity: unmarshal details: %w", err)
 			}
 		}
@@ -776,7 +783,12 @@ func (s *SQLActivityStore) commitDayDigest(ctx context.Context, day time.Time, l
 	default:
 		var existing DigestDetails
 		if existingDetails.Valid && existingDetails.String != "" {
-			if uerr := json.Unmarshal([]byte(existingDetails.String), &existing); uerr != nil {
+			raw, derr := decodeActivityDetails([]byte(existingDetails.String))
+			if derr != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("sql_activity: compact decode existing digest: %w", derr)
+			}
+			if uerr := json.Unmarshal(raw, &existing); uerr != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("sql_activity: compact decode existing digest: %w", uerr)
 			}
@@ -880,7 +892,11 @@ func (s *SQLActivityStore) RecompactDigests(ctx context.Context) (RecompactResul
 		}
 		var dd DigestDetails
 		if c.details != "" {
-			if uerr := json.Unmarshal([]byte(c.details), &dd); uerr != nil {
+			raw, derr := decodeActivityDetails([]byte(c.details))
+			if derr != nil {
+				continue // undecodable — leave as-is, do not corrupt
+			}
+			if uerr := json.Unmarshal(raw, &dd); uerr != nil {
 				continue // undecodable — leave as-is, do not corrupt
 			}
 		}
@@ -929,7 +945,7 @@ func (s *SQLActivityStore) RecompactDigests(ctx context.Context) (RecompactResul
 		summary := fmt.Sprintf("Daily digest for %s (%d entries)", dd.Date, dd.OriginalCount)
 		if _, uerr := s.writer.ExecContext(ctx, s.dialect.rebind(
 			`UPDATE activity SET details = ?, summary = ? WHERE id = ?`),
-			string(ddBytes), summary, c.id); uerr != nil {
+			encodeActivityDetails(ddBytes), summary, c.id); uerr != nil {
 			return result, fmt.Errorf("sql_activity: recompact update: %w", uerr)
 		}
 		result.Touched++
