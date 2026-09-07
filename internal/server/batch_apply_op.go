@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -36,12 +36,72 @@ func errText(err error) string {
 
 // batchApplyOpParams is the JSON params for the metadata.batch-apply-cached op.
 type batchApplyOpParams struct {
+	// BookIDs is the work REMAINING. A checkpoint rewrites it to the unfinished
+	// tail, so a resumed run is shaped exactly like a smaller fresh run and
+	// needs no special-case decoding anywhere.
 	BookIDs []string `json:"book_ids"`
 	// WriteBack mirrors the handler's body.WriteBack: when true (the default at
 	// the handler) the applied metadata is also written into the audio files and
 	// enqueued for iTunes sync. When false only the database rows change.
 	WriteBack bool `json:"write_back"`
+	// OriginalTotal is the size of the batch as the USER requested it, carried
+	// across restarts for display only. Nothing branches on it. Without it a
+	// resumed run reports "applied 120 of 352" for a job the user started as 699
+	// books, which reads as the op having silently lost work.
+	OriginalTotal int `json:"original_total,omitempty"`
 }
+
+// completed is how many books earlier attempts of this run already finished,
+// derived rather than stored so it cannot drift out of step with BookIDs.
+//
+// Clamped at zero on purpose. OriginalTotal is absent on a fresh run and on
+// params hand-written against /operations/v2, and a merge can legitimately grow
+// BookIDs past a stale OriginalTotal; in every one of those cases the truthful
+// answer is "nothing is known to be done yet", not a negative offset that would
+// drive the progress bar backwards.
+func (p batchApplyOpParams) completed() int {
+	if p.OriginalTotal <= len(p.BookIDs) {
+		return 0
+	}
+	return p.OriginalTotal - len(p.BookIDs)
+}
+
+// batchApplyCheckpointState builds the checkpoint payload for a contiguous
+// completion watermark. It is a named function rather than an inline expression
+// so a test can drive the REAL payload builder through RunItems instead of
+// re-deriving the slice arithmetic and proving only that the copy agrees with
+// itself.
+//
+// bookIDs is this attempt's work; watermark indexes into it.
+func batchApplyCheckpointState(bookIDs []string, writeBack bool, originalTotal, watermark int) batchApplyOpParams {
+	watermark = min(max(watermark, 0), len(bookIDs))
+	return batchApplyOpParams{
+		BookIDs:       bookIDs[watermark:],
+		WriteBack:     writeBack,
+		OriginalTotal: originalTotal,
+	}
+}
+
+// batchApplyCheckpointEvery is how many completed books pass between checkpoint
+// writes. The checkpoint is the contiguous-completion watermark, so a restart
+// re-applies at most this many books. Re-applying is safe (the same cached
+// candidate lands on the same book) but not free — it rewrites tags into the
+// audio files — so this is deliberately small rather than the 200 a cheap
+// probe-style backfill can afford.
+const batchApplyCheckpointEvery = 10
+
+// batchApplyMinCheckpointInterval arms the registry watchdog's uncheckpointed
+// strike path, which is gated on ResumePolicy == ResumeRestart AND a nonzero
+// MinCheckpointInterval (registry/watchdog.go). Leaving it zero would mean a
+// hung run is never struck — the silent half of declaring a resume policy.
+//
+// Sized from the WORST case, not the average: PerItemTimeout is 3 minutes and
+// WriteBackWorkers can be configured down to 1, so batchApplyCheckpointEvery
+// books can legitimately take 30 minutes with no checkpoint in between. A
+// tighter value would strike healthy long-running batches, which is how the
+// strike path came to fire spuriously for every ResumeRestart job before it was
+// sharpened.
+const batchApplyMinCheckpointInterval = 45 * time.Minute
 
 func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMessage, bool, error) {
 	var current, next batchApplyOpParams
@@ -56,6 +116,10 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	}
 	seen := make(map[string]struct{}, len(current.BookIDs)+len(next.BookIDs))
 	merged := batchApplyOpParams{WriteBack: current.WriteBack}
+	// Books an earlier attempt already finished, inferred before BookIDs is
+	// rewritten. Preserving it across the merge is what keeps a resumed-then-
+	// extended run reporting absolute progress instead of appearing to restart.
+	priorDone := current.completed()
 	for _, id := range append(current.BookIDs, next.BookIDs...) {
 		if id == "" {
 			continue
@@ -73,6 +137,11 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	if !applycap.Fits(len(merged.BookIDs), config.AppConfig.BulkApplyMaxItems) {
 		return nil, false, nil
 	}
+	// Re-derive rather than carry OriginalTotal through: the merged run's total
+	// is what an earlier attempt finished plus what is left to do. Setting it to
+	// current.OriginalTotal would under-count the newly enqueued books and make
+	// the run report completion before it had touched them.
+	merged.OriginalTotal = priorDone + len(merged.BookIDs)
 	raw, err := json.Marshal(merged)
 	return raw, err == nil, err
 }
@@ -94,20 +163,23 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 // watchdog. The handler now returns an op id in milliseconds.
 func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:                "metadata.batch-apply-cached",
-		Liveness:          opsregistry.LivenessRunItems,
-		Plugin:            "metadata",
-		DisplayName:       "Apply Cached Metadata",
-		Description:       "Apply the highest-scored cached metadata candidate to each of a set of books, optionally writing tags back into the audio files.",
-		DefaultPriority:   opsregistry.PriorityNormal,
-		Cancellable:       true,
-		Isolate:           false,
-		Timeout:           4 * time.Hour,
-		ResumePolicy:      opsregistry.ResumeDrop,
-		ConcurrencyKey:    "metadata.batch-apply-cached",
-		MergeQueuedParams: mergeBatchApplyQueuedParams,
-		Permissions:       []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
+		ID:              "metadata.batch-apply-cached",
+		Liveness:        opsregistry.LivenessRunItems,
+		Plugin:          "metadata",
+		DisplayName:     "Apply Cached Metadata",
+		Description:     "Apply the highest-scored cached metadata candidate to each of a set of books, optionally writing tags back into the audio files.",
+		DefaultPriority: opsregistry.PriorityNormal,
+		Cancellable:     true,
+		Isolate:         false,
+		Timeout:         4 * time.Hour,
+		ResumePolicy:    opsregistry.ResumeRestart,
+		// Non-zero is REQUIRED alongside ResumeRestart, not optional decoration
+		// — see the constant.
+		MinCheckpointInterval: batchApplyMinCheckpointInterval,
+		ConcurrencyKey:        "metadata.batch-apply-cached",
+		MergeQueuedParams:     mergeBatchApplyQueuedParams,
+		Permissions:           []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:          []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p batchApplyOpParams
 			if len(rawParams) > 0 {
@@ -133,9 +205,22 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			}
 
 			progress := registryProgressAdapter{r: reporter}
+			// bookIDs is what is LEFT. On a resumed run the registry has merged
+			// the checkpoint back into params, so this is already the unfinished
+			// tail and the run needs no resume branch of its own.
 			bookIDs := p.BookIDs
 			total := len(bookIDs)
-			_ = progress.UpdateProgress(0, total, "starting metadata apply")
+			priorDone := p.completed()
+			// Denominator the USER recognises, so a resumed run continues the
+			// count instead of appearing to start a smaller job.
+			originalTotal := priorDone + total
+			if priorDone > 0 {
+				reporter.Log(slog.LevelInfo, "resuming metadata apply",
+					slog.Int("remaining", total),
+					slog.Int("already_applied_by_earlier_attempts", priorDone),
+					slog.Int("total", originalTotal))
+			}
+			_ = progress.UpdateProgress(priorDone, originalTotal, "starting metadata apply")
 
 			var applied, noCandidates, decodeFailed, applyFailed, writeFailed atomic.Int64
 			// skippedLocked counts BOOKS where at least one user-locked field was
@@ -227,11 +312,53 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// The Label is deliberately COARSE and constant: reporter_db.go writes
 			// one op_logs_v2 row per DISTINCT progress message, so a label carrying
 			// the book id would write one DB row per book.
+			//
+			// CHECKPOINTING. runOne returns nil for every per-book outcome
+			// (failures land in the counters), and RunItems only advances the
+			// watermark on a nil return — so every book examined here leaves the
+			// remaining set, whether it applied or was skipped. That is
+			// deliberate and is the user's requirement verbatim: "don't let one
+			// bad item constantly make it fail." A book with no cached candidate
+			// would otherwise be retried on every restart, forever.
+			//
+			// The cost is accepted knowingly: a book whose write-back failed on a
+			// transient fault (a NAS blip) also leaves the set and is not retried
+			// by the resume. It is not lost — the database apply is durable and
+			// the failure is counted and logged as writeFailed — but recovering
+			// the file write needs a fresh apply, not this checkpoint. Note this
+			// inverts RunItems' documented default rationale ("a FAILED item never
+			// advances the watermark"), which is why it is spelled out here rather
+			// than left to read as an oversight.
 			runErr := opsregistry.RunItems(ctx, reporter, bookIDs, runOne, opsregistry.RunItemsOptions{
 				Concurrency:    writeBackWorkers(),
 				PerItemTimeout: 3 * time.Minute,
 				ErrMode:        opsregistry.ErrModeCollect,
 				Label:          func(int, int) string { return "applying cached metadata" },
+				// Absolute position in the batch the user started, not in this
+				// attempt's remainder.
+				ProgressOffset:  priorDone,
+				ProgressTotal:   originalTotal,
+				CheckpointEvery: batchApplyCheckpointEvery,
+				// The watermark is the contiguous completed PREFIX, so
+				// bookIDs[watermark:] is exactly the work still owed — including
+				// any book a faster worker finished out of order past a gap,
+				// which is re-applied rather than skipped. Storing the remaining
+				// IDs, rather than the watermark index the chapters-backfill
+				// precedent stores, is what makes this safe against the set
+				// changing between attempts: MergeQueuedParams can union new
+				// books into a queued row, and an index into a list that has
+				// since grown would silently skip whatever sorted below it. That
+				// is the 2026-08-21 production incident shape (registry/types.go)
+				// — new books discarded while the run reported success.
+				//
+				// Every field is carried. Checkpoint JSON is MERGED into the
+				// resumed params, so anything omitted returns as its zero value:
+				// dropping WriteBack would silently downgrade a live run to a
+				// database-only one on restart.
+				CheckpointStateFn: func(_ context.Context, watermark int) error {
+					return reporter.Checkpoint(batchApplyCheckpointState(
+						bookIDs, p.WriteBack, originalTotal, watermark))
+				},
 			})
 			// Return BEFORE the "complete" row, so a canceled batch does not report
 			// success on its way out. runOne never returns a non-nil error (per-book
@@ -241,10 +368,19 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				return runErr
 			}
 
-			_ = progress.UpdateProgress(total, total, fmt.Sprintf(
-				"complete: applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d, kept user-locked fields on %d)",
+			// The counters cover THIS attempt only; they are not carried across a
+			// restart. So the resumed wording reports them against the books this
+			// attempt examined and names the earlier work separately, rather than
+			// printing "applied 120 of 699" — which would read as 579 failures.
+			summary := fmt.Sprintf(
+				"applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d, kept user-locked fields on %d)",
 				applied.Load(), total, noCandidates.Load(), decodeFailed.Load(),
-				applyFailed.Load(), writeFailed.Load(), skippedLocked.Load()))
+				applyFailed.Load(), writeFailed.Load(), skippedLocked.Load())
+			if priorDone > 0 {
+				summary = fmt.Sprintf("%s; %d more were completed by earlier attempts before a restart, %d in the batch overall",
+					summary, priorDone, originalTotal)
+			}
+			_ = progress.UpdateProgress(originalTotal, originalTotal, "complete: "+summary)
 			return nil
 		},
 	})
