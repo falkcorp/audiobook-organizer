@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-07-the-books-that-could-never-be-filed-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6f4b1a83-c05d-4e29-9d7a-b21836e5c470 -->
 <!-- last-edited: 2026-09-07 -->
 
@@ -44,6 +44,11 @@
   - **Genuinely different recordings that happen to want the same name?** It files ours
     beside the other one as `..._copy1`, exactly the way the library's own filing feature
     has always handled a name clash. One rule, not two.
+
+  - **Can't tell?** Then it does nothing. If the app cannot even work out whether the
+    file in the way belongs to your library or is a shortcut pointing somewhere outside
+    it, it refuses to guess and marks the book as one it could not file (below), rather
+    than picking a branch and possibly moving the wrong copy aside.
 
 - **And one bad book no longer ruins the whole run.** A book that genuinely cannot be
   filed is now remembered as such and quietly skipped on later runs, instead of being
