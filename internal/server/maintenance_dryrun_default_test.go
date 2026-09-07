@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dryrun_default_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6c1d84af-97b2-4e30-8f55-2b70e9c14d63
-// last-edited: 2026-08-23
+// last-edited: 2026-09-07
 
 package server
 
@@ -17,7 +17,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/gin-gonic/gin"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // ---------------------------------------------------------------------------
@@ -431,76 +430,3 @@ func TestRunMaintenanceJob_PersistsResolvedDryRun(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// The restart entry point
-// ---------------------------------------------------------------------------
-
-// TestResumeLegacyOp_DoesNotReEnqueueAMaintenanceRow pins the deletion of the
-// SECOND resume path.
-//
-// Every maintenance dispatch used to create a v1 row AND enqueue a v2 op, and
-// both were swept on restart: resumeAfterStartup resumed the v2 row per the
-// job's declared ResumePolicy (via container.Start, before this function runs at
-// all), and then resumeLegacyOp's default branch re-enqueued the SAME job again
-// off the v1 row. Only EnqueueOp's ConcurrencyKey dedupe kept that from running
-// the job twice.
-//
-// Retiring the v1 minter removes the first half of that pairing, so the branch
-// is gone. Rows written before the deploy still arrive here, and they must now be
-// closed out rather than re-enqueued -- their v2 twin is what resumes them.
-//
-// What this test REPLACED is worth recording. It used to assert that this branch
-// reconstructed the operator's dry_run choice from a side-table params blob,
-// because database.Operation has no params field and a resumed PREVIEW would
-// otherwise apply for real. The v2 row stores params natively, so that invariant
-// moved rather than disappeared: it is now
-// TestResume_PreservesParamsAcrossRestartAndRequeue in
-// internal/operations/registry, checked against both resume policies.
-func TestResumeLegacyOp_DoesNotReEnqueueAMaintenanceRow(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-	if server.opRegistry == nil {
-		t.Skip("ops registry not wired in this build")
-	}
-
-	job := probeAdvertisesTrue
-	job.mu.Lock()
-	job.runs = nil
-	job.mu.Unlock()
-
-	opID := ulid.Make().String()
-	opType := "maintenance:" + job.ID()
-	if _, err := server.storeForWiring().CreateOperation(opID, opType, nil); err != nil {
-		t.Fatalf("CreateOperation: %v", err)
-	}
-
-	server.resumeLegacyOp(opID, opType)
-
-	// The job must not run. A re-enqueue would be a second run of work whose v2
-	// twin resumeAfterStartup has already dealt with. Waiting a fixed window is
-	// the honest shape for a must-NOT-happen assertion: there is no event to
-	// synchronize on, and the positive control below fires in the same window.
-	time.Sleep(2 * time.Second)
-	job.mu.Lock()
-	runs := len(job.runs)
-	job.mu.Unlock()
-	if runs != 0 {
-		t.Fatalf("resumeLegacyOp re-enqueued the maintenance job (%d run(s)); the "+
-			"v1 resume branch was supposed to be deleted, and its v2 twin already "+
-			"resumed this run", runs)
-	}
-
-	// And the stale row must be closed out, not left mid-flight to be swept again
-	// on every subsequent restart -- the stuck-row pathology this lane exists to end.
-	row, err := server.storeForWiring().GetOperationByID(opID)
-	if err != nil {
-		t.Fatalf("GetOperationByID: %v", err)
-	}
-	if row == nil {
-		t.Fatal("the stale v1 row was deleted; it should be closed out and left readable")
-	}
-	if row.Status != "failed" {
-		t.Errorf("stale v1 row left at status %q, want a terminal status; a row that "+
-			"stays resumable is re-swept on every restart", row.Status)
-	}
-}

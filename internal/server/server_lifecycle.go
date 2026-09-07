@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.34.1
+// version: 4.0.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package server
 
@@ -29,8 +29,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
-	"github.com/falkcorp/audiobook-organizer/internal/operations"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
@@ -44,285 +42,6 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
 )
-
-func (s *Server) resumeInterruptedOperations() {
-	store := s.storeForWiring()
-	if store == nil {
-		return
-	}
-
-	interrupted, err := store.GetInterruptedOperations()
-	if err != nil {
-		slog.Warn("Failed to query interrupted operations", "err", err)
-		return
-	}
-
-	// SYS-4 observability gate: count interrupted operations whose Type is a
-	// pre-UOS v1 legacy name still handled by the resumeLegacyOp shim. This is
-	// telemetry only (does not change resume behavior) and lays the groundwork
-	// for a future task that deletes resumeLegacyOp once this count is verified
-	// to stay at zero in production across a full release cycle.
-	if n := countLegacyV1Ops(interrupted); n > 0 {
-		slog.Info("legacy v1 op rows pending resume", "count", n)
-	}
-
-	for _, op := range interrupted {
-		_ = store.UpdateOperationStatus(op.ID, "interrupted", op.Progress, op.Total, "server restarted")
-
-		checkpoint, _ := operations.LoadCheckpoint(store, op.ID)
-		phaseInfo := ""
-		if checkpoint != nil {
-			phaseInfo = fmt.Sprintf(" from %s at %d/%d", checkpoint.Phase, checkpoint.PhaseIndex, checkpoint.PhaseTotal)
-		}
-		slog.Info("Resuming interrupted operation", "op", op.ID, "type", op.Type, "phase", phaseInfo)
-
-		// v2 path: look up the op definition in the registry and use its declared ResumePolicy.
-		if s.opRegistry != nil {
-			if def, ok := s.opRegistry.Def(op.Type); ok {
-				s.resumeV2Op(op.ID, op.Type, def.ResumePolicy)
-				continue
-			}
-		}
-
-		// v1 legacy shim: handle pre-UOS op type names that aren't registered under their old name.
-		s.resumeLegacyOp(op.ID, op.Type)
-	}
-}
-
-// resumeV2Op handles resume for operations registered in the v2 registry,
-// dispatching based on their declared ResumePolicy.
-func (s *Server) resumeV2Op(opID, opType string, policy opsregistry.ResumePolicy) {
-	switch policy {
-	case opsregistry.ResumeRestart:
-		// Marking the row "queued" is NOT enough, which is what this used to do.
-		// Nothing scans the store for queued rows — the dispatcher works from
-		// the registry's own queue — so a ResumeRestart op was set to "queued"
-		// and then sat there forever. Measured 2026-08-17: a library.scan
-		// (ResumePolicy=ResumeRestart since #2500) was killed by a deploy and
-		// never came back, and no scan was running afterwards.
-		//
-		// Re-enqueue for real, the way ResumeRequeue does. Params are nil for
-		// the same reason they are nil there: the concrete params type is not
-		// known at this call site (LoadParams is generic over T), and every
-		// ResumeRestart op today treats nil as "do the whole thing" — which is
-		// exactly the intended restart semantic. An op that needs its original
-		// params to restart correctly must persist them itself.
-		newID, err := s.opRegistry.EnqueueOp(context.Background(), opType, nil)
-		if err != nil {
-			slog.Warn("Failed to re-enqueue v2 op on restart-resume", "opID", opID, "opType", opType, "err", err)
-			_ = s.Ops().UpdateOperationError(opID, "failed to resume: "+err.Error())
-			return
-		}
-		// Close the old row out rather than leaving it mid-flight, so the
-		// timeline shows one finished attempt and one fresh run instead of a
-		// phantom that never moves again.
-		now := time.Now()
-		reason := fmt.Sprintf("interrupted during %s — restarted as %s", opType, newID)
-		_ = s.Ops().UpdateOperationV2Status(opID, "interrupted_restart", nil, &now, &reason)
-		slog.Info("Restarted interrupted operation", "oldOpID", opID, "newOpID", newID, "opType", opType)
-	case opsregistry.ResumeRequeue:
-		// Re-enqueue from zero (idempotent op).
-		if _, err := s.opRegistry.EnqueueOp(context.Background(), opType, nil); err != nil {
-			slog.Warn("Failed to re-enqueue v2 op on resume", "opID", opID, "opType", opType, "err", err)
-			_ = s.Ops().UpdateOperationError(opID, "failed to resume: "+err.Error())
-		}
-	case opsregistry.ResumeDrop:
-		_ = s.Ops().UpdateOperationError(opID, fmt.Sprintf("interrupted during %s (dropped on restart)", opType))
-		_ = operations.ClearState(s.storeForWiring(), opID)
-	case opsregistry.ResumeAsk:
-		// Surface in UI — mark as interrupted_ask so the frontend can prompt the user.
-		slog.Info("Op requires user decision to resume or drop", "opID", opID, "opType", opType)
-		now := time.Now()
-		reason := "interrupted — waiting for user to choose resume or drop"
-		_ = s.Ops().UpdateOperationV2Status(opID, "interrupted_ask", nil, &now, &reason)
-	default:
-		_ = s.Ops().UpdateOperationError(opID, fmt.Sprintf("interrupted during %s (unknown resume policy)", opType))
-		_ = operations.ClearState(s.storeForWiring(), opID)
-	}
-}
-
-// legacyV1OpTypes is the set of pre-UOS v1 operation type names still handled
-// by the resumeLegacyOp switch below. Kept in sync with that switch; used by
-// countLegacyV1Ops for the SYS-4 observability gate. The "maintenance:*"
-// default branch is intentionally excluded — it is a namespaced prefix, not a
-// fixed v1 type name, and is not a candidate for the future shim deletion.
-var legacyV1OpTypes = map[string]struct{}{
-	"itunes_import":            {},
-	"scan":                     {},
-	"organize":                 {},
-	"bulk_write_back":          {},
-	"isbn-enrichment":          {},
-	"metadata-refresh":         {},
-	"itunes_path_reconcile":    {},
-	"itunes_path_repair":       {},
-	"transcode":                {},
-	"diagnostics_export":       {},
-	"diagnostics_ai":           {},
-	"itunes_sync":              {},
-	"reconcile_scan":           {},
-	"metadata_candidate_fetch": {},
-}
-
-// countLegacyV1Ops returns how many of the given operations carry a pre-UOS v1
-// legacy Type name (see legacyV1OpTypes / resumeLegacyOp). Pure function so the
-// SYS-4 count gate is testable without constructing a Server.
-func countLegacyV1Ops(ops []database.Operation) int {
-	n := 0
-	for _, op := range ops {
-		if _, ok := legacyV1OpTypes[op.Type]; ok {
-			n++
-		}
-	}
-	return n
-}
-
-// resumeLegacyOp handles resume for pre-UOS v1 op type names that are not
-// registered in the v2 registry under their original names.
-func (s *Server) resumeLegacyOp(opID, opType string) {
-	store := s.storeForWiring()
-	switch opType {
-	case "itunes_import":
-		// Migrated to UOS (itunes.import); re-enqueue via registry on resume.
-		if s.opRegistry != nil {
-			_, _ = s.opRegistry.EnqueueOp(context.Background(), "itunes.import", nil)
-		} else {
-			_ = store.UpdateOperationError(opID, "operation registry not available")
-		}
-	case "scan", "organize":
-		// Pre-migration v1 op types. library.scan and library.organize have
-		// ResumePolicy=Drop; restarting them via the v1 queue would race with
-		// v2 workers. Mark failed so the user can re-trigger manually.
-		_ = store.UpdateOperationError(opID, fmt.Sprintf("interrupted during %s, please retry", opType))
-		_ = operations.ClearState(store, opID)
-	case "metadata_candidate_fetch":
-		// A fetch from before metadata.candidate-fetch stopped writing a v1 row.
-		// Runs started since resume themselves (ResumePolicy=ResumeRestart, and
-		// Run skips books that already have results), so this branch only ever
-		// sees the pre-migration backlog.
-		//
-		// Marked for retry rather than re-enqueued. Re-enqueueing would key the
-		// remainder under a NEW v2 id while the finished half stays under the v1
-		// one, so a single logical fetch would show up as two partial runs in the
-		// Resume Review picker. Its results stay readable either way — the picker
-		// spans both keyspaces — and re-running skips whatever already matched.
-		_ = store.UpdateOperationError(opID, "interrupted during metadata candidate fetch, please retry")
-		_ = operations.ClearState(store, opID)
-	case "bulk_write_back":
-		// Migrated to UOS (library.bulk-write-back); re-enqueue via registry on resume.
-		params, _ := operations.LoadParams[operations.BulkWriteBackParams](store, opID)
-		if params == nil {
-			slog.Warn("No params for interrupted bulk_write_back , marking failed", "opID", opID)
-			_ = store.UpdateOperationError(opID, "no saved params, cannot resume")
-			return
-		}
-		if s.opRegistry != nil {
-			enqParams := bulkWriteBackOpParams{BookIDs: params.BookIDs, Rename: params.Rename}
-			if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "library.bulk-write-back", enqParams); enqErr != nil {
-				slog.Warn("Failed to re-enqueue bulk_write_back via v2", "opID", opID, "enqErr", enqErr)
-				_ = store.UpdateOperationError(opID, "failed to resume: "+enqErr.Error())
-			}
-		} else {
-			_ = store.UpdateOperationError(opID, "operation registry not available")
-		}
-	case "isbn-enrichment":
-		// Migrated to UOS (scheduler.isbn-enrichment); re-enqueue via registry on resume.
-		if s.opRegistry != nil {
-			enqParams := schedulerExtraOpParams{LegacyOpID: opID}
-			if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "scheduler.isbn-enrichment", enqParams); enqErr != nil {
-				slog.Warn("Failed to re-enqueue isbn-enrichment via v2", "opID", opID, "enqErr", enqErr)
-				_ = store.UpdateOperationError(opID, "failed to resume: "+enqErr.Error())
-			}
-		} else {
-			_ = store.UpdateOperationError(opID, "operation registry not available")
-		}
-	case "metadata-refresh":
-		// Migrated to UOS (scheduler.metadata-refresh); re-enqueue via registry on resume.
-		if s.opRegistry != nil {
-			enqParams := schedulerExtraOpParams{LegacyOpID: opID}
-			if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "scheduler.metadata-refresh", enqParams); enqErr != nil {
-				slog.Warn("Failed to re-enqueue metadata-refresh via v2", "opID", opID, "enqErr", enqErr)
-				_ = store.UpdateOperationError(opID, "failed to resume: "+enqErr.Error())
-			}
-		} else {
-			_ = store.UpdateOperationError(opID, "operation registry not available")
-		}
-	case "itunes_path_reconcile":
-		// Migrated to UOS (itunes.path-reconcile); re-enqueue via registry on resume.
-		if s.opRegistry != nil {
-			_, _ = s.opRegistry.EnqueueOp(context.Background(), "itunes.path-reconcile", nil)
-		} else {
-			_ = store.UpdateOperationError(opID, "operation registry not available")
-		}
-	case "itunes_path_repair":
-		// New runs no longer create a v1 row, so this branch only ever sees
-		// rows minted before that change. It must still be safe for them.
-		//
-		// DO NOT pass nil params here. EnqueueOp normalizes nil to "{}", which
-		// decodes to the zero itunesPathRepairOpParams — and its DryRun is
-		// FALSE. This branch therefore used to turn an interrupted DRY RUN into
-		// a real APPLY that rewrites locations in the live iTunes library, with
-		// nothing in the original request asking for it.
-		//
-		// The v1 row does not record which mode the run was in, so the mode
-		// cannot be recovered — resume in the safe one and let an operator
-		// re-trigger with ?apply=true if they meant to write.
-		if s.opRegistry != nil {
-			_, _ = s.opRegistry.EnqueueOp(context.Background(), "itunes.path-repair",
-				itunesPathRepairOpParams{DryRun: true})
-		} else {
-			_ = store.UpdateOperationError(opID, "operation registry not available")
-		}
-	case "transcode", "diagnostics_export", "diagnostics_ai", "itunes_sync",
-		// reconcile_scan: a 271K-file hash sweep that ignores ctx, runs
-		// nightly via the scheduler, and pins both queue workers for ~45min
-		// when auto-resumed. Repeated quick deploys produced a queue jam
-		// where new ops (AcoustID, embed, etc.) sat queued behind two
-		// stuck reconcile_scans that the cancel API couldn't actually
-		// kill. Letting the scheduler re-run it tomorrow is fine.
-		"reconcile_scan":
-		// These are not resumable — mark as failed silently.
-		_ = store.UpdateOperationError(opID, fmt.Sprintf("interrupted during %s, please retry", opType))
-		_ = operations.ClearState(store, opID)
-	default:
-		// A v1 row whose type this switch does not name. Since the v1 maintenance
-		// minter was retired that means one thing: a "maintenance:<job>" row from
-		// before the deploy.
-		//
-		// This branch used to RE-ENQUEUE those, and that was the second of two
-		// resume paths firing for a single logical run. Every maintenance dispatch
-		// created a v1 row AND a v2 op, so resumeAfterStartup (via container.Start)
-		// already resumed the v2 row per the job's own declared ResumePolicy before
-		// this function ran at all; the enqueue here was absorbed only by
-		// EnqueueOp's ConcurrencyKey dedupe. Retiring the minter deletes the first
-		// half of that pairing, so the re-enqueue has nothing left to add for any
-		// job whose declared ResumePolicy actually resumes.
-		//
-		// That was NOT true when this branch was first deleted, and the gap is
-		// worth recording. Five jobs -- bulk-deluge-import, cleanup-empty-folders,
-		// refetch-missing-authors, repair-missing-files and scan-composer-tags --
-		// declared CanResume() true while returning maintenance.DefaultPolicy(),
-		// whose ResumePolicy is ResumeDrop. For those five the re-enqueue deleted
-		// here was their ONLY resume, so deleting it stopped them resuming at all;
-		// the declared policy had never had to be correct because this branch
-		// resumed them regardless of it. All five now declare RestartPolicy(), so
-		// the statement above holds for every job and this branch is redundant for
-		// the reason it claims to be.
-		//
-		// The elaborate dry_run reconstruction that lived here goes with it. It
-		// existed only because database.Operation has no params field, so an
-		// interrupted PREVIEW resumed as a real mutation under Go's zero value; it
-		// was worked around by persisting params to a side table and falling back
-		// to the job's advertised default. The v2 row stores params natively and
-		// both registry resume paths carry them across verbatim, so the operator's
-		// actual choice survives a restart with nothing to reconstruct.
-		//
-		// Close the row out rather than leaving it mid-flight. Its results and
-		// summary log are keyed by id in tables with no foreign key to it, so they
-		// stay readable.
-		_ = store.UpdateOperationError(opID, "interrupted, cannot resume")
-		_ = operations.ClearState(store, opID)
-	}
-}
 
 // opRegistrationGate reports whether the operations registry came up whole.
 //
@@ -421,8 +140,12 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 	s.seedRolesAndTokens()
 
-	// Resume any operations that were interrupted by a previous shutdown/crash
-	s.resumeInterruptedOperations()
+	// Operations interrupted by a previous shutdown/crash are resumed by the
+	// operations registry: Registry.Start runs resumeAfterStartup, which reads
+	// ListResumableOperationsV2 and applies each def's declared ResumePolicy.
+	// A v1 sweep used to run here as well; it was deleted on 2026-09-07 because
+	// its only candidate source was the `operation:` keyspace, whose minter was
+	// retired 2026-08-23.
 
 	// Recover interrupted file I/O operations (cover embed, tag write, rename)
 	RecoverInterruptedFileOps(s.fileIOPool)
