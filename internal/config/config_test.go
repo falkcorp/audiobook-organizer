@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package config
 
@@ -686,4 +686,37 @@ func TestInitConfig_AcoustIDAPIKeyFromEnv(t *testing.T) {
 	viper.Reset()
 	InitConfig()
 	assert.Equal(t, "test-acoustid-key", Snapshot().AcoustIDAPIKey)
+}
+
+// TestInitConfig_ActivityBackendFromEnv locks the prod rollback lever: the
+// activity store backend must be forceable via ACTIVITY_BACKEND without editing
+// config.yaml (which is root:600 on prod and not reachable through the deploy's
+// NOPASSWD levers). AutomaticEnv() is not active in this codebase, so this only
+// works if config.go has an explicit viper.BindEnv for the key. Regression guard
+// for the 2026-09-07 SQLite-migration OOM incident, where a Pebble→SQLite
+// backfill OOM-looped prod and =pebble was the only safe stop-gap.
+func TestInitConfig_ActivityBackendFromEnv(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	assert.Equal(t, "", Snapshot().ActivityBackend, "default backend is empty (SQLite path)")
+
+	t.Setenv("ACTIVITY_BACKEND", "pebble")
+	t.Setenv("ACTIVITY_DB_PATH", "/tmp/activity-test.sqlite")
+	viper.Reset()
+	InitConfig()
+	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
+		"ACTIVITY_BACKEND did not reach Config.ActivityBackend — check viper.BindEnv")
+	assert.Equal(t, "/tmp/activity-test.sqlite", Snapshot().ActivityDBPath,
+		"ACTIVITY_DB_PATH did not reach Config.ActivityDBPath — check viper.BindEnv")
+
+	// The DB-persisted config blob replaces the whole struct at boot
+	// (LoadConfigFromDatabase). Simulate that wipe, then confirm the
+	// env-authoritative re-apply restores the rollback lever — without this the
+	// systemd env would be silently dropped and SQLite would re-engage.
+	Mutate(func(c *Config) { c.ActivityBackend = ""; c.ActivityDBPath = "" })
+	ApplyEnvAuthoritativeConfig()
+	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
+		"ACTIVITY_BACKEND dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
+	assert.Equal(t, "/tmp/activity-test.sqlite", Snapshot().ActivityDBPath,
+		"ACTIVITY_DB_PATH dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
 }

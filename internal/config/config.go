@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.102.0
+// version: 1.103.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package config
 
@@ -1472,6 +1472,17 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	if viper.IsSet("abs_default_library_id") {
 		c.ABSDefaultLibraryID = viper.GetString("abs_default_library_id")
 	}
+	// Activity-log backend selector. Env-authoritative for the same reason as the
+	// ABS keys: LoadConfigFromDatabase replaces the whole struct with the persisted
+	// blob, so without this a systemd Environment=ACTIVITY_BACKEND=pebble rollback
+	// would be silently dropped at boot and SQLite would re-engage. This lever
+	// exists to halt the Pebble→SQLite migration/backfill (the 2026-09-07 OOM).
+	if viper.IsSet("activity_backend") {
+		c.ActivityBackend = viper.GetString("activity_backend")
+	}
+	if viper.IsSet("activity_db_path") {
+		c.ActivityDBPath = viper.GetString("activity_db_path")
+	}
 }
 
 // ApplyEnvAuthoritativeConfig applies the environment-authoritative overrides to the
@@ -1879,6 +1890,18 @@ func InitConfig() {
 	viper.SetDefault("dedup.chromem_lazy", false)
 	viper.BindEnv("dedup.chromem_lazy", "DEDUP_CHROMEM_LAZY") //nolint:errcheck
 
+	// Activity-log store backend selection. Bound to env so ACTIVITY_BACKEND
+	// can force the store choice without editing config.yaml — the prod rollback
+	// lever when the SQLite migration/backfill misbehaves (set =pebble to open
+	// Pebble only, skipping the SQLite wrapper and its Pebble→SQLite backfill).
+	// AutomaticEnv() is not active in this codebase, so without this BindEnv the
+	// ActivityBackend field is settable only from config.yaml (root:600 on prod,
+	// not editable via the deploy's NOPASSWD levers).
+	viper.SetDefault("activity_backend", "")
+	viper.SetDefault("activity_db_path", "")
+	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND") //nolint:errcheck
+	viper.BindEnv("activity_db_path", "ACTIVITY_DB_PATH") //nolint:errcheck
+
 	// Dedup boilerplate-blocklist extras (nested under "dedup_boilerplate.*",
 	// INIT-4 T5). Empty by default — the compiled-in blocklist in
 	// internal/dedup/boilerplate.go is always active regardless.
@@ -2039,6 +2062,15 @@ func InitConfig() {
 			EnableAIParsing: viper.GetBool("enable_ai_parsing"),
 			OpenAIAPIKey:    viper.GetString("openai_api_key"),
 			AcoustIDAPIKey:  viper.GetString("acoustid_api_key"),
+
+			// Activity-log store backend. Read from viper here so config.yaml's
+			// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
+			// the field — the mapstructure tag is inert because this config is
+			// built by explicit GetString calls, not viper.Unmarshal. Also
+			// re-applied in applyEnvAuthoritativeConfig so the env lever survives
+			// the DB-blob config overlay (see the ABS keys there).
+			ActivityBackend: viper.GetString("activity_backend"),
+			ActivityDBPath:  viper.GetString("activity_db_path"),
 
 			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
 			WhisperClipCacheDir:                  viper.GetString("whisper_clip_cache_dir"),
