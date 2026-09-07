@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 package registry
 
@@ -64,7 +64,7 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 		r.clearScanStandDown()
 	}
 
-	rows, superseded := supersedeStaleQuiesced(rows)
+	rows, superseded := supersedeStaleQuiesced(rows, r.defDeclaresMergeQueuedParams)
 	for _, sup := range superseded {
 		r.resumeDrop(sup.ID, "superseded: a newer run of this op exists")
 	}
@@ -144,7 +144,26 @@ func (r *Registry) resumeAfterStartup(ctx context.Context) {
 // Rows that are queued or running are NEVER superseded — this function only ever
 // removes interrupted_quiesced rows, so the pre-existing sweep behaviour for the
 // in-flight set is unchanged.
-func supersedeStaleQuiesced(rows []database.OperationV2Row) (keep, superseded []database.OperationV2Row) {
+//
+// EXCEPTION, via defMerges: the rule above assumes a def is one-run-per-def, so
+// that any other run of it is doing the same work and the newest is a superset.
+// That holds for library.scan, which this heuristic was written for. It is FALSE
+// for a set-parameterized def — one whose runs each carry their own list of items
+// (metadata.batch-apply-cached and friends). There, a queued row is a DIFFERENT
+// batch of books, not a newer take on this one, and dropping the interrupted run
+// discards its checkpoint and abandons every book it still owed. That is an
+// ordinary deploy with a second batch queued, not an edge case.
+//
+// defMerges reports whether a def declares MergeQueuedParams, which is exactly
+// the "runs carry their own item set and are unioned rather than replaced"
+// property. Using the declaration rather than a def-id list means a new
+// set-parameterized op is covered the day it is written. library.scan does not
+// declare it, so the case this heuristic exists for is unchanged. A nil
+// defMerges treats every def as one-run-per-def (the old behaviour).
+func supersedeStaleQuiesced(
+	rows []database.OperationV2Row,
+	defMerges func(defID string) bool,
+) (keep, superseded []database.OperationV2Row) {
 	// Winner per def among the quiesced rows, and whether the def has a live row.
 	hasLive := make(map[string]bool, len(rows))
 	newestQuiesced := make(map[string]string, len(rows))
@@ -163,13 +182,29 @@ func supersedeStaleQuiesced(rows []database.OperationV2Row) (keep, superseded []
 			keep = append(keep, row)
 			continue
 		}
-		if hasLive[row.DefID] || row.ID != newestQuiesced[row.DefID] {
+		// A set-parameterized def's runs are not interchangeable, so a live row
+		// never makes this one redundant. Its own newest-wins dedupe still
+		// applies: two interrupted runs of the same def are still stale relative
+		// to each other in the same way, and letting them all restart is the
+		// pile-up this function exists to prevent.
+		setParameterized := defMerges != nil && defMerges(row.DefID)
+		if (hasLive[row.DefID] && !setParameterized) || row.ID != newestQuiesced[row.DefID] {
 			superseded = append(superseded, row)
 			continue
 		}
 		keep = append(keep, row)
 	}
 	return keep, superseded
+}
+
+// defDeclaresMergeQueuedParams reports whether a registered def unions new
+// requests into an existing queued run rather than replacing it. See
+// supersedeStaleQuiesced for why that distinction decides supersession.
+func (r *Registry) defDeclaresMergeQueuedParams(defID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	def, ok := r.defs[defID]
+	return ok && def.MergeQueuedParams != nil
 }
 
 // resumeRestart increments resume_count, merges any saved checkpoint state
@@ -200,6 +235,24 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 				row.Params = string(merged)
 				r.logger.Info("registry: resumeAfterStartup: merged checkpoint state into params",
 					"op_id", row.ID, "state_bytes", len(stateRow.StateBlob))
+
+				// CONSUME the blob now that params carry it. Leaving it behind
+				// makes it a stale authority that outlives the data it described:
+				// the row is now "queued", so a def with MergeQueuedParams can
+				// union newly requested work into these params, and a SECOND
+				// restart before dispatch would overlay this same old blob back
+				// on top and silently discard everything merged in between. That
+				// is the 2026-08-21 incident shape (new items dropped while the
+				// run reports success), reached by a different route.
+				//
+				// Safe to delete unconditionally: params were persisted first, so
+				// the resume position is already durable, and an op that keeps
+				// running simply writes a fresh checkpoint. Deleting after the
+				// params write (never before) is what makes the ordering safe.
+				if delErr := r.store.DeleteOpStateV2(row.ID); delErr != nil {
+					r.logger.Warn("registry: resumeAfterStartup: failed to delete consumed checkpoint state",
+						"op_id", row.ID, "error", delErr)
+				}
 			}
 		}
 	}

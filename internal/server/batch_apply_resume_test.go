@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_resume_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6b81c4-7d05-4e39-b1a8-93c05e7d264f
 // last-edited: 2026-09-07
 
@@ -8,7 +8,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 
@@ -75,6 +77,11 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 	var mu sync.Mutex
 	finished := map[string]bool{}
 	var violations []string
+	// sawGap records whether any checkpoint was taken while MORE books had
+	// finished than the checkpoint dropped from the remaining set. That is the
+	// definition of the watermark being stalled behind a gap, and it is the
+	// thing this test claims to exercise.
+	sawGap := false
 
 	err := opsregistry.RunItems(context.Background(), rec, ids,
 		func(_ context.Context, id string) error {
@@ -96,10 +103,14 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 			CheckpointStateFn: func(_ context.Context, watermark int) error {
 				st := batchApplyCheckpointState(ids, true, len(ids), watermark)
 				mu.Lock()
-				for _, dropped := range ids[:len(ids)-len(st.BookIDs)] {
-					if !finished[dropped] {
-						violations = append(violations, dropped)
+				dropped := ids[:len(ids)-len(st.BookIDs)]
+				for _, d := range dropped {
+					if !finished[d] {
+						violations = append(violations, d)
 					}
+				}
+				if len(finished) > len(dropped) {
+					sawGap = true
 				}
 				mu.Unlock()
 				return rec.Checkpoint(st)
@@ -140,18 +151,18 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 		}
 	}
 
-	// The gap really did open: b5 completed while b3 and b4 were blocked, so at
-	// least one checkpoint must have been taken while the watermark was stalled
-	// short of the end. Without this the test could pass vacuously on a run that
-	// happened to complete in order and never exercised the gap at all.
-	sawStalledCheckpoint := false
-	for _, st := range states {
-		if len(st.BookIDs) >= 3 {
-			sawStalledCheckpoint = true
-			break
-		}
-	}
-	if !sawStalledCheckpoint {
+	// Anti-vacuity: the gap really did open. At least one checkpoint must have
+	// been taken while more books had FINISHED than the checkpoint dropped --
+	// i.e. b5 was done while the watermark still sat behind b3/b4.
+	//
+	// A size threshold on BookIDs cannot express this: with CheckpointEvery=1
+	// an ordinary in-order run also produces long remaining sets early on, so
+	// such a check passes without any gap ever existing. Comparing completions
+	// against drops is the only form that distinguishes the two.
+	mu.Lock()
+	gapOpened := sawGap
+	mu.Unlock()
+	if !gapOpened {
 		t.Error("no checkpoint was taken while the out-of-order gap was open; " +
 			"the test did not exercise what it claims to")
 	}
@@ -169,33 +180,68 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 // "don't let one bad item constantly make it fail" -- and this test exists so
 // the behaviour cannot be quietly reverted to "retry forever".
 func TestBatchApplyCheckpoint_FailedBookStillLeavesTheSet(t *testing.T) {
-	ids := []string{"good1", "hopeless", "good2"}
-	rec := &ckptRecorder{}
+	// Both halves run the SAME books through the same options and differ only in
+	// what the per-item function returns for "hopeless". Asserting only the
+	// returns-nil half would pin nothing: with every item returning nil the
+	// watermark reaches the end no matter what the design intends, so the test
+	// would pass against an implementation that had lost the property entirely.
+	// The returns-error half is what gives the other half its meaning -- it
+	// shows the book's fate genuinely hinges on runOne's return value, which is
+	// the single line of the op this test is really about.
+	const hopeless = "hopeless"
+	ids := []string{"good1", hopeless, "good2"}
 
-	err := opsregistry.RunItems(context.Background(), rec, ids,
-		// Mirrors the op's runOne: a per-book problem is counted, never returned.
-		func(_ context.Context, _ string) error { return nil },
-		opsregistry.RunItemsOptions{
-			Concurrency:     1,
-			ErrMode:         opsregistry.ErrModeCollect,
-			CheckpointEvery: 1,
-			CheckpointStateFn: func(_ context.Context, watermark int) error {
-				return rec.Checkpoint(batchApplyCheckpointState(ids, true, len(ids), watermark))
+	run := func(t *testing.T, itemErr error) batchApplyOpParams {
+		t.Helper()
+		rec := &ckptRecorder{}
+		err := opsregistry.RunItems(context.Background(), rec, ids,
+			func(_ context.Context, id string) error {
+				if id == hopeless {
+					return itemErr
+				}
+				return nil
 			},
-		})
-	if err != nil {
-		t.Fatalf("RunItems: %v", err)
-	}
-	final, ok := rec.last()
-	if !ok {
-		t.Fatal("no checkpoint written")
-	}
-	for _, id := range final.BookIDs {
-		if id == "hopeless" {
-			t.Fatal("a book that could not be applied stayed in the remaining set; " +
-				"every restart would retry it forever, which is the failure mode this design removes")
+			opsregistry.RunItemsOptions{
+				Concurrency:     1,
+				ErrMode:         opsregistry.ErrModeCollect,
+				CheckpointEvery: 1,
+				CheckpointStateFn: func(_ context.Context, watermark int) error {
+					return rec.Checkpoint(batchApplyCheckpointState(ids, true, len(ids), watermark))
+				},
+			})
+		if itemErr == nil && err != nil {
+			t.Fatalf("RunItems: %v", err)
 		}
+		final, ok := rec.last()
+		if !ok {
+			t.Fatal("no checkpoint written")
+		}
+		return final
 	}
+
+	// The mechanism: a NON-nil return holds the book in the remaining set, so a
+	// resume would come back to it on every restart, forever.
+	t.Run("returning an error retries the book forever", func(t *testing.T) {
+		final := run(t, errors.New("no cached candidates"))
+		if !slices.Contains(final.BookIDs, hopeless) {
+			t.Fatalf("a failed item left the remaining set (%v); RunItems' watermark no longer "+
+				"depends on the return value, so this op's design no longer means what it says",
+				final.BookIDs)
+		}
+	})
+
+	// What the op actually does: runOne counts the per-book outcome and returns
+	// nil, so the book advances the watermark and a restart does not retry it.
+	// That is the user's requirement -- "don't let one bad item constantly make
+	// it fail".
+	t.Run("returning nil lets the book leave the set", func(t *testing.T) {
+		final := run(t, nil)
+		if slices.Contains(final.BookIDs, hopeless) {
+			t.Fatalf("a book that could not be applied stayed in the remaining set (%v); "+
+				"every restart would retry it forever, which is the failure mode this design removes",
+				final.BookIDs)
+		}
+	})
 }
 
 // TestMergeBatchApplyQueuedParams_ResumedRunUnionsNewWork guards the 2026-08-21

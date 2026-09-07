@@ -1,7 +1,7 @@
 // file: internal/operations/registry/queued_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 342326a8-40f7-440f-b6a6-0f7f8255b6b6
-// last-edited: 2026-08-28
+// last-edited: 2026-09-07
 
 package registry
 
@@ -42,6 +42,17 @@ func (r *Registry) tryMergeQueuedParams(
 		}
 		if err := r.store.UpdateOperationV2Params(op.ID, params); err != nil {
 			return "", false, fmt.Errorf("registry: persist queued param merge for %s: %w", op.ID, err)
+		}
+		// These params are now the whole truth for this run, so no checkpoint
+		// blob may survive to contradict them. resumeRestart already consumes
+		// the blob when it merges one into params, which covers the only route
+		// by which a queued row can hold one; this is the second layer, at the
+		// point where the params it would contradict are actually written.
+		// Without it, a restart between this merge and dispatch would overlay a
+		// pre-merge checkpoint and drop everything just merged in.
+		if delErr := r.store.DeleteOpStateV2(op.ID); delErr != nil {
+			r.logger.Warn("registry: failed to clear checkpoint state after queued param merge",
+				"op_id", op.ID, "def_id", defID, "error", delErr)
 		}
 		r.logger.Info("registry: merged request into queued operation", "op_id", op.ID, "def_id", defID)
 		return op.ID, true, nil
