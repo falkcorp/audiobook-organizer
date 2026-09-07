@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package maintenance
 
@@ -319,6 +319,12 @@ type jobUserStateStore interface {
 // has.
 type jobOperationRecordStore interface {
 	GetOperationByID(id string) (*database.Operation, error)
+	// GetOperationV2 is the v2 counterpart. A job that has to ask "does this
+	// operation exist / is it finished" must consult both keyspaces: ids minted
+	// since 2026-08-23 exist only in v2, and GetOperationByID answers
+	// (nil, nil) for one rather than erroring, so a v1-only check reads every
+	// current operation as deleted. See retention-and-hygiene's opstate sweep.
+	GetOperationV2(id string) (*database.OperationV2Row, error)
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 	CreateOperationResult(result *database.OperationResult) error
 	SaveOperationSummaryLog(op *database.OperationSummaryLog) error

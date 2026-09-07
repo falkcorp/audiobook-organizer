@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package jobs
 
@@ -61,9 +61,15 @@ type retentionKVStore interface {
 
 // retentionOpStateStore is the slice needed to drop resume-state rows whose
 // parent operation no longer exists.
+//
+// It reads BOTH operation keyspaces. `opstate:` is keyed by whichever id the
+// writing op had, and since the v1 id minter was retired on 2026-08-23 that is
+// always a v2 id — so a slice holding only GetOperationByID cannot answer
+// "is this operation still live" for any checkpoint written since.
 type retentionOpStateStore interface {
 	ScanPrefix(prefix string) ([]database.KVPair, error)
 	GetOperationByID(id string) (*database.Operation, error)
+	GetOperationV2(id string) (*database.OperationV2Row, error)
 	DeleteOperationState(opID string) error
 }
 
