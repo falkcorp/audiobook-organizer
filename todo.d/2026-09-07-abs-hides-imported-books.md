@@ -25,6 +25,14 @@ index on a 3-way AND — `IsPrimaryVersion && LibraryState == "organized" &&
 (`browse.go:1344`). Books that are imported but not yet organized fail the
 `== "organized"` test and vanish from author pages, series, counts and browse.
 
+**The same filter explains the series symptom too.** The user also reported
+*"no matter what with some of them you get the same series but only two books."*
+Series `152828` holds **8** of the 9 books but only **2** of them are `organized`
+(the two seq-5 rows), so ABS renders that series with two books. Series `207866`
+holds the single organized seq-3 book, so it renders with one. 2 + 1 = the three
+books on the author page. One filter accounts for every number the user saw —
+there is no separate series-visibility bug.
+
 **Why this is a bug and not deliberate gating:** the book at seq 6
 ("Nameless Sovereign, Book 6") is `imported` and was **actively playing in the
 user's client** while absent from its own author's page. The server streams it
