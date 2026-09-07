@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package sysinfo
 
@@ -25,6 +25,11 @@ type SystemServiceStore interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 	GetDashboardStats() (*database.DashboardStats, error)
 	GetOperationLogs(operationID string) ([]database.OperationLog, error)
+	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
+
+	// GetRecentOperations is the retired v1 reader. It is kept for
+	// CollectSystemLogs alone — see the comment at that call site for why
+	// repointing it to v2 would not fix anything.
 	GetRecentOperations(limit int) ([]database.Operation, error)
 }
 
@@ -140,9 +145,22 @@ func (ss *SystemService) CollectSystemStatus() (*SystemStatus, error) {
 		dbStats = &database.LibraryStats{}
 	}
 
-	recentOps, err := ss.db.GetRecentOperations(5)
-	if err != nil {
-		recentOps = []database.Operation{}
+	// The dashboard's "Recent Operations" panel. This read the v1 `operation:`
+	// keyspace until 2026-09-07, and nothing has minted a v1 row since that
+	// minter was retired on 2026-08-23 — so the panel had been frozen for two
+	// weeks, showing the same five pre-retirement runs to anyone who loaded the
+	// page, with nothing to indicate the list was stale.
+	//
+	// ListOperationsV2Since is the only v2 lister; a zero `since` means all
+	// history, and it sorts started_at DESC NULLS LAST, so the first five rows
+	// are the newest five. row.DefID is the wire `type` here (unlike the fixed
+	// constants the reconcile endpoints pass) because this panel displays the
+	// def name in a chip rather than keying behaviour off it.
+	recentOps := []database.Operation{}
+	if rows, err := ss.db.ListOperationsV2Since(time.Time{}, 5); err == nil {
+		for i := range rows {
+			recentOps = append(recentOps, *rows[i].AsLegacyOperation(rows[i].DefID))
+		}
 	}
 
 	var memStats runtime.MemStats
@@ -284,6 +302,22 @@ func (ss *SystemService) CollectSystemLogs(level, search string, limit, offset i
 		offset = 0
 	}
 
+	// ⚠️ DELIBERATELY STILL ON THE v1 READER. Repointing this to v2 would look
+	// like a fix and change nothing, so it is left alone until the real fix.
+	//
+	// This walks operation ids only to call GetOperationLogs(op.ID), which reads
+	// the `operationlog:` keyspace. That keyspace has no writer: AddOperationLog
+	// is called only from logger.OperationLogger, which is only constructed by
+	// logger.ForOperation — and ForOperation has zero production callers. Ops
+	// log through the activity store instead (see the note at
+	// server/batch_save_op.go:99, which spells out that the two are different
+	// keyspaces). Verified against production 2026-09-07: GET /system/logs
+	// returns {"logs":null,"total":0}.
+	//
+	// So the System Logs page is already empty, and it is empty for a reason
+	// that has nothing to do with which keyspace supplies the ids. Feeding it
+	// fresh v2 ids would return logs for none of them either. The real fix is
+	// to source this endpoint from the activity store; filed separately.
 	operations, err := ss.db.GetRecentOperations(50)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to fetch operations")
