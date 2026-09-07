@@ -1,7 +1,7 @@
 // file: internal/diagnostics/service_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: d1a9n0st-1cs0-t3st-s3rv-1c3t3st0001
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package diagnostics
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +39,7 @@ func setupDiagnosticsMocks(t *testing.T) *dbmocks.MockStore {
 	store.EXPECT().CountAuthors().Return(0, nil).Maybe()
 	store.EXPECT().CountSeries().Return(0, nil).Maybe()
 	store.EXPECT().GetSystemActivityLogs("", 10000).Return(nil, nil).Maybe()
-	store.EXPECT().GetRecentOperations(100).Return(nil, nil).Maybe()
+	store.EXPECT().ListOperationsV2Since(mock.Anything, 100).Return(nil, nil).Maybe()
 	return store
 }
 

@@ -1,7 +1,7 @@
 // file: internal/diagnostics/service.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package diagnostics
 
@@ -382,10 +382,22 @@ func (ds *Service) writeLogs(zw *zip.Writer) error {
 	return WriteJSON(zw, "logs.json", filtered)
 }
 
+// writeOperations dumps recent operations into the diagnostics bundle.
+//
+// Reads the v2 keyspace. It read v1's GetRecentOperations until 2026-09-07,
+// which meant the bundle shipped a list whose newest entry was ~2026-08-16 —
+// every operation since the v1 minter was retired was missing, and nothing about
+// the file said so. A diagnostics export that silently omits the entire recent
+// history is worse than one that omits the section, because the reader has no
+// way to tell the difference.
+//
+// A zero `since` means "no lower bound"; the limit does the bounding, and
+// ListOperationsV2Since sorts newest-first (started_at DESC NULLS LAST,
+// queued_at DESC), so this is genuinely the most recent 100.
 func (ds *Service) writeOperations(zw *zip.Writer) error {
-	ops, err := ds.db.GetRecentOperations(100)
+	ops, err := ds.db.ListOperationsV2Since(time.Time{}, 100)
 	if err != nil {
-		ops = []database.Operation{}
+		ops = []database.OperationV2Row{}
 	}
 	return WriteJSON(zw, "operations.json", ops)
 }
