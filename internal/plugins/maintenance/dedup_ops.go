@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -121,7 +122,6 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, _ json.RawMessage, reporte
 	// Poll for completion (up to 24h, check every 5 min)
 	pollInterval := 5 * time.Minute
 	maxPolls := 288 // 24h / 5min
-	opID := ctxOpID(ctx)
 
 	prog := sdk.NewProgress(reporter, maxPolls)
 	prog.Start(fmt.Sprintf("Submitting %d authors to OpenAI Batch API...", len(inputs)))
@@ -162,14 +162,14 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, _ json.RawMessage, reporte
 				"suggestions": discoveries,
 				"batch_id":    batchID,
 			}
-			resultJSON, jErr := json.Marshal(resultPayload)
-			if jErr != nil {
-				return fmt.Errorf("failed to marshal results: %w", jErr)
-			}
-			if opID != "" {
-				if err := store.UpdateOperationResultData(opID, string(resultJSON)); err != nil {
-					return fmt.Errorf("failed to store results: %w", err)
-				}
+			// Write onto this run's own v2 row via the reporter. The previous
+			// store.UpdateOperationResultData(opID, ...) resolved a v1
+			// `operation:` row that no longer exists for any live op, so it
+			// returned "operation not found" and failed the batch right after
+			// the results had been downloaded. See reconcile.go for the full
+			// account.
+			if err := opsregistry.ReporterSetResult(reporter, resultPayload); err != nil {
+				return fmt.Errorf("failed to store results: %w", err)
 			}
 			prog.Done(fmt.Sprintf("Batch complete: %d suggestions", len(discoveries)))
 			return nil

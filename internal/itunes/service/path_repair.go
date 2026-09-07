@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 01ad6c79-5f3f-4ee1-a07a-1f4b3a8c0d12
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 //
 // PathRepairer dumps the iTunes XML, finds tracks whose Location no
 // longer exists on disk, re-discovers the correct path via three tiers
@@ -74,7 +74,7 @@ type PathRepairConfig struct {
 	AudiobookRoot string
 	// ReportDir is the directory where each run drops its JSON
 	// report. Empty means no file is written; the result still flows
-	// inline via UpdateOperationResultData.
+	// inline via SetOperationV2Result.
 	ReportDir string
 }
 
@@ -591,17 +591,24 @@ func applyAction(dryRun bool) string {
 // pathRepairerStore to embed the whole OperationStore, which in turn is why it
 // could not be narrowed with the other subsystem stores in #2560.
 type opResultWriter interface {
-	UpdateOperationResultData(opID, data string) error
+	SetOperationV2Result(id string, resultData string) error
 }
 
 // persistRepairResult JSON-encodes the result and stores it on the
 // operation row so the API can fetch the report after the run.
+//
+// Writes the v2 row. This called UpdateOperationResultData, which resolves a v1
+// `operation:` row and returns "operation not found" when there is none — and
+// there is never one, because opID here is the v2 run id and nothing has minted
+// a v1 row since the minter was retired. Both callers discard this error with
+// `_ =`, so the repair report was silently never persisted and the API route
+// that serves it returned nothing, with no sign anything had failed.
 func persistRepairResult(store opResultWriter, opID string, result iTunesPathRepairResult) error {
 	b, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-	return store.UpdateOperationResultData(opID, string(b))
+	return store.SetOperationV2Result(opID, string(b))
 }
 
 // writeReportFile persists the result to <reportDir>/itunes-repair-<opID>.json.
