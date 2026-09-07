@@ -3348,6 +3348,57 @@ func (_c *MockOpsV2Store_RecordOpCompletion_Call) RunAndReturn(run func(sub data
 	return _c
 }
 
+// ResetOperationV2ForResume provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) ResetOperationV2ForResume(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ResetOperationV2ForResume")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOpsV2Store_ResetOperationV2ForResume_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ResetOperationV2ForResume'
+type MockOpsV2Store_ResetOperationV2ForResume_Call struct {
+	*mock.Call
+}
+
+// ResetOperationV2ForResume is a helper method to define mock.On call
+//   - id string
+func (_e *MockOpsV2Store_Expecter) ResetOperationV2ForResume(id any) *MockOpsV2Store_ResetOperationV2ForResume_Call {
+	return &MockOpsV2Store_ResetOperationV2ForResume_Call{Call: _e.mock.On("ResetOperationV2ForResume", id)}
+}
+
+func (_c *MockOpsV2Store_ResetOperationV2ForResume_Call) Run(run func(id string)) *MockOpsV2Store_ResetOperationV2ForResume_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_ResetOperationV2ForResume_Call) Return(err error) *MockOpsV2Store_ResetOperationV2ForResume_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_ResetOperationV2ForResume_Call) RunAndReturn(run func(id string) error) *MockOpsV2Store_ResetOperationV2ForResume_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SetOperationV2Result provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) SetOperationV2Result(id string, resultData string) error {
 	ret := _mock.Called(id, resultData)
@@ -24790,6 +24841,57 @@ func (_c *MockStore_Reset_Call) Return(err error) *MockStore_Reset_Call {
 }
 
 func (_c *MockStore_Reset_Call) RunAndReturn(run func() error) *MockStore_Reset_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ResetOperationV2ForResume provides a mock function for the type MockStore
+func (_mock *MockStore) ResetOperationV2ForResume(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ResetOperationV2ForResume")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_ResetOperationV2ForResume_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ResetOperationV2ForResume'
+type MockStore_ResetOperationV2ForResume_Call struct {
+	*mock.Call
+}
+
+// ResetOperationV2ForResume is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) ResetOperationV2ForResume(id any) *MockStore_ResetOperationV2ForResume_Call {
+	return &MockStore_ResetOperationV2ForResume_Call{Call: _e.mock.On("ResetOperationV2ForResume", id)}
+}
+
+func (_c *MockStore_ResetOperationV2ForResume_Call) Run(run func(id string)) *MockStore_ResetOperationV2ForResume_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ResetOperationV2ForResume_Call) Return(err error) *MockStore_ResetOperationV2ForResume_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_ResetOperationV2ForResume_Call) RunAndReturn(run func(id string) error) *MockStore_ResetOperationV2ForResume_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
 // last-edited: 2026-09-06
 
@@ -204,8 +204,15 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 		}
 	}
 
-	// Reset status to queued so the dispatcher picks it up normally.
-	_ = r.store.UpdateOperationV2Status(row.ID, "queued", nil, nil, nil)
+	// Reset status to queued so the dispatcher picks it up normally, and CLEAR
+	// the interrupt-time CompletedAt back to nil. UpdateOperationV2Status cannot
+	// un-set CompletedAt (nil = leave unchanged), so a plain status flip left the
+	// stale stamp in place and the resumed op stayed out of the Active-Operations
+	// timeline — a genuinely running resumed scan was invisible in the UI.
+	if err := r.store.ResetOperationV2ForResume(row.ID); err != nil {
+		r.logger.Warn("registry: resumeAfterStartup: failed to reset op for resume",
+			"op_id", row.ID, "error", err)
+	}
 
 	r.logger.Info("registry: resumeAfterStartup: re-queued restart op",
 		"op_id", row.ID, "def_id", def.ID, "resume_count_new", row.ResumeCount+1)

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.12.1
+// version: 3.13.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-06
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -277,6 +277,62 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 		if err := batch.Delete(opv2ActKey(id), nil); err != nil {
 			return err
 		}
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+// ResetOperationV2ForResume flips an interrupted op back to "queued" for a
+// ResumeRestart-style resume, and — unlike UpdateOperationV2Status — CLEARS the
+// CompletedAt timestamp (and the stale interrupt error) back to nil.
+//
+// This exists because UpdateOperationV2Status treats a nil timestamp as "leave
+// unchanged", so it can never un-set CompletedAt. On interrupt the row got a
+// CompletedAt stamped; on resume that stamp has to go, or the row stays excluded
+// from the Active-Operations timeline (ListOperationsV2Since admits a row only if
+// CompletedAt == nil || QueuedAt is inside the window), leaving a genuinely
+// running resumed op invisible in the UI. QueuedAt is intentionally left
+// untouched: it feeds restart-strike accounting (checkInfiniteRestart) and the
+// queue index key, and clearing CompletedAt alone is sufficient for visibility.
+//
+// Index maintenance mirrors UpdateOperationV2Status's status=="queued" path: the
+// queue index entry is (re-)added when the op was not already queued, and the
+// active-set entry is left alone (a queued op is not active).
+func (p *PebbleStore) ResetOperationV2ForResume(id string) (err error) {
+	defer recoverPebbleClosed("ResetOperationV2ForResume", &err)
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+
+	var row OperationV2Row
+	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+		return err
+	}
+	if row.ID == "" {
+		return fmt.Errorf("opv2: operation not found: %s", id)
+	}
+
+	oldStatus := row.Status
+	row.Status = "queued"
+	row.CompletedAt = nil
+	row.ErrorMessage = nil
+
+	data, err := json.Marshal(&row)
+	if err != nil {
+		return err
+	}
+
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
+		return err
+	}
+	if oldStatus != "queued" {
+		if err := batch.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), nil); err != nil {
+			return err
+		}
+	}
+	// A resumed op is queued, not active: drop any stale active-set entry.
+	if err := batch.Delete(opv2ActKey(id), nil); err != nil {
+		return err
 	}
 	return batch.Commit(pebble.Sync)
 }

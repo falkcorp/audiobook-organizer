@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 5c1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-06
 
 package scanner
 
@@ -9,12 +9,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"github.com/falkcorp/audiobook-organizer/internal/personname"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 func withTempBooks(t *testing.T, names []string) []Book {
@@ -326,6 +327,41 @@ func TestProcessBooksParallelCancellation(t *testing.T) {
 	err := ProcessBooksParallel(ctx, books, 2, nil, nil)
 	if err != context.Canceled {
 		t.Errorf("expected context.Canceled error, got %v", err)
+	}
+}
+
+// TestScanDirectoryParallelCancellation pins the fix for the 2026-09-06 scan
+// stand-down failure: the discovery/scan phase (this function's WalkDir + the
+// per-directory worker loop) used to ignore ctx entirely, so a scan cancelled
+// mid-discovery ran for minutes — past the registry's 5s abandon grace — and the
+// stand-down could never park it. Before the fix this returned (books, nil) with
+// a cancelled ctx; now it returns context.Canceled promptly. A tree with several
+// subdirectories exercises both the discovery walk and the dispatch loop.
+func TestScanDirectoryParallelCancellation(t *testing.T) {
+	oldExts := config.AppConfig.SupportedExtensions
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
+	config.AppConfig.SupportedExtensions = []string{".m4b"}
+
+	root := t.TempDir()
+	for i := 0; i < 12; i++ {
+		sub := filepath.Join(root, fmt.Sprintf("book-%02d", i))
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+		if err := os.WriteFile(filepath.Join(sub, "part.m4b"), []byte("audio"), 0o644); err != nil {
+			t.Fatalf("write audio: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the walk starts
+
+	books, err := ScanDirectoryParallel(ctx, root, 2, nil)
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got err=%v (books=%d)", err, len(books))
+	}
+	if len(books) != 0 {
+		t.Fatalf("expected no books from a cancelled scan, got %d", len(books))
 	}
 }
 

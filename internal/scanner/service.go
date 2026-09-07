@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-06
 package scanner
 
 import (
@@ -200,7 +200,7 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 	// the expensive directory walk.
 	var totalFilesAcrossFolders int
 	if forceUpdate || scanCache == nil {
-		totalFilesAcrossFolders = ss.countFilesAcrossFolders(foldersToScan, log)
+		totalFilesAcrossFolders = ss.countFilesAcrossFolders(ctx, foldersToScan, log)
 		log.Info("Total audiobook files across all folders: %d", totalFilesAcrossFolders)
 		if totalFilesAcrossFolders == 0 {
 			log.Warn("No audiobook files detected during pre-scan; totals will update as files are processed")
@@ -363,12 +363,20 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate, i
 	return foldersToScan, nil
 }
 
-func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logger.Logger) int {
+func (ss *ScanService) countFilesAcrossFolders(ctx context.Context, foldersToScan []string, log logger.Logger) int {
 	totalFilesAcrossFolders := 0
 	// Same source as the discovery walk in scanner.go -- see the comment
 	// inside the walk below for why they must not diverge.
 	app := appdirs.Current()
 	for _, folderPath := range foldersToScan {
+		// This pre-pass walks every folder before the per-folder scan loop even
+		// begins, so a scan cancelled during counting would otherwise keep
+		// walking with no ctx check (same class of bug as the discovery walk in
+		// scanner.go). Return the partial count; PerformScan's folder loop sees
+		// the cancel on its next iteration.
+		if ctx.Err() != nil {
+			return totalFilesAcrossFolders
+		}
 		if _, err := os.Stat(folderPath); os.IsNotExist(err) {
 			log.Warn("Folder does not exist: %s", folderPath)
 			continue
@@ -376,6 +384,9 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 		fileCount := 0
 		walkErrLogged := false
 		walkErr := filepath.WalkDir(folderPath, func(path string, d fs.DirEntry, err error) error {
+			if cerr := ctx.Err(); cerr != nil {
+				return cerr
+			}
 			if err != nil {
 				// Permission/I-O errors here undercount the progress
 				// denominator; log the first per folder so the undercount is
@@ -404,6 +415,11 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 			}
 			return nil
 		})
+		if ctx.Err() != nil {
+			// The walk was aborted by cancellation, not an I/O failure — return
+			// the partial count without logging it as a walk error.
+			return totalFilesAcrossFolders + fileCount
+		}
 		if walkErr != nil && !walkErrLogged {
 			// Only reachable when the root itself fails to stat.
 			log.Warn("count phase: walk failed for %s: %v (progress total may undercount)", folderPath, walkErr)
