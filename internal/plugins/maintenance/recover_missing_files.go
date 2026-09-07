@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-06
 
@@ -694,14 +694,34 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		return plan, nil
 	}
 
-	// Acquire the scan stand-down for the write phase: cooperatively quiesce any
-	// running library.scan so our FilePath rewrites can't race the scanner's own
-	// writes to the same rows. Released — and the scan resumed from its checkpoint —
-	// when this function returns. Dry-run returned above, so it never stands the
-	// scanner down.
-	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "recover-missing-files apply")
-	if sdErr != nil {
-		return plan, fmt.Errorf("recover-missing-files: acquire scan stand-down: %w", sdErr)
+	// Acquire the scan stand-down ONLY for runs that rewrite DB rows (Branch A
+	// repoints, Phase 4 below): those change book_file.FilePath via UpdateBookFile
+	// and would race the scanner's own writes to the same rows. Cooperatively
+	// quiesce any running library.scan for that window; the gate is released — and
+	// the scan resumed from its checkpoint — when this function returns.
+	//
+	// A reflink-only run (Branch B, Phase 5) does NO DB write: it clones source
+	// bytes to each row's OWN already-dead FilePath and never repoints. It creates
+	// files only at non-existent paths using refuse-on-exist (ReflinkOrCopy →
+	// fs.ErrExist → skip), and the scanner's own organize move also refuses to
+	// overwrite, so it cannot clobber a concurrent scan — worst case is a skipped or
+	// orphan clone, never corruption or loss. So when there are no rewrites we skip
+	// the acquire entirely and run Phase 5 with no interlock (standDownHeld stays
+	// false; scanStandDownLostForApply then reports "keep going", never a spurious
+	// abort). This also lets the recovery proceed against a resumed scan the
+	// stand-down cannot currently quiesce. Dry-run returned above, so this is only
+	// ever reached for an actual apply.
+	var (
+		holderID         string
+		standDownHeld    bool
+		releaseStandDown = func() {}
+	)
+	if len(rewrites) > 0 {
+		h, held, rel, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "recover-missing-files apply")
+		if sdErr != nil {
+			return plan, fmt.Errorf("recover-missing-files: acquire scan stand-down: %w", sdErr)
+		}
+		holderID, standDownHeld, releaseStandDown = h, held, rel
 	}
 	defer releaseStandDown()
 

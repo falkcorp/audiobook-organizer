@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reflink_outside_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d2c4a71-6e08-4b3f-8c1a-2f7b0e5d9a34
 // last-edited: 2026-09-06
 
@@ -26,6 +26,8 @@ func statSize(t *testing.T, path string) int64 {
 // Branch B core: a missing row whose bytes exist ONLY under a SourceDir, unique in both
 // directions (one unclaimed source of that size, wanted by one row), is RESTORED by
 // cloning the source back to the row's own FilePath — no DB write, source left intact.
+// A reflink-only run does NO DB write, so it must NOT stand the scanner down (Fix A):
+// the acquire is load-bearing only for DB-rewriting runs (see MixedInTreeAndOutsideInOneApply).
 func TestReflink_RestoresUniqueOutsideMatch(t *testing.T) {
 	root := t.TempDir()
 	src := t.TempDir()
@@ -52,9 +54,9 @@ func TestReflink_RestoresUniqueOutsideMatch(t *testing.T) {
 	require.Equal(t, int64(321), statSize(t, srcFile), "the source is left intact (clone/copy, never a move)")
 
 	acq, rel, ren := c.counts()
-	require.Equal(t, 1, acq, "the reflink write phase stands the scanner down once")
-	require.Equal(t, 1, rel)
-	require.GreaterOrEqual(t, ren, 1, "the lease is renewed at least once per reflink item")
+	require.Equal(t, 0, acq, "a reflink-only run does NO DB write, so it must NOT stand the scanner down")
+	require.Equal(t, 0, rel)
+	require.Equal(t, 0, ren, "with no gate held, the per-item heartbeat never renews a lease")
 }
 
 // Off by default: without reflinkOutside the same fixture is only CENSUSED as "outside"
@@ -185,16 +187,29 @@ func TestReflink_DryRunReportsButCreatesNothing(t *testing.T) {
 	require.Equal(t, 0, acq, "dry run must never stand the scanner down")
 }
 
-// A lapsed stand-down lease mid-reflink is a HARD ABORT: no file is created and the op
-// surfaces an error, so a resumed scanner never races ungated writes.
+// A lapsed stand-down lease mid-apply is a HARD ABORT when the run holds the gate —
+// i.e. a run with Branch A DB rewrites. The in-tree repoint and the outside reflink both
+// stop, no file is created, and the op surfaces an error, so a resumed scanner never
+// races the ungated DB writes. Uses a MIXED run because a reflink-only run holds no gate
+// (see ReflinkOnlyRunIgnoresLostLease) — the lease-abort only applies where DB writes do.
 func TestReflink_AbortsWhenLeaseLost(t *testing.T) {
 	root := t.TempDir()
 	src := t.TempDir()
-	dst := filepath.Join(root, "gone.mp3")
+	// Branch A — an in-tree unique match forces the stand-down to be held.
+	inGone := filepath.Join(root, "in-gone.mp3")
+	writeFile(t, filepath.Join(root, "in-real.mp3"), 111)
+	// Branch B — an outside unique match that must be aborted along with Branch A.
+	outGone := filepath.Join(root, "out-gone.mp3")
 	writeFile(t, filepath.Join(src, "match.mp3"), 321)
 	store := &recoverFakeStore{
-		cores: []database.BookFileCore{{ID: "f1", BookID: "b1", FilePath: dst, FileSize: 321}},
-		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1", FilePath: dst, FileSize: 321}}},
+		cores: []database.BookFileCore{
+			{ID: "fa", BookID: "ba", FilePath: inGone, FileSize: 111},
+			{ID: "fb", BookID: "bb", FilePath: outGone, FileSize: 321},
+		},
+		full: map[string][]database.BookFile{
+			"ba": {{ID: "fa", BookID: "ba", FilePath: inGone, FileSize: 111}},
+			"bb": {{ID: "fb", BookID: "bb", FilePath: outGone, FileSize: 321}},
+		},
 	}
 	c := &recordingScanController{renewOK: false} // lease gone from the first heartbeat
 
@@ -203,12 +218,41 @@ func TestReflink_AbortsWhenLeaseLost(t *testing.T) {
 		&opIDReporter{id: "op-9"})
 	require.Error(t, err, "a lapsed lease mid-apply must surface as an error")
 	require.Contains(t, err.Error(), "lease lapsed")
-	require.Equal(t, 0, plan.Reflinked, "no file is created once the lease is lost")
-	require.NoFileExists(t, dst)
+	require.Equal(t, 0, plan.Repointed, "no DB row is rewritten once the lease is lost")
+	require.Equal(t, 0, plan.Reflinked, "and Phase 5 is skipped entirely once the lease is lost")
+	require.Empty(t, store.updates)
+	require.NoFileExists(t, outGone)
 
 	acq, rel, _ := c.counts()
-	require.Equal(t, 1, acq)
+	require.Equal(t, 1, acq, "the DB-rewriting run stands the scanner down")
 	require.Equal(t, 1, rel, "the gate is still released on the abort path")
+}
+
+// A reflink-only run holds no stand-down, so a scanner that resumes mid-run cannot make
+// it abort: it never acquired a lease to lose. Even with the controller reporting the
+// lease gone (renewOK:false), the reflink is created and no error surfaces — the mirror
+// of AbortsWhenLeaseLost, proving the lease-abort is scoped to DB-writing runs only.
+func TestReflink_ReflinkOnlyRunIgnoresLostLease(t *testing.T) {
+	root := t.TempDir()
+	src := t.TempDir()
+	dst := filepath.Join(root, "gone.mp3")
+	writeFile(t, filepath.Join(src, "match.mp3"), 321)
+	store := &recoverFakeStore{
+		cores: []database.BookFileCore{{ID: "f1", BookID: "b1", FilePath: dst, FileSize: 321}},
+		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1", FilePath: dst, FileSize: 321}}},
+	}
+	c := &recordingScanController{renewOK: false} // would abort a held run — but none is held
+
+	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
+		&opIDReporter{id: "op-9"})
+	require.NoError(t, err, "a reflink-only run holds no lease, so a lost lease cannot abort it")
+	require.Equal(t, 1, plan.Reflinked, "the reflink is created regardless of scanner state")
+	require.Equal(t, int64(321), statSize(t, dst))
+
+	acq, _, ren := c.counts()
+	require.Equal(t, 0, acq, "no gate acquired")
+	require.Equal(t, 0, ren, "and the heartbeat never touches the controller")
 }
 
 // Branch A (in-tree repoint) and Branch B (reflink) run under ONE stand-down in a single
