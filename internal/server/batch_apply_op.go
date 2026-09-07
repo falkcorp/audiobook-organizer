@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -73,10 +75,41 @@ func (p batchApplyOpParams) completed() int {
 // itself.
 //
 // bookIDs is this attempt's work; watermark indexes into it.
-func batchApplyCheckpointState(bookIDs []string, writeBack bool, originalTotal, watermark int) batchApplyOpParams {
+//
+// deferred is the books the write-back gate never let through. They sit BELOW
+// the watermark — runOne returned nil for them so the loop could keep going —
+// so the suffix alone would drop them, and nothing was applied for them, not
+// even the database half. Re-appending them keeps the work owed across a
+// restart. Order does not matter to a resumed run, so they go on the end.
+func batchApplyCheckpointState(
+	bookIDs []string,
+	writeBack bool,
+	originalTotal, watermark int,
+	deferred []string,
+) batchApplyOpParams {
 	watermark = min(max(watermark, 0), len(bookIDs))
+	remaining := bookIDs[watermark:]
+	if len(deferred) > 0 {
+		// Clone first: appending to bookIDs[watermark:] in place would write
+		// past the subslice into the caller's own backing array.
+		seen := make(map[string]struct{}, len(remaining)+len(deferred))
+		for _, id := range remaining {
+			seen[id] = struct{}{}
+		}
+		owed := slices.Clone(remaining)
+		for _, id := range deferred {
+			// A book can be deferred AND sit above the watermark when a gap
+			// held the prefix back. Carrying it twice would apply it twice.
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			owed = append(owed, id)
+		}
+		remaining = owed
+	}
 	return batchApplyOpParams{
-		BookIDs:       bookIDs[watermark:],
+		BookIDs:       remaining,
 		WriteBack:     writeBack,
 		OriginalTotal: originalTotal,
 	}
@@ -223,12 +256,36 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			_ = progress.UpdateProgress(priorDone, originalTotal, "starting metadata apply")
 
 			var applied, noCandidates, decodeFailed, applyFailed, writeFailed atomic.Int64
-			// gateUnavailable counts books never ATTEMPTED because the write-back
-			// gate stayed saturated past this item's own timeout. Kept separate
-			// from writeFailed: nothing was applied for these, not even the
-			// database half, so the summary must not let them read as partial
-			// successes.
-			var gateUnavailable atomic.Int64
+			// gateDeferred holds the IDS — not a count — of books never
+			// ATTEMPTED because the write-back gate stayed saturated past this
+			// item's own timeout. Kept separate from writeFailed: nothing was
+			// applied for these, not even the database half, so the summary must
+			// not let them read as partial successes.
+			//
+			// It is a list rather than a counter because these books are still
+			// OWED. A count could only be reported; the IDs can be retried at the
+			// end of the run and carried in the checkpoint across a restart. Gate
+			// saturation is a load condition affecting the whole batch, so
+			// deferring is expected under load and must not quietly drop work.
+			var gateDeferredMu sync.Mutex
+			var gateDeferred []string
+			noteGateDeferred := func(id string) {
+				gateDeferredMu.Lock()
+				gateDeferred = append(gateDeferred, id)
+				gateDeferredMu.Unlock()
+			}
+			snapshotGateDeferred := func() []string {
+				gateDeferredMu.Lock()
+				defer gateDeferredMu.Unlock()
+				return slices.Clone(gateDeferred)
+			}
+			takeGateDeferred := func() []string {
+				gateDeferredMu.Lock()
+				defer gateDeferredMu.Unlock()
+				out := gateDeferred
+				gateDeferred = nil
+				return out
+			}
 			// skippedLocked counts BOOKS where at least one user-locked field was
 			// left alone. It is not subtracted from applied: the unlocked fields
 			// landed. It exists so the summary cannot read "applied 500 of 500"
@@ -269,14 +326,15 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						// joins per-item errors and RunItems returns the join, so
 						// ONE gate timeout out of 699 books marks the op failed
 						// and terminal, and the summary naming every successful
-						// apply never prints. Count it as a per-book outcome
-						// instead, exactly like the other non-apply reasons.
+						// apply never prints. Record it as a per-book outcome
+						// instead — but as an ID, not a count, because unlike the
+						// other non-apply reasons this book still needs applying.
 						//
 						// Genuine cancellation is unaffected: RunItems checks the
 						// RUN context itself and stops the loop, so swallowing
 						// this per-item deadline cannot make a cancelled batch
 						// look like a completed one.
-						gateUnavailable.Add(1)
+						noteGateDeferred(id)
 						reporter.Log(slog.LevelWarn, "book not applied",
 							slog.String("book_id", id),
 							slog.String("reason", "write-back gate unavailable"),
@@ -396,7 +454,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				// carries no omitempty and OriginalTotal does.
 				CheckpointStateFn: func(_ context.Context, watermark int) error {
 					return reporter.Checkpoint(batchApplyCheckpointState(
-						bookIDs, p.WriteBack, originalTotal, watermark))
+						bookIDs, p.WriteBack, originalTotal, watermark,
+						snapshotGateDeferred()))
 				},
 			})
 			// Return BEFORE the "complete" row, so a canceled batch does not report
@@ -414,14 +473,56 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				return runErr
 			}
 
+			// Second pass over the books the gate deferred. Without it the
+			// checkpoint carry above only helps a run that gets RESTARTED: a run
+			// that finishes normally reaches terminal success, its checkpoint
+			// becomes moot, and the deferred books are never applied by anything.
+			//
+			// This is not a generic retry loop and must not become one — it
+			// exists because gate saturation is a property of the MOMENT, not of
+			// the book, and the biggest consumer of that gate is this op's own
+			// workers, which have now finished. So the second look is the one
+			// most likely to succeed, and one is enough: a book deferred twice is
+			// contending with something outside this batch, which another lap
+			// here would not resolve.
+			//
+			// Same concurrency as the main pass, deliberately: the worst case is
+			// that the retry takes as long as the portion of the batch it covers
+			// would have, which is the cost of the work rather than an extra one.
+			// No CheckpointEvery — a restart during this pass resumes from the
+			// checkpoint the main pass already wrote, which still owes these
+			// books because CheckpointStateFn folded them back in.
+			if deferred := takeGateDeferred(); len(deferred) > 0 {
+				reporter.Log(slog.LevelInfo, "retrying books the write-back gate deferred",
+					slog.Int("count", len(deferred)))
+				retryErr := opsregistry.RunItems(ctx, reporter, deferred, runOne, opsregistry.RunItemsOptions{
+					Concurrency:    writeBackWorkers(),
+					PerItemTimeout: 3 * time.Minute,
+					ErrMode:        opsregistry.ErrModeCollect,
+					Label:          func(int, int) string { return "retrying deferred books" },
+					// Progress stays pinned at the batch's own end: these books
+					// were already counted as examined by the main pass, so
+					// letting this pass advance the bar would drive it past 100%.
+					ProgressOffset: originalTotal,
+					ProgressTotal:  originalTotal,
+				})
+				if retryErr != nil {
+					return retryErr
+				}
+			}
+
 			// The counters cover THIS attempt only; they are not carried across a
 			// restart. So the resumed wording reports them against the books this
 			// attempt examined and names the earlier work separately, rather than
 			// printing "applied 120 of 699" — which would read as 579 failures.
+			// Read AFTER the retry pass: whatever is still here was deferred
+			// twice, so this counts books that genuinely need a fresh apply,
+			// not books that merely waited once.
+			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
 				"applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d)",
 				applied.Load(), total, noCandidates.Load(), decodeFailed.Load(),
-				applyFailed.Load(), writeFailed.Load(), gateUnavailable.Load(),
+				applyFailed.Load(), writeFailed.Load(), stillDeferred,
 				skippedLocked.Load())
 			if priorDone > 0 {
 				// State the known ambiguity rather than implying a clean count.
