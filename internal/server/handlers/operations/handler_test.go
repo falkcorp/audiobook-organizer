@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
 // last-edited: 2026-09-07
 
@@ -130,15 +130,12 @@ func TestCancelOperation_FallbackForceStatus(t *testing.T) {
 
 // --- ClearStaleOperations ---
 
-func TestClearStaleOperations_ClearsRunning(t *testing.T) {
+// This was _ClearsRunning, which fed three v1 rows in and expected the two live
+// ones to be force-failed. The v1 sweep was removed on 2026-09-07, so the test
+// is inverted: the handler must not consult the v1 keyspace at all. No v1
+// expectation is declared, so a mockery mock fails on either call.
+func TestClearStaleOperations_DoesNotTouchTheV1Keyspace(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().GetRecentOperations(500).Return([]database.Operation{
-		{ID: "a", Status: "running"},
-		{ID: "b", Status: "completed"},
-		{ID: "c", Status: "queued"},
-	}, nil)
-	store.EXPECT().UpdateOperationStatus("a", "failed", 0, 0, mock.Anything).Return(nil)
-	store.EXPECT().UpdateOperationStatus("c", "failed", 0, 0, mock.Anything).Return(nil)
 
 	w := run(http.MethodPost, "/operations/clear-stale", "/operations/clear-stale", nil, func(r *gin.Engine) {
 		r.POST("/operations/clear-stale", h.ClearStaleOperations)
@@ -146,7 +143,10 @@ func TestClearStaleOperations_ClearsRunning(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, float64(2), resp["data"].(map[string]any)["cleared"])
+	assert.Equal(t, float64(0), resp["data"].(map[string]any)["cleared"],
+		"newTestHandler injects no repairPhantomLive, so there is nothing to repair")
+	store.AssertNotCalled(t, "GetRecentOperations", 500)
+	store.AssertNotCalled(t, "UpdateOperationStatus", "a", "failed", 0, 0, mock.Anything)
 }
 
 // --- DeleteOperationHistory ---
@@ -286,25 +286,26 @@ func TestGetOperationResult_ReadsTheV2Row(t *testing.T) {
 	require.Contains(t, got, "suggestions")
 }
 
-// The v1 arm. Five callers were still writing v1 result data on 2026-08-23
-// (maintenance dedup/reconcile, itunes path-repair, batch_poller, diagnostics),
-// so the fallback is load-bearing, not legacy politeness.
-func TestGetOperationResult_FallsBackToV1WhenNoV2Row(t *testing.T) {
+// This was _FallsBackToV1WhenNoV2Row, justified by "five callers were still
+// writing v1 result data on 2026-08-23, so the fallback is load-bearing". #3103
+// moved every one of them to SetOperationV2Result and a policy test keeps them
+// there, so the justification expired and the fallback went with it on
+// 2026-09-07. Inverted rather than deleted: an id with no v2 row now 404s, and
+// the v1 keyspace is not consulted on the way there.
+func TestGetOperationResult_NoV2RowDoesNotFallBackToV1(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
-	rd := `{"files":10}`
 	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
-	store.EXPECT().GetOperationByID("op-1").Return(&database.Operation{ID: "op-1", ResultData: &rd}, nil)
 
 	w := getResult(t, h, "op-1")
-	require.Equal(t, http.StatusOK, w.Code)
-	got, ok := resultData(t, w).(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, float64(10), got["files"])
+	require.Equal(t, http.StatusNotFound, w.Code)
+	store.AssertNotCalled(t, "GetOperationByID", "op-1")
 }
 
-// A v2 row that exists but has not stored a result yet answers null — it must
-// NOT fall through to v1. A twinned op mid-run would otherwise serve the stale
-// result of its v1 mirror as if it were this run's output.
+// A v2 row that exists but has not stored a result yet answers null. This
+// predates the v1 fallback's removal — it guarded against a twinned op mid-run
+// serving its v1 mirror's stale result as if it were this run's output — and is
+// kept because "row exists, result is empty" and "no such row" must still stay
+// distinguishable: 200 with null, not 404.
 func TestGetOperationResult_V2RowWithNoResultDoesNotFallThroughToV1(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
 	store.EXPECT().GetOperationV2("op-running").Return(&database.OperationV2Row{ID: "op-running"}, nil)
@@ -315,16 +316,18 @@ func TestGetOperationResult_V2RowWithNoResultDoesNotFallThroughToV1(t *testing.T
 	store.AssertNotCalled(t, "GetOperationByID", "op-running")
 }
 
-// A v2 lookup error is not fatal: the id may be a v1 id, and failing the whole
-// request would make a v2 store hiccup take the v1 ops down with it.
-func TestGetOperationResult_V2LookupErrorStillTriesV1(t *testing.T) {
+// A v2 lookup error used to be non-fatal because the id might have been a v1 id
+// and a v2 hiccup should not take the v1 ops down with it. With one keyspace
+// left there is nowhere to fall through TO, and swallowing the error would turn
+// a store failure into a 404 — telling the caller their result does not exist
+// when the truth is that we could not look. It surfaces as a 500.
+func TestGetOperationResult_V2LookupErrorIsNotReportedAsMissing(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
-	rd := `{"files":2}`
 	store.EXPECT().GetOperationV2("op-1").Return(nil, errors.New("pebble closed"))
-	store.EXPECT().GetOperationByID("op-1").Return(&database.Operation{ID: "op-1", ResultData: &rd}, nil)
 
 	w := getResult(t, h, "op-1")
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	store.AssertNotCalled(t, "GetOperationByID", "op-1")
 }
 
 // Whatever the op stored is what comes back. A payload that is not valid JSON
@@ -340,10 +343,9 @@ func TestGetOperationResult_UnparseablePayloadIsEchoedRaw(t *testing.T) {
 	require.Equal(t, rd, resultData(t, w))
 }
 
-func TestGetOperationResult_NotFoundInEitherKeyspace(t *testing.T) {
+func TestGetOperationResult_UnknownIDIsNotFound(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
 	store.EXPECT().GetOperationV2("nope").Return(nil, nil)
-	store.EXPECT().GetOperationByID("nope").Return(nil, nil)
 
 	w := getResult(t, h, "nope")
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -408,16 +410,22 @@ func TestRevertOperation_Error(t *testing.T) {
 
 // --- ClearStaleOperations: the v2 half ---
 
-// newClearStaleHandler builds a Handler whose v1 store returns the given rows
-// and whose v2 repair returns the given count/error.
-func newClearStaleHandler(t *testing.T, v1 []database.Operation, v2Count int, v2Err error) *operations.Handler {
+// newClearStaleHandler builds a Handler whose v2 repair returns the given
+// count/error.
+//
+// NO v1 EXPECTATIONS ARE DECLARED, AND THAT IS THE ASSERTION. The v1 sweep was
+// removed on 2026-09-07; a mockery mock fails the test on any call it was not
+// told to expect, so if the handler reaches for GetRecentOperations or
+// UpdateOperationStatus again, every test built on this helper fails.
+//
+// (An earlier attempt declared them with .Times(0) to make the intent explicit.
+// That is wrong: testify counts a .Times(0) expectation as one that must still
+// be MET, so AssertExpectations reported "0 out of 2 expectation(s) were met"
+// and the tests failed for saying exactly what they meant.)
+func newClearStaleHandler(t *testing.T, v2Count int, v2Err error) *operations.Handler {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	store := operationsmocks.NewMockOperationsStore(t)
-	store.EXPECT().GetRecentOperations(500).Return(v1, nil).Maybe()
-	store.EXPECT().
-		UpdateOperationStatus(mock.Anything, "failed", 0, 0, mock.Anything).
-		Return(nil).Maybe()
 	return operations.New(store, nil, nil, nil, nil, nil,
 		func() (int, error) { return v2Count, v2Err },
 		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
@@ -436,54 +444,50 @@ func clearStale(h *operations.Handler) *httptest.ResponseRecorder {
 // "Clear Stale" could not touch, because the handler only ever swept v1 rows.
 // With no v1 rows to fail, the button returned {"cleared":0} and did nothing.
 func TestClearStaleOperations_RepairsV2PhantomLiveRows(t *testing.T) {
-	h := newClearStaleHandler(t, nil, 1, nil)
+	h := newClearStaleHandler(t, 1, nil)
 	w := clearStale(h)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var body struct {
 		Data struct {
 			Cleared    int `json:"cleared"`
-			V1Failed   int `json:"v1_failed"`
 			V2Repaired int `json:"v2_repaired"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Equal(t, 1, body.Data.V2Repaired)
-	assert.Equal(t, 0, body.Data.V1Failed)
 	assert.Equal(t, 1, body.Data.Cleared,
-		"cleared stays the sum so the existing Activity page keeps working")
+		"cleared keeps its name: web/src/services/api.ts declares the response as {cleared: number}")
 }
 
-// TestClearStaleOperations_CountsBothHalves pins that the two sweeps are added,
-// not that one shadows the other.
-func TestClearStaleOperations_CountsBothHalves(t *testing.T) {
-	v1 := []database.Operation{
-		{ID: "v1-a", Status: "running"},
-		{ID: "v1-b", Status: "pending"},
-		{ID: "v1-done", Status: "completed"}, // terminal: not swept
-	}
-	h := newClearStaleHandler(t, v1, 3, nil)
+// This was _CountsBothHalves and pinned that the v1 and v2 sweeps were ADDED
+// rather than one shadowing the other. The v1 half was removed on 2026-09-07, so
+// the test is repurposed rather than deleted: it now pins that "cleared" tracks
+// the v2 count alone, and — via the .Times(0) expectations in the helper — that
+// the handler does not touch the v1 keyspace to produce it.
+func TestClearStaleOperations_ReportsOnlyTheV2Count(t *testing.T) {
+	h := newClearStaleHandler(t, 3, nil)
 	w := clearStale(h)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var body struct {
 		Data struct {
-			Cleared    int `json:"cleared"`
-			V1Failed   int `json:"v1_failed"`
-			V2Repaired int `json:"v2_repaired"`
+			Cleared    int  `json:"cleared"`
+			V2Repaired int  `json:"v2_repaired"`
+			V1Failed   *int `json:"v1_failed"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Equal(t, 2, body.Data.V1Failed)
 	assert.Equal(t, 3, body.Data.V2Repaired)
-	assert.Equal(t, 5, body.Data.Cleared)
+	assert.Equal(t, 3, body.Data.Cleared)
+	assert.Nil(t, body.Data.V1Failed, "the v1_failed field went away with the v1 sweep")
 }
 
 // TestClearStaleOperations_ReportsRepairFailure: a repair error must surface
 // rather than be swallowed into a partial success, or the user presses the
 // button, sees a count, and believes the row was fixed.
 func TestClearStaleOperations_ReportsRepairFailure(t *testing.T) {
-	h := newClearStaleHandler(t, nil, 0, errors.New("pebble closed"))
+	h := newClearStaleHandler(t, 0, errors.New("pebble closed"))
 	w := clearStale(h)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

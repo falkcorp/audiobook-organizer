@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-09-07
 
@@ -193,41 +193,29 @@ func (h *Handler) CancelOperation(c *gin.Context) {
 	httputil.RespondWithNoContent(c)
 }
 
-// ClearStaleOperations force-marks all pending/running/queued v1 operations as
-// failed, and repairs v2 rows that are stuck reading as in-flight.
-// Implements POST /operations/clear-stale.
+// ClearStaleOperations repairs operation rows that are stuck reading as
+// in-flight. Implements POST /operations/clear-stale.
 //
-// The two halves address different bugs and are deliberately not unified:
+// What it does: stamps completed_at on v2 rows that already hold a TERMINAL
+// status. It does not terminate anything — the operation is already over — it
+// only fixes rows the UI cannot otherwise clear.
 //
-//   - v1 (below): force-fail rows still claiming to be live. Unchanged.
-//   - v2 (repairPhantomLive): stamp completed_at on rows that already hold a
-//     TERMINAL status. This does not terminate anything -- the operation is
-//     already over -- it only fixes rows the UI cannot otherwise clear.
+// v2 rows in a LIVE status (queued/running/waiting_deps/interrupted_quiesced)
+// are NOT touched. Those belong to the scheduler and the startup resume sweep,
+// which decide per-op whether to restart, requeue, or drop them; a button that
+// force-failed them would silently discard work that was going to resume.
 //
-// v2 rows in a live status (queued/running/waiting_deps/interrupted_quiesced)
-// are NOT touched here. Those belong to the scheduler and the startup resume
-// sweep, which decide per-op whether to restart, requeue, or drop them; a button
-// that force-failed them would silently discard work that was going to resume.
-// Until 2026-09-07 this handler was v1-only, so pressing it against a stuck v2
-// row returned {"cleared":0} and did nothing at all.
+// HISTORY, because this handler has been wrong in both directions. Until
+// 2026-09-07 it was v1-only, so pressing it against a stuck v2 row returned
+// {"cleared":0} and did nothing at all; #3102 added the v2 half. The v1 half —
+// which force-failed pending/running/queued rows in the `operation:` keyspace —
+// was removed on 2026-09-07 with the rest of the v1 reads. Nothing has minted a
+// v1 row since that minter was retired on 2026-08-23, so it could only ever act
+// on pre-retirement rows, and the keyspace holding them is being deleted.
 func (h *Handler) ClearStaleOperations(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
-	}
-
-	ops, err := h.store.GetRecentOperations(500)
-	if err != nil {
-		httputil.InternalError(c, "failed to get operations", err)
-		return
-	}
-
-	v1Failed := 0
-	for _, op := range ops {
-		if op.Status == "pending" || op.Status == "running" || op.Status == "queued" {
-			_ = h.store.UpdateOperationStatus(op.ID, "failed", 0, 0, "force cleared by user")
-			v1Failed++
-		}
 	}
 
 	v2Repaired := 0
@@ -240,11 +228,12 @@ func (h *Handler) ClearStaleOperations(c *gin.Context) {
 		v2Repaired = n
 	}
 
-	// "cleared" stays the sum so the existing Activity page keeps working; the
-	// split is reported alongside it for anyone debugging which half acted.
+	// "cleared" is the client-facing field — web/src/services/api.ts declares the
+	// response as {cleared: number} and reads nothing else — so it keeps its name
+	// even though only one half now contributes to it. "v1_failed" was dropped
+	// with the v1 half; "v2_repaired" stays for anyone reading the raw response.
 	httputil.RespondWithOK(c, gin.H{
-		"cleared":     v1Failed + v2Repaired,
-		"v1_failed":   v1Failed,
+		"cleared":     v2Repaired,
 		"v2_repaired": v2Repaired,
 	})
 }
@@ -466,37 +455,38 @@ func (h *Handler) ListStaleOperations(c *gin.Context) {
 
 // GetOperationResult implements GET /operations/:id/result.
 //
-// Two keyspaces hold result payloads and the id alone does not say which. Ops
-// that still mint a v1 row write theirs with UpdateOperationResultData
-// ("operation:<id>"); ops that have gone v2-native write theirs with
-// ReporterSetResult, which lands on the v2 row ("opv2:op:<id>"). v2 is checked
-// first because for a twinned op — one that wrote both — the v2 row is the
-// authority; the v1 twin is a mirror that the retirement lane is removing.
+// This is the only route that serves a completed run's payload: rowToResponse
+// (operations_v2_handlers.go) deliberately omits ResultData because the same
+// function renders the op LIST, where result blobs would balloon every row. So
+// an op whose result this cannot reach has no reader at all.
 //
-// A v1-only read here is what made a v2-native op's output unreachable: nothing
-// else serves ResultData, since rowToResponse omits it (it also renders the op
-// LIST, where result blobs would balloon every row). Do not narrow this back to
-// one keyspace until the last UpdateOperationResultData caller is gone —
-// maintenance/dedup_ops.go, maintenance/reconcile.go, itunes/path_repair.go,
-// batch_poller.go and diagnostics.go were all still writing v1 on 2026-08-23.
+// THE V1 FALLBACK WAS REMOVED ON 2026-09-07, AND ITS OWN EXIT CONDITION IS WHY.
+// The comment that stood here said: "Do not narrow this back to one keyspace
+// until the last UpdateOperationResultData caller is gone — maintenance/
+// dedup_ops.go, maintenance/reconcile.go, itunes/path_repair.go, batch_poller.go
+// and diagnostics.go were all still writing v1 on 2026-08-23." #3103 moved every
+// one of those to ReporterSetResult / SetOperationV2Result, and a policy test in
+// internal/plugins/maintenance keeps them there. Re-verified before deleting:
+// `git grep UpdateOperationResultData` on main returns the interface
+// declarations, the PebbleStore implementation, and nothing else — zero
+// production writers. batch_poller.go and diagnostics.go do not mention it at
+// all, so that half of the claim had already expired unnoticed.
+//
+// Reading a result stored on a pre-2026-08-23 v1 row is the accepted cost, in
+// line with the rest of the v1 purge.
 func (h *Handler) GetOperationResult(c *gin.Context) {
 	id := c.Param("id")
 
-	if row, err := h.store.GetOperationV2(id); err == nil && row != nil {
-		h.respondWithResult(c, row.ResultData)
-		return
-	}
-
-	op, err := h.store.GetOperationByID(id)
+	row, err := h.store.GetOperationV2(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get operation", err)
 		return
 	}
-	if op == nil {
+	if row == nil {
 		httputil.RespondWithNotFound(c, "operation", id)
 		return
 	}
-	h.respondWithResult(c, op.ResultData)
+	h.respondWithResult(c, row.ResultData)
 }
 
 // respondWithResult renders a stored result payload, which is a *string of JSON
