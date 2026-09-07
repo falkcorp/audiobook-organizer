@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package jobs
 
@@ -18,6 +18,80 @@ import (
 )
 
 func init() { maintenance.Register(&revertMetadataFetchJob{}) }
+
+// bulkMetadataFetchDefIDs are the v2 OperationDef ids whose runs this job knows
+// how to revert. Both write per-book OperationResult rows keyed by their own op
+// id, which is what the revert reads:
+//
+//   - "library.bulk-metadata-fetch" — RegisterBulkMetadataFetchOp
+//     (internal/server/metadata_ops.go:540), the route POST /operations/v2 uses.
+//   - "maintenance.bulk-fetch-metadata" — the bulk-fetch-metadata maintenance
+//     job, whose v2 def id is maintenanceOpID(jobID) = "maintenance." + ID().
+//
+// This is the v2 counterpart of the `op.Type != "bulk_metadata_fetch"` guard on
+// the v1 arm below, and it is load-bearing for the same reason: it is what stops
+// a revert being pointed at an unrelated operation, whose results would be read
+// as metadata writes to roll back.
+var bulkMetadataFetchDefIDs = map[string]bool{
+	"library.bulk-metadata-fetch":     true,
+	"maintenance.bulk-fetch-metadata": true,
+}
+
+// resolveFetchOpStart returns the time a bulk-metadata-fetch run began, which is
+// the cutoff the revert rolls book changes back to.
+//
+// It looks the operation up in BOTH keyspaces, v2 first. Until 2026-09-07 it
+// called GetOperationByID alone — the v1 `operation:` keyspace — and skipped the
+// id on a nil result:
+//
+//	op, err := store.GetOperationByID(fetchOpID)
+//	if err != nil || op == nil {
+//	    continue
+//	}
+//
+// The v1 id minter was retired on 2026-08-23, so every fetch a user could
+// actually want to revert has a v2 id, and GetOperationByID answers (nil, nil)
+// for one rather than erroring. Every id took the `continue`, bookIDSet stayed
+// empty, and the job reported success having reverted nothing.
+//
+// That is the second time this file has been broken by a read outliving its
+// writer — see Run's comment on the GetOperationParams path — and the lesson
+// recorded there is why an unresolvable id is now a hard error rather than a
+// skip. A revert is destructive and its scope is decided here: silently
+// dropping an id the caller listed means reverting less than they asked for
+// while reporting that it worked. There is no safe default for "I could not
+// find one of the operations you named", so it fails loudly instead.
+func resolveFetchOpStart(store maintenance.JobStore, fetchOpID string) (time.Time, error) {
+	row, err := store.GetOperationV2(fetchOpID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("looking up operation %s: %w", fetchOpID, err)
+	}
+	if row != nil {
+		if !bulkMetadataFetchDefIDs[row.DefID] {
+			return time.Time{}, fmt.Errorf("operation %s is not a bulk metadata fetch (got def %q)", fetchOpID, row.DefID)
+		}
+		if row.StartedAt != nil {
+			return *row.StartedAt, nil
+		}
+		return row.QueuedAt, nil
+	}
+
+	op, err := store.GetOperationByID(fetchOpID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("looking up operation %s: %w", fetchOpID, err)
+	}
+	if op != nil {
+		if op.Type != "bulk_metadata_fetch" {
+			return time.Time{}, fmt.Errorf("operation %s is not a bulk_metadata_fetch (got %q)", fetchOpID, op.Type)
+		}
+		if op.StartedAt != nil {
+			return *op.StartedAt, nil
+		}
+		return op.CreatedAt, nil
+	}
+
+	return time.Time{}, fmt.Errorf("operation %s not found in either operations keyspace", fetchOpID)
+}
 
 type revertMetadataFetchJob struct{}
 
@@ -72,16 +146,9 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobS
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		op, err := store.GetOperationByID(fetchOpID)
-		if err != nil || op == nil {
-			continue
-		}
-		if op.Type != "bulk_metadata_fetch" {
-			return fmt.Errorf("operation %s is not a bulk_metadata_fetch (got %q)", fetchOpID, op.Type)
-		}
-		ts := op.CreatedAt
-		if op.StartedAt != nil {
-			ts = *op.StartedAt
+		ts, err := resolveFetchOpStart(store, fetchOpID)
+		if err != nil {
+			return err
 		}
 		if revertAfter.IsZero() || ts.Before(revertAfter) {
 			revertAfter = ts
