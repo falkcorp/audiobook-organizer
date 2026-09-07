@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-24
+// last-edited: 2026-09-06
 
 package database
 
@@ -122,6 +122,13 @@ type OpV2LifecycleStore interface {
 	// UpdateOperationV2Status sets the status (and optional timestamps).
 	// startedAt / completedAt are set when non-nil.
 	UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error
+	// ResetOperationV2ForResume flips an interrupted op back to "queued" for a
+	// ResumeRestart resume and CLEARS CompletedAt (and the interrupt error) to
+	// nil — something UpdateOperationV2Status cannot do (nil means "leave
+	// unchanged"). Without it a resumed op keeps its interrupt-time CompletedAt
+	// and stays invisible in the Active-Operations timeline. QueuedAt is left
+	// untouched (it feeds restart-strike accounting).
+	ResetOperationV2ForResume(id string) error
 	// SetOperationV2StatusIfQueued atomically sets status=canceled only if status was queued.
 	// Returns true if the row was updated.
 	SetOperationV2StatusIfQueued(id, newStatus string) (bool, error)

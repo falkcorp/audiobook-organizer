@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.82.0
+// version: 1.83.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-06
 
 package scanner
 
@@ -902,6 +902,17 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	// files that will never be scanned and the bar can never reach 100%.
 	app := appdirs.Current()
 	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
+		// Abort discovery promptly on cancellation. This walk visits every
+		// directory under an import root (11,998 of them under one prod root),
+		// so without this check a scan cancelled mid-discovery keeps walking for
+		// minutes — long past the registry's abandon grace. Returning the ctx
+		// error stops WalkDir and propagates via the `if err != nil` return
+		// below. Root cause of the 2026-09-06 stand-down failure: a resumed scan
+		// cancelled during this phase ran ~9 min before the outer folder loop's
+		// ctx check could fire, so the stand-down abandoned it and hung.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		if err != nil {
 			if path == rootDir {
 				return err
@@ -964,6 +975,13 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	semaphore := make(chan struct{}, workers)
 
 	for _, dir := range dirs {
+		// Stop dispatching new per-directory work once cancelled, mirroring
+		// ProcessBooksParallel's guard. Combined with the worker-start check
+		// below, a cancelled scan drains the in-flight workers and returns
+		// within ~one directory instead of scanning all of them.
+		if ctx.Err() != nil {
+			break
+		}
 		scanDir := dir
 		wg.Go(func() {
 			semaphore <- struct{}{} // Acquire
@@ -980,6 +998,13 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 						fmt.Sprintf("Scanning folders: %d/%d (%s)", n, len(dirs), filepath.Base(scanDir)))
 				}
 			}()
+
+			// A worker that started queuing before cancellation returns without
+			// doing the (expensive) per-directory tag read; the deferred release
+			// still runs.
+			if ctx.Err() != nil {
+				return
+			}
 
 			// Read directory entries
 			entries, err := os.ReadDir(scanDir)
@@ -1028,6 +1053,13 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	}
 
 	wg.Wait()
+
+	// A cancelled discovery pass returns the ctx error rather than a partial
+	// book set: the caller (scanFolder) treats a scan error as "do not
+	// auto-organize", and the run unwinds so the registry sees a clean cancel.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Surface dropped-subtree count in the scan summary (R-5): each failure was
 	// warn-logged above, but a single aggregate makes a mass-failure obvious.
@@ -2341,6 +2373,14 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 	if len(files) >= 3 {
 		infos := make([]MultiFileInfo, len(files))
 		for i, f := range files {
+			// This is the longest uninterrupted stretch of a scan — a tag read
+			// per file in the directory. A flat library of tens of thousands of
+			// files spends its whole scan here, so a cancel that is not observed
+			// in this loop is a cancel not observed for minutes. Returning a nil
+			// (partial) result is safe: the caller discards it on ctx error.
+			if ctx.Err() != nil {
+				return nil
+			}
 			infos[i] = quickReadMultiFileInfo(f)
 			noteFile()
 		}

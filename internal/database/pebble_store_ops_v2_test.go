@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-08-23
+// last-edited: 2026-09-06
 
 package database
 
@@ -264,4 +264,68 @@ func TestUpdateOpProgressV2_AdvancesHighWaterProgress(t *testing.T) {
 	require.Equal(t, 42, row.HighWaterProgress,
 		"high-water mark must not regress when a resumed run reports a lower current")
 	require.Equal(t, 5, row.ProgressCurrent, "current progress should still track the live value")
+}
+
+// TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility pins B1:
+// a ResumeRestart op reuses its row, and on interrupt the row got a CompletedAt
+// stamped. UpdateOperationV2Status cannot un-set CompletedAt (nil = leave
+// unchanged), so a resumed op stayed excluded from the Active-Operations
+// timeline (ListOperationsV2Since admits a row only if CompletedAt == nil OR its
+// QueuedAt is inside the window). ResetOperationV2ForResume clears CompletedAt so
+// the running resumed op is visible again — without touching QueuedAt.
+func TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	// A row queued 30m ago (older than the 15m window) and interrupted 20m ago.
+	oldQueued := time.Now().UTC().Add(-30 * time.Minute)
+	row := OperationV2Row{
+		ID:       "op-resume-1",
+		DefID:    "library.scan",
+		Plugin:   "library",
+		Status:   "queued",
+		Priority: 5,
+		QueuedAt: oldQueued,
+	}
+	require.NoError(t, s.InsertOperationV2(row))
+
+	// Stamp it interrupted_quiesced with a CompletedAt + error, as the worker does.
+	interruptedAt := time.Now().UTC().Add(-20 * time.Minute)
+	interruptMsg := "quiesced: scan stand-down"
+	require.NoError(t, s.UpdateOperationV2Status("op-resume-1", "interrupted_quiesced", nil, &interruptedAt, &interruptMsg))
+
+	since := time.Now().UTC().Add(-15 * time.Minute)
+
+	// Excluded before reset: CompletedAt set AND QueuedAt older than the window.
+	before, err := s.ListOperationsV2Since(since, 100)
+	require.NoError(t, err)
+	for _, r := range before {
+		if r.ID == "op-resume-1" {
+			t.Fatalf("row should be excluded from the timeline before reset")
+		}
+	}
+
+	// Reset for resume.
+	require.NoError(t, s.ResetOperationV2ForResume("op-resume-1"))
+
+	got, err := s.GetOperationV2("op-resume-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "queued", got.Status)
+	require.Nil(t, got.CompletedAt, "CompletedAt must be cleared to nil")
+	require.Nil(t, got.ErrorMessage, "stale interrupt error must be cleared")
+	require.True(t, got.QueuedAt.Equal(oldQueued), "QueuedAt must be left untouched")
+
+	// Included after reset: CompletedAt == nil satisfies the filter.
+	after, err := s.ListOperationsV2Since(since, 100)
+	require.NoError(t, err)
+	found := false
+	for _, r := range after {
+		if r.ID == "op-resume-1" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "reset-for-resume row must appear in the timeline")
 }
