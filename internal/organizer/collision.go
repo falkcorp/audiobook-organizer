@@ -1,5 +1,5 @@
 // file: internal/organizer/collision.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
 // last-edited: 2026-09-07
 
@@ -419,7 +419,19 @@ func resolveTargetCollisions(entries []FileRenameEntry, policy *CollisionPolicy,
 		if oerr != nil {
 			// We cannot tell which side of the library boundary the occupant
 			// is on, so we cannot pick a branch. Record it as unresolvable
-			// rather than guessing.
+			// rather than guessing. c.dstInfo was just set from the os.Stat
+			// above, so the failure carries the occupant fingerprint
+			// ApplyRenameBlocked needs to self-heal — without it the durable
+			// skip would compare against a zero size/mtime and retry
+			// immediately, making the record decorative.
+			//
+			// This branch is DEFENSIVE, and deliberately has no end-to-end
+			// fixture. The obvious trigger — a permission denial while
+			// resolving the link — cannot reach here: measured on darwin, the
+			// os.Stat above fails with the SAME EACCES and takes the retarget
+			// path first. What is left is a link rewritten between the two
+			// calls, or an ELOOP-depth chain. occupantOutsideRoot's own error
+			// contract is pinned directly by TestOccupantOutsideRoot instead.
 			failures = append(failures, *collisionFailure(c, "cannot determine whether the occupant is inside the library: "+oerr.Error()))
 			continue
 		}

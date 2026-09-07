@@ -1,5 +1,5 @@
 // file: internal/organizer/collision_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e07b5c9-1a26-4f83-b0d7-92c1e6438af5
 // last-edited: 2026-09-07
 
@@ -644,6 +644,98 @@ func TestRenameFiles_KeepsResolvedCollisionAfterAPartialPublish(t *testing.T) {
 	if len(strays) != 0 {
 		t.Fatalf("temp files left stranded: %v", strays)
 	}
+}
+
+// TestOccupantOutsideRoot pins the library-boundary predicate, and in
+// particular its ERROR contract — the one thing about it that is not obvious.
+//
+// It deliberately does NOT swallow every resolution failure into "in-library".
+// Only NOT-EXIST means in-library: a broken link really is not evidence of an
+// outside file. Any other failure is returned, because os.Stat FOLLOWS the link
+// and would hand the caller the outside file's bytes while the caller believed
+// it was comparing an in-library pair — and a match there would quarantine our
+// source and repoint the row at a symlink leaving the tree. An undecidable
+// boundary must become an unresolvable collision, not a guess.
+func TestOccupantOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+
+	inside := writeCollisionFile(t, filepath.Join(root, "Author", "inside.m4b"), "x")
+
+	// A symlink out of the tree — what the `symlink` organization strategy
+	// leaves behind, and the only way an occupant AT a target under RootDir can
+	// actually live outside it.
+	outsideReal := writeCollisionFile(t, filepath.Join(outsideDir, "real.m4b"), "x")
+	outsideLink := filepath.Join(root, "Author", "linked.m4b")
+	if err := os.Symlink(outsideReal, outsideLink); err != nil {
+		t.Skipf("filesystem has no symlinks: %v", err)
+	}
+
+	dangling := filepath.Join(root, "Author", "dangling.m4b")
+	if err := os.Symlink(filepath.Join(outsideDir, "gone.m4b"), dangling); err != nil {
+		t.Skipf("filesystem has no symlinks: %v", err)
+	}
+
+	t.Run("a real file under the root is in-library", func(t *testing.T) {
+		got, err := occupantOutsideRoot(inside, root)
+		if err != nil || got {
+			t.Fatalf("occupantOutsideRoot = (%v, %v), want (false, nil)", got, err)
+		}
+	})
+
+	t.Run("a symlink out of the tree is outside", func(t *testing.T) {
+		got, err := occupantOutsideRoot(outsideLink, root)
+		if err != nil || !got {
+			t.Fatalf("occupantOutsideRoot = (%v, %v), want (true, nil)", got, err)
+		}
+	})
+
+	t.Run("a dangling link is in-library, not an error", func(t *testing.T) {
+		got, err := occupantOutsideRoot(dangling, root)
+		if err != nil || got {
+			t.Fatalf("occupantOutsideRoot = (%v, %v), want (false, nil)", got, err)
+		}
+	})
+
+	t.Run("an empty root disables the boundary test", func(t *testing.T) {
+		got, err := occupantOutsideRoot(outsideLink, "")
+		if err != nil || got {
+			t.Fatalf("occupantOutsideRoot = (%v, %v), want (false, nil)", got, err)
+		}
+	})
+
+	// The case the narrowing exists for: an unresolvable link that is NOT
+	// simply absent must surface as an error rather than defaulting to
+	// in-library.
+	t.Run("an unresolvable link is an error, not a silent in-library default", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root traverses regardless of mode bits")
+		}
+		locked := filepath.Join(outsideDir, "locked")
+		if err := os.MkdirAll(locked, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		hidden := writeCollisionFile(t, filepath.Join(locked, "real.m4b"), "x")
+		link := filepath.Join(root, "Author", "locked.m4b")
+		if err := os.Symlink(hidden, link); err != nil {
+			t.Skipf("filesystem has no symlinks: %v", err)
+		}
+		if err := os.Chmod(locked, 0o000); err != nil {
+			t.Skipf("cannot drop directory permissions: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+		if _, err := os.Lstat(filepath.Join(locked, "real.m4b")); err == nil {
+			t.Skip("permissions are not enforced on this filesystem")
+		}
+		got, err := occupantOutsideRoot(link, root)
+		if err == nil {
+			t.Fatalf("an unresolvable occupant must be an error, got (%v, nil)", got)
+		}
+		if got {
+			t.Fatalf("an errored boundary test must not also claim 'outside': %v", got)
+		}
+	})
 }
 
 // TestRenameFiles_NilPolicyKeepsTheOldRefusal pins the explicit opt-out: with
