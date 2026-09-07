@@ -1,5 +1,5 @@
 // file: internal/organizer/collision.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
 // last-edited: 2026-09-07
 
@@ -91,7 +91,10 @@ type CollisionPolicy struct {
 	// unresolvable collision a reported failure instead.
 	RootDir string
 
-	// BookID owns these entries; used for the quarantine layout and logging.
+	// BookID owns these entries. It is a LOOKUP KEY and a log field, and
+	// deliberately nothing else: the quarantine directory is named from the id on
+	// the row the store returns, not from this value. See the quarantine call in
+	// resolveIdenticalInLibrary.
 	BookID string
 
 	// Store enables the stored-FileHash rung and all row repointing. nil
@@ -648,7 +651,14 @@ func applyCollisionDecision(c collisionCandidate, policy *CollisionPolicy, journ
 			fmt.Sprintf("occupant is byte-identical but book_file %s could not be rehydrated: %v", c.entry.SegmentID, err))
 	}
 
-	qPath, err := quarantineCollisionSource(policy.RootDir, policy.BookID, c.entry.SourcePath)
+	// prior.BookID, NOT policy.BookID. They agree today, but they are different
+	// kinds of value: policy.BookID is what the CALLER asked for and arrives
+	// straight from op params, while prior.BookID is what the store actually
+	// holds for the row being quarantined. Naming the quarantine directory after
+	// the row means the directory can never disagree with the row it parks, and
+	// the id is a value the database returned rather than an unvalidated request
+	// string on its way into a filesystem path. See quarantineCollisionSource.
+	qPath, err := quarantineCollisionSource(policy.RootDir, prior.BookID, c.entry.SourcePath)
 	if err != nil {
 		return collisionDecision{}, false, collisionFailure(c, fmt.Sprintf("quarantine the losing copy: %v", err))
 	}
@@ -816,13 +826,20 @@ func quarantineCollisionSource(rootDir, bookID, src string) (string, error) {
 	if dirName == "" {
 		dirName = "unattributed"
 	}
-	// pathvalidation.SecureJoin, not filepath.Join plus a hand-written prefix
-	// check. bookID reaches here from op params, so it is user input on the way
-	// into an os.MkdirAll; SecureJoin is this repo's designated barrier for
-	// exactly that and rejects traversal and absolute components itself. The
-	// prefix check it replaces was correct but bespoke, and CodeQL does not
-	// recognise it as a barrier — go/path-injection flagged both filesystem
-	// calls below.
+	// bookID must be a value the STORE returned (see the call site: it passes
+	// prior.BookID, the id on the rehydrated row), never a request or op-params
+	// string handed straight in. That is the rule the rest of this package
+	// already follows — ApplyRename takes a request id, uses it only as a lookup
+	// key, and builds every path component from the row GetBookByID returns —
+	// and it is why organizer's path building has no open go/path-injection
+	// alerts while a direct string-to-join route does.
+	//
+	// SecureJoin on top of that, rather than filepath.Join plus a bespoke prefix
+	// check: it rejects traversal and absolute components itself, so the
+	// containment rule lives in one tested place. Do NOT read its presence as
+	// the thing that satisfies the scanner — the repo's CodeQL model pack
+	// declares it a barrier and it is still not credited. Keeping the input off
+	// the taint path is what does the work; this is defence in depth behind it.
 	dir, err := pathvalidation.SecureJoin(qRoot, sanitizePath(dirName))
 	if err != nil {
 		return "", fmt.Errorf("quarantine dir for book %q escapes %s: %w", dirName, qRoot, err)
