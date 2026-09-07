@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_ops_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c1d4f60-2a97-4e35-b8d1-6f0e3a7c95b2
-// last-edited: 2026-08-22
+// last-edited: 2026-09-07
 
 package metabatch
 
@@ -16,17 +16,20 @@ import (
 // CandidateFetchDefID is the v2 OperationDef id for metadata candidate fetches.
 const CandidateFetchDefID = "metadata.candidate-fetch"
 
-// candidateFetchOpType is the v1 operations-row type string for the same work.
+// candidateFetchOpType is the `type` string this work is advertised as on the
+// wire.
 //
-// New runs no longer write a v1 row at all — the handler returns the id
-// EnqueueOp minted and results key on that. This constant exists ONLY to keep
-// historical fetches visible; see CandidateFetchOps.
+// It originated as the v1 operations-row type, but it is no longer a v1
+// artifact: ResolveCandidateFetch stamps it onto the v1-SHAPED object the
+// results endpoint returns, and the frontend keys off it. The shape is a wire
+// contract; the keyspace it came from is gone.
 const candidateFetchOpType = "metadata_candidate_fetch"
 
-// CandidateFetchOp identifies one metadata candidate-fetch run, from either
-// keyspace. Status vocabularies differ slightly between the two ("pending" is
-// v1's queued state, "queued" is v2's), so callers that filter on status should
-// accept both spellings.
+// CandidateFetchOp identifies one metadata candidate-fetch run.
+//
+// Status is the v2 vocabulary ("queued", not v1's "pending") as of 2026-09-07,
+// when the v1 listing pass was removed — callers no longer need to accept both
+// spellings, though doing so is harmless.
 type CandidateFetchOp struct {
 	ID        string
 	Status    string
@@ -35,45 +38,29 @@ type CandidateFetchOp struct {
 	// the Resume Review picker renders it; dropping it here would have blanked
 	// the column for every run without anything failing.
 	CompletedAt *time.Time
-	// Legacy is true for a v1 operations row.
-	//
-	// ⚠️ NOT a census field. Historical runs wrote a v1 row and a v2 row under
-	// DIFFERENT ids — the handler minted one, EnqueueOp the other — so the `seen`
-	// map in CandidateFetchOps cannot merge a twin, and one logical run surfaces
-	// as a populated v1 entry plus an empty v2 one. Counting Legacy entries
-	// therefore over-counts. It is benign for the readers here, which all drop
-	// zero-result ops.
-	Legacy bool
 }
 
-// CandidateFetchOpLister is the store slice CandidateFetchOps reads: one
-// listing call per keyspace.
+// CandidateFetchOpLister is the store slice CandidateFetchOps reads.
 type CandidateFetchOpLister interface {
-	GetRecentOperations(limit int) ([]database.Operation, error)
 	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
 }
 
-// CandidateFetchOps returns every metadata candidate-fetch run visible in
-// EITHER keyspace, newest first.
+// CandidateFetchOps returns every metadata candidate-fetch run, newest first.
 //
-// WHY THE UNION. Four readers used to hand-roll this same scan —
-// GetRecentOperations plus an `op.Type != "metadata_candidate_fetch"` filter —
-// in the dedup guard, the Resume Review picker, latestMetadataResultsByBook and
-// LatestMatchedBookIDs. Once new runs stopped writing a v1 row, a v2-only
-// rewrite of those four would have dropped every fetch already keyed under a v1
-// id. That is precisely the bug the Resume Review picker was written to fix: its
-// own comment records that back-to-back fetches left the first one's results
-// invisible because the id lived only in React state. Reintroducing it for the
-// existing backlog is not an acceptable cutover cost, so both keyspaces are read
-// until the v1 rows age out.
+// WHY IT IS ONE FUNCTION. Four readers used to hand-roll this same scan — the
+// dedup guard, the Resume Review picker, latestMetadataResultsByBook and
+// LatestMatchedBookIDs. Centralising it is what made the 2026-09-07 removal of
+// the v1 listing pass a single delete instead of four separate edits with four
+// chances to leave one behind. Keep it that way.
 //
-// Keeping it in ONE function is the point. When the v1 rows are finally dropped,
-// this is a single delete rather than four separate edits with four chances to
-// leave one behind.
+// It read BOTH keyspaces until then, so that fetches already keyed under a v1 id
+// stayed visible — the "results are invisible" bug the Resume Review picker was
+// written to fix. That backlog is now old enough that dropping it is deliberate
+// and authorized.
 //
-// Errors are swallowed per-keyspace on purpose: a store that cannot answer one
-// listing should still surface what the other knows. A total failure yields an
-// empty slice, which every caller already treats as "nothing to show".
+// A listing error is swallowed and yields an empty slice, which every caller
+// already treats as "nothing to show". For the dedup guard that degrades to
+// re-fetching a book — wasteful but correct — never to skipping one.
 func CandidateFetchOps(store CandidateFetchOpLister, limit int) []CandidateFetchOp {
 	if limit <= 0 {
 		limit = 5000
@@ -113,22 +100,11 @@ func CandidateFetchOps(store CandidateFetchOpLister, limit int) []CandidateFetch
 		}
 	}
 
-	// v1 — history only. Same reasoning as above: bound the scan, not the answer.
-	if ops, err := store.GetRecentOperations(storeScanBound); err == nil {
-		for _, op := range ops {
-			if op.Type != candidateFetchOpType || seen[op.ID] {
-				continue
-			}
-			seen[op.ID] = true
-			out = append(out, CandidateFetchOp{
-				ID:          op.ID,
-				Status:      op.Status,
-				CreatedAt:   op.CreatedAt,
-				CompletedAt: op.CompletedAt,
-				Legacy:      true,
-			})
-		}
-	}
+	// The v1 "history only" pass that used to follow is gone (2026-09-07): nothing
+	// has minted a v1 row since the minter was retired, so it could only return
+	// pre-2026-08-23 history. Dropping it is deliberate and authorized. It was the
+	// only producer of Legacy:true, so CandidateFetchOp.Legacy is now always false
+	// and its GetOperationParams branch is unreachable — both removed with it.
 
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
@@ -142,34 +118,19 @@ func CandidateFetchOps(store CandidateFetchOpLister, limit int) []CandidateFetch
 // CandidateFetchParamsReader is the store slice CandidateFetchBookIDs reads.
 type CandidateFetchParamsReader interface {
 	GetOperationV2(id string) (*database.OperationV2Row, error)
-	GetOperationParams(opID string) ([]byte, error)
 }
 
 // CandidateFetchBookIDs returns the books a fetch was asked to cover.
 //
-// The two keyspaces store this differently and neither shape is going to change
-// retroactively: a v2 row carries marshalled FetchOpParams in its own Params
-// column, while a v1 run had the handler write a bare []string through
-// SaveOperationParams. Reading the right one is keyed off op.Legacy rather than
-// guessed by trying both, so a malformed blob reports as empty instead of
-// silently matching the other decoder.
+// A v2 row carries marshalled FetchOpParams in its own Params column. The v1
+// shape — a bare []string the handler wrote through SaveOperationParams — is
+// gone as of 2026-09-07 along with the v1 listing pass that produced the only
+// rows it applied to; SaveOperationParams had no writer left either.
 //
 // An empty result means "we cannot tell what this run covers". Callers use this
 // for the dedup guard, where that degrades to re-fetching a book — wasteful but
 // correct — rather than to skipping one.
 func CandidateFetchBookIDs(store CandidateFetchParamsReader, op CandidateFetchOp) []string {
-	if op.Legacy {
-		raw, err := store.GetOperationParams(op.ID)
-		if err != nil || len(raw) == 0 {
-			return nil
-		}
-		var ids []string
-		if err := json.Unmarshal(raw, &ids); err != nil {
-			return nil
-		}
-		return ids
-	}
-
 	row, err := store.GetOperationV2(op.ID)
 	if err != nil || row == nil || row.Params == "" {
 		return nil
