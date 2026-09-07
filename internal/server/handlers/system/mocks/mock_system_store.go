@@ -5,6 +5,8 @@
 package systemmocks
 
 import (
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -704,68 +706,6 @@ func (_c *MockSystemStore_GetDashboardStats_Call) RunAndReturn(run func() (*data
 	return _c
 }
 
-// GetRecentOperations provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetRecentOperations(limit int) ([]database.Operation, error) {
-	ret := _mock.Called(limit)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetRecentOperations")
-	}
-
-	var r0 []database.Operation
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) ([]database.Operation, error)); ok {
-		return returnFunc(limit)
-	}
-	if returnFunc, ok := ret.Get(0).(func(int) []database.Operation); ok {
-		r0 = returnFunc(limit)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Operation)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
-		r1 = returnFunc(limit)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockSystemStore_GetRecentOperations_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetRecentOperations'
-type MockSystemStore_GetRecentOperations_Call struct {
-	*mock.Call
-}
-
-// GetRecentOperations is a helper method to define mock.On call
-//   - limit int
-func (_e *MockSystemStore_Expecter) GetRecentOperations(limit any) *MockSystemStore_GetRecentOperations_Call {
-	return &MockSystemStore_GetRecentOperations_Call{Call: _e.mock.On("GetRecentOperations", limit)}
-}
-
-func (_c *MockSystemStore_GetRecentOperations_Call) Run(run func(limit int)) *MockSystemStore_GetRecentOperations_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 int
-		if args[0] != nil {
-			arg0 = args[0].(int)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockSystemStore_GetRecentOperations_Call) Return(operations []database.Operation, err error) *MockSystemStore_GetRecentOperations_Call {
-	_c.Call.Return(operations, err)
-	return _c
-}
-
-func (_c *MockSystemStore_GetRecentOperations_Call) RunAndReturn(run func(limit int) ([]database.Operation, error)) *MockSystemStore_GetRecentOperations_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetSetting provides a mock function for the type MockSystemStore
 func (_mock *MockSystemStore) GetSetting(key string) (*database.Setting, error) {
 	ret := _mock.Called(key)
@@ -988,6 +928,74 @@ func (_c *MockSystemStore_InvalidateLibraryStats_Call) Return() *MockSystemStore
 
 func (_c *MockSystemStore_InvalidateLibraryStats_Call) RunAndReturn(run func()) *MockSystemStore_InvalidateLibraryStats_Call {
 	_c.Run(run)
+	return _c
+}
+
+// ListOperationsV2Since provides a mock function for the type MockSystemStore
+func (_mock *MockSystemStore) ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error) {
+	ret := _mock.Called(since, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListOperationsV2Since")
+	}
+
+	var r0 []database.OperationV2Row
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) ([]database.OperationV2Row, error)); ok {
+		return returnFunc(since, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) []database.OperationV2Row); ok {
+		r0 = returnFunc(since, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.OperationV2Row)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(time.Time, int) error); ok {
+		r1 = returnFunc(since, limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockSystemStore_ListOperationsV2Since_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListOperationsV2Since'
+type MockSystemStore_ListOperationsV2Since_Call struct {
+	*mock.Call
+}
+
+// ListOperationsV2Since is a helper method to define mock.On call
+//   - since time.Time
+//   - limit int
+func (_e *MockSystemStore_Expecter) ListOperationsV2Since(since any, limit any) *MockSystemStore_ListOperationsV2Since_Call {
+	return &MockSystemStore_ListOperationsV2Since_Call{Call: _e.mock.On("ListOperationsV2Since", since, limit)}
+}
+
+func (_c *MockSystemStore_ListOperationsV2Since_Call) Run(run func(since time.Time, limit int)) *MockSystemStore_ListOperationsV2Since_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 time.Time
+		if args[0] != nil {
+			arg0 = args[0].(time.Time)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockSystemStore_ListOperationsV2Since_Call) Return(operationV2Rows []database.OperationV2Row, err error) *MockSystemStore_ListOperationsV2Since_Call {
+	_c.Call.Return(operationV2Rows, err)
+	return _c
+}
+
+func (_c *MockSystemStore_ListOperationsV2Since_Call) RunAndReturn(run func(since time.Time, limit int) ([]database.OperationV2Row, error)) *MockSystemStore_ListOperationsV2Since_Call {
+	_c.Call.Return(run)
 	return _c
 }
 

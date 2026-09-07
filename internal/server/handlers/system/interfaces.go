@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -15,6 +15,8 @@ package system
 
 import (
 	"context"
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
@@ -51,7 +53,11 @@ type SystemAuthorStore interface {
 type SystemAuditReader interface {
 	// activity log
 	GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error) // SystemActivityStore
-	GetRecentOperations(limit int) ([]database.Operation, error)                          // OperationStore
+
+	// operation history. This was GetRecentOperations, which reads the v1
+	// `operation:` keyspace; nothing has minted a v1 row since 2026-08-23, so it
+	// served a two-week-old snapshot. Swapped 2026-09-07.
+	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error) // OpV2QueryStore
 }
 
 // SystemLifecycleStore resets the store — the factory-reset path.

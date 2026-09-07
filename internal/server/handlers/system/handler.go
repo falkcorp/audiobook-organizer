@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -694,9 +694,19 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 		return
 	}
 
-	recentOps, err := store.GetRecentOperations(5)
-	if err != nil {
-		recentOps = []database.Operation{}
+	// Same freeze as the dashboard panel in sysinfo.CollectSystemStatus: this read
+	// the v1 `operation:` keyspace, nothing has minted a v1 row since that minter
+	// was retired on 2026-08-23, and production was serving five rows dated
+	// 2026-08-16 to 2026-08-21 with nothing to say they were stale.
+	//
+	// Repointed rather than removed even though no frontend code reads
+	// `recentOperations` from this endpoint (grepped 2026-09-07) — it is a public
+	// response field, and serving correct data costs one call.
+	recentOps := []database.Operation{}
+	if rows, err := store.ListOperationsV2Since(time.Time{}, 5); err == nil {
+		for i := range rows {
+			recentOps = append(recentOps, *rows[i].AsLegacyOperation(rows[i].DefID))
+		}
 	}
 
 	// Try to read broken file count from underlying store (PebbleStore)
