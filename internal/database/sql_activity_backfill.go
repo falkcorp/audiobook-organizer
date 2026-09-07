@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
 // last-edited: 2026-09-07
 
@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -38,15 +39,35 @@ const ActivitySQLBackfillKey = "system:backfill:activity_sql_v1_done"
 // sqlBackfillBatch is how many rows are copied per SQLite transaction.
 const sqlBackfillBatch = 500
 
+// sqlBackfillProgressEvery bounds how often a long-running tier emits a progress
+// line.
+//
+// The trigger is wall-clock rather than every-N-batches on purpose. Batch cost
+// here varies by orders of magnitude: a batch of 500 iTunes `ApplyITLOperations`
+// rows carries ~9.6 MB of `details` EACH, while a batch of ordinary events
+// carries a few hundred bytes each. Any fixed N therefore produces either an
+// hour of silence or a log flood depending only on which rows a tier happens to
+// hold. A time interval gives the same heartbeat cadence either way, which is
+// the whole point — the reader needs to distinguish "working" from "wedged".
+//
+// Sized against observed production throughput (~600 rows/s on the `change`
+// tier): ~18k rows per line, a few hundred lines for a multi-hour tier.
+const sqlBackfillProgressEvery = 30 * time.Second
+
 // SQLActivityBackfillResult holds the outcome of a Pebble → SQLite backfill run.
 type SQLActivityBackfillResult struct {
 	TiersProcessed int            `json:"tiers_processed"`
 	EntriesScanned int            `json:"entries_scanned"` // rows read from Pebble
 	EntriesCopied  int            `json:"entries_copied"`  // rows actually inserted (excludes idempotent skips)
 	PerTierScanned map[string]int `json:"per_tier_scanned"`
-	ParityOK       bool           `json:"parity_ok"`
-	DryRun         bool           `json:"dry_run"`
-	AlreadyDone    bool           `json:"already_done"`
+	// PerTierCopied breaks EntriesCopied down the same way PerTierScanned does.
+	// The two differ by exactly the idempotent skips, so a tier where
+	// scanned≫copied is a RESUMED run re-streaming already-copied history — the
+	// one shape that otherwise looks identical to a stalled first run.
+	PerTierCopied map[string]int `json:"per_tier_copied"`
+	ParityOK      bool           `json:"parity_ok"`
+	DryRun        bool           `json:"dry_run"`
+	AlreadyDone   bool           `json:"already_done"`
 }
 
 // BackfillPebbleActivityToSQL copies ALL Pebble activity history into sqlStore,
@@ -63,7 +84,11 @@ func BackfillPebbleActivityToSQL(
 	sqlStore *SQLActivityStore,
 	dryRun bool,
 ) (SQLActivityBackfillResult, error) {
-	res := SQLActivityBackfillResult{DryRun: dryRun, PerTierScanned: make(map[string]int)}
+	res := SQLActivityBackfillResult{
+		DryRun:         dryRun,
+		PerTierScanned: make(map[string]int),
+		PerTierCopied:  make(map[string]int),
+	}
 
 	if !dryRun {
 		if _, closer, err := pebbleStore.db.Get([]byte(ActivitySQLBackfillKey)); err == nil {
@@ -86,9 +111,17 @@ func BackfillPebbleActivityToSQL(
 		default:
 		}
 
-		if !dryRun {
-			slog.Info("[activity-sql-backfill] processing tier", "tier", tier)
-		}
+		slog.Info("[activity-sql-backfill] processing tier",
+			"tier", tier, "tier_index", res.TiersProcessed+1, "tiers_total", len(actTiers), "dry_run", dryRun)
+
+		// Progress bookkeeping. A tier can run for hours (production's `change`
+		// tier holds ~5.7M rows at ~600 rows/s), and before this the function
+		// logged nothing between "processing tier" and the final summary — so a
+		// working run and a wedged one were indistinguishable from the log.
+		tierStart := time.Now()
+		lastLog := tierStart
+		lastScanned := 0
+		tierScanned := 0
 
 		// Stream the tier in bounded batches instead of materialising it. Each
 		// batch is copied into SQLite and then re-presented for parity WITHIN the
@@ -103,31 +136,56 @@ func BackfillPebbleActivityToSQL(
 		// exactly once on copy and zero times on every re-present, so EntriesCopied
 		// and the parity verdict are identical either way.
 		tierReinserted := 0
+		tierCopied := 0
 		scanned, serr := pebbleStore.streamTierEntries(ctx, tier, sqlBackfillBatch, func(batch []ActivityEntry) error {
-			if dryRun {
-				return nil // count only; no writes
+			tierScanned += len(batch)
+			if !dryRun {
+				// Copy pass for this batch.
+				copied, cerr := sqlStore.recordBatch(ctx, batch)
+				if cerr != nil {
+					return fmt.Errorf("copy: %w", cerr)
+				}
+				tierCopied += copied
+				res.EntriesCopied += copied
+				// Parity pass: re-present the same batch. A correct copy inserts ZERO
+				// here (every row conflicts on src_key). Any insert means a copied row
+				// did not land — record it so the tier fails parity below.
+				n, verr := sqlStore.recordBatch(ctx, batch)
+				if verr != nil {
+					return fmt.Errorf("parity re-present: %w", verr)
+				}
+				tierReinserted += n
 			}
-			// Copy pass for this batch.
-			copied, cerr := sqlStore.recordBatch(ctx, batch)
-			if cerr != nil {
-				return fmt.Errorf("copy: %w", cerr)
+
+			// Heartbeat. Rate is computed over the window since the last line, not
+			// since tier start, so a slowdown shows up immediately instead of being
+			// averaged away by a fast first hour.
+			if now := time.Now(); now.Sub(lastLog) >= sqlBackfillProgressEvery {
+				window := now.Sub(lastLog).Seconds()
+				slog.Info("[activity-sql-backfill] tier progress",
+					"tier", tier,
+					"scanned", tierScanned,
+					"copied", tierCopied,
+					"rows_per_sec", int(float64(tierScanned-lastScanned)/window),
+					"elapsed", now.Sub(tierStart).Round(time.Second).String(),
+					"dry_run", dryRun)
+				lastLog, lastScanned = now, tierScanned
 			}
-			res.EntriesCopied += copied
-			// Parity pass: re-present the same batch. A correct copy inserts ZERO
-			// here (every row conflicts on src_key). Any insert means a copied row
-			// did not land — record it so the tier fails parity below.
-			n, verr := sqlStore.recordBatch(ctx, batch)
-			if verr != nil {
-				return fmt.Errorf("parity re-present: %w", verr)
-			}
-			tierReinserted += n
 			return nil
 		})
 		if serr != nil {
 			return res, fmt.Errorf("activity-sql-backfill: stream tier=%s: %w", tier, serr)
 		}
 		res.PerTierScanned[tier] = scanned
+		res.PerTierCopied[tier] = tierCopied
 		res.EntriesScanned += scanned
+		slog.Info("[activity-sql-backfill] tier complete",
+			"tier", tier,
+			"tier_index", res.TiersProcessed+1, "tiers_total", len(actTiers),
+			"scanned", scanned, "copied", tierCopied,
+			"skipped_already_present", scanned-tierCopied,
+			"elapsed", time.Since(tierStart).Round(time.Second).String(),
+			"dry_run", dryRun)
 		if tierReinserted != 0 {
 			res.ParityOK = false
 			slog.Error("[activity-sql-backfill] PARITY FAIL — re-presentation inserted rows; not flipping",
