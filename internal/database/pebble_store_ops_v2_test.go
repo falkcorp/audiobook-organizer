@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 package database
 
@@ -328,4 +328,89 @@ func TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility(t *tes
 		}
 	}
 	require.True(t, found, "reset-for-resume row must appear in the timeline")
+}
+
+// TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus pins the
+// invariant that CompletedAt is set whenever a row leaves the live states.
+//
+// CompletedAt is the canonical liveness signal for this store: both
+// ListOperationsV2Since and the timeline handler decide "still in flight" on
+// CompletedAt == nil, never on a status list. A terminal status written with no
+// stamp therefore produced a row that was dead to the worker and alive to every
+// reader — a canceled maintenance.transcribe-book-intros op sat in the UI's
+// Active Operations panel for 73 days that way, and no user action could clear
+// it, because "Clear Stale" filters on queued/running/pending and it was none
+// of those.
+func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	t.Run("canceling a queued op stamps CompletedAt", func(t *testing.T) {
+		row := buildTestOpRow("op-cancel", "queued")
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.SetOperationV2StatusIfQueued("op-cancel", "canceled")
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-cancel")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, "canceled", got.Status)
+		require.NotNil(t, got.CompletedAt,
+			"a terminal status with no CompletedAt reads as in-flight forever")
+	})
+
+	t.Run("an unknown terminal status is stamped too", func(t *testing.T) {
+		// The condition is the complement of a terminal-status list precisely so
+		// a state added later needs no edit here. If someone replaces it with an
+		// enumeration, this case is what fails.
+		row := buildTestOpRow("op-future", "queued")
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.SetOperationV2StatusIfQueued("op-future", "abandoned_by_a_future_feature")
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-future")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.NotNil(t, got.CompletedAt)
+	})
+
+	t.Run("promoting to running leaves CompletedAt nil", func(t *testing.T) {
+		// "running" is live. Stamping it would mark a working op complete.
+		row := buildTestOpRow("op-run", "queued")
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.SetOperationV2StatusIfQueued("op-run", "running")
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-run")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Nil(t, got.CompletedAt)
+	})
+
+	t.Run("an existing stamp is never overwritten", func(t *testing.T) {
+		// ResetOperationV2ForResume clears CompletedAt on the way back to
+		// queued, so a queued row normally has none. If one does survive, it is
+		// the earlier, truer completion time and must win.
+		earlier := time.Now().UTC().Add(-72 * time.Hour)
+		row := buildTestOpRow("op-stamped", "queued")
+		row.CompletedAt = &earlier
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.SetOperationV2StatusIfQueued("op-stamped", "canceled")
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-stamped")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second)
+	})
 }

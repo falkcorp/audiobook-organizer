@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.13.0
+// version: 3.14.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -388,6 +388,29 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (update
 	}
 
 	row.Status = newStatus
+	// Stamp CompletedAt whenever this transition takes the row out of the live
+	// states. CompletedAt is the CANONICAL liveness signal in this store --
+	// ListOperationsV2Since keeps a row forever on `CompletedAt == nil`, and the
+	// timeline handler counts it as in-flight on the same test -- so a terminal
+	// status written without a stamp produces a row that is dead to the worker
+	// and alive to every reader. That is not hypothetical: a canceled
+	// maintenance.transcribe-book-intros op sat in the UI's "Active Operations"
+	// panel from 2026-06-26 to 2026-09-07 with completed_at null, and no user
+	// action could clear it.
+	//
+	// The condition is the COMPLEMENT of a terminal-status list, deliberately.
+	// ListOperationsV2Since:631 explains why the reader avoids a status list
+	// ("has to be updated every time a new terminal state is added, and silently
+	// under-reports until someone remembers"); enumerating terminal states HERE
+	// would reintroduce exactly that maintenance burden one layer up. Naming the
+	// two live states instead means a terminal state added later is covered
+	// without anyone touching this function. It is also the same predicate the
+	// active-index delete below already uses, which encodes "not running means
+	// not live" and then fails to finish the thought.
+	if newStatus != "running" && newStatus != "queued" && row.CompletedAt == nil {
+		now := time.Now().UTC()
+		row.CompletedAt = &now
+	}
 	data, err := json.Marshal(&row)
 	if err != nil {
 		return false, err
