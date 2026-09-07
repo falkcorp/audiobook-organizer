@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.46.5 -->
+<!-- version: 10.46.6 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-06 -->
+<!-- last-edited: 2026-09-07 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,97 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Operation log download (`GET /operations/v2/:id/logs/download`) delivers a
+      corrupt `.log.gz` to the browser — "Data error", nothing can decompress it.**
+      Reported 2026-09-06 for op `01M1WJSMX5YMPJJE2C96Y6JF5D` (a canceled embed-scan
+      with a very large log). **The origin handler is NOT the bug:** a direct-LAN
+      `curl` of the endpoint (`internal/server/handlers/operations_v2.go:372`
+      `DownloadOperationLogs`) returns a valid single gzip stream — `gunzip -t`
+      passes, magic bytes `1f 8b`, 109 MB uncompressed, `Content-Type:
+      application/gzip`, no stray `Content-Encoding`. So the corruption is introduced
+      **in the delivery path**, not in the handler. Two leading hypotheses to
+      distinguish: (1) the proxy/Cloudflare front the browser downloads through
+      re-compresses or buffers the already-gzipped body (chunked, no Content-Length),
+      or (2) very large streamed logs are truncated in transit (this op's log is
+      100 MB+). Repro/diagnostic: download the same op both direct-LAN and via the
+      public/proxied hostname, `gunzip -t` each, and compare sizes + response headers
+      for a doubled `Content-Encoding` or a short byte count. Likely fixes to weigh:
+      exclude this route from proxy compression; set a real `Content-Length` (buffer
+      or write to a temp artifact first) so truncation is detectable; or hand back a
+      stored artifact URL instead of streaming. Until fixed, direct-LAN download works.
+
+- [x] **A resumed `library.scan` could not be quiesced by the scan stand-down, and
+      was invisible in the UI.** RESOLVED in the scan-standdown-resumed PR. Root
+      cause was NOT the resume handle (the stand-down cancels the correct handle and
+      the ctx does propagate) — it was a ctx-plumbing gap: `ScanDirectoryParallel`'s
+      discovery walk + per-directory worker loop (and `groupFilesIntoBooks`,
+      `countFilesAcrossFolders`) accepted or ignored `ctx` but never checked it, so a
+      scan cancelled during that phase ran for minutes (measured ~9m on a 12k-dir
+      root, confirmed in the 2026-09-06 20:15 journal) — long past the registry's 5s
+      abandon grace, so the stand-down abandoned it, hung on the dead handle's
+      `parked` for the full 5m lease, and re-dispatched a second scan. Fix threads
+      `ctx.Err()` checks into those loops (mirroring `ProcessBooksParallel`), so a
+      quiescing scan aborts in ~1s and parks cleanly inside the existing grace.
+      Visibility (B1): `ResetOperationV2ForResume` clears the interrupt-time
+      `CompletedAt` on resume so the running resumed op reappears in Active Operations.
+- [ ] **Defense-in-depth: the abandonment path never closes `parked`.** Independent
+      of the scan fix, if ANY op's goroutine is abandoned mid-quiesce (worker.go
+      abandonment branch, 5s grace), a stand-down waiting on that handle still orphans
+      until the 5m lease instead of failing fast. The scan fix means this no longer
+      fires for scans, but the general hole remains. Fix: on abandonment, wake a
+      waiting stand-down with a "could not park" error rather than burning the lease.
+
+## Activity SQLite backend — follow-ups after the cutover
+
+The SQLite activity backend + Pebble→SQLite migration landed (backend-agnostic
+store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
+
+- [ ] **🔴 BLOCKER — rewrite the Pebble→SQLite backfill to stream.**
+  `BackfillPebbleActivityToSQL` calls `scanTierKVs(ctx, tier, nil, nil)`, which
+  materializes a whole activity tier into memory before the first insert. On prod
+  (2026-09-07) this drove RSS to ~30 G on the `change` tier and the kernel
+  OOM-killed the service in a ~14-min restart loop. Rewrite copy AND parity to
+  stream from a Pebble iterator in bounded `sqlBackfillBatch` windows — the parity
+  pass must re-iterate Pebble independently (it can't reuse the copy slice), which
+  is strictly stronger. **Until this lands, SQLite is disabled on prod via
+  `ACTIVITY_BACKEND=pebble` in `deploy/local.conf`** (rollback lever wired in
+  #3088). Re-enable only after a bounded-memory backfill is verified.
+- [ ] **Audit `scanTierKVs` callers for the same OOM shape.** `Summarize` /
+  `CompactByDay` on the Pebble side may also call the full-tier materializer; if so
+  that is a pre-existing hazard independent of the migration.
+- [ ] **Scheduled auto-compaction toggle.** A `ScheduledTaskConfig` (like
+  `reconcile`/`ai_dedup_batch`) that, when enabled, compacts the *previous day*
+  on a schedule. Trivial now that `CompactByDay` is bounded on SQLite. This was
+  the original user ask ("a setting we can turn on that runs autocompaction as a
+  scheduled task that compacts the previous day").
+- [ ] **Make the "Compact after N days" button async.** The handler
+  (`internal/server/handlers/activity.go` `CompactActivity`) still runs
+  `CompactByDay` synchronously in the HTTP request. SQLite makes it bounded/fast,
+  but enqueuing an op is the correct shape and removes the browser-timeout
+  coupling entirely.
+- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod:
+  stop dual-writing to Pebble and range-delete the `act:` keyspace to reclaim the
+  ~1.3 GiB it holds. Separate PR; do NOT do it until the flip is verified in prod.
+- [ ] **MySQL/Postgres dialects.** The `sqlDialect` seam is built; adding a
+  networked backend is a dialect + driver + DSN/credentials decision.
+
+- [ ] **A canceled operation can linger forever in the Active-Operations timeline
+      because the cancel path leaves `completed_at` null.** Found while fixing the
+      transcribe churn: op `01KW2PHQ1M0NPNDPAMVZ7ZW8M9`
+      (`maintenance.transcribe-book-intros`, queued 2026-06-26, `resume_count=4`,
+      stuck at 199/200) is `status=canceled` with `completed_at=null`. It does NOT
+      block new work — a terminal status is dropped from the `opv2:act:` set
+      (`pebble_store_ops_v2.go:276`), so `ListActiveOperationsV2` (the ConcurrencyKey
+      dedupe source) never returns it — but `ListOperationsV2Since` admits any row
+      with `completed_at==nil`, so it shows as perpetually in-flight in the timeline
+      and inflates `in_flight_before_window`. This reads to the user as "transcribe
+      keeps running / cancels." Same family as the abandonment-path follow-up
+      (`2026-09-06-scan-standdown-resumed-handle.md`): the cancel/abandon paths need
+      to stamp `completed_at` (and close `parked`) on the way out. There is no API to
+      stamp `completed_at` on an arbitrary existing op, so the June zombie row is left
+      as-is; a small admin sweep (or fixing the cancel path + a one-shot backfill of
+      canceled/failed rows with null `completed_at`) would clear it.
 
 - [ ] **After the download-fix set (#3075/#3076/#3077) is deployed, run the two repair ops** to clean up books already broken by the stale `book_file` pointer. Order and both report-only first:
   1. `maintenance.missing-file-repoint` — report-only, review, then apply. Repoints books whose file pointer was orphaned when an apply moved the file.
