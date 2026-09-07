@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -501,36 +501,50 @@ type pactPreparedEntry struct {
 // pactDeleteEntry uses to remove them — rather than from a private fmt.Sprintf.
 // Writer and deleter now share one definition of the key format, so "what this
 // wrote is what Prune deletes" is true by construction, not by inspection.
-func (s *PebbleActivityStore) prepareEntry(e ActivityEntry) (pactPreparedEntry, error) {
+// normalizeActivityEntry applies the write-time defaults every activity backend
+// must agree on, so a dual-written entry stores identical field values in each
+// store (and therefore hashes to the same content key — see activitySrcKey).
+// It is the single source of truth for those defaults: prepareEntry (Pebble) and
+// MigratingActivityStore.Record (the SQLite dual-write fan-out) both call it, so
+// the two backends can never normalize a zero timestamp or an empty tier/level
+// to different values. It returns an error only for the one per-entry-attributable
+// failure the batch paths rely on isolating: a pre-epoch timestamp.
+func normalizeActivityEntry(e ActivityEntry) (ActivityEntry, error) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
 	}
 	if e.Timestamp.UnixNano() < 0 {
-		// A pre-epoch instant is not REPRESENTABLE in this store's key format.
+		// A pre-epoch instant is not REPRESENTABLE in Pebble's key format.
 		// pactPrimaryKey renders the nano with %020d, so a negative value gets a
 		// leading '-' (0x2D, below '0') instead of a zero pad: the key sorts
 		// before every post-epoch key, and among negatives it sorts in REVERSE
-		// chronological order. Everything in this file that reads time from a
-		// key rather than from the row — the tier merge, the since/until bounds
-		// in pactTierBounds, and the reverse index scan the limit pushdown is
-		// built on — silently returns a wrong ORDER for such a row, with no
-		// error surface anywhere.
+		// chronological order. Everything that reads time from a key rather than
+		// from the row — the tier merge, the since/until bounds in pactTierBounds,
+		// and the reverse index scan the limit pushdown is built on — silently
+		// returns a wrong ORDER for such a row, with no error surface anywhere.
 		//
 		// Rejecting rather than clamping: clamping would invent a timestamp the
 		// caller never supplied and store it as fact, and the row would then be
-		// indistinguishable from a real one. And rejecting belongs HERE
-		// specifically because prepareEntry is by design the one step that can
-		// fail for a reason attributable to a single entry — RecordBatch's error
-		// semantics rest on that split, so a per-entry rejection lands exactly
-		// where this file already puts per-entry failures, and a batch is not
-		// doomed by one bad row.
-		return pactPreparedEntry{}, fmt.Errorf("%w: %s", pactErrPreEpochTimestamp, e.Timestamp.UTC().Format(time.RFC3339Nano))
+		// indistinguishable from a real one. Rejecting belongs at normalization
+		// because it is the one step that can fail for a reason attributable to a
+		// single entry — RecordBatch's error semantics rest on that split, so a
+		// per-entry rejection lands exactly where this file already puts per-entry
+		// failures, and a batch is not doomed by one bad row.
+		return ActivityEntry{}, fmt.Errorf("%w: %s", pactErrPreEpochTimestamp, e.Timestamp.UTC().Format(time.RFC3339Nano))
 	}
 	if e.Level == "" {
 		e.Level = "info"
 	}
 	if e.Tier == "" {
 		e.Tier = "change"
+	}
+	return e, nil
+}
+
+func (s *PebbleActivityStore) prepareEntry(e ActivityEntry) (pactPreparedEntry, error) {
+	e, err := normalizeActivityEntry(e)
+	if err != nil {
+		return pactPreparedEntry{}, err
 	}
 
 	id := s.counter.Add(1)

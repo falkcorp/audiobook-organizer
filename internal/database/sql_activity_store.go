@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-07
 
@@ -33,7 +33,9 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -123,14 +125,47 @@ const sqlActInsert = `INSERT INTO activity
 	(src_key, ts, tier, type, level, source, operation_id, book_id, summary, details, tags, pruned_at)
 	VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// sqlActInsertIgnore is the idempotent backfill insert: a row whose src_key was
-// already copied is skipped, so a resumed/re-run backfill never duplicates.
-// The WHERE clause must match the partial unique index (idx_act_srckey) for
-// SQLite to accept src_key as the conflict target.
+// sqlActInsertIgnore is the idempotent insert used by EVERY write path (live
+// Record, RecordBatch, and the Pebble→SQLite backfill). Because src_key is a
+// deterministic content hash of the entry (see activitySrcKey), presenting the
+// same event twice — a live dual-write and the backfill's copy of the same
+// Pebble row, or a resumed/re-run backfill — conflicts on src_key and is
+// skipped, so no path can ever duplicate an event. The WHERE clause must match
+// the partial unique index (idx_act_srckey) for SQLite to accept src_key as the
+// conflict target.
 const sqlActInsertIgnore = sqlActInsert + ` ON CONFLICT(src_key) WHERE src_key IS NOT NULL DO NOTHING`
 
-// rowArgs marshals an entry into positional insert args. srcKey is the origin
-// backend's primary key for backfilled rows, or nil for native SQLite writes.
+// activitySrcKey derives the deterministic content key that makes activity
+// writes idempotent across the Pebble→SQLite cutover. It hashes the canonical
+// JSON of the entry with the two NON-identity fields zeroed:
+//
+//   - ID: a per-write monotonic counter Pebble stamps INSIDE prepareEntry, on a
+//     value copy the dual-write path never sees. The live SQLite row (ID 0) and
+//     the backfilled copy of the same event (ID = the Pebble counter) would
+//     otherwise hash differently; zeroing it makes them collide and dedup.
+//   - PrunedAt: a lifecycle mutation set by Prune long after the event, not part
+//     of the event's identity.
+//
+// encoding/json marshals map keys in sorted order, so json.Marshal is
+// deterministic for ActivityEntry (Details is a map; Tags preserves order), and
+// the same event always yields the same key. CONSEQUENCE: two byte-identical
+// events at the same nanosecond collapse into ONE row (Pebble keeps both, since
+// its key carries a random ULID). That is acceptable for a display/audit log and
+// is the deliberate price of key-free idempotent dual-write.
+func activitySrcKey(e ActivityEntry) (string, error) {
+	e.ID = 0
+	e.PrunedAt = nil
+	b, err := json.Marshal(e)
+	if err != nil {
+		return "", fmt.Errorf("sql_activity: hash entry: %w", err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// rowArgs marshals an entry into positional insert args. srcKey is the entry's
+// deterministic content key (activitySrcKey); every write path supplies it now,
+// so the ON CONFLICT dedup applies uniformly.
 func rowArgs(e ActivityEntry, srcKey any) ([]any, error) {
 	var det, tg any
 	if len(e.Details) > 0 {
@@ -199,31 +234,38 @@ func scanEntries(rows *sql.Rows) ([]ActivityEntry, error) {
 
 // ── ActivityWriter ──────────────────────────────────────────────────────────
 
-// Record inserts one entry and returns its autoincrement id.
+// Record inserts one entry idempotently, keyed by its content hash, and returns
+// the row's autoincrement id (0 on a dedup skip). The return is best-effort:
+// every caller ignores it, and re-presenting an already-stored event is a no-op.
 func (s *SQLActivityStore) Record(e ActivityEntry) (int64, error) {
-	args, err := rowArgs(e, nil)
+	key, err := activitySrcKey(e)
 	if err != nil {
 		return 0, err
 	}
-	res, err := s.writer.Exec(s.dialect.rebind(sqlActInsert), args...)
+	args, err := rowArgs(e, key)
+	if err != nil {
+		return 0, err
+	}
+	res, err := s.writer.Exec(s.dialect.rebind(sqlActInsertIgnore), args...)
 	if err != nil {
 		return 0, fmt.Errorf("sql_activity: record: %w", err)
 	}
 	return res.LastInsertId()
 }
 
-// RecordBatch inserts every entry in one transaction. Used by the migration
-// backfill and by high-volume writers. It is NOT part of ActivityStorer but is
-// the batched analogue of Record; returns the number inserted.
+// RecordBatch inserts every entry in one transaction, idempotently by content
+// key. Used by the migration backfill and by high-volume writers. It is NOT part
+// of ActivityStorer but is the batched analogue of Record; returns the number of
+// rows actually inserted (content-conflict skips are excluded).
 func (s *SQLActivityStore) RecordBatch(entries []ActivityEntry) (int, error) {
-	return s.recordBatch(context.Background(), entries, false)
+	return s.recordBatch(context.Background(), entries)
 }
 
-// recordBatchWithKeys inserts entries idempotently keyed by their origin
-// src_key (INSERT … ON CONFLICT(src_key) DO NOTHING). keys[i] pairs with
-// entries[i]. Returns rows actually inserted (conflicts are silently skipped,
-// which is the point — a resumed backfill re-presents rows it already copied).
-func (s *SQLActivityStore) recordBatchWithKeys(ctx context.Context, entries []ActivityEntry, keys []string) (int, error) {
+// recordBatch inserts entries idempotently in one transaction, each keyed by its
+// content hash (activitySrcKey) via INSERT … ON CONFLICT(src_key) DO NOTHING.
+// Returns rows actually inserted; a re-presented event conflicts and is skipped,
+// which is exactly what makes a resumed/re-run backfill safe.
+func (s *SQLActivityStore) recordBatch(ctx context.Context, entries []ActivityEntry) (int, error) {
 	if len(entries) == 0 {
 		return 0, nil
 	}
@@ -238,7 +280,12 @@ func (s *SQLActivityStore) recordBatchWithKeys(ctx context.Context, entries []Ac
 	}
 	inserted := 0
 	for i := range entries {
-		args, aerr := rowArgs(entries[i], keys[i])
+		key, kerr := activitySrcKey(entries[i])
+		if kerr != nil {
+			_ = tx.Rollback()
+			return 0, kerr
+		}
+		args, aerr := rowArgs(entries[i], key)
 		if aerr != nil {
 			_ = tx.Rollback()
 			return 0, aerr
@@ -260,40 +307,6 @@ func (s *SQLActivityStore) recordBatchWithKeys(ctx context.Context, entries []Ac
 		return 0, err
 	}
 	return inserted, nil
-}
-
-func (s *SQLActivityStore) recordBatch(ctx context.Context, entries []ActivityEntry, _ bool) (int, error) {
-	if len(entries) == 0 {
-		return 0, nil
-	}
-	tx, err := s.writer.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	stmt, err := tx.PrepareContext(ctx, s.dialect.rebind(sqlActInsert))
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
-	for i := range entries {
-		args, aerr := rowArgs(entries[i], nil)
-		if aerr != nil {
-			_ = tx.Rollback()
-			return 0, aerr
-		}
-		if _, eerr := stmt.ExecContext(ctx, args...); eerr != nil {
-			_ = tx.Rollback()
-			return 0, eerr
-		}
-	}
-	if err := stmt.Close(); err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return len(entries), nil
 }
 
 // ── filter → SQL ────────────────────────────────────────────────────────────

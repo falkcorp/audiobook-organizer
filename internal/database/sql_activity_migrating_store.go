@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
 // last-edited: 2026-09-07
 
@@ -51,28 +51,21 @@ type MigratingActivityStore struct {
 	secondary ActivityStorer
 	// readSecondary=false ⇒ active is primary; true ⇒ active is secondary.
 	readSecondary atomic.Bool
-	// cutoff partitions history from live writes. Every write through this
-	// wrapper (≥ cutoff) is dual-written to BOTH backends, so it is already in
-	// the secondary. The backfill therefore copies ONLY primary rows OLDER than
-	// cutoff — copying a ≥cutoff row would duplicate the event the dual-write
-	// already stored (the secondary assigns fresh ids, so the two copies do not
-	// collide on a key). Captured at construction, before any write flows.
-	cutoff time.Time
 }
 
 // NewMigratingActivityStore builds the wrapper. readSecondary seeds the initial
 // active backend (typically false at boot, then flipped true by the backfill op
 // once parity is verified — or true immediately if the migration already
 // completed on a prior run).
+//
+// There is no history/live cutoff: dual-writes and the backfill share a
+// deterministic content key (see activitySrcKey), so the backfill copies ALL of
+// Pebble idempotently and can never duplicate an event the dual-write stored.
 func NewMigratingActivityStore(primary, secondary ActivityStorer, readSecondary bool) *MigratingActivityStore {
-	m := &MigratingActivityStore{primary: primary, secondary: secondary, cutoff: time.Now().UTC()}
+	m := &MigratingActivityStore{primary: primary, secondary: secondary}
 	m.readSecondary.Store(readSecondary)
 	return m
 }
-
-// MigrationCutoff is the history/live boundary: the backfill copies primary
-// rows strictly older than this, and dual-write covers everything from here on.
-func (m *MigratingActivityStore) MigrationCutoff() time.Time { return m.cutoff }
 
 // SetReadSecondary performs the live read/maintenance flip. Safe to call
 // concurrently with reads and writes.
@@ -104,7 +97,19 @@ func (m *MigratingActivityStore) active() ActivityStorer {
 
 // Record writes to both backends. The active backend's (id, err) is
 // authoritative; a secondary-only failure is logged, not returned.
+//
+// It normalizes the entry ONCE here, before fan-out, so both backends store
+// identical field values (a zero timestamp resolved independently in each store
+// would otherwise resolve to different instants). Identical field values are
+// what let the backfill's content key match the live dual-write's — the whole
+// basis of key-free idempotency. A normalization error (a pre-epoch timestamp)
+// is attributable to the entry and rejects the write from both backends, exactly
+// as each backend's own normalization would.
 func (m *MigratingActivityStore) Record(e ActivityEntry) (int64, error) {
+	e, nerr := normalizeActivityEntry(e)
+	if nerr != nil {
+		return 0, nerr
+	}
 	pID, pErr := m.primary.Record(e)
 	sID, sErr := m.secondary.Record(e)
 	if pErr != nil {

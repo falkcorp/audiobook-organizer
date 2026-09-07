@@ -1,5 +1,5 @@
 // file: internal/activity/sql_migration.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e3b1f47-2a90-4c6d-b5e1-9f0c7d2a6b58
 // last-edited: 2026-09-07
 
@@ -47,12 +47,11 @@ func (s *sqlMigrationStarter) Start(_ context.Context) error {
 		slog.Warn("[activity] migration wrapper has unexpected backend types; skipping SQLite backfill")
 		return nil
 	}
-	cutoff := s.mig.MigrationCutoff()
 	go func() {
 		time.Sleep(sqlMigrationSettleDelay)
 		bg := context.Background()
-		slog.Info("[activity] starting Pebble→SQLite activity backfill (background)", "cutoff", cutoff)
-		res, err := database.BackfillPebbleActivityToSQL(bg, pebble, sqlStore, cutoff, false)
+		slog.Info("[activity] starting Pebble→SQLite activity backfill (background)")
+		res, err := database.BackfillPebbleActivityToSQL(bg, pebble, sqlStore, false)
 		if err != nil {
 			slog.Error("[activity] Pebble→SQLite backfill failed — reads stay on Pebble", "err", err)
 			return

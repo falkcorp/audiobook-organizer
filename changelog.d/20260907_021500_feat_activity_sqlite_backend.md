@@ -18,8 +18,12 @@
 ### Migration
 
 - On boot the activity log dual-writes to both Pebble and SQLite; a background
-  one-time backfill copies Pebble history (bounded to rows older than the
-  process-start cutoff, so live dual-writes are never duplicated) and, only
-  after verifying per-tier row-count parity, flips reads to SQLite. Reads stay
-  on Pebble until parity passes, so the log is never served empty or
-  half-migrated. Rollback is `activity_backend: pebble`.
+  one-time backfill copies all Pebble history and, only after verifying per-tier
+  parity, flips reads to SQLite. Every SQLite write is keyed by a deterministic
+  content hash of the entry, so the backfill's copy of an event the live
+  dual-write already stored is an idempotent no-op — there is no duplicate and
+  no reliance on a timestamp cutoff (activity timestamps are caller-supplied and
+  non-monotonic). Parity is verified by re-presentation: after copying a tier,
+  re-inserting every scanned entry must insert zero rows. Reads stay on Pebble
+  until parity passes, so the log is never served empty or half-migrated.
+  Rollback is `activity_backend: pebble`.

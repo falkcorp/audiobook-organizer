@@ -1,30 +1,31 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
 // last-edited: 2026-09-07
 
 // Package database — Pebble → SQLite activity backfill for the backend cutover.
 //
 // WHY: during the dual-write window the SQLite store receives every NEW write,
-// but historic entries live only in Pebble. This copies them, keyed by the
-// Pebble primary key ("act:<tier>:<nano>:<ulid>") stored in SQLite's src_key
-// column, so the copy is idempotent (ON CONFLICT DO NOTHING) and a resumed or
-// re-run backfill never duplicates. Live dual-written rows keep src_key NULL and
-// are never touched here.
+// but historic entries live only in Pebble. This copies them. Every insert is
+// keyed by the entry's deterministic content hash (activitySrcKey) and issued as
+// INSERT … ON CONFLICT(src_key) DO NOTHING, so the copy is idempotent against
+// BOTH a resumed/re-run backfill AND the live dual-write of the same event — no
+// duplicate can arise, and there is no timestamp cutoff to get wrong (activity
+// timestamps are caller-supplied and non-monotonic, so a cutoff is unsound).
 //
-// THE FLIP IS GATED ON PARITY, NOT ON "no error". After copying, it verifies
-// per tier that the number of backfilled SQLite rows (src_key IS NOT NULL)
-// equals the number of Pebble rows scanned. Only if every tier matches does it
-// write the sentinel and let the caller flip reads to SQLite. This repo has a
-// backfill-false-success incident on record; a returned nil error is not
-// evidence the data arrived.
+// THE FLIP IS GATED ON PARITY, NOT ON "no error". After copying a tier it
+// re-presents every scanned entry; the second pass MUST insert zero rows, which
+// proves every scanned entry is already present. A plain count-equality gate is
+// WRONG here: content-dedup means the number of Pebble rows scanned is ≥ the
+// number of distinct SQLite rows, so equal counts cannot be required. This repo
+// has a backfill-false-success incident on record; a returned nil error is not
+// evidence the data arrived, so the gate must be able to actually fail.
 package database
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -48,27 +49,18 @@ type SQLActivityBackfillResult struct {
 	AlreadyDone    bool           `json:"already_done"`
 }
 
-// backfilledCount returns how many rows of tier were copied by a backfill
-// (src_key IS NOT NULL), i.e. excluding live dual-written rows.
-func (s *SQLActivityStore) backfilledCount(ctx context.Context, tier string) (int, error) {
-	var n int
-	err := s.reader.QueryRowContext(ctx, s.dialect.rebind(
-		`SELECT COUNT(*) FROM activity WHERE tier = ? AND src_key IS NOT NULL`), tier).Scan(&n)
-	return n, err
-}
-
-// BackfillPebbleActivityToSQL copies Pebble activity history into sqlStore,
-// verifies per-tier parity, and (unless dryRun) writes the sentinel on success.
-// It does NOT flip reads — the caller does that only when ParityOK is true.
+// BackfillPebbleActivityToSQL copies ALL Pebble activity history into sqlStore,
+// verifies per-tier parity by re-presentation, and (unless dryRun) writes the
+// sentinel on success. It does NOT flip reads — the caller does that only when
+// ParityOK is true.
 //
-// It copies ONLY rows OLDER than `until` (the migration cutoff): rows at or
-// after the cutoff are already in sqlStore via dual-write, and copying them
-// would duplicate the event. Pass the wrapper's MigrationCutoff().
+// There is no timestamp bound: every insert is idempotent by content key, so
+// copying a row the live dual-write already stored is a no-op rather than a
+// duplicate.
 func BackfillPebbleActivityToSQL(
 	ctx context.Context,
 	pebbleStore *PebbleActivityStore,
 	sqlStore *SQLActivityStore,
-	until time.Time,
 	dryRun bool,
 ) (SQLActivityBackfillResult, error) {
 	res := SQLActivityBackfillResult{DryRun: dryRun, PerTierScanned: make(map[string]int)}
@@ -86,6 +78,7 @@ func BackfillPebbleActivityToSQL(
 	slog.Info("[activity-sql-backfill] starting Pebble → SQLite backfill",
 		"dry_run", dryRun, "tiers", len(actTiers))
 
+	res.ParityOK = true
 	for _, tier := range actTiers {
 		select {
 		case <-ctx.Done():
@@ -93,7 +86,10 @@ func BackfillPebbleActivityToSQL(
 		default:
 		}
 
-		kvs, err := pebbleStore.scanTierKVs(ctx, tier, nil, &until)
+		// scanTierKVs loads the whole tier into memory (existing behaviour); the
+		// decoded entries are reused for both the copy pass and the parity pass,
+		// so parity costs no extra Pebble scan.
+		kvs, err := pebbleStore.scanTierKVs(ctx, tier, nil, nil)
 		if err != nil {
 			return res, fmt.Errorf("activity-sql-backfill: scan pebble tier=%s: %w", tier, err)
 		}
@@ -104,30 +100,55 @@ func BackfillPebbleActivityToSQL(
 			continue
 		}
 
-		slog.Info("[activity-sql-backfill] processing tier",
-			"tier", tier, "entries", len(kvs), "dry_run", dryRun)
+		entries := make([]ActivityEntry, len(kvs))
+		for j, kv := range kvs {
+			entries[j] = kv.entry
+		}
 
-		if !dryRun {
-			for i := 0; i < len(kvs); i += sqlBackfillBatch {
-				select {
-				case <-ctx.Done():
-					return res, ctx.Err()
-				default:
-				}
-				end := min(i+sqlBackfillBatch, len(kvs))
-				chunk := kvs[i:end]
-				entries := make([]ActivityEntry, len(chunk))
-				keys := make([]string, len(chunk))
-				for j, kv := range chunk {
-					entries[j] = kv.entry
-					keys[j] = string(kv.key)
-				}
-				copied, cerr := sqlStore.recordBatchWithKeys(ctx, entries, keys)
-				if cerr != nil {
-					return res, fmt.Errorf("activity-sql-backfill: copy tier=%s: %w", tier, cerr)
-				}
-				res.EntriesCopied += copied
+		if dryRun {
+			res.TiersProcessed++
+			continue
+		}
+
+		slog.Info("[activity-sql-backfill] processing tier",
+			"tier", tier, "entries", len(entries))
+
+		// Copy pass.
+		for i := 0; i < len(entries); i += sqlBackfillBatch {
+			select {
+			case <-ctx.Done():
+				return res, ctx.Err()
+			default:
 			}
+			end := min(i+sqlBackfillBatch, len(entries))
+			copied, cerr := sqlStore.recordBatch(ctx, entries[i:end])
+			if cerr != nil {
+				return res, fmt.Errorf("activity-sql-backfill: copy tier=%s: %w", tier, cerr)
+			}
+			res.EntriesCopied += copied
+		}
+
+		// Parity pass: re-present the same entries. Every one must now conflict,
+		// so a correct copy inserts ZERO. Any insert here means a scanned entry
+		// did not land — fail parity, do not flip, do not write the sentinel.
+		reinserted := 0
+		for i := 0; i < len(entries); i += sqlBackfillBatch {
+			select {
+			case <-ctx.Done():
+				return res, ctx.Err()
+			default:
+			}
+			end := min(i+sqlBackfillBatch, len(entries))
+			n, verr := sqlStore.recordBatch(ctx, entries[i:end])
+			if verr != nil {
+				return res, fmt.Errorf("activity-sql-backfill: parity re-present tier=%s: %w", tier, verr)
+			}
+			reinserted += n
+		}
+		if reinserted != 0 {
+			res.ParityOK = false
+			slog.Error("[activity-sql-backfill] PARITY FAIL — re-presentation inserted rows; not flipping",
+				"tier", tier, "scanned", len(entries), "reinserted_on_second_pass", reinserted)
 		}
 		res.TiersProcessed++
 	}
@@ -138,20 +159,6 @@ func BackfillPebbleActivityToSQL(
 		return res, nil
 	}
 
-	// Parity gate: every Pebble row must be present in SQLite as a backfilled row.
-	res.ParityOK = true
-	for _, tier := range actTiers {
-		want := res.PerTierScanned[tier]
-		got, err := sqlStore.backfilledCount(ctx, tier)
-		if err != nil {
-			return res, fmt.Errorf("activity-sql-backfill: parity count tier=%s: %w", tier, err)
-		}
-		if got != want {
-			res.ParityOK = false
-			slog.Error("[activity-sql-backfill] PARITY MISMATCH — not flipping",
-				"tier", tier, "pebble", want, "sqlite_backfilled", got)
-		}
-	}
 	if !res.ParityOK {
 		return res, fmt.Errorf("activity-sql-backfill: parity check failed; sentinel NOT written, reads stay on Pebble")
 	}
