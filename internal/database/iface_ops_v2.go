@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-07
 
@@ -66,6 +66,45 @@ type OperationV2Row struct {
 	SubjectID      string // opaque ID of the subject
 	Requirements   string // JSON array of Requirement objects ([]registry.Requirement)
 	ReqSnapshotRev uint64 // dep_rev at the time the requirements were evaluated
+}
+
+// AsLegacyOperation maps a v2 row onto the v1 Operation shape.
+//
+// WHY THE V1 SHAPE SURVIVES THE V1 KEYSPACE. Several endpoints put an Operation
+// straight into their response bodies and the frontend parses those fields, so
+// the shape is a wire contract independent of which keyspace the row came from.
+// Handing back a different shape for a v2-keyed run would break the client for
+// what is now every run.
+//
+// legacyType is what the response advertises as `type`. A run's KIND did not
+// change when its id did, and the frontend keys off these strings — callers
+// with a fixed wire type pass that constant, callers that display the def name
+// pass row.DefID.
+//
+// This is the shared translator. Package-private copies exist in `server`
+// (reconcileV2RowAsOperation) and `metabatch` (inline in ResolveCandidateFetch);
+// they predate this one and should converge onto it. Do not add a fourth.
+func (r *OperationV2Row) AsLegacyOperation(legacyType string) *Operation {
+	if r == nil {
+		return nil
+	}
+	op := &Operation{
+		ID:           r.ID,
+		Type:         legacyType,
+		Status:       r.Status,
+		Progress:     r.ProgressCurrent,
+		Total:        r.ProgressTotal,
+		Message:      r.ProgressMessage,
+		CreatedAt:    r.QueuedAt,
+		StartedAt:    r.StartedAt,
+		CompletedAt:  r.CompletedAt,
+		ErrorMessage: r.ErrorMessage,
+		ResultData:   r.ResultData,
+	}
+	if r.ActorUserID != nil {
+		op.UserID = *r.ActorUserID
+	}
+	return op
 }
 
 // OpStrikeV2Row is a single row in op_strikes_v2.

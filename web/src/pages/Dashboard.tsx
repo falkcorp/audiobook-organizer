@@ -1,7 +1,7 @@
 // file: web/src/pages/Dashboard.tsx
-// version: 1.14.5
+// version: 1.15.0
 // guid: 2f3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-08-19
+// last-edited: 2026-09-07
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -40,8 +40,10 @@ import {
   Person as PersonIcon,
   MenuBook as MenuBookIcon,
   Warning as WarningIcon,
+  PauseCircleOutlined as PauseCircleOutlineIcon,
 } from '@mui/icons-material';
 import * as api from '../services/api';
+import type { ChipColor } from '../utils/activityTagColors';
 import { useOperationsStore } from '../stores/useOperationsStore';
 
 interface SystemStats {
@@ -60,10 +62,32 @@ interface SystemStats {
   disk_usage_percent: number;
 }
 
+/**
+ * How a recent operation is rendered. `stopped` was added on 2026-09-07 when
+ * this panel was repointed from the retired v1 operations keyspace to v2: v2
+ * has statuses v1 never had (`canceled`, `waiting_deps`, and four
+ * `interrupted_*` variants), and collapsing them into `running` was both wrong
+ * on screen and expensive — see `live` below.
+ */
+type RecentOperationStatus = 'success' | 'error' | 'running' | 'stopped';
+
 interface RecentOperation {
   id: string;
   type: string;
-  status: 'success' | 'error' | 'running';
+  status: RecentOperationStatus;
+  /**
+   * Whether the operation is still going to do anything, taken from
+   * `completed_at == null` rather than from `status`.
+   *
+   * This is deliberate, and it mirrors the backend: `ListOperationsV2Since`
+   * keys liveness on completed_at's nullness for the same reason — a status
+   * list has to be updated every time a terminal state is added, and silently
+   * misreports until someone remembers. Every terminal AND every paused v2
+   * status stamps completed_at at its write site, and
+   * `RepairOpsV2MissingCompletedAt` exists to keep that true, so null means
+   * genuinely in flight: queued, waiting on deps, or running.
+   */
+  live: boolean;
   message: string;
   timestamp: string;
 }
@@ -132,18 +156,47 @@ export function Dashboard() {
       // Broken files count (may be undefined)
       setBrokenFileCount((systemStatus as any).broken_file_count ?? null);
 
-      // Convert recent operations
-      const recentOps = (systemStatus.operations?.recent || []).slice(0, 5).map((op) => ({
-        id: op.id,
-        type: op.type,
-        status: (op.status === 'completed'
-          ? 'success'
-          : op.status === 'failed'
-            ? 'error'
-            : 'running') as 'success' | 'error' | 'running',
-        message: op.message || `${op.type} operation`,
-        timestamp: op.created_at,
-      }));
+      // Convert recent operations. Two independent questions, two fields: what
+      // to draw comes from `status`, whether to keep polling comes from
+      // `completed_at`. Mapping a stopped op to 'running' would answer both
+      // wrongly at once.
+      const recentOps: RecentOperation[] = (systemStatus.operations?.recent || [])
+        .slice(0, 5)
+        .map((op) => {
+          let status: RecentOperationStatus;
+          switch (op.status) {
+            case 'completed':
+              status = 'success';
+              break;
+            case 'failed':
+              status = 'error';
+              break;
+            // Stopped, not failed and not working: the user canceled it, or the
+            // server went down under it. Drawing these as 'running' left a
+            // canceled op indistinguishable from a live one.
+            case 'canceled':
+            case 'interrupted_dropped':
+            case 'interrupted_quiesced':
+            case 'interrupted_ask':
+            case 'interrupted_restart':
+              status = 'stopped';
+              break;
+            // 'running', 'queued', 'waiting_deps', and anything a future
+            // registry version adds. An unknown status is far likelier to be a
+            // new in-flight state than a new terminal one, and this only
+            // decides an icon — `live` decides the polling.
+            default:
+              status = 'running';
+          }
+          return {
+            id: op.id,
+            type: op.type,
+            status,
+            live: !op.completed_at,
+            message: op.message || `${op.type} operation`,
+            timestamp: op.created_at,
+          };
+        });
       setOperations(recentOps);
     } catch (error) {
       console.error('Failed to load system status:', error);
@@ -205,7 +258,10 @@ export function Dashboard() {
 
   // Auto-refresh every 15s while a scan is active
   useEffect(() => {
-    const hasActiveScan = operations?.some((op) => op.status === 'running');
+    // `live`, not `status === 'running'`. This drives a 15s interval firing
+    // four API calls, so a status that never resolves is a poll that never
+    // stops — one per open dashboard tab, indefinitely.
+    const hasActiveScan = operations?.some((op) => op.live);
     if (!hasActiveScan) {
       if (autoRefreshIntervalRef.current) {
         clearInterval(autoRefreshIntervalRef.current);
@@ -335,23 +391,32 @@ export function Dashboard() {
     </Card>
   );
 
-  const getStatusIcon = (status: string) => {
+  // Both helpers take RecentOperationStatus, not string, so adding a state to
+  // the union makes tsc point at every switch that has not handled it. They
+  // used to take `string` and be called through an `as` cast at the call site,
+  // which type-checked whatever was passed and would have silently swallowed
+  // the 'stopped' state added above.
+  const getStatusIcon = (status: RecentOperationStatus) => {
     switch (status) {
       case 'success':
         return <CheckCircleIcon color="success" />;
       case 'error':
         return <ErrorIcon color="error" />;
+      case 'stopped':
+        return <PauseCircleOutlineIcon color="disabled" />;
       default:
         return <CheckCircleIcon color="action" />;
     }
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: RecentOperationStatus): ChipColor => {
     switch (status) {
       case 'success':
         return 'success';
       case 'error':
         return 'error';
+      case 'stopped':
+        return 'warning';
       default:
         return 'default';
     }
@@ -635,7 +700,7 @@ export function Dashboard() {
                       <Chip
                         label={op.type}
                         size="small"
-                        color={getStatusColor(op.status) as 'success' | 'error' | 'default'}
+                        color={getStatusColor(op.status)}
                         variant="outlined"
                       />
                     </Box>
