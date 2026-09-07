@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.83.0
+// version: 1.84.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 package scanner
 
@@ -2614,7 +2614,10 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			duration = &book.Duration
 		}
 
-		ls := "imported"
+		// libraryStateImported is the DEFAULT, not an observation: it means "this
+		// scan derived no state for the row", which is why applyScannerFields
+		// refuses to overlay it onto a row that already has one.
+		ls := libraryStateImported
 		if book.LibraryState != "" {
 			ls = book.LibraryState
 		}
@@ -3342,7 +3345,22 @@ func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[s
 	if scanned.Duration != nil {
 		dst.Duration = scanned.Duration
 	}
-	if scanned.LibraryState != nil {
+	// LibraryState is NOT read off the file, unlike its neighbours here. It is a
+	// creation default ("imported") chosen a few hundred lines up, overridden
+	// only when the scan itself derived a state from the file — today just
+	// "suspicious" (the MinBookSizeBytes guard). Overlaying the DEFAULT onto an
+	// existing row therefore reverts organize's stamp on every already-organized
+	// book, and since the scan root and the organized tree are the same
+	// directory that is every organized book, every scan. Measured on prod
+	// 2026-09-07: 6 of one author's 9 books read "imported" while still carrying
+	// last_organized_at, and they vanished from the ABS layer, which serves only
+	// library_state == "organized".
+	//
+	// So: a state the scan genuinely derived still wins, but the bare default
+	// never overwrites a state already on the row. A row with no state yet still
+	// gets one.
+	if scanned.LibraryState != nil &&
+		!(dst.LibraryState != nil && *scanned.LibraryState == libraryStateImported) {
 		dst.LibraryState = scanned.LibraryState
 	}
 	if scanned.Quantity != nil {

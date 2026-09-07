@@ -1,7 +1,7 @@
 // file: internal/scanner/override_guard_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 70a71534-36fa-4d6c-9c4a-acf8dc2de6e8
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package scanner
 
@@ -389,4 +389,86 @@ func TestApplyScannerFields_UnkeyedProviderIDsAreNotGuarded(t *testing.T) {
 		t.Errorf("OpenLibraryID has no lock key so it must still be overlaid; got %v. "+
 			"If a key was just added to database.UserLockableFields, guard it in applyScannerFields", got.OpenLibraryID)
 	}
+}
+
+// TestApplyScannerFields_RescanDoesNotRevertOrganizedState pins the fix for a
+// production defect found 2026-09-07: a rescan reverted library_state from
+// "organized" back to "imported" on every organized book, and since the ABS
+// layer serves only library_state == "organized", those books silently vanished
+// from author pages, series and counts as scans advanced. Measured on prod: 6 of
+// one author's 9 books read "imported" while still carrying last_organized_at —
+// the signature of this revert, since applyScannerFields touches no
+// LastOrganized* field.
+//
+// The overlay was unguarded because override_guard.go listed LibraryState among
+// fields "read off the file itself". It is not: it is a creation default. This
+// test exists because the clobber was previously unpinned in BOTH directions.
+func TestApplyScannerFields_RescanDoesNotRevertOrganizedState(t *testing.T) {
+	for _, existing := range []string{"organized", "organized_source", "suspicious", "needs_review"} {
+		t.Run("keeps_"+existing, func(t *testing.T) {
+			dst := curated()
+			state := existing
+			dst.LibraryState = &state
+
+			scanned := scannedTags()
+			def := libraryStateImported // what a scan with no derived state carries
+			scanned.LibraryState = &def
+
+			applyScannerFields(dst, scanned, map[string]bool{})
+
+			if dst.LibraryState == nil || *dst.LibraryState != existing {
+				t.Errorf("rescan reverted library_state %q -> %q; the default must never "+
+					"overwrite a state already on the row (organized books disappear from ABS)",
+					existing, derefState(dst.LibraryState))
+			}
+		})
+	}
+}
+
+// The guard must not block a state the scan GENUINELY derived. "suspicious" is
+// set by the MinBookSizeBytes path and flows through this same overlay, so a
+// blanket refusal would silently stop flagging undersized files.
+func TestApplyScannerFields_DerivedStateStillWins(t *testing.T) {
+	dst := curated()
+	organized := "organized"
+	dst.LibraryState = &organized
+
+	scanned := scannedTags()
+	derived := "suspicious"
+	scanned.LibraryState = &derived
+
+	applyScannerFields(dst, scanned, map[string]bool{})
+
+	if dst.LibraryState == nil || *dst.LibraryState != "suspicious" {
+		t.Errorf("a scan-derived state was blocked: got %v, want \"suspicious\" -- the "+
+			"guard is refusing indiscriminately instead of refusing only the default",
+			dst.LibraryState)
+	}
+}
+
+// A row that has no state yet must still receive the default, or newly scanned
+// books would land with a nil state and fall out of every state-filtered view.
+func TestApplyScannerFields_EmptyStateStillGetsDefault(t *testing.T) {
+	dst := curated()
+	dst.LibraryState = nil
+
+	scanned := scannedTags()
+	def := libraryStateImported
+	scanned.LibraryState = &def
+
+	applyScannerFields(dst, scanned, map[string]bool{})
+
+	if dst.LibraryState == nil || *dst.LibraryState != libraryStateImported {
+		t.Errorf("a stateless row did not receive the default: got %v", dst.LibraryState)
+	}
+}
+
+// derefState renders a *string library_state for a failure message. Printing the
+// pointer instead shows an address, which tells a reader nothing about which
+// state was wrongly written.
+func derefState(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
 }
