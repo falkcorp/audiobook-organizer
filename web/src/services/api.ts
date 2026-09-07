@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.77.0
+// version: 2.78.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-01
+// last-edited: 2026-09-07
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3746,16 +3746,48 @@ export interface BatchFetchRequest {
   only_unmatched?: boolean;
 }
 
+/**
+ * What `POST /metadata/batch-fetch-candidates` returns INSIDE the `{data:...}`
+ * envelope. Written against the handler
+ * (`internal/server/metadata_batch_candidates.go`) rather than against what the
+ * callers happened to read, because the previous flat declaration here was the
+ * reason the missing envelope hop went unnoticed by the type checker.
+ *
+ * The handler has three success shapes and they do not share a field set:
+ *  - started      -> `operation_id` (non-empty), `total_books`, `message`
+ *  - nothing to do -> `operation_id: ""`, `book_count: 0`, `message`
+ *  - all skipped   -> `operation_id: ""`, `book_count: 0`, `skipped`, `message`
+ *
+ * `operation_id` is always present and is the EMPTY STRING, not absent, when
+ * the server declined to start — which is why callers may keep testing it for
+ * falsiness to mean "nothing was enqueued".
+ */
+export interface BatchFetchStartResponse {
+  /** Empty string when the server declined to start. Non-empty means enqueued. */
+  operation_id: string;
+  message?: string;
+  /** Book count on the STARTED path. */
+  total_books?: number;
+  /** Only on the two "nothing to do" paths, where it is always 0. */
+  book_count?: number;
+  /** Books left out because they are already in a running fetch. */
+  skipped?: number;
+}
+
 export async function batchFetchCandidates(
   req: BatchFetchRequest
-): Promise<{ operation_id: string; book_count?: number; message?: string }> {
+): Promise<BatchFetchStartResponse> {
   const response = await apiFetch(`${API_BASE}/metadata/batch-fetch-candidates`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   });
   if (!response.ok) throw await buildApiError(response, 'Failed to start batch fetch');
-  return response.json();
+  // The backend wraps every success in `{data: ...}` (internal/httputil/respond.go).
+  // Omitting this hop left `operation_id` permanently undefined, so every
+  // successful fetch took the callers' "already being fetched" branch.
+  const body = await response.json();
+  return body.data ?? body;
 }
 
 export async function getOperationResults(
