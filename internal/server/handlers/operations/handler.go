@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-08-23
+// last-edited: 2026-09-07
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -69,6 +69,13 @@ type Handler struct {
 	// controller passes s.collectStaleOperations.
 	collectStale func(timeout time.Duration) ([]database.Operation, error)
 
+	// repairPhantomLive stamps completed_at on v2 operation rows that hold a
+	// terminal status with completed_at null. Injected for the same reason
+	// collectStale is: this package's store handle is the v1 OperationsStore and
+	// must not widen to reach the v2 keyspace, so the controller closes over
+	// s.Ops() and passes RepairOpsV2MissingCompletedAt.
+	repairPhantomLive func() (int, error)
+
 	// preflightUndo wraps undo.PreflightUndoConflicts(s.Ops(), id). The undo
 	// report type is an importable alias, but PreflightUndoConflicts consumes a
 	// full database.Store opaquely, so the controller closes over s.Ops().
@@ -89,18 +96,20 @@ func New(
 	pipeline ScanCanceler,
 	scanStore AIScanLister,
 	collectStale func(timeout time.Duration) ([]database.Operation, error),
+	repairPhantomLive func() (int, error),
 	preflightUndo func(id string) (*undo.UndoConflictReport, error),
 	revert func(id string) error,
 ) *Handler {
 	return &Handler{
-		store:         store,
-		registry:      registry,
-		getScheduler:  getScheduler,
-		pipeline:      pipeline,
-		scanStore:     scanStore,
-		collectStale:  collectStale,
-		preflightUndo: preflightUndo,
-		revert:        revert,
+		store:             store,
+		registry:          registry,
+		getScheduler:      getScheduler,
+		pipeline:          pipeline,
+		scanStore:         scanStore,
+		collectStale:      collectStale,
+		repairPhantomLive: repairPhantomLive,
+		preflightUndo:     preflightUndo,
+		revert:            revert,
 	}
 }
 
@@ -184,8 +193,23 @@ func (h *Handler) CancelOperation(c *gin.Context) {
 	httputil.RespondWithNoContent(c)
 }
 
-// ClearStaleOperations force-marks all pending/running/queued operations as
-// failed. Implements POST /operations/clear-stale.
+// ClearStaleOperations force-marks all pending/running/queued v1 operations as
+// failed, and repairs v2 rows that are stuck reading as in-flight.
+// Implements POST /operations/clear-stale.
+//
+// The two halves address different bugs and are deliberately not unified:
+//
+//   - v1 (below): force-fail rows still claiming to be live. Unchanged.
+//   - v2 (repairPhantomLive): stamp completed_at on rows that already hold a
+//     TERMINAL status. This does not terminate anything -- the operation is
+//     already over -- it only fixes rows the UI cannot otherwise clear.
+//
+// v2 rows in a live status (queued/running/waiting_deps/interrupted_quiesced)
+// are NOT touched here. Those belong to the scheduler and the startup resume
+// sweep, which decide per-op whether to restart, requeue, or drop them; a button
+// that force-failed them would silently discard work that was going to resume.
+// Until 2026-09-07 this handler was v1-only, so pressing it against a stuck v2
+// row returned {"cleared":0} and did nothing at all.
 func (h *Handler) ClearStaleOperations(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
@@ -198,15 +222,31 @@ func (h *Handler) ClearStaleOperations(c *gin.Context) {
 		return
 	}
 
-	cleared := 0
+	v1Failed := 0
 	for _, op := range ops {
 		if op.Status == "pending" || op.Status == "running" || op.Status == "queued" {
 			_ = h.store.UpdateOperationStatus(op.ID, "failed", 0, 0, "force cleared by user")
-			cleared++
+			v1Failed++
 		}
 	}
 
-	httputil.RespondWithOK(c, gin.H{"cleared": cleared})
+	v2Repaired := 0
+	if h.repairPhantomLive != nil {
+		n, repairErr := h.repairPhantomLive()
+		if repairErr != nil {
+			httputil.InternalError(c, "failed to repair stuck operations", repairErr)
+			return
+		}
+		v2Repaired = n
+	}
+
+	// "cleared" stays the sum so the existing Activity page keeps working; the
+	// split is reported alongside it for anyone debugging which half acted.
+	httputil.RespondWithOK(c, gin.H{
+		"cleared":     v1Failed + v2Repaired,
+		"v1_failed":   v1Failed,
+		"v2_repaired": v2Repaired,
+	})
 }
 
 // DeleteOperationHistory deletes operations matching the given status(es).

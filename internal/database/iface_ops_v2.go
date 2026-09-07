@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 package database
 
@@ -132,6 +132,10 @@ type OpV2LifecycleStore interface {
 	// SetOperationV2StatusIfQueued atomically sets status=canceled only if status was queued.
 	// Returns true if the row was updated.
 	SetOperationV2StatusIfQueued(id, newStatus string) (bool, error)
+	// RepairOpsV2MissingCompletedAt stamps completed_at on rows that hold a
+	// terminal status with completed_at null -- rows that are dead to the worker
+	// but read as in-flight to every consumer. Returns the number written.
+	RepairOpsV2MissingCompletedAt() (int, error)
 	// UpdateOperationV2Params replaces the params blob on an operation row.
 	// Used by resumeRestart to inject checkpoint state before re-dispatch.
 	UpdateOperationV2Params(id string, params []byte) error

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-08-23
+// last-edited: 2026-09-07
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (cancel not-found fallback,
@@ -60,6 +60,7 @@ func newTestHandler(t *testing.T) (*operations.Handler, *operationsmocks.MockOpe
 		func(timeout time.Duration) ([]database.Operation, error) {
 			return []database.Operation{{ID: "stale-1", Status: "running"}}, nil
 		},
+		func() (int, error) { return 0, nil },
 		func(id string) (*undo.UndoConflictReport, error) {
 			return &undo.UndoConflictReport{TotalChanges: 1}, nil
 		},
@@ -372,7 +373,7 @@ func TestUndoPreflightHandler_UsesInjectedFunc(t *testing.T) {
 func TestUndoPreflightHandler_Error(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := operationsmocks.NewMockOperationsStore(t)
-	h := operations.New(store, nil, nil, nil, nil, nil,
+	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(id string) (*undo.UndoConflictReport, error) { return nil, errors.New("boom") },
 		func(id string) error { return nil },
 	)
@@ -395,12 +396,94 @@ func TestRevertOperation_Success(t *testing.T) {
 func TestRevertOperation_Error(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := operationsmocks.NewMockOperationsStore(t)
-	h := operations.New(store, nil, nil, nil, nil, nil,
+	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
 		func(id string) error { return errors.New("revert failed") },
 	)
 	w := run(http.MethodPost, "/operations/:id/revert", "/operations/op-1/revert", nil, func(r *gin.Engine) {
 		r.POST("/operations/:id/revert", h.RevertOperation)
 	})
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// --- ClearStaleOperations: the v2 half ---
+
+// newClearStaleHandler builds a Handler whose v1 store returns the given rows
+// and whose v2 repair returns the given count/error.
+func newClearStaleHandler(t *testing.T, v1 []database.Operation, v2Count int, v2Err error) *operations.Handler {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	store := operationsmocks.NewMockOperationsStore(t)
+	store.EXPECT().GetRecentOperations(500).Return(v1, nil).Maybe()
+	store.EXPECT().
+		UpdateOperationStatus(mock.Anything, "failed", 0, 0, mock.Anything).
+		Return(nil).Maybe()
+	return operations.New(store, nil, nil, nil, nil, nil,
+		func() (int, error) { return v2Count, v2Err },
+		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
+		func(id string) error { return nil },
+	)
+}
+
+func clearStale(h *operations.Handler) *httptest.ResponseRecorder {
+	return run(http.MethodPost, "/operations/clear-stale", "/operations/clear-stale", nil, func(r *gin.Engine) {
+		r.POST("/operations/clear-stale", h.ClearStaleOperations)
+	})
+}
+
+// TestClearStaleOperations_RepairsV2PhantomLiveRows is the regression for the
+// bug the user hit: a canceled op stuck in Active Operations at 199/200 that
+// "Clear Stale" could not touch, because the handler only ever swept v1 rows.
+// With no v1 rows to fail, the button returned {"cleared":0} and did nothing.
+func TestClearStaleOperations_RepairsV2PhantomLiveRows(t *testing.T) {
+	h := newClearStaleHandler(t, nil, 1, nil)
+	w := clearStale(h)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var body struct {
+		Data struct {
+			Cleared    int `json:"cleared"`
+			V1Failed   int `json:"v1_failed"`
+			V2Repaired int `json:"v2_repaired"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, 1, body.Data.V2Repaired)
+	assert.Equal(t, 0, body.Data.V1Failed)
+	assert.Equal(t, 1, body.Data.Cleared,
+		"cleared stays the sum so the existing Activity page keeps working")
+}
+
+// TestClearStaleOperations_CountsBothHalves pins that the two sweeps are added,
+// not that one shadows the other.
+func TestClearStaleOperations_CountsBothHalves(t *testing.T) {
+	v1 := []database.Operation{
+		{ID: "v1-a", Status: "running"},
+		{ID: "v1-b", Status: "pending"},
+		{ID: "v1-done", Status: "completed"}, // terminal: not swept
+	}
+	h := newClearStaleHandler(t, v1, 3, nil)
+	w := clearStale(h)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var body struct {
+		Data struct {
+			Cleared    int `json:"cleared"`
+			V1Failed   int `json:"v1_failed"`
+			V2Repaired int `json:"v2_repaired"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, 2, body.Data.V1Failed)
+	assert.Equal(t, 3, body.Data.V2Repaired)
+	assert.Equal(t, 5, body.Data.Cleared)
+}
+
+// TestClearStaleOperations_ReportsRepairFailure: a repair error must surface
+// rather than be swallowed into a partial success, or the user presses the
+// button, sees a count, and believes the row was fixed.
+func TestClearStaleOperations_ReportsRepairFailure(t *testing.T) {
+	h := newClearStaleHandler(t, nil, 0, errors.New("pebble closed"))
+	w := clearStale(h)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

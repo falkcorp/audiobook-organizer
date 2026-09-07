@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.14.0
+// version: 3.15.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-07
 
@@ -398,16 +398,20 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (update
 	// panel from 2026-06-26 to 2026-09-07 with completed_at null, and no user
 	// action could clear it.
 	//
-	// The condition is the COMPLEMENT of a terminal-status list, deliberately.
-	// ListOperationsV2Since:631 explains why the reader avoids a status list
-	// ("has to be updated every time a new terminal state is added, and silently
-	// under-reports until someone remembers"); enumerating terminal states HERE
-	// would reintroduce exactly that maintenance burden one layer up. Naming the
-	// two live states instead means a terminal state added later is covered
-	// without anyone touching this function. It is also the same predicate the
-	// active-index delete below already uses, which encodes "not running means
-	// not live" and then fails to finish the thought.
-	if newStatus != "running" && newStatus != "queued" && row.CompletedAt == nil {
+	// This uses the explicit terminal ALLOWLIST rather than the complement of the
+	// live states. An earlier revision of this function used the complement
+	// (`!= "running" && != "queued"`) on the reasoning that ListOperationsV2Since
+	// :631 avoids a status list, so this should too. That reasoning does not
+	// transfer, because a reader and a writer have opposite safe defaults: a
+	// reader that misses a terminal status under-reports deadness, and the row
+	// lingers visibly until someone complains, whereas a writer that misses a
+	// LIVE status stamps a row the resume machinery still owns -- silently, and
+	// the result looks like completed work. The complement got that backwards:
+	// "interrupted_quiesced" (resumable, see isResumableV2Status) and
+	// "waiting_deps" are both live and both would have been stamped. Only the
+	// fact that the two real call sites (registry.go:990, :999) pass a literal
+	// "canceled" kept that from being reachable.
+	if isTerminalV2Status(newStatus) && row.CompletedAt == nil {
 		now := time.Now().UTC()
 		row.CompletedAt = &now
 	}
@@ -917,6 +921,120 @@ func (p *PebbleStore) ListWaitingDepsOps() (rows []OperationV2Row, err error) {
 // that is NOT drop — is genuinely unfinished business.
 func isResumableV2Status(status string) bool {
 	return status == "queued" || status == "running" || status == "interrupted_quiesced"
+}
+
+// isTerminalV2Status reports whether a v2 status means the operation is finished
+// for good: no worker holds it, no resume sweep will pick it up, and nothing is
+// waiting on a user decision.
+//
+// This is an explicit allowlist, NOT the complement of the live states, and the
+// direction is the point. Every caller is a WRITER that stamps completed_at, so
+// the cost of being wrong is asymmetric:
+//
+//   - Miss a terminal status -> the repair stamps fewer rows than it could. The
+//     leftover row stays visible in Active Operations and someone reports it.
+//   - Miss a LIVE status -> the repair stamps a row that the scheduler, the
+//     dependency waiter, or the startup resume sweep still owns. That is silent,
+//     and the row then reads as finished work that never ran.
+//
+// So a status that is not listed here is treated as live. Adding a genuinely new
+// terminal state means adding it here; forgetting to costs visibility, not work.
+// (Contrast ListOperationsV2Since below, which is a READER and takes the opposite
+// default on purpose -- see its comment.)
+//
+// The excluded-but-terminal-looking cases, verified against their write sites:
+// "interrupted_quiesced" (registry.go:1263 via worker.go:264) is resumable;
+// "interrupted_ask" (resume.go:383) is waiting on a user; "interrupted_restart"
+// (server_lifecycle.go:121) is a resume marker. All three already pass a non-nil
+// completedAt at their write site, so excluding them here costs nothing.
+func isTerminalV2Status(status string) bool {
+	switch status {
+	case "completed", "failed", "canceled", "interrupted_dropped":
+		return true
+	default:
+		return false
+	}
+}
+
+// RepairOpsV2MissingCompletedAt stamps completed_at on every operation row that
+// holds a terminal status but has completed_at null, and returns the number of
+// rows actually written.
+//
+// Such a row is dead to the worker and alive to every reader -- CompletedAt is
+// the canonical liveness signal in this store (ListOperationsV2Since:631) -- so
+// it sits in the UI's Active Operations panel forever with no user action able
+// to clear it. Before 2026-09-07 the only producer was
+// SetOperationV2StatusIfQueued, which wrote a terminal status without a stamp;
+// every other writer of a terminal status passes a non-nil completedAt. That
+// bug is fixed at the source, and this is the repair for rows it already made.
+//
+// The scan reads the opv2:op: keyspace rather than the opv2:act: index because
+// the affected rows are exactly the ones the index has already dropped
+// (SetOperationV2StatusIfQueued deletes the act key on the same write that
+// leaves completed_at null). There is no age cutoff and no row cap: the oldest
+// known instance had been stuck for 73 days, which is precisely the row a
+// "recent 500" query would miss.
+func (p *PebbleStore) RepairOpsV2MissingCompletedAt() (repaired int, err error) {
+	defer recoverPebbleClosed("RepairOpsV2MissingCompletedAt", &err)
+
+	// Collect candidates WITHOUT opsMu held: this scans the whole op keyspace,
+	// and holding the ops write lock across it would stall every in-flight
+	// progress update. The predicate is re-checked under the lock below, so a
+	// stale candidate is harmless.
+	prefix := []byte("opv2:op:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return 0, err
+	}
+	var candidates []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		var row OperationV2Row
+		if err := json.Unmarshal(iter.Value(), &row); err != nil || row.ID == "" {
+			continue
+		}
+		if isTerminalV2Status(row.Status) && row.CompletedAt == nil {
+			candidates = append(candidates, row.ID)
+		}
+	}
+	iterErr := iter.Error()
+	if closeErr := iter.Close(); closeErr != nil && iterErr == nil {
+		iterErr = closeErr
+	}
+	if iterErr != nil {
+		return 0, iterErr
+	}
+
+	for _, id := range candidates {
+		// Re-check the FULL predicate under the lock, not just the null test. A
+		// row can go canceled -> resumed -> queued between the two passes, and
+		// ResetOperationV2ForResume clears CompletedAt as part of that, so a bare
+		// `CompletedAt == nil` check would pass and stamp a live queued row.
+		if p.stampCompletedAtIfPhantom(id) {
+			repaired++
+		}
+	}
+	return repaired, nil
+}
+
+// stampCompletedAtIfPhantom stamps completed_at on one row if it still holds a
+// terminal status with a null completed_at. Reports whether it wrote.
+func (p *PebbleStore) stampCompletedAtIfPhantom(id string) bool {
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+
+	var row OperationV2Row
+	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil || row.ID == "" {
+		return false
+	}
+	if !isTerminalV2Status(row.Status) || row.CompletedAt != nil {
+		return false
+	}
+	now := time.Now().UTC()
+	row.CompletedAt = &now
+	return p.pebbleSetJSON(opv2OpKey(id), &row) == nil
 }
 
 // ListResumableOperationsV2 returns the rows the startup resume sweep should

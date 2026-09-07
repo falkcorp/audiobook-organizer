@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.28.0
+// version: 2.29.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package server
 
@@ -218,6 +218,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		opsPipeline,
 		opsScanStore,
 		s.collectStaleOperations,
+		// repairPhantomLive: the v2 half of Clear Stale. s.Ops() is the v2-capable
+		// store; the handler holds only the v1 OperationsStore.
+		func() (int, error) {
+			return s.Ops().RepairOpsV2MissingCompletedAt()
+		},
 		func(id string) (*undo.UndoConflictReport, error) {
 			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
 		},
