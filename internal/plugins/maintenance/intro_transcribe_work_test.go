@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_work_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a4c2e9d-1b6f-4d38-9e5a-c0f3b8d21a76
-// last-edited: 2026-09-05
+// last-edited: 2026-09-07
 
 package maintenance
 
@@ -9,10 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -74,6 +77,125 @@ func TestSelectTranscribeWork_PolicyAndOrder(t *testing.T) {
 				t.Errorf("samples = %q", got.samples)
 			}
 		})
+	}
+}
+
+// needsTranscribeWork is the in-memory predicate. A book that failed last run
+// for a DURABLE reason (source gone, no audio, ffmpeg could not decode) must be
+// skipped by default — that is the churn this fix removes. whisper_error and
+// empty stay retryable (often a transient endpoint/clip defect). retry_failed
+// forces every durable book back into work.
+func TestNeedsTranscribeWork_DurableFailureSkip(t *testing.T) {
+	withStatus := func(status string) *database.Book {
+		return &database.Book{ID: "x", TranscribeStatus: new(status)}
+	}
+	cases := []struct {
+		name string
+		book *database.Book
+		sel  transcribeSelect
+		want bool
+	}{
+		{"source_missing skipped", withStatus(statusSourceMissing), transcribeSelect{onlyMissing: true}, false},
+		{"no_audio skipped", withStatus(statusNoAudio), transcribeSelect{onlyMissing: true}, false},
+		{"ffmpeg_error skipped", withStatus(statusFFmpegError), transcribeSelect{onlyMissing: true}, false},
+		{"whisper_error retried", withStatus(statusWhisperError), transcribeSelect{onlyMissing: true}, true},
+		{"empty retried", withStatus(statusEmpty), transcribeSelect{onlyMissing: true}, true},
+		{"no status retried", &database.Book{ID: "x"}, transcribeSelect{onlyMissing: true}, true},
+		{"retry_failed overrides source_missing", withStatus(statusSourceMissing), transcribeSelect{onlyMissing: true, retryFailed: true}, true},
+		{"retry_failed overrides ffmpeg_error", withStatus(statusFFmpegError), transcribeSelect{onlyMissing: true, retryFailed: true}, true},
+		{"extract_only ignores durable status", withStatus(statusSourceMissing), transcribeSelect{onlyMissing: true, extractOnly: true}, true},
+		{"only_missing=false ignores durable status", withStatus(statusSourceMissing), transcribeSelect{onlyMissing: false}, true},
+		{"durable status but has transcript is done", &database.Book{ID: "x", TranscribeStatus: new(statusSourceMissing), IntroTranscription: new("Chapter one.")}, transcribeSelect{onlyMissing: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := needsTranscribeWork(tc.book, tc.sel); got != tc.want {
+				t.Errorf("needsTranscribeWork = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// selectTranscribeWork self-heals: a book that failed source_file_missing last
+// run is skipped while its source is gone, but re-enters work the moment the
+// file is back on disk — no flag required. This is the whole point of choosing a
+// stat recheck over a retry_failed-only path: after the missing-file repoint
+// restores sources, the next run picks them up automatically.
+func TestSelectTranscribeWork_SelfHealsWhenSourceReappears(t *testing.T) {
+	dir := t.TempDir()
+	presentPath := filepath.Join(dir, "present.mp3")
+	if err := os.WriteFile(presentPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missingPath := filepath.Join(dir, "gone.mp3") // never created
+
+	books := map[string]*database.Book{
+		// "back" failed source_missing last run, but its file is now present.
+		"back": {ID: "back", TranscribeStatus: new(statusSourceMissing)},
+		// "stillgone" failed source_missing and its file is still absent.
+		"stillgone": {ID: "stillgone", TranscribeStatus: new(statusSourceMissing)},
+	}
+	files := map[string][]database.BookFile{
+		"back":      {{ID: "bf-back", FilePath: presentPath}},
+		"stillgone": {{ID: "bf-gone", FilePath: missingPath}},
+	}
+	store := &database.MockStore{
+		GetBookByIDFunc:  func(id string) (*database.Book, error) { return books[id], nil },
+		GetBookFilesFunc: func(id string) ([]database.BookFile, error) { return files[id], nil },
+	}
+	ids := []string{"back", "stillgone"}
+
+	got, err := selectTranscribeWork(context.Background(), store, ids, transcribeSelect{onlyMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.work, ",") != "back" {
+		t.Errorf("work = %v, want [back] (source reappeared) and NOT stillgone", got.work)
+	}
+	if got.skipped != 1 || got.failedSkipped != 1 {
+		t.Errorf("skipped/failedSkipped = %d/%d, want 1/1 (stillgone counted as a known-broken skip)", got.skipped, got.failedSkipped)
+	}
+}
+
+// ffmpeg_error self-heals only when the bytes actually changed: the source was
+// present at failure time, so mere presence is not enough — require mtime after
+// the failed attempt (a re-encode/replace).
+func TestSelectTranscribeWork_FFmpegErrorRetriedOnlyWhenFileChanged(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "book.mp3")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileMtime := fi.ModTime()
+
+	newStore := func(attemptedAt time.Time) *database.MockStore {
+		book := &database.Book{ID: "b", TranscribeStatus: new(statusFFmpegError), TranscribeAttemptedAt: new(attemptedAt)}
+		return &database.MockStore{
+			GetBookByIDFunc:  func(string) (*database.Book, error) { return book, nil },
+			GetBookFilesFunc: func(string) ([]database.BookFile, error) { return []database.BookFile{{ID: "bf", FilePath: p}}, nil },
+		}
+	}
+
+	// Attempt happened AFTER the file's mtime → bytes unchanged → stay skipped.
+	got, err := selectTranscribeWork(context.Background(), newStore(fileMtime.Add(time.Hour)), []string{"b"}, transcribeSelect{onlyMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.work) != 0 {
+		t.Errorf("unchanged ffmpeg_error file: work = %v, want none", got.work)
+	}
+
+	// Attempt happened BEFORE the file's mtime → bytes replaced since → retry.
+	got, err = selectTranscribeWork(context.Background(), newStore(fileMtime.Add(-time.Hour)), []string{"b"}, transcribeSelect{onlyMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.work, ",") != "b" {
+		t.Errorf("replaced ffmpeg_error file: work = %v, want [b]", got.work)
 	}
 }
 
