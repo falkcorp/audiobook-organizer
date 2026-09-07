@@ -101,7 +101,7 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 			ErrMode:         opsregistry.ErrModeCollect,
 			CheckpointEvery: 1,
 			CheckpointStateFn: func(_ context.Context, watermark int) error {
-				st := batchApplyCheckpointState(ids, true, len(ids), watermark)
+				st := batchApplyCheckpointState(ids, true, len(ids), watermark, nil)
 				mu.Lock()
 				dropped := ids[:len(ids)-len(st.BookIDs)]
 				for _, d := range dropped {
@@ -151,14 +151,21 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 		}
 	}
 
-	// Anti-vacuity: the gap really did open. At least one checkpoint must have
-	// been taken while more books had FINISHED than the checkpoint dropped --
-	// i.e. b5 was done while the watermark still sat behind b3/b4.
+	// Anti-vacuity: SOME gap really did open. At least one checkpoint must have
+	// been taken while more books had FINISHED than the checkpoint dropped.
 	//
-	// A size threshold on BookIDs cannot express this: with CheckpointEvery=1
-	// an ordinary in-order run also produces long remaining sets early on, so
-	// such a check passes without any gap ever existing. Comparing completions
-	// against drops is the only form that distinguishes the two.
+	// Deliberately weaker than "the b3/b4/b5 gap specifically": with
+	// Concurrency=4 an incidental gap is near-certain, so this passing does not
+	// by itself prove the engineered choreography ran. Naming b5 would prove
+	// more, but only by racing the checkpoint against b3/b4 unblocking the
+	// instant b5 closes the channel — a flaky assertion buys no real coverage.
+	// The load-bearing check is the `violations` loop above, which holds for
+	// every gap, engineered or incidental; this is only a floor under it.
+	//
+	// A size threshold on BookIDs could not express even that much: with
+	// CheckpointEvery=1 an ordinary in-order run also produces long remaining
+	// sets early on, so such a check passes with no gap ever existing.
+	// Comparing completions against drops is what distinguishes the two.
 	mu.Lock()
 	gapOpened := sawGap
 	mu.Unlock()
@@ -206,7 +213,7 @@ func TestBatchApplyCheckpoint_FailedBookStillLeavesTheSet(t *testing.T) {
 				ErrMode:         opsregistry.ErrModeCollect,
 				CheckpointEvery: 1,
 				CheckpointStateFn: func(_ context.Context, watermark int) error {
-					return rec.Checkpoint(batchApplyCheckpointState(ids, true, len(ids), watermark))
+					return rec.Checkpoint(batchApplyCheckpointState(ids, true, len(ids), watermark, nil))
 				},
 			})
 		if itemErr == nil && err != nil {
@@ -354,7 +361,7 @@ func TestBatchApplyCheckpointState_IsAlwaysAValidResumePoint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := batchApplyCheckpointState(ids, true, 3, tc.watermark)
+			got := batchApplyCheckpointState(ids, true, 3, tc.watermark, nil)
 			if len(got.BookIDs) != tc.wantLeft {
 				t.Fatalf("remaining = %v, want %d ids", got.BookIDs, tc.wantLeft)
 			}
@@ -363,4 +370,46 @@ func TestBatchApplyCheckpointState_IsAlwaysAValidResumePoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBatchApplyCheckpointState_GateDeferredBooksStayOwed pins the one case
+// where the remaining set is NOT just the suffix. A book the write-back gate
+// never let through had nothing applied for it — not even the database half —
+// but runOne returned nil so the loop could keep going, which puts it below the
+// watermark. The suffix alone would drop it silently, which is the exact
+// failure this whole PR exists to prevent, one layer down.
+func TestBatchApplyCheckpointState_GateDeferredBooksStayOwed(t *testing.T) {
+	ids := []string{"a", "b", "c", "d"}
+
+	t.Run("a deferred book below the watermark is carried", func(t *testing.T) {
+		// Watermark 3 means a, b and c left the set; b was deferred.
+		got := batchApplyCheckpointState(ids, true, 4, 3, []string{"b"})
+		want := []string{"d", "b"}
+		if !slices.Equal(got.BookIDs, want) {
+			t.Fatalf("remaining = %v, want %v", got.BookIDs, want)
+		}
+	})
+
+	t.Run("a deferred book still in the suffix is not duplicated", func(t *testing.T) {
+		// A gap can hold the watermark behind a book that was deferred, so the
+		// same id arrives from both sources. Carrying it twice would apply it
+		// twice on resume.
+		got := batchApplyCheckpointState(ids, true, 4, 1, []string{"c"})
+		want := []string{"b", "c", "d"}
+		if !slices.Equal(got.BookIDs, want) {
+			t.Fatalf("remaining = %v, want %v", got.BookIDs, want)
+		}
+	})
+
+	t.Run("the caller's slice is not written through", func(t *testing.T) {
+		// remaining is a SUBSLICE of ids, so appending to it without cloning
+		// would overwrite ids' own backing array past the watermark. Nothing
+		// downstream would report that; the corruption would just show up as a
+		// wrong resume set on the next checkpoint.
+		src := []string{"a", "b", "c", "d"}
+		_ = batchApplyCheckpointState(src[:3], true, 4, 2, []string{"a"})
+		if src[3] != "d" {
+			t.Fatalf("caller's slice was written through: src = %v", src)
+		}
+	})
 }

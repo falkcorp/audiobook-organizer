@@ -40,12 +40,16 @@ Three details worth knowing, because all three are deliberate:
   second restart at exactly the wrong moment could still have undone it — the
   saved progress note is now cleared once it has been folded into the run, so it
   cannot come back later and overwrite newer work.
-- **One busy moment no longer fails the whole batch.** When many files are being
-  written at once, a book can wait too long for its turn and give up. That used
-  to end the entire run as failed, discarding the report for every book that had
-  already applied. Those books are now counted and named in the summary
-  ("gate unavailable"), the run finishes normally, and re-running the apply
-  picks them up.
+- **One busy moment no longer fails the whole batch, and no longer loses the
+  book either.** When many files are being written at once, a book can wait too
+  long for its turn and give up. That used to end the entire run as failed,
+  discarding the report for every book that had already applied. Now the run
+  carries on, remembers which books it had to pass over, and comes back to them
+  once the rest of the batch has finished and the queue has cleared — which is
+  the moment they are most likely to succeed. A book that is passed over twice
+  is waiting on something outside this batch; it is counted in the summary as
+  "gate unavailable" and needs a fresh apply. Books passed over are also kept in
+  the saved progress note, so a restart in the middle still owes them.
 
 One number in the summary is knowingly imprecise: after a restart, books an
 earlier attempt had already applied can look like books with nothing to apply,
