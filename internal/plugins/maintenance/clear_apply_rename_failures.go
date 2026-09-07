@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
 // last-edited: 2026-09-07
 
@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -164,12 +165,14 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 	// Persist the full row list on the operation record, the same way
 	// reconcile.go and dedup_ops.go do, so a dry run's decisions are readable
 	// afterwards rather than living only in the log.
-	if opID := ctxOpID(ctx); opID != "" {
-		if blob, mErr := json.Marshal(res); mErr == nil {
-			if err := store.UpdateOperationResultData(opID, string(blob)); err != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", err))
-			}
-		}
+	//
+	// This wrote via store.UpdateOperationResultData(ctxOpID(ctx), ...), which
+	// resolves a v1 `operation:` row that no live op has, so it always returned
+	// "operation not found". Here the error was only logged, so the failure was
+	// invisible: every run reported success while the result data it promises
+	// was never stored. Now it goes to the run's own v2 row.
+	if err := opsregistry.ReporterSetResult(reporter, res); err != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", err))
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6b7e3d51-c0a3-4ab2-8d6c-7e9c1d4a8f01
-// last-edited: 2026-07-18
+// last-edited: 2026-09-07
 
 package itunesservice
 
@@ -154,7 +154,7 @@ func TestRepair_TierA_AutoResolvesMissingTrack(t *testing.T) {
 			{ID: "f1", FilePath: newPath, ITunesPersistentID: "PID_B"},
 		}, nil).Once()
 	m.EXPECT().DeleteOperationState("op-tierA").Return(nil).Once()
-	m.EXPECT().UpdateOperationResultData("op-tierA", mock.Anything).Return(nil).Once()
+	m.EXPECT().SetOperationV2Result("op-tierA", mock.Anything).Return(nil).Once()
 
 	r := newPathRepairer(m, nil, PathRepairConfig{XMLPath: xmlPath})
 	res, err := r.repairWithResult(context.Background(), "op-tierA", true, noopProgressRepair{})
@@ -184,7 +184,7 @@ func TestRepair_TierA_NoMappingFallsThrough(t *testing.T) {
 	m.EXPECT().GetBookByExternalID("itunes", "PID_B").
 		Return("", nil).Once()
 	m.EXPECT().DeleteOperationState("op-noMap").Return(nil).Once()
-	m.EXPECT().UpdateOperationResultData("op-noMap", mock.Anything).Return(nil).Once()
+	m.EXPECT().SetOperationV2Result("op-noMap", mock.Anything).Return(nil).Once()
 
 	r := newPathRepairer(m, nil, PathRepairConfig{XMLPath: xmlPath})
 	res, err := r.repairWithResult(context.Background(), "op-noMap", true, noopProgressRepair{})
@@ -223,7 +223,7 @@ func TestRepair_TierB_RecoversFromStaleDBPath(t *testing.T) {
 	m.EXPECT().GetBookByID("book-b").
 		Return(&database.Book{ID: "book-b", FilePath: "/disk/STALE.m4b"}, nil).Once()
 	m.EXPECT().DeleteOperationState("op-tierB").Return(nil).Once()
-	m.EXPECT().UpdateOperationResultData("op-tierB", mock.Anything).Return(nil).Once()
+	m.EXPECT().SetOperationV2Result("op-tierB", mock.Anything).Return(nil).Once()
 
 	r := newPathRepairer(m, nil, PathRepairConfig{XMLPath: xmlPath, AudiobookRoot: root})
 	// Inject deterministic extractor that maps movedFile → book-b.
@@ -262,7 +262,7 @@ func TestRepair_TierC_EmitsReviewCandidates(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
 	m.EXPECT().GetBookByExternalID("itunes", "PID_B").Return("", nil).Once()
 	m.EXPECT().DeleteOperationState("op-tierC").Return(nil).Once()
-	m.EXPECT().UpdateOperationResultData("op-tierC", mock.Anything).Return(nil).Once()
+	m.EXPECT().SetOperationV2Result("op-tierC", mock.Anything).Return(nil).Once()
 
 	r := newPathRepairer(m, nil, PathRepairConfig{XMLPath: xmlPath, AudiobookRoot: root})
 	r.bookIDExtractor = func(string) (string, error) { return "", nil }
@@ -308,7 +308,7 @@ func TestRepair_ApplyMode_TierA_UpdatesAndEnqueues(t *testing.T) {
 		return c.BookID == "book-b" && c.NewPath == newPath && c.ChangeType == "itunes_path_repair"
 	})).Return(nil).Once()
 	m.EXPECT().DeleteOperationState("op-apply").Return(nil).Once()
-	m.EXPECT().UpdateOperationResultData("op-apply", mock.Anything).Return(nil).Once()
+	m.EXPECT().SetOperationV2Result("op-apply", mock.Anything).Return(nil).Once()
 
 	enq := &mockEnqueuer{}
 	r := newPathRepairer(m, enq, PathRepairConfig{XMLPath: xmlPath})
@@ -377,7 +377,7 @@ func TestRepair_EndToEnd_AllTiers(t *testing.T) {
 
 	reportDir := filepath.Join(dir, "reports")
 	m.EXPECT().DeleteOperationState("op-e2e").Return(nil).Once()
-	m.EXPECT().UpdateOperationResultData("op-e2e", mock.Anything).Return(nil).Once()
+	m.EXPECT().SetOperationV2Result("op-e2e", mock.Anything).Return(nil).Once()
 
 	r := newPathRepairer(m, nil, PathRepairConfig{
 		XMLPath:       xmlPath,
@@ -478,7 +478,7 @@ func TestRepair_ApplyMode_SharedBookID_SerializesWrites(t *testing.T) {
 	})).Return(nil).Once()
 
 	m.EXPECT().DeleteOperationState("op-multi").Return(nil).Once()
-	m.EXPECT().UpdateOperationResultData("op-multi", mock.Anything).Return(nil).Once()
+	m.EXPECT().SetOperationV2Result("op-multi", mock.Anything).Return(nil).Once()
 
 	enq := &mockEnqueuer{}
 	r := newPathRepairer(m, enq, PathRepairConfig{XMLPath: xmlPath})

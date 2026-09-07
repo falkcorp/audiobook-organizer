@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
-// last-edited: 2026-08-19
+// last-edited: 2026-09-07
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -46,7 +47,6 @@ func (p *Plugin) runReconcileScan(ctx context.Context, _ json.RawMessage, report
 		return fmt.Errorf("database not initialized")
 	}
 
-	opID := ctxOpID(ctx)
 	adapter := newOpsAdapter(reporter)
 	reconcileLog := operations.LoggerFromReporter(adapter)
 
@@ -55,14 +55,18 @@ func (p *Plugin) runReconcileScan(ctx context.Context, _ json.RawMessage, report
 		return fmt.Errorf("reconcile scan failed: %w", err)
 	}
 
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("failed to marshal scan results: %w", err)
-	}
-	if opID != "" {
-		if err := store.UpdateOperationResultData(opID, string(resultJSON)); err != nil {
-			return fmt.Errorf("failed to store scan results: %w", err)
-		}
+	// Persist onto this run's own v2 row via the reporter, NOT via the v1
+	// store.UpdateOperationResultData(ctxOpID(ctx), ...) this used to call.
+	// That path looked up a v1 `operation:` row and returned "operation not
+	// found" when there was none -- and there is never one now: ctxOpID carries
+	// the v2 id (registry_wire.go installs opRunContextDecorator on the v2
+	// registry), and nothing has minted a v1 row since the minter was retired.
+	// Because the error was returned rather than logged, this op FAILED at the
+	// very end of an otherwise complete ~45-minute scan, discarding the preview.
+	// ReporterSetResult marshals and writes to the reporter's own opID, and
+	// fails loudly for the same reason spelled out on its doc comment.
+	if err := opsregistry.ReporterSetResult(reporter, result); err != nil {
+		return fmt.Errorf("failed to store scan results: %w", err)
 	}
 
 	summary := fmt.Sprintf("Found %d broken records, %d matches, %d unmatched",

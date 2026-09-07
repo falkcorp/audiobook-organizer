@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-07
 
@@ -167,7 +167,6 @@ type opsRecordsAndQueue interface {
 	ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error)
 	ListUserPlaylists(playlistType string, limit int, offset int) ([]database.UserPlaylist, int, error)
 	Optimize() error
-	UpdateOperationResultData(id string, resultData string) error
 	UpsertReviewItem(item database.ReviewItem) (database.ReviewItem, error)
 }
 
