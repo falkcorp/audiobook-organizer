@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -109,10 +109,13 @@ func TestHandler_GetOperationResult_WithData(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
 	resultData := `{"files_processed":10}`
-	op := &database.Operation{ID: "op-1", Status: "completed", ResultData: &resultData}
-	// No v2 twin: this pins the v1 arm of the two-keyspace result lookup.
-	mockStore.EXPECT().GetOperationV2("op-1").Return(nil, nil)
-	mockStore.EXPECT().GetOperationByID("op-1").Return(op, nil)
+	// v2 is the only keyspace this route reads as of 2026-09-07. It used to fall
+	// back to GetOperationByID, and these three tests pinned that arm; the
+	// fallback went with the rest of the v1 reads once UpdateOperationResultData
+	// lost its last production writer (#3103), leaving it able to serve only
+	// pre-2026-08-23 rows in a keyspace being deleted.
+	mockStore.EXPECT().GetOperationV2("op-1").Return(
+		&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: &resultData}, nil)
 
 	router.GET("/operations/:id/result", newOperationsHandler(srv).GetOperationResult)
 
@@ -130,10 +133,10 @@ func TestHandler_GetOperationResult_WithData(t *testing.T) {
 func TestHandler_GetOperationResult_NoData(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	op := &database.Operation{ID: "op-1", Status: "completed", ResultData: nil}
-	// No v2 twin: this pins the v1 arm of the two-keyspace result lookup.
-	mockStore.EXPECT().GetOperationV2("op-1").Return(nil, nil)
-	mockStore.EXPECT().GetOperationByID("op-1").Return(op, nil)
+	// A row that exists but carries no result is still 200 — the run happened and
+	// simply produced no payload, which is not the same as "no such operation".
+	mockStore.EXPECT().GetOperationV2("op-1").Return(
+		&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: nil}, nil)
 
 	router.GET("/operations/:id/result", newOperationsHandler(srv).GetOperationResult)
 
@@ -147,8 +150,9 @@ func TestHandler_GetOperationResult_NoData(t *testing.T) {
 func TestHandler_GetOperationResult_NotFound(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
+	// Absent from v2 is now absent, full stop — there is no second keyspace left
+	// to consult before answering 404.
 	mockStore.EXPECT().GetOperationV2("nope").Return(nil, nil)
-	mockStore.EXPECT().GetOperationByID("nope").Return(nil, nil)
 
 	router.GET("/operations/:id/result", newOperationsHandler(srv).GetOperationResult)
 
@@ -386,7 +390,11 @@ func TestHandler_GetDashboard_Success(t *testing.T) {
 		StateDistribution:  map[string]int{"new": 50, "organized": 50},
 	}
 	mockStore.EXPECT().GetDashboardStats().Return(stats, nil)
-	mockStore.EXPECT().GetRecentOperations(5).Return([]database.Operation{}, nil)
+	// `recentOperations` moved off GetRecentOperations (the v1 `operation:`
+	// keyspace) on 2026-09-07: nothing has minted a v1 row since the minter was
+	// retired 2026-08-23, so it was serving five rows from mid-August with
+	// nothing to mark them stale.
+	mockStore.EXPECT().ListOperationsV2Since(time.Time{}, 5).Return(nil, nil)
 
 	router.GET("/dashboard", newSystemHandler(srv).GetDashboard)
 
