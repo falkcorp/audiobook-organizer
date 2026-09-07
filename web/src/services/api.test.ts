@@ -1,7 +1,7 @@
 // file: src/services/api.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-08-16
+// last-edited: 2026-09-07
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -12,6 +12,7 @@ import {
   removeImportPath,
   bulkFetchMetadata,
   batchWriteBackMetadata,
+  batchFetchCandidates,
 } from './api';
 
 const mockFetch = vi.fn();
@@ -239,5 +240,107 @@ describe('isOperationTerminal', () => {
     // the wrong spelling is NOT terminal keeps anyone from "fixing" the drift by
     // teaching the frontend to accept both and leaving the mismatch in place.
     expect(isOperationTerminal('cancelled')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// batchFetchCandidates: the envelope hop
+// ---------------------------------------------------------------------------
+//
+// This suite exists because the component-level test could not catch the bug it
+// was written to guard. `ReviewWorkspace.refetchStale.test.tsx` does
+// `vi.mock('../../services/api')`, so the real `batchFetchCandidates` never runs
+// there -- the fixture stands in for the function at its own boundary and
+// asserts nothing about how that function reads the wire.
+//
+// The defect: a bare `return response.json()` behind a FLAT declared return
+// type handed callers the whole `{data:{...}}` envelope. `operation_id` was
+// therefore ALWAYS undefined, and all three callers' `if (!resp.operation_id)`
+// guard fired on every SUCCESSFUL fetch, showing an "already being fetched"
+// toast for an operation the server had in fact enqueued. It also made
+// `withOptimisticOperation` pick no id and silently drop its bell placeholder.
+//
+// These tests drive the real function against a real enveloped Response, which
+// is the only level at which that bug is observable.
+describe('batchFetchCandidates envelope unwrapping', () => {
+  beforeEach(() => {
+    global.fetch = mockFetch as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    mockFetch.mockReset();
+  });
+
+  function enveloped(inner: unknown, status = 200) {
+    return new Response(JSON.stringify({ data: inner }), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // The regression gate. Fails against the pre-fix `return response.json()`,
+  // which resolved to `{data:{...}}` and left operation_id undefined.
+  it('unwraps the data envelope so operation_id reaches the caller', async () => {
+    mockFetch.mockResolvedValueOnce(
+      enveloped(
+        { operation_id: 'op-1', total_books: 2, message: 'metadata candidate fetch started' },
+        202
+      )
+    );
+
+    const resp = await batchFetchCandidates({ book_ids: ['a', 'c'] });
+
+    expect(resp.operation_id).toBe('op-1');
+    expect(resp.total_books).toBe(2);
+    // The envelope must not survive into the caller's view of the response.
+    expect(resp).not.toHaveProperty('data');
+  });
+
+  // The property the three callers actually branch on, stated the way they
+  // state it, so a future regression reads as the user-visible symptom rather
+  // than as a shape mismatch.
+  it('makes the started response pass the callers "did it start" guard', async () => {
+    mockFetch.mockResolvedValueOnce(enveloped({ operation_id: 'op-1', total_books: 1 }, 202));
+
+    const resp = await batchFetchCandidates({ book_ids: ['a'] });
+
+    expect(Boolean(resp.operation_id)).toBe(true);
+  });
+
+  // The other side of that guard: the server really does decline sometimes, and
+  // it says so with an EMPTY STRING rather than by omitting the key. The
+  // "already being fetched" toast is correct here and must still fire.
+  it('preserves the empty operation_id the server sends when it declines to start', async () => {
+    mockFetch.mockResolvedValueOnce(
+      enveloped({
+        operation_id: '',
+        book_count: 0,
+        skipped: 3,
+        message: 'All 3 books are already being fetched in another operation',
+      })
+    );
+
+    const resp = await batchFetchCandidates({ book_ids: ['a', 'b', 'c'] });
+
+    expect(resp.operation_id).toBe('');
+    expect(Boolean(resp.operation_id)).toBe(false);
+    expect(resp.skipped).toBe(3);
+    expect(resp.message).toMatch(/already being fetched/);
+  });
+
+  // `body.data ?? body` rather than `body.data`: the caller branches on a
+  // field's PRESENCE, so a response that arrives unwrapped should degrade to
+  // working rather than to a false-positive toast.
+  it('falls back to the body when a response arrives unwrapped', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ operation_id: 'op-flat' }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const resp = await batchFetchCandidates({ book_ids: ['a'] });
+
+    expect(resp.operation_id).toBe('op-flat');
   });
 });

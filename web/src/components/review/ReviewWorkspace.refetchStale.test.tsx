@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
-// last-edited: 2026-08-21
+// last-edited: 2026-09-07
 //
 // The refetch path from /review. Before this the stale chip's tooltip ended
 // "refetch to be sure", naming a remedy the workspace had no way to reach --
@@ -69,7 +69,21 @@ function seed(results: api.CandidateResult[], stale: number) {
     total: 0,
   });
   vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, byKind: {} });
-  vi.mocked(api.batchFetchCandidates).mockResolvedValue({ operation_id: 'op-1' });
+  // The STARTED shape, as `batchFetchCandidates` hands it back after unwrapping
+  // the server's `{data:...}` envelope. This is flat on purpose: the mock stands
+  // in for the api function at its own boundary, and that function's contract is
+  // the unwrapped body, not the wire frame.
+  //
+  // What keeps this fixture from certifying a bug again is the declared return
+  // type. `batchFetchCandidates` used to promise a flat shape while returning
+  // the envelope; now that it promises `BatchFetchStartResponse` and delivers
+  // it, a fixture written as `{data:{operation_id:'op-1'}}` is a type error
+  // rather than a silently-passing lie.
+  vi.mocked(api.batchFetchCandidates).mockResolvedValue({
+    operation_id: 'op-1',
+    total_books: 2,
+    message: 'metadata candidate fetch started',
+  });
   // CompareSpine (Task 7) now calls usePathAliases() itself, which pulls
   // config via api.getConfig(). The module is auto-mocked above, so without
   // this every mount throws "Cannot read properties of undefined (reading
@@ -111,6 +125,59 @@ describe('refetching stale rows from /review', () => {
 
     await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalledTimes(1));
     expect(api.batchFetchCandidates).toHaveBeenCalledWith({ book_ids: ['a', 'c'] });
+  });
+
+  // Regression, 2026-09-07. `batchFetchCandidates` returned the raw `{data:...}`
+  // envelope, so `resp.operation_id` was ALWAYS undefined and this success path
+  // fell into the `if (!resp.operation_id)` branch. Every refetch that the
+  // server had actually enqueued told the reviewer their books were "already
+  // being fetched" -- the operation ran, and the UI said nothing had started.
+  //
+  // Asserting the absence of that toast is the half that would have caught it:
+  // the call-count assertions above all passed throughout the bug.
+  it('reports a started refetch as started, not as already running', async () => {
+    const user = userEvent.setup();
+    seed(
+      [makeResult('a', { is_fresh: false }), makeResult('c', { is_fresh: false })] as
+        api.CandidateResult[],
+      2
+    );
+    await openWorkspace();
+
+    await user.click(screen.getByLabelText(/Refetch 2 stale books/i));
+    await user.click(screen.getByTestId('refetch-stale-confirm'));
+
+    await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalledTimes(1));
+
+    expect(await screen.findByText(/Refetching metadata for 2 books/i)).toBeInTheDocument();
+    expect(screen.queryByText(/already being fetched/i)).not.toBeInTheDocument();
+  });
+
+  // The other side of the same guard. The server declines by sending an EMPTY
+  // operation_id, and when it does the toast is correct -- so the fix above must
+  // not be "delete the guard".
+  it('still says so when the server declines because a fetch is already running', async () => {
+    const user = userEvent.setup();
+    seed(
+      [makeResult('a', { is_fresh: false }), makeResult('c', { is_fresh: false })] as
+        api.CandidateResult[],
+      2
+    );
+    vi.mocked(api.batchFetchCandidates).mockResolvedValue({
+      operation_id: '',
+      book_count: 0,
+      skipped: 2,
+      message: 'All 2 books are already being fetched in another operation',
+    });
+    await openWorkspace();
+
+    await user.click(screen.getByLabelText(/Refetch 2 stale books/i));
+    await user.click(screen.getByTestId('refetch-stale-confirm'));
+
+    await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalledTimes(1));
+
+    expect(await screen.findByText(/already being fetched/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Refetching metadata for/i)).not.toBeInTheDocument();
   });
 
   it('cancelling the confirm starts nothing', async () => {
