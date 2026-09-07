@@ -1,5 +1,5 @@
 // file: internal/organizer/collision.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
 // last-edited: 2026-09-07
 
@@ -61,6 +61,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
 // CollisionStore is the narrow store surface the resolver needs. It is
@@ -230,7 +231,8 @@ func (j *collisionJournal) rollback(result *RenameFilesResult) {
 		if err := j.store.UpdateBookFile(r.fileID, r.prior); err != nil {
 			slog.Error("collision rollback failed — book_file row left in its resolved state",
 				"file_id", logger.SanitizeLogValue(r.fileID),
-				"restore_path", logger.SanitizeLogValue(r.prior.FilePath), "error", err)
+				"restore_path", logger.SanitizeLogValue(r.prior.FilePath),
+				"error", logger.SanitizeLogValue(err.Error()))
 			result.Errors = append(result.Errors, fmt.Sprintf(
 				"collision rollback: could not restore book_file %s to %s: %v", r.fileID, r.prior.FilePath, err))
 		}
@@ -247,7 +249,8 @@ func (j *collisionJournal) rollback(result *RenameFilesResult) {
 			// applies no barrier of its own — see logger.SanitizeLogValue.
 			slog.Error("collision rollback failed — file left in quarantine",
 				"quarantine_path", logger.SanitizeLogValue(m.quarantine),
-				"original_path", logger.SanitizeLogValue(m.original), "error", err)
+				"original_path", logger.SanitizeLogValue(m.original),
+				"error", logger.SanitizeLogValue(err.Error()))
 			result.Errors = append(result.Errors, fmt.Sprintf(
 				"collision rollback: file stranded in quarantine at %s (original %s): %v",
 				m.quarantine, m.original, err))
@@ -813,9 +816,16 @@ func quarantineCollisionSource(rootDir, bookID, src string) (string, error) {
 	if dirName == "" {
 		dirName = "unattributed"
 	}
-	dir := filepath.Clean(filepath.Join(qRoot, sanitizePath(dirName)))
-	if dir != qRoot && !strings.HasPrefix(dir, qRoot+string(filepath.Separator)) {
-		return "", fmt.Errorf("quarantine path %q escapes %s", dir, qRoot)
+	// pathvalidation.SecureJoin, not filepath.Join plus a hand-written prefix
+	// check. bookID reaches here from op params, so it is user input on the way
+	// into an os.MkdirAll; SecureJoin is this repo's designated barrier for
+	// exactly that and rejects traversal and absolute components itself. The
+	// prefix check it replaces was correct but bespoke, and CodeQL does not
+	// recognise it as a barrier — go/path-injection flagged both filesystem
+	// calls below.
+	dir, err := pathvalidation.SecureJoin(qRoot, sanitizePath(dirName))
+	if err != nil {
+		return "", fmt.Errorf("quarantine dir for book %q escapes %s: %w", dirName, qRoot, err)
 	}
 
 	quarantineMu.Lock()
@@ -825,7 +835,13 @@ func quarantineCollisionSource(rootDir, bookID, src string) (string, error) {
 		return "", fmt.Errorf("create quarantine dir %s: %w", dir, err)
 	}
 
-	dest := filepath.Join(dir, filepath.Base(src))
+	// filepath.Base(src) is a single component by construction, but src is a
+	// path read off the filesystem, so it goes through the same barrier rather
+	// than relying on that reasoning holding at every future call site.
+	dest, err := pathvalidation.SecureJoin(dir, filepath.Base(src))
+	if err != nil {
+		return "", fmt.Errorf("quarantine destination for %s escapes %s: %w", filepath.Base(src), dir, err)
+	}
 	if _, statErr := os.Lstat(dest); statErr == nil {
 		// Same disambiguation convention as the library itself.
 		var err error
