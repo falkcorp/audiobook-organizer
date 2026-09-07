@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.98.0
+// version: 1.99.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-07
 
@@ -241,55 +241,55 @@ type MockStore struct {
 	ListAIJobsFunc         func(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 
 	// Metadata rejections
-	AddMetadataRejectionFunc         func(r MetadataRejection) error
-	GetMetadataRejectionsFunc        func(bookID string) ([]MetadataRejection, error)
-	DeleteMetadataRejectionsFunc     func(bookID string) error
-	GetAuthorsByBookIDsFunc          func(ctx context.Context, bookIDs []string) (map[string][]Author, error)
-	GetNarratorsByBookIDsFunc        func(ctx context.Context, bookIDs []string) (map[string][]Narrator, error)
-	UpsertOpDefinitionV2Func         func(row OpDefinitionV2Row) error
-	DeleteOrphanOpDefsV2Func         func(keepIDs []string) error
-	InsertOperationV2Func            func(row OperationV2Row) error
-	ListQueuedOperationsV2Func       func() ([]OperationV2Row, error)
-	GetOperationV2Func               func(id string) (*OperationV2Row, error)
-	UpdateOperationV2StatusFunc      func(id string, status string, startedAt, completedAt *time.Time, errMsg *string) error
-	SetOperationV2StatusIfQueuedFunc func(id, newStatus string) (bool, error)
+	AddMetadataRejectionFunc          func(r MetadataRejection) error
+	GetMetadataRejectionsFunc         func(bookID string) ([]MetadataRejection, error)
+	DeleteMetadataRejectionsFunc      func(bookID string) error
+	GetAuthorsByBookIDsFunc           func(ctx context.Context, bookIDs []string) (map[string][]Author, error)
+	GetNarratorsByBookIDsFunc         func(ctx context.Context, bookIDs []string) (map[string][]Narrator, error)
+	UpsertOpDefinitionV2Func          func(row OpDefinitionV2Row) error
+	DeleteOrphanOpDefsV2Func          func(keepIDs []string) error
+	InsertOperationV2Func             func(row OperationV2Row) error
+	ListQueuedOperationsV2Func        func() ([]OperationV2Row, error)
+	GetOperationV2Func                func(id string) (*OperationV2Row, error)
+	UpdateOperationV2StatusFunc       func(id string, status string, startedAt, completedAt *time.Time, errMsg *string) error
+	SetOperationV2StatusIfQueuedFunc  func(id, newStatus string) (bool, error)
 	RepairOpsV2MissingCompletedAtFunc func() (int, error)
-	CountRunningByPluginV2Func       func(plugin string) (int, error)
-	ListActiveOperationsV2Func       func() ([]OperationV2Row, error)
-	ListResumableOperationsV2Func    func() ([]OperationV2Row, error)
-	IncrementResumeCountV2Func       func(id string) error
-	ResetOperationV2ForResumeFunc    func(id string) error
-	SetOperationV2ResultFunc         func(id string, resultData string) error
-	InsertOpStrikeV2Func             func(row OpStrikeV2Row) error
-	GetOpStateV2Func                 func(opID string) (*OpStateV2Row, error)
-	DeleteOpStateV2Func              func(opID string) error
-	UpdateOperationV2ParamsFunc      func(id string, params []byte) error
-	UpdateOpProgressV2Func           func(id string, current, total int, message string) error
-	UpdateOpPhaseV2Func              func(id string, phase *string) error
-	UpdateOpCheckpointV2Func         func(id string, newHWM int) error
-	AppendOpLogsV2Func               func(rows []OpLogV2Row) error
-	InsertOpErrorV2Func              func(row OpErrorV2Row) error
-	UpsertOpStateV2Func              func(row OpStateV2Row) error
-	ListOperationsV2SinceFunc        func(since time.Time, limit int) ([]OperationV2Row, error)
-	GetOpLogsV2Func                  func(opID string, limit int) ([]OpLogV2Row, error)
-	GetDepRevFunc                    func(sub OpSubject) (uint64, error)
-	BumpDepRevFunc                   func(sub OpSubject) (uint64, error)
-	RecordOpCompletionFunc           func(sub OpSubject, opType, fileID string, depRev uint64) error
-	GetOpCompletionFunc              func(sub OpSubject, opType string) (uint64, bool, error)
-	ListFileCompletionsFunc          func(sub OpSubject, opType string) (map[string]uint64, error)
-	ListWaitingDepsOpsFunc           func() ([]OperationV2Row, error)
-	PromoteToQueuedFunc              func(id string) error
-	AddToBatchBucketFunc             func(opType string, sub OpSubject) error
-	ListBatchBucketFunc              func(opType string) ([]BatchBucketEntry, error)
-	ClearBatchBucketFunc             func(opType string, subs []OpSubject) error
-	UpsertReviewItemFunc             func(item ReviewItem) (ReviewItem, error)
-	GetReviewItemFunc                func(id string) (*ReviewItem, error)
-	ListReviewItemsFunc              func(filter ReviewFilter) ([]ReviewItem, int, error)
-	CountReviewItemsFunc             func(status string) (int, error)
-	ReviewStatsByKindFunc            func() ([]ReviewKindStat, error)
-	SetReviewItemStatusFunc          func(id, status string) (*ReviewItem, error)
-	SetReviewItemDecisionFunc        func(id, status, chosenAction string) (*ReviewItem, error)
-	DeleteReviewItemFunc             func(id string) error
+	CountRunningByPluginV2Func        func(plugin string) (int, error)
+	ListActiveOperationsV2Func        func() ([]OperationV2Row, error)
+	ListResumableOperationsV2Func     func() ([]OperationV2Row, error)
+	IncrementResumeCountV2Func        func(id string) error
+	ResetOperationV2ForResumeFunc     func(id string) error
+	SetOperationV2ResultFunc          func(id string, resultData string) error
+	InsertOpStrikeV2Func              func(row OpStrikeV2Row) error
+	GetOpStateV2Func                  func(opID string) (*OpStateV2Row, error)
+	DeleteOpStateV2Func               func(opID string) error
+	UpdateOperationV2ParamsFunc       func(id string, params []byte) error
+	UpdateOpProgressV2Func            func(id string, current, total int, message string) error
+	UpdateOpPhaseV2Func               func(id string, phase *string) error
+	UpdateOpCheckpointV2Func          func(id string, newHWM int) error
+	AppendOpLogsV2Func                func(rows []OpLogV2Row) error
+	InsertOpErrorV2Func               func(row OpErrorV2Row) error
+	UpsertOpStateV2Func               func(row OpStateV2Row) error
+	ListOperationsV2SinceFunc         func(since time.Time, limit int) ([]OperationV2Row, error)
+	GetOpLogsV2Func                   func(opID string, limit int) ([]OpLogV2Row, error)
+	GetDepRevFunc                     func(sub OpSubject) (uint64, error)
+	BumpDepRevFunc                    func(sub OpSubject) (uint64, error)
+	RecordOpCompletionFunc            func(sub OpSubject, opType, fileID string, depRev uint64) error
+	GetOpCompletionFunc               func(sub OpSubject, opType string) (uint64, bool, error)
+	ListFileCompletionsFunc           func(sub OpSubject, opType string) (map[string]uint64, error)
+	ListWaitingDepsOpsFunc            func() ([]OperationV2Row, error)
+	PromoteToQueuedFunc               func(id string) error
+	AddToBatchBucketFunc              func(opType string, sub OpSubject) error
+	ListBatchBucketFunc               func(opType string) ([]BatchBucketEntry, error)
+	ClearBatchBucketFunc              func(opType string, subs []OpSubject) error
+	UpsertReviewItemFunc              func(item ReviewItem) (ReviewItem, error)
+	GetReviewItemFunc                 func(id string) (*ReviewItem, error)
+	ListReviewItemsFunc               func(filter ReviewFilter) ([]ReviewItem, int, error)
+	CountReviewItemsFunc              func(status string) (int, error)
+	ReviewStatsByKindFunc             func() ([]ReviewKindStat, error)
+	SetReviewItemStatusFunc           func(id, status string) (*ReviewItem, error)
+	SetReviewItemDecisionFunc         func(id, status, chosenAction string) (*ReviewItem, error)
+	DeleteReviewItemFunc              func(id string) error
 
 	// User Preferences
 	GetUserPreferenceFunc     func(key string) (*UserPreference, error)
