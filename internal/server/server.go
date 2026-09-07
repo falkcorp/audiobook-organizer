@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.46.0
+// version: 2.46.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-03
+// last-edited: 2026-09-07
 
 package server
 
@@ -1031,9 +1031,6 @@ type serverOrganizeHooks struct {
 // records a pending dedup candidate that surfaces in the UI.
 //
 // Safe to call even when the dedup engine is disabled — it's a no-op.
-
-// resumeInterruptedOperations checks for operations left in running/queued state
-// from a previous server lifecycle and re-enqueues them.
 
 // Start starts the HTTP server
 
