@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-08-23
+// last-edited: 2026-09-07
 
 package server
 
@@ -237,6 +237,12 @@ type serverOperationV2Store interface {
 	// of which statuses count as active.
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 	UpdateOperationV2Status(id string, status string, startedAt *time.Time, completedAt *time.Time, errMsg *string) error
+	// RepairOpsV2MissingCompletedAt backs the v2 half of POST
+	// /operations/clear-stale (wire_handlers.go). It stamps completed_at on rows
+	// that hold a terminal status with completed_at null -- rows that are dead to
+	// the worker but read as in-flight to ListOperationsV2Since above, which is
+	// what puts them in the UI's Active Operations panel with no way to clear.
+	RepairOpsV2MissingCompletedAt() (int, error)
 }
 
 // serverUserStore: User rows and per-user preferences.

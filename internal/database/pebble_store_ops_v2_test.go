@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-09-07
 
@@ -362,21 +362,50 @@ func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testi
 			"a terminal status with no CompletedAt reads as in-flight forever")
 	})
 
-	t.Run("an unknown terminal status is stamped too", func(t *testing.T) {
-		// The condition is the complement of a terminal-status list precisely so
-		// a state added later needs no edit here. If someone replaces it with an
-		// enumeration, this case is what fails.
+	t.Run("an unrecognized status is NOT stamped", func(t *testing.T) {
+		// This subtest asserted the opposite until 2026-09-07, when the
+		// condition was the complement of the live states ("anything that is not
+		// running or queued is terminal"). That is wrong in the dangerous
+		// direction: "interrupted_quiesced" is resumable and "waiting_deps" is
+		// waiting on the dependency scheduler, and the complement called both
+		// terminal. A stamped live row reads as finished work that never ran.
+		//
+		// So the predicate is now an allowlist and an unknown status is treated
+		// as live. Adding a real terminal state means adding it to
+		// isTerminalV2Status; the cost of forgetting is a row that lingers
+		// visibly, not work silently discarded.
 		row := buildTestOpRow("op-future", "queued")
 		require.NoError(t, s.InsertOperationV2(row))
 
-		updated, err := s.SetOperationV2StatusIfQueued("op-future", "abandoned_by_a_future_feature")
+		updated, err := s.SetOperationV2StatusIfQueued("op-future", "invented_by_a_future_feature")
 		require.NoError(t, err)
-		require.True(t, updated)
+		require.True(t, updated, "the status write itself still happens")
 
 		got, err := s.GetOperationV2("op-future")
 		require.NoError(t, err)
 		require.NotNil(t, got)
-		require.NotNil(t, got.CompletedAt)
+		require.Nil(t, got.CompletedAt,
+			"an unrecognized status must be treated as live, not stamped")
+	})
+
+	t.Run("resumable and waiting statuses are NOT stamped", func(t *testing.T) {
+		// The two concrete statuses the old complement predicate got wrong.
+		// isResumableV2Status lists interrupted_quiesced as resumable, and
+		// ListWaitingDepsOps hands waiting_deps rows to the dependency scheduler.
+		for _, status := range []string{"interrupted_quiesced", "waiting_deps"} {
+			id := "op-live-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+
+			updated, err := s.SetOperationV2StatusIfQueued(id, status)
+			require.NoError(t, err)
+			require.True(t, updated)
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt,
+				"%s is live; stamping it hides an op the resume/deps machinery still owns", status)
+		}
 	})
 
 	t.Run("promoting to running leaves CompletedAt nil", func(t *testing.T) {
@@ -412,5 +441,106 @@ func TestSetOperationV2StatusIfQueued_StampsCompletedAtOnTerminalStatus(t *testi
 		require.NotNil(t, got)
 		require.NotNil(t, got.CompletedAt)
 		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second)
+	})
+}
+
+// TestRepairOpsV2MissingCompletedAt covers the repair behind the v2 half of
+// POST /operations/clear-stale.
+//
+// The rows it targets are the ones the pre-2026-09-07
+// SetOperationV2StatusIfQueued produced: a terminal status with completed_at
+// null, which is dead to the worker and in-flight to every reader. The dangerous
+// mistake would be stamping a row that is still LIVE, so most of these subtests
+// assert what the repair must NOT touch.
+func TestRepairOpsV2MissingCompletedAt(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	// insert writes a row with CompletedAt forced to nil, bypassing the status
+	// setters so the test can construct the corrupt shape directly.
+	insert := func(t *testing.T, id, status string) {
+		t.Helper()
+		row := buildTestOpRow(id, status)
+		row.CompletedAt = nil
+		require.NoError(t, s.InsertOperationV2(row))
+	}
+
+	t.Run("stamps terminal rows and leaves live rows alone", func(t *testing.T) {
+		// Terminal: every status in isTerminalV2Status.
+		terminal := []string{"completed", "failed", "canceled", "interrupted_dropped"}
+		for _, st := range terminal {
+			insert(t, "term-"+st, st)
+		}
+		// Live: the scheduler, the deps waiter, and the startup resume sweep each
+		// still own one of these. Stamping any of them hides real work.
+		live := []string{"queued", "running", "waiting_deps", "interrupted_quiesced", "interrupted_ask"}
+		for _, st := range live {
+			insert(t, "live-"+st, st)
+		}
+
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Equal(t, len(terminal), n,
+			"the count must come from rows actually written, not candidates seen")
+
+		for _, st := range terminal {
+			got, err := s.GetOperationV2("term-" + st)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.NotNil(t, got.CompletedAt, "%s is terminal and must be stamped", st)
+		}
+		for _, st := range live {
+			got, err := s.GetOperationV2("live-" + st)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt, "%s is live and must not be stamped", st)
+		}
+	})
+
+	t.Run("is idempotent and reports zero on a clean store", func(t *testing.T) {
+		// Everything repairable was repaired by the subtest above, so a second
+		// pass must find nothing. A non-zero result here would mean the repair
+		// is re-stamping rows it already fixed.
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Zero(t, n)
+	})
+
+	t.Run("never overwrites an existing stamp", func(t *testing.T) {
+		earlier := time.Now().UTC().Add(-73 * 24 * time.Hour)
+		row := buildTestOpRow("term-already-stamped", "canceled")
+		row.CompletedAt = &earlier
+		require.NoError(t, s.InsertOperationV2(row))
+
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Zero(t, n, "an already-stamped row is not a candidate")
+
+		got, err := s.GetOperationV2("term-already-stamped")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second,
+			"the original completion time is the truer one and must win")
+	})
+
+	t.Run("has no age cutoff", func(t *testing.T) {
+		// The row this repair was written for had been stuck for 73 days. Any
+		// "recent N" window -- GetRecentOperations(500), the timeline's default
+		// range -- would miss it, which is why the scan is unbounded.
+		old := time.Now().UTC().Add(-200 * 24 * time.Hour)
+		row := buildTestOpRow("term-ancient", "canceled")
+		row.CompletedAt = nil
+		row.QueuedAt = old
+		require.NoError(t, s.InsertOperationV2(row))
+
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+
+		got, err := s.GetOperationV2("term-ancient")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.NotNil(t, got.CompletedAt)
 	})
 }

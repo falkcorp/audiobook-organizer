@@ -3348,6 +3348,59 @@ func (_c *MockOpsV2Store_RecordOpCompletion_Call) RunAndReturn(run func(sub data
 	return _c
 }
 
+// RepairOpsV2MissingCompletedAt provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) RepairOpsV2MissingCompletedAt() (int, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for RepairOpsV2MissingCompletedAt")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() int); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RepairOpsV2MissingCompletedAt'
+type MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call struct {
+	*mock.Call
+}
+
+// RepairOpsV2MissingCompletedAt is a helper method to define mock.On call
+func (_e *MockOpsV2Store_Expecter) RepairOpsV2MissingCompletedAt() *MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call {
+	return &MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call{Call: _e.mock.On("RepairOpsV2MissingCompletedAt")}
+}
+
+func (_c *MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call) Run(run func()) *MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call) Return(n int, err error) *MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call) RunAndReturn(run func() (int, error)) *MockOpsV2Store_RepairOpsV2MissingCompletedAt_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ResetOperationV2ForResume provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) ResetOperationV2ForResume(id string) error {
 	ret := _mock.Called(id)
@@ -24797,6 +24850,59 @@ func (_c *MockStore_RemoveSeriesTagsByPrefix_Call) Return(err error) *MockStore_
 }
 
 func (_c *MockStore_RemoveSeriesTagsByPrefix_Call) RunAndReturn(run func(seriesID int, prefix string, source string) error) *MockStore_RemoveSeriesTagsByPrefix_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RepairOpsV2MissingCompletedAt provides a mock function for the type MockStore
+func (_mock *MockStore) RepairOpsV2MissingCompletedAt() (int, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for RepairOpsV2MissingCompletedAt")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() int); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_RepairOpsV2MissingCompletedAt_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RepairOpsV2MissingCompletedAt'
+type MockStore_RepairOpsV2MissingCompletedAt_Call struct {
+	*mock.Call
+}
+
+// RepairOpsV2MissingCompletedAt is a helper method to define mock.On call
+func (_e *MockStore_Expecter) RepairOpsV2MissingCompletedAt() *MockStore_RepairOpsV2MissingCompletedAt_Call {
+	return &MockStore_RepairOpsV2MissingCompletedAt_Call{Call: _e.mock.On("RepairOpsV2MissingCompletedAt")}
+}
+
+func (_c *MockStore_RepairOpsV2MissingCompletedAt_Call) Run(run func()) *MockStore_RepairOpsV2MissingCompletedAt_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_RepairOpsV2MissingCompletedAt_Call) Return(n int, err error) *MockStore_RepairOpsV2MissingCompletedAt_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockStore_RepairOpsV2MissingCompletedAt_Call) RunAndReturn(run func() (int, error)) *MockStore_RepairOpsV2MissingCompletedAt_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 package registry_test
 
@@ -198,6 +198,11 @@ func (f *fakeStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, er
 	f.ops[id] = op
 	return true, nil
 }
+
+// RepairOpsV2MissingCompletedAt is a no-op here: the registry never calls it
+// (it is a UI-triggered repair on the store), it exists only to satisfy
+// database.OpsV2Store.
+func (f *fakeStore) RepairOpsV2MissingCompletedAt() (int, error) { return 0, nil }
 
 func (f *fakeStore) CountRunningByPluginV2(plugin string) (int, error) {
 	f.mu.Lock()
