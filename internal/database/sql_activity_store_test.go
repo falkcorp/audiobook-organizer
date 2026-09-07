@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f1c4b70-3d21-4a58-b0e6-1c8a2f5d6e30
 // last-edited: 2026-09-07
 
@@ -235,21 +235,21 @@ func TestSQLActivity_WipeCancel(t *testing.T) {
 func TestSQLActivity_BackfillIdempotent(t *testing.T) {
 	s := newTestSQLStore(t)
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	// Distinct entries (Summary "a" vs "b") ⇒ distinct content keys ⇒ two rows.
 	entries := []ActivityEntry{
 		{Timestamp: base, Tier: "info", Type: "t", Level: "info", Source: "s", Summary: "a"},
 		{Timestamp: base.Add(time.Minute), Tier: "info", Type: "t", Level: "info", Source: "s", Summary: "b"},
 	}
-	keys := []string{"act:info:1:AAA", "act:info:2:BBB"}
 
-	n1, err := s.recordBatchWithKeys(context.Background(), entries, keys)
+	n1, err := s.recordBatch(context.Background(), entries)
 	if err != nil {
 		t.Fatalf("backfill1: %v", err)
 	}
 	if n1 != 2 {
 		t.Errorf("first backfill inserted %d, want 2", n1)
 	}
-	// Re-run: same keys → zero inserted, no duplicates.
-	n2, err := s.recordBatchWithKeys(context.Background(), entries, keys)
+	// Re-run: same content keys → zero inserted, no duplicates.
+	n2, err := s.recordBatch(context.Background(), entries)
 	if err != nil {
 		t.Fatalf("backfill2: %v", err)
 	}
@@ -259,5 +259,106 @@ func TestSQLActivity_BackfillIdempotent(t *testing.T) {
 	_, total, _ := s.Query(context.Background(), ActivityFilter{})
 	if total != 2 {
 		t.Errorf("total after re-run = %d, want 2", total)
+	}
+}
+
+// TestSQLActivity_ContentKeyRoundTrip is the constraint the whole cutover rests
+// on: the content key derived from a live-recorded entry must equal the key
+// derived from the SAME entry after it round-trips through Pebble's JSON storage
+// and back. If it does not, the backfill's copy of a live-dual-written event
+// would not dedup and the log would gain duplicates. It also asserts the two
+// deliberately-excluded fields (ID, PrunedAt) do not perturb the key.
+func TestSQLActivity_ContentKeyRoundTrip(t *testing.T) {
+	live := ActivityEntry{
+		Timestamp:   time.Date(2026, 9, 1, 12, 0, 0, 123, time.UTC),
+		Tier:        "change",
+		Type:        "metadata_applied",
+		Level:       "info",
+		Source:      "metafetch",
+		OperationID: "op1",
+		BookID:      "bk1",
+		Summary:     "Applied metadata",
+		Details:     map[string]any{"z": 1.0, "a": "x", "m": true},
+		Tags:        []string{"action:metadata", "provider:google"},
+	}
+	liveKey, err := activitySrcKey(live)
+	if err != nil {
+		t.Fatalf("live key: %v", err)
+	}
+
+	// Simulate Pebble's round-trip: it marshals the entry (with a stamped ID)
+	// and later decodes it back for the backfill.
+	stamped := live
+	stamped.ID = 987654321
+	b, err := json.Marshal(stamped)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded ActivityEntry
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// And a lifecycle mutation the backfill might observe on an older row.
+	pruned := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	decoded.PrunedAt = &pruned
+
+	backfillKey, err := activitySrcKey(decoded)
+	if err != nil {
+		t.Fatalf("backfill key: %v", err)
+	}
+	if liveKey != backfillKey {
+		t.Fatalf("content key diverged across round-trip:\n live=%s\n back=%s", liveKey, backfillKey)
+	}
+}
+
+// TestSQLActivity_LiveDualWriteThenBackfillNoDup is the end-to-end proof: record
+// an entry through the migration wrapper (dual-writing to a real Pebble + a real
+// SQLite), then run the full backfill over that Pebble. The backfill re-copies
+// the row the live path already stored, and the content key must make it a
+// no-op — SQLite must hold exactly ONE row, and parity must pass.
+func TestSQLActivity_LiveDualWriteThenBackfillNoDup(t *testing.T) {
+	pebbleStore := newTestPebbleActivityStore(t)
+	sqlStore := newTestSQLStore(t)
+	mig := NewMigratingActivityStore(pebbleStore, sqlStore, false)
+
+	// A historical-timestamp entry: exactly the shape (changelog/batcher) that
+	// broke the old timestamp-cutoff design — recorded "now" but carrying an old
+	// timestamp, so any cutoff would have re-copied it as a duplicate.
+	old := time.Date(2026, 1, 15, 8, 30, 0, 0, time.UTC)
+	if _, err := mig.Record(ActivityEntry{
+		Timestamp: old, Tier: "change", Type: "metadata_changed", Level: "info",
+		Source: "changelog", Summary: "historical import", Tags: []string{"action:import"},
+	}); err != nil {
+		t.Fatalf("live record: %v", err)
+	}
+	// A zero-timestamp entry: normalized once in the wrapper, so both backends
+	// agree on the resolved instant (the second asymmetry the redesign closes).
+	if _, err := mig.Record(ActivityEntry{
+		Tier: "info", Type: "scan", Source: "scanner", Summary: "live now",
+	}); err != nil {
+		t.Fatalf("live record zero-ts: %v", err)
+	}
+
+	if _, total, _ := sqlStore.Query(context.Background(), ActivityFilter{}); total != 2 {
+		t.Fatalf("after dual-write SQLite total = %d, want 2", total)
+	}
+
+	res, err := BackfillPebbleActivityToSQL(context.Background(), pebbleStore, sqlStore, false)
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if !res.ParityOK {
+		t.Fatalf("parity failed: %+v", res)
+	}
+	// The backfill scanned both Pebble rows but inserted zero — both already
+	// present via dual-write under the same content keys.
+	if res.EntriesScanned != 2 {
+		t.Errorf("scanned = %d, want 2", res.EntriesScanned)
+	}
+	if res.EntriesCopied != 0 {
+		t.Errorf("copied = %d, want 0 (dual-write already stored both)", res.EntriesCopied)
+	}
+	if _, total, _ := sqlStore.Query(context.Background(), ActivityFilter{}); total != 2 {
+		t.Errorf("after backfill SQLite total = %d, want 2 (no duplicates)", total)
 	}
 }
