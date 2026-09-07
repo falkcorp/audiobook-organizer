@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -429,6 +430,53 @@ func TestSQLActivity_BackfillStreamsMultipleBatches(t *testing.T) {
 	}
 	if _, total, _ := sqlStore.Query(context.Background(), ActivityFilter{}); total != distinct {
 		t.Errorf("after second run SQLite total = %d, want %d (unchanged)", total, distinct)
+	}
+}
+
+// TestSQLActivity_LargeDetailsStoredCompressed proves the details codec is wired
+// end to end through the real store: a large repetitive details payload is stored
+// as a compressed BLOB (much smaller than the raw JSON) yet reads back byte-for-
+// byte. This is the regression guard for the disk blow-up that raw JSON caused.
+func TestSQLActivity_LargeDetailsStoredCompressed(t *testing.T) {
+	s := newTestSQLStore(t)
+	ctx := context.Background()
+
+	bigVal := strings.Repeat("ITLSafetyCompare mismatch; dropped_updates=11; ", 5000)
+	e := ActivityEntry{
+		Timestamp: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Tier:      "change", Type: "itl_apply", Level: "warn", Source: "itunes",
+		Summary: "ITL apply", Details: map[string]any{"err": bigVal, "attempts": "120"},
+	}
+	rawJSON, _ := json.Marshal(e.Details)
+
+	if _, err := s.recordBatch(ctx, []ActivityEntry{e}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	// Stored column must be a compressed BLOB far smaller than the raw JSON.
+	var stored []byte
+	if err := s.reader.QueryRowContext(ctx,
+		`SELECT details FROM activity WHERE type = 'itl_apply' LIMIT 1`).Scan(&stored); err != nil {
+		t.Fatalf("read stored details: %v", err)
+	}
+	if len(stored) == 0 || stored[0] != detailsFmtZstd {
+		t.Fatalf("stored details not zstd-tagged: len=%d tag=%#v", len(stored), stored)
+	}
+	if len(stored) >= len(rawJSON)/4 {
+		t.Errorf("stored %d bytes not << raw %d (expected heavy compression)", len(stored), len(rawJSON))
+	}
+
+	// And it reads back through the normal query path, fully intact.
+	entries, _, err := s.Query(ctx, ActivityFilter{Type: "itl_apply"})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].Details["err"] != bigVal {
+		t.Errorf("details round-trip mismatch: got %d-byte err, want %d",
+			len(entries[0].Details["err"].(string)), len(bigVal))
 	}
 }
 

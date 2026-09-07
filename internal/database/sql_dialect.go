@@ -73,7 +73,7 @@ func (sqliteDialect) ddl() []string {
 			operation_id TEXT,
 			book_id      TEXT,
 			summary      TEXT    NOT NULL,
-			details      TEXT,
+			details      BLOB,
 			tags         TEXT,
 			pruned_at    INTEGER
 		)`,
