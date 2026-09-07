@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.13.0
+// version: 5.14.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package metafetch
 
@@ -91,15 +91,37 @@ type metafetchBookStore interface {
 // metafetchFileStore is everything about bytes on disk: the file rows, the
 // move/rename bookkeeping the write-back path records, and the import roots a
 // destination path is checked against.
+//
+// Split into the two halves below on 2026-09-07, when the collision resolver's
+// GetBookFileByID took it to 9 declared entries and over the interfacebloat
+// limit of 8. The name is retained as their composition so the method set stays
+// byte-identical and no consumer moves.
 type metafetchFileStore interface {
+	metafetchFileReader
+	metafetchFileWriter
+}
+
+// metafetchFileReader looks up file rows and the import roots a destination
+// path is checked against.
+type metafetchFileReader interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	// GetBookFileByID rehydrates the FULL record. The collision resolver
+	// (organizer.CollisionStore) needs it because UpdateBookFile is a
+	// full-record replacement: repointing from a partial record would wipe the
+	// fingerprint, transcript and tags on the row.
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+// metafetchFileWriter creates and mutates file rows and records the
+// move/rename bookkeeping the write-back path produces.
+type metafetchFileWriter interface {
 	CreateBookFile(file *database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
 	RecordPathChange(change *database.BookPathChange) error
 	SetLastWrittenAt(id string, t time.Time) error
 	MarkNeedsRescan(bookID string) error
-	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
 // metafetchContributorStore is the get-or-create pass service_apply.go runs when
@@ -610,7 +632,17 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 		return fmt.Errorf("compute target paths for book %s: %w", id, err)
 	}
 
-	renameResult, renameErr := RenameFiles(entries)
+	// Same collision policy as runApplyPipeline: this is the same rename
+	// reached from the "Save to Files" button, and an occupied target failed
+	// forever here in exactly the same way.
+	//
+	// The durable-failure skip is deliberately NOT applied on this path. It is
+	// user-initiated: someone pressing the button has asked for this book now,
+	// and silently doing nothing because a background run recorded a failure
+	// would be a button that does nothing with no explanation. The record is
+	// still written on failure, and still cleared on success, so the two paths
+	// share one state.
+	renameResult, renameErr := RenameFiles(entries, applyCollisionPolicy(mfs.db, id))
 	// Even when RenameFiles returns an error, entries in renameResult.Succeeded
 	// have physically moved on disk — their DB paths MUST still be updated
 	// below, or the library loses track of files that did move. The error is
@@ -701,9 +733,13 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 
 	// Now that DB paths for every succeeded rename are persisted, surface the
 	// rename failure (skipping dedup/writeback follow-ups for the failed run).
+	// An unresolved collision is recorded durably so the BACKGROUND apply stops
+	// re-attempting it; this user-initiated path itself is never skipped.
 	if renameErr != nil {
+		recordRenameCollisionFailure(mfs.db, id, renameResult, renameErr)
 		return fmt.Errorf("rename files: %w", renameErr)
 	}
+	organizer.ClearApplyRenameFailure(mfs.db, id)
 
 	// Trigger dedup check after metadata apply
 	if mfs.dedupEngine != nil {

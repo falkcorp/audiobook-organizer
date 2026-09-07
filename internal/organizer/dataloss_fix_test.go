@@ -1,7 +1,7 @@
 // file: internal/organizer/dataloss_fix_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ff38c140-155a-4c69-b3ea-b350a8503066
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package organizer
 
@@ -94,7 +94,7 @@ func TestRenameFilesPhase2CollisionRollsBack(t *testing.T) {
 
 	result, err := RenameFiles([]FileRenameEntry{
 		{SegmentID: "s1", SourcePath: src, TargetPath: dst},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected error for phase-2 collision, got nil")
 	}
@@ -146,7 +146,7 @@ func TestRenameFilesResumesStrandedTemp(t *testing.T) {
 
 	result, err := RenameFiles([]FileRenameEntry{
 		{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: int64(len("stranded"))},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestRenameFilesPartialSucceededReportedOnFailure(t *testing.T) {
 	result, err := RenameFiles([]FileRenameEntry{
 		{SegmentID: "s1", SourcePath: src1, TargetPath: dst1},
 		{SegmentID: "s2", SourcePath: src2, TargetPath: dst2},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

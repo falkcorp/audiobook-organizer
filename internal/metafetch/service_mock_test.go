@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package metafetch
 
@@ -681,7 +681,7 @@ func TestRecordChangeHistory(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRenameFilesEmpty(t *testing.T) {
-	result, err := RenameFiles(nil)
+	result, err := RenameFiles(nil, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Empty(t, result.Succeeded)
@@ -692,7 +692,7 @@ func TestRenameFilesSkipsMissing(t *testing.T) {
 	entries := []FileRenameEntry{
 		{SegmentID: "s1", SourcePath: "/nonexistent/path/file.m4b", TargetPath: "/other/path/file.m4b"},
 	}
-	result, err := RenameFiles(entries)
+	result, err := RenameFiles(entries, nil)
 	require.NoError(t, err)
 	assert.Len(t, result.Skipped, 1)
 	assert.Empty(t, result.Succeeded)

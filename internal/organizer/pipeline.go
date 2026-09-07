@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.4.1
+// version: 1.5.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package organizer
 
@@ -40,6 +40,14 @@ type FileRenameEntry struct {
 	// that formats to the same path. Without a size to check against, the
 	// resume is refused rather than guessed.
 	ExpectedSize int64 `json:"expected_size,omitempty"`
+	// SourceHash is the identity digest the book_file row records for this
+	// file (empty when the row has none). It is the stored-hash rung of the
+	// pre-flight collision resolver's identity ladder (collision.go): comparing
+	// two stored hashes decides "same bytes?" with two index reads and no file
+	// I/O, which is what keeps multi-GB .m4b hashing off the common path. It is
+	// a filehash.BookFileHash value — the one algorithm that fills
+	// book_files.file_hash — so it is comparable with a live digest.
+	SourceHash string `json:"source_hash,omitempty"`
 }
 
 // FilePipelineResult holds the results of a file pipeline operation.
@@ -256,6 +264,7 @@ func planPass(rootDir, folderPattern, filePattern string, sorted []database.Book
 			SourcePath:   f.FilePath,
 			TargetPath:   targetPath,
 			ExpectedSize: f.FileSize,
+			SourceHash:   f.FileHash,
 		})
 	}
 
@@ -324,6 +333,20 @@ type RenameFilesResult struct {
 	Succeeded []FileRenameEntry `json:"succeeded"`
 	Skipped   []FileRenameEntry `json:"skipped"` // source not found
 	Errors    []string          `json:"errors,omitempty"`
+	// Resolutions lists the path collisions the pre-flight pass resolved
+	// (collision.go). Empty when no CollisionPolicy was supplied.
+	Resolutions []CollisionResolution `json:"resolutions,omitempty"`
+	// Collisions lists the collisions the pre-flight pass could NOT resolve.
+	// They carry the occupant's size and mtime so the caller can record a
+	// durable failure that self-heals when the occupant changes or goes away.
+	//
+	// NOTE there is deliberately no "already at target" list. An entry the
+	// resolver settles without a rename needs NOTHING from the caller: the
+	// quarantine branch repoints its own row, and the already-linked branch
+	// leaves the row alone because it is already correct. A field saying
+	// "callers must treat these as path-updated" would be a contract no caller
+	// honoured and, after a rollback, one that was false as well.
+	Collisions []CollisionFailure `json:"collisions,omitempty"`
 }
 
 // renameTemp tracks a file parked at its intermediate temp path during a
@@ -498,7 +521,16 @@ func globEscape(s string) string {
 //     destination that exists — a collision fails the batch and rolls back
 //     instead of silently destroying bytes, even against a concurrent worker
 //     that appeared between the pre-check and the syscall.
-func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
+//
+// policy switches on the pre-flight collision resolver (collision.go). It is an
+// EXPLICIT parameter, not a package default, because it changes what happens to
+// files on disk: with a policy an occupied target is resolved (quarantine the
+// losing copy, or fall back to organize's _copyN ladder); with policy == nil an
+// occupied target fails the batch exactly as it always has. Every WRITE-BACK
+// caller passes a policy — refusing forever is the bug being fixed and it is a
+// bug in all of them. See collision.go for why the pass runs before phase 1 and
+// why its own mutations are journalled.
+func RenameFiles(entries []FileRenameEntry, policy *CollisionPolicy) (*RenameFilesResult, error) {
 	result := &RenameFilesResult{}
 	if len(entries) == 0 {
 		return result, nil
@@ -555,12 +587,32 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 		return result, nil
 	}
 
+	// Pre-flight: resolve every target that is already occupied on disk, BEFORE
+	// any file is parked as a temp.
+	//
+	// The ordering is the whole guarantee. rollbackRenameTemps can return a
+	// parked temp to its source, but it cannot resurrect an occupant. Deciding
+	// every collision first means a book that fails on its second file never
+	// leaves a destroyed occupant behind the first one. The pass's own
+	// mutations (a quarantine move, a row repoint) are recorded in `journal`
+	// and undone alongside the temps on every later failure.
+	//
+	// Entries resumed from a stranded temp are deliberately NOT put through the
+	// resolver: their source is already gone, there is nothing to quarantine,
+	// and their identity was verified by strandedTempMismatch above.
+	valid, journal, cerr := resolveTargetCollisions(valid, policy, result)
+	if cerr != nil {
+		rollbackRenameTemps(temps, result)
+		return result, cerr
+	}
+
 	// Phase 1: rename source -> temp
 	for _, entry := range valid {
 		// Ensure target directory exists
 		targetDir := filepath.Dir(entry.TargetPath)
 		if err := os.MkdirAll(targetDir, 0o775); err != nil {
 			rollbackRenameTemps(temps, result)
+			journal.rollback(result)
 			return result, fmt.Errorf("create target dir %s: %w", targetDir, err)
 		}
 
@@ -568,6 +620,7 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 		if err := safeRename(entry.SourcePath, tempPath); err != nil {
 			// Rollback temps already moved
 			rollbackRenameTemps(temps, result)
+			journal.rollback(result)
 			return result, fmt.Errorf("rename %s -> temp: %w", entry.SourcePath, err)
 		}
 		temps = append(temps, renameTemp{TempPath: tempPath, Entry: entry})
@@ -576,9 +629,21 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 	// Phase 2: publish temp -> final without ever replacing an occupant. On
 	// failure, roll back this and every remaining temp so no file is left
 	// stranded at a .tmp-rename path.
+	//
+	// The collision journal is rolled back too, but ONLY while nothing has been
+	// published yet. Once a temp has been published, undoing an earlier
+	// quarantine would move a file back to a source path whose row now points
+	// at the published target — an inconsistency worse than the quarantine.
+	// Past that point the resolutions stand and are reported instead.
 	for i, t := range temps {
 		if err := finalizeExclusive(t.TempPath, t.Entry.TargetPath); err != nil {
 			rollbackRenameTemps(temps[i:], result)
+			if len(result.Succeeded) == 0 {
+				journal.rollback(result)
+			} else if !journal.empty() {
+				slog.Warn("RenameFiles: keeping resolved collisions after a partial publish — rolling them back would contradict rows already updated",
+					"published", len(result.Succeeded), "resolutions", len(result.Resolutions))
+			}
 			return result, fmt.Errorf("rename temp -> %s: %w", t.Entry.TargetPath, err)
 		}
 		result.Succeeded = append(result.Succeeded, t.Entry)

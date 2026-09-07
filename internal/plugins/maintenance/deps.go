@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -149,7 +149,17 @@ type opsLinkStore interface {
 // GetUserPreference) is embedded rather than spelled out so every op that
 // writes a user-lockable column can go through database.LoadFieldLocks /
 // ApplyRespectingLocks -- the ONE guard the metadata apply paths share.
+// It is split into two halves because adding the `_system` preference pair
+// took it to ten declared entries, over the interfacebloat limit of 8. The name
+// is retained as their composition so the method set stays byte-identical and
+// no consumer moves — the same regrouping opsBookFileWriter took on 2026-08-24.
 type opsHousekeeping interface {
+	opsRecordsAndQueue
+	opsSystemPreferences
+}
+
+// opsRecordsAndQueue is opsHousekeeping's original method set.
+type opsRecordsAndQueue interface {
 	database.MetadataFieldStateReader
 
 	CreateOperationChange(change *database.OperationChange) error
@@ -161,7 +171,23 @@ type opsHousekeeping interface {
 	UpsertReviewItem(item database.ReviewItem) (database.ReviewItem, error)
 }
 
-// OpsStore is the 53 methods the maintenance ops need -- what they call directly
+// opsSystemPreferences is the `_system` preference namespace: the keyspace the
+// metadata apply pipeline keeps its phase checkpoints and its durable
+// rename-failure records in (organizer/checkpoint.go, organizer/apply_failure.go).
+//
+// It is its OWN interface rather than two more entries on opsHousekeeping for a
+// mechanical reason as well as a descriptive one: opsHousekeeping already
+// declares eight entries, which is the interfacebloat limit every group in this
+// file is deliberately kept under. It stays on the common path rather than
+// behind a one-caller accessor because clearing a durable rename-failure record
+// is what stops a bad classification from being permanent, and an op that
+// cannot be reached is not a control.
+type opsSystemPreferences interface {
+	GetAllPreferencesForUser(userID string) ([]database.UserPreferenceKV, error)
+	SetUserPreferenceForUser(userID string, key string, value string) error
+}
+
+// OpsStore is the 55 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
 type OpsStore interface {
