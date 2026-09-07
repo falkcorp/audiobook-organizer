@@ -1,7 +1,7 @@
 // file: internal/metafetch/file_pipeline_dataloss_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1ed9f6-e6b5-47cb-9843-94343fe2e7eb
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package metafetch
 
@@ -34,7 +34,7 @@ func TestMetafetchRenameFilesPhase2CollisionRollsBack(t *testing.T) {
 
 	result, err := RenameFiles([]FileRenameEntry{
 		{SegmentID: "s1", SourcePath: src, TargetPath: dst},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected error for phase-2 collision, got nil")
 	}
@@ -70,7 +70,7 @@ func TestMetafetchRenameFilesResumesStrandedTemp(t *testing.T) {
 	// without a size the pipeline refuses (see organizer.strandedTempMismatch).
 	result, err := RenameFiles([]FileRenameEntry{
 		{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: int64(len("stranded"))},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

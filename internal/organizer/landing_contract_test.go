@@ -1,7 +1,7 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package organizer
 
@@ -282,7 +282,7 @@ func TestRenameFiles_TwoWritersOneTarget_NeitherFileIsLost(t *testing.T) {
 			go func() {
 				defer done.Done()
 				start.Wait()
-				results[i], errs[i] = RenameFiles([]FileRenameEntry{{SegmentID: "s", SourcePath: src, TargetPath: dst}})
+				results[i], errs[i] = RenameFiles([]FileRenameEntry{{SegmentID: "s", SourcePath: src, TargetPath: dst}}, nil)
 			}()
 		}
 		start.Done()
@@ -328,7 +328,7 @@ func TestRenameFiles_ResumesANonceSuffixedStrandedTemp(t *testing.T) {
 	require.True(t, strings.HasPrefix(parked, dst+TmpRenameSuffix+"-"), "temp name shape: %s", parked)
 	require.NoError(t, os.WriteFile(parked, []byte("stranded"), 0o644))
 
-	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: int64(len("stranded"))}})
+	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: int64(len("stranded"))}}, nil)
 	require.NoError(t, err)
 	require.Empty(t, result.Skipped)
 	require.Len(t, result.Succeeded, 1)
@@ -359,7 +359,7 @@ func TestRenameFiles_StrandedTemp_RefusedWhenUnverifiable(t *testing.T) {
 			parked := renameTempPath(dst)
 			require.NoError(t, os.WriteFile(parked, []byte("stranded"), 0o644))
 
-			result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: tc.expected}})
+			result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: tc.expected}}, nil)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.reason)
 			require.Contains(t, err.Error(), parked, "the error must name the temp an operator has to look at")
@@ -388,7 +388,7 @@ func TestRenameFiles_LegacyTempBesidePresentSource_Refuses(t *testing.T) {
 	legacy := dst + TmpRenameSuffix
 	require.NoError(t, os.WriteFile(legacy, []byte("orphan"), 0o644))
 
-	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: 4}})
+	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst, ExpectedSize: 4}}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), legacy)
 	require.Empty(t, result.Succeeded)
@@ -415,7 +415,7 @@ func TestRenameFiles_TwoStrandedTempsForOneTarget_RefusesToGuess(t *testing.T) {
 	require.NoError(t, os.WriteFile(p1, []byte("one"), 0o644))
 	require.NoError(t, os.WriteFile(p2, []byte("two"), 0o644))
 
-	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst}})
+	result, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst}}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "refusing to guess")
 	require.Len(t, result.Errors, 1)
@@ -436,7 +436,7 @@ func TestRenameFiles_LegacyAndNonceTempsTogether_IsAmbiguous(t *testing.T) {
 	require.NoError(t, os.WriteFile(dst+TmpRenameSuffix, []byte("legacy"), 0o644))
 	require.NoError(t, os.WriteFile(renameTempPath(dst), []byte("nonce"), 0o644))
 
-	_, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst}})
+	_, err := RenameFiles([]FileRenameEntry{{SegmentID: "s1", SourcePath: src, TargetPath: dst}}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "2 stranded temp files")
 }

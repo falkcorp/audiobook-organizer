@@ -1,7 +1,7 @@
 // file: internal/metafetch/virtual_bookfile_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f1e9c72-8b4d-4a6e-9d05-7c2b1a8e4f60
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package metafetch
 
@@ -78,7 +78,7 @@ func TestVirtualBookFiles_StrandedTempResumesOnlyWithSize(t *testing.T) {
 			result, err := RenameFiles([]FileRenameEntry{{
 				SegmentID: files[0].ID, SourcePath: files[0].FilePath,
 				TargetPath: dst, ExpectedSize: files[0].FileSize,
-			}})
+			}}, nil)
 			if tc.wantResume {
 				if err != nil || len(result.Succeeded) != 1 {
 					t.Fatalf("expected resume: err=%v succeeded=%d", err, len(result.Succeeded))

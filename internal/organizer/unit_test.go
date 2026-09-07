@@ -1,7 +1,7 @@
 // file: internal/organizer/unit_test.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package organizer
 
@@ -450,7 +450,7 @@ func TestComputeTargetPathsFromSegments(t *testing.T) {
 
 func TestRenameFiles(t *testing.T) {
 	t.Run("empty entries returns empty result", func(t *testing.T) {
-		result, err := RenameFiles(nil)
+		result, err := RenameFiles(nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -466,7 +466,7 @@ func TestRenameFiles(t *testing.T) {
 		entries := []FileRenameEntry{
 			{SegmentID: "s1", SourcePath: "/nonexistent/file.m4b", TargetPath: "/tmp/out.m4b"},
 		}
-		result, err := RenameFiles(entries)
+		result, err := RenameFiles(entries, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -486,7 +486,7 @@ func TestRenameFiles(t *testing.T) {
 		entries := []FileRenameEntry{
 			{SegmentID: "s1", SourcePath: src, TargetPath: dst},
 		}
-		result, err := RenameFiles(entries)
+		result, err := RenameFiles(entries, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -508,7 +508,7 @@ func TestRenameFiles(t *testing.T) {
 			{SegmentID: "s1", SourcePath: "/no/such/a.m4b", TargetPath: "/tmp/a.m4b"},
 			{SegmentID: "s2", SourcePath: "/no/such/b.m4b", TargetPath: "/tmp/b.m4b"},
 		}
-		result, err := RenameFiles(entries)
+		result, err := RenameFiles(entries, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

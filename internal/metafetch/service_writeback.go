@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package metafetch
 
@@ -498,8 +498,9 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 		return fmt.Errorf("compute target paths for book %s: %w", id, err)
 	}
 
-	if config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) {
-		renameResult, renameErr := RenameFiles(entries)
+	if config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) &&
+		!organizer.ApplyRenameBlocked(mfs.db, id, targetPathsOf(entries)) {
+		renameResult, renameErr := RenameFiles(entries, applyCollisionPolicy(mfs.db, id))
 		// Even when RenameFiles returns an error, entries in
 		// renameResult.Succeeded have physically moved on disk — their DB
 		// paths MUST still be updated below, or the library loses track of
@@ -582,11 +583,21 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 		}
 
 		// DB paths for every succeeded rename are persisted; now surface the
-		// rename failure. The checkpoint is NOT set, so the next apply run
-		// retries the rename (including any stranded-temp resume).
+		// rename failure.
+		//
+		// The checkpoint is still NOT set here, so a TRANSIENT failure (a NAS
+		// blip, a stranded temp waiting to be resumed) is retried by the next
+		// apply run exactly as before. What changed is that an UNRESOLVED
+		// COLLISION also gets a durable record, which excludes this book from
+		// later runs until the blocking file goes away, changes, or the book
+		// starts targeting a different path — see organizer.ApplyRenameBlocked.
+		// Without it the same book re-attempted the same doomed rename on every
+		// run, forever, and never advanced past phaseRename.
 		if renameErr != nil {
+			recordRenameCollisionFailure(mfs.db, id, renameResult, renameErr)
 			return fmt.Errorf("rename files: %w", renameErr)
 		}
+		organizer.ClearApplyRenameFailure(mfs.db, id)
 		setCheckpoint(mfs.db, id, phaseRename)
 	}
 

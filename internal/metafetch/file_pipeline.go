@@ -1,7 +1,7 @@
 // file: internal/metafetch/file_pipeline.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-08-15
+// last-edited: 2026-09-07
 
 // The metadata-apply rename path, expressed entirely in terms of
 // internal/organizer.
@@ -26,6 +26,9 @@
 package metafetch
 
 import (
+	"errors"
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -47,14 +50,84 @@ type (
 	RenameResult       = organizer.RenameFilesResult
 	RelocateRequest    = organizer.RelocateRequest
 	RelocateResult     = organizer.RelocateResult
+	CollisionPolicy    = organizer.CollisionPolicy
 )
 
 // RenameFiles performs the two-phase rename. See organizer.RenameFiles for the
 // failure semantics — in particular that entries in result.Succeeded have
 // physically moved even when an error is returned, so callers must still
 // persist their DB path updates.
-func RenameFiles(entries []FileRenameEntry) (*RenameResult, error) {
-	return organizer.RenameFiles(entries)
+//
+// policy is threaded through rather than defaulted here: it decides what
+// happens to real files when a target is occupied, so it belongs at the call
+// site. Both write-back callers in this package pass one (see
+// applyCollisionPolicy); nil restores the pre-2026-09-07 behaviour of failing
+// the batch on any occupied target.
+func RenameFiles(entries []FileRenameEntry, policy *CollisionPolicy) (*RenameResult, error) {
+	return organizer.RenameFiles(entries, policy)
+}
+
+// applyCollisionPolicy builds the collision policy the metadata write-back
+// paths use.
+//
+// It is shared by BOTH callers on purpose. runApplyPipeline and
+// RunApplyPipelineRenameOnly are the same operation reached two ways
+// (batch apply, and the "Save to Files" button), and the permanent-failure bug
+// — an occupied target failing forever with no resolution — was identical in
+// each. Giving one of them a resolver and not the other would mean the same
+// book succeeds or fails depending on which button pressed it.
+func applyCollisionPolicy(store organizer.CollisionStore, bookID string) *CollisionPolicy {
+	return &CollisionPolicy{
+		RootDir: config.AppConfig.RootDir,
+		BookID:  bookID,
+		Store:   store,
+	}
+}
+
+// targetPathsOf is the plan the durable-failure self-heal compares against: a
+// book whose computed targets no longer include the path a previous run was
+// blocked on is not blocked any more, whatever is still sitting at that path.
+func targetPathsOf(entries []FileRenameEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.TargetPath)
+	}
+	return out
+}
+
+// recordRenameCollisionFailure persists a durable failure for a book whose
+// rename failed on an UNRESOLVED COLLISION, so later runs skip it instead of
+// re-attempting the same doomed rename forever.
+//
+// Only collisions are recorded. Every other rename failure (a stranded temp
+// awaiting an operator, a NAS blip, a permissions problem) keeps the old
+// retry-next-run behaviour, because those genuinely can succeed on a re-run
+// with no change to the world. Recording them all would convert a transient
+// outage into a library-wide skip list.
+func recordRenameCollisionFailure(store database.UserPreferenceStore, bookID string, result *RenameResult, renameErr error) {
+	var cerr *organizer.CollisionError
+	if !errors.As(renameErr, &cerr) || len(cerr.Failures) == 0 {
+		return
+	}
+	// Record the FIRST unresolved collision. One is enough to block the book,
+	// and it is the one an operator has to look at first; the rest are in the
+	// result and the log.
+	f := cerr.Failures[0]
+	organizer.RecordApplyRenameFailure(store, organizer.ApplyRenameFailure{
+		BookID:          bookID,
+		TargetPath:      f.TargetPath,
+		OccupantPath:    f.OccupantPath,
+		OccupantSize:    f.OccupantSize,
+		OccupantModUnix: f.OccupantModUnix,
+		Reason:          f.Reason,
+	})
+	slog.Warn("apply rename: recording a durable collision failure — this book is skipped until the blocking file changes or goes away",
+		"book_id", bookID,
+		"target_path", f.TargetPath,
+		"occupant_path", f.OccupantPath,
+		"reason", f.Reason,
+		"unresolved_total", len(cerr.Failures),
+		"resolved_total", len(result.Resolutions))
 }
 
 // newPathOrganizer builds the Organizer the apply path plans renames with.
