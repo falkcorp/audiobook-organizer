@@ -1,5 +1,5 @@
 // file: internal/organizer/apply_failure.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a2d64f1-0c53-4b97-91ae-63f7c0d5b284
 // last-edited: 2026-09-07
 
@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // ApplyRenameFailurePrefix namespaces the per-book records. The maintenance op
@@ -90,11 +91,11 @@ func RecordApplyRenameFailure(store database.UserPreferenceStore, f ApplyRenameF
 	}
 	blob, err := json.Marshal(f)
 	if err != nil {
-		slog.Warn("could not encode apply rename failure record", "book_id", f.BookID, "error", err)
+		slog.Warn("could not encode apply rename failure record", "book_id", logger.SanitizeLogValue(f.BookID), "error", err)
 		return
 	}
 	if err := store.SetUserPreferenceForUser("_system", applyRenameFailureKey(f.BookID), string(blob)); err != nil {
-		slog.Warn("could not persist apply rename failure record", "book_id", f.BookID, "error", err)
+		slog.Warn("could not persist apply rename failure record", "book_id", logger.SanitizeLogValue(f.BookID), "error", err)
 	}
 }
 
@@ -115,7 +116,9 @@ func LoadApplyRenameFailure(store database.UserPreferenceStore, bookID string) (
 	if err := json.Unmarshal([]byte(pref.Value), &f); err != nil {
 		// A record we cannot read must not block the book forever — that is
 		// the failure mode this whole file exists to remove.
-		slog.Warn("discarding unreadable apply rename failure record", "book_id", bookID, "error", err)
+		// book_id and every path below are user-controlled; this package logs
+		// through log/slog directly, which applies no barrier of its own.
+		slog.Warn("discarding unreadable apply rename failure record", "book_id", logger.SanitizeLogValue(bookID), "error", err)
 		return nil, false
 	}
 	return &f, true
@@ -161,7 +164,7 @@ func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plann
 		}
 		if !stillPlanned {
 			slog.Info("apply rename: durable failure cleared — the book no longer targets the blocked path",
-				"book_id", bookID, "blocked_target", rec.TargetPath)
+				"book_id", logger.SanitizeLogValue(bookID), "blocked_target", logger.SanitizeLogValue(rec.TargetPath))
 			ClearApplyRenameFailure(store, bookID)
 			return false
 		}
@@ -174,13 +177,13 @@ func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plann
 	info, err := os.Lstat(occupant)
 	if err != nil {
 		slog.Info("apply rename: durable failure cleared — the blocking file is gone",
-			"book_id", bookID, "occupant", occupant)
+			"book_id", logger.SanitizeLogValue(bookID), "occupant", logger.SanitizeLogValue(occupant))
 		ClearApplyRenameFailure(store, bookID)
 		return false
 	}
 	if info.Size() != rec.OccupantSize || info.ModTime().Unix() != rec.OccupantModUnix {
 		slog.Info("apply rename: durable failure cleared — the blocking file changed",
-			"book_id", bookID, "occupant", occupant,
+			"book_id", logger.SanitizeLogValue(bookID), "occupant", logger.SanitizeLogValue(occupant),
 			"recorded_size", rec.OccupantSize, "now_size", info.Size())
 		ClearApplyRenameFailure(store, bookID)
 		return false

@@ -1,5 +1,5 @@
 // file: internal/organizer/collision.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
 // last-edited: 2026-09-07
 
@@ -60,6 +60,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // CollisionStore is the narrow store surface the resolver needs. It is
@@ -228,7 +229,8 @@ func (j *collisionJournal) rollback(result *RenameFilesResult) {
 		}
 		if err := j.store.UpdateBookFile(r.fileID, r.prior); err != nil {
 			slog.Error("collision rollback failed — book_file row left in its resolved state",
-				"file_id", r.fileID, "restore_path", r.prior.FilePath, "error", err)
+				"file_id", logger.SanitizeLogValue(r.fileID),
+				"restore_path", logger.SanitizeLogValue(r.prior.FilePath), "error", err)
 			result.Errors = append(result.Errors, fmt.Sprintf(
 				"collision rollback: could not restore book_file %s to %s: %v", r.fileID, r.prior.FilePath, err))
 		}
@@ -240,8 +242,12 @@ func (j *collisionJournal) rollback(result *RenameFilesResult) {
 		// Refusing leaves the file in quarantine (reported); replacing would
 		// destroy the other one silently.
 		if err := moveExclusive(m.quarantine, m.original); err != nil {
+			// Paths are user-controlled (they come from tags and from the
+			// filesystem), and this package logs through log/slog directly, which
+			// applies no barrier of its own — see logger.SanitizeLogValue.
 			slog.Error("collision rollback failed — file left in quarantine",
-				"quarantine_path", m.quarantine, "original_path", m.original, "error", err)
+				"quarantine_path", logger.SanitizeLogValue(m.quarantine),
+				"original_path", logger.SanitizeLogValue(m.original), "error", err)
 			result.Errors = append(result.Errors, fmt.Sprintf(
 				"collision rollback: file stranded in quarantine at %s (original %s): %v",
 				m.quarantine, m.original, err))
@@ -515,14 +521,14 @@ func resolveTargetCollisions(entries []FileRenameEntry, policy *CollisionPolicy,
 		}
 		result.Resolutions = append(result.Resolutions, res.resolution)
 		slog.Warn("apply rename: resolved a path collision",
-			"book_id", policy.BookID,
+			"book_id", logger.SanitizeLogValue(policy.BookID),
 			"action", res.resolution.Action,
-			"source", res.resolution.SourcePath,
-			"occupant", res.resolution.OccupantPath,
-			"original_target", res.resolution.OriginalTarget,
-			"final_target", res.resolution.FinalTarget,
-			"quarantine", res.resolution.QuarantinePath,
-			"detail", res.resolution.Detail)
+			"source", logger.SanitizeLogValue(res.resolution.SourcePath),
+			"occupant", logger.SanitizeLogValue(res.resolution.OccupantPath),
+			"original_target", logger.SanitizeLogValue(res.resolution.OriginalTarget),
+			"final_target", logger.SanitizeLogValue(res.resolution.FinalTarget),
+			"quarantine", logger.SanitizeLogValue(res.resolution.QuarantinePath),
+			"detail", logger.SanitizeLogValue(res.resolution.Detail))
 	}
 
 	if len(failures) > 0 {
@@ -651,19 +657,49 @@ func applyCollisionDecision(c collisionCandidate, policy *CollisionPolicy, journ
 	journal.rows = append(journal.rows, rowRestore{fileID: prior.ID, prior: &snapshot})
 
 	updated := *prior
-	sameBookOccupantRow := c.occupant != nil && c.occupant.ID != prior.ID && c.occupant.BookID == prior.BookID
-	if sameBookOccupantRow {
-		// Another row of THIS book already points at the kept file. Repointing
-		// ours there too would manufacture a duplicate row for one path.
-		// Instead the occupant row survives untouched and ours is tombstoned:
-		// its FilePath genuinely has no bytes any more, so Missing=true is a
-		// true statement, not a marker (book_file has no deleted_at column).
-		// mark-missing-files reconciles the flag in both directions, so this
-		// self-corrects if the file ever comes back.
+	// ANY other row already holding the kept path blocks the repoint, whether it
+	// belongs to this book or another one. The book-equality clause that used to
+	// narrow this to same-book occupants was wrong, and the cross-book case it
+	// let through is the DANGEROUS one:
+	//
+	// book_file_path is a single-slot index — one path maps to exactly one
+	// "<bookID>:<fileID>" (pebble_store.go), written with a blind Set and no
+	// conflict check. Repointing our row at a path another row holds silently
+	// overwrites that slot, so the other row becomes unreachable by every path
+	// lookup in the codebase. Worse, it is not stable damage: UpdateBookFile
+	// deletes the secondary indexes keyed on the OLD row's values before writing
+	// the new ones, so the next write that moves OUR row off that path deletes
+	// the slot outright and never rewrites it — including this file's own
+	// journal rollback, which restores prior.FilePath. The path then belongs to
+	// a live row with NO index entry, and the scanner's path lookup misses and
+	// mints a brand-new third row for it on every subsequent scan. There is no
+	// verify/rebuild op for these indexes, so none of that is repairable.
+	//
+	// Two sibling maintenance ops already refuse exactly this state
+	// (recover_missing_files.go, missing_file_repoint.go both reject a candidate
+	// another row has claimed); this path must not be the one that creates it on
+	// purpose.
+	//
+	// So the occupant row survives untouched and ours is tombstoned instead. Its
+	// FilePath genuinely has no bytes any more — we just quarantined them — so
+	// Missing=true is a true statement rather than a marker (book_file has no
+	// deleted_at column), and mark-missing-files reconciles the flag in both
+	// directions if the file ever comes back. Critically, this leaves FilePath
+	// UNCHANGED, so UpdateBookFile sees old.FilePath == new.FilePath and never
+	// touches the occupant's index slot.
+	occupantIsAnotherRow := c.occupant != nil && c.occupant.ID != prior.ID
+	if occupantIsAnotherRow {
 		updated.Missing = true
-		base.Detail = "occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because a sibling row of the same book already points at the kept file"
+		if c.occupant.BookID == prior.BookID {
+			base.Detail = "occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because a sibling row of the same book already points at the kept file"
+		} else {
+			base.Detail = fmt.Sprintf("occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because book_file %s of a DIFFERENT book (%s) already points at the kept file — repointing across books would corrupt the single-slot path index", c.occupant.ID, c.occupant.BookID)
+		}
 	} else {
 		// Repoint — never delete. The surviving row follows the kept file.
+		// Safe ONLY because no other row holds TargetPath: this write takes over
+		// that path's single index slot, and the branch above is what guarantees
+		// the slot is either unowned or already ours.
 		updated.FilePath = c.entry.TargetPath
 		updated.Missing = false
 		base.Detail = "occupant is byte-identical and already organized; source quarantined and this row repointed at the kept file"
