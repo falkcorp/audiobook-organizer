@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-05
+// last-edited: 2026-09-07
 
 package organizer
 
@@ -984,13 +984,95 @@ func (orgSvc *Service) hydrateAndUpdateBook(bookID string, mutate func(*database
 // state correctly (see the oldPath==targetPath branch). That asymmetry — one
 // path marking the state, its sibling silently not — is what produced a
 // permanent, self-refilling organize backlog.
+//
+// An EMPTY operationID is a normal, expected call: post-scan auto-organize
+// (server.go) organizes with no operation behind it. It means "no operation to
+// attribute this to", NOT "attribute this to the empty operation" — so the
+// previous operation id is left in place rather than blanked. Writing &"" here
+// erased the record of which run last organized a book every time the automatic
+// path touched it, which is the one path that runs unattended and most often.
+// LibraryState and LastOrganizedAt are facts about the BOOK and are always
+// written; only the audit attribution is conditional.
 func (orgSvc *Service) stampOrganizeMetadata(bookID, operationID string, when time.Time) error {
 	organizedState := "organized"
 	return orgSvc.hydrateAndUpdateBook(bookID, func(b *database.Book) {
 		b.LibraryState = &organizedState
-		b.LastOrganizeOperationID = &operationID
+		if operationID != "" {
+			b.LastOrganizeOperationID = &operationID
+		}
 		b.LastOrganizedAt = &when
 	})
+}
+
+// stampAlreadyCorrectWorkers bounds the bulk stamp. It matches organizeBooks'
+// own numWorkers: the work is one Pebble read plus one write per book, and both
+// loops hit the same store.
+const stampAlreadyCorrectWorkers = 8
+
+// stampAlreadyCorrect records that every book already sitting at its correct
+// organized path IS organized, and returns how many were processed.
+//
+// It is a method rather than an inline loop for two reasons: the gate it used to
+// carry was a real bug that nothing could have caught (see below), and a
+// library-scale loop doing a DB read+write per item is exactly the shape
+// CLAUDE.md's concurrency mandate names. It runs on a bounded pool for that
+// reason — the books are disjoint (one row each, keyed by distinct book id), so
+// parallel workers can never touch the same row.
+//
+// NOT GATED ON operationID, and that is the fix, not an oversight. Being at the
+// correct organized path is a fact about the BOOK; having an operation to
+// attribute it to is a separate question, and stampOrganizeMetadata already
+// keeps the attribution conditional. CommitLanding's three branches have always
+// drawn the line there — they stamp unconditionally and gate only their
+// CreateOperationChange rows — and this loop was the ONE place that gated the
+// stamp itself.
+//
+// That asymmetry is what kept the library_state revert alive even after the
+// scanner stopped causing it (scanner/override_guard.go). Post-scan
+// auto-organize passes an EMPTY operation id, so the books a rescan had just
+// reverted to "imported" were diverted into alreadyCorrect — they ARE at their
+// correct paths — and then never re-stamped. The ABS layer serves only
+// library_state == "organized", so they stayed invisible with nothing left in
+// the system able to put them back.
+//
+// Cancellation is honoured but a stamp is never rolled back: each write is
+// independently true, so a cancelled run leaves fewer books stamped rather than
+// an inconsistent set.
+func (orgSvc *Service) stampAlreadyCorrect(ctx context.Context, alreadyCorrect []database.Book, operationID string, log logger.Logger) int {
+	if len(alreadyCorrect) == 0 {
+		return 0
+	}
+	stampNow := time.Now()
+	var stamped atomic.Int64
+
+	jobs := make(chan int, stampAlreadyCorrectWorkers*2)
+	var wg sync.WaitGroup
+	for range stampAlreadyCorrectWorkers {
+		wg.Go(func() {
+			for i := range jobs {
+				b := &alreadyCorrect[i]
+				if updateErr := orgSvc.stampOrganizeMetadata(b.ID, operationID, stampNow); updateErr != nil {
+					log.Debug("Organize: failed to stamp already-correct book %s: %s", b.ID, updateErr.Error())
+					continue
+				}
+				stamped.Add(1)
+			}
+		})
+	}
+	for i := range alreadyCorrect {
+		if ctx.Err() != nil || log.IsCanceled() {
+			break
+		}
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	// The count reports stamps that actually landed. Returning len() regardless,
+	// as the sequential version did, reported every book as already-correct even
+	// when its write failed — the summary then disagreed with the database, and
+	// the "Needs Organizing" backlog it was supposed to explain stayed full.
+	return int(stamped.Load())
 }
 
 // LandingOutcome is what CommitLanding persisted for one organized book.
@@ -1260,21 +1342,7 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	close(jobs)
 	wg.Wait()
 
-	// Stamp already-correct books with this operation ID (sequential — bulk stamp).
-	// Same hydrate-before-write treatment as the two per-book writebacks above:
-	// alreadyCorrect is sourced from the same Core-fetched allBooks slice, so
-	// stamping goes through stampOrganizeMetadata rather than writing back the
-	// in-memory (ToBook()-derived) copy directly.
-	if operationID != "" && len(alreadyCorrect) > 0 {
-		stampNow := time.Now()
-		for i := range alreadyCorrect {
-			b := &alreadyCorrect[i]
-			if updateErr := orgSvc.stampOrganizeMetadata(b.ID, operationID, stampNow); updateErr != nil {
-				log.Debug("Organize: failed to stamp already-correct book %s: %s", b.ID, updateErr.Error())
-			}
-		}
-		stats.AlreadyCorrect += len(alreadyCorrect)
-	}
+	stats.AlreadyCorrect += orgSvc.stampAlreadyCorrect(ctx, alreadyCorrect, operationID, log)
 
 	summary := formatOrganizeSummary(stats)
 	log.Info("%s", summary)
