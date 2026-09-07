@@ -3,6 +3,19 @@
 The SQLite activity backend + Pebble→SQLite migration landed (backend-agnostic
 store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
 
+- [ ] **🔴 BLOCKER — rewrite the Pebble→SQLite backfill to stream.**
+  `BackfillPebbleActivityToSQL` calls `scanTierKVs(ctx, tier, nil, nil)`, which
+  materializes a whole activity tier into memory before the first insert. On prod
+  (2026-09-07) this drove RSS to ~30 G on the `change` tier and the kernel
+  OOM-killed the service in a ~14-min restart loop. Rewrite copy AND parity to
+  stream from a Pebble iterator in bounded `sqlBackfillBatch` windows — the parity
+  pass must re-iterate Pebble independently (it can't reuse the copy slice), which
+  is strictly stronger. **Until this lands, SQLite is disabled on prod via
+  `ACTIVITY_BACKEND=pebble` in `deploy/local.conf`** (rollback lever wired in
+  #3088). Re-enable only after a bounded-memory backfill is verified.
+- [ ] **Audit `scanTierKVs` callers for the same OOM shape.** `Summarize` /
+  `CompactByDay` on the Pebble side may also call the full-tier materializer; if so
+  that is a pre-existing hazard independent of the migration.
 - [ ] **Scheduled auto-compaction toggle.** A `ScheduledTaskConfig` (like
   `reconcile`/`ai_dedup_batch`) that, when enabled, compacts the *previous day*
   on a schedule. Trivial now that `CompactByDay` is bounded on SQLite. This was
