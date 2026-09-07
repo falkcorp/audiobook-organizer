@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f1c4b70-3d21-4a58-b0e6-1c8a2f5d6e30
 // last-edited: 2026-09-07
 
@@ -360,5 +360,113 @@ func TestSQLActivity_LiveDualWriteThenBackfillNoDup(t *testing.T) {
 	}
 	if _, total, _ := sqlStore.Query(context.Background(), ActivityFilter{}); total != 2 {
 		t.Errorf("after backfill SQLite total = %d, want 2 (no duplicates)", total)
+	}
+}
+
+// TestSQLActivity_BackfillStreamsMultipleBatches exercises the streaming backfill
+// across MORE than one sqlBackfillBatch window — the multi-batch flush path the
+// two-row dual-write test never reaches. It proves the streamed copy+parity end to
+// end: every distinct Pebble row lands in SQLite exactly once, content-identical
+// rows dedup to a single SQLite row during the copy, per-tier parity passes, and
+// the sentinel is written so a second run short-circuits.
+//
+// It is the regression guard for the OOM fix: the old backfill materialised the
+// whole tier before the first insert, so this many rows exercised none of the
+// batching that keeps memory bounded. Here they force at least three stream
+// batches through a single Pebble iterator.
+func TestSQLActivity_BackfillStreamsMultipleBatches(t *testing.T) {
+	pebbleStore := newTestPebbleActivityStore(t)
+	sqlStore := newTestSQLStore(t)
+
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	// More than 2×sqlBackfillBatch so streamTierEntries flushes ≥3 batches.
+	const distinct = sqlBackfillBatch*2 + 37
+	entries := make([]ActivityEntry, 0, distinct+2)
+	for i := range distinct {
+		entries = append(entries, ActivityEntry{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Tier:      "change", Type: "metadata_changed", Level: "info",
+			Source: "test", Summary: fmt.Sprintf("entry-%04d", i),
+		})
+	}
+	// Two content-duplicates of the first entry (identical fields ⇒ identical
+	// src_key), appended as extra Pebble rows. During the streamed copy they must
+	// collapse into the single SQLite row for that content — proving dedup holds
+	// through the batched copy, not just within one recordBatch call.
+	entries = append(entries, entries[0], entries[0])
+
+	if n, err := pebbleStore.RecordBatch(entries); err != nil || n != len(entries) {
+		t.Fatalf("seed pebble: wrote %d/%d err=%v", n, len(entries), err)
+	}
+
+	res, err := BackfillPebbleActivityToSQL(context.Background(), pebbleStore, sqlStore, false)
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if !res.ParityOK {
+		t.Fatalf("parity failed: %+v", res)
+	}
+	// Every Pebble row was scanned: the distinct set plus the 2 duplicates.
+	if want := len(entries); res.EntriesScanned != want {
+		t.Errorf("scanned = %d, want %d", res.EntriesScanned, want)
+	}
+	// Distinct content keys inserted once; the 2 duplicates deduped away.
+	if res.EntriesCopied != distinct {
+		t.Errorf("copied = %d, want %d (duplicates dedup)", res.EntriesCopied, distinct)
+	}
+	if _, total, _ := sqlStore.Query(context.Background(), ActivityFilter{}); total != distinct {
+		t.Errorf("SQLite total = %d, want %d", total, distinct)
+	}
+
+	// Second run: the sentinel is present, so the backfill short-circuits without
+	// re-scanning — AlreadyDone and ParityOK, zero further copies.
+	res2, err := BackfillPebbleActivityToSQL(context.Background(), pebbleStore, sqlStore, false)
+	if err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if !res2.AlreadyDone || !res2.ParityOK {
+		t.Errorf("second run = %+v, want AlreadyDone && ParityOK", res2)
+	}
+	if _, total, _ := sqlStore.Query(context.Background(), ActivityFilter{}); total != distinct {
+		t.Errorf("after second run SQLite total = %d, want %d (unchanged)", total, distinct)
+	}
+}
+
+// TestSQLActivity_BackfillDryRunCountsWithoutWriting proves dryRun streams and
+// counts the whole history but writes nothing: no SQLite rows, no sentinel, so a
+// later real run still does the work.
+func TestSQLActivity_BackfillDryRunCountsWithoutWriting(t *testing.T) {
+	pebbleStore := newTestPebbleActivityStore(t)
+	sqlStore := newTestSQLStore(t)
+
+	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	const n = sqlBackfillBatch + 11
+	entries := make([]ActivityEntry, 0, n)
+	for i := range n {
+		entries = append(entries, ActivityEntry{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Tier:      "change", Type: "t", Level: "info",
+			Source: "test", Summary: fmt.Sprintf("dry-%04d", i),
+		})
+	}
+	if wrote, err := pebbleStore.RecordBatch(entries); err != nil || wrote != n {
+		t.Fatalf("seed pebble: wrote %d/%d err=%v", wrote, n, err)
+	}
+
+	res, err := BackfillPebbleActivityToSQL(context.Background(), pebbleStore, sqlStore, true)
+	if err != nil {
+		t.Fatalf("dry-run backfill: %v", err)
+	}
+	if !res.DryRun || res.EntriesScanned != n {
+		t.Errorf("dry-run = %+v, want DryRun && scanned %d", res, n)
+	}
+	if res.EntriesCopied != 0 {
+		t.Errorf("dry-run copied = %d, want 0 (no writes)", res.EntriesCopied)
+	}
+	if _, total, _ := sqlStore.Query(context.Background(), ActivityFilter{}); total != 0 {
+		t.Errorf("SQLite total after dry-run = %d, want 0", total)
+	}
+	if pebbleStore.SQLBackfillDone() {
+		t.Errorf("dry-run wrote the sentinel; it must not")
 	}
 }

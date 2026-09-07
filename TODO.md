@@ -59,16 +59,17 @@ into one of the curated sections below, is a normal direct edit.
 The SQLite activity backend + Pebble→SQLite migration landed (backend-agnostic
 store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
 
-- [ ] **🔴 BLOCKER — rewrite the Pebble→SQLite backfill to stream.**
-  `BackfillPebbleActivityToSQL` calls `scanTierKVs(ctx, tier, nil, nil)`, which
-  materializes a whole activity tier into memory before the first insert. On prod
-  (2026-09-07) this drove RSS to ~30 G on the `change` tier and the kernel
-  OOM-killed the service in a ~14-min restart loop. Rewrite copy AND parity to
-  stream from a Pebble iterator in bounded `sqlBackfillBatch` windows — the parity
-  pass must re-iterate Pebble independently (it can't reuse the copy slice), which
-  is strictly stronger. **Until this lands, SQLite is disabled on prod via
-  `ACTIVITY_BACKEND=pebble` in `deploy/local.conf`** (rollback lever wired in
-  #3088). Re-enable only after a bounded-memory backfill is verified.
+- [x] **🔴 BLOCKER — rewrite the Pebble→SQLite backfill to stream.** DONE #3090:
+  added `PebbleActivityStore.streamTierEntries` (bounded-batch snapshot iterator,
+  ≤`sqlBackfillBatch` rows live) and rewrote `BackfillPebbleActivityToSQL` to copy
+  AND parity-check each batch in one step, reusing the in-memory batch slice — the
+  `change`-tier OOM cannot recur. Parity re-presents the *same batch just copied*
+  rather than re-iterating Pebble independently: the dual-write is Pebble-first-then-
+  SQLite, so an independent re-read would race a live write (row in Pebble, not yet
+  in SQLite) and false-fail parity. **Re-enable is a 2-step deploy, NOT yet done:**
+  deploy the new binary with `ACTIVITY_BACKEND=pebble` still set (healthy, no
+  backfill), then remove the env line from `deploy/local.conf` and restart to run
+  the streamed backfill — watch `change`-tier RSS stays flat and parity flips reads.
 - [ ] **Audit `scanTierKVs` callers for the same OOM shape.** `Summarize` /
   `CompactByDay` on the Pebble side may also call the full-tier materializer; if so
   that is a pre-existing hazard independent of the migration.

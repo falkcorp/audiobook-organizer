@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
 // last-edited: 2026-09-07
 
@@ -86,69 +86,52 @@ func BackfillPebbleActivityToSQL(
 		default:
 		}
 
-		// scanTierKVs loads the whole tier into memory (existing behaviour); the
-		// decoded entries are reused for both the copy pass and the parity pass,
-		// so parity costs no extra Pebble scan.
-		kvs, err := pebbleStore.scanTierKVs(ctx, tier, nil, nil)
-		if err != nil {
-			return res, fmt.Errorf("activity-sql-backfill: scan pebble tier=%s: %w", tier, err)
-		}
-		res.PerTierScanned[tier] = len(kvs)
-		res.EntriesScanned += len(kvs)
-		if len(kvs) == 0 {
-			res.TiersProcessed++
-			continue
+		if !dryRun {
+			slog.Info("[activity-sql-backfill] processing tier", "tier", tier)
 		}
 
-		entries := make([]ActivityEntry, len(kvs))
-		for j, kv := range kvs {
-			entries[j] = kv.entry
-		}
-
-		if dryRun {
-			res.TiersProcessed++
-			continue
-		}
-
-		slog.Info("[activity-sql-backfill] processing tier",
-			"tier", tier, "entries", len(entries))
-
-		// Copy pass.
-		for i := 0; i < len(entries); i += sqlBackfillBatch {
-			select {
-			case <-ctx.Done():
-				return res, ctx.Err()
-			default:
+		// Stream the tier in bounded batches instead of materialising it. Each
+		// batch is copied into SQLite and then re-presented for parity WITHIN the
+		// same fn call, reusing the same in-memory slice — so at most
+		// sqlBackfillBatch rows are ever live, and the parity re-present can never
+		// pick up a concurrent live dual-write (it only ever re-presents the batch
+		// it just copied, never re-reads Pebble). See streamTierEntries for why a
+		// materialising scan here OOM-killed prod on the `change` tier.
+		//
+		// Per-batch copy+parity is equivalent to the old whole-tier copy-then-parity:
+		// content-key dedup makes a row that repeats within or across batches insert
+		// exactly once on copy and zero times on every re-present, so EntriesCopied
+		// and the parity verdict are identical either way.
+		tierReinserted := 0
+		scanned, serr := pebbleStore.streamTierEntries(ctx, tier, sqlBackfillBatch, func(batch []ActivityEntry) error {
+			if dryRun {
+				return nil // count only; no writes
 			}
-			end := min(i+sqlBackfillBatch, len(entries))
-			copied, cerr := sqlStore.recordBatch(ctx, entries[i:end])
+			// Copy pass for this batch.
+			copied, cerr := sqlStore.recordBatch(ctx, batch)
 			if cerr != nil {
-				return res, fmt.Errorf("activity-sql-backfill: copy tier=%s: %w", tier, cerr)
+				return fmt.Errorf("copy: %w", cerr)
 			}
 			res.EntriesCopied += copied
-		}
-
-		// Parity pass: re-present the same entries. Every one must now conflict,
-		// so a correct copy inserts ZERO. Any insert here means a scanned entry
-		// did not land — fail parity, do not flip, do not write the sentinel.
-		reinserted := 0
-		for i := 0; i < len(entries); i += sqlBackfillBatch {
-			select {
-			case <-ctx.Done():
-				return res, ctx.Err()
-			default:
-			}
-			end := min(i+sqlBackfillBatch, len(entries))
-			n, verr := sqlStore.recordBatch(ctx, entries[i:end])
+			// Parity pass: re-present the same batch. A correct copy inserts ZERO
+			// here (every row conflicts on src_key). Any insert means a copied row
+			// did not land — record it so the tier fails parity below.
+			n, verr := sqlStore.recordBatch(ctx, batch)
 			if verr != nil {
-				return res, fmt.Errorf("activity-sql-backfill: parity re-present tier=%s: %w", tier, verr)
+				return fmt.Errorf("parity re-present: %w", verr)
 			}
-			reinserted += n
+			tierReinserted += n
+			return nil
+		})
+		if serr != nil {
+			return res, fmt.Errorf("activity-sql-backfill: stream tier=%s: %w", tier, serr)
 		}
-		if reinserted != 0 {
+		res.PerTierScanned[tier] = scanned
+		res.EntriesScanned += scanned
+		if tierReinserted != 0 {
 			res.ParityOK = false
 			slog.Error("[activity-sql-backfill] PARITY FAIL — re-presentation inserted rows; not flipping",
-				"tier", tier, "scanned", len(entries), "reinserted_on_second_pass", reinserted)
+				"tier", tier, "scanned", scanned, "reinserted_on_second_pass", tierReinserted)
 		}
 		res.TiersProcessed++
 	}

@@ -1952,6 +1952,104 @@ func (s *PebbleActivityStore) scanTierKVs(ctx context.Context, tier string, sinc
 	return out, nil
 }
 
+// streamTierEntries iterates a tier's entries in ascending key order and hands
+// them to fn in bounded batches of at most batchSize, NEVER materialising the
+// whole tier. It is the memory-bounded counterpart to scanTierKVs, added for the
+// Pebble→SQLite activity backfill after the materialising scan OOM-killed prod on
+// the ~1.3 GiB `change` tier (2026-09-07): scanTierKVs held every decoded row of
+// the tier live before the first insert, so RSS tracked the whole tier. This
+// holds at most batchSize rows.
+//
+// The batch slice fn receives is REUSED across calls: fn MUST NOT retain it (or
+// any row in it) past its own return — the backing array is truncated and refilled
+// for the next batch. The backfill's fn copies each batch into SQLite and
+// re-presents the same slice for parity, both fully synchronous, which is exactly
+// this contract.
+//
+// A single Pebble iterator (a consistent point-in-time snapshot) is held open
+// across the whole tier while fn commits to SQLite between batches. That is
+// deliberate: seek-based re-pagination would be more code and re-decode work for
+// no benefit at this scale, and the snapshot pin is modest here — do NOT
+// "optimise" it into a re-seek loop. Because the iterator is a snapshot, live
+// dual-writes that land after it opens are invisible to the stream (and handled
+// by the live write path), so fn never races a concurrent writer.
+//
+// ctx is checked every activityCtxCheckInterval rows and again before each fn
+// call. Decode failures are counted and reported in aggregate exactly as
+// scanTierKVs does. A non-nil fn error aborts the stream immediately. Returns the
+// number of entries successfully decoded AND accepted by fn — i.e. what actually
+// reached the batches (decode failures excluded).
+func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string, batchSize int, fn func(batch []ActivityEntry) error) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	lower, upper := pactTierBounds(tier, nil, nil)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upper,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("pebble_activity_store: streamTierEntries new iter (tier=%s): %w", tier, err)
+	}
+	defer iter.Close()
+
+	tally := &pactDecodeTally{}
+	defer tally.log("streamTierEntries tier=" + tier)
+
+	batch := make([]ActivityEntry, 0, batchSize)
+	streamed := 0
+	seen := 0
+
+	// flush hands the accumulated batch to fn, then truncates it for reuse. It is
+	// a no-op on an empty batch so the trailing flush after the loop is safe.
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if err := fn(batch); err != nil {
+			return err
+		}
+		streamed += len(batch)
+		batch = batch[:0] // reuse backing array; rows overwritten on next fill
+		return nil
+	}
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		if seen%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				slog.Warn("[activity] streamTierEntries aborted: caller went away",
+					"tier", tier, "rows_scanned", seen, "streamed", streamed, "error", ctxErr)
+				return streamed, ctxErr
+			}
+		}
+		seen++
+
+		var e ActivityEntry
+		s.entriesDecoded.Add(1)
+		if jsonErr := json.Unmarshal(iter.Value(), &e); jsonErr != nil {
+			// Counted and reported in aggregate by the deferred tally.log, exactly
+			// as scanTierKVs — never a silent drop.
+			s.decodeFailures.Add(1)
+			tally.record(iter.Key(), jsonErr)
+			continue
+		}
+		batch = append(batch, e)
+		if len(batch) >= batchSize {
+			if err := flush(); err != nil {
+				return streamed, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return streamed, err
+	}
+	return streamed, nil
+}
+
 // queryByIndexPrefix reads ref values from an index prefix, then fetches primary entries.
 // Handles both op and book secondary indexes.
 //
