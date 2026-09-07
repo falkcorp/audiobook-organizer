@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-07
 
@@ -60,7 +60,35 @@ var (
 	// activitySourcesCacheTTL is how long a GetDistinctSources result is reused.
 	// The source list feeds a filter picker, so slightly stale counts are fine;
 	// re-scanning on every page load was half the OOM.
-	activitySourcesCacheTTL = 45 * time.Second
+	//
+	// Raised from 45s on 2026-09-07. The UI polls /activity/sources roughly
+	// every 90s, so a TTL BELOW the poll interval guaranteed every poll was a
+	// miss — the memo never once served a request in the steady state. The TTL
+	// must exceed the poll interval to do anything at all, and it is only
+	// useful together with activitySourcesCacheBucket below: a rolling `since`
+	// changed the cache key faster than the TTL expired it, so raising the TTL
+	// alone would have changed nothing.
+	activitySourcesCacheTTL = 5 * time.Minute
+
+	// activitySourcesCacheBucket quantises the Since/Until bounds in the
+	// sources cache key so a rolling window stops changing the key on every
+	// request.
+	//
+	// The UI sends `since` as now-minus-24h truncated to the minute
+	// (observed on production: `since=2026-09-06T20:03:00.000Z`, then
+	// ...20:04:00Z a minute later). That is a NEW key every 60s, so the memo
+	// was structurally unreachable: measured on production 2026-09-07, four
+	// consecutive polls took 35.38s, 1.46ms (a repeat within the same minute —
+	// the only hit), 35.68s (key changed) and 35.05s (TTL expired).
+	//
+	// Bounds are truncated DOWN to a multiple of this, so requests within the
+	// same bucket share an answer. The cost is deliberate and bounded: a
+	// request asking for a window up to one bucket NARROWER than the cached
+	// one may be served counts that include up to `bucket` of extra older
+	// entries. These counts already carry a much larger approximation — they
+	// cover only the newest activityQueryScanBudget entries — and they feed a
+	// filter picker, where a slightly generous count is harmless.
+	activitySourcesCacheBucket = 5 * time.Minute
 
 	// activityCtxCheckInterval is how many rows a scan processes between
 	// context checks. Checking every row would cost a select per decode;
@@ -793,7 +821,8 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) ([]Ac
 			exhausted = false
 			break
 		}
-		ex, phaseExhausted, err := s.scanNewestFirst(ctx, phase, f, remaining, "query", collect)
+		// pactDecodeFull: Query RETURNS these entries, Details included.
+		ex, phaseExhausted, err := s.scanNewestFirst(ctx, phase, f, remaining, "query", pactDecodeFull, collect)
 		examined += ex
 		if err != nil {
 			// Explicitly nil: drop the partial page rather than returning it.
@@ -958,15 +987,30 @@ func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, erro
 	return deleted, nil
 }
 
+// pactBucketTime truncates t down to a multiple of activitySourcesCacheBucket.
+//
+// Truncation is in UTC and on the absolute instant, so it does not depend on
+// the caller's location: time.Time.Truncate already rounds since the zero time
+// and ignores the monotonic clock reading, which is what we want for a value
+// that only ever becomes a map key.
+func pactBucketTime(t time.Time) time.Time {
+	return t.UTC().Truncate(activitySourcesCacheBucket)
+}
+
 // pactSourcesCacheKey derives a cache key covering every filter field that can
 // change the result, so one filter's counts are never served for another.
+//
+// Since/Until are quantised to activitySourcesCacheBucket rather than taken at
+// their native nanosecond precision — see that var for why the unquantised key
+// made the cache unreachable for the UI's rolling 24h window. Every other field
+// is matched exactly.
 func pactSourcesCacheKey(f ActivityFilter) string {
 	since, until := "", ""
 	if f.Since != nil {
-		since = fmt.Sprintf("%d", f.Since.UnixNano())
+		since = fmt.Sprintf("%d", pactBucketTime(*f.Since).UnixNano())
 	}
 	if f.Until != nil {
-		until = fmt.Sprintf("%d", f.Until.UnixNano())
+		until = fmt.Sprintf("%d", pactBucketTime(*f.Until).UnixNano())
 	}
 	return strings.Join([]string{
 		f.Tier, f.Type, f.Level, f.Source, f.OperationID, f.BookID, f.Search,
@@ -1004,14 +1048,17 @@ func (s *PebbleActivityStore) GetDistinctSources(ctx context.Context, f Activity
 	tiers := append(append([]string{}, nonDigest...), digestTiers...)
 
 	counts := make(map[string]int)
-	examined, exhausted, err := s.scanNewestFirst(ctx, tiers, f, activityQueryScanBudget, "sources",
+	// pactDecodeNoDetails: this aggregates e.Source and nothing else, and
+	// matchesFilter reads no dropped field. Decoding Details here cost 52.8 MB
+	// of garbage per ~9.6 MB ITL row for a value immediately discarded.
+	examined, exhausted, err := s.scanNewestFirst(ctx, tiers, f, activityQueryScanBudget, "sources", pactDecodeNoDetails,
 		func(e ActivityEntry) bool {
 			counts[e.Source]++
 			return true
 		})
 	if err != nil {
 		// Explicitly nil, and nothing is cached: a cancelled scan's partial
-		// counts must not become the memoized answer for the next 45s.
+		// counts must not become the memoized answer for a whole TTL.
 		return nil, err
 	}
 	if !exhausted {
@@ -1777,6 +1824,85 @@ func pactSelectTiers(f ActivityFilter) (nonDigest, digest []string) {
 	return nonDigest, digest
 }
 
+// pactDecodeMode selects how much of each stored entry scanNewestFirst
+// materializes out of its JSON value.
+type pactDecodeMode int
+
+const (
+	// pactDecodeFull materializes the whole ActivityEntry, Details included.
+	// Required by any caller that RETURNS entries to its own caller.
+	pactDecodeFull pactDecodeMode = iota
+
+	// pactDecodeNoDetails decodes every field except Details, which is left
+	// nil. For callers that only aggregate over the scalar fields.
+	pactDecodeNoDetails
+)
+
+// pactEntryNoDetails is ActivityEntry with the Details map omitted, for scans
+// that never look at Details.
+//
+// WHY this exists, measured rather than assumed. ActivityEntry.Details is a
+// map[string]any, so decoding it does not merely copy bytes — it materializes
+// the blob into a tree of boxed maps, slices, strings and float64s. A class of
+// `change`-tier rows on production carries ~9.6 MB iTunes ITL dumps. Benchmarked
+// on an 8.1 MB entry (BenchmarkDecodeSource):
+//
+//	full ActivityEntry:  84,701,835 ns/op  52,783,781 B/op  1,221,588 allocs/op
+//	this struct:         16,920,602 ns/op            86 B/op          1 allocs/op
+//
+// 5x faster and, far more importantly, 52.8 MB of garbage per row becomes none.
+// That per-row allocation is what put GetDistinctSources at 3.21 GB in the
+// production OOM heap profile; the bound and the memo capped how OFTEN it was
+// paid, this removes the cost itself.
+//
+// encoding/json skips a key with no matching struct field using a byte-level
+// scanner that allocates nothing, so the residual 16.9 ms is pure lexing of
+// bytes we then discard. That is the floor for a JSON value, and it is why this
+// is a mitigation and not the fix: the fix is the SQLite backend, where
+// GetDistinctSources is an indexed `GROUP BY source` that never reads a row.
+//
+// One deliberate behaviour difference: a row whose `details` is syntactically
+// valid JSON but of the wrong Go type (a string where a map is expected) fails
+// a full decode and succeeds here. Such a row previously counted as a decode
+// failure and was dropped from the counts; it is now counted. Malformed JSON
+// still fails in both modes — skipping a value still requires it to parse.
+//
+// ⚠️ This struct must stay field-identical to ActivityEntry minus Details.
+// TestPactEntryNoDetails_MirrorsActivityEntry enforces that by reflection
+// rather than by this comment, because a field added to ActivityEntry and
+// missed here would silently stop being matched by matchesFilter on the
+// sources path — a filter that quietly matches the wrong rows, with no error.
+type pactEntryNoDetails struct {
+	ID          int64      `json:"id"`
+	Timestamp   time.Time  `json:"timestamp"`
+	Tier        string     `json:"tier"`
+	Type        string     `json:"type"`
+	Level       string     `json:"level"`
+	Source      string     `json:"source"`
+	OperationID string     `json:"operation_id,omitempty"`
+	BookID      string     `json:"book_id,omitempty"`
+	Summary     string     `json:"summary"`
+	Tags        []string   `json:"tags,omitempty"`
+	PrunedAt    *time.Time `json:"pruned_at,omitempty"`
+}
+
+// entry widens the projection back to an ActivityEntry with a nil Details.
+func (p pactEntryNoDetails) entry() ActivityEntry {
+	return ActivityEntry{
+		ID:          p.ID,
+		Timestamp:   p.Timestamp,
+		Tier:        p.Tier,
+		Type:        p.Type,
+		Level:       p.Level,
+		Source:      p.Source,
+		OperationID: p.OperationID,
+		BookID:      p.BookID,
+		Summary:     p.Summary,
+		Tags:        p.Tags,
+		PrunedAt:    p.PrunedAt,
+	}
+}
+
 // scanNewestFirst walks the given tiers newest-first as a k-way merge over
 // per-tier reverse iterators, decoding at most `budget` entries, and invokes
 // visit for every decoded entry that passes matchesFilter. visit returns false
@@ -1802,6 +1928,7 @@ func (s *PebbleActivityStore) scanNewestFirst(
 	f ActivityFilter,
 	budget int,
 	op string,
+	mode pactDecodeMode,
 	visit func(ActivityEntry) bool,
 ) (examined int, exhausted bool, err error) {
 	if len(tiers) == 0 {
@@ -1878,7 +2005,19 @@ func (s *PebbleActivityStore) scanNewestFirst(
 		examined++
 		s.entriesDecoded.Add(1)
 		var e ActivityEntry
-		if jsonErr := json.Unmarshal(c.iter.Value(), &e); jsonErr != nil {
+		var jsonErr error
+		if mode == pactDecodeNoDetails {
+			// Decode into the projection and widen. matchesFilter reads no
+			// field this drops, so filtering is unchanged — see
+			// pactEntryNoDetails for the measurement that motivates it.
+			var p pactEntryNoDetails
+			if jsonErr = json.Unmarshal(c.iter.Value(), &p); jsonErr == nil {
+				e = p.entry()
+			}
+		} else {
+			jsonErr = json.Unmarshal(c.iter.Value(), &e)
+		}
+		if jsonErr != nil {
 			s.decodeFailures.Add(1)
 			tally.record(c.iter.Key(), jsonErr)
 		} else if matchesFilter(e, f) {
