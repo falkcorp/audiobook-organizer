@@ -1,11 +1,15 @@
 // file: internal/diagnostics/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2a8c4f61-5b07-4d39-8e15-9c0b6a3e7d21
-// last-edited: 2026-08-19
+// last-edited: 2026-09-07
 
 package diagnostics
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import (
+	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
 
 // The store surface this package needs, measured with an empty-interface
 // compiler probe under -gcflags=-e: 12 methods, no forwarding constraints. It
@@ -40,6 +44,6 @@ type Store interface {
 	seriesAggregateReader
 
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetRecentOperations(limit int) ([]database.Operation, error)
+	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
 	GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error)
 }
