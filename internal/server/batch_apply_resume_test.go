@@ -77,23 +77,29 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 	var mu sync.Mutex
 	finished := map[string]bool{}
 	var violations []string
-	// sawGap records whether any checkpoint was taken while MORE books had
-	// finished than the checkpoint dropped from the remaining set. That is the
-	// definition of the watermark being stalled behind a gap, and it is the
-	// thing this test claims to exercise.
-	sawGap := false
+	// order is the completion sequence. It is the anti-vacuity evidence: the
+	// channel above makes "b5 finished before b3 and b4" a fact of the test
+	// rather than a hope about the scheduler, and that IS the gap.
+	var order []string
 
 	err := opsregistry.RunItems(context.Background(), rec, ids,
 		func(_ context.Context, id string) error {
-			switch id {
-			case "b3", "b4":
+			if id == "b3" || id == "b4" {
 				<-fiveDone
-			case "b5":
-				once.Do(func() { close(fiveDone) })
 			}
 			mu.Lock()
 			finished[id] = true
+			order = append(order, id)
 			mu.Unlock()
+			// Release b3/b4 only AFTER b5 has recorded itself. Closing first
+			// made the recorded order race the causal one: b3 and b4 woke
+			// immediately and could reach the mutex before b5 did, so `order`
+			// came out [... b3 b4 b5] on a loaded runner even though b5's work
+			// had provably finished first. The channel orders the WORK; this
+			// orders the OBSERVATION of it, and the test reads the latter.
+			if id == "b5" {
+				once.Do(func() { close(fiveDone) })
+			}
 			return nil
 		},
 		opsregistry.RunItemsOptions{
@@ -108,9 +114,6 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 					if !finished[d] {
 						violations = append(violations, d)
 					}
-				}
-				if len(finished) > len(dropped) {
-					sawGap = true
 				}
 				mu.Unlock()
 				return rec.Checkpoint(st)
@@ -151,27 +154,34 @@ func TestBatchApplyCheckpoint_OutOfOrderCompletionKeepsTheGap(t *testing.T) {
 		}
 	}
 
-	// Anti-vacuity: SOME gap really did open. At least one checkpoint must have
-	// been taken while more books had FINISHED than the checkpoint dropped.
+	// Anti-vacuity: the out-of-order completion really happened. b5 finishing
+	// before b3 and b4 is what stalls the watermark at 3, and the channel makes
+	// it a fact rather than a hope about the scheduler.
 	//
-	// Deliberately weaker than "the b3/b4/b5 gap specifically": with
-	// Concurrency=4 an incidental gap is near-certain, so this passing does not
-	// by itself prove the engineered choreography ran. Naming b5 would prove
-	// more, but only by racing the checkpoint against b3/b4 unblocking the
-	// instant b5 closes the channel — a flaky assertion buys no real coverage.
-	// The load-bearing check is the `violations` loop above, which holds for
-	// every gap, engineered or incidental; this is only a floor under it.
+	// This deliberately does NOT assert that a checkpoint was written while the
+	// gap was open, which an earlier version of this test did and which CI
+	// failed. RunItems suppresses that checkpoint on purpose: maybeCheckpoint
+	// returns early on `mark <= lastCkpt` (run_items.go), because a stalled
+	// watermark would otherwise rewrite the same value once per completion. So
+	// b5's completion writes nothing, and whether any LATER checkpoint's
+	// callback observes b5 in `finished` before b3/b4 also land is a race
+	// between goroutines reaching ckptMu — near-certain on a developer machine,
+	// not on a loaded runner. Asserting it tested the scheduler, not the code.
 	//
-	// A size threshold on BookIDs could not express even that much: with
-	// CheckpointEvery=1 an ordinary in-order run also produces long remaining
-	// sets early on, so such a check passes with no gap ever existing.
-	// Comparing completions against drops is what distinguishes the two.
+	// The safety property is checked by the `violations` loop above, which runs
+	// against EVERY checkpoint and does not care when they were taken.
 	mu.Lock()
-	gapOpened := sawGap
+	completionOrder := append([]string(nil), order...)
 	mu.Unlock()
-	if !gapOpened {
-		t.Error("no checkpoint was taken while the out-of-order gap was open; " +
-			"the test did not exercise what it claims to")
+	fiveAt := slices.Index(completionOrder, "b5")
+	switch {
+	case fiveAt < 0:
+		t.Fatalf("b5 never completed; order = %v", completionOrder)
+	case fiveAt > slices.Index(completionOrder, "b3"),
+		fiveAt > slices.Index(completionOrder, "b4"):
+		t.Fatalf("b5 did not finish ahead of b3/b4, so the watermark never "+
+			"stalled behind a gap and the test proved nothing; order = %v",
+			completionOrder)
 	}
 
 	final, _ := rec.last()
