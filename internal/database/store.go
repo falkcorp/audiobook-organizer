@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.92.1
+// version: 2.93.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 package database
 
@@ -254,7 +254,13 @@ type Book struct {
 	LastOrganizeOperationID *string `json:"last_organize_operation_id,omitempty"`
 	// LastOrganizedAt is when this book was last stamped by an organize run (organized, re-organized, or confirmed correct).
 	LastOrganizedAt *time.Time `json:"last_organized_at,omitempty"`
-	// MetadataReviewStatus tracks manual metadata matching: null, "no_match", "matched".
+	// MetadataReviewStatus tracks metadata matching: null (nobody has ruled on
+	// this book), "no_match", "matched", or "audio_confirmed" — the last written
+	// by metafetch/service_apply.go when a candidate title matched the book's own
+	// transcribed audio. This comment listed only the first three until
+	// 2026-09-08, years after the apply path started writing the fourth, and a
+	// switch in handlers/metadata_cache.go trusted it: `audio_confirmed` books
+	// were reported as still awaiting review.
 	MetadataReviewStatus *string `json:"metadata_review_status,omitempty"`
 	// MetadataSource records which provider supplied the last applied metadata
 	// (e.g. "audible", "google_books", "openlibrary"). Used to selectively

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-09-01
+// last-edited: 2026-09-08
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -88,6 +88,38 @@ describe('summary reflects what the server says is reviewable', () => {
       no_candidates: 5178,
       decode_errors: 0,
     });
+  });
+
+  it('carries resolved_no_candidates through', async () => {
+    // Books already ruled on whose stored candidate is gone. They used to be
+    // counted inside `unreviewable`, which reported settled work as a permanent
+    // backlog -- 212 of them on production, all created by an empty refetch
+    // overwriting a book's candidates while leaving its verdict intact. The
+    // rail can only show them separately if the lane forwards the field.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload([makeResult('b1')]),
+      unreviewable: 5178,
+      resolved_no_candidates: 212,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.resolved_no_candidates).toBe(212);
+    // And it must NOT be folded back into the total it was just taken out of.
+    expect(result.current.summary.unreviewable).toBe(5178);
+  });
+
+  it('leaves resolved_no_candidates undefined when the server omits it', async () => {
+    // Same reason as the breakdown: a server that predates the split says
+    // nothing, which is not the same claim as "there are none".
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload([makeResult('b1')]),
+      unreviewable: 8532,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.resolved_no_candidates).toBeUndefined();
   });
 
   it('leaves the breakdown undefined when the server omits it', async () => {

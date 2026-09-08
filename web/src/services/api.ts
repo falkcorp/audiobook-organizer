@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.79.0
+// version: 2.80.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3929,6 +3929,15 @@ export async function getCachedReviewResults(
     no_candidates: number;
     decode_errors: number;
   };
+  /**
+   * Books already matched or marked no-match whose stored candidate is gone.
+   * These were counted inside `unreviewable` until 2026-09-08, which reported
+   * settled work as a permanent backlog: an empty refetch used to overwrite a
+   * book's candidates while leaving its verdict intact, and a row with a
+   * verdict and no candidate is indistinguishable from a never-fetched one
+   * unless the server says so.
+   */
+  resolved_no_candidates?: number;
 }> {
   const response = await apiFetch(
     `${API_BASE}/audiobooks/metadata/cache/review?limit=${limit}&offset=${offset}`,

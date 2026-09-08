@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -187,6 +187,14 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	type entryWithStatus struct {
 		sum    metafetch.MetadataCacheSummary
 		status string // "matched" | "no_match" | "applied"
+		// reviewed distinguishes "a human (or the audio-confirm pass) has ruled
+		// on this book" from "nobody has looked at it yet". It cannot be derived
+		// from status: status defaults to "matched" for an UNREVIEWED book, so
+		// "matched" means pending-review, not reviewed. Without this flag a row
+		// that has already been ruled on is indistinguishable from a fresh one
+		// once its candidates are gone, and it gets filed under "unreviewable"
+		// forever.
+		reviewed bool
 	}
 	// Fetch every book in ONE batch read instead of a GetBookByID per summary.
 	//
@@ -238,16 +246,30 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			orphaned++
 			continue
 		}
+		// "matched" is the PENDING-review default, not a verdict — a book nobody
+		// has ruled on lands here.
 		st := "matched"
+		reviewed := false
 		if book.MetadataReviewStatus != nil {
 			switch *book.MetadataReviewStatus {
 			case "no_match":
-				st = "no_match"
+				st, reviewed = "no_match", true
 			case "matched":
-				st = "applied"
+				st, reviewed = "applied", true
+			case "audio_confirmed":
+				// Written by metafetch/service_apply.go when the candidate title
+				// matched the book's own transcribed audio. That is a verdict —
+				// a stronger one than a human eyeballing a title — but this
+				// switch did not list it until 2026-09-08, so those books fell
+				// to the "matched" default and were reported as still awaiting
+				// review. The doc comment on database.Book.MetadataReviewStatus
+				// still described the vocabulary as `null, "no_match",
+				// "matched"` and nothing re-checked it when the apply path
+				// started writing a fourth value.
+				st, reviewed = "applied", true
 			}
 		}
-		prepared = append(prepared, entryWithStatus{sum: sum, status: st})
+		prepared = append(prepared, entryWithStatus{sum: sum, status: st, reviewed: reviewed})
 	}
 	// Stable sort: matched (pending review) first, then no_match, then applied.
 	statusRank := map[string]int{"matched": 0, "no_match": 1, "applied": 2}
@@ -291,16 +313,62 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		sum    metafetch.MetadataCacheSummary
 		status string
 		cand   metafetch.MetadataCandidate
+		// lastChecked is when this book was last searched for, which is >=
+		// sum.FetchedAt when the last search came back empty and the older
+		// candidates were kept. It drives is_fresh so a row the UI offers a
+		// "Refresh" on is one a refresh would actually change.
+		lastChecked time.Time
 	}
+	// ONE clock read for every freshness decision below -- the summary counts and
+	// the per-row is_fresh flag. Reading time.Now() twice for one predicate lets
+	// a row sitting on the boundary be counted stale by the summary and reported
+	// fresh by its own flag: "the chip says 5,771 but I count 5,772 icons", from
+	// a race no test can reproduce because both reads land in the same
+	// millisecond under test.
+	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
+
+	// lastChecked is when this book was last SEARCHED FOR, which is not the same
+	// as when its candidates were fetched. A book whose providers returned
+	// nothing an hour ago keeps its older candidates and their older FetchedAt
+	// (see metafetch.cacheSearchResponse), so dating staleness off FetchedAt
+	// alone would leave it permanently overdue and every refetch pass would pick
+	// it again forever -- "we pressed the stale button yesterday and they are
+	// still marked stale". LastEmptyFetchAt records that fruitless look.
+	lastChecked := func(entry *metafetch.MetadataCandidateCache, fetchedAt time.Time) time.Time {
+		if entry != nil && entry.LastEmptyFetchAt != nil && entry.LastEmptyFetchAt.After(fetchedAt) {
+			return *entry.LastEmptyFetchAt
+		}
+		return fetchedAt
+	}
+
 	reviewable := make([]reviewableRow, 0, len(prepared))
 	var decodeErrors int
-	// noCandidates is the second cause, counted for the same reason as orphaned.
-	var noCandidates int
+	// The no-candidate rows split by whether the book has already been ruled on.
+	// They used to share one counter, and lumping them together is what put
+	// already-resolved books in the "unreviewable" bucket permanently: a book
+	// whose candidates were destroyed by an empty refetch kept its verdict but
+	// lost its evidence, and nothing downstream could tell it apart from a book
+	// nobody has ever fetched for.
+	var noCandidatesPending, noCandidatesReviewed int
+	// stale is counted across every non-orphaned row, NOT just the reviewable
+	// ones. Counting it inside the reviewable loop -- which is what this did
+	// until 2026-09-08 -- structurally hid every stale row that had no
+	// candidates, and those are exactly the rows a refetch would help. On
+	// production the chip read "11 stale" while 2,658 stale zero-candidate rows
+	// sat in the unreviewable bucket, understating the backlog 242x.
+	var stale int
 	for i, p := range prepared {
 		entry := cachedByIdx[i]
+		if !lastChecked(entry, p.sum.FetchedAt).After(freshCutoff) {
+			stale++
+		}
 		if entry == nil || len(entry.Candidates) == 0 {
 			// No cached candidate means nothing to review. Not an error.
-			noCandidates++
+			if p.reviewed {
+				noCandidatesReviewed++
+			} else {
+				noCandidatesPending++
+			}
 			continue
 		}
 		var cand metafetch.MetadataCandidate
@@ -309,28 +377,16 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			decodeErrors++
 			continue
 		}
-		reviewable = append(reviewable, reviewableRow{sum: p.sum, status: p.status, cand: cand})
+		reviewable = append(reviewable, reviewableRow{
+			sum:         p.sum,
+			status:      p.status,
+			cand:        cand,
+			lastChecked: lastChecked(entry, p.sum.FetchedAt),
+		})
 	}
 
 	var matched, noMatch, applied int
-	// stale counts every reviewable row past the TTL, not just the ones on this
-	// page, so the rail can state the size of the problem rather than whatever
-	// fraction of it happens to be visible.
-	//
-	// ONE clock read, used both here and for the per-row is_fresh flag below.
-	// Reading time.Now() twice for one predicate lets a row sitting on the
-	// boundary be counted stale by the summary and reported fresh by its own
-	// flag -- "the chip says 5,771 but I count 5,772 icons", from a race no
-	// test can reproduce because both reads land in the same millisecond under
-	// test. The two loops read the same FetchedAt (page is a slice of
-	// reviewable), so a single cutoff makes them structurally unable to
-	// disagree.
-	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
-	var stale int
 	for _, r := range reviewable {
-		if !r.sum.FetchedAt.After(freshCutoff) {
-			stale++
-		}
 		switch r.status {
 		case "no_match":
 			noMatch++
@@ -364,7 +420,10 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// library that meant 5,771 of 5,774 reviewable rows were past the TTL
 		// and every one of them was presented as though freshly fetched.
 		fetchedAt := page[i].sum.FetchedAt
-		isFresh := fetchedAt.After(freshCutoff)
+		// Dated off lastChecked, not fetchedAt: a book whose providers came back
+		// empty this morning is not one a "Refresh" would improve, even though
+		// the candidates it still shows are older than the TTL.
+		isFresh := page[i].lastChecked.After(freshCutoff)
 		results = append(results, metabatch.CandidateResult{
 			Book:      metabatch.BuildCandidateBookInfo(h.store, book),
 			Candidate: &cand,
@@ -394,7 +453,12 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// reported alongside it. Knowing the number is 8,532 tells an operator
 		// nothing about what to DO; knowing 3,354 of it is rows whose book is
 		// gone points straight at a reaper, and the rest at a refetch.
-		"unreviewable": orphaned + noCandidates + decodeErrors,
+		//
+		// noCandidatesReviewed is deliberately NOT part of this sum. Those books
+		// have a verdict; there is nothing for a reviewer to do with them, so
+		// filing them under "unreviewable" reported settled work as a backlog.
+		// They are reported separately as `resolved_no_candidates`.
+		"unreviewable": orphaned + noCandidatesPending + decodeErrors,
 		// Reviewable rows whose cached candidate is past MetadataCacheTTL. They
 		// are still returned -- staleness is informational, per the TTL's
 		// contract -- but a reviewer applying month-old metadata should be told.
@@ -403,13 +467,22 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			// The book the row points at no longer resolves. Only a cleanup
 			// pass fixes these; refetching cannot.
 			"orphaned": orphaned,
-			// The book is fine, the cache just holds no candidate for it.
-			// A refetch fixes these.
-			"no_candidates": noCandidates,
+			// The book is fine, nobody has ruled on it, and the cache holds no
+			// candidate for it. A refetch is the fix for these.
+			"no_candidates": noCandidatesPending,
 			// Stored, but the JSON would not decode. Also counted in `errors`;
 			// this repeats it so the three causes sum to `unreviewable`.
 			"decode_errors": decodeErrors,
 		},
+		// Books already ruled on that have no candidate left to show. Not a
+		// backlog and not an error -- reported so the number is visible rather
+		// than silently missing from every bucket.
+		//
+		// Before 2026-09-08 an empty refetch overwrote a book's candidates while
+		// leaving its verdict intact, which is how these are produced;
+		// metafetch.cacheSearchResponse no longer does that, so this count is
+		// now a fixed backlog of historical damage rather than a growing one.
+		"resolved_no_candidates": noCandidatesReviewed,
 	})
 }
 
