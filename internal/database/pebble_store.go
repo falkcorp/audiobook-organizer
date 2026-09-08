@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.142.1
+// version: 1.143.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package database
 
@@ -110,6 +110,7 @@ type PebbleStore struct {
 	opsMu                    sync.Mutex   // serializes v2 op CAS operations (SetOperationV2StatusIfQueued)
 	reviewMu                 sync.Mutex   // serializes review-item upserts so concurrent same-DedupKey writes can't duplicate rows (review_store.go)
 	authorMu                 sync.Mutex   // serializes author creation so concurrent same-name writes can't duplicate rows (pebble_store_authors.go)
+	apiKeyMu                 sync.Mutex   // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
 	fileProvMu               sync.Mutex   // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
 	opsLogSeq                atomic.Int64 // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string       // organized library root; set via SetRootDir after config load

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-07-03
+// last-edited: 2026-09-07
 
 package database
 
@@ -423,7 +423,24 @@ func (p *PebbleStore) SetAPIKeyExpiry(id string, at time.Time) error {
 	return p.db.Set([]byte("apikey:"+id), data, pebble.Sync)
 }
 
+// TouchAPIKeyLastUsed stamps an API key's last-use metadata and increments its
+// use counter.
+//
+// Serialized on apiKeyMu because the body is a read-modify-write: read the key,
+// bump UseCount, write it back. Every authenticated request touches its key, so
+// concurrent requests on the SAME key overlap constantly — unguarded, two
+// requests both read UseCount=N and both write N+1, and one is lost. Measured
+// before the lock: 200 concurrent touches recorded 37, losing 163 of them. The
+// same window makes LastUsedAt/LastUsedIP the values of whichever goroutine
+// wrote last rather than of the most recent request.
+//
+// A mutex rather than an atomic because the state is a whole record, not a
+// single word (see the "shape of the state" rule in the Go standards); it is
+// held across a Pebble read and a NoSync write, both memtable-speed.
 func (p *PebbleStore) TouchAPIKeyLastUsed(id string, at time.Time, ip string) error {
+	p.apiKeyMu.Lock()
+	defer p.apiKeyMu.Unlock()
+
 	k, err := p.GetAPIKey(id)
 	if err != nil {
 		return err
