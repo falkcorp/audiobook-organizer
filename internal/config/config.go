@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.103.0
+// version: 1.104.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-07
 
@@ -1333,12 +1333,29 @@ func Mutate(fn func(*Config)) {
 // InitConfig set. Call it LAST in the DB-load path (after the blob and secret rows are
 // applied) via Mutate.
 //
-// This is pure viper: each key has a BindEnv binding (see InitConfig), so viper.GetX
-// honors the environment — no os.Getenv here. viper.IsSet is true only when a real
-// override layer (env/flag/config-file) supplied the key, NOT for SetDefault, so a
-// UI-set value that lives only in the blob is left untouched when no env var is present.
-// Env-authoritative keys ONLY: OAuth / Cloudflare Access / Whisper. UI-managed keys
-// (itunes.*, scheduled.*, etc.) are intentionally excluded — they belong to the blob.
+// There are TWO categories here and they need DIFFERENT tests. Do not collapse them.
+//
+//  1. AUTH-SURFACE keys (OAuth / Cloudflare Access / ABS): the blob must NEVER win,
+//     even when the environment is silent. These are externally-reachable auth
+//     switches, and the blob is untrusted input — it must not be able to enable an
+//     auth surface or supply its credentials. `viper.IsSet` is the right test
+//     precisely BECAUSE every one of these keys has a registered SetDefault, which
+//     makes IsSet permanently true and so makes the assignment unconditional. That
+//     is deliberate; TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI asserts it.
+//
+//  2. OPERATIONAL keys that the UI may also set (activity_db_path): the environment
+//     wins only when it ACTUALLY supplies the key; otherwise the persisted blob
+//     value must survive. These need envSupplied(), NOT viper.IsSet.
+//
+// The comment that stood here until 2026-09-07 claimed "viper.IsSet is true only when
+// a real override layer supplied the key, NOT for SetDefault, so a UI-set value that
+// lives only in the blob is left untouched." That is FALSE — viper's IsSet is
+// Get(key) != nil and a registered default is a value, so IsSet is true with an empty
+// environment. Every category-2 key guarded by IsSet was therefore overwritten with
+// its default on EVERY boot, silently destroying the persisted value: a dead lever.
+//
+// UI-managed keys (itunes.*, scheduled.*, etc.) are excluded entirely — they belong
+// to the blob and must not appear in this function at all.
 // WhisperEndpoint declares one remote Whisper server for the dispatch pool.
 // Mirror of transcribe.Endpoint kept as a plain config struct so this package
 // never imports internal/transcribe.
@@ -1405,6 +1422,22 @@ func ParseWhisperEndpoints(s string) []WhisperEndpoint {
 		return nil
 	}
 	return endpoints
+}
+
+// envSupplied reports whether the process environment actually provided a value for
+// an environment variable bound via viper.BindEnv.
+//
+// viper.IsSet CANNOT answer this question. InitConfig registers a SetDefault for most
+// bound keys, and viper.IsSet is `Get(key) != nil` — a registered default is a value,
+// so IsSet stays true with a completely empty environment. Measured against this
+// repo's viper: SetDefault("activity_db_path", "") alone yields IsSet=true, Get="".
+//
+// An empty value counts as "not supplied" on purpose: systemd `Environment=FOO=` and
+// an unset variable should not behave differently, and an empty override could only
+// ever blank a persisted setting.
+func envSupplied(envVar string) bool {
+	v, ok := os.LookupEnv(envVar)
+	return ok && v != ""
 }
 
 func applyEnvAuthoritativeConfig(c *Config) {
@@ -1480,7 +1513,13 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	if viper.IsSet("activity_backend") {
 		c.ActivityBackend = viper.GetString("activity_backend")
 	}
-	if viper.IsSet("activity_db_path") {
+	// Category 2 (see the doc comment): operator-OR-UI settable. ACTIVITY_DB_PATH wins
+	// when the operator actually sets it, but with the environment silent the value
+	// persisted in the config blob must SURVIVE — this is the field behind the
+	// activity-database location control in Settings. Guarding this with viper.IsSet
+	// (as every other key here does) overwrote it with "" on every boot, because the
+	// registered SetDefault keeps IsSet permanently true.
+	if envSupplied("ACTIVITY_DB_PATH") {
 		c.ActivityDBPath = viper.GetString("activity_db_path")
 	}
 }
