@@ -41,10 +41,13 @@
   had always reduced the ID with `filepath.Base`; the download path had not, and nothing made
   the two agree.
 
-  The ID is now validated once at the top of the download path, and every cover path is built
-  with `pathvalidation.SecureJoin`, which fails rather than escaping its root — a second,
-  independent guard rather than the only one. A traversing book ID is rejected before any
-  network request is made.
+  The ID is now validated once at the top of the download path, so the existence check and the
+  `os.Create` destination can no longer disagree about which file they mean, and a traversing
+  book ID is rejected before any network request is made. Each path then gets a second,
+  independent guard: the lookup probes through an `fs.FS` rooted at the covers directory, which
+  `io/fs` confines by construction (`os.DirFS` rejects any name containing a separator or `..`),
+  and the write resolves its destination with `pathvalidation.SecureJoin`, which fails rather
+  than escaping its root.
 
   The validation **rejects rather than truncates**. Reducing `a/b/c` to `c` the way
   `filepath.Base` does would be worse than useless on a write path: two different book IDs

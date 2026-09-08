@@ -1,5 +1,5 @@
 // file: internal/metadata/cover_lookup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b080c796-52a1-4a1e-a40d-232a50596515
 // last-edited: 2026-09-08
 
@@ -176,9 +176,16 @@ func TestFindExistingCover_NarrowerThanGlob(t *testing.T) {
 	})
 }
 
-// TestFindExistingCover_RefusesEscapingID covers the SecureJoin guard directly,
-// bypassing the callers' own sanitization. Without it, an id of "../<name>"
-// would stat a file outside the covers directory and hand back its path.
+// TestFindExistingCover_RefusesEscapingID covers the lookup's own confinement
+// directly, bypassing the callers' sanitization. Without it, an id of
+// "../<name>" would stat a file outside the covers directory and hand back its
+// path.
+//
+// What actually holds here is io/fs, not the explicit ValidPath check:
+// os.DirFS's Open rejects any name failing fs.ValidPath with ErrInvalid, so
+// deleting that check leaves this test green (confirmed by mutation). The check
+// is documentation and defence-in-depth; this test pins the behaviour, which is
+// the thing that must not regress either way.
 func TestFindExistingCover_RefusesEscapingID(t *testing.T) {
 	root := t.TempDir()
 	coversDir := filepath.Join(root, "covers")

@@ -1,5 +1,5 @@
 // file: internal/metadata/cover.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
 // last-edited: 2026-09-08
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -201,8 +202,8 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 var coverExtensions = [...]string{".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
 // findExistingCover returns the path of the stored cover for id, or "" if there
-// is none. Both callers pass an id already reduced by safeCoverID; the
-// SecureJoin below is a second, independent guard rather than the only one.
+// is none. Both callers pass an id already checked by safeCoverID; the io/fs
+// confinement below is a second, independent guard rather than the only one.
 //
 // This intentionally does not use filepath.Glob. The pattern "<id>.*" contains a
 // meta character, so Glob cannot do a point lookup — it falls into glob(), which
@@ -221,22 +222,28 @@ var coverExtensions = [...]string{".gif", ".jpeg", ".jpg", ".png", ".webp"}
 // Two deliberate refinements over the Glob version, both narrowing what can be
 // returned: a directory named "<id>.jpg" is no longer treated as a cover, and
 // neither is a dangling symlink (Glob listed both; serving either fails).
-// pathvalidation.SecureJoin, rather than filepath.Join, is what confines the
-// probe to coversDir: id reaches here from callers that do not all sanitize it,
-// and an id like "../../etc/passwd" would otherwise be statted outside the
-// covers directory. filepath.Glob had the same exposure — CodeQL simply does not
-// model Glob as a path sink, so replacing it with os.Stat is what surfaced the
-// pre-existing taint as a new high-severity alert. Treated as a real finding
-// rather than a reporting artefact.
+// The probe goes through an fs.FS rooted at coversDir rather than
+// os.Stat(filepath.Join(...)). id reaches here from callers that pass
+// request-supplied values (CoverPathForBook is called with c.Param("id")), and
+// io/fs confines a lookup to its root by construction: fs.ValidPath rejects any
+// name containing a separator or "..", so no argument can walk out of coversDir.
+// filepath.Glob had the same underlying exposure — CodeQL just does not model
+// Glob as a path sink — so replacing it is what surfaced the pre-existing taint.
 func findExistingCover(coversDir, id string) string {
+	fsys := os.DirFS(coversDir)
 	for _, ext := range coverExtensions {
-		p, err := pathvalidation.SecureJoin(coversDir, id+ext)
-		if err != nil {
-			// id escapes coversDir, so it cannot name a cover we own.
+		name := id + ext
+		if !fs.ValidPath(name) || strings.ContainsRune(name, '/') {
+			// Redundant with os.dirFS.Open, which rejects the same names with
+			// ErrInvalid — verified by mutation: deleting this block changes no
+			// test outcome. Kept because it states the precondition at the point
+			// it matters, and because it is what still holds if this ever stops
+			// going through an fs.FS. ValidPath alone would accept "a/b", which
+			// is a subdirectory rather than a cover we own.
 			return ""
 		}
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p
+		if fi, err := fs.Stat(fsys, name); err == nil && !fi.IsDir() {
+			return filepath.Join(coversDir, name)
 		}
 	}
 	return ""
