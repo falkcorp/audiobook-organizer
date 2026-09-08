@@ -30,6 +30,34 @@
   recount, and rendering it approximately — dual-writes grow a tier while it is
   being scanned, the same reason `maintenance.activity-reclaim` renders `≈N`.
 
+- [x] **Never resume the `digest` tier of the activity migration.** DONE (follow-up
+  to the checkpoint below, after review caught it). A resume bound is sound only
+  where every writer either dual-writes to SQLite or appends forward in time.
+  `CompactByDay` does neither: it keys its row `pactPrimaryKey("digest",
+  startOfDay, ulid)` — BACKDATED — and routes through
+  `MigratingActivityStore.CompactByDay` → `m.active()`, which is Pebble for the
+  whole migration, so there is no SQLite counterpart. It is reachable
+  mid-migration from scheduled maintenance (`server_maintenance_deps.go:285`) and
+  from a user button (`handlers/activity.go:385`), and it REPLACES a day's digest
+  with a fresh ULID. A row below the cursor was therefore skipped by the copy AND
+  by the verify — the parity pass re-presents only the batch it just read, never
+  re-reading Pebble — leaving the tier `clean` while missing a row that may be a
+  correction to a stale one. `activityNonResumableTiers` now forces a full scan of
+  `digest` (~1 row/day); `change` (~5.7M rows) still resumes. Residual, documented
+  not coded: `Summarize` also bypasses the dual-write but keys at `now`, unsafe
+  only if a caller recorded a FUTURE-dated entry the scan already passed
+  (`normalizeActivityEntry` rejects pre-epoch, does not clamp forward), and the
+  loss would be one summary row whose originals are already in SQLite.
+
+- [ ] **Two stale reading-guides were corrected with it — watch for more.**
+  `PerTierCopied`'s doc said scanned≫copied means "a RESUMED run re-streaming
+  already-copied history"; checkpointing INVERTS that (a resume now skips it, so
+  scanned≈copied), and the shape now means a full re-scan instead. The
+  `streamTierEntries` resume comment asserted keys sort in write order, which
+  `sql_activity_backfill.go`'s own header denies (timestamps are caller-supplied
+  and non-monotonic). Both are fixed; the pattern — a justification outliving its
+  reason — is worth a sweep of the other activity-migration comments.
+
 - [x] **Checkpoint the migration so a restart doesn't start over.** DONE: adds
   `ActivitySQLBackfillProgressKey`, a per-tier `{state, cursor, scanned, copied,
   reinserted}` blob written every batch (NoSync) with verdict transitions synced,

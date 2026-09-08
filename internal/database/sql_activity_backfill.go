@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
 // last-edited: 2026-09-08
 
@@ -61,9 +61,18 @@ type SQLActivityBackfillResult struct {
 	EntriesCopied  int            `json:"entries_copied"`  // rows actually inserted (excludes idempotent skips)
 	PerTierScanned map[string]int `json:"per_tier_scanned"`
 	// PerTierCopied breaks EntriesCopied down the same way PerTierScanned does.
-	// The two differ by exactly the idempotent skips, so a tier where
-	// scanned≫copied is a RESUMED run re-streaming already-copied history — the
-	// one shape that otherwise looks identical to a stalled first run.
+	// The two differ by exactly the idempotent skips.
+	//
+	// ⚠️ Read this pair the NEW way. Before the checkpoint landed, scanned≫copied
+	// meant "a resumed run re-streaming already-copied history". Resuming now
+	// SKIPS that history, so a genuine resume shows scanned≈copied for its tail
+	// and a tier that resumes cleanly never exhibits the old shape at all.
+	//
+	// Today scanned≫copied means the tier is being RE-SCANNED with SQLite already
+	// holding its rows, which narrows to three causes: a `failed` verdict reset to
+	// a full re-scan on load, a tier in activityNonResumableTiers (`digest`, which
+	// never resumes), or a lost/cleared progress blob. None of them is a stall,
+	// and none is a resume.
 	PerTierCopied map[string]int `json:"per_tier_copied"`
 	ParityOK      bool           `json:"parity_ok"`
 	DryRun        bool           `json:"dry_run"`
@@ -145,6 +154,19 @@ func BackfillPebbleActivityToSQL(
 		var resumeFrom []byte
 		if !dryRun {
 			resumeFrom = resumeCursorFor(tier, st.Cursor)
+			// Not resuming means re-scanning the tier from row zero, so the
+			// checkpoint's counters must go with the cursor that produced them.
+			// Carrying them into a full re-scan would double-count every row
+			// (inflating scanned/copied) and, worse, would keep a stale
+			// `reinserted` alive across a scan that re-verified everything from
+			// scratch — the one condition under which a fresh verdict IS
+			// trustworthy. This is the same rule loadActivityBackfillProgress
+			// applies to a `failed` tier, applied at the other place the decision
+			// is made: a resume carries counters, a full re-scan resets them.
+			if resumeFrom == nil && (st.Scanned != 0 || st.Copied != 0 || st.Reinserted != 0) {
+				st.Cursor = ""
+				st.Scanned, st.Copied, st.Reinserted = 0, 0, 0
+			}
 		}
 
 		slog.Info("[activity-sql-backfill] processing tier",
@@ -265,6 +287,10 @@ func BackfillPebbleActivityToSQL(
 		res.PerTierCopied[tier] = tierCopied
 		res.EntriesScanned += tierScanned
 		res.EntriesCopied += tierCopied
+		// ⚠️ Do NOT derive a rate from this line. `scanned`/`copied` are
+		// cumulative for the TIER (they start at the checkpoint), while `elapsed`
+		// covers THIS ATTEMPT only. On a resumed tier the pair divides out to a
+		// throughput far above anything the scan achieved.
 		slog.Info("[activity-sql-backfill] tier complete",
 			"tier", tier,
 			"tier_index", res.TiersProcessed+1, "tiers_total", len(actTiers),
