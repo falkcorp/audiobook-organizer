@@ -88,7 +88,9 @@ Costs nest, so these overlap.
       surfaced: CodeQL models `os.Stat` as a path sink and does not model `Glob`, so
       swapping them turned a silent pre-existing issue into a new high-severity alert
       on the read — and the `os.Create` one line below had the same exposure. Both
-      now go through `safeCoverID` + `pathvalidation.SecureJoin`. The directory is
+      now go through `safeCoverID`; the read is then confined by probing through an
+      `fs.FS` rooted at the covers directory and the write by
+      `pathvalidation.SecureJoin`. The directory is
       also growing: 7,885 files on 2026-08-02, 9,288 on 2026-09-08, so the cost of
       the old glob rose over time.
 - [ ] **`minifiedItem` — 23.17 s (5.30 %).**
