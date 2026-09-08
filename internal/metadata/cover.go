@@ -242,14 +242,30 @@ func findExistingCover(coversDir, id string) string {
 	return ""
 }
 
-// safeCoverID reduces bookID to a single path segment usable as a cover
-// filename stem, or "" when nothing usable remains.
+// safeCoverID returns bookID when it is usable as a cover filename stem, and ""
+// otherwise.
+//
+// It rejects rather than truncates. filepath.Base would reduce "a/b/c" to "c",
+// which is worse than useless on the write path: two different book IDs sharing
+// a last segment would resolve to the same cover filename and one book's art
+// would overwrite the other's. Book IDs are DB-minted ULIDs — both cover-writing
+// callers reach DownloadCoverArt only after GetBookByID has returned a real book
+// — so a separator here means the caller is wrong, and guessing which book was
+// meant is not this function's job.
+//
+// The separator test is written out rather than expressed as
+// `bookID != filepath.Base(bookID)`, because Base("/") returns "/" — that form
+// let a bare separator through, which the tests caught.
 func safeCoverID(bookID string) string {
-	safe := filepath.Base(bookID)
-	if safe == "." || safe == ".." || safe == string(filepath.Separator) {
+	if bookID == "" || bookID == "." || bookID == ".." {
 		return ""
 	}
-	return safe
+	// '/' is checked alongside filepath.Separator so that a Unix-style path
+	// is rejected on Windows too, where Separator is '\\'.
+	if strings.ContainsRune(bookID, '/') || strings.ContainsRune(bookID, filepath.Separator) {
+		return ""
+	}
+	return bookID
 }
 
 // CoverPathForBook returns the local cover file path if it exists, empty string otherwise.
