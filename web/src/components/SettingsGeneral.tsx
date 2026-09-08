@@ -1,7 +1,7 @@
 // file: web/src/components/SettingsGeneral.tsx
-// version: 1.0.4
+// version: 1.1.0
 // guid: 72ebd6f3-7436-4f24-8233-205c50dd05fb
-// last-edited: 2026-08-19
+// last-edited: 2026-09-07
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -33,51 +33,13 @@ import {
 } from '@mui/icons-material';
 import * as api from '../services/api';
 
-interface SettingsState {
-  libraryPath: string;
-  organizationStrategy: string;
-  scanOnStartup: boolean;
-  autoOrganize: boolean;
-  folderNamingPattern: string;
-  fileNamingPattern: string;
-  createBackups: boolean;
-  supportedExtensions: string[];
-  excludePatterns: string[];
-  enableDiskQuota: boolean;
-  diskQuotaPercent: number;
-  enableUserQuotas: boolean;
-  defaultUserQuotaGB: number;
-  autoFetchMetadata: boolean;
-  enableAIParsing: boolean;
-  metadataLLMScoringEnabled: boolean;
-  openaiApiKey: string;
-  metadataSources: any[];
-  language: string;
-  concurrentScans: number;
-  memoryLimitType: string;
-  cacheSize: number;
-  cacheInvalidateOnBookUpdate: boolean;
-  metadataFetchCacheTTLDays: number;
-  memoryLimitPercent: number;
-  memoryLimitMB: number;
-  logLevel: string;
-  logFormat: string;
-  enableJsonLogging: boolean;
-  purgeSoftDeletedAfterDays: number;
-  purgeSoftDeletedDeleteFiles: boolean;
-  autoUpdateEnabled: boolean;
-  autoUpdateChannel: string;
-  autoUpdateCheckMinutes: number;
-  autoUpdateWindowStart: number;
-  autoUpdateWindowEnd: number;
-  maintenanceWindowEnabled: boolean;
-  maintenanceWindowStart: number;
-  maintenanceWindowEnd: number;
-  autoRenameOnApply: boolean;
-  autoWriteTagsOnApply: boolean;
-  verifyAfterWrite: boolean;
-  protectedPaths: string;
-}
+// SettingsState is imported, not redeclared. This file used to carry its own
+// 44-field structural copy that had to be updated in lockstep with the real one;
+// adding a field to Settings.tsx broke this component at the prop boundary with an
+// error that named neither file. `import type` is erased at compile time, so the
+// Settings -> SettingsGeneral runtime import stays one-directional.
+// useSettingsHandlers.ts already imports the type this way.
+import type { SettingsState } from '../pages/Settings';
 
 interface ScanStatus {
   status: 'scanning' | 'complete' | 'error' | 'cancelled';
