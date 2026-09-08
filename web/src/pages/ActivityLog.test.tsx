@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-08
 
@@ -282,5 +282,69 @@ describe('Active Operations expand/collapse', () => {
       expect(screen.queryByText('Author Duplicate Scan')).not.toBeInTheDocument();
     });
     expect(screen.getByText('Library Scan')).toBeInTheDocument();
+  });
+});
+
+// The Completed section spans the whole 24-hour window — 80 rows on production —
+// and an unpaged list of that buries every section under it, which on this page
+// includes Failed. So each section pages at OPS_SECTION_PAGE_SIZE (7).
+describe('Active Operations section pagination', () => {
+  const op = (id: string, status: string, displayName: string) => ({
+    id,
+    type: 'scan',
+    displayName,
+    status,
+    progress: 1,
+    total: 2,
+    message: '',
+    parent_id: null,
+  });
+
+  beforeEach(() => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
+    operationsStoreState.activeOperations = Array.from({ length: 10 }, (_, i) =>
+      op(`done-${i}`, 'completed', `Finished Job ${i}`)
+    );
+  });
+
+  afterEach(() => {
+    operationsStoreState.activeOperations = [];
+  });
+
+  it('shows one page of rows, and the heading still reports the TOTAL', async () => {
+    renderPage();
+
+    // Page 1 only.
+    expect(await screen.findByText('Finished Job 0')).toBeInTheDocument();
+    expect(screen.getByText('Finished Job 6')).toBeInTheDocument();
+    expect(screen.queryByText('Finished Job 7')).not.toBeInTheDocument();
+
+    // The heading answers "how many completed today?", so it must NOT shrink to
+    // the page size — that would make the pagination itself misleading.
+    expect(screen.getByText('Completed (10)')).toBeInTheDocument();
+    expect(screen.getByText('1–7 of 10')).toBeInTheDocument();
+  });
+
+  it('page 2 shows the remainder', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Finished Job 0');
+
+    await user.click(screen.getByRole('button', { name: /go to page 2/i }));
+
+    expect(await screen.findByText('Finished Job 7')).toBeInTheDocument();
+    expect(screen.getByText('Finished Job 9')).toBeInTheDocument();
+    expect(screen.queryByText('Finished Job 0')).not.toBeInTheDocument();
+    expect(screen.getByText('8–10 of 10')).toBeInTheDocument();
+  });
+
+  it('does not paginate a section that fits on one page', async () => {
+    operationsStoreState.activeOperations = Array.from({ length: 5 }, (_, i) =>
+      op(`done-${i}`, 'completed', `Finished Job ${i}`)
+    );
+    renderPage();
+
+    expect(await screen.findByText('Finished Job 4')).toBeInTheDocument();
+    expect(screen.queryByText(/of 5$/)).not.toBeInTheDocument();
   });
 });
