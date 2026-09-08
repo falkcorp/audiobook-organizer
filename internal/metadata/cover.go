@@ -1,5 +1,5 @@
 // file: internal/metadata/cover.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
 // last-edited: 2026-09-08
 
@@ -8,7 +8,6 @@ package metadata
 import (
 	"context"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"io"
 	"net"
 	"net/http"
@@ -17,6 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
+	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
 // ErrSSRFBlocked is returned when a cover URL resolves to a private/reserved address.
@@ -114,6 +116,15 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 	if bookID == "" {
 		return "", fmt.Errorf("empty book ID")
 	}
+	// Sanitize once, here, so the existence check and the os.Create below cannot
+	// disagree about which file they mean. This site previously used bookID raw
+	// while CoverPathForBook applied filepath.Base; CodeQL flagged the read as
+	// "uncontrolled data used in path expression" and the write one line down had
+	// the identical exposure, so both now go through the sanitized id.
+	safeID := safeCoverID(bookID)
+	if safeID == "" {
+		return "", fmt.Errorf("invalid book ID %q", bookID)
+	}
 
 	if err := validateCoverURL(coverURL); err != nil {
 		return "", err
@@ -123,10 +134,8 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 
 	// Check if cover already exists (any known extension). This is the same
 	// lookup CoverPathForBook does; see findExistingCover for why it is a stat
-	// probe rather than a glob. Note this site passes bookID unsanitized while
-	// CoverPathForBook applies filepath.Base — preserved as-is, since changing
-	// it is a separate question from the lookup cost.
-	if existing := findExistingCover(coversDir, bookID); existing != "" {
+	// probe rather than a glob.
+	if existing := findExistingCover(coversDir, safeID); existing != "" {
 		return existing, nil
 	}
 
@@ -151,7 +160,10 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 	}
 
 	ext := extensionFromContentType(contentType)
-	destPath := filepath.Join(coversDir, bookID+ext)
+	destPath, err := pathvalidation.SecureJoin(coversDir, safeID+ext)
+	if err != nil {
+		return "", fmt.Errorf("invalid cover destination for book %q: %w", bookID, err)
+	}
 
 	// Limit to 10 MB
 	limitedReader := io.LimitReader(resp.Body, 10*1024*1024)
@@ -189,8 +201,8 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 var coverExtensions = [...]string{".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
 // findExistingCover returns the path of the stored cover for id, or "" if there
-// is none. coversDir and id are used as given; sanitizing id is the caller's
-// job, because the two callers deliberately differ on it.
+// is none. Both callers pass an id already reduced by safeCoverID; the
+// SecureJoin below is a second, independent guard rather than the only one.
 //
 // This intentionally does not use filepath.Glob. The pattern "<id>.*" contains a
 // meta character, so Glob cannot do a point lookup — it falls into glob(), which
@@ -209,9 +221,20 @@ var coverExtensions = [...]string{".gif", ".jpeg", ".jpg", ".png", ".webp"}
 // Two deliberate refinements over the Glob version, both narrowing what can be
 // returned: a directory named "<id>.jpg" is no longer treated as a cover, and
 // neither is a dangling symlink (Glob listed both; serving either fails).
+// pathvalidation.SecureJoin, rather than filepath.Join, is what confines the
+// probe to coversDir: id reaches here from callers that do not all sanitize it,
+// and an id like "../../etc/passwd" would otherwise be statted outside the
+// covers directory. filepath.Glob had the same exposure — CodeQL simply does not
+// model Glob as a path sink, so replacing it with os.Stat is what surfaced the
+// pre-existing taint as a new high-severity alert. Treated as a real finding
+// rather than a reporting artefact.
 func findExistingCover(coversDir, id string) string {
 	for _, ext := range coverExtensions {
-		p := filepath.Join(coversDir, id+ext)
+		p, err := pathvalidation.SecureJoin(coversDir, id+ext)
+		if err != nil {
+			// id escapes coversDir, so it cannot name a cover we own.
+			return ""
+		}
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			return p
 		}
@@ -219,11 +242,21 @@ func findExistingCover(coversDir, id string) string {
 	return ""
 }
 
+// safeCoverID reduces bookID to a single path segment usable as a cover
+// filename stem, or "" when nothing usable remains.
+func safeCoverID(bookID string) string {
+	safe := filepath.Base(bookID)
+	if safe == "." || safe == ".." || safe == string(filepath.Separator) {
+		return ""
+	}
+	return safe
+}
+
 // CoverPathForBook returns the local cover file path if it exists, empty string otherwise.
 func CoverPathForBook(destDir string, bookID string) string {
 	// filepath.Base strips any directory traversal from the bookID segment.
-	safeID := filepath.Base(bookID)
-	if safeID == "." || safeID == "/" {
+	safeID := safeCoverID(bookID)
+	if safeID == "" {
 		return ""
 	}
 	return findExistingCover(filepath.Join(destDir, "covers"), safeID)

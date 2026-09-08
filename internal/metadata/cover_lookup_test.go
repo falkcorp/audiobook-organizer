@@ -6,6 +6,7 @@
 package metadata
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -173,6 +174,68 @@ func TestFindExistingCover_NarrowerThanGlob(t *testing.T) {
 			t.Fatalf("a dangling symlink must not be served as a cover, got %q", got)
 		}
 	})
+}
+
+// TestFindExistingCover_RefusesEscapingID covers the SecureJoin guard directly,
+// bypassing the callers' own sanitization. Without it, an id of "../<name>"
+// would stat a file outside the covers directory and hand back its path.
+func TestFindExistingCover_RefusesEscapingID(t *testing.T) {
+	root := t.TempDir()
+	coversDir := filepath.Join(root, "covers")
+	if err := os.MkdirAll(coversDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A real file one level above the covers directory, i.e. the thing a
+	// traversal would be reaching for.
+	outside := filepath.Join(root, "secret.jpg")
+	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if got := findExistingCover(coversDir, "../secret"); got != "" {
+		t.Fatalf("escaping id resolved to %q; SecureJoin guard is not holding", got)
+	}
+	// Sanity check that the fixture is real: the same probe inside the covers
+	// directory does find a file, so the empty result above is the guard and not
+	// a broken test setup.
+	if err := os.WriteFile(filepath.Join(coversDir, "inside.jpg"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := findExistingCover(coversDir, "inside"); got == "" {
+		t.Fatal("fixture is inert: a cover inside coversDir was not found")
+	}
+}
+
+func TestSafeCoverID(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"01HZY", "01HZY"},
+		{"../../etc/passwd", "passwd"},
+		{"a/b/c", "c"},
+		{"", ""},
+		{".", ""},
+		{"..", ""},
+		{"/", ""},
+		{"../..", ""},
+	} {
+		if got := safeCoverID(tc.in); got != tc.want {
+			t.Errorf("safeCoverID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestDownloadCoverArt_RejectsTraversingBookID pins the write side: a traversing
+// bookID must be refused outright rather than writing through it.
+func TestDownloadCoverArt_RejectsTraversingBookID(t *testing.T) {
+	for _, bad := range []string{"..", ".", "/", "../.."} {
+		_, err := downloadCoverArtWithClient(http.DefaultClient,
+			"http://127.0.0.1:1/cover.jpg", t.TempDir(), bad)
+		if err == nil {
+			t.Fatalf("bookID %q was accepted; want rejection", bad)
+		}
+		if !strings.Contains(err.Error(), "invalid book ID") {
+			t.Fatalf("bookID %q: got %v, want an invalid-book-ID rejection before any network use", bad, err)
+		}
+	}
 }
 
 // TestCoverPathForBook_SanitizesID keeps the traversal guard covered now that the

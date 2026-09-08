@@ -32,3 +32,21 @@
   This does not make search fast on its own — the same profile showed 47 % of CPU going to GC
   and 18 % to the metadata apply jobs' SHA-256 hashing — but it removes work that grows as the
   library gains covers.
+
+### Security
+
+- **Cover paths are now confined to the covers directory.** The cover download path built both
+  its "do we already have this?" lookup and its `os.Create` destination from an unsanitized
+  book ID, so an ID containing `../` resolved outside the covers directory. `CoverPathForBook`
+  had always reduced the ID with `filepath.Base`; the download path had not, and nothing made
+  the two agree.
+
+  The ID is now sanitized once at the top of the download path, and every cover path is built
+  with `pathvalidation.SecureJoin`, which fails rather than escaping its root — a second,
+  independent guard rather than the only one. A traversing book ID is rejected before any
+  network request is made.
+
+  This exposure was not introduced by the performance change above; `filepath.Glob` resolved
+  traversal the same way. It surfaced because CodeQL models `os.Stat` as a path sink and does
+  not model `Glob`, so replacing one with the other turned a silent pre-existing issue into a
+  reported one. It was fixed rather than annotated away.
