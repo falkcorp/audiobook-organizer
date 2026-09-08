@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.47.0 -->
+<!-- version: 10.47.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-08 -->
 
@@ -13,6 +13,1007 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+## ABS layer hides every `imported` book — author pages undercount (2026-09-07)
+
+**Confirmed on production, not inferred.** A user reported an author page showing
+"only three books" when the library holds nine by that author.
+
+Measured for author `Nameless Author` (id 40260):
+
+```
+native  GET /api/v1/authors/40260/books   -> count: 9   (all 9 correctly linked)
+ABS     GET /api/authors/40260            -> numBooks: 3, libraryItems: []
+```
+
+Per-book state of those 9:
+
+```
+library_state='organized'  -> 3 books  (seq 3, 5, 5)   <- exactly the 3 ABS shows
+library_state='imported'   -> 6 books  (seq 1, 2, 2, 4, 4, 6)  <- silently dropped
+all 9: is_primary_version=true, quarantined_at=null
+```
+
+**Root cause:** `absItemFilterBase()`
+(`internal/server/handlers/abs/browse.go:186-194`) gates the shared contributor
+index on a 3-way AND — `IsPrimaryVersion && LibraryState == "organized" &&
+!QuarantinedAt`. `numBooks` is then just `len(idx.authorBooks[id])`
+(`browse.go:1344`). Books that are imported but not yet organized fail the
+`== "organized"` test and vanish from author pages, series, counts and browse.
+
+**The same filter explains the series symptom too.** The user also reported
+*"no matter what with some of them you get the same series but only two books."*
+Series `152828` holds **8** of the 9 books but only **2** of them are `organized`
+(the two seq-5 rows), so ABS renders that series with two books. Series `207866`
+holds the single organized seq-3 book, so it renders with one. 2 + 1 = the three
+books on the author page. One filter accounts for every number the user saw —
+there is no separate series-visibility bug.
+
+**Why this is a bug and not deliberate gating:** the book at seq 6
+("Nameless Sovereign, Book 6") is `imported` and was **actively playing in the
+user's client** while absent from its own author's page. The server streams it
+but will not list it. Whatever the intent, "playable but unlistable" is not it.
+
+- [ ] **Decide the intended semantics and make the filter match them.** Should the
+  ABS layer expose `imported` books? If yes, relax the `LibraryState` clause. If
+  no, it must at least be consistent — a book that cannot be listed should not be
+  streamable/resumable either. **Blast radius is wide**: this filter feeds the
+  shared contributor index, so authors, series, counts and browse all change
+  together. Not a drive-by fix.
+**`libraryItems: []` is NOT a bug — ruled out by measurement.** An earlier draft
+of this note claimed it was a second defect (suspected memdb/Pebble ID drift in
+`GetBooksByIDs`). That is **wrong** and was disproved directly:
+
+```
+GET /api/authors/40260               -> numBooks 3, libraryItems 0
+GET /api/authors/40260?include=items -> numBooks 3, libraryItems 3
+```
+
+and all three organized book IDs resolve individually with **HTTP 200**. Omitting
+items unless `?include=items` is asked for is correct Audiobookshelf behaviour and
+is implemented deliberately (`internal/server/handlers/abs/browse.go:1432,1449,1478-1482`).
+There is exactly **one** bug here — the `library_state` filter — not two. Do not
+go chasing `GetBooksByIDs`.
+- [ ] **Add a test that a non-`organized` book is reachable wherever it is
+  playable**, so the two surfaces cannot drift apart again.
+
+## Why the books are `imported` is NOT yet established
+
+An earlier draft of this note asserted they are `imported` because
+organize/write-back had not moved them yet, and that fixing the rename collisions
+would flip them to `organized`. **That claim is not supported by the evidence and
+is retracted.** Measured file paths for all 9:
+
+```
+imported   seq=1  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign/...
+imported   seq=2  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign 2 - Unknown Author/...
+organized  seq=3  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign 3 - A Cultivation Prog...
+imported   seq=6  /mnt/bigdata/books/audiobook-organizer/Nameless Author/Nameless Sovereign/Nameless Sovereign, Bo...
+```
+
+**Every one of the 9 — organized and imported alike — is already physically
+inside the organized tree**, and both states appear under both flat
+(`Author/Title`) and nested (`Author/Series/Title`) shapes. So `library_state`
+does not track physical location, and these books are not sitting outside
+awaiting a move that collisions are blocking.
+
+- [ ] **Determine what `library_state` actually means and why these 6 are
+  `imported`.** Candidates: the book was scanned in place and never *claimed* by
+  an organize run (so `imported` means "not placed by us", regardless of where it
+  sits), or the state is simply stale and was never updated after a successful
+  placement. These imply completely different fixes — one is a state-repair
+  backfill, the other is a bug in organize's state write.
+- [ ] **Re-measure after the collision resolver lands** before changing the ABS
+  filter. Not because the causal link is established — it is not — but because
+  the population of `imported` books may shift and the filter change should be
+  decided against current data.
+
+Side observation from the same paths: one book sits under a directory named
+`Nameless Sovereign 2 - Unknown Author` — an "Unknown Author" string baked into a
+path for a book whose author is known. Separate junk-metadata artifact, not the
+cause here.
+
+## Activity-log reset feature + reauth gate (2026-09-07)
+
+Follow-ups agreed while fixing the activity SQLite disk blow-up.
+
+- [ ] **Reset Activity Log — admin feature (PR in progress).** Let a user reset
+  the activity log from the UI. Requirements: (1) **multi-step confirmation**
+  (prompt more than once before doing it); (2) runs as the `audiobook` service
+  user so it can wipe its own store without host `sudo` (jdfalk has no write on
+  `/var/lib/audiobook-organizer` and no NOPASSWD `rm`); (3) **audit the wipe
+  durably so the record survives it** — who cleared it, when, source IP, and
+  surrounding request context, written to slog/journald AND seeded as the first
+  entry of the fresh log, in case a wipe was malicious; (4) **mask sensitive
+  fields (IP, etc.) in the UI by default**, but allow pulling the full unredacted
+  audit file/export.
+- [ ] **Reauth / passkey reverify gate (future).** Require a step-up reauth
+  (passkey reverify or other 2FA) before (a) pulling the **unredacted** activity
+  export and (b) any destructive reset. Not built yet; the reset feature ships
+  with masking + audit first, this hardens it.
+- [ ] **Full-application-database reset (future, GATED).** A "reset everything"
+  (books, metadata, authors, versions — the whole Pebble store) reset. **ONLY
+  valid after the passkey/2FA reverify gate above exists** — do not build the
+  full-DB wipe without step-up reauth guarding it. Blast radius is the entire
+  library, so it needs stronger protection than the activity-only reset.
+
+## Re-enable SQLite activity backend after details compression (2026-09-07)
+
+The OOM streaming fix (#3090) and the `details` zstd compression (this PR) both
+land while SQLite stays OFF on prod (`ACTIVITY_BACKEND=pebble`). Re-enabling is a
+separate, deliberate step:
+
+- [ ] **Re-run the migration with compression in place and confirm the size is
+  sane.** The prod `activity.sqlite` was wiped, so the backfill starts clean.
+  With `details` compressed the file should land near Pebble's compressed
+  footprint, not the 30 GB+ raw blow-up. Deploy the new binary with
+  `ACTIVITY_BACKEND=pebble` first (healthy, no backfill), then remove the env line
+  and restart to run the streamed+compressed backfill; watch `change`-tier RSS
+  stays flat AND `activity.sqlite` growth stays bounded, then confirm the parity
+  flip to SQLite.
+- [ ] **Only then** consider retiring the Pebble activity path and reclaiming the
+  `act:` keyspace (separate, after SQLite reads soak).
+
+## Sweep `api.ts` for missing `{data:…}` envelope unwraps (2026-09-07)
+
+PR #3092 fixed ONE instance of this: `batchFetchCandidates` did a bare
+`return response.json()`, returning the Go `{"data":{…}}` envelope
+(`internal/httputil/respond.go:98-99`) instead of the inner object. Callers read
+`resp.operation_id`, which was permanently `undefined`, so the
+"already being fetched" toast fired on **every successful fetch**, and
+`withOptimisticOperation` silently deleted the notification-bell placeholder it
+had just inserted (it reconciles on `result.operation_id ?? result.id`).
+
+The audit for that PR found the defect is **systemic, not a one-off**:
+
+- [ ] **Fix the 18 confirmed functions.** Each was verified against its actual Go
+  handler during the #3092 audit (not merely grepped). They return the envelope
+  un-unwrapped, so every field read off the result is `undefined`.
+- [ ] **Verify the 11 bare-return candidates**: `patchAudiobookRating`,
+  `revertToSnapshot`, `pruneBookVersions`, `runTask`,
+  `getMaintenanceWindowStatus`, `findMetadataHashDuplicates`,
+  `backfillFileHashes`, `backfillMetadataHashes`, `runMaintenanceJob`,
+  `getTools`, `installTool`.
+- [ ] **Triage the ~30 second-shape candidates.** `searchBooks` (~`api.ts:1113`)
+  is a SUSPECT only — it was deliberately not upgraded to a finding.
+
+**Trap for whoever does this — do not blanket-apply the unwrap.**
+`RespondWithList` responds **flat** (`{items, count, …}`, no `.data` key), so a
+bare return is *correct* against it. None of the 18 confirmed use it, but every
+remaining candidate must be checked **per Go handler**, never assumed from the
+call shape.
+
+**Also add the structural guard**, or this returns: the reason the bug survived
+was that the declared TS return type claimed a flat shape (a lie) AND the test
+fixture mocked that same flat shape, so type checker, test, and buggy code all
+agreed with each other. Honest return types are what make a wrong fixture a
+compile error.
+
+Separately noted while fixing, pre-existing and NOT fixed: the batch-fetch
+handler sends `total_books` on the started path but `book_count` only on the
+"nothing to do" paths, so `handleFetchAllUnmatched` always prints "unmatched".
+
+- [ ] **`metadata.batch-apply-cached` still has no resume — and a bare
+      `ResumePolicy` flip would make it worse, not better.** Deferred from the
+      apply-path collision-resolver PR (`fix/apply-path-collision-resolver`),
+      which deliberately shipped only the collision resolver and the durable
+      per-item failure record. The op never calls `reporter.Checkpoint`, so
+      switching it from `ResumeDrop` to `ResumeRestart` on its own would restore
+      `state_bytes=0`, hand back unmodified params, and **re-run every book_id
+      from the top on each restart** — an unbounded re-apply loop, strictly worse
+      than today's drop. Four things have to land together:
+      - a checkpoint field on `batchApplyOpParams` plus a periodic
+        `reporter.Checkpoint` (`internal/server/batch_apply_op.go`);
+      - **a done-set or contiguous watermark, NOT a `LastBookID` cursor.**
+        `intro_transcribe.go:346` can use a cursor because it is sequential;
+        this loop is parallel at `writeBackWorkers()`
+        (`batch_apply_op.go:164-166`), so books finish out of order and a
+        last-ID cursor silently skips the gaps;
+      - a nonzero `MinCheckpointInterval`, or the watchdog's
+        uncheckpointed-strike path never engages (`watchdog.go:186`);
+      - reconciliation with `mergeBatchApplyQueuedParams`
+        (`batch_apply_op.go:108`) — `registry/types.go:76` records a real
+        incident where *"metadata.batch-apply-cached ran discarded the new
+        book_ids"*, so resume plus params-merge is a known sharp edge here.
+
+## `GET /operations/timeline` silently ignores its query filters (2026-09-07)
+
+**This one caused real prod damage, so it is filed on its own rather than as a
+footnote.**
+
+`GET /api/v1/operations/timeline?status=canceled` returned the **identical** rows
+as the same call with no filter at all — 3 rows either way. The `status`
+parameter is neither honored nor rejected: it is silently dropped, and the
+endpoint answers as if the caller had asked for everything. The response is also
+a **truncated recent-activity view, not a census**: it reported 3 rows at
+`limit=80` while the store actually held at least 70 canceled operations.
+
+Both properties together make it an actively misleading instrument — it returns
+a plausible, confidently-wrong answer rather than an error.
+
+**What it cost:** `DELETE /api/v1/operations/history?status=canceled` was sized
+against that view as "blast radius: 1 row" (the single stale
+`maintenance.transcribe-book-intros` zombie). It deleted **70** rows of
+operation history on production. Only canceled-op audit history was lost — no
+running or queued ops, no book or file data — but the sizing was wrong by 70x
+and nothing in the API surfaced that.
+
+- [ ] **Honor `status` (and every other documented query filter) on
+  `/operations/timeline`, or reject unsupported filters with a 400.** A filter
+  that is ignored rather than rejected fails silently in the same direction as
+  the caller's assumption. Rejecting is acceptable; silently ignoring is not.
+- [ ] **Audit the other query params on this endpoint** (`limit`, and any
+  def_id/plugin/date filters) for the same "accepted then dropped" behavior —
+  `limit=80` returning a small truncated set suggests limit is not doing what a
+  caller would expect either.
+- [ ] **Make the truncation explicit.** If the endpoint is deliberately a recent
+  view, say so in the response (a `truncated: true` / `total` field) so it cannot
+  be mistaken for a complete listing. There is no `GET /operations/v2` list
+  endpoint (only `/operations/v2/:id`), so timeline is the obvious listing and
+  callers will keep reaching for it.
+- [ ] **Add a dry-run / count mode to `DELETE /operations/history`**, and consider
+  a delete-by-id endpoint. Today it deletes **by status only**
+  (`DeleteOperationsByStatus`,
+  `internal/server/handlers/operations/handler.go:215`) and `DELETE
+  /operations/v2/:id` only cancels (a no-op on an already-terminal op), so there
+  is no supported way to remove exactly one stale row and no way to preview a
+  deletion's true scope.
+
+**Regression test to add:** assert that a filtered request returns a *different*
+result set than the unfiltered one for a fixture with mixed statuses. A filter is
+unproven until the response actually changes when the filter changes.
+
+## Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)
+
+**Confirmed live on production.** Books progressively disappear from the ABS
+layer (author pages, series, counts, browse) as scans run, because every rescan
+resets `library_state` to `imported` and the organize run that follows cannot
+undo it.
+
+### Evidence (author `Nameless Author`, id 40260 — 9 books)
+
+**All 9 carry `last_organized_at`.** Organize stamped every one; six were then
+reverted:
+
+```
+organized (3)  last_organized_at = 2026-08-31 23:24   <- most recently organized
+imported  (6)  last_organized_at = 2026-08-28 15:14 (x4), 2026-04-28 (x2)
+```
+
+State tracks **scan recency, not location** — all 9 sit inside the organized tree,
+under both flat and nested path shapes, in both states. The survivors are simply
+the rows a scan pass has not re-touched since their organize stamp.
+
+The discriminating signature is `library_state='imported'` **AND**
+`last_organized_at IS NOT NULL`: `applyScannerFields` overlays ~20 fields and
+touches **zero** `LastOrganized*` fields, so only this revert produces it.
+
+### Mechanism — three hops
+
+1. `internal/scanner/scanner.go:2617-2641` — every scanned file builds a `dbBook`
+   with a hardcoded `ls := "imported"`, `LibraryState: new(ls)` — unconditionally
+   non-nil.
+2. `internal/scanner/scanner.go:2912` — a rescan of a path-matched book runs
+   `applyScannerFields`, then `UpdateBook`.
+3. `internal/scanner/scanner.go:3345-3347` — a bare nil-check with **no
+   `!locked[...]` guard**, unlike the ten tag-derived fields below it:
+   ```go
+   if scanned.LibraryState != nil { dst.LibraryState = scanned.LibraryState }
+   ```
+
+Since the scan root and the organized tree are the same directory, this hits
+**every organized book on every scan**.
+
+**The justification is factually wrong.** `internal/scanner/override_guard.go:44-49`
+lists `LibraryState` under *"NOT GUARDED, deliberately"* because *"These are read
+off the file itself; the scanner IS authoritative for them."* `LibraryState` is
+**not** read off the file — it is a hardcoded literal at `scanner.go:2617`. Nine
+of the ten fields listed genuinely are file-derived (`FileHash`, `FileSize`,
+`Duration`, …); this one was swept in with them. Two writers claim ownership in
+direct conflict — `internal/organizer/service.go:977-987` says organize owns it,
+`override_guard.go:47` says the scanner does — and the scanner wins because it
+runs repeatedly. (CLAUDE.md: *"When a comment explains why something must stay
+wide, verify the claim before believing it."*)
+
+**The loop closes** because the auto-organize that fires after a scan
+(`internal/server/server.go:1230`) passes `&organizer.Request{BookIDs: ids}` with
+an **empty** OperationID, and the `alreadyCorrect` path only stamps when
+`operationID != ""` (`internal/organizer/service.go:1268`). A user-triggered
+organize (`internal/server/library_core_ops.go:274`) does pass one and would fix
+the library — until the next scan pass reaches those rows.
+
+### Work
+
+- [ ] **Stop the clobber.** Guard `LibraryState` in `applyScannerFields`
+  (`scanner.go:3345-3347`) and correct the false rationale in
+  `override_guard.go:44-49`. **Do this first** — any repair without it re-reverts
+  on the next scan.
+- [ ] **Close the re-stamp gate** at `server.go:1230` / `service.go:1268` so the
+  post-scan auto-organize can stamp an already-correctly-placed book.
+- [ ] **Backfill** the reverted rows, keyed on `library_state='imported' AND
+  last_organized_at IS NOT NULL`. Only after the two fixes above.
+- [ ] **Pin it with a test.** `internal/scanner/rescan_preserve_test.go` and
+  `override_guard_test.go` contain **zero** `LibraryState` references — the
+  clobber is unpinned in either direction.
+
+### 🔴 DO NOT RUN `fix-library-states`
+
+`internal/maintenance/jobs/fix_library_states.go` (id `fix-library-states`) is
+named exactly like the fix for this and is **registered and reachable from the
+ops UI** (`internal/server/maintenance_dispatcher.go:183`). It writes
+**`"present"` / `"missing"`** (`:47-50`) — a vocabulary **nothing else in the
+codebase produces or consumes**. Running it sets every book to a value that fails
+the ABS filter, the dashboard's Needs-Organizing count, every filter chip and the
+list warmer. **It would empty the ABS library, not repair it.** No cron entry
+found; reachable, not scheduled. It does not exist for this drift — its premise
+is filesystem presence.
+
+- [ ] **Fix or unregister `fix-library-states`** before someone clicks it.
+
+### Blast-radius notes for the two options
+
+- **Relax the ABS filter** (`browse.go:190`) — touches ABS only; the native UI
+  does not default-filter on `library_state`, which is why all 9 books are
+  visible there today. Must still exclude `organized_source` iTunes-tree rows.
+- **Repair the state values** — 🔴 `internal/itunes/service/importer.go:1381,1505`
+  skip any book whose state is not `"imported"`, so repaired books **drop out of
+  the iTunes organize pass**; note the standing hands-off rule on
+  `books/itunes/**`. Also flips same-path dedup survivor election
+  (`merge_same_path_dupes.go:289-290`), moves dashboard counts, changes
+  bulk-organize/dup-detect eligibility (`web/src/pages/Library.tsx:1558,1582`),
+  and needs a Bleve reindex (`internal/search/document.go:41`).
+
+### Two incidental defects found en route
+
+- [ ] **Broken undo record.** `internal/organizer/rename.go:230` assigns
+  `"organized"` to the book *before* `:264-266` records
+  `OldValue: stringOrDefault(book.LibraryState, "")`, so the undo entry is
+  `organized → organized`. `internal/undo/engine.go:274-275` and
+  `internal/audiobooks/revert.go:143` replay `OldValue`, so this undo can never
+  restore the pre-rename state.
+- [ ] **A false agreement claim.** `internal/server/handlers/abs/browse.go:176-178`
+  asserts the ABS `library_state` filter and `pebble_store_stats.go`'s
+  `organized_books` "are expected to agree and the acceptance check compares
+  them." They cannot: stats uses a **path prefix**
+  (`pebble_store_stats.go:337-344`), ABS uses the **state field**. All 9 books
+  count as organized in stats; only 3 pass ABS. The named acceptance test
+  (`abs/item_filter_test.go`) does not compare the two — its "unorganized" seed is
+  outside the tree *and* `organized_source`, so the failing shape (inside
+  rootDir, primary, unquarantined, `imported`) is absent from the fixture and
+  could never have been caught.
+
+`library_state` has **no enum and no type** — it is a bare `*string`
+(`internal/database/store.go:239,391`) and `internal/batch/service.go:341-342`
+accepts any caller-supplied string with no allowlist. Values in use: `imported`,
+`organized`, `organized_source`, `suspicious`, `deleted`, `needs_review`, plus
+the rogue `present`/`missing`. `imported` is not a documented state — it is the
+zero value with a name, defaulted from nil at four independent sites.
+
+## Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)
+
+A `maintenance.transcribe-book-intros` op queued **2026-06-26** was still sitting
+in the operations timeline on 2026-09-07 reading `canceled` at `199/200`
+("99%"), with `resume_count: 4` and **`completed_at: None`**. It looked like a
+live, recently-failed job for over two months and prompted a false report that
+the transcribe drain fix (#3014, merged 2026-09-01) had not worked — the fix was
+fine; the row simply predated it by 67 days and nothing ever buried it.
+
+- [ ] **Set `completed_at` when an op reaches a terminal status.** `canceled` is
+  terminal (`internal/operations/registry/registry.go:916`) and deliberately
+  non-resumable (`worker.go:97`), yet the row carried no completion timestamp.
+  Check every terminal path (completed, failed, canceled, timeout) — an op the
+  UI shows as finished but with a null completion time is indistinguishable from
+  a stuck one.
+- [ ] **Age out / visually distinguish terminal ops in the timeline** so a
+  months-old corpse cannot be mistaken for current activity.
+
+**Related instrument bug found in the same session — fix or document:**
+
+- [ ] **`GET /api/v1/operations/timeline` silently IGNORES its `status=` filter.**
+  It returned the identical 3 rows with and without `?status=canceled`, and is a
+  truncated recent-activity view, not a census. There is no `GET /operations/v2`
+  list endpoint (only `/operations/v2/:id`), so timeline is the obvious listing
+  and it misleads. Either honor the filter or reject unsupported filters — a
+  filter that is ignored rather than rejected returns a plausible wrong answer.
+- [ ] **There is no delete-one-op endpoint.** `DELETE /operations/history` deletes
+  **by status only** (`DeleteOperationsByStatus`,
+  `internal/server/handlers/operations/handler.go:215`); `DELETE
+  /operations/v2/:id` cancels and is a no-op on an already-terminal op. Sizing a
+  cleanup from the timeline as "1 row" and firing `?status=canceled` deleted
+  **70** rows on prod. Consider a by-id delete and/or a dry-run count.
+
+- [ ] **Concurrency audit 2026-09-07: unjoined goroutines + serial whole-library loops.**
+  A CI data race (fixed in #3117) turned out to be one instance of a family. Four
+  read-only reviewers swept the codebase against `.standards/instructions/go.md`
+  and CLAUDE.md's concurrency rules. Three findings are fixed (#3117 reporter flush
+  join, #3118 API-key lost update, #3119 activity backfill cancellable); the rest
+  are below, highest-value first. Pebble **panics** on use-after-close rather than
+  returning an error, so every unjoined goroutine that writes to the store is a
+  shutdown crash, not a logged failure.
+
+  - [x] **CLAUDE.md names a SEQUENTIAL loop as the parallel exemplar.** DONE
+    2026-09-07. The "Concurrency — Prefer Multi-Core Design (MANDATORY)" section
+    pointed new maintenance ops at `internal/plugins/acoustid/backfill.go`'s
+    `RunItems` pattern — but that call passed no `Concurrency:` field, so
+    `run_items.go:148` clamped it to 1. A nightly (`0 3 * * *`) full-library job
+    doing per-file `fpcalc` + `UpdateBookFile` + a book read-modify-write, on one
+    core; anyone who followed the instruction copied a serial loop.
+    **Correction to this entry as originally filed:** it proposed
+    `fingerprint_rescan.go:162` as the replacement exemplar. That file is not a
+    `RunItems` caller at all — it has a hand-rolled pool defaulting to 4, not the
+    "16-wide" claimed here — so following this note would have swapped one wrong
+    exemplar for another. The section now names
+    `internal/plugins/maintenance/duration_backfill.go`, which really does set
+    `Concurrency: runtime.NumCPU()` and guards the state its `Label` closure
+    reads. The op itself was fixed in the same PR: counters are an `atomic.Int64`
+    tally, `CheckpointFn`/`lastID` replaced by `CheckpointStateFn` + `ResumeFrom`
+    with the book ID stored beside the index to validate a resume against a
+    shifted collection, legacy `LastProcessedBookID` checkpoints still honoured on
+    upgrade, `CheckpointEvery: 50`, and pool size from the shared
+    `FP_PARALLEL_WORKERS` knob. Verified by mutation: non-atomic counters lose 93
+    of 720 outcomes and trip `-race`.
+  - [x] **`InvalidateLibraryStats` docstring is false, and it costs 87 seconds a
+    load.** It is documented as stale-while-revalidate; it is a hard delete. So
+    **every dashboard load during a scan takes the cold path** — measured at 87s.
+    Likely the whole explanation for "the dashboard hangs during a scan". Same file
+    has an unjoined recompute goroutine (`internal/database/pebble_store_stats.go:196-214`).
+
+    **Fixed 2026-09-07.** The framing above was wrong in a way that changed the fix.
+    It was not "a working SWR mechanism whose docstring lies" — the mechanism had
+    **never run**, for two independent reasons. `statsLibraryTTL` was 10 minutes and
+    `defaultLibraryCountsMinIntervalSeconds` was 600, the same number:
+    `readCachedLibraryStats` returned nil once age exceeded the TTL, while
+    `GetDashboardStats` only kicked a background recompute at *at least* the
+    min-interval, so the SWR branch was reachable in a one-second window. The hard
+    delete was the second reason, and fixing it alone would not have turned SWR on.
+
+    What shipped:
+    - `InvalidateLibraryStats` sets an in-memory dirty flag and **leaves the cached
+      value in place**. Safe as in-memory because `stats:library` has exactly one
+      reader (`readCachedLibraryStats`) — checked the KEY's readers, not just this
+      function's callers.
+    - `readCachedLibraryStats` no longer expires on age. Judging staleness moved to
+      the only caller that can act on it.
+    - The TTL constant is deleted; the min-interval is the single threshold, now
+      **300s (5 minutes)**, at the owner's call.
+    - The recompute goroutine is joined. No `WaitGroup` was needed: it already holds
+      `libraryCountsRecomputeMu` for its whole life, so `Close` taking that mutex is
+      the join — and that sidesteps the Add-concurrent-with-`Wait` trap that the
+      `file_io_pool` item below turned out to contain. `libraryStatsClosed` is
+      read and written only under that same mutex, so no recompute can start against
+      a closing database.
+    - Open question 1 from the earlier investigation (what bounds staleness after a
+      recompute FAILS) was **answered by the owner**: serve the cached value
+      regardless, never block. Since that trades a bounded-staleness guarantee for
+      responsiveness, the failure is made loud instead — consecutive failures are
+      counted, logged at ERROR from the third on, and the cache is re-marked dirty so
+      the next read retries. `computed_at` already ships in the payload.
+
+    Every guard mutation-verified: restoring the delete, restoring the TTL, and
+    removing the join each fail a specific test.
+  - [x] `internal/server/file_io_pool.go:154` — overflow goroutine calls
+    `removePendingFileOp` (a Pebble `DeleteRaw`) outside `p.wg`, violating the
+    invariant the file's own comment states at `:116-118` (*"Any new caller must do
+    the same."*). ~~One-line `p.wg.Go` fix.~~
+
+    **Correction: the one-line fix was wrong and would have made things worse.**
+    `Stop` closes `p.ch` and then waits; `SubmitTyped` checked the atomic `stopped`
+    flag and *then* sent. That check-then-act window was already an unrecovered
+    **`panic: send on closed channel`** in production — the pool's only `recover()`
+    is inside `worker`, not the submit path — reproduced deterministically in
+    `internal/server/file_io_pool_shutdown_test.go`. Dropping a bare `p.wg.Go` into
+    that same window would have added a second failure mode: a `WaitGroup` Add
+    concurrent with `Wait`. Fixed properly by giving the pool a `sync.RWMutex` that
+    submitters hold across the whole check-and-send and `Stop` takes for writing
+    before closing. The overflow semaphore is acquired **outside** that lock,
+    because it is real backpressure on an arbitrarily slow `fn()` and waiting for it
+    under the lock would transfer the wait to `Stop`'s write-lock acquisition —
+    outside the 30-second budget, which only wraps `wg.Wait()`. Measured before the
+    fix: `Stop` returned with 0 of 2 overflow goroutines finished.
+  - [ ] `internal/itunes/service/writeback_batcher.go` — `Stop()` (`:814`) sets a
+    flag and calls `flush()` once but **waits for nothing**; three goroutines
+    (`:235`, `:256`, `:262`) are unjoined, `flush()` never checks `b.stopped`, and
+    the `stopCh` field (`:93`, `:137`) is dead. Separately, `b.mu` is released
+    before `SafeWriteITL`, so two concurrent flushes read-modify-write the live ITL
+    through the same `.tmp` — the more dangerous half, given the standing
+    hands-off-`books/itunes/**` rule. Currently dark: every entry point early-returns
+    unless `itunes.auto_write_back` is true (default false, absent from the prod
+    unit), and `UpdateConfig` has no production caller — but that is one config edit
+    plus a restart away. **Prod value unverified** (config.yaml is 0600, config API
+    errored).
+  - [ ] `internal/scanner/scanner.go:1398-1406` — bare `recover()` whose comment
+    justifies it with `GetGlobalStore` while the code calls `getStore()`; it is
+    swallowing a real `pebble: closed` panic from `ResetScanFailCount`, whose error
+    is also discarded while its `IncrScanFailCount` neighbour logs. The repo already
+    decided against this shape — use the `warnSampled` logging recover at `:748`.
+  - [ ] `internal/plugins/maintenance/extract_wav_clips.go:127` — 8-slot ffmpeg pool
+    collapses to serial because the `mu` `defer` is held across `hashFileSHA256` +
+    `persistCanonicalFileHash` (a full source-file hash). Also: `mu` is declared
+    inside the per-page callback (`:93`) while the counters it guards are at
+    function scope (`:87-88`), so raising `Concurrency` above 1 leaves them
+    unguarded — hoist it in the same edit.
+  - [ ] Remaining unjoined-goroutine sites: `metafetch/service.go:746`,
+    `importer/service.go:378`, `dedup/lifecycle.go:189-203` (nil-bgCtx fallback),
+    `plugin/events.go:88-101` (unbounded EventBus), `tools/embed_queue.go`,
+    `watcher/watcher.go:218-232`, `updater/scheduler.go:52`,
+    `openlibrary/store.go` (pipeline leak), `transcode/transcode.go:321`
+    (`strings.Builder` race), `scheduler/scheduler.go:240`,
+    `tools/ollama_daemon.go:78`, `activity/batcher.go:94`, `aiscan/pipeline.go:359`,
+    `itunes/library_watcher.go:44` (non-idempotent `close(w.stop)` — a second Stop
+    panics), `acoustid/fingerprint_rescan.go:145` (heartbeat can leave a stale
+    progress gauge), `itunes/service/importer.go:347` (`Add(1)`+`defer Done()` →
+    `wg.Go`, and its semaphore is acquired *inside* the goroutine so the fan-out is
+    `len(rows)`, not `NumCPU`).
+  - [ ] Serial whole-library loops needing a worker pool (several need a
+    **partition key**, not just an errgroup): `maintenance/author.go:133` (must
+    partition by BOOK not author — `CreateAuthor` is already known racy),
+    `maintenance/intro_transcribe.go:971`/`:1003`/`:1032`/`:396`,
+    `itunes/service/position_sync.go:86-140`, `scanner/chapter_consolidator.go:138`
+    (shard the outer `dirOrder` loop), `itunes/relocate.go:83`,
+    `itunes/backfill.go:97` (the `TODO(PERF-5)` N+1 is still there),
+    `acoustid/lsh_backfill.go:115` (~275K rows), `acoustid/reset_all.go:144`,
+    `maintenance/{fs_regroup_xml,itunes_regroup,booksig_recovery_audit,title_backfill,cleanup_merged,rebuild}.go`,
+    `dedup/{reembed_embeddings,build_isbn_index}.go`.
+  - [ ] `maintenance/merge_same_path_dupes.go:366-372` — safe today only because
+    `groups` comes from map keys, so the linear `.path` search that recovers the
+    result index is unique. Admit one duplicate path and two of 24 workers write the
+    same slice element unguarded. Carry the index in the item struct like every
+    other result-slice site.
+
+## Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)
+
+The apply-path collision resolver ships with a **proxy** for "is our library copy
+already a reflink of this outside file": a size match plus a re-stat interlock,
+reusing the precedent from `recover-missing-files` Branch B
+(`internal/plugins/maintenance/recover_missing_files.go:829-830`). That proxy is
+deliberately weaker than true extent identity and is documented as such in the
+code.
+
+A real detection method **does exist** on OpenZFS and was ruled in after the fact:
+
+```
+stat -c %i /pool/dataset/fileA      # object/inode numbers
+zdb -ddddd pool/dataset <inode>     # dump block pointers
+```
+
+Inspect the `DVA[0]=<vdev:offset:asize>` lines. **If two files return identical
+`vdev:offset` tuples for an extent, they are physically sharing the same cloned
+blocks.** `libzpool`/`libzfs` bindings can compare object block pointers directly
+instead of shelling out.
+
+Confirmed available on this deployment: `/mnt/bigdata/books` is ZFS on pool
+`bigdata` with `feature@block_cloning = active`, OpenZFS **2.4.1**.
+
+- [ ] **Upgrade the reflink predicate from the size+re-stat proxy to real DVA
+  comparison** — ideally as an opt-in verification used only on the branch that
+  QUARANTINES a file, leaving the cheap proxy for the common path.
+
+**Costs that made this low priority rather than the default — weigh before doing it:**
+
+- `zdb` normally requires **root**. The service runs as the `audiobook` user, the
+  same permission wall that blocked wiping `activity.sqlite` on 2026-09-07. Needs
+  a privileged helper or a sudoers entry.
+- It is a **subprocess per file** reading pool metadata. Inside the apply path
+  behind `writeBackFileGate` at library scale, that is exactly the hotspot shape
+  CLAUDE.md's concurrency mandate names — it must be bounded, and skipped whenever
+  a cheaper rung already decided.
+- `zdb` is a **debugger, not a query API**. On a live imported pool it can read
+  inconsistent state or report stale block pointers for an actively-written
+  dataset.
+- The `libzfs`/`libzpool` binding route is cleaner but means **cgo**, which
+  reverses the deliberate no-cgo constraint chosen for the `modernc.org/sqlite`
+  driver. Do not adopt cgo for this without deciding that explicitly.
+
+### Nothing ever deletes a v2 operation row — `opv2:op:` grows without bound
+
+The `retention-and-hygiene` job's phase (1) is the only operation-retention sweep
+in the codebase. It lists via `ListOperations` and deletes via
+`DeleteOperationWithLogs`, both of which are the **v1** `operation:` keyspace.
+
+Nothing has minted a v1 row since the v1 id minter was retired on 2026-08-23. So
+phase (1) now operates on a fixed, shrinking set of pre-retirement rows and will
+reach empty — at which point the job named "Retention & Dead-Prefix Hygiene"
+retains nothing at all.
+
+Meanwhile there is **no v2 equivalent**. Verified on `origin/main` 2026-09-07:
+
+```
+git grep -n "DeleteOperationV2\|DeleteOpV2\|PurgeOperationsV2\|DeleteOperationsV2" -- 'internal/*.go'
+(no matches)
+```
+
+The only v2 deletions anywhere are `DeleteOpStateV2` in the registry's resume
+paths, which drop a consumed *checkpoint* and never the operation row. So every
+operation the system has run since 2026-08-23 is still in `opv2:op:`, along with
+its `opv2:act:` activity rows, and always will be.
+
+This matters now rather than eventually because Pebble growth is already a live
+problem (30 GB, `book_ver:` CoW at 7.65 GB, compaction never running — see
+`project_prod_disk_and_pebble_growth`).
+
+**Not a mechanical fix — it needs a decision first:**
+
+- What retention policy do v2 rows get? `OperationLogRetentionDays` (default 90)
+  is the v1 knob; reusing it is the obvious answer but should be deliberate.
+- Deleting a v2 op row orphans its `opv2:act:` and `opv2:q:` entries and any
+  `operation_results` rows. Whatever sweep gets written has to delete the whole
+  set, the way `DeleteOperationWithLogs` does for v1.
+- Terminal-only, and which terminal? `IsTerminalV2Status` excludes
+  `interrupted_quiesced` / `_ask` / `_restart` for good reason — a retention
+  sweep must not delete a row the resume path still owns, however old it is.
+
+Found while fixing the same job's phase (3), which had the mirror-image bug: a
+v1-only *liveness* check that read every v2 operation as deleted (PR #3108).
+
+### Decide the fate of the v1 stale-operation reaper (and `operation_timeout_minutes`)
+
+`internal/server/server_lifecycle.go` runs a background goroutine on a **1-minute
+ticker** (`:629-644`, gated on `config.AppConfig.OperationTimeoutMinutes > 0`, which
+defaults to **30**, so it is running in prod right now) that calls
+`collectStaleOperations` → `failStaleOperations`. That pair is **inert on both ends**:
+
+- **Input.** `collectStaleOperations` (`:1727-1752`) reads
+  `s.Ops().GetRecentOperations(500)` — the v1 `operation:` keyspace. The v1 id minter
+  was retired 2026-08-23, so it returns nothing an operator has run since.
+- **Output.** `failStaleOperations` (`:1754-1778`) calls
+  `s.Ops().UpdateOperationError(op.ID, msg)`, which resolves via `GetOperationByID`
+  and writes `operation:<id>` (`internal/database/pebble_store_operations.go:167`) —
+  the same keyspace phase 1 of the v1 purge deletes.
+
+So this is **dead code, not a disabled safety net**, and the safety it used to provide
+is already owned by the v2 watchdog (`internal/operations/registry/watchdog.go`), which
+has three strike types (`uncheckpointed`, `stuck`, `never_reported`) and **cancels**
+stuck ops (`:139-141`).
+
+**Do NOT simply repoint `collectStaleOperations` at v2.** That would stand up a second,
+dumber reaper next to the watchdog: a flat `OperationTimeoutMinutes` cutoff with no
+liveness signal and no awareness of `interrupted_quiesced` / `interrupted_ask` /
+`interrupted_restart` — all three of which stamp `completed_at` while still awaiting
+resume. It would force-fail operations the watchdog is legitimately holding. That is a
+regression, not a migration.
+
+Three decisions, and the third is the only one that is not obvious:
+
+1. **Delete the reaper** — `failStaleOperations`, its ticker goroutine, and the
+   `collectStaleOperations` helper behind it. Superseded by the v2 watchdog.
+2. **Decide what `operation_timeout_minutes` means.** It is a documented, persisted
+   config key (`internal/config/config.go:958`, `:2097`, `:2670`, default 30 at
+   `:2798`; settable at runtime via `internal/config/persistence.go:1062`). With the
+   reaper gone it controls nothing. Either wire it to the v2 watchdog's own timeout or
+   deprecate it explicitly — leaving a live knob attached to nothing is the shape of
+   bug this whole v1 sweep keeps finding.
+3. **`GET` stale-operations listing.** `internal/server/handlers/operations/handler.go:444`
+   also calls `h.collectStale(...)` to serve a read-only
+   `{timeout_minutes, count, operations}` payload, which today always answers
+   `count: 0`. Repoint it at v2 (read-only, so no reaper hazard) or delete the endpoint
+   with the rest.
+
+Filed rather than fixed because deleting a reaper that has been wired into server
+startup since before the v2 migration is a production call, and because (2) is a
+user-visible config deprecation.
+
+### Finish the v1 resume teardown: the `opstate:params` side table and `GetInterruptedOperations`
+
+The startup v1 resume sweep itself is **done** — `resumeInterruptedOperations`,
+`resumeV2Op`, `resumeLegacyOp` and `countLegacyV1Ops` were deleted from
+`internal/server/server_lifecycle.go` on 2026-09-07 (~280 lines), along with the
+three tests that pinned them. `Registry.resumeAfterStartup`
+(`internal/operations/registry/resume.go`) was already doing the job, and two
+consecutive production boots showed the v1 sweep silent while the registry did
+real resume work. Two pieces it exposed are still open.
+
+**1. The `opstate:<id>:params` side table is dead in both directions — delete it.**
+
+Verified 2026-09-07 across `internal/` excluding tests and mocks. There are **zero
+matched writer→reader pairs**, and after the sweep deletion there are zero readers
+at all:
+
+| dir | site | type | counterpart |
+|---|---|---|---|
+| write | `organizer/service.go:234` | `operations.OrganizeParams` | no loader anywhere |
+| write | `itunes/service/importer.go:397` | `operations.ITunesImportParams` | no loader anywhere |
+| read | *(deleted 2026-09-07)* `server_lifecycle.go:212` | `operations.BulkWriteBackParams` | never had a writer — the pre-UOS handler that wrote it was already gone, so the branch could only ever take its own `"no saved params, cannot resume"` path |
+
+The `metabatch/fetch_ops_index.go` legacy arm that used to read this table behind
+`if op.Legacy` is **already gone from main** — `CandidateFetchBookIDs` is v2-only
+now. Five maintenance jobs carry comments recording their own migration off
+`GetOperationParams` (`bulk_deluge_import.go:47`, `bulk_fetch_metadata.go:49`,
+`prune_book_snapshots.go:28`, `revert_metadata_fetch.go:40`,
+`scan_composer_tags.go:49`). This is the tail of a finished migration: it needs
+**no v2 successor**, because nothing reads what it stores.
+
+Scope: `SaveOperationParams` / `GetOperationParams` in `database/iface_ops.go`,
+`database/pebble_store_operations.go`, `database/mock_store.go`,
+`database/mocks/` (regenerate), `server/server_ops_store.go:194,218`,
+`organizer/service.go:84`; the four helpers in `operations/state.go`
+(`SaveParams`, `LoadParams`, `LoadRawParams`, `SaveRawParams`) and their two
+interface decls; the two write call sites above. Touches ~10 test files that stub
+the store methods.
+
+Also orphaned once the helpers go — the param structs in `operations/state.go`
+that exist only to be serialized through them: `ITunesImportParams`, `ScanParams`,
+`OrganizeParams`, `BulkWriteBackParams`, `IsbnEnrichmentParams`,
+`MetadataRefreshParams`, `ComposerScanParams`, `BackfillFileHashesParams`,
+`MissingFileRepairParams` (9 types, most already at zero references before this
+work). ⚠️ **Keep `BulkMetadataFetchParams`** — it has 3 independent production
+uses in `server/metadata_ops.go` and does not route through the helpers.
+
+⚠️ **Do not delete `opstate:` state generally.** The `opstate:<id>` *state* pair is
+a separate, live concern — `operations.SaveCheckpoint` is in active use; see the
+retention sweep fix of 2026-09-07 (#3108). Only the `:params` half is dead.
+
+**2. `GetInterruptedOperations` now has zero production callers.**
+
+`database/pebble_store_operations.go:474` iterates the v1 bound
+`[]byte("operation:") .. []byte("operation:~")`. Its only caller was the deleted
+sweep. Left in place deliberately: it should go with the rest of the `operation:`
+methods in the final v1 phase rather than as a one-off, since deleting it alone
+still touches the store interface and both generated mock sets.
+
+- [ ] **`GET /system/logs` returns nothing and has for a long time — point it at the activity store.**
+      `sysinfo.CollectSystemLogs` walks recent operation ids and calls
+      `GetOperationLogs(op.ID)`, which reads the `operationlog:` Pebble keyspace.
+      That keyspace has **no writer**: `AddOperationLog` is called only from
+      `logger.OperationLogger`, which is only constructed by `logger.ForOperation`,
+      and `ForOperation` has **zero production callers**. Operations log through the
+      activity store instead — `internal/server/batch_save_op.go:99` already spells
+      out that the two are different keyspaces.
+      Verified against production 2026-09-07:
+      `GET /api/v1/system/logs?limit=5` → `{"logs":null,"offset":0,"total":0}`.
+      The System Logs page is empty on screen and nothing reports an error.
+
+      This is **not** a v1-vs-v2 keyspace problem and repointing the id source to v2
+      does not fix it (deliberately left on `GetRecentOperations` in the sysinfo v2
+      repoint, with a comment saying why) — fresh v2 ids have no `operationlog:`
+      rows either. The fix is to source the endpoint from the activity store, which
+      means deciding what "system logs" means now that per-operation logs, activity
+      entries and the `journalctl` stream are three different things.
+
+      Also decide the fate of `operationlog:`, `AddOperationLog`,
+      `GetOperationLogs`, `logger.ForOperation` and `logger.OperationLogger` — a
+      seventh write-dead keyspace found during the v1 operations purge, and the
+      only one whose deadness is currently user-visible.
+
+### N+1 / batch-endpoint audit follow-ups (2026-09-08)
+
+Full audit with file:line anchors, cardinality and dismissed sites:
+[`docs/audits/2026-09-08-n-plus-one-batch-endpoint-audit.md`](docs/audits/2026-09-08-n-plus-one-batch-endpoint-audit.md).
+Root cause of the 13.8–28.0 s search (finding 7) is fixed in #3128; these are the rest.
+
+Do NOT add a memdb branch to `GetBookFiles` — its absence is deliberate
+(`memdb_strip.go:118` strips fingerprints/transcriptions; it is the full-fidelity
+escape hatch). Move Core-only callers to `GetBookFilesForIDsCore` instead.
+
+- [ ] **abs mapper: batch the per-book file fetch** — `mapper.go:163`
+      `GetBookFiles` inside the per-book errgroup → `GetBookFilesForIDsCore`
+      alongside the existing pre-loop batch calls at `:102-116`. Every field abs
+      reads is on `BookFileCore` (checked field-by-field); the mapper already
+      sorts at `:170`. Request path, 7 call sites.
+      **⚠️ Gate it on memdb being warm.** `GetBookFilesForIDsCore`'s fallback
+      (`pebble_store_bookfiles.go:685`) is a FULL scan of all ~726K `book_file:`
+      rows, while the `GetBookFiles` it replaces is prefix-bounded. Swapping
+      naively makes the cold case far worse on a path that is live during the
+      ~130 s async warmup after every restart. Keep a per-book cold fallback, or
+      give the batch method a prefix-per-book fallback first.
+- [ ] **`ListCachedCandidates`: use `GetBooksByIDs`** — `metadata_cache.go:129`.
+      Its twin `GetCacheReviewResults` (`:205`) was already fixed; the comment at
+      `:191-197` records 21.7 s / 35.2 s prod timings for this exact pattern.
+      Source is unbounded (`ListCachedSummaries` takes no limit).
+- [ ] **Fix `mapper.go:82-84`, which claims the relation lookups are batched.**
+      They are not: `GetAuthorsByBookIDs` / `GetNarratorsByBookIDs`
+      (`pebble_store_authors.go:1033`/`:1059`) loop per book AND per author
+      internally, ignore `ctx`, and do no cross-book dedupe. Either make them real
+      or correct the comment — do not leave both.
+- [ ] **Add memdb-backed author/series/narrator batch getters.**
+      `memdb_schema.go:214/231/292/313` declares warm `id` indexes on authors,
+      series and narrators plus a `book_id` index on `book_authors`, and **zero
+      getters read them**. Unblocks the item above, finding 5, and the dedup
+      handlers.
+- [ ] **`OptimizeDatabase`: batch the per-author read** —
+      `operations/handler.go:297`. The book list is already memdb-fast; the author
+      read is a disk get per book over an unlimited `GetAllBooksCore(0,0)`.
+      Synchronous HTTP handler.
+- [ ] **dedup handlers: batch the point-gets** — `dedup/handler.go:769,894,626,674,281`,
+      with `Limit: 100000` hardcoded and `bothUnmatchedScanLimit = 1_000_000`.
+      Synchronous HTTP.
+- [ ] **`/api/me`: hoist `GetBookFilesForIDsCore` above the errgroup** —
+      `abs/userdata.go:450`. `bookIDs` is already materialized at `:207-213`.
+- [ ] **Add a batch chapter getter.** `GetChaptersForBook`
+      (`pebble_store_chapters.go:40`) has no `…ByBookIDs` sibling anywhere; needed
+      by `mapper.go:244` (per page item) and `chapters_backfill.go:349`
+      (whole library).
+- [ ] **`GetSyncFileIDsForBook` prefix scan** (follow-up to #3128) — the
+      `sync_file:book:<bookID>:<syncFileID>` index stores the fileID as its value,
+      so one scan per book replaces N point-gets with zero record gets.
+      `RepointSyncFile` keeps that index current (verified). Do this on measured
+      evidence after #3128 is deployed.
+- [ ] **Background loops with an existing batch fix** — `relink_unlinked.go:119/126`,
+      `generate_itl_tests.go:55` (serial; `GetAllBookFilesCore()` deletes the loop),
+      `fix_read_by_narrator.go:56` (serial), `recompute_book_aggregates.go:180/187`
+      (serial), `regroup_shattered_ai.go:160/164`, plus the `GetBookFiles` and
+      `GetBookByID` rows in the audit's table.
+- [ ] **Group-by-BookID, not a batch swap** — `fix_book_file_paths.go:56`,
+      `enrich_book_files.go:69`, `recompute_itunes_paths.go:56`,
+      `lsh_backfill.go:122`, `tag_backfill.go:147`, `dedupe_book_file_rows.go:253`
+      each refetch a book's whole file list once per file.
+
+### ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)
+
+35 s CPU profile of prod, captured while driving 12 distinct uncached broad
+queries concurrently. Total samples **437.25 s = 1249 % CPU** (≈12.5 of 48 cores).
+Taken on the deployed debug build immediately after #3128.
+
+**The mint lock is fixed and the fix is confirmed by absence, not by argument.**
+`MintOrGetSyncFileIDs` is 10.80 s cum (**2.47 %**) and no longer serializes
+anything; before #3128 the singular form was a process-global mutex held across
+an fsync on the innermost loop of every item response. The whole
+`abs.LibrarySearch` handler is now **39.53 s cum = 9.04 %** of process CPU.
+
+**Search latency is now dominated by things that are not search.**
+
+| Consumer | cum | share |
+|---|---|---|
+| GC (`gcBgMarkWorker`) | 206.40 s | **47.20 %** |
+| `metadata.batch-apply-cached` → `applyCachedCandidateForBook` | 80.80 s | 18.48 % |
+| ├ `WriteTagsSafe` | 58.40 s | 13.36 % |
+| ├ `ComputeFileHashAndSize` | 53.64 s | 12.27 % |
+| └ `sha256.blockGeneric` | 53.42 s | **12.22 %** |
+| `abs.LibrarySearch` (everything below is inside it) | 39.53 s | 9.04 % |
+
+Load average 22.85 on 48 cores. Measured search latency in that window: **3.4 s
+(q=M) – 15.7 s (q=L)**, payloads 2.2–3.6 MB. Before #3128 the same query shape
+measured 13.8–28.0 s. **Both measurements were taken with a `library.scan` and
+the apply jobs running, so neither is a clean isolation** — the improvement is
+real but the range is not a controlled A/B.
+
+The apply jobs are hashing whole audio files with SHA-256 and that plus the
+allocation churn is driving 47 % GC. Search will stay slow while they run. That
+is a deliberate trade the user made (they are applying metadata and were
+explicitly told not to be cancelled); it is not a search defect.
+
+#### New hotspots INSIDE search, ranked (these are the real follow-ups)
+
+Costs nest, so these overlap.
+
+- [ ] **`searchSeriesHits` — 29.26 s cum (6.69 %), now larger than the entire
+      item-view path.** Calls `seriesPageBooks` → `seriesRows` (22.69 s, 5.19 %).
+      This is the single biggest thing inside search and had never been looked at,
+      because the mint lock was masking it.
+- [x] **DONE (#3130).** **`coverPath` / `coverFile` → `metadata.CoverPathForBook`
+      — 27.96 s cum (6.40 %). Root cause identified: `filepath.Glob` reads and
+      sorts the entire covers directory once per book.** `internal/metadata/cover.go:180` globs
+      `<rootDir>/covers/<bookID>.*`. Because the pattern contains a meta character,
+      Go's `filepath.Glob` cannot do a point lookup — it falls into `glob()`, which
+      calls `Readdirnames(-1)` on the whole directory, `slices.Sort`s every name, and
+      runs `filepath.Match` against each. The profile splits exactly that way:
+
+      | callee of `filepath.glob` | cum | share of glob |
+      |---|---|---|
+      | `os.(*File).Readdirnames` | 18.00 s | 64.38 % |
+      | `slices.Sort[[]string,string]` | 5.57 s | 19.92 % |
+      | `filepath.Match` | 4.17 s | 14.91 % |
+      | `os.Stat` | 0.08 s | 0.29 % |
+
+      **`/mnt/bigdata/books/audiobook-organizer/covers` holds 9,288 entries**
+      (counted on prod 2026-09-08), so every cover resolution reads and sorts 9,288
+      filenames to find one whose name is already known. Cost is
+      O(items × covers-dir-size) and grows as the library gains covers, independent
+      of the query.
+
+      **Fix:** the bookID is known and only the extension is unknown — `os.Stat` the
+      five candidate extensions (`.jpg .jpeg .png .webp .gif`) in the order the
+      existing loop prefers, and return the first hit. `os.Stat` measured 0.01 ms on
+      this box, so this replaces a 9,288-entry readdir + sort with at most five
+      point lookups. Behaviour differs in one edge case worth a test: `Glob` returns
+      *any* extension matching `.*` and the loop then filters to the five known
+      image types, so a cover stored under some other extension is found by neither
+      the old code (filtered out) nor the new (not probed) — but a **case-variant**
+      extension (`.JPG`) is matched by `Glob` + `strings.ToLower` today and would be
+      missed by naive stats. Probe case variants or keep the comparison
+      case-insensitive.
+
+      Note `CoverPathForBook` has two other callers — `metafetch.writeBackForBook`
+      and `ApplyMetadataFileIO` (0.07 s / 0.06 s here) — so they benefit too, and
+      both must stay correct.
+
+      ⚠️ Verify the root dir from `GET /api/v1/config` (`root_dir`), **not** from the
+      systemd unit: the unit sets `AUDIOBOOK_ROOT_DIR=/var/lib/audiobooks`, which a
+      config file overrides to `/mnt/bigdata/books/audiobook-organizer`. The unit's
+      value does not exist on disk. (`AUDIOBOOK_ROOT_DIR` is in fact vestigial —
+      `viper.AutomaticEnv()` runs with no `SetEnvPrefix`, so the key it reads is
+      `ROOT_DIR`.)
+
+      **Fixed in #3130**, which also had to fix a path-traversal exposure the change
+      surfaced: CodeQL models `os.Stat` as a path sink and does not model `Glob`, so
+      swapping them turned a silent pre-existing issue into a new high-severity alert
+      on the read — and the `os.Create` one line below had the same exposure. Both
+      now go through `safeCoverID`; the read is then confined by probing through an
+      `fs.FS` rooted at the covers directory and the write by
+      `pathvalidation.SecureJoin`. The directory is
+      also growing: 7,885 files on 2026-08-02, 9,288 on 2026-09-08, so the cost of
+      the old glob rose over time.
+- [ ] **`minifiedItem` — 23.17 s (5.30 %).**
+- [ ] `loadItemViews` / `loadOneItemView` — 17.80 s (4.07 %); `GetBookFiles`
+      within it only 4.98 s (1.14 %), which is why the batch swap in the N+1
+      audit's finding 1 is **not** the priority it looked like. Two reasons, and
+      they must be read together: (a) `GetBookFiles` is **prefix-bounded**, so the
+      per-book cost is already proportional to that book's files, not to the table
+      — the N+1 shape is real but each call is cheap; and (b) the proposed
+      replacement `GetBookFilesForIDsCore` **falls back to a full scan of all
+      ~726 K `book_file:` rows** when memdb is unavailable, which is exactly the
+      state during the ~130 s async warmup after every restart. So the swap trades
+      a measured-minor warm cost for an unmeasured-severe cold one. Do not treat
+      "only 1.14 %" as a green light to apply finding 1 unchanged — if it is done
+      at all, the fallback must be made prefix-bounded first.
+- [ ] **`MintOrGetSyncFileIDs` at 10.80 s (2.47 %) is now worth the prefix-scan
+      follow-up** (audit finding 7): the `sync_file:book:<bookID>:<syncFileID>`
+      index stores the fileID as its value, so one scan per book replaces the N
+      point-gets this method still does. `RepointSyncFile` keeps that index
+      current (verified).
+- [ ] **Investigate the 47 % GC directly.** A 3 MB response per search is a large
+      allocation source; so is the apply job. Worth a heap profile before assuming
+      which one dominates.
+
+Profile artifact: captured via `http://localhost:6060/debug/pprof/profile?seconds=35`
+on the deployed debug build. Re-capture rather than trusting these exact numbers —
+they were taken under a specific concurrent workload.
+
+Companion: [`docs/audits/2026-09-08-n-plus-one-batch-endpoint-audit.md`](docs/audits/2026-09-08-n-plus-one-batch-endpoint-audit.md).
+
+### CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names
+
+Found while fixing #3130, where `pathvalidation.SecureJoin` failed to clear a
+`go/path-injection` alert it should have cleared. The reason nobody noticed is that
+**`main` carries 0 `go/path-injection` alerts** (~100 open alerts overall, none of that
+rule), so no flow has ever depended on these rows working. A sanitizer model that is
+never exercised is indistinguishable from one that does not work.
+
+> ⚠️ **This entry was filed backwards on 2026-09-08 and corrected the same day (#3132).**
+> The original text claimed `path-sanitizers.model.yml` used predicates that "do not exist
+> for Go" and that `pathInjectionSanitizer` was the correct one. That is the reverse of the
+> truth. Verified against `github/codeql`:
+> `go/ql/lib/semmle/go/dataflow/internal/ExternalFlowExtensions.qll` declares
+> `barrierModel` (**9** data columns) and `barrierGuardModel` (**10**);
+> `pathInjectionSanitizer`/`pathInjectionSanitizerGuard` appear **only** under `java/` and
+> `ruby/`. Do not re-derive this from the old text.
+
+- [x] **`.github/codeql/models/go-sanitizers.model.yml` declared a predicate Go does not
+      have** (`pathInjectionSanitizer`, 3-column rows). An unknown `extensible:` fails pack
+      loading, so it could never credit anything and risked taking the pack down with it. It
+      was also a duplicate of `path-sanitizers.model.yml`. **Deleted in #3132.**
+- [x] **`.github/codeql/models/path-sanitizers.model.yml` is structurally correct.** Its
+      rows measure exactly 9 columns for `barrierModel` and 10 for `barrierGuardModel`,
+      matching the declarations above minus the auto-supplied `madId`. No change needed.
+- [ ] **🔴 The barrier still does not fire, and deleting the invalid file did not fix it.**
+      #3132 ran a known-positive control: a probe commit restoring the exact
+      `SecureJoin`+`os.Stat` form that produced 8/8 alerts on 2026-09-07, with the invalid
+      file already removed. **The alert fired anyway** — alert 1866, `open`,
+      `internal/metadata/cover.go:250`, 2026-09-08T11:44:21Z. So the broken pack was not the
+      cause and the remaining question is why *valid* `barrierModel` rows take no effect.
+      Candidates, none yet tested:
+      - the `kind` column value `"path-injection"` may not be what Go's tainted-path query
+        looks for in a **barrier** (sink kinds and barrier kinds need not share a vocabulary);
+      - the access path `ReturnValue[0]` may be wrong for a `(T, error)` function, or may need
+        to be a bare `ReturnValue`;
+      - the pack may not be loading at all — only `.github/workflows/codeql.yml` passes
+        `config-file:`; `security.yml`'s advanced reusable workflow does not, so at most one
+        of the two Go analyses can see the pack;
+      - `subtypes` (`false`) or the empty `type`/`signature` columns may not match.
+      **Next step is a canary, not another guess:** the control above is cheap to re-run, so
+      change one variable per push and read the alert rather than reasoning about it.
+- [ ] **Every language is analyzed by CodeQL twice per run, and Go costs ~8.5 min each time.**
+      Noticed while chasing the above, because alerts arrive under two different
+      `analysis_key`s and it is not obvious which one a given alert came from.
+      `.github/workflows/codeql.yml` analyzes `go`, `javascript-typescript` and `actions` in
+      three jobs; `.github/workflows/security.yml` separately passes
+      `languages: '["go", "javascript", "actions"]'` to the advanced reusable workflow.
+      Measured on completed runs on main: `Analyze (go)` 8m17s (run 34202309268) and
+      `Advanced CodeQL Security / CodeQL Analysis (go)` 8m54s (run 34202310167).
+      Do **not** simply delete one without first checking which analysis the branch's
+      required status contexts reference — and note the config-file asymmetry above, which
+      means the two are not interchangeable.
+
+⚠️ These are `.github/` files: push them with git, never the MCP contents API.
 
 - [ ] **Operation log download (`GET /operations/v2/:id/logs/download`) delivers a
       corrupt `.log.gz` to the browser — "Data error", nothing can decompress it.**
