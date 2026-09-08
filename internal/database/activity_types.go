@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-29
+// last-edited: 2026-09-08
 
 // Package database — activity log types and helpers previously defined in
 // activity_store.go (the legacy SQLite backend). Extracted here in fable5
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ActivityEntry represents a single entry in the unified activity log.
@@ -30,6 +31,49 @@ type ActivityEntry struct {
 	Details     map[string]any `json:"details,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	PrunedAt    *time.Time     `json:"pruned_at,omitempty"`
+}
+
+// activitySummaryMax bounds the stored summary. A summary is a one-line
+// headline; nothing legitimate needs more than this.
+//
+// Not a theoretical limit. Measured on prod 2026-09-07: the activity database
+// was 5.3 GB, of which the summary column alone held 5.48 GB of data. The
+// details column — the one that IS zstd-compressed — held 351 MB, about 6% of
+// the file, so the compression work had been aimed at the wrong column. 208,103
+// `system` rows averaged 27 KB of summary and the single largest was 9,558,930
+// bytes: an iTunes write-back failure whose ContractVerdict.Error() formatted
+// every one of ~100k mhoh violations into one string.
+//
+// That root cause is fixed in itl_safety_contract.go. This clamp exists because
+// the storage layer must not depend on every caller being well behaved — the
+// next unbounded string will come from somewhere else.
+const activitySummaryMax = 8 << 10 // 8 KiB
+
+// clampActivitySummary truncates an oversized summary on a rune boundary and
+// says how much was dropped, so a truncated row is never mistaken for the whole
+// message.
+//
+// The RESULT is bounded by activitySummaryMax, marker included — not the
+// truncated prefix alone. That makes the function idempotent, which matters
+// because more than one layer clamps: Record and recordBatch both do, and a
+// dual-write store hands the same entry to two backends. Reserving no room for
+// the marker made the output overshoot the cap, so a second pass truncated again
+// and appended a second marker.
+func clampActivitySummary(s string) string {
+	if len(s) <= activitySummaryMax {
+		return s
+	}
+	// Render the marker first: its length depends on the sizes it reports, so
+	// the budget for the prefix cannot be known until it exists.
+	marker := fmt.Sprintf("... [summary truncated: %d bytes total]", len(s))
+	cut := activitySummaryMax - len(marker)
+	if cut < 0 {
+		cut = 0
+	}
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + marker
 }
 
 // ActivityFilter controls which entries Query returns.

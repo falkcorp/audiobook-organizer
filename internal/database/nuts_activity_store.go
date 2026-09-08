@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 package database
 
@@ -117,6 +117,7 @@ func (s *NutsActivityStore) Close() error { return s.db.Close() }
 
 // Record inserts an ActivityEntry and returns a synthetic int64 ID.
 func (s *NutsActivityStore) Record(e ActivityEntry) (int64, error) {
+	e.Summary = clampActivitySummary(e.Summary)
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
 	}

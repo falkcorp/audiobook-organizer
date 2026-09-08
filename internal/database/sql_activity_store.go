@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -268,6 +268,7 @@ func scanEntries(rows *sql.Rows) ([]ActivityEntry, error) {
 // the row's autoincrement id (0 on a dedup skip). The return is best-effort:
 // every caller ignores it, and re-presenting an already-stored event is a no-op.
 func (s *SQLActivityStore) Record(e ActivityEntry) (int64, error) {
+	e.Summary = clampActivitySummary(e.Summary)
 	key, err := activitySrcKey(e)
 	if err != nil {
 		return 0, err
@@ -310,12 +311,19 @@ func (s *SQLActivityStore) recordBatch(ctx context.Context, entries []ActivityEn
 	}
 	inserted := 0
 	for i := range entries {
-		key, kerr := activitySrcKey(entries[i])
+		// Clamp on a local copy, before activitySrcKey: the key is derived from
+		// the entry, so clamping after it would make this path compute a
+		// different dedup key than Record does for the same row. Copying rather
+		// than writing through entries[i] keeps this free of side effects on the
+		// caller's slice.
+		e := entries[i]
+		e.Summary = clampActivitySummary(e.Summary)
+		key, kerr := activitySrcKey(e)
 		if kerr != nil {
 			_ = tx.Rollback()
 			return 0, kerr
 		}
-		args, aerr := rowArgs(entries[i], key)
+		args, aerr := rowArgs(e, key)
 		if aerr != nil {
 			_ = tx.Rollback()
 			return 0, aerr

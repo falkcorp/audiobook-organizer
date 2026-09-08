@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_safety_contract.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 404bbed1-87ba-4e56-b9e4-a492a2281163
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 //
 // ITLSafetyContract — the iTunes writeback write-safety contract (fable5 TASK-003).
 //
@@ -79,21 +79,55 @@ func (v ContractVerdict) FailedGuards() []string {
 	return names
 }
 
-// Error renders a stable, log-friendly summary of all violations. Returns "" if
+// contractVerdictMaxViolations bounds how many individual violations Error()
+// spells out. The rest are counted, not listed.
+//
+// This used to be unbounded, and it was not a cosmetic problem. A guard like
+// location-form produces one violation PER mhoh block, so a systematically bad
+// write-back — every path carrying the '.itunes-writeback/' staging marker, say
+// — yields violations in the hundreds of thousands. On 2026-09-07 that rendered
+// a single 9,558,930-byte error string, which the write-back batcher logged, and
+// which landed verbatim in the activity log's summary column. 208,103 such rows
+// were most of a 5.3 GB activity database. The structured detail is not lost:
+// callers that need every violation read v.Results.
+const contractVerdictMaxViolations = 20
+
+// Error renders a stable, log-friendly summary of the violations. Returns "" if
 // the verdict passed (so callers can do `if e := v.Error(); e != "" { ... }`).
+//
+// The output is bounded — see contractVerdictMaxViolations. It is an error
+// string destined for logs, not a serialization format.
 func (v ContractVerdict) Error() string {
 	if v.Pass {
 		return ""
 	}
+
+	total := 0
+	for _, r := range v.Results {
+		if !r.Pass() {
+			total += len(r.Violations)
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString("ITLSafetyContract REJECTED write:")
+	shown := 0
+outer:
 	for _, r := range v.Results {
 		if r.Pass() {
 			continue
 		}
 		for _, viol := range r.Violations {
+			if shown >= contractVerdictMaxViolations {
+				break outer
+			}
 			fmt.Fprintf(&b, " [%s@%d/%s: %s]", r.Guard, viol.Offset, viol.Chunk, viol.Message)
+			shown++
 		}
+	}
+	if total > shown {
+		fmt.Fprintf(&b, " ... and %d more violation(s) across guards %v (full detail in ContractVerdict.Results)",
+			total-shown, v.FailedGuards())
 	}
 	return b.String()
 }
