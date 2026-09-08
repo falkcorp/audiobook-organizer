@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.104.0
+// version: 1.105.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-07
 
@@ -748,11 +748,26 @@ type Config struct {
 	// leak). "pebble" is the escape hatch — Pebble-only, no SQLite opened — and
 	// is the instant rollback for the migration.
 	ActivityBackend string `json:"activity_backend" mapstructure:"activity_backend"`
-	// ActivityDBPath is the SQLite activity file. Empty ⇒ "activity.sqlite"
-	// beside the main database (DatabasePath's directory).
+	// ActivityDBPath is the SQLite activity file. Empty resolves via
+	// ResolveActivityDBPath: {RootDir}/.activity/activity.sqlite when a library
+	// root is configured, else "activity.sqlite" beside the main database.
 	ActivityDBPath string `json:"activity_db_path" mapstructure:"activity_db_path"`
-	PlaylistDir    string `json:"playlist_dir"`
-	SetupComplete  bool   `json:"setup_complete"`
+	// ActivityDBMoveOnChange controls what happens when the resolved activity
+	// database path stops matching the file actually in use — because this
+	// setting changed, or because the library root moved under the default.
+	//
+	// true  ⇒ copy the existing database to the new location, verify it by row
+	//         count, and only then remove the original (see RelocateActivityDB).
+	// false ⇒ leave the old file alone and start a fresh database at the new
+	//         path. History stays readable at the old location but the log
+	//         appears to start over, so this is not the default.
+	//
+	// The move is a real copy of a file that reaches tens of gigabytes and is
+	// usually cross-filesystem, so it is deliberately a choice rather than
+	// something that happens silently on a path edit.
+	ActivityDBMoveOnChange bool   `json:"activity_db_move_on_change" mapstructure:"activity_db_move_on_change"`
+	PlaylistDir            string `json:"playlist_dir"`
+	SetupComplete          bool   `json:"setup_complete"`
 
 	// Library organization
 	OrganizationStrategy    string `json:"organization_strategy"` // 'auto', 'copy', 'hardlink', 'reflink', 'symlink'
@@ -1424,6 +1439,37 @@ func ParseWhisperEndpoints(s string) []WhisperEndpoint {
 	return endpoints
 }
 
+// ActivityDBDirName is the dot-directory that holds the activity database under
+// the library root. Dot-prefixed so the scanner skips it: pathutil.ShouldSkipDir
+// rejects any hidden directory, which keeps a multi-gigabyte SQLite file out of
+// every library walk without needing its own exclusion rule.
+const ActivityDBDirName = ".activity"
+
+// ActivityDBFileName is the activity database's basename in that directory.
+const ActivityDBFileName = "activity.sqlite"
+
+// ResolveActivityDBPath returns the activity database path this config actually
+// implies, applying the default when ActivityDBPath is unset.
+//
+// The default lives under the LIBRARY root rather than beside the main database
+// because the two have very different storage needs: the activity log grows
+// without bound (29 GB on production) while the main database sits on a small
+// system volume. Putting it in {RootDir}/.activity keeps it on the same large
+// volume as the library it describes.
+//
+// Falls back to sitting beside the main database when no library root is
+// configured — first boot, or a setup that never set one — since an empty
+// RootDir would otherwise resolve to a path at the filesystem root.
+func (c *Config) ResolveActivityDBPath() string {
+	if p := strings.TrimSpace(c.ActivityDBPath); p != "" {
+		return p
+	}
+	if root := strings.TrimSpace(c.RootDir); root != "" {
+		return filepath.Join(root, ActivityDBDirName, ActivityDBFileName)
+	}
+	return filepath.Join(filepath.Dir(c.DatabasePath), ActivityDBFileName)
+}
+
 // envSupplied reports whether the process environment actually provided a value for
 // an environment variable bound via viper.BindEnv.
 //
@@ -1521,6 +1567,12 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	// registered SetDefault keeps IsSet permanently true.
 	if envSupplied("ACTIVITY_DB_PATH") {
 		c.ActivityDBPath = viper.GetString("activity_db_path")
+	}
+	// Same category as the path it governs: normally owned by the UI, but an
+	// operator must be able to force it off from the unit file — relocating tens
+	// of gigabytes is not something to discover during an incident.
+	if envSupplied("ACTIVITY_DB_MOVE_ON_CHANGE") {
+		c.ActivityDBMoveOnChange = viper.GetBool("activity_db_move_on_change")
 	}
 }
 
@@ -1938,8 +1990,10 @@ func InitConfig() {
 	// not editable via the deploy's NOPASSWD levers).
 	viper.SetDefault("activity_backend", "")
 	viper.SetDefault("activity_db_path", "")
-	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND") //nolint:errcheck
-	viper.BindEnv("activity_db_path", "ACTIVITY_DB_PATH") //nolint:errcheck
+	viper.SetDefault("activity_db_move_on_change", true)
+	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND")                     //nolint:errcheck
+	viper.BindEnv("activity_db_path", "ACTIVITY_DB_PATH")                     //nolint:errcheck
+	viper.BindEnv("activity_db_move_on_change", "ACTIVITY_DB_MOVE_ON_CHANGE") //nolint:errcheck
 
 	// Dedup boilerplate-blocklist extras (nested under "dedup_boilerplate.*",
 	// INIT-4 T5). Empty by default — the compiled-in blocklist in
@@ -2108,8 +2162,9 @@ func InitConfig() {
 			// built by explicit GetString calls, not viper.Unmarshal. Also
 			// re-applied in applyEnvAuthoritativeConfig so the env lever survives
 			// the DB-blob config overlay (see the ABS keys there).
-			ActivityBackend: viper.GetString("activity_backend"),
-			ActivityDBPath:  viper.GetString("activity_db_path"),
+			ActivityBackend:        viper.GetString("activity_backend"),
+			ActivityDBPath:         viper.GetString("activity_db_path"),
+			ActivityDBMoveOnChange: viper.GetBool("activity_db_move_on_change"),
 
 			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
 			WhisperClipCacheDir:                  viper.GetString("whisper_clip_cache_dir"),
