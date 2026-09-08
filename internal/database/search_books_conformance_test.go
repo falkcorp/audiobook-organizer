@@ -1,5 +1,5 @@
 // file: internal/database/search_books_conformance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e9a1f77-63b2-4c05-8ad1-9b52e7c30f6a
 // last-edited: 2026-09-08
 
@@ -217,6 +217,47 @@ func TestSearchBooks_MemDBAndPebbleAgree(t *testing.T) {
 				"book %s description does not match what was stored", b.ID)
 		}
 	})
+}
+
+// A negative limit reached the memdb path's result-slice preallocation and
+// panicked: make([]string, 0, n) panics outright for n < 0. The Pebble scan
+// never preallocated, so this was introduced by the fast path — CodeQL flagged
+// it as go/uncontrolled-allocation-size before it shipped.
+//
+// limit is not validated at all three SearchBooks call sites, so the store layer
+// treats it as untrusted. Both paths must survive it and agree.
+func TestSearchBooks_HostileLimitDoesNotPanic(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	fx := buildSearchConformanceFixture(t, store)
+
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok)
+
+	for _, limit := range []int{-1, -1 << 30, 1 << 30} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			got := searchBothWays(t, p, "needlemark", limit, 0)
+
+			require.Equal(t, searchIDs(got[false]), searchIDs(got[true]),
+				"limit=%d diverged between the two paths", limit)
+
+			if limit < 0 {
+				// Both paths return NOTHING for a negative limit, and that is
+				// the pre-existing behaviour, not a choice made here: the
+				// collect condition is `limit == 0 || len(ids) < limit`, and a
+				// negative limit satisfies neither. Asserted so the fast path
+				// keeps matching it — the point of this test is that a hostile
+				// limit is inert on both paths rather than a panic on one.
+				require.Empty(t, got[true],
+					"a negative limit collects nothing on the pebble scan; the fast path must agree")
+			} else {
+				// A huge limit is just "no early exit" — every match is returned.
+				require.Len(t, got[true], 4)
+				require.Contains(t, searchIDs(got[true]), fx.titleHitID)
+			}
+		})
+	}
 }
 
 // TestSearchBooks_MemDBPathIsNotAFullScan pins the reason this change exists.
