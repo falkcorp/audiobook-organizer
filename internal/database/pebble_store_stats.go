@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-09-05
+// last-edited: 2026-09-07
 
 package database
 
@@ -172,47 +172,32 @@ func (p *PebbleStore) GetBookSizesByLocation(rootDir string) (librarySize, impor
 	return librarySize, importSize, nil
 }
 
-// GetDashboardStats returns LibraryStats, serving from the PebbleDB cache when fresh.
-// Even if the cache is marked dirty via InvalidateLibraryStats, returns the cached value
-// if it was recomputed within the min-interval (default 10 minutes) to prevent thrashing
-// during background operations like fingerprinting.
+// GetDashboardStats returns LibraryStats, serving whatever is cached
+// immediately and refreshing behind it.
 //
-// Only when a cache miss (TTL expiry, or recent compute + dirty but outside min-interval)
-// requires recompute, a per-process mutex gates the work to prevent concurrent stampedes.
+// Stale-while-revalidate, and as of 2026-09-07 that is finally true rather than
+// merely documented. ANY cached value is returned without blocking, at any age.
+// If it is dirty (a mutation happened) or older than the min-interval, a
+// background recompute is kicked for next time.
+//
+// It only blocks when there is genuinely nothing to serve — first boot, or a
+// cache that will not decode. That blocking scan was measured at 87 seconds, and
+// before this it ran on EVERY dashboard load during a scan, because
+// InvalidateLibraryStats deleted the cached value outright and ~15 mutation
+// paths call it.
 func (p *PebbleStore) GetDashboardStats() (*DashboardStats, error) {
-	// Stale-while-revalidate. ANY cached value — even a week-old one —
-	// is returned immediately; if stale beyond the min-interval, kick a
-	// background recompute for next time. This eliminates the cold-start
-	// 87s spike where memdb wasn't warm yet and computeLibraryStats fell
-	// through to a slow Pebble scan blocking the dashboard.
 	cached := p.readCachedLibraryStats()
 
 	if cached != nil {
 		ageSec := time.Since(cached.ComputedAt).Seconds()
 		minIntervalSec := float64(getLibraryCountsMinIntervalSeconds())
-		if ageSec >= minIntervalSec {
-			// Stale: kick off background recompute. TryLock so we don't
-			// queue duplicate recomputes — one in flight is enough.
-			if p.libraryCountsRecomputeMu.TryLock() {
-				go func() {
-					defer p.libraryCountsRecomputeMu.Unlock()
-					start := time.Now()
-					stats, err := p.computeLibraryStats()
-					if err != nil {
-						slog.Warn("library_counts background recompute failed",
-							"component", "library_counts_cache", "error", err)
-						return
-					}
-					p.writeCachedLibraryStats(stats)
-					slog.Info("library_counts cache recomputed (background)",
-						"component", "library_counts_cache",
-						"total_books", stats.TotalBooks,
-						"duration_ms", time.Since(start).Milliseconds(),
-						"reason", "stale-while-revalidate",
-					)
-				}()
-			}
-		} else {
+		dirty := p.libraryStatsDirty.Load()
+		switch {
+		case dirty:
+			p.startLibraryStatsRecompute("invalidated", ageSec)
+		case ageSec >= minIntervalSec:
+			p.startLibraryStatsRecompute("stale-while-revalidate", ageSec)
+		default:
 			slog.Debug("library_counts cache hit (fresh)",
 				"component", "library_counts_cache",
 				"age_seconds", ageSec,
@@ -222,7 +207,7 @@ func (p *PebbleStore) GetDashboardStats() (*DashboardStats, error) {
 		return cached, nil
 	}
 
-	// No cache at all (first boot or post-Invalidate restart). Block on
+	// No cache at all (first boot, or a value that would not decode). Block on
 	// recompute — nothing to serve in the meantime.
 	p.libraryCountsRecomputeMu.Lock()
 	defer p.libraryCountsRecomputeMu.Unlock()
@@ -249,6 +234,68 @@ func (p *PebbleStore) GetDashboardStats() (*DashboardStats, error) {
 		"reason", "cold-cache",
 	)
 	return stats, nil
+}
+
+// startLibraryStatsRecompute kicks at most one background recompute and returns
+// immediately. The caller has already decided to serve the cached value.
+//
+// TryLock is both the stampede guard and, together with Close, the shutdown
+// join: the goroutine holds libraryCountsRecomputeMu for its entire life, so
+// Close taking that mutex waits for it. libraryStatsClosed is read here under
+// the same mutex Close writes it under, which is what closes the window — a
+// plain flag check before TryLock would let a recompute start against a
+// database Close had already begun tearing down, and Pebble panics on
+// use-after-close.
+func (p *PebbleStore) startLibraryStatsRecompute(reason string, ageSec float64) {
+	if !p.libraryCountsRecomputeMu.TryLock() {
+		return // one already in flight; that is enough
+	}
+	if p.libraryStatsClosed {
+		p.libraryCountsRecomputeMu.Unlock()
+		return
+	}
+
+	// Clear the dirty flag BEFORE computing, not after. A mutation that lands
+	// while the scan is running must leave the cache marked dirty, because this
+	// recompute cannot have seen it. Clearing afterwards would swallow that
+	// mutation until the min-interval elapsed.
+	p.libraryStatsDirty.Store(false)
+
+	go func() {
+		defer p.libraryCountsRecomputeMu.Unlock()
+		start := time.Now()
+		stats, err := p.computeLibraryStats()
+		if err != nil {
+			// Put the flag back: this refresh did not happen.
+			p.libraryStatsDirty.Store(true)
+			fails := p.libraryStatsRefreshFailures.Add(1)
+			// Reads never block on this, so a recompute that keeps failing shows
+			// an ever-staler dashboard and nothing else. Say so loudly once it is
+			// clearly not a blip. Callers still get ComputedAt in the payload.
+			if fails >= 3 {
+				slog.Error("library_counts background recompute failing repeatedly; dashboard counts are stale",
+					"component", "library_counts_cache",
+					"consecutive_failures", fails,
+					"cached_age_seconds", ageSec,
+					"error", err)
+			} else {
+				slog.Warn("library_counts background recompute failed",
+					"component", "library_counts_cache",
+					"consecutive_failures", fails,
+					"error", err)
+			}
+			return
+		}
+		p.libraryStatsRefreshFailures.Store(0)
+		p.writeCachedLibraryStats(stats)
+		slog.Info("library_counts cache recomputed (background)",
+			"component", "library_counts_cache",
+			"total_books", stats.TotalBooks,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"served_age_seconds", ageSec,
+			"reason", reason,
+		)
+	}()
 }
 
 // computeLibraryStats builds a fresh LibraryStats in two sequential range scans.

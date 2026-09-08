@@ -28,41 +28,45 @@
     upgrade, `CheckpointEvery: 50`, and pool size from the shared
     `FP_PARALLEL_WORKERS` knob. Verified by mutation: non-atomic counters lose 93
     of 720 outcomes and trip `-race`.
-  - [ ] **`InvalidateLibraryStats` docstring is false, and it costs 87 seconds a
+  - [x] **`InvalidateLibraryStats` docstring is false, and it costs 87 seconds a
     load.** It is documented as stale-while-revalidate; it is a hard delete. So
     **every dashboard load during a scan takes the cold path** — measured at 87s.
     Likely the whole explanation for "the dashboard hangs during a scan". Same file
     has an unjoined recompute goroutine (`internal/database/pebble_store_stats.go:196-214`).
 
-    **Investigated 2026-09-07, deliberately NOT fixed — read this before starting.**
-    The framing above is wrong in a way that changes the fix. It is not "a working
-    SWR mechanism whose docstring lies"; the mechanism has **never run**.
-    `statsLibraryTTL` is 10 minutes and `defaultLibraryCountsMinIntervalSeconds` is
-    600 — the same number. `readCachedLibraryStats` returns nil once age exceeds the
-    TTL, but `GetDashboardStats` only kicks the background recompute when age is
-    **at least** the min-interval. The two thresholds are identical, so the
-    stale-while-revalidate branch is reachable only in a one-second window. The hard
-    delete is a second, independent reason it never fires — fixing the delete alone
-    would not turn SWR on. **Split the two thresholds** as part of any fix.
+    **Fixed 2026-09-07.** The framing above was wrong in a way that changed the fix.
+    It was not "a working SWR mechanism whose docstring lies" — the mechanism had
+    **never run**, for two independent reasons. `statsLibraryTTL` was 10 minutes and
+    `defaultLibraryCountsMinIntervalSeconds` was 600, the same number:
+    `readCachedLibraryStats` returned nil once age exceeded the TTL, while
+    `GetDashboardStats` only kicked a background recompute at *at least* the
+    min-interval, so the SWR branch was reachable in a one-second window. The hard
+    delete was the second reason, and fixing it alone would not have turned SWR on.
 
-    Three things must be settled before writing code:
-    1. **What is the maximum age a dashboard read may return, and what enforces it
-       after a recompute FAILS?** The recompute logs a warning and returns. If the
-       TTL check is simply removed so stale values are servable, a permanently
-       failing recompute means a permanently wrong dashboard with no upper bound —
-       trading today's slow-but-correct answer for a fast wrong one. The shape that
-       survives is a *second, longer* hard ceiling: serve stale up to N, block
-       beyond N. Pick N deliberately; do not let it fall out of deleting the check.
-    2. **The unjoined recompute goroutine must be fixed in the SAME change**, not a
-       follow-up. It calls `writeCachedLibraryStats` (a Pebble write) and Pebble
-       panics on use-after-close. Making SWR reachable makes that goroutine fire far
-       more often, so fixing the cache without the join makes the shutdown crash
-       *more* likely, not less.
-    3. **An in-memory `atomic.Bool` dirty flag is per-process.** Before choosing it
-       over the Pebble delete, grep for readers of the `stats:library` KEY, not just
-       callers of `InvalidateLibraryStats` — a startup path or second process would
-       not see an in-memory flag and would serve a value everyone else considers
-       dirty.
+    What shipped:
+    - `InvalidateLibraryStats` sets an in-memory dirty flag and **leaves the cached
+      value in place**. Safe as in-memory because `stats:library` has exactly one
+      reader (`readCachedLibraryStats`) — checked the KEY's readers, not just this
+      function's callers.
+    - `readCachedLibraryStats` no longer expires on age. Judging staleness moved to
+      the only caller that can act on it.
+    - The TTL constant is deleted; the min-interval is the single threshold, now
+      **300s (5 minutes)**, at the owner's call.
+    - The recompute goroutine is joined. No `WaitGroup` was needed: it already holds
+      `libraryCountsRecomputeMu` for its whole life, so `Close` taking that mutex is
+      the join — and that sidesteps the Add-concurrent-with-`Wait` trap that the
+      `file_io_pool` item below turned out to contain. `libraryStatsClosed` is
+      read and written only under that same mutex, so no recompute can start against
+      a closing database.
+    - Open question 1 from the earlier investigation (what bounds staleness after a
+      recompute FAILS) was **answered by the owner**: serve the cached value
+      regardless, never block. Since that trades a bounded-staleness guarantee for
+      responsiveness, the failure is made loud instead — consecutive failures are
+      counted, logged at ERROR from the third on, and the cache is re-marked dirty so
+      the next read retries. `computed_at` already ships in the payload.
+
+    Every guard mutation-verified: restoring the delete, restoring the TTL, and
+    removing the join each fail a specific test.
   - [x] `internal/server/file_io_pool.go:154` — overflow goroutine calls
     `removePendingFileOp` (a Pebble `DeleteRaw`) outside `p.wg`, violating the
     invariant the file's own comment states at `:116-118` (*"Any new caller must do

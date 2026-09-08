@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.143.0
+// version: 1.144.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-07
 
@@ -117,6 +117,26 @@ type PebbleStore struct {
 	libraryCountsRecomputeMu sync.Mutex   // gates recompute to prevent stampede when N callers see dirty cache
 	UseMemDB                 bool         // feature flag: use in-memory query layer for aggregations / filtered reads
 
+	// libraryStatsDirty is set by InvalidateLibraryStats and cleared when a
+	// recompute starts. It replaces a Pebble Delete of stats:library that ran on
+	// every book/file mutation and destroyed the cached value the dashboard
+	// wanted to serve. See InvalidateLibraryStats for why in-memory is safe here.
+	libraryStatsDirty atomic.Bool
+
+	// libraryStatsRefreshFailures counts CONSECUTIVE background recompute
+	// failures. Reads never block on a recompute, so a permanently failing one
+	// would otherwise show an ever-staler dashboard with nothing in the log
+	// saying why. Reset on success.
+	libraryStatsRefreshFailures atomic.Int64
+
+	// libraryStatsClosed is written and read only while holding
+	// libraryCountsRecomputeMu. Close sets it under that lock and a reader
+	// checks it under the same lock before starting a recompute, so no recompute
+	// can begin against a database that is being closed — Pebble panics on
+	// use-after-close. Close's own acquisition of that mutex doubles as the JOIN:
+	// an in-flight recompute holds it for its whole life.
+	libraryStatsClosed bool
+
 	// Primary-book-count cache. CountPrimaryBooks full-scans every book: key and
 	// json.Unmarshal's each Book (~5.6s on a ~44K-book library). The 5s metrics
 	// ticker (server_lifecycle.go) called it on every tick, saturating ~2 cores
@@ -181,8 +201,19 @@ func (p *PebbleStore) WaitForWarmup() {
 }
 
 const statsLibraryKey = "stats:library"
-const statsLibraryTTL = 10 * time.Minute
-const defaultLibraryCountsMinIntervalSeconds = 600 // 10 minutes
+
+// defaultLibraryCountsMinIntervalSeconds is how stale the cached dashboard stats
+// may get before a read kicks a BACKGROUND recompute. The cached value is still
+// returned immediately either way — this only decides when refreshing starts.
+//
+// Was 600, and there used to be a statsLibraryTTL of 10 minutes next to it that
+// made readCachedLibraryStats return nil past the same age. Two thresholds with
+// one value meant the stale-while-revalidate branch in GetDashboardStats was
+// reachable only in a one-second window: by the time a value was old enough to
+// trigger a refresh it was already old enough to be discarded, so every read
+// past 10 minutes took the blocking cold path instead. The TTL is gone and this
+// is now the only threshold.
+const defaultLibraryCountsMinIntervalSeconds = 300 // 5 minutes
 
 // primaryCountCacheTTL bounds how stale the cached CountPrimaryBooks value may
 // be. A metrics gauge / health probe tolerating tens of seconds of staleness is
@@ -232,18 +263,35 @@ func (p *PebbleStore) SetRootDir(rootDir string) {
 	}
 }
 
-// InvalidateLibraryStats drops the cached stats:library key so the next
-// GetDashboardStats call triggers a fresh full recompute.
-// NoSync is intentional: a crash before the delete flushes leaves a stale
-// cache that expires within statsLibraryTTL — identical to the pre-cache
-// behaviour. The benefit is avoiding a sync flush on every book/file mutation.
+// InvalidateLibraryStats marks the cached stats as needing recomputation. The
+// cached value is deliberately LEFT IN PLACE so the next GetDashboardStats can
+// still serve it instantly while a background recompute runs.
+//
+// This used to Delete the stats:library key outright. That made
+// readCachedLibraryStats return nil, which made GetDashboardStats skip its
+// stale-while-revalidate branch entirely and take the blocking cold path —
+// measured at 87 seconds. Since ~15 mutation paths call this (every book-file
+// write among them), during a scan that was every single dashboard load. The
+// docstring above it advertised stale-while-revalidate the whole time.
+//
+// The flag is in memory rather than in Pebble on purpose: it costs no I/O on a
+// hot mutation path, and stats:library has exactly one reader
+// (readCachedLibraryStats, below), so there is no other process or startup path
+// that could miss it. The cost of losing it on a crash is one refresh cycle of
+// staleness, which the min-interval already permits.
 func (p *PebbleStore) InvalidateLibraryStats() {
-	if err := p.db.Delete([]byte(statsLibraryKey), pebble.NoSync); err != nil {
-		slog.Warn("pebble Delete stats:library", "error", err)
-	}
+	p.libraryStatsDirty.Store(true)
 	slog.Debug("library_counts marked dirty", "reason", "invalidated")
 }
 
+// readCachedLibraryStats returns the cached stats at ANY age, or nil only when
+// there is genuinely nothing stored or it will not decode.
+//
+// It deliberately does not expire on age. Judging staleness is
+// GetDashboardStats's job, because it is the only caller that can act on the
+// answer — serve the value and refresh behind it. Returning nil here instead
+// forced a blocking recompute and was half of why stale-while-revalidate never
+// actually ran.
 func (p *PebbleStore) readCachedLibraryStats() *LibraryStats {
 	val, closer, err := p.db.Get([]byte(statsLibraryKey))
 	if err != nil {
@@ -252,9 +300,6 @@ func (p *PebbleStore) readCachedLibraryStats() *LibraryStats {
 	defer closer.Close()
 	var s LibraryStats
 	if err := json.Unmarshal(val, &s); err != nil {
-		return nil
-	}
-	if time.Since(s.ComputedAt) > statsLibraryTTL {
 		return nil
 	}
 	return &s
@@ -414,6 +459,16 @@ func (p *PebbleStore) Close() error {
 	if p.warmupDone != nil {
 		<-p.warmupDone
 	}
+
+	// Same hazard, second goroutine: GetDashboardStats can have a background
+	// stats recompute in flight, and computeLibraryStats iterates p.db. Taking
+	// libraryCountsRecomputeMu waits for it — the recompute holds that mutex from
+	// the TryLock that started it until it returns — and setting the flag under
+	// the same mutex stops a new one from starting after we let go.
+	p.libraryCountsRecomputeMu.Lock()
+	p.libraryStatsClosed = true
+	p.libraryCountsRecomputeMu.Unlock()
+
 	return p.db.Close()
 }
 
