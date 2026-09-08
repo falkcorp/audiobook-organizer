@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.1.0
+// version: 4.2.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 
 import { useState } from 'react';
@@ -31,6 +31,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { OperationActivityPanel } from '../OperationActivityPanel';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
+import { formatProgressCounts } from './operationsFormat';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
 
@@ -407,14 +408,7 @@ export function OperationsIndicator() {
                             fontFamily: 'monospace',
                           }}
                         >
-                          {op.total > 0 ? (
-                            <>
-                              {op.progress.toLocaleString()} / {op.total.toLocaleString()} (
-                              {progressPct}%)
-                            </>
-                          ) : (
-                            'Starting...'
-                          )}
+                          {formatProgressCounts(op)}
                         </Typography>
                         {eta && (
                           <Typography

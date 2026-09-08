@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.6.0
-// last-edited: 2026-09-07
+// version: 1.7.0
+// last-edited: 2026-09-08
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -130,12 +130,17 @@ func init() {
 	// completed on a prior boot.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "activity-sql-migration",
-		Needs:  []string{serviceregistry.KeyActivityStore},
+		Needs:  []string{serviceregistry.KeyActivityStore, serviceregistry.KeyStore},
 		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
 			mig, _ := store.(*database.MigratingActivityStore)
-			return &sqlMigrationStarter{mig: mig}, nil
+			// The main store is what carries the operations_v2 rows the run
+			// reports its status to. Optional by design: a store that does not
+			// implement the three-method recorder leaves ops nil and the
+			// migration runs exactly as it did before, just silently.
+			ops, _ := serviceregistry.Get[any](c, serviceregistry.KeyStore).(migrationOpsRecorder)
+			return &sqlMigrationStarter{mig: mig, ops: ops}, nil
 		},
 	})
 

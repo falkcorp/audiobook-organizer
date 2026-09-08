@@ -1,7 +1,7 @@
 // file: internal/activity/sql_migration.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e3b1f47-2a90-4c6d-b5e1-9f0c7d2a6b58
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 // Package activity — background driver for the Pebble → SQLite activity cutover.
 //
@@ -13,6 +13,7 @@ package activity
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -30,6 +31,12 @@ const sqlMigrationSettleDelay = 60 * time.Second
 // in which case Start is a no-op.
 type sqlMigrationStarter struct {
 	mig *database.MigratingActivityStore
+
+	// ops is the operations-v2 store the run reports its status to. Optional:
+	// nil means the migration runs exactly as before, silently. See
+	// sql_migration_report.go for why the run reports to a row rather than
+	// becoming a registry-owned operation.
+	ops migrationOpsRecorder
 
 	// ctx/cancel/wg make the backfill goroutine cancellable AND joinable.
 	// Previously it was a bare `go func()` on context.Background() with no Stop
@@ -74,24 +81,40 @@ func (s *sqlMigrationStarter) Start(_ context.Context) error {
 			return
 		}
 		slog.Info("[activity] starting Pebble→SQLite activity backfill (background)")
-		res, err := database.BackfillPebbleActivityToSQL(s.ctx, pebble, sqlStore, false)
+
+		// The row is inserted HERE, not in Start, so a shutdown during the settle
+		// delay leaves no phantom "running" operation behind for a user to wonder
+		// about. Everything below reports through it; none of it can fail the run.
+		rep := &migrationOpReporter{ops: s.ops}
+		rep.begin(time.Now().UTC())
+
+		res, err := database.BackfillPebbleActivityToSQLWithProgress(
+			s.ctx, pebble, sqlStore, false, rep.observe)
 		if err != nil {
 			if s.ctx.Err() != nil {
 				// Cancelled by shutdown, not broken. The backfill is idempotent
 				// by content key and resumable, so the next boot continues.
 				slog.Info("[activity] Pebble→SQLite backfill interrupted by shutdown — resumes next boot")
+				rep.finish("interrupted_quiesced",
+					"interrupted by shutdown — resumes from its checkpoint on the next start", nil)
 				return
 			}
 			slog.Error("[activity] Pebble→SQLite backfill failed — reads stay on Pebble", "err", err)
+			rep.finish("failed", "migration failed — activity reads stay on the old store", err)
 			return
 		}
 		if !res.ParityOK {
 			slog.Error("[activity] Pebble→SQLite backfill parity failed — reads stay on Pebble")
+			rep.finish("failed",
+				"copy could not be verified — activity reads stay on the old store", nil)
 			return
 		}
 		s.mig.SetReadSecondary(true)
 		slog.Info("[activity] activity log migrated to SQLite — reads now served from SQLite",
 			"scanned", res.EntriesScanned, "copied", res.EntriesCopied)
+		rep.finish("completed", fmt.Sprintf(
+			"activity log migrated: %s rows scanned, %s copied — reads now served from SQLite",
+			humanCount(res.EntriesScanned), humanCount(res.EntriesCopied)), nil)
 	})
 	return nil
 }
