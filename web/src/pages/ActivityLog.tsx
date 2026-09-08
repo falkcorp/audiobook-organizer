@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.25.0
+// version: 2.26.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-08
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -63,6 +63,11 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 // Section keys for the Active Operations panel, declared here rather than
 // derived from the rendered list so "Collapse All" can name every section even
 // when one of them is currently empty and therefore not rendered.
+// How many operations one section shows at a time. The Completed section runs to
+// the full 24-hour window — 80 rows on production — and an unpaged list of that
+// buries the sections under it, which on this page includes Failed.
+const OPS_SECTION_PAGE_SIZE = 7;
+
 const OPS_SECTION_KEYS = [
   'pending',
   'active',
@@ -212,6 +217,11 @@ export default function ActivityLog() {
   const toggleTagFilter = useCallback((tag: string) => {
     setTagFilter((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
   }, []);
+
+  // Per-section page, keyed by section key. Absent means page 1. Deliberately
+  // NOT clamped on write: sections shrink as ops age out of the 24h window, and
+  // a stored page past the end would blank the list. Clamping happens at render.
+  const [sectionPages, setSectionPages] = useState<Record<string, number>>({});
 
   // Mobile filter collapse
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -1569,6 +1579,11 @@ export default function ActivityLog() {
                   .filter((s) => s.ops.length > 0)
                   .map((section) => {
                     const sectionCollapsed = collapsedSections.has(section.key);
+                    const totalPages = Math.ceil(section.ops.length / OPS_SECTION_PAGE_SIZE);
+                    // Clamp here rather than in the setter — see sectionPages.
+                    const page = Math.min(sectionPages[section.key] ?? 1, totalPages);
+                    const start = (page - 1) * OPS_SECTION_PAGE_SIZE;
+                    const pageOps = section.ops.slice(start, start + OPS_SECTION_PAGE_SIZE);
                     return (
                       <Box key={section.key} sx={{ mb: 1 }}>
                         <Stack
@@ -1598,11 +1613,33 @@ export default function ActivityLog() {
                             variant="overline"
                             sx={{ color: 'text.secondary', fontWeight: 600 }}
                           >
+                            {/* The TOTAL, not the page size — the heading has to
+                                keep answering "how many completed today?" */}
                             {section.title} ({section.ops.length})
                           </Typography>
                         </Stack>
                         <Collapse in={!sectionCollapsed} unmountOnExit>
-                          <Stack spacing={1}>{section.ops.map(renderOp)}</Stack>
+                          <Stack spacing={1}>{pageOps.map(renderOp)}</Stack>
+                          {totalPages > 1 && (
+                            <Stack
+                              direction="row"
+                              spacing={1}
+                              sx={{ alignItems: 'center', justifyContent: 'center', pt: 1 }}
+                            >
+                              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                {start + 1}–{start + pageOps.length} of {section.ops.length}
+                              </Typography>
+                              <Pagination
+                                count={totalPages}
+                                page={page}
+                                onChange={(_, p) =>
+                                  setSectionPages((prev) => ({ ...prev, [section.key]: p }))
+                                }
+                                color="primary"
+                                size="small"
+                              />
+                            </Stack>
+                          )}
                         </Collapse>
                       </Box>
                     );
