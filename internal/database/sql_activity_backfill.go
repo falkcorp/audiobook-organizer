@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
 // last-edited: 2026-09-08
 
@@ -63,16 +63,43 @@ type SQLActivityBackfillResult struct {
 	// PerTierCopied breaks EntriesCopied down the same way PerTierScanned does.
 	// The two differ by exactly the idempotent skips.
 	//
-	// ⚠️ Read this pair the NEW way. Before the checkpoint landed, scanned≫copied
-	// meant "a resumed run re-streaming already-copied history". Resuming now
-	// SKIPS that history, so a genuine resume shows scanned≈copied for its tail
-	// and a tier that resumes cleanly never exhibits the old shape at all.
+	// ⚠️ scanned≫copied MEANS NOTHING ON ITS OWN. Do not diagnose from it.
 	//
-	// Today scanned≫copied means the tier is being RE-SCANNED with SQLite already
-	// holding its rows, which narrows to three causes: a `failed` verdict reset to
-	// a full re-scan on load, a tier in activityNonResumableTiers (`digest`, which
-	// never resumes), or a lost/cleared progress blob. None of them is a stall,
-	// and none is a resume.
+	// This guide has now been wrong twice, in opposite directions, and the second
+	// version was written in this file and disproved by production four hours
+	// later — so the rule below is stated as a non-inference rather than as a
+	// better list of causes.
+	//
+	//  v1 (pre-checkpoint): "scanned≫copied means a resumed run re-streaming
+	//      already-copied history." Checkpointing broke that: a resume now skips
+	//      the history instead of re-reading it.
+	//  v2 (2026-09-08): "a genuine resume shows scanned≈copied for its tail, and
+	//      never the old shape; scanned≫copied therefore narrows to a `failed`
+	//      verdict, a tier in activityNonResumableTiers, or a lost progress blob
+	//      — none of them a resume." DISPROVED the same day on prod.
+	//
+	// What prod actually showed on 2026-09-08, across two processes and ~2.5h of
+	// tier `change`: one run reached scanned=965,500 with copied=0 over 1h49m; it
+	// was interrupted, checkpointed at row 972,000, and the next process logged
+	// `resumed=true resuming_after_row=972000` and ran on to scanned=1,419,500
+	// still at copied=0. That is a genuine resume showing copied=0 — v2's
+	// "never" — and it is none of v2's three causes: the blob was present and its
+	// cursor was used, the tier is `change` and not `digest`, and a `failed`
+	// verdict would have reset the cursor to 0 and reported resumed=false.
+	//
+	// The reason v2 missed it: copied EXCLUDES idempotent skips, and a row is
+	// skipped whenever SQLite already holds it — which is true of everything an
+	// EARLIER attempt copied, and separately of everything the live dual-write
+	// stored (MigratingActivityStore.Record writes both backends under the same
+	// content key). A tier that a previous run already copied therefore reports
+	// copied=0 forever after, no matter how it is entered. Resumed or not is
+	// simply not what this pair measures.
+	//
+	// So: copied=0 with scanned climbing is the NORMAL, healthy shape for a
+	// re-verification pass, and on its own is not evidence of a stall, a lost
+	// checkpoint, or a failed verdict. To tell those apart, read the
+	// `processing tier` line's `resumed` / `resuming_after_row` fields, which say
+	// directly what this pair only ever implied.
 	PerTierCopied map[string]int `json:"per_tier_copied"`
 	ParityOK      bool           `json:"parity_ok"`
 	DryRun        bool           `json:"dry_run"`
