@@ -1,11 +1,12 @@
 // file: internal/metadata/cover_lookup_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b080c796-52a1-4a1e-a40d-232a50596515
 // last-edited: 2026-09-08
 
 package metadata
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -174,6 +175,19 @@ func TestFindExistingCover_NarrowerThanGlob(t *testing.T) {
 			t.Fatalf("a dangling symlink must not be served as a cover, got %q", got)
 		}
 	})
+}
+
+// TestFindExistingCover_DirFSStatsWithoutOpening guards the performance property
+// that made the fs.FS formulation acceptable in a PR whose whole point is
+// removing filesystem work. os.DirFS implements fs.StatFS, so fs.Stat dispatches
+// to os.Stat; if it ever stopped doing so, fs.Stat would fall back to Open+Stat
+// and quietly double the syscalls per probe. That regression is invisible to
+// every other test here, because they only assert results.
+func TestFindExistingCover_DirFSStatsWithoutOpening(t *testing.T) {
+	if _, ok := os.DirFS(t.TempDir()).(fs.StatFS); !ok {
+		t.Fatal("os.DirFS no longer implements fs.StatFS: fs.Stat now opens the " +
+			"file to stat it, doubling the syscalls findExistingCover makes")
+	}
 }
 
 // TestFindExistingCover_RefusesEscapingID covers the lookup's own confinement
