@@ -262,5 +262,25 @@ func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, e
 	if _, err := s.writer.ExecContext(ctx, `VACUUM`); err != nil {
 		return time.Since(start), fmt.Errorf("sql_activity: vacuum: %w", err)
 	}
+
+	// VACUUM alone does not finish the job in WAL mode: it writes the rebuilt
+	// database THROUGH the WAL, so the bytes it "freed" are still occupying the
+	// -wal file afterwards. SQLite's automatic checkpoint is PASSIVE, which
+	// recycles the WAL in place at its high-water mark and never shrinks the
+	// file — so without an explicit TRUNCATE the space is never returned and no
+	// amount of waiting fixes it.
+	//
+	// Measured on prod 2026-09-08, first run of this pass: the main file fell
+	// 22,898,438,144 → 11,447,480,320 (10.66 GB freed) while the WAL sat at
+	// 11,514,065,152 and did not move for the next three minutes. Net reclaim
+	// was therefore approximately zero until the service restarted. Same reason
+	// WipeAllActivity ends with this pragma.
+	//
+	// Failure here is not fatal to the vacuum, which has already committed:
+	// report it so the caller can say the space is still held, rather than
+	// discarding a successful multi-GB rebuild.
+	if _, err := s.writer.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return time.Since(start), fmt.Errorf("sql_activity: vacuum succeeded but WAL truncate failed (space still held): %w", err)
+	}
 	return time.Since(start), nil
 }

@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-09-08
 
@@ -8,6 +8,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -212,5 +213,51 @@ func TestClampOversizedSummaries_CancelReturnsCommittedProgress(t *testing.T) {
 	}
 	if res.Clamped != 0 {
 		t.Errorf("Clamped=%d on a pass cancelled before its first batch", res.Clamped)
+	}
+}
+
+// VacuumActivity must leave the -wal file truncated, not merely checkpointed.
+//
+// This is the half that a "did the main file shrink?" assertion misses, and it
+// is the half that decides whether the user gets their disk space back. In WAL
+// mode VACUUM writes the rebuilt database THROUGH the WAL, and SQLite's
+// automatic checkpoint is PASSIVE — it recycles the WAL in place at its
+// high-water mark and never shrinks the file. Hit for real on prod 2026-09-08:
+// the main file fell 22,898,438,144 → 11,447,480,320 while the WAL held at
+// 11,514,065,152 and stayed there, so the net reclaim was about zero.
+func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
+	s := newTestSQLStore(t)
+
+	// Build a WAL worth truncating: write, then clamp, which rewrites every one
+	// of these rows and pushes their freed overflow pages into the WAL.
+	for range 40 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	if _, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{}); err != nil {
+		t.Fatalf("clamp: %v", err)
+	}
+
+	walPath := s.path + "-wal"
+	before, err := os.Stat(walPath)
+	if err != nil {
+		t.Skipf("no -wal file at %s (%v); nothing to assert", walPath, err)
+	}
+	if before.Size() == 0 {
+		t.Skip("WAL already empty before vacuum; fixture did not build one")
+	}
+
+	if _, err := s.VacuumActivity(context.Background()); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+
+	after, err := os.Stat(walPath)
+	if err != nil {
+		return // truncate-to-removal is an acceptable outcome
+	}
+	if after.Size() >= before.Size() {
+		t.Errorf("WAL did not shrink: %d bytes before vacuum, %d after. "+
+			"VACUUM in WAL mode must be followed by PRAGMA wal_checkpoint(TRUNCATE); "+
+			"the automatic checkpoint is PASSIVE and never shrinks the file, so the "+
+			"space VACUUM freed stays held by the -wal", before.Size(), after.Size())
 	}
 }
