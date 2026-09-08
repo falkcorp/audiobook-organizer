@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 package maintenance
 
@@ -50,6 +50,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- database ---
 		p.dbOptimizeDef(),
+		p.activityReclaimDef(),
 
 		// --- author/series ---
 		p.authorDedupScanDef(),
