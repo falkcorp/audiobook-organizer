@@ -1,5 +1,5 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.8.0
+// version: 3.9.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-09-08
 
@@ -8,6 +8,7 @@ import * as api from '../services/api';
 import { type OperationSSEEventName } from '../services/api';
 import { useAppStore } from './useAppStore';
 import { isTerminal } from '../utils/operationPolling';
+import { groupOperations, type OperationGroup } from './operationGrouping';
 
 export interface ActiveOperation {
   id: string;
@@ -44,6 +45,11 @@ export interface ActiveOperation {
   current_item?: string | null;
   /** 0 = alert (shows in bell badge), 1 = activity-only (no bell badge) */
   notify_level?: number;
+  /** Set ONLY on the synthetic rows groupOperations builds. Its presence means
+   *  this row stands for several real operations and its id names no record on
+   *  the server — anything that fetches, cancels or refreshes by id must check
+   *  it first. Absent on every operation that came from the API. */
+  group?: OperationGroup;
 }
 
 export interface OperationLogEvent {
@@ -68,6 +74,14 @@ interface OperationsState {
   /** alertOperations contains only ops with notify_level === 0 (NotifyAlert).
    *  Use this for the bell badge count. */
   alertOperations: ActiveOperation[];
+  /** groupedOperations is activeOperations with runs of consecutive same-kind
+   *  operations folded under synthetic parent rows — see operationGrouping.ts.
+   *  It is a SEPARATE array on purpose: Library.tsx, OpenLibraryDumps,
+   *  ITunesImport and OperationActivityPanel all look ops up by id in
+   *  activeOperations, and a synthetic row (whose id names no server record)
+   *  has no business in their results. Read this from anything that RENDERS a
+   *  list of operations; read activeOperations from anything that resolves one. */
+  groupedOperations: ActiveOperation[];
   latestLogEvent: OperationLogEvent | null;
   polling: boolean;
   // SSE EventSource instance — kept here so it can be closed on unmount.
@@ -180,9 +194,15 @@ function deriveOperationArrays(operations: Record<string, ActiveOperation>): {
   activeOperations: ActiveOperation[];
   liveOperations: ActiveOperation[];
   alertOperations: ActiveOperation[];
+  groupedOperations: ActiveOperation[];
 } {
   const all = Object.values(operations);
   return {
+    // Derived here rather than in the component so the bell and the Activity
+    // page cannot disagree about what a group is, and so the fold sees the
+    // whole 24-hour window at once — a group split across a pagination
+    // boundary would be worse than no grouping at all.
+    groupedOperations: groupOperations(all),
     // NOTE THE NAME IS HISTORICAL: activeOperations is every op in the loaded
     // 24-hour window, finished ones included — it is the whole timeline, not the
     // live set. Callers that mean "running right now" must filter with
@@ -200,6 +220,7 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
   activeOperations: [],
   liveOperations: [],
   alertOperations: [],
+  groupedOperations: [],
   latestLogEvent: null,
   polling: false,
   _sseSource: null,

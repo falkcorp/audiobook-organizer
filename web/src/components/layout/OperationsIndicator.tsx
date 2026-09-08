@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.5.0
+// version: 4.6.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-08
 
@@ -153,7 +153,7 @@ function SectionHeader({
 }
 
 export function OperationsIndicator() {
-  const activeOperations = useOperationsStore((state) => state.activeOperations);
+  const groupedOperations = useOperationsStore((state) => state.groupedOperations);
   const alertOperations = useOperationsStore((state) => state.alertOperations);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
@@ -193,12 +193,20 @@ export function OperationsIndicator() {
   // The activity migration ends at interrupted_dropped on every restart, which
   // is what surfaced it.
   const alertInProgress = alertOperations.filter((op) => !isTerminal(op.status));
+  // The badge counts REAL work, from the ungrouped alert set. Deriving it from
+  // grouped rows would make it disagree with the list it labels: twelve queued
+  // runs are twelve things happening, however many rows it takes to show them.
   const badgeCount = alertInProgress.length;
 
-  const inProgress = activeOperations.filter((op) => !isTerminal(op.status));
+  // The LIST is grouped, and shows top-level rows only. This popover has no
+  // tree rendering — no indentation, no expander — so a group's children would
+  // land in it as duplicate flat rows. The parent alone is the roll-up, and the
+  // Activity page is where the members are.
+  const rows = groupedOperations.filter((op) => !op.parent_id);
+  const inProgress = rows.filter((op) => !isTerminal(op.status));
   const queued = inProgress.filter((op) => op.status === 'queued');
   const running = inProgress.filter((op) => op.status !== 'queued');
-  const terminal = activeOperations.filter((op) => isTerminal(op.status));
+  const terminal = rows.filter((op) => isTerminal(op.status));
 
   const empty = running.length === 0 && queued.length === 0 && terminal.length === 0;
 
@@ -313,6 +321,7 @@ export function OperationsIndicator() {
                           }}
                         >
                           {formatOperationType(op.type)}
+                          {op.group ? ` ×${op.group.count}` : ''}
                         </Typography>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                           {elapsed && (
@@ -325,33 +334,41 @@ export function OperationsIndicator() {
                               {elapsed}
                             </Typography>
                           )}
-                          <Tooltip title="View activity">
-                            <IconButton
-                              size="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActivityOpId(op.id);
-                              }}
-                              sx={{ p: 0.25 }}
-                            >
-                              <ArticleIcon sx={{ fontSize: 18 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Cancel">
-                            <IconButton
-                              size="small"
-                              color="error"
-                              onClick={() => handleCancel(op.id)}
-                              disabled={cancelling.has(op.id)}
-                              sx={{ p: 0.25 }}
-                            >
-                              {cancelling.has(op.id) ? (
-                                <CircularProgress size={14} />
-                              ) : (
-                                <CancelIcon sx={{ fontSize: 18 }} />
-                              )}
-                            </IconButton>
-                          </Tooltip>
+                          {/* Both act on op.id against the server, and a group
+                              row's id is derived from its members — it names no
+                              record. The group's runs are on the Activity page,
+                              which "View All" already goes to. */}
+                          {!op.group && (
+                            <Tooltip title="View activity">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActivityOpId(op.id);
+                                }}
+                                sx={{ p: 0.25 }}
+                              >
+                                <ArticleIcon sx={{ fontSize: 18 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {!op.group && (
+                            <Tooltip title="Cancel">
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => handleCancel(op.id)}
+                                disabled={cancelling.has(op.id)}
+                                sx={{ p: 0.25 }}
+                              >
+                                {cancelling.has(op.id) ? (
+                                  <CircularProgress size={14} />
+                                ) : (
+                                  <CancelIcon sx={{ fontSize: 18 }} />
+                                )}
+                              </IconButton>
+                            </Tooltip>
+                          )}
                         </Box>
                       </Box>
 
@@ -481,6 +498,7 @@ export function OperationsIndicator() {
                           }}
                         >
                           {formatOperationType(op.type)}
+                          {op.group ? ` ×${op.group.count}` : ''}
                         </Typography>
                         <Typography
                           variant="caption"
@@ -492,21 +510,25 @@ export function OperationsIndicator() {
                         </Typography>
                       </Box>
                     </Box>
-                    <Tooltip title="Cancel">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => handleCancel(op.id)}
-                        disabled={cancelling.has(op.id)}
-                        sx={{ p: 0.25 }}
-                      >
-                        {cancelling.has(op.id) ? (
-                          <CircularProgress size={14} />
-                        ) : (
-                          <CancelIcon sx={{ fontSize: 18 }} />
-                        )}
-                      </IconButton>
-                    </Tooltip>
+                    {/* A group row's id names no server record — see the
+                        queued/running rows above. */}
+                    {!op.group && (
+                      <Tooltip title="Cancel">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => handleCancel(op.id)}
+                          disabled={cancelling.has(op.id)}
+                          sx={{ p: 0.25 }}
+                        >
+                          {cancelling.has(op.id) ? (
+                            <CircularProgress size={14} />
+                          ) : (
+                            <CancelIcon sx={{ fontSize: 18 }} />
+                          )}
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </Box>
                 ))}
               </Collapse>
@@ -534,11 +556,14 @@ export function OperationsIndicator() {
                   return (
                     <Box
                       key={`recent-${op.id}`}
-                      onClick={() => setActivityOpId(op.id)}
+                      // A group row opens nothing: its id names no record, so
+                      // the activity panel would query an operation that does
+                      // not exist. The Activity page holds its members.
+                      onClick={op.group ? undefined : () => setActivityOpId(op.id)}
                       sx={{
                         px: 2,
                         py: 0.75,
-                        cursor: 'pointer',
+                        cursor: op.group ? 'default' : 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
@@ -559,6 +584,7 @@ export function OperationsIndicator() {
                         }}
                       >
                         {formatOperationType(op.type)}
+                        {op.group ? ` ×${op.group.count}` : ''}
                       </Typography>
                       <Chip
                         label={statusLabel}

@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-08
 
@@ -19,12 +19,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
 import { fetchActivity, fetchActivitySources } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
+// The real fold, not a stub — see the groupedOperations getter below. The store
+// module itself is mocked; this one is not.
+import { groupOperations } from '../stores/operationGrouping';
+import type { ActiveOperation } from '../stores/useOperationsStore';
 
 vi.mock('../services/activityApi', () => ({
   fetchActivity: vi.fn(),
@@ -56,6 +60,13 @@ const operationsStoreState = {
   liveOperations: [] as unknown[],
   loadFromServer: loadActiveOpsFromServer,
   latestLogEvent: null,
+  // groupedOperations is what the page RENDERS, and it is derived here with the
+  // real fold rather than stubbed. A hand-written stub would let a test set up
+  // twelve rows and assert twelve rows while production folds them into one —
+  // the fixture would be describing a store that does not exist.
+  get groupedOperations(): unknown[] {
+    return groupOperations(this.activeOperations as ActiveOperation[]);
+  },
 };
 vi.mock('../stores/useOperationsStore', () => ({
   useOperationsStore: (selector: (s: typeof operationsStoreState) => unknown) =>
@@ -289,7 +300,15 @@ describe('Active Operations expand/collapse', () => {
 // and an unpaged list of that buries every section under it, which on this page
 // includes Failed. So each section pages at OPS_SECTION_PAGE_SIZE (7).
 describe('Active Operations section pagination', () => {
-  const op = (id: string, status: string, displayName: string) => ({
+  // Ten jobs, ten minutes apart, newest first. The spacing is not decoration:
+  // consecutive same-kind runs inside the idle gap are folded into one group
+  // row now (see operationGrouping), so a fixture of ten identical
+  // simultaneous ops would render as ONE collapsed row and would be testing
+  // grouping rather than pagination. Ten minutes exceeds the gap, so these stay
+  // ten independent rows — and the descending timestamps make the page order
+  // deterministic instead of leaning on sort stability.
+  const T0 = Date.UTC(2026, 8, 8, 12, 0, 0);
+  const op = (id: string, status: string, displayName: string, index = 0) => ({
     id,
     type: 'scan',
     displayName,
@@ -298,12 +317,13 @@ describe('Active Operations section pagination', () => {
     total: 2,
     message: '',
     parent_id: null,
+    finishedAt: T0 - index * 10 * 60 * 1000,
   });
 
   beforeEach(() => {
     mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
     operationsStoreState.activeOperations = Array.from({ length: 10 }, (_, i) =>
-      op(`done-${i}`, 'completed', `Finished Job ${i}`)
+      op(`done-${i}`, 'completed', `Finished Job ${i}`, i)
     );
   });
 
@@ -340,11 +360,100 @@ describe('Active Operations section pagination', () => {
 
   it('does not paginate a section that fits on one page', async () => {
     operationsStoreState.activeOperations = Array.from({ length: 5 }, (_, i) =>
-      op(`done-${i}`, 'completed', `Finished Job ${i}`)
+      op(`done-${i}`, 'completed', `Finished Job ${i}`, i)
     );
     renderPage();
 
     expect(await screen.findByText('Finished Job 4')).toBeInTheDocument();
     expect(screen.queryByText(/of 5$/)).not.toBeInTheDocument();
+  });
+});
+
+// The reported shape, end to end: a dozen consecutive AI-parse runs, each
+// COMPLETED-looking and each saying nothing, filling the Completed section.
+describe('Active Operations grouping', () => {
+  const T0 = Date.UTC(2026, 8, 8, 12, 0, 0);
+  const aiParse = (i: number, status = 'failed') => ({
+    id: `ai-${i}`,
+    def_id: 'library.ai-parse',
+    type: 'ai-parse',
+    displayName: 'AI Filename Parsing',
+    status,
+    progress: 0,
+    total: 5,
+    message: '0/5 book(s) parsed in 0/1 batches; 1 batch failure(s), 0 save failure(s)',
+    parent_id: null,
+    finishedAt: T0 + i * 20_000,
+  });
+
+  beforeEach(() => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
+    operationsStoreState.activeOperations = Array.from({ length: 12 }, (_, i) => aiParse(i));
+  });
+
+  afterEach(() => {
+    operationsStoreState.activeOperations = [];
+  });
+
+  it('folds a run of consecutive same-kind ops into one collapsed row', async () => {
+    renderPage();
+
+    // One row, not twelve, and it says what it stands for.
+    expect(await screen.findByText('AI Filename Parsing')).toBeInTheDocument();
+    expect(screen.getAllByText('AI Filename Parsing')).toHaveLength(1);
+    expect(screen.getByText('12 runs')).toBeInTheDocument();
+    // The section heading still counts the group row it shows.
+    expect(screen.getByText('Failed (1)')).toBeInTheDocument();
+  });
+
+  it('expanding the group reveals every member', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('12 runs');
+
+    await user.click(screen.getByRole('button', { name: 'Expand All' }));
+
+    // Parent + 12 children = 13 rows in the section, which is more than one
+    // page — so the section pages at 7 and says so. The count in the heading is
+    // the total, not the page.
+    await waitFor(() => {
+      expect(screen.getByText('Failed (13)')).toBeInTheDocument();
+    });
+    expect(screen.getByText('1–7 of 13')).toBeInTheDocument();
+  });
+
+  // Grouping must not silently absorb a run that ended differently. The group
+  // key includes status precisely so a failure cannot hide inside a run of
+  // successes — or land in a section its parent is not in.
+  it('does not fold ops of differing status into one group', async () => {
+    operationsStoreState.activeOperations = [
+      ...Array.from({ length: 6 }, (_, i) => aiParse(i)),
+      ...Array.from({ length: 6 }, (_, i) => ({
+        ...aiParse(i + 6, 'completed'),
+        id: `ai-ok-${i}`,
+      })),
+    ];
+
+    renderPage();
+
+    // One group per status, each in its own section.
+    await waitFor(() => expect(screen.getAllByText('6 runs')).toHaveLength(2));
+    expect(screen.getByText('Failed (1)')).toBeInTheDocument();
+    expect(screen.getByText('Completed (1)')).toBeInTheDocument();
+  });
+
+  // A group row's id is derived from its members and names no server record, so
+  // every control that would act on it by id must be absent.
+  it('offers no per-op controls on the group row', async () => {
+    renderPage();
+    const countChip = await screen.findByText('12 runs');
+
+    // Scoped to the row: the page toolbar has its own Refresh, and asserting
+    // globally would pass or fail on that one instead.
+    const row = countChip.closest('.MuiPaper-root') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
   });
 });
