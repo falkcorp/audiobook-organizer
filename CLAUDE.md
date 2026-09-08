@@ -45,10 +45,20 @@ that apply to each shape of problem.
   disjoint sets (by book ID, group ID, etc.) so parallel workers can never touch the
   same row, and say so in a comment.
 - When adding a new full-library maintenance/backfill op, look for an existing
-  parallel sibling first (e.g. `internal/plugins/acoustid/backfill.go`'s
-  `registry.RunItems`-based pattern) before writing a new sequential loop from
-  scratch — several serial hotspots in the audit above are sequential duplicates of
-  an already-correctly-parallelized twin elsewhere in the codebase.
+  parallel sibling first (e.g. `internal/plugins/maintenance/duration_backfill.go`'s
+  `registry.RunItems` call) before writing a new sequential loop from scratch —
+  several serial hotspots in the audit above are sequential duplicates of an
+  already-correctly-parallelized twin elsewhere in the codebase.
+  **`registry.RunItems` is not parallel by default.** `RunItemsOptions.Concurrency`
+  defaults to zero and `run_items.go` clamps anything below 1 up to 1, so a call
+  that omits the field is an ordinary sequential loop wearing a worker-pool API.
+  This section named `internal/plugins/acoustid/backfill.go` as its exemplar until
+  2026-09-07 and that call omitted `Concurrency`, so the instruction was pointing
+  at a nightly full-library job running on one core. Copy the field, not just the
+  shape. And note what the exemplar's `Label` closure does: `run_items.go` invokes
+  Label **inside each worker goroutine**, so any counter it reads needs the same
+  mutex or atomic as the callback body — a plain `int` there is a data race that
+  `-race` only catches if a test actually runs the op concurrently.
 
 ## Fix It Right (MANDATORY)
 
