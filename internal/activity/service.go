@@ -1,5 +1,5 @@
 // file: internal/activity/service.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-08
 
@@ -132,14 +132,17 @@ func (s *Service) ClampSummaries(ctx context.Context, max int, dryRun, vacuum bo
 // so threading one through the signature would widen the coupling for nothing
 // (see the worked example in CLAUDE.md). When the wired store is not the
 // migration wrapper — the Pebble-only escape hatch, or a SQLite-open fallback —
-// the assertion yields nil and the reclaim reports a refusal rather than
-// failing, because "there is no duplicate copy" is an answer, not an error.
+// the reclaim reports a refusal naming the type it got, rather than failing,
+// because "there is no duplicate copy" is an answer and not an error.
 func (s *Service) ReclaimMigratedActivity(
 	ctx context.Context,
 	retain time.Duration,
 	dryRun bool,
 	onTier database.ActivityReclaimProgress,
 ) (database.ActivityReclaimResult, error) {
-	mig, _ := s.store.(*database.MigratingActivityStore)
-	return database.ReclaimMigratedActivity(ctx, mig, retain, dryRun, onTier)
+	// Pass the store as wired. Asserting the wrapper type here would throw away
+	// the concrete type before the refusal could name it, and that name is the
+	// only thing distinguishing "legitimately Pebble-only" from "a wrapper got
+	// wired in front and this op has been silently refusing ever since".
+	return database.ReclaimMigratedActivity(ctx, s.store, retain, dryRun, onTier)
 }

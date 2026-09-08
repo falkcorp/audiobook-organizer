@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_reclaim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c8f31d92-4a67-4b05-8e13-2d90a5c76f48
 // last-edited: 2026-09-08
 
@@ -178,29 +178,68 @@ func TestReclaimMigratedActivity_RetainFloorOverridesAnUnsafeRequest(t *testing.
 	assert.WithinDuration(t, time.Now().UTC().Add(-activityReclaimMinRetain), res.Cutoff, time.Minute)
 }
 
-func TestReclaimMigratedActivity_NilWrapperIsARefusalNotAnError(t *testing.T) {
+func TestReclaimMigratedActivity_NonWrapperStoreIsARefusalNotAnError(t *testing.T) {
 	// A Pebble-only deployment has no duplicate copy. That is an answer the op
 	// should report, not a failure it should raise.
-	res, err := ReclaimMigratedActivity(context.Background(), nil, time.Hour, false, nil)
-	require.NoError(t, err)
-	assert.True(t, res.Refused)
-	assert.Contains(t, res.RefusedReason, "no duplicate copy")
+	//
+	// The refusal must also NAME the store it got. "Pebble-only escape hatch"
+	// and "someone wired a decorator in front of the migration wrapper and this
+	// op has silently refused ever since" produce the identical outcome, and the
+	// concrete type is the only thing that separates them in a log.
+	for _, tc := range []struct {
+		name  string
+		store ActivityStorer
+		want  string
+	}{
+		{"nil store", nil, "<nil>"},
+		{"pebble-only", newTestPebbleActivityStore(t), "PebbleActivityStore"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := ReclaimMigratedActivity(context.Background(), tc.store, time.Hour, false, nil)
+			require.NoError(t, err)
+			assert.True(t, res.Refused)
+			assert.Contains(t, res.RefusedReason, "no duplicate copy")
+			assert.Contains(t, res.RefusedReason, tc.want,
+				"the refusal must name the concrete store type it was handed")
+		})
+	}
 }
 
-func TestReclaimMigratedActivity_ReportsProgressPerTier(t *testing.T) {
-	// Prune is one blocking call per tier with no callback, so between-tier is
-	// the only liveness signal the op has. If it stops being emitted, a long
-	// reclaim reports nothing and looks wedged.
+func TestReclaimMigratedActivity_ReportsProgressForBothPhases(t *testing.T) {
+	// Each phase is one blocking call per tier with no callback of its own, so
+	// between-tier is the only liveness signal the op has. The census needs one
+	// as much as the prune does: it walks the primary keyspace twice per tier,
+	// and on a refused run it is the entire run. If either stops reporting, a
+	// long reclaim goes silent and looks wedged.
 	mig, pebbleStore, sqlStore := newReclaimFixture(t, true)
 	seedActivity(t, pebbleStore, "change", 10*24*time.Hour, "old")
 	seedActivity(t, sqlStore, "change", 10*24*time.Hour, "copied")
 
-	var tiers []string
+	byPhase := map[ActivityReclaimPhase][]string{}
 	_, err := ReclaimMigratedActivity(context.Background(), mig, 48*time.Hour, false,
-		func(tier string, _, total int, _ ActivityReclaimTier) {
-			tiers = append(tiers, tier)
+		func(phase ActivityReclaimPhase, tier string, _, total int, _ ActivityReclaimTier) {
+			byPhase[phase] = append(byPhase[phase], tier)
 			assert.Equal(t, len(actTiers), total)
 		})
 	require.NoError(t, err)
-	assert.Equal(t, actTiers, tiers, "every tier must report, in order")
+	assert.Equal(t, actTiers, byPhase[ReclaimPhaseCensus], "every tier must report a census, in order")
+	assert.Equal(t, actTiers, byPhase[ReclaimPhasePrune], "every tier must report a prune, in order")
+}
+
+func TestReclaimMigratedActivity_CensusReportsEvenWhenTheRunIsRefused(t *testing.T) {
+	// The refusal path is the one production takes today, so it is the path that
+	// has to stay observable: no prune callbacks, but a full census.
+	mig, pebbleStore, _ := newReclaimFixture(t, false /* reads still on Pebble */)
+	seedActivity(t, pebbleStore, "change", 10*24*time.Hour, "old")
+
+	byPhase := map[ActivityReclaimPhase][]string{}
+	res, err := ReclaimMigratedActivity(context.Background(), mig, 48*time.Hour, false,
+		func(phase ActivityReclaimPhase, tier string, _, _ int, _ ActivityReclaimTier) {
+			byPhase[phase] = append(byPhase[phase], tier)
+		})
+	require.NoError(t, err)
+	require.True(t, res.Refused)
+	assert.Equal(t, actTiers, byPhase[ReclaimPhaseCensus],
+		"a refused run still walks the whole keyspace; it must say so as it goes")
+	assert.Empty(t, byPhase[ReclaimPhasePrune], "a refused run must not prune")
 }
