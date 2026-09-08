@@ -3292,7 +3292,46 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	return nil
 }
 
+// SearchBooks returns books whose title, author name or narrator contains the
+// query, in book-ID order.
+//
+// The Pebble path below is a full-library scan: it iterates every author row to
+// build a name map, then every book row, json.Unmarshal-ing each one, and it can
+// only stop early once it has `limit` matches. A query that matches nothing
+// therefore costs the whole library. Measured on production 2026-09-08 at ~121K
+// books: 5.35s for a zero-match query, against 0.6s for a common word that
+// filled the limit early — and because the cost is Pebble block reads, it lands
+// on a disk already busy with whatever else is running. AudioBooth searches per
+// keystroke, so it hit that on the first character and timed out.
+//
+// So prefer memdb when it is warm: the same predicate over the in-memory book
+// table needs no disk and no per-row unmarshal. Only the matching IDs come back
+// (memdb holds a stripped projection — see memdb_search.go), and the winners are
+// re-read from Pebble here so the returned Books are byte-for-byte what the disk
+// scan produced.
 func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, error) {
+	if p.UseMemDB && p.mem() != nil {
+		ids, err := p.mem().SearchBookIDs(query, limit, offset)
+		if err == nil {
+			books := make([]Book, 0, len(ids))
+			for _, id := range ids {
+				// Deliberately NOT GetBookByID: that folds in the book_sig:
+				// sidecar, and the disk scan below does not. Hydrating here
+				// would add ~22KB of base64 signature per hit to every search
+				// response. Match the scan exactly.
+				b, bErr := p.getBookRowForSearch(id)
+				if bErr != nil || b == nil {
+					continue
+				}
+				books = append(books, *b)
+			}
+			return books, nil
+		}
+		// Fall through to the disk scan on a memdb error rather than failing
+		// the search: slow beats broken.
+		slog.Warn("memdb search failed, falling back to pebble scan", "error", err)
+	}
+
 	// Scan book:* index directly instead of loading all books into memory
 	// Pre-load author names for author field matching during iteration
 	authorNames := make(map[int]string)
