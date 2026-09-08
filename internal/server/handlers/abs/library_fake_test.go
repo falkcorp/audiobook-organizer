@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-05
+// last-edited: 2026-09-08
 
 package abs_test
 
@@ -649,6 +649,25 @@ func (f *fakeLibrary) ResolveSyncItem(syncID string) (*database.SyncItem, error)
 	}
 	cp := *it
 	return &cp, nil
+}
+
+// MintOrGetSyncFileIDs mirrors the real store's batch form. It delegates to the
+// singular method so the fake cannot drift into returning different ids from the
+// two paths — which is the property the conformance test in internal/database
+// asserts against the real implementation.
+func (f *fakeLibrary) MintOrGetSyncFileIDs(bookID string, fileIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(fileIDs))
+	for _, fileID := range fileIDs {
+		if _, dup := out[fileID]; dup {
+			continue
+		}
+		id, err := f.MintOrGetSyncFileID(bookID, fileID)
+		if err != nil {
+			return nil, err
+		}
+		out[fileID] = id
+	}
+	return out, nil
 }
 
 func (f *fakeLibrary) MintOrGetSyncFileID(bookID, fileID string) (string, error) {
