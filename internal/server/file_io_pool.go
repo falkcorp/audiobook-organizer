@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.5.2
+// version: 2.6.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -18,7 +18,6 @@ import (
 
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -34,9 +33,24 @@ type FileIOJob struct {
 // FileIOPool manages a bounded pool of workers for slow file operations.
 // Jobs are tracked in PebbleDB so interrupted ones can be recovered on restart.
 type FileIOPool struct {
-	ch       chan fileIOJobEntry
-	wg       sync.WaitGroup
-	stopped  int32
+	ch chan fileIOJobEntry
+	wg sync.WaitGroup
+
+	// submitMu serialises submitters against Stop. Submitters hold it for
+	// reading across their whole check-and-act; Stop takes it for writing to
+	// set stopped, so once Stop releases it no submitter can still be sitting
+	// between "read stopped as false" and its send on p.ch.
+	//
+	// An atomic flag was not enough, and this is not a theoretical race. A
+	// submitter that passed the check microseconds before Stop ran would send
+	// on a channel Stop has since closed. That panic is unrecovered: the
+	// recover() lives in the worker body (see worker), not in SubmitTyped, so
+	// it takes the process down. The same window would let the overflow
+	// goroutine's wg.Go run as a WaitGroup Add concurrent with Stop's Wait,
+	// which panics on its own once the worker count has reached zero.
+	submitMu sync.RWMutex
+	stopped  bool
+
 	pending  sync.Map      // "{bookID}:{opType}" -> FileIOJob, for in-memory tracking
 	overflow chan struct{} // semaphore to limit overflow goroutines
 	// store is the database backing the pending-op persistence layer.
@@ -115,7 +129,11 @@ func NewFileIOPool(workers int) *FileIOPool {
 
 // worker drains p.ch until it is closed. It does NOT touch p.wg: the pool's
 // only caller starts it via p.wg.Go, which owns the counter and decrements it
-// when worker returns. Any new caller must do the same.
+// when worker returns. Any new caller must do the same — and until 2026-09-07
+// SubmitTyped's overflow path did not, starting a bare `go func()` that Stop's
+// wg.Wait could not see. That goroutine calls fn() and then writes to the
+// store, so a shutdown could return with it still running against a closing
+// database.
 func (p *FileIOPool) worker(id int) {
 	for job := range p.ch {
 		func() {
@@ -138,9 +156,51 @@ func (p *FileIOPool) Submit(bookID string, fn func()) {
 
 // SubmitTyped queues a file I/O job with a specific operation type.
 func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) {
-	if atomic.LoadInt32(&p.stopped) == 1 {
+	if p.tryQueue(bookID, opType, fn) {
+		return
+	}
+
+	// The worker buffer is full. Take an overflow slot BEFORE re-entering the
+	// lock. This send is the pool's backpressure: it blocks until one of the
+	// `workers` overflow goroutines finishes an arbitrarily slow fn(). Waiting
+	// for that while holding submitMu would make Stop's write-lock acquisition
+	// wait for it too, and Stop's 30-second budget only wraps wg.Wait() — it
+	// would be blown before the timer ever started.
+	p.overflow <- struct{}{}
+
+	p.submitMu.RLock()
+	defer p.submitMu.RUnlock()
+	if p.stopped {
+		// Stop ran while we were queued behind the semaphore. Drop the job but
+		// leave the pending_file_op row that tryQueue persisted: that row is
+		// the recovery mechanism, so the work is picked up on next start
+		// rather than silently lost.
+		<-p.overflow
 		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", bookID, "opType", opType)
 		return
+	}
+	slog.Warn("file I/O pool buffer full, running overflow for book (op)", "bookID", bookID, "opType", opType)
+	// wg.Go under the read lock. Stop cannot have reached wg.Wait(), because it
+	// sets stopped under the write lock and we have just read it as false.
+	p.wg.Go(func() {
+		defer func() { <-p.overflow }()
+		fn()
+		p.pending.Delete(pendingKey(bookID, opType))
+		p.removePendingFileOp(bookID, opType)
+	})
+}
+
+// tryQueue records the job and attempts a non-blocking send onto the worker
+// channel, holding submitMu for reading so Stop cannot close p.ch underneath
+// the send. It reports whether the caller is done: true when the job was
+// queued, or when the pool is stopped and the job was dropped. False means the
+// buffer was full and the caller must take the overflow path.
+func (p *FileIOPool) tryQueue(bookID, opType string, fn func()) bool {
+	p.submitMu.RLock()
+	defer p.submitMu.RUnlock()
+	if p.stopped {
+		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", bookID, "opType", opType)
+		return true
 	}
 	job := FileIOJob{BookID: bookID, OpType: opType, CreatedAt: time.Now()}
 	p.pending.Store(pendingKey(bookID, opType), job)
@@ -148,15 +208,9 @@ func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) {
 
 	select {
 	case p.ch <- fileIOJobEntry{bookID: bookID, opType: opType, fn: fn}:
+		return true
 	default:
-		p.overflow <- struct{}{}
-		slog.Warn("file I/O pool buffer full, running overflow for book (op)", "bookID", bookID, "opType", opType)
-		go func() {
-			defer func() { <-p.overflow }()
-			fn()
-			p.pending.Delete(pendingKey(bookID, opType))
-			p.removePendingFileOp(bookID, opType)
-		}()
+		return false
 	}
 }
 
@@ -198,9 +252,19 @@ func (p *FileIOPool) PendingBookIDs() []string {
 // with a 30-second timeout to prevent blocking shutdown indefinitely.
 // Safe to call multiple times.
 func (p *FileIOPool) Stop() {
-	if !atomic.CompareAndSwapInt32(&p.stopped, 0, 1) {
+	p.submitMu.Lock()
+	if p.stopped {
+		p.submitMu.Unlock()
 		return
 	}
+	p.stopped = true
+	p.submitMu.Unlock()
+
+	// Safe to close now. Every submitter either returned before we took the
+	// write lock, or is blocked acquiring the read lock and will read stopped
+	// as true. None is mid-send on p.ch, and no wg.Go can still be pending —
+	// which is what makes the wg.Wait below a complete join rather than a join
+	// of whichever goroutines happened to have registered by this instant.
 	close(p.ch)
 
 	done := make(chan struct{})

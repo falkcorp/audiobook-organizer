@@ -33,10 +33,55 @@
     **every dashboard load during a scan takes the cold path** — measured at 87s.
     Likely the whole explanation for "the dashboard hangs during a scan". Same file
     has an unjoined recompute goroutine (`internal/database/pebble_store_stats.go:196-214`).
-  - [ ] `internal/server/file_io_pool.go:154` — overflow goroutine calls
+
+    **Investigated 2026-09-07, deliberately NOT fixed — read this before starting.**
+    The framing above is wrong in a way that changes the fix. It is not "a working
+    SWR mechanism whose docstring lies"; the mechanism has **never run**.
+    `statsLibraryTTL` is 10 minutes and `defaultLibraryCountsMinIntervalSeconds` is
+    600 — the same number. `readCachedLibraryStats` returns nil once age exceeds the
+    TTL, but `GetDashboardStats` only kicks the background recompute when age is
+    **at least** the min-interval. The two thresholds are identical, so the
+    stale-while-revalidate branch is reachable only in a one-second window. The hard
+    delete is a second, independent reason it never fires — fixing the delete alone
+    would not turn SWR on. **Split the two thresholds** as part of any fix.
+
+    Three things must be settled before writing code:
+    1. **What is the maximum age a dashboard read may return, and what enforces it
+       after a recompute FAILS?** The recompute logs a warning and returns. If the
+       TTL check is simply removed so stale values are servable, a permanently
+       failing recompute means a permanently wrong dashboard with no upper bound —
+       trading today's slow-but-correct answer for a fast wrong one. The shape that
+       survives is a *second, longer* hard ceiling: serve stale up to N, block
+       beyond N. Pick N deliberately; do not let it fall out of deleting the check.
+    2. **The unjoined recompute goroutine must be fixed in the SAME change**, not a
+       follow-up. It calls `writeCachedLibraryStats` (a Pebble write) and Pebble
+       panics on use-after-close. Making SWR reachable makes that goroutine fire far
+       more often, so fixing the cache without the join makes the shutdown crash
+       *more* likely, not less.
+    3. **An in-memory `atomic.Bool` dirty flag is per-process.** Before choosing it
+       over the Pebble delete, grep for readers of the `stats:library` KEY, not just
+       callers of `InvalidateLibraryStats` — a startup path or second process would
+       not see an in-memory flag and would serve a value everyone else considers
+       dirty.
+  - [x] `internal/server/file_io_pool.go:154` — overflow goroutine calls
     `removePendingFileOp` (a Pebble `DeleteRaw`) outside `p.wg`, violating the
     invariant the file's own comment states at `:116-118` (*"Any new caller must do
-    the same."*). One-line `p.wg.Go` fix.
+    the same."*). ~~One-line `p.wg.Go` fix.~~
+
+    **Correction: the one-line fix was wrong and would have made things worse.**
+    `Stop` closes `p.ch` and then waits; `SubmitTyped` checked the atomic `stopped`
+    flag and *then* sent. That check-then-act window was already an unrecovered
+    **`panic: send on closed channel`** in production — the pool's only `recover()`
+    is inside `worker`, not the submit path — reproduced deterministically in
+    `internal/server/file_io_pool_shutdown_test.go`. Dropping a bare `p.wg.Go` into
+    that same window would have added a second failure mode: a `WaitGroup` Add
+    concurrent with `Wait`. Fixed properly by giving the pool a `sync.RWMutex` that
+    submitters hold across the whole check-and-send and `Stop` takes for writing
+    before closing. The overflow semaphore is acquired **outside** that lock,
+    because it is real backpressure on an arbitrarily slow `fn()` and waiting for it
+    under the lock would transfer the wait to `Stop`'s write-lock acquisition —
+    outside the 30-second budget, which only wraps `wg.Wait()`. Measured before the
+    fix: `Stop` returned with 0 of 2 overflow goroutines finished.
   - [ ] `internal/itunes/service/writeback_batcher.go` — `Stop()` (`:814`) sets a
     flag and calls `flush()` once but **waits for nothing**; three goroutines
     (`:235`, `:256`, `:262`) are unjoined, `flush()` never checks `b.stopped`, and
