@@ -1,5 +1,5 @@
 // file: internal/activity/sql_migration_report.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d19f2b4-3c58-4e07-9a1d-8f4b0c73e2a6
 // last-edited: 2026-09-08
 
@@ -26,6 +26,19 @@
 // are plain store writes with no worker and no goroutineWG enrollment. The
 // migration keeps its unbounded join; the user gets a row in the operations UI.
 //
+// WHY IT ALSO PUBLISHES TO THE EVENT HUB. Writing the row is not enough to make
+// it VISIBLE. useOperationsStore calls loadFromServer() once at app mount and
+// thereafter only in response to SSE events — there is no polling interval. So a
+// store-only write shows up when the page is loaded and then FREEZES: a 4-hour
+// migration would sit at whatever count the initial load happened to catch, which
+// is the "working hard or quietly dead?" ambiguity this whole change exists to
+// remove. Publishing op.created / op.updated / op.terminal is what makes it tick.
+//
+// The hub is safe to call from the copy goroutine, which is why this is a publish
+// and not another lifecycle entanglement: EventHub.Publish is nil-safe, holds only
+// an RLock, drops events for slow subscribers rather than blocking, touches no
+// Pebble handle, and cannot panic (bus.go).
+//
 // NO OperationDef IS REGISTERED, deliberately. Registry.ActiveDefs() has no
 // allowlist and feeds GET /api/v1/op-defs, so registering one would put a Run
 // button on the migration — a way to launch a SECOND concurrent backfill over the
@@ -36,6 +49,7 @@
 package activity
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -63,6 +77,17 @@ type migrationOpsRecorder interface {
 	UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error
 }
 
+// migrationEventPublisher is the operations SSE bus, narrowed to the one method
+// this needs. Declared here rather than imported so the activity package does not
+// take a dependency on internal/operations/registry for the sake of a status
+// feed; *registry.EventHub satisfies it structurally.
+//
+// May be nil, in which case the row is still written and still correct — it just
+// stops updating live between page loads.
+type migrationEventPublisher interface {
+	Publish(ctx context.Context, eventName string, payload any) error
+}
+
 // migrationOpReporter mirrors backfill progress onto an operations_v2 row.
 //
 // NOT SAFE FOR CONCURRENT USE, and it does not need to be: begin, observe and
@@ -73,6 +98,7 @@ type migrationOpsRecorder interface {
 // the migration behaves exactly as it did before this file.
 type migrationOpReporter struct {
 	ops  migrationOpsRecorder
+	bus  migrationEventPublisher
 	opID string
 
 	// reasserted guards the one-shot status re-assert in observe. See the comment
@@ -100,12 +126,41 @@ type migrationOpReporter struct {
 // would erode — some later edit adds `if err != nil { return err }` to the
 // callback path and one transient Pebble error aborts the copy. Routed through a
 // helper that has no error return, it cannot.
+//
+// Swallowing errors is sufficient here only because none of the three writes can
+// PANIC, which was worth checking rather than assuming: Pebble raises ErrClosed
+// as a panic from Get/Set, and these writes run on the copy goroutine during
+// shutdown, where nothing would recover it. All three are covered.
+// InsertOperationV2 and UpdateOperationV2Status carry their own
+// `defer recoverPebbleClosed` because they touch p.db directly;
+// UpdateOpProgressV2 has no method-level guard and does not need one — it reaches
+// the store only through pebbleGetJSON/pebbleSetJSON, which are guarded
+// themselves. (pebble_ops_v2_closed_test.go asserts exactly this for all three.)
+// The absence of a guard on the METHOD is therefore not a hole; check the helper
+// before concluding otherwise.
 func bestEffort(what, opID string, err error) {
 	if err == nil {
 		return
 	}
 	slog.Warn("[activity] could not update migration status row (migration continues)",
 		"step", what, "op_id", opID, "err", err)
+}
+
+// publish fans one operations SSE event out to any connected UI. Best-effort for
+// the same reason the store writes are: a status feed must never be able to fail
+// the copy. Nil bus is a no-op — the row is still written, it just stops updating
+// between page loads.
+//
+// The event names and payload keys mirror what the registry emits (registry.go's
+// publishOpCreated/publishOpTerminal, reporter_db.go's op.updated) because
+// useOperationsStore dispatches on exactly those names and reads exactly these
+// keys. `message` is included on op.updated, which the registry omits: without it
+// the count would advance live while the tier line stayed stale.
+func (r *migrationOpReporter) publish(eventName string, payload map[string]any) {
+	if r.bus == nil {
+		return
+	}
+	bestEffort("publish "+eventName, r.opID, r.bus.Publish(context.Background(), eventName, payload))
 }
 
 // begin inserts the operation row. It is called when work actually starts — after
@@ -125,6 +180,17 @@ func (r *migrationOpReporter) begin(now time.Time) {
 		QueuedAt:        now,
 		StartedAt:       &now,
 	}))
+	// AFTER the insert, never before: op.created makes the UI re-fetch the
+	// timeline, and a reload that raced ahead of the write would find nothing and
+	// leave the migration invisible until the next event.
+	r.publish("op.created", map[string]any{
+		"op_id":    r.opID,
+		"def_id":   migrationOpDefID,
+		"plugin":   migrationOpPlugin,
+		"status":   "running",
+		"priority": 0,
+		"resumed":  false,
+	})
 }
 
 // observe records one progress update. It is the backfill's onProgress callback,
@@ -168,6 +234,12 @@ func (r *migrationOpReporter) observe(u database.ActivityBackfillProgressUpdate)
 		r.finishedCopied += u.Copied
 	}
 	bestEffort("progress", r.opID, r.ops.UpdateOpProgressV2(r.opID, r.lastCopied, 0, msg))
+	r.publish("op.updated", map[string]any{
+		"op_id":            r.opID,
+		"progress_current": r.lastCopied,
+		"progress_total":   0,
+		"message":          msg,
+	})
 }
 
 // finish closes the row out in a terminal state.
@@ -198,6 +270,13 @@ func (r *migrationOpReporter) finish(status, message string, cause error) {
 	bestEffort("progress-final", r.opID, r.ops.UpdateOpProgressV2(r.opID, r.lastCopied, 0, message))
 	bestEffort("finish", r.opID,
 		r.ops.UpdateOperationV2Status(r.opID, status, nil, &done, errMsg))
+	// op.terminal makes the UI re-fetch, so the final status and message land even
+	// though the intervening op.updated events only ever carried counts.
+	r.publish("op.terminal", map[string]any{
+		"op_id":  r.opID,
+		"def_id": migrationOpDefID,
+		"status": status,
+	})
 }
 
 // humanCount renders large row counts readably — these run to millions, and

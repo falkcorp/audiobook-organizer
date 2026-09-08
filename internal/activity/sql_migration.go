@@ -1,5 +1,5 @@
 // file: internal/activity/sql_migration.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e3b1f47-2a90-4c6d-b5e1-9f0c7d2a6b58
 // last-edited: 2026-09-08
 
@@ -37,6 +37,11 @@ type sqlMigrationStarter struct {
 	// sql_migration_report.go for why the run reports to a row rather than
 	// becoming a registry-owned operation.
 	ops migrationOpsRecorder
+
+	// bus is the operations SSE hub. Also optional, and its absence degrades
+	// differently from ops': the row is still written and still accurate, it just
+	// stops updating between page loads (see sql_migration_report.go).
+	bus migrationEventPublisher
 
 	// ctx/cancel/wg make the backfill goroutine cancellable AND joinable.
 	// Previously it was a bare `go func()` on context.Background() with no Stop
@@ -85,7 +90,7 @@ func (s *sqlMigrationStarter) Start(_ context.Context) error {
 		// The row is inserted HERE, not in Start, so a shutdown during the settle
 		// delay leaves no phantom "running" operation behind for a user to wonder
 		// about. Everything below reports through it; none of it can fail the run.
-		rep := &migrationOpReporter{ops: s.ops}
+		rep := &migrationOpReporter{ops: s.ops, bus: s.bus}
 		rep.begin(time.Now().UTC())
 
 		res, err := database.BackfillPebbleActivityToSQLWithProgress(
@@ -95,7 +100,15 @@ func (s *sqlMigrationStarter) Start(_ context.Context) error {
 				// Cancelled by shutdown, not broken. The backfill is idempotent
 				// by content key and resumable, so the next boot continues.
 				slog.Info("[activity] Pebble→SQLite backfill interrupted by shutdown — resumes next boot")
-				rep.finish("interrupted_quiesced",
+				// interrupted_DROPPED, not interrupted_quiesced, and the difference
+				// is load-bearing: isResumableV2Status treats quiesced as resumable,
+				// so the next boot's resumeAfterStartup would pull this row into the
+				// resume machinery only to drop it as "unknown def" (no OperationDef
+				// is registered — see sql_migration_report.go). A row nothing can
+				// resume belongs in a TERMINAL state, and the restart is not a lost
+				// run: the starter begins a fresh one from the checkpoint, with its
+				// own row.
+				rep.finish("interrupted_dropped",
 					"interrupted by shutdown — resumes from its checkpoint on the next start", nil)
 				return
 			}

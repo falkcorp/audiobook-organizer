@@ -2,7 +2,41 @@
   migration now writes an `operations_v2` row (`activity.sql-migration`) and drives
   it from a progress callback on the backfill, so it appears in the operations UI
   with its tier, position (`tier 1/7`) and running counts, and closes out
-  `completed` / `failed` / `interrupted_quiesced`.
+  `completed` / `failed` / `interrupted_dropped`.
+
+  **Writing the row is NOT enough to make it visible — it must also publish to the
+  ops event hub.** `useOperationsStore` calls `loadFromServer()` once at app mount
+  and thereafter ONLY from SSE events; there is no polling interval. A store-only
+  write therefore appears on page load and then FREEZES, which for a 4-hour job is
+  the exact "working or dead?" ambiguity this task existed to remove. The reporter
+  publishes `op.created` / `op.updated` / `op.terminal` (the three names the store
+  dispatches on), with `message` included on `op.updated` — the registry's own
+  `op.updated` omits it, which would have left the count ticking while the tier
+  line stayed stale. The hub is safe to call from the copy goroutine: `Publish` is
+  nil-safe, RLock-only, drops events for slow subscribers instead of blocking,
+  touches no Pebble handle and cannot panic (`bus.go`). `KeyOpHub` is a declared
+  `Need`, not a `TryGet`: neither `Get` nor `TryGet` builds on demand (both read
+  `c.built`), so `Needs` is the only thing that orders the hub ahead of this
+  service — a bare `TryGet` would hand back nil on an unlucky build order and
+  silently cost every live update.
+
+  **Terminal status is `interrupted_dropped`, not `interrupted_quiesced`.**
+  `isResumableV2Status` counts quiesced as RESUMABLE, so the next boot would pull
+  a def-less row into `resumeAfterStartup` purely to drop it as "unknown def". A
+  row nothing can resume belongs in a terminal state; the restart is not a lost
+  run, since the starter begins a fresh one from the checkpoint with its own row.
+  (`pebble_store_ops_v2_resumable_test.go:63` already pins the non-resumability.)
+
+  **A panic hazard was investigated and found NOT to exist — do not re-raise it.**
+  `UpdateOpProgressV2` has no method-level `recoverPebbleClosed` while its
+  siblings do, which looks like an unguarded leg, and `recoverPebbleClosed`'s own
+  comment names it as an *observed* panic leg. It is nonetheless safe: it never
+  touches `p.db` directly, reaching the store only via `pebbleGetJSON` /
+  `pebbleSetJSON`, which carry the guard themselves. The methods that DO hold a
+  method-level guard are exactly the ones with direct `p.db` calls
+  (`InsertOperationV2` has two). `pebble_ops_v2_closed_test.go:78,94,95` already
+  asserts all three return errors rather than panicking. Check the helper before
+  concluding a missing guard is a hole.
 
   **The route this note recommended was wrong — do not retry it.** Running the
   backfill AS a registry op is unsafe, and the "just close the 2s gap" fix below

@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.2.0
+// version: 4.3.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 
 import { useState } from 'react';
@@ -63,6 +63,12 @@ function formatOperationType(type: string): string {
       return 'Embedding Rescan';
     case 'fingerprint-rescan':
       return 'Fingerprint Rescan';
+    // The activity log's Pebble→SQLite move. It has no registered OperationDef
+    // (deliberately — see internal/activity/sql_migration_report.go), so the
+    // server falls back to sending the raw def id and the default branch below
+    // would render it "Sql-Migration".
+    case 'sql-migration':
+      return 'Activity Log Migration';
     default:
       return type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }

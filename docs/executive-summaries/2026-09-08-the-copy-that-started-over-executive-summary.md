@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-08-the-copy-that-started-over-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 8a3983cf-04c3-4969-8383-64e4f57acd8d -->
 <!-- last-edited: 2026-09-08 -->
 
@@ -107,6 +107,14 @@ which stage it is on (there are seven), how many entries it has processed, and h
 long it has been going. When it ends it says how it ended: finished, stopped by a
 restart — in which case it will pick up where it left off — or failed, **with the
 reason**.
+
+The count also moves while you watch it. That sounds like a detail and is not: the
+page only asks the server for the list of running jobs when it is first opened, and
+otherwise waits to be told that something changed. A job that writes its progress
+down but never announces it would appear once and then sit at the same number for
+the rest of its run — which, for a job that takes hours, is indistinguishable from
+the frozen display this change set out to fix. So the move now announces each step
+as well as recording it.
 
 That last point matters more than it sounds. The record of progress is deliberately
 wiped for any stage that failed its check, so that the stage is re-done and

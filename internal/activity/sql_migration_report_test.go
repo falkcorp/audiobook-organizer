@@ -1,5 +1,5 @@
 // file: internal/activity/sql_migration_report_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c07b5e1-42fa-4d86-b3c9-0e5a7d18f6b2
 // last-edited: 2026-09-08
 
@@ -13,6 +13,7 @@
 package activity
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -20,6 +21,33 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// fakeBus records published SSE events. Publish never fails in production
+// (EventHub.Publish always returns nil), but failWith proves the reporter does
+// not depend on that.
+type fakeBus struct {
+	names    []string
+	payloads []map[string]any
+	failWith error
+}
+
+func (f *fakeBus) Publish(_ context.Context, eventName string, payload any) error {
+	f.names = append(f.names, eventName)
+	p, _ := payload.(map[string]any)
+	f.payloads = append(f.payloads, p)
+	return f.failWith
+}
+
+// lastPayloadFor returns the most recent payload published under eventName.
+func (f *fakeBus) lastPayloadFor(eventName string) map[string]any {
+	var found map[string]any
+	for i, n := range f.names {
+		if n == eventName {
+			found = f.payloads[i]
+		}
+	}
+	return found
+}
 
 // fakeOpsRecorder records calls and can be made to fail every write.
 type fakeOpsRecorder struct {
@@ -248,6 +276,129 @@ func TestMigrationOpReporter_ProgressNeverGoesBackwardsAcrossTiers(t *testing.T)
 // Closing the row must not erase the count it just reported: UpdateOpProgressV2
 // writes ProgressCurrent unconditionally, so a 0 in the final call would leave a
 // completed migration displaying "0 processed".
+// THE VISIBILITY TEST. Writing the row is not the same as showing it.
+// useOperationsStore calls loadFromServer() at app mount and thereafter only in
+// response to SSE events — there is no polling interval — so without these three
+// events a 4-hour migration renders frozen at whatever count the page load
+// happened to catch. The names and payload keys are what the store dispatches on
+// (op.created → reload, op.updated → merge counts, op.terminal → reload).
+func TestMigrationOpReporter_PublishesTheEventsTheUIListensFor(t *testing.T) {
+	ops := &fakeOpsRecorder{}
+	bus := &fakeBus{}
+	rep := &migrationOpReporter{ops: ops, bus: bus}
+
+	rep.begin(time.Now().UTC())
+	rep.observe(database.ActivityBackfillProgressUpdate{
+		Tier: "change", TierIndex: 1, TiersTotal: 7, Scanned: 900, Copied: 900,
+	})
+	rep.finish("completed", "activity log migrated", nil)
+
+	for _, want := range []string{"op.created", "op.updated", "op.terminal"} {
+		if bus.lastPayloadFor(want) == nil {
+			t.Errorf("never published %q — the UI has no way to learn about this (published: %v)",
+				want, bus.names)
+		}
+	}
+	if got := bus.names[0]; got != "op.created" {
+		t.Errorf("first event = %q, want op.created", got)
+	}
+
+	created := bus.lastPayloadFor("op.created")
+	if created["def_id"] != migrationOpDefID || created["op_id"] != rep.opID {
+		t.Errorf("op.created identifies the wrong operation: %v", created)
+	}
+
+	// op.updated must carry the message too. The registry's own op.updated omits
+	// it; if this one did the same, the count would advance live while the tier
+	// line stayed stuck on whatever the last full reload returned.
+	updated := bus.lastPayloadFor("op.updated")
+	msg, _ := updated["message"].(string)
+	if !strings.Contains(msg, "change") || !strings.Contains(msg, "1/7") {
+		t.Errorf("op.updated message %q does not name the tier and position", msg)
+	}
+	if updated["progress_current"] != 900 {
+		t.Errorf("op.updated progress_current = %v, want 900", updated["progress_current"])
+	}
+
+	if got := bus.lastPayloadFor("op.terminal")["status"]; got != "completed" {
+		t.Errorf("op.terminal status = %v, want completed", got)
+	}
+}
+
+// op.created tells the UI to re-fetch the timeline. Published before the row
+// existed, that fetch finds nothing and the migration stays invisible until some
+// later event happens to trigger another reload.
+func TestMigrationOpReporter_PublishesCreatedOnlyAfterTheRowExists(t *testing.T) {
+	ops := &fakeOpsRecorder{}
+	bus := &fakeBus{}
+	// Recording the insert count at publish time is what makes the ordering
+	// observable at all — both calls have returned by the time begin() has.
+	var insertsWhenPublished = -1
+	rep := &migrationOpReporter{ops: ops, bus: &orderingBus{inner: bus, ops: ops, seen: &insertsWhenPublished}}
+
+	rep.begin(time.Now().UTC())
+
+	if insertsWhenPublished != 1 {
+		t.Errorf("op.created published with %d rows inserted, want 1 — a UI reload racing this event finds no row",
+			insertsWhenPublished)
+	}
+}
+
+// orderingBus records how many rows had been inserted at the moment of publish.
+type orderingBus struct {
+	inner *fakeBus
+	ops   *fakeOpsRecorder
+	seen  *int
+}
+
+func (o *orderingBus) Publish(ctx context.Context, eventName string, payload any) error {
+	if eventName == "op.created" {
+		*o.seen = len(o.ops.inserted)
+	}
+	return o.inner.Publish(ctx, eventName, payload)
+}
+
+// The bus is as incapable of failing the migration as the store is, and a nil bus
+// (no hub wired) must leave the run working exactly as before — the row is still
+// written and still correct, it just stops updating between page loads.
+func TestMigrationOpReporter_BusFailuresAndNilBusNeverReachTheMigration(t *testing.T) {
+	ops := &fakeOpsRecorder{}
+	rep := &migrationOpReporter{ops: ops, bus: &fakeBus{failWith: errors.New("bus exploded")}}
+	rep.begin(time.Now().UTC())
+	rep.observe(database.ActivityBackfillProgressUpdate{Tier: "change", TierIndex: 1, TiersTotal: 7})
+	rep.finish("completed", "done", nil)
+
+	nilBus := &migrationOpReporter{ops: &fakeOpsRecorder{}, bus: nil}
+	nilBus.begin(time.Now().UTC())
+	nilBus.observe(database.ActivityBackfillProgressUpdate{Tier: "change", TierIndex: 1, TiersTotal: 7})
+	nilBus.finish("completed", "done", nil)
+
+	// No panic == pass. Confirm the STORE writes still happened in both cases:
+	// a bus failure must not disable the durable record.
+	if len(ops.statuses) == 0 {
+		t.Error("a failing bus suppressed the store writes")
+	}
+}
+
+// The published count must be the accumulated one, for the same reason the
+// stored count is: per-tier counts restart at every tier boundary, and a live
+// feed that dropped 7 times over a run would read as lost work.
+func TestMigrationOpReporter_PublishedCountAccumulatesAcrossTiers(t *testing.T) {
+	bus := &fakeBus{}
+	rep := &migrationOpReporter{ops: &fakeOpsRecorder{}, bus: bus}
+	rep.begin(time.Now().UTC())
+
+	rep.observe(database.ActivityBackfillProgressUpdate{
+		Tier: "change", TierIndex: 1, TiersTotal: 7, Scanned: 100, Copied: 100,
+		Done: true, Verdict: "clean"})
+	rep.observe(database.ActivityBackfillProgressUpdate{
+		Tier: "debug", TierIndex: 2, TiersTotal: 7, Scanned: 5, Copied: 5})
+
+	if got := bus.lastPayloadFor("op.updated")["progress_current"]; got != 105 {
+		t.Errorf("published progress_current = %v, want 105 (100 from tier 1 + 5 from tier 2)", got)
+	}
+}
+
 func TestMigrationOpReporter_FinishKeepsTheFinalCount(t *testing.T) {
 	ops := &fakeOpsRecorder{}
 	rep := &migrationOpReporter{ops: ops}
