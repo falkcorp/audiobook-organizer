@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.46.6 -->
+<!-- version: 10.47.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-07 -->
+<!-- last-edited: 2026-09-08 -->
 
 # Project TODO — live items only
 
@@ -14705,12 +14705,19 @@ GET /api/items/7840afbd-…/cover  → 404      (5 of 5 in the window)
 
 On prod, `/mnt/bigdata/books/audiobook-organizer/covers/` holds **7,885** files
 against a library of roughly **40,400** books — about **19.5%** coverage.
+Re-counted 2026-09-08: **9,288** files, so roughly **23%** — the gap is closing
+slowly but is still the dominant explanation for a 404.
 
 ### Why this is not a bug
 
-`Handler.ItemCover` resolves via `metadata.CoverPathForBook`, which globs
-`<RootDir>/covers/<bookID>.{jpg,jpeg,png,webp,gif}` and returns `""` when nothing
-matches. The handler then answers 404, and its own comment records that as intended:
+`Handler.ItemCover` resolves via `metadata.CoverPathForBook`, which returns `""`
+when the book has no stored cover.
+
+> Updated 2026-09-08 (#3130): that lookup no longer globs
+> `<RootDir>/covers/<bookID>.{jpg,jpeg,png,webp,gif}`. The glob read and sorted the
+> entire covers directory on every call — 6.4% of process CPU in a production
+> profile — and was replaced by a five-extension stat probe. **The 404 behaviour
+> described here is unchanged**; only the cost of reaching it is. The handler then answers 404, and its own comment records that as intended:
 *"A 404 here is correct and harmless: both clients fall back to a placeholder."*
 
 **Not yet confirmed:** whether those 5 specific items lack cover files, or whether the
