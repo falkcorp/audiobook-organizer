@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-08-n-plus-one-batch-endpoint-audit.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 6b41e9c7-5d20-4a83-91fe-0c7d3846ab52 -->
 <!-- last-edited: 2026-09-08 -->
 
@@ -90,7 +90,9 @@ pre-loop batch calls at `:102-116`.
 > during exactly the ~130 s async memdb warmup after every restart, when
 > clients are reconnecting and searching. Either keep the per-book path as the
 > cold fallback, or give `GetBookFilesForIDsCore` a prefix-per-book fallback
-> instead of the full scan. Do not just swap the call. Every field abs reads off `fileView.File`
+> instead of the full scan. Do not just swap the call.
+
+Every field abs reads off `fileView.File`
 (`mapper.go:258,259,435,605,613-652,747-780,868-876`, `play.go:233`) is present
 on `BookFileCore` — checked field by field. The memdb path does not sort, but the
 mapper already sorts at `:170`. Bounded by page size (`defaultPageLimit = 50`,
