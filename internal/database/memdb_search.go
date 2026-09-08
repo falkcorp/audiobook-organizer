@@ -1,5 +1,5 @@
 // file: internal/database/memdb_search.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
 // last-edited: 2026-09-08
 
@@ -107,18 +107,23 @@ func (m *MemStore) SearchBookIDs(query string, limit, offset int) ([]string, err
 
 	lowerQuery := strings.ToLower(query)
 
-	// Preallocate from `limit`, but never trust it for a size. limit reaches
-	// SearchBooks from three call sites and is not validated at all of them:
-	// limit == 0 legitimately means "no limit", and a NEGATIVE value makes
-	// make([]string, 0, limit) panic with "makeslice: cap out of range". The
-	// Pebble scan never preallocated, so the fast path introduced that; CodeQL
-	// caught it as go/uncontrolled-allocation-size. Both cases collapse to the
-	// default here, which is only a capacity hint — append grows past it.
-	capHint := limit
-	if capHint <= 0 || capHint > searchIDsPreallocMax {
-		capHint = searchIDsPreallocMax
-	}
-	ids := make([]string, 0, capHint)
+	// A CONSTANT capacity — deliberately not derived from `limit`.
+	//
+	// The first cut sized this from limit, which is wrong twice over. `limit`
+	// reaches SearchBooks from three call sites and is not validated at all of
+	// them, and a negative value makes make([]string, 0, limit) panic with
+	// "makeslice: cap out of range" — the Pebble scan never preallocated, so the
+	// fast path introduced that. Clamping it fixed the panic but kept the
+	// allocation size flowing from request input, which CodeQL still flags
+	// (go/uncontrolled-allocation-size) and which is a fair reading: the clamp is
+	// one edit away from being wrong again.
+	//
+	// There is nothing to trade off. The win in this function is not allocating
+	// the result slice once instead of a few times — it is not unmarshalling
+	// ~121K book rows off disk. A fixed hint gets the same speed with no
+	// user-controlled size anywhere; append grows past it when a no-limit query
+	// matches more.
+	ids := make([]string, 0, searchIDsPreallocMax)
 	var count int
 
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
