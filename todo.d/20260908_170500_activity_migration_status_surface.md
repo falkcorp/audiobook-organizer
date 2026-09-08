@@ -116,14 +116,38 @@
   (`normalizeActivityEntry` rejects pre-epoch, does not clamp forward), and the
   loss would be one summary row whose originals are already in SQLite.
 
-- [ ] **Two stale reading-guides were corrected with it — watch for more.**
-  `PerTierCopied`'s doc said scanned≫copied means "a RESUMED run re-streaming
-  already-copied history"; checkpointing INVERTS that (a resume now skips it, so
-  scanned≈copied), and the shape now means a full re-scan instead. The
-  `streamTierEntries` resume comment asserted keys sort in write order, which
-  `sql_activity_backfill.go`'s own header denies (timestamps are caller-supplied
-  and non-monotonic). Both are fixed; the pattern — a justification outliving its
-  reason — is worth a sweep of the other activity-migration comments.
+- [x] **Two stale reading-guides were corrected with it — watch for more.** DONE,
+  and the sweep found a third: the correction itself. `PerTierCopied`'s doc said
+  scanned≫copied means "a RESUMED run re-streaming already-copied history";
+  checkpointing INVERTED that, so it was rewritten to say a genuine resume shows
+  scanned≈copied and **never** the old shape, narrowing scanned≫copied to three
+  causes, "none of them a resume."
+
+  **Production disproved that ~4 hours after it was written.** Tier `change`,
+  two processes, ~2.5h: one run reached `scanned=965,500 copied=0` over 1h49m,
+  was interrupted, checkpointed at row 972,000, and the next process logged
+  `resumed=true resuming_after_row=972000` and ran to `scanned=1,419,500`, still
+  `copied=0`. A genuine resume showing the "never" shape, and none of the three
+  causes: the blob was present and its cursor used, the tier is `change` not
+  `digest`, and a `failed` verdict clears `Cursor` and zeroes `Scanned`
+  (`sql_activity_progress.go:196`) so it would have reported `resumed=false`.
+
+  **Root cause of both wrong guides: `copied` excludes idempotent skips**, and a
+  row is skipped whenever SQLite already holds it — true of everything an earlier
+  attempt copied AND of everything the live dual-write stored (`Record` writes
+  both backends under one content key). A tier a previous run already copied
+  reports `copied=0` forever after, however it is entered. **The pair does not
+  measure resumption at all**, which is why every attempt to read resumption out
+  of it has failed. It is now documented as a NON-inference, with both prior
+  versions recorded, rather than as a third list of causes.
+
+  Operationally: `copied=0` with `scanned` climbing is the NORMAL, healthy shape
+  for a re-verification pass. Read `resumed` / `resuming_after_row` on the
+  `processing tier` line instead.
+
+  The `streamTierEntries` resume comment (keys sort in write order — denied by
+  `sql_activity_backfill.go`'s own header) was the second guide and is fixed;
+  re-checked in this sweep and still correct.
 
 - [x] **Checkpoint the migration so a restart doesn't start over.** DONE: adds
   `ActivitySQLBackfillProgressKey`, a per-tier `{state, cursor, scanned, copied,
