@@ -155,17 +155,22 @@ func BackfillPebbleActivityToSQL(
 		if !dryRun {
 			resumeFrom = resumeCursorFor(tier, st.Cursor)
 			// Not resuming means re-scanning the tier from row zero, so the
-			// checkpoint's counters must go with the cursor that produced them.
-			// Carrying them into a full re-scan would double-count every row
-			// (inflating scanned/copied) and, worse, would keep a stale
-			// `reinserted` alive across a scan that re-verified everything from
-			// scratch — the one condition under which a fresh verdict IS
-			// trustworthy. This is the same rule loadActivityBackfillProgress
-			// applies to a `failed` tier, applied at the other place the decision
-			// is made: a resume carries counters, a full re-scan resets them.
-			if resumeFrom == nil && (st.Scanned != 0 || st.Copied != 0 || st.Reinserted != 0) {
+			// PROGRESS counters must go with the cursor that produced them —
+			// carrying them into a full re-scan double-counts every row.
+			//
+			// ⚠️ Reinserted is NOT reset here, and that asymmetry is the whole
+			// point. It is the integrity signal, not a progress counter: an
+			// interrupted attempt that observed parity failures records them with
+			// no cursor written yet, and clearing them because "there is nothing
+			// to resume from" is precisely the laundering this package exists to
+			// prevent — the tier would re-scan, find a clean tail, and pass.
+			// loadActivityBackfillProgress is the ONLY place allowed to clear a
+			// reinserted count, and it does so only for a tier already recorded
+			// `failed`, which is what turns a failed verdict into a genuine
+			// full re-verification rather than a forgotten one.
+			if resumeFrom == nil && (st.Scanned != 0 || st.Copied != 0) {
 				st.Cursor = ""
-				st.Scanned, st.Copied, st.Reinserted = 0, 0, 0
+				st.Scanned, st.Copied = 0, 0
 			}
 		}
 

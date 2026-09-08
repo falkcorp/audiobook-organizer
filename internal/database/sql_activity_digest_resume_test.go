@@ -139,6 +139,45 @@ func TestResumeCursorFor_RefusesDigestButStillResumesOtherTiers(t *testing.T) {
 	}
 }
 
+// Dropping a discarded cursor's counters must NOT drop the parity failures with
+// them. Reinserted is an integrity signal, not progress: an interrupted attempt
+// records it with no cursor written yet, so "nothing to resume from" must not be
+// read as "nothing went wrong". A forced full re-scan (the `digest` case) is the
+// sharpest version — it never resumes, so it hits this path every single time.
+func TestSQLActivityBackfill_AFullRescanKeepsAnInheritedParityFailure(t *testing.T) {
+	pebbleStore := newTestPebbleActivityStore(t)
+	sqlStore := newTestSQLStore(t)
+	seedTiers(t, pebbleStore, map[string]int{"digest": 4})
+
+	prior := &ActivityBackfillProgress{
+		Version: activityProgressVersion,
+		Tiers: map[string]*ActivityBackfillTierProgress{
+			// Progress counters that must be dropped, alongside a parity failure
+			// that must NOT be.
+			"digest": {State: activityTierInProgress, Scanned: 900, Copied: 900, Reinserted: 5},
+		},
+	}
+	if err := saveActivityBackfillProgress(pebbleStore.db, prior, true); err != nil {
+		t.Fatalf("seed prior progress: %v", err)
+	}
+
+	res, err := BackfillPebbleActivityToSQL(context.Background(), pebbleStore, sqlStore, false)
+	if err == nil {
+		t.Fatal("backfill returned nil error: resetting the discarded cursor's counters also " +
+			"cleared the inherited parity failure, laundering it into a clean verdict")
+	}
+	if res.ParityOK {
+		t.Error("res.ParityOK = true with an inherited parity failure")
+	}
+	if IsActivitySQLBackfillDone(pebbleStore.db) {
+		t.Fatal("SENTINEL WRITTEN despite unverified data — reads would flip to SQLite")
+	}
+	// The progress counters WERE dropped, even though the failure was kept.
+	if got := res.PerTierScanned["digest"]; got != 4 {
+		t.Errorf("digest scanned = %d, want 4 — stale progress counters survived the re-scan", got)
+	}
+}
+
 // A tier that restarts from row zero must drop the counters that belonged to the
 // cursor it just discarded, or every restart inflates the tier's totals.
 func TestSQLActivityBackfill_AFullRescanDropsTheCheckpointCounters(t *testing.T) {
