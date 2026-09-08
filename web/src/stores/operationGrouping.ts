@@ -1,5 +1,5 @@
 // file: web/src/stores/operationGrouping.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4a1f37-2b95-4e60-9d13-6a7fb2e08c54
 // last-edited: 2026-09-08
 
@@ -120,14 +120,27 @@ function byTimeThenId(a: ActiveOperation, b: ActiveOperation): number {
  */
 export function groupOperations(ops: ActiveOperation[]): ActiveOperation[] {
   const byKey = new Map<string, ActiveOperation[]>();
+  const out: ActiveOperation[] = [];
   for (const op of ops) {
+    // An op that already declares a parent is left exactly as it is. Real
+    // lineage outranks inferred timing: a server-declared parent means "this
+    // op spawned that one", where a group only ever means "these ran back to
+    // back". Re-parenting such a row into a group would silently destroy the
+    // stronger claim, and detach it from a parent that is still on the page.
+    //
+    // Nothing in production sets parent_id today (registry.WithParent has no
+    // callers), so this costs nothing now — it is here so that wiring lineage
+    // up later is not a change that quietly breaks this function.
+    if (op.parent_id) {
+      out.push(op);
+      continue;
+    }
     const key = groupKey(op);
     const bucket = byKey.get(key);
     if (bucket) bucket.push(op);
     else byKey.set(key, [op]);
   }
 
-  const out: ActiveOperation[] = [];
   for (const bucket of byKey.values()) {
     if (bucket.length < MIN_GROUP_SIZE) {
       out.push(...bucket);
