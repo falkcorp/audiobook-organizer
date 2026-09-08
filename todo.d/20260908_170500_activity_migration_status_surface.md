@@ -1,34 +1,43 @@
-- [ ] **Give the Pebble→SQLite activity migration a visible status.** The
-  checkpoint half is done (see below); the status half is not. Today the only way
-  to learn that the migration is running, how far along it is, or why
-  `read_secondary` is still false, is to grep raw log text through activity
-  search. There is no operation, no progress, no surfaced reason. The user asked
-  for it to "always have some sort of status like all the other things in
-  activities".
+- [x] **Give the Pebble→SQLite activity migration a visible status.** DONE. The
+  migration now writes an `operations_v2` row (`activity.sql-migration`) and drives
+  it from a progress callback on the backfill, so it appears in the operations UI
+  with its tier, position (`tier 1/7`) and running counts, and closes out
+  `completed` / `failed` / `interrupted_quiesced`.
 
-  Two routes, to decide with the shutdown numbers below on the table:
+  **The route this note recommended was wrong — do not retry it.** Running the
+  backfill AS a registry op is unsafe, and the "just close the 2s gap" fix below
+  does not work. That reasoning treated batch cost as a constant. Per
+  `sqlBackfillProgressEvery`'s own comment a 500-row batch of iTunes
+  `ApplyITLOperations` rows carries **~9.6 MB of `details` EACH** — gigabytes to
+  compress and insert, twice (copy then parity) — and a single row's insert is not
+  interruptible at all. No number of ctx checks bounds that under a hard 2s escape.
+  Confirming it: **`pebble_activity_store.go` contains `recoverPebbleClosed` zero
+  times**, so overrunning the escape is a process PANIC, not an error. That is why
+  `sqlMigrationStarter.Stop` joins unbounded, and why that comment must not be
+  "fixed".
 
-  - **As a registry op** — best UX (`ActiveDefs()` has no allowlist, so a
-    registered op shows up immediately, and `Reporter` gives progress + logs).
-    **Requires closing a 2s gap first.** `Registry.Shutdown` drains bounded by ctx
-    (10s, `server_lifecycle.go:405`), then joins `goroutineWG` behind a
-    **hardcoded 2s escape** (`registry.go:1188`) and returns regardless.
-    `worker.go:359` claims that final join "genuinely covers plugin code" — true
-    only if the goroutine exits within those 2s. `streamTierEntries` checks ctx
-    every 64 rows (~0.26s at production's 244 rows/s), but once inside `fn` the
-    two `recordBatch` passes over a 500-row batch run to completion — **~2.05s**,
-    i.e. right at the boundary. Past it the caller closes Pebble under a live
-    reader, where Pebble *panics* rather than errors. Fix: check ctx between the
-    copy and parity passes inside `fn`, halving worst-case exit to ~1s. Today
-    `sqlMigrationStarter.Stop` sidesteps all of this with an unbounded join.
-  - **As a read-only status endpoint** over the checkpoint blob — no shutdown risk
-    at all, but not "where the other operations are", which is what was asked.
+  So the work stays on its own goroutine and only the REPORTING is registry-shaped
+  (`InsertOperationV2` / `UpdateOpProgressV2` / `UpdateOperationV2Status` are plain
+  store writes with no worker and no `goroutineWG` enrollment). **No `OperationDef`
+  is registered on purpose**: `ActiveDefs()` has no allowlist and feeds
+  `/api/v1/op-defs`, so registering one would add a Run button that could launch a
+  second concurrent backfill. The cost is that `resumeAfterStartup` drops a stale
+  row as "unknown def", which is the correct terminal state.
 
-  **Denominator is open either way.** Progress needs a per-tier total. Counting
-  all 7 tiers up front is a full keyspace walk; prefer counting lazily at each
-  tier's start, persisting the count in the checkpoint blob so resumes don't
-  recount, and rendering it approximately — dual-writes grow a tier while it is
-  being scanned, the same reason `maintenance.activity-reclaim` renders `≈N`.
+  **Two things this bought that the checkpoint blob cannot give.** A `failed`
+  migration is now durably recorded with its reason — `loadActivityBackfillProgress`
+  rewrites a `failed` tier verdict back to `in_progress` on the next boot (correctly,
+  so it re-verifies in full), which means after a restart the blob can no longer
+  answer "why didn't it flip?". And the row survives independently of it.
+
+  **Denominator: dropped deliberately, not deferred.** `total` is 0. Counting one
+  costs a full key walk per tier and the number moves under itself anyway as
+  dual-writes land. `OperationsIndicator` already renders `total === 0` as an
+  indeterminate bar, which is the truthful rendering — but it also printed the
+  literal `'Starting...'` in that case, which for a 4-hour job with 4.7M rows copied
+  reads as a stuck job. Fixed generally for every zero-total op: show the count once
+  progress is non-zero (`formatProgressCounts`, `web/src/components/layout/
+  operationsFormat.ts`).
 
 - [x] **Never resume the `digest` tier of the activity migration.** DONE (follow-up
   to the checkpoint below, after review caught it). A resume bound is sound only

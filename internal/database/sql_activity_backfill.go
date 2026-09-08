@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
 // last-edited: 2026-09-08
 
@@ -79,6 +79,27 @@ type SQLActivityBackfillResult struct {
 	AlreadyDone   bool           `json:"already_done"`
 }
 
+// ActivityBackfillProgressUpdate is one observation of a running backfill, handed
+// to the optional callback so a caller can surface progress to users without
+// re-deriving it or re-reading Pebble. Every field is already computed for the
+// log lines this mirrors, so reporting costs no additional I/O.
+//
+// Scanned and Copied are cumulative FOR THE TIER — they start at the checkpoint,
+// not at zero — while Elapsed covers only the current attempt. Dividing one by
+// the other on a resumed tier yields a throughput far above anything the scan
+// achieved; see the note on the "tier complete" log line below.
+type ActivityBackfillProgressUpdate struct {
+	Tier       string
+	TierIndex  int // 1-based, over TiersTotal
+	TiersTotal int
+	Scanned    int
+	Copied     int
+	Elapsed    time.Duration
+	// Done marks the final update for this tier, carrying its verdict.
+	Done    bool
+	Verdict string
+}
+
 // BackfillPebbleActivityToSQL copies ALL Pebble activity history into sqlStore,
 // verifies per-tier parity by re-presentation, and (unless dryRun) writes the
 // sentinel on success. It does NOT flip reads — the caller does that only when
@@ -92,6 +113,25 @@ func BackfillPebbleActivityToSQL(
 	pebbleStore *PebbleActivityStore,
 	sqlStore *SQLActivityStore,
 	dryRun bool,
+) (SQLActivityBackfillResult, error) {
+	return BackfillPebbleActivityToSQLWithProgress(ctx, pebbleStore, sqlStore, dryRun, nil)
+}
+
+// BackfillPebbleActivityToSQLWithProgress is BackfillPebbleActivityToSQL with an
+// observer. onProgress may be nil; when set it is called at each tier boundary and
+// on the same schedule as the progress log line (sqlBackfillProgressEvery).
+//
+// ⚠️ The callback runs INLINE on the backfill goroutine. It must not block and it
+// must not return work to the caller: this migration is the only writer of the
+// SQLite activity history and a callback that stalls stalls the copy. Callers that
+// persist these updates are expected to swallow their own errors — a reporting
+// failure must never abort a run that is hours deep.
+func BackfillPebbleActivityToSQLWithProgress(
+	ctx context.Context,
+	pebbleStore *PebbleActivityStore,
+	sqlStore *SQLActivityStore,
+	dryRun bool,
+	onProgress func(ActivityBackfillProgressUpdate),
 ) (SQLActivityBackfillResult, error) {
 	res := SQLActivityBackfillResult{
 		DryRun:         dryRun,
@@ -126,6 +166,17 @@ func BackfillPebbleActivityToSQL(
 
 	slog.Info("[activity-sql-backfill] starting Pebble → SQLite backfill",
 		"dry_run", dryRun, "tiers", len(actTiers))
+
+	// report is the single gate for the observer: it fills in the constant field
+	// and no-ops when nobody is watching, so the call sites below stay one line
+	// and can never dereference a nil callback.
+	report := func(u ActivityBackfillProgressUpdate) {
+		if onProgress == nil {
+			return
+		}
+		u.TiersTotal = len(actTiers)
+		onProgress(u)
+	}
 
 	for _, tier := range actTiers {
 		select {
@@ -177,6 +228,14 @@ func BackfillPebbleActivityToSQL(
 		slog.Info("[activity-sql-backfill] processing tier",
 			"tier", tier, "tier_index", res.TiersProcessed+1, "tiers_total", len(actTiers),
 			"resuming_after_row", st.Scanned, "resumed", resumeFrom != nil, "dry_run", dryRun)
+
+		// Report the tier the moment it starts, before any row is read. A tier can
+		// run for hours; without this the surface would show the PREVIOUS tier's
+		// name until the first heartbeat 30s later.
+		report(ActivityBackfillProgressUpdate{
+			Tier: tier, TierIndex: res.TiersProcessed + 1,
+			Scanned: st.Scanned, Copied: st.Copied,
+		})
 
 		// Progress bookkeeping. A tier can run for hours (production's `change`
 		// tier holds ~5.7M rows at ~600 rows/s), and before this the function
@@ -258,6 +317,11 @@ func BackfillPebbleActivityToSQL(
 					"rows_per_sec", int(float64(tierScanned-lastScanned)/window),
 					"elapsed", now.Sub(tierStart).Round(time.Second).String(),
 					"dry_run", dryRun)
+				report(ActivityBackfillProgressUpdate{
+					Tier: tier, TierIndex: res.TiersProcessed + 1,
+					Scanned: tierScanned, Copied: tierCopied,
+					Elapsed: now.Sub(tierStart),
+				})
 				lastLog, lastScanned = now, tierScanned
 			}
 			return nil
@@ -308,6 +372,12 @@ func BackfillPebbleActivityToSQL(
 			slog.Error("[activity-sql-backfill] PARITY FAIL — re-presentation inserted rows; not flipping",
 				"tier", tier, "scanned", tierScanned, "reinserted_on_second_pass", tierReinserted)
 		}
+		report(ActivityBackfillProgressUpdate{
+			Tier: tier, TierIndex: res.TiersProcessed + 1,
+			Scanned: tierScanned, Copied: tierCopied,
+			Elapsed: time.Since(tierStart),
+			Done:    true, Verdict: st.State,
+		})
 
 		// Sync: losing a verdict is the one failure that could let unverified
 		// data go live, so a write error here fails the run rather than leaving

@@ -1,12 +1,13 @@
 <!-- file: docs/executive-summaries/2026-09-08-the-copy-that-started-over-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8a3983cf-04c3-4969-8383-64e4f57acd8d -->
 <!-- last-edited: 2026-09-08 -->
 
 # The copy that started over every time
 
-**Pull requests:** [#3141](https://github.com/falkcorp/audiobook-organizer/pull/3141) — merged,
-plus the follow-up in this change.
+**Pull requests:** [#3141](https://github.com/falkcorp/audiobook-organizer/pull/3141) and
+[#3142](https://github.com/falkcorp/audiobook-organizer/pull/3142) — both merged — plus the
+visible-status work in this change (section 4).
 
 ## Executive Summary
 
@@ -32,8 +33,13 @@ plus the follow-up in this change.
   full before it can pass.
 - **A review then found a case the first fix would still have gotten wrong**, and
   that case is the second half of this work. See section 2.
-- Nothing here changes what the app shows you. It changes how long the move takes
-  and, more importantly, whether "verified" actually means verified.
+- **The move is also no longer invisible.** It now appears in the operations list
+  like any other long-running job, with its stage, its counts, and — if it stops
+  early — the reason. Previously a move that had been working for four hours and one
+  that had quietly stopped looked identical from the outside. See section 4.
+- Beyond that new status display, none of this changes what the app shows you. It
+  changes how long the move takes and, more importantly, whether "verified" actually
+  means verified.
 
 ## 1. Why restarting was so expensive
 
@@ -87,10 +93,40 @@ notices:
 - A section re-read from the start must discard the counts belonging to the bookmark
   it replaced, so repeated restarts cannot inflate the totals.
 
-## 4. What is not done
+## 4. The move is now something you can watch
 
-The move still has **no visible status**. There is no way to see that it is running,
-how far along it is, or why the app has not switched over yet, short of reading raw
-log text. That was asked for and is not in this change; it is written down as the
-next piece of work, together with a shutdown-timing problem that has to be solved
-first if the status is to be shown the same way every other long-running job is.
+This was the open half of the request, and it is now done.
+
+Until this change, the move ran completely invisibly. There was no way to see that it
+was running, how far along it was, or why the app had not switched over yet, short of
+reading the server's raw log output. A move that had been working steadily for four
+hours and one that had quietly stopped looked exactly the same from the outside.
+
+It now appears in the operations list alongside every other long-running job, showing
+which stage it is on (there are seven), how many entries it has processed, and how
+long it has been going. When it ends it says how it ended: finished, stopped by a
+restart — in which case it will pick up where it left off — or failed, **with the
+reason**.
+
+That last point matters more than it sounds. The record of progress is deliberately
+wiped for any stage that failed its check, so that the stage is re-done and
+re-verified from scratch rather than trusted. The consequence is that after a restart
+the progress record can no longer tell you *why* the app had not switched over. The
+operation entry is kept separately and is not wiped, so the explanation survives.
+
+**One deliberate omission: there is no percentage.** Working one out would mean
+counting every record in a stage before starting it — a second full pass over the same
+millions of records the move is already reading — and the total would drift anyway,
+because new activity keeps arriving while the copy runs. Rather than show a
+confident-looking number that is wrong, it shows the count of what it has actually
+done. A related display bug surfaced while doing this and was fixed: any job without a
+total was labelled "Starting…", so this one would have read "Starting…" for four hours
+with 4.7 million records already copied.
+
+### What is still open
+
+The move itself is unchanged by this work — it runs exactly as before, and reporting
+its status can never interrupt or fail it. Its ability to resume after a restart,
+added earlier in this change, has still **not been observed working in production**:
+the only restart since then was running an older build. The next restart is the first
+real test of it.
