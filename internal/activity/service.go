@@ -92,8 +92,18 @@ var ErrSummaryClampUnsupported = errors.New("activity: summary clamp requires th
 //
 // vacuum is a separate switch because clamping alone shrinks values without
 // shrinking the file: a run that skips it truthfully reports gigabytes reclaimed
-// while df does not move. It is skipped for a dry run, and skipped when nothing
-// was clamped, so neither case pays a whole-database rewrite for no benefit.
+// while df does not move. It is skipped only for a dry run, which has nothing to
+// compact.
+//
+// It is deliberately NOT conditioned on this pass having clamped anything. That
+// guard existed until 2026-09-08 and made the operation unable to fix the exact
+// situation it was written for: after the first production clamp reclaimed
+// 10.66 GB, the WAL held 11,514,065,152 bytes that VACUUM would have released —
+// but every subsequent call found zero rows left to clamp and therefore skipped
+// the vacuum, so no request could reach the reclaim path. Restarting does not
+// help either: SQLite only deletes the -wal on a clean last-connection close.
+// `vacuum` already defaults to false, so passing it is an explicit request and
+// honouring it unconditionally is what the caller asked for.
 func (s *Service) ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error) {
 	var zero database.ClampSummariesResult
 	clamper, ok := database.FindSummaryClamper(s.store)
@@ -105,7 +115,7 @@ func (s *Service) ClampSummaries(ctx context.Context, max int, dryRun, vacuum bo
 	if err != nil {
 		return res, err
 	}
-	if vacuum && !dryRun && res.Clamped > 0 {
+	if vacuum && !dryRun {
 		if _, verr := clamper.VacuumActivity(ctx); verr != nil {
 			// The clamp already committed. Surface the vacuum failure without
 			// discarding a successful pass that may have taken hours.
