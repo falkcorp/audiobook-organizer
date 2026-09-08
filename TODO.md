@@ -1084,9 +1084,24 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
   `CompactByDay` synchronously in the HTTP request. SQLite makes it bounded/fast,
   but enqueuing an op is the correct shape and removes the browser-timeout
   coupling entirely.
-- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod:
-  stop dual-writing to Pebble and range-delete the `act:` keyspace to reclaim the
-  ~1.3 GiB it holds. Separate PR; do NOT do it until the flip is verified in prod.
+- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod.
+  Two halves; the delete half is now built, the write half is not:
+  - [x] **Delete the accumulated copy.** #3139 adds `maintenance.activity-reclaim`.
+    It is triggered (not scheduled), dry-run unless `dry_run=false`, and refuses
+    unless `read_secondary` is set — which is the only signal meaning "the copy is
+    verified", since `sqlMigrationStarter` sets it solely after per-tier `ParityOK`.
+    It prunes behind a time cutoff rather than range-deleting the prefix, because
+    `Record` dual-writes forever and a prefix wipe would take rows written between
+    the parity check and the delete.
+  - [ ] **Stop dual-writing.** `MigratingActivityStore.Record` fans out to BOTH
+    backends unconditionally with no post-cutover stop, so every new row still
+    writes a Pebble copy nothing reads and the reclaim has to be re-run forever.
+    `Record` should skip the primary once `readSecondary` is true — which also
+    removes the race that forces the cutoff-bounded prune above.
+  - **On the "~1.3 GiB" this entry used to claim:** that came from
+    `RepairActivityIndexes`' comment and predates substantial growth (the Pebble DB
+    has gone from a 31 GB baseline to 59 GB). It was never measured here. Run the
+    reclaim dry-run for the real number before quoting one.
 - [ ] **MySQL/Postgres dialects.** The `sqlDialect` seam is built; adding a
   networked backend is a dialect + driver + DSN/credentials decision.
 
