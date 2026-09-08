@@ -1,6 +1,7 @@
 // file: internal/metadata/cover.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
+// last-edited: 2026-09-08
 
 package metadata
 
@@ -120,13 +121,13 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 
 	coversDir := filepath.Join(destDir, "covers")
 
-	// Check if cover already exists (any extension)
-	matches, _ := filepath.Glob(filepath.Join(coversDir, bookID+".*"))
-	for _, m := range matches {
-		ext := strings.ToLower(filepath.Ext(m))
-		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".gif" {
-			return m, nil
-		}
+	// Check if cover already exists (any known extension). This is the same
+	// lookup CoverPathForBook does; see findExistingCover for why it is a stat
+	// probe rather than a glob. Note this site passes bookID unsanitized while
+	// CoverPathForBook applies filepath.Base — preserved as-is, since changing
+	// it is a separate question from the lookup cost.
+	if existing := findExistingCover(coversDir, bookID); existing != "" {
+		return existing, nil
 	}
 
 	// Create covers directory
@@ -169,6 +170,55 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 	return destPath, nil
 }
 
+// coverExtensions lists the image extensions a stored cover may carry, in the
+// order that decides precedence when a book somehow has more than one on disk.
+//
+// This order is load-bearing and is NOT arbitrary. It reproduces what the
+// previous filepath.Glob implementation did: Go's glob() sorts the directory
+// names before matching, so Glob returned "<id>.gif" ahead of "<id>.jpg", and
+// the caller took the first match whose extension was allowed. Precedence was
+// therefore alphabetical by extension, not the order the old if-statement
+// happened to list them in. Reordering this slice silently changes which file
+// gets served for any book with two covers.
+//
+// Lowercase-only is safe by construction, not by observation: every write goes
+// through extensionFromContentType, which returns a hardcoded lowercase
+// extension. (Confirmed against production on 2026-09-08 — 0 of 9,288 files in
+// the covers directory had a non-lowercase extension, on a case-sensitive
+// filesystem.)
+var coverExtensions = [...]string{".gif", ".jpeg", ".jpg", ".png", ".webp"}
+
+// findExistingCover returns the path of the stored cover for id, or "" if there
+// is none. coversDir and id are used as given; sanitizing id is the caller's
+// job, because the two callers deliberately differ on it.
+//
+// This intentionally does not use filepath.Glob. The pattern "<id>.*" contains a
+// meta character, so Glob cannot do a point lookup — it falls into glob(), which
+// calls Readdirnames(-1) on the entire covers directory, slices.Sort's every
+// name, and runs filepath.Match against each one. That makes resolving a single
+// cover O(size of the covers directory) even though the filename is already
+// known apart from its extension.
+//
+// It mattered: on 2026-09-08 this sat on the ABS search path once per result
+// with 9,288 files in that directory, and a 35s production CPU profile
+// attributed 27.96s (6.4% of process CPU) to it — 18.00s Readdirnames, 5.57s
+// sort, 4.17s Match, and only 0.08s of actual os.Stat. Probing the five
+// candidate extensions is constant in the directory size; os.Stat measured
+// 0.01ms on that host.
+//
+// Two deliberate refinements over the Glob version, both narrowing what can be
+// returned: a directory named "<id>.jpg" is no longer treated as a cover, and
+// neither is a dangling symlink (Glob listed both; serving either fails).
+func findExistingCover(coversDir, id string) string {
+	for _, ext := range coverExtensions {
+		p := filepath.Join(coversDir, id+ext)
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
 // CoverPathForBook returns the local cover file path if it exists, empty string otherwise.
 func CoverPathForBook(destDir string, bookID string) string {
 	// filepath.Base strips any directory traversal from the bookID segment.
@@ -176,15 +226,7 @@ func CoverPathForBook(destDir string, bookID string) string {
 	if safeID == "." || safeID == "/" {
 		return ""
 	}
-	coversDir := filepath.Join(destDir, "covers")
-	matches, _ := filepath.Glob(filepath.Join(coversDir, safeID+".*"))
-	for _, m := range matches {
-		ext := strings.ToLower(filepath.Ext(m))
-		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".gif" {
-			return m
-		}
-	}
-	return ""
+	return findExistingCover(filepath.Join(destDir, "covers"), safeID)
 }
 
 // HasExistingCoverArt checks if an audio file already has cover art, either
