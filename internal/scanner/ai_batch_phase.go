@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 package scanner
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// maxTotalFailures is how many failed batches abort the whole phase. Package
+// scope rather than a local const so a test can assert the policy is UNCHANGED
+// across edits to the counter that feeds it -- the counter moved on 2026-09-08
+// and the abort threshold deliberately did not.
+const maxTotalFailures = 3
 
 // aiBatchParser is the one AI capability this phase needs. Named as a consumer
 // interface so the phase can be driven by a fake in tests: the production
@@ -59,7 +66,6 @@ type aiBatchParser interface {
 func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, candidates []int, log logger.Logger, save func(context.Context, *Book) (string, error)) AIPhaseSummary {
 	const batchSize = 20
 	const delayBetweenBatches = 2 * time.Second
-	const maxTotalFailures = 3
 
 	totalBatches := (len(candidates) + batchSize - 1) / batchSize
 	log.Info("AI batch parsing %d books in %d batches of %d, %d at a time",
@@ -78,6 +84,32 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	aborted := make(chan struct{})
 	var abortOnce sync.Once
 	abort := func() { abortOnce.Do(func() { close(aborted) }) }
+
+	// The counters above say HOW MANY batches failed. These say WHICH books were
+	// in them and WHY they failed, which is the only thing that makes a failed
+	// run actionable -- and until now it existed at the failure site and was
+	// thrown away into log.Warn, which LoggerFromReporter does not forward, so
+	// the operation record never saw it.
+	//
+	// Slices, not atomics, so they need a real lock: every write below happens on
+	// a worker goroutine and aiBatchWorkers is greater than one.
+	var detailMu sync.Mutex
+	var batchFailures []AIBatchFailure
+	var saveFailures []AISaveFailure
+	recordBatchFailure := func(f AIBatchFailure) {
+		detailMu.Lock()
+		defer detailMu.Unlock()
+		if len(batchFailures) < maxRecordedBatchFailures {
+			batchFailures = append(batchFailures, f)
+		}
+	}
+	recordSaveFailure := func(f AISaveFailure) {
+		detailMu.Lock()
+		defer detailMu.Unlock()
+		if len(saveFailures) < maxRecordedSaveFailures {
+			saveFailures = append(saveFailures, f)
+		}
+	}
 
 	aiGroup, aiGroupCtx := errgroup.WithContext(ctx)
 	aiGroup.SetLimit(aiBatchWorkers)
@@ -115,13 +147,32 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 			cancel()
 
 			if aiErr != nil {
-				log.Warn("AI batch parsing failed (batch %d-%d): %v", start, end, aiErr)
+				// Counted BEFORE the permanent-failure branch below, not after.
+				// The increment used to sit under it, so the worst failure there
+				// is -- a revoked key, an exhausted quota, every batch dead --
+				// returned with BatchesFailed still 0 and the summary printed
+				// "0 batch failure(s)" for a run that failed everything. The
+				// threshold test below reads the counter instead of the return
+				// value of Add, which keeps the abort policy identical: each
+				// error increments exactly once and the third one trips it.
+				failed := failures.Add(1)
+				permanent := isPermanentAIFailure(aiErr)
+				recordBatchFailure(AIBatchFailure{
+					Batch:     batchNum,
+					Total:     totalBatches,
+					Filenames: cappedFilenames(filenames),
+					Omitted:   max(0, len(filenames)-maxRecordedFilenames),
+					Err:       aiErr.Error(),
+					Permanent: permanent,
+				})
+				log.Warn("AI batch parsing failed (batch %d/%d, %d file(s): %s): %v",
+					batchNum, totalBatches, len(filenames), summarizeFilenames(filenames), aiErr)
 
 				// A permanent backend state -- no credits, revoked key,
 				// quota exhausted -- will not clear by the next batch, so
 				// stop the whole phase on the first one rather than retrying
 				// it for every remaining batch.
-				if isPermanentAIFailure(aiErr) {
+				if permanent {
 					abortedPermanent.Store(true)
 					log.Warn("AI batch parsing disabled for this scan after a non-retryable error at batch %d/%d: %v — "+
 						"the remaining books keep their filename-derived metadata",
@@ -130,7 +181,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 					return nil
 				}
 
-				if failures.Add(1) >= maxTotalFailures {
+				if failed >= maxTotalFailures {
 					abortedThreshold.Store(true)
 					log.Warn("AI batch parsing disabled for this scan: %d batch failures by batch %d/%d — "+
 						"the remaining books keep their filename-derived metadata",
@@ -189,6 +240,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				stampPath, saveErr := save(ctx, &books[idx])
 				if saveErr != nil {
 					savesFailed.Add(1)
+					recordSaveFailure(AISaveFailure{Path: books[idx].FilePath, Err: saveErr.Error()})
 					log.Warn("failed to re-save AI-enriched book %s: %v", books[idx].FilePath, saveErr)
 				}
 				booksParsed.Add(1)
@@ -221,6 +273,12 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 		log.Warn("AI batch parsing phase ended early: %v", err)
 	}
 
+	// Every worker has returned, so the slices are quiescent -- but read them
+	// under the same lock anyway rather than relying on that argument holding
+	// after the next edit to this function.
+	detailMu.Lock()
+	defer detailMu.Unlock()
+
 	return AIPhaseSummary{
 		BooksNominated:   len(candidates),
 		BatchesTotal:     totalBatches,
@@ -230,7 +288,66 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 		SavesFailed:      int(savesFailed.Load()),
 		AbortedPermanent: abortedPermanent.Load(),
 		AbortedThreshold: abortedThreshold.Load(),
+		BatchFailures:    batchFailures,
+		SaveFailures:     saveFailures,
 	}
+}
+
+// How much of a failure is kept for the operation record.
+//
+// Capped because reporter.Log writes into the activity store, and that store's
+// growth is a measured production problem -- an unbounded dump of every failed
+// batch's every filename would be a new source of it. The caps are chosen to
+// keep a typical failure WHOLE: batchSize is 20 and the runs in the report that
+// prompted this were 5 books, so maxRecordedFilenames covers a small batch
+// entirely and truncates a full one with an explicit "+N more".
+const (
+	maxRecordedBatchFailures = 5
+	maxRecordedFilenames     = 10
+	maxRecordedSaveFailures  = 10
+)
+
+// AIBatchFailure is one failed LLM batch: which books were in it, and why it
+// failed. Captured at the failure site because that is the only place both
+// facts exist -- the summary is assembled after every worker has returned.
+type AIBatchFailure struct {
+	// Batch and Total are the 1-based batch number and batch count as reported
+	// to progress, so a failure here names the same batch the progress line did.
+	Batch     int      `json:"batch"`
+	Total     int      `json:"total"`
+	Filenames []string `json:"filenames"`
+	// Omitted is how many filenames the cap dropped, so a truncated list says so
+	// rather than silently reading as the whole batch.
+	Omitted   int    `json:"omitted,omitempty"`
+	Err       string `json:"error"`
+	Permanent bool   `json:"permanent,omitempty"`
+}
+
+// AISaveFailure is one book whose AI-filled fields could not be written back.
+// Distinct from a batch failure: the LLM answered, and the answer was lost.
+type AISaveFailure struct {
+	Path string `json:"path"`
+	Err  string `json:"error"`
+}
+
+// cappedFilenames returns at most maxRecordedFilenames names, copied so the
+// summary does not retain the caller's slice.
+func cappedFilenames(names []string) []string {
+	out := make([]string, 0, min(len(names), maxRecordedFilenames))
+	return append(out, names[:min(len(names), maxRecordedFilenames)]...)
+}
+
+// summarizeFilenames renders a filename list for a single log line.
+func summarizeFilenames(names []string) string {
+	if len(names) == 0 {
+		return "(none)"
+	}
+	shown := cappedFilenames(names)
+	s := strings.Join(shown, ", ")
+	if omitted := len(names) - len(shown); omitted > 0 {
+		s += fmt.Sprintf(", +%d more", omitted)
+	}
+	return s
 }
 
 // AIPhaseSummary is what runAIBatchPhase actually did, as opposed to what its
@@ -247,14 +364,44 @@ type AIPhaseSummary struct {
 	SavesFailed      int
 	AbortedPermanent bool
 	AbortedThreshold bool
+	// BatchFailures and SaveFailures are the capped detail behind the two
+	// counters above: which books, and what the error said. See the cap
+	// constants for why they are bounded.
+	BatchFailures []AIBatchFailure
+	SaveFailures  []AISaveFailure
 }
 
 // Aborted reports whether the phase stopped short, leaving nominated books
-// unparsed. This -- not "did any field change" -- is what makes a queued run a
-// failure: a healthy library where every candidate was already filled in by
-// another path legitimately changes nothing, and must not be reported as an
-// error.
+// unparsed.
+//
+// This is NOT the predicate for "was this run a failure" -- see Failed. It
+// answers only "did we stop early", and a run that had one batch, failed it,
+// and had nothing left to try stopped exactly on schedule.
 func (s AIPhaseSummary) Aborted() bool { return s.AbortedPermanent || s.AbortedThreshold }
+
+// Failed reports whether the run must be recorded as a failed operation.
+//
+// The distinction that has to exist here: a healthy no-op has BatchesFailed
+// == 0. Parsing 0 books because the only batch failed is NOT the same as
+// parsing 0 books because nothing needed changing, and until 2026-09-08 the
+// operation could not tell them apart -- it failed only on Aborted(), which is
+// AbortedPermanent || AbortedThreshold, so a single-batch run whose only batch
+// failed tripped neither and finished green with a full progress bar.
+//
+// Still NOT keyed on a low change count, for the reason Aborted's comment gave:
+// a library where every candidate was already filled in by another path
+// legitimately parses and changes nothing, and making that red would train
+// everyone to ignore the status.
+//
+// SavesFailed counts too. The LLM answered and the answer was thrown away, so
+// those books keep their filename-derived metadata exactly as if the batch had
+// failed -- from the library's point of view it is the same loss.
+func (s AIPhaseSummary) Failed() bool {
+	if s.Disabled {
+		return false
+	}
+	return s.Aborted() || s.BatchesFailed > 0 || s.SavesFailed > 0
+}
 
 // String renders the summary in the same shape as the scan's own
 // "scan summary:" line, which is the established idiom for per-run counters
@@ -271,5 +418,58 @@ func (s AIPhaseSummary) String() string {
 	case s.AbortedThreshold:
 		msg += "; ABORTED after hitting the batch failure threshold -- the remaining books keep their filename-derived metadata"
 	}
+	// The cause, on the one line the Activity page actually renders.
+	//
+	// This line is the operation's progress_message, so it stays ONE line and
+	// the full per-batch detail goes to FailureDetails below. But a row reading
+	// "0/5 book(s) parsed ... 1 batch failure(s)" and nothing else is a report
+	// that something went wrong with no way to find out what, and that was the
+	// complaint. Whatever else is true, the first error belongs here.
+	if len(s.BatchFailures) > 0 {
+		f := s.BatchFailures[0]
+		msg += fmt.Sprintf("; first failure: batch %d/%d (%d file(s)): %s",
+			f.Batch, f.Total, len(f.Filenames)+f.Omitted, f.Err)
+	} else if len(s.SaveFailures) > 0 {
+		msg += fmt.Sprintf("; first save failure: %s: %s", s.SaveFailures[0].Path, s.SaveFailures[0].Err)
+	}
 	return msg
+}
+
+// FailureDetails is one line per captured failure, naming the books involved.
+//
+// Separate from String because they go to different places: String is the
+// operation's progress message (one line, rendered in the row) while these are
+// logged into the operation record, where the expanded row shows them. Empty
+// for a run with nothing to report, so the caller can range over it blindly.
+func (s AIPhaseSummary) FailureDetails() []string {
+	if len(s.BatchFailures) == 0 && len(s.SaveFailures) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(s.BatchFailures)+len(s.SaveFailures)+2)
+	for _, f := range s.BatchFailures {
+		names := strings.Join(f.Filenames, ", ")
+		if f.Omitted > 0 {
+			names += fmt.Sprintf(", +%d more", f.Omitted)
+		}
+		kind := "batch failed"
+		if f.Permanent {
+			kind = "batch failed (non-retryable)"
+		}
+		lines = append(lines, fmt.Sprintf("%s: batch %d/%d, %d file(s) [%s]: %s",
+			kind, f.Batch, f.Total, len(f.Filenames)+f.Omitted, names, f.Err))
+	}
+	// The counters are the census; these lists are a capped sample. Say so,
+	// rather than letting five recorded failures read as the total.
+	if s.BatchesFailed > len(s.BatchFailures) {
+		lines = append(lines, fmt.Sprintf("... and %d further batch failure(s) not recorded (cap %d)",
+			s.BatchesFailed-len(s.BatchFailures), maxRecordedBatchFailures))
+	}
+	for _, f := range s.SaveFailures {
+		lines = append(lines, fmt.Sprintf("save failed: %s: %s", f.Path, f.Err))
+	}
+	if s.SavesFailed > len(s.SaveFailures) {
+		lines = append(lines, fmt.Sprintf("... and %d further save failure(s) not recorded (cap %d)",
+			s.SavesFailed-len(s.SaveFailures), maxRecordedSaveFailures))
+	}
+	return lines
 }

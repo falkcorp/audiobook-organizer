@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 32147e60-f02b-47a1-8b05-cf56ca320f50
-// last-edited: 2026-08-24
+// last-edited: 2026-09-08
 
 package server
 
@@ -177,8 +177,19 @@ func TestLibraryAIParseOpReportsPerBatchProgressToTheReporter(t *testing.T) {
 	require.True(t, ok)
 
 	rep := &aiParseStubReporter{}
-	require.NoError(t, def.Run(context.Background(),
-		[]byte(`{"books":[{"id":"bk1","file_path":"/lib/a.m4b"}]}`), rep))
+	runErr := def.Run(context.Background(),
+		[]byte(`{"books":[{"id":"bk1","file_path":"/lib/a.m4b"}]}`), rep)
+
+	// The backend is a closed port, so the one batch failed and the run must be
+	// recorded as FAILED. This assertion was require.NoError until 2026-09-08,
+	// which is precisely the defect: a single-batch run whose only batch fails
+	// sets neither AbortedPermanent nor AbortedThreshold, so the op returned nil
+	// and the Activity page showed COMPLETED with a full green bar -- dozens of
+	// rows in a row, all of them lying.
+	require.Error(t, runErr,
+		"a run whose only batch failed reported success; it will render as COMPLETED with a green bar")
+	require.Contains(t, runErr.Error(), "batch failure",
+		"the failure gives no indication of what went wrong: %v", runErr)
 
 	var sawBatch bool
 	for _, m := range rep.seen() {
@@ -205,6 +216,17 @@ func TestLibraryAIParseOpReportsPerBatchProgressToTheReporter(t *testing.T) {
 	}
 	require.True(t, sawSummary,
 		"the operation record has no summary of what actually happened; a failed run is indistinguishable from a clean one. logged=%v", rep.logged())
+
+	// And it must say WHICH book was in the failed batch and WHAT the backend
+	// said. Both facts exist at the failure site in ai_batch_phase.go and used
+	// to be thrown away into log.Warn, which LoggerFromReporter does not
+	// forward -- so the operation record carried a failure count and nothing
+	// that could be acted on.
+	logged := strings.Join(rep.logged(), "\n")
+	require.Contains(t, logged, "a.m4b",
+		"the operation record does not name the book(s) in the failed batch. logged=%v", rep.logged())
+	require.Contains(t, logged, "connection refused",
+		"the operation record does not say why the batch failed. logged=%v", rep.logged())
 
 	// And nothing may claim a parse that did not happen.
 	for _, m := range rep.seen() {
