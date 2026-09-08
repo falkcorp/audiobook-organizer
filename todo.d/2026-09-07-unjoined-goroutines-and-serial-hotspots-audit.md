@@ -7,26 +7,27 @@
   returning an error, so every unjoined goroutine that writes to the store is a
   shutdown crash, not a logged failure.
 
-  - [ ] **CLAUDE.md names a SEQUENTIAL loop as the parallel exemplar.** The
-    "Concurrency — Prefer Multi-Core Design (MANDATORY)" section points new
-    maintenance ops at `internal/plugins/acoustid/backfill.go`'s `RunItems`
-    pattern — but that call passes no `Concurrency:` field, so `run_items.go:148`
-    clamps it to 1. It is a nightly (`0 3 * * *`) full-library job doing per-file
-    `fpcalc` + `UpdateBookFile` + a book read-modify-write. Anyone who followed the
-    instruction copied a serial loop. **This is a doc bug that manufactures code
-    bugs — fix the sentence to name `fingerprint_rescan.go:162` (16-wide in prod
-    via `FP_PARALLEL_WORKERS`) or `duration_backfill.go:108`.** Fixing the op
-    itself needs more than adding `Concurrency:`: the `fingerprinted`/`skipped`/
-    `failed` counters (`:105`) are plain ints also read by the `Label` closure,
-    which `run_items.go:227`/`:239` runs *inside each worker*, so they must become
-    `atomic.Int64`; and `lastID` (`:123`) is a strictly-sequential resume watermark
-    that a mutex cannot rescue — replace `CheckpointFn`/`LastProcessedBookID` with
-    `CheckpointStateFn` + `ResumeFrom`, keep the book ID alongside the index to
-    validate the resume point (today a missing ID fails safe to a full restart;
-    a bare index would silently skip books when the ID-ordered collection grows),
-    migrate existing on-disk checkpoints that have only `LastProcessedBookID`, and
-    set `CheckpointEvery` so a serialized checkpoint per book does not eat the
-    parallelism. Note `fingerprintThrottle` becomes per-worker.
+  - [x] **CLAUDE.md names a SEQUENTIAL loop as the parallel exemplar.** DONE
+    2026-09-07. The "Concurrency — Prefer Multi-Core Design (MANDATORY)" section
+    pointed new maintenance ops at `internal/plugins/acoustid/backfill.go`'s
+    `RunItems` pattern — but that call passed no `Concurrency:` field, so
+    `run_items.go:148` clamped it to 1. A nightly (`0 3 * * *`) full-library job
+    doing per-file `fpcalc` + `UpdateBookFile` + a book read-modify-write, on one
+    core; anyone who followed the instruction copied a serial loop.
+    **Correction to this entry as originally filed:** it proposed
+    `fingerprint_rescan.go:162` as the replacement exemplar. That file is not a
+    `RunItems` caller at all — it has a hand-rolled pool defaulting to 4, not the
+    "16-wide" claimed here — so following this note would have swapped one wrong
+    exemplar for another. The section now names
+    `internal/plugins/maintenance/duration_backfill.go`, which really does set
+    `Concurrency: runtime.NumCPU()` and guards the state its `Label` closure
+    reads. The op itself was fixed in the same PR: counters are an `atomic.Int64`
+    tally, `CheckpointFn`/`lastID` replaced by `CheckpointStateFn` + `ResumeFrom`
+    with the book ID stored beside the index to validate a resume against a
+    shifted collection, legacy `LastProcessedBookID` checkpoints still honoured on
+    upgrade, `CheckpointEvery: 50`, and pool size from the shared
+    `FP_PARALLEL_WORKERS` knob. Verified by mutation: non-atomic counters lose 93
+    of 720 outcomes and trip `-race`.
   - [ ] **`InvalidateLibraryStats` docstring is false, and it costs 87 seconds a
     load.** It is documented as stale-while-revalidate; it is a hard delete. So
     **every dashboard load during a scan takes the cold path** — measured at 87s.
