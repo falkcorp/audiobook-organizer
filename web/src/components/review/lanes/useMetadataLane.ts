@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-09-01
+// last-edited: 2026-09-08
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -287,6 +287,12 @@ export interface MetadataLaneSummary {
    * "every cause is zero".
    */
   unreviewable_by_cause?: { orphaned: number; no_candidates: number; decode_errors: number };
+  /**
+   * Books already ruled on whose stored candidate is gone. Optional for the
+   * same reason as the breakdown above: a server that predates the split omits
+   * it, and these books used to be counted inside `unreviewable`.
+   */
+  resolved_no_candidates?: number;
 }
 
 export interface MetadataFilters {
@@ -636,6 +642,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           // "no breakdown available" and "every cause is zero" are different
           // claims, and the rail renders them differently.
           unreviewable_by_cause: data.unreviewable_by_cause,
+          resolved_no_candidates: data.resolved_no_candidates,
         });
         setLoading(false);
       })

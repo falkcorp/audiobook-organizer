@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.3.0
+// version: 1.4.0
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -133,8 +133,30 @@ func (mfs *Service) FetchAndCacheLimited(ctx context.Context, limiter *rate.Limi
 }
 
 // cacheSearchResponse writes the top-N candidates from a search response to the
-// candidate cache (always replaces) and returns the resulting entry. Shared by
-// FetchAndCache and FetchAndCacheLimited so both persist results identically.
+// candidate cache and returns the resulting entry. Shared by FetchAndCache and
+// FetchAndCacheLimited so both persist results identically.
+//
+// A search that comes back EMPTY does not erase candidates an earlier search
+// found. This write was unconditional until 2026-09-08 — the doc comment here
+// said "always replaces" — so a single empty provider response overwrote a good
+// entry with `Candidates: []` and a fresh FetchedAt. That silently moved a book
+// out of the review queue and into the "unreviewable" bucket, and because a
+// book's review verdict is stored separately from its candidates, the verdict
+// outlived the evidence it was based on. Production on 2026-09-08 held 212 books
+// carrying a matched/no_match/audio_confirmed verdict with zero candidates to
+// justify it, and 8,714 zero-candidate entries stamped "fresh" — an empty
+// refetch marks itself current on the way past.
+//
+// Dropping candidates because the book changed underneath us is a real need, but
+// it is not this function's job: InvalidateCachedCandidates already does exactly
+// that, from the paths that know it happened (manual edit, metadata apply,
+// organize rename).
+//
+// SourceHash is the discriminator, and this is its first non-diagnostic use.
+// Same inputs + zero results means the providers had nothing to say this time
+// and the stored candidates are still the best answer anyone has, so they stay
+// and only LastEmptyFetchAt moves. Different inputs means the title/author/
+// series the candidates answer to no longer exists, so replacing them is right.
 func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series string, resp *SearchMetadataResponse) *MetadataCandidateCache {
 	candidates := resp.Results
 	if len(candidates) > metadataCacheTopN {
@@ -150,12 +172,33 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		raw = append(raw, b)
 	}
 
+	sourceHash := hashSearchInputs(bookID, query, author, narrator, series)
 	entry := &MetadataCandidateCache{
 		BookID:     bookID,
 		Candidates: raw,
 		FetchedAt:  nowUTC(),
-		SourceHash: hashSearchInputs(bookID, query, author, narrator, series),
+		SourceHash: sourceHash,
 	}
+
+	// Preserve-on-empty. A search WITH results always replaces, exactly as
+	// before, and leaves LastEmptyFetchAt nil -- the invariant is "the last time
+	// a search for these inputs came back with nothing", so a search that found
+	// something clears it rather than carrying a stale one forward.
+	if len(raw) == 0 {
+		now := nowUTC()
+		entry.LastEmptyFetchAt = &now
+		if mfs.db != nil {
+			if prev, perr := mfs.db.GetMetadataCache(bookID); perr == nil && prev != nil &&
+				len(prev.Candidates) > 0 && prev.SourceHash == sourceHash {
+				entry.Candidates = prev.Candidates
+				// NOT bumped: FetchedAt dates the CANDIDATES, and these are the
+				// ones the previous search returned. Moving it would relabel
+				// month-old candidates as freshly fetched.
+				entry.FetchedAt = prev.FetchedAt
+			}
+		}
+	}
+
 	if mfs.db != nil {
 		if err := mfs.db.PutMetadataCache(entry); err != nil {
 			// Cache failure should not break the user's fetch; log and

@@ -1,5 +1,5 @@
 // file: internal/database/iface_metadata.go
-// version: 1.1.0
+// version: 1.2.0
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -32,6 +32,19 @@ type MetadataCandidateCache struct {
 	// series, isbn10/13, asin) so v2 can detect "book metadata mutated
 	// since cache" without parsing candidates. Diagnostic only in v1.
 	SourceHash string `json:"source_hash"`
+	// LastEmptyFetchAt records the most recent search that ran against these
+	// same inputs and came back with nothing. It exists so that "we looked and
+	// found nothing" can be written down WITHOUT erasing candidates an earlier
+	// search did find — see metafetch.cacheSearchResponse.
+	//
+	// FetchedAt cannot carry this. FetchedAt dates the candidates, and moving
+	// it on an empty result would relabel month-old candidates as fresh. But
+	// without a second timestamp a preserved entry stays permanently past the
+	// TTL, so every stale-refetch pass would pick the same never-matchable
+	// books again forever. This field is what lets a caller distinguish
+	// "nobody has looked at this in 30 days" from "we looked an hour ago and
+	// the providers have nothing".
+	LastEmptyFetchAt *time.Time `json:"last_empty_fetch_at,omitempty"`
 }
 
 // MetadataCacheTTL is the freshness window. Entries older than this

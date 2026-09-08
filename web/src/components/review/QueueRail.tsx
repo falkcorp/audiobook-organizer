@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-08-27
+// last-edited: 2026-09-08
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -116,6 +116,13 @@ export interface QueueRailProps {
     unreviewable: number;
     stale: number;
     unreviewable_by_cause?: { orphaned: number; no_candidates: number; decode_errors: number };
+    /**
+     * Books already ruled on that have no candidate left to show. Not a backlog
+     * and not an error, so they are no longer counted in `unreviewable` — but
+     * they are still reported, because a number that belongs to no bucket is a
+     * number nobody can act on.
+     */
+    resolved_no_candidates?: number;
   };
   sourceCounts: Record<string, number>;
   filters: MetadataFilters;
@@ -297,6 +304,33 @@ export function QueueRail({
                   }
                 />
               </Box>
+            </Tooltip>
+          )}
+          {summary.errors > 0 && (
+            // Errors get their OWN chip, not a line buried in the unreviewable
+            // tooltip. A stored candidate that will not decode is a broken row
+            // someone has to repair; a book the providers simply have nothing
+            // for is normal and needs no attention at all. Folding the two into
+            // one warning-coloured total meant a real corruption problem could
+            // only be found by hovering, and read identically to a backlog.
+            <Tooltip title="Cache rows whose stored candidate will not decode. These are broken, not merely unmatched — a refetch is the usual repair.">
+              <Chip
+                size="small"
+                variant="outlined"
+                color="error"
+                label={`${summary.errors.toLocaleString()} errors`}
+              />
+            </Tooltip>
+          )}
+          {Boolean(summary.resolved_no_candidates) && (
+            <Tooltip
+              title={`${(summary.resolved_no_candidates ?? 0).toLocaleString()} books already matched or marked no-match whose stored candidate is gone. Nothing to do — they are counted here rather than as a backlog.`}
+            >
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`${(summary.resolved_no_candidates ?? 0).toLocaleString()} resolved, no candidate`}
+              />
             </Tooltip>
           )}
           {summary.unreviewable > 0 && (
