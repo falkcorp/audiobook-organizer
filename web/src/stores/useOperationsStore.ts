@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.6.2
+// version: 3.7.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-07-13
+// last-edited: 2026-09-08
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -168,8 +168,17 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
 
   loadFromServer: async () => {
     try {
-      // Load exclusively from v2 timeline endpoint.
-      const v2Ops = await api.getOperationTimeline(15);
+      // Load exclusively from v2 timeline endpoint, over the last 24 hours.
+      //
+      // This REPLACES the operations map below rather than merging into it, so
+      // the window it asks for is exactly the history the UI has. It asked for
+      // 15 minutes until 2026-09-08, which made the operations list read as
+      // EMPTY after every server restart: a restart drops the SSE stream, the
+      // onError path re-invokes this function, and a quarter-hour window on a
+      // just-booted server matches nothing. The records were never lost —
+      // nothing deletes `opv2:op:` rows at all — but the view discarded them,
+      // which looks identical to losing them.
+      const v2Ops = await api.getOperationTimeline(api.OPERATION_TIMELINE_WINDOW_MINUTES);
 
       set(() => {
         const merged: Record<string, ActiveOperation> = {};

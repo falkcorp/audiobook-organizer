@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.80.0
+// version: 2.81.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-08
 
@@ -562,11 +562,45 @@ export interface OperationTimelineResponse {
   operations: OperationV2[];
 }
 
-export async function getOperationTimeline(sinceMinutes = 15): Promise<OperationV2[]> {
+/** One day of operation history, in minutes. See getOperationTimeline. */
+export const OPERATION_TIMELINE_WINDOW_MINUTES = 24 * 60;
+
+/**
+ * How many operations to ask for. The server clamps at 1000 and defaults to 200
+ * when no limit is sent, and 200 is not enough for a full day on a busy library
+ * (a 72h window on production matched 574). Asking for the maximum is what keeps
+ * a day's history from being silently trimmed to its newest 200 entries.
+ */
+export const OPERATION_TIMELINE_LIMIT = 1000;
+
+/**
+ * Fetch recent operations, defaulting to the last 24 hours.
+ *
+ * The window used to be 15 minutes, which made the operations list look EMPTY
+ * after every restart: nothing had completed in the previous quarter hour, so a
+ * fully populated history rendered as "no operations". The records were never
+ * lost — they are durable in Pebble under `opv2:op:` — they were simply outside
+ * a window nobody had a reason to expect.
+ *
+ * `truncated` is logged rather than swallowed. A silently short list is the
+ * failure this endpoint has produced twice now, and it always looks like data
+ * loss rather than a cap.
+ */
+export async function getOperationTimeline(
+  sinceMinutes = OPERATION_TIMELINE_WINDOW_MINUTES
+): Promise<OperationV2[]> {
   try {
-    const response = await apiFetch(`${API_BASE}/operations/timeline?since=${sinceMinutes}m`);
+    const response = await apiFetch(
+      `${API_BASE}/operations/timeline?since=${sinceMinutes}m&limit=${OPERATION_TIMELINE_LIMIT}`
+    );
     if (!response.ok) return [];
     const body = await response.json();
+    if (body?.data?.truncated) {
+      console.warn(
+        `Operation timeline truncated: showing ${body.data.limit} of ${body.data.matched} ` +
+          `operations in the last ${sinceMinutes}m.`
+      );
+    }
     return body?.data?.operations ?? [];
   } catch {
     return [];

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 package database
 
@@ -224,6 +224,60 @@ func TestListOperationsV2Since_KeepsLiveOpsOutsideTheWindow(t *testing.T) {
 	require.False(t, ids["op-finished"],
 		"a finished operation outside the window is history and must stay filtered — "+
 			"without this the test would also pass if the window were simply deleted")
+}
+
+// TestListOperationsV2Since_IncludesLongOpsThatFinishedInsideTheWindow is the
+// other half of the rule above, which was left unfixed for three weeks.
+//
+// The live-op fix rescued rows with CompletedAt == nil. Rows that had FINISHED
+// were still admitted on QueuedAt, so "what completed in the last 24 hours"
+// silently answered "what was QUEUED in the last 24 hours" — and the longer an
+// operation ran, the more likely it was to be excluded from its own history.
+// A backfill queued 30h ago that finished 20 minutes ago is the last 20 minutes
+// of history by any reading, and it was invisible at every window under 30h.
+//
+// This is the same class of defect as the live-op case: an operation punished in
+// the timeline for having taken a long time.
+func TestListOperationsV2Since_IncludesLongOpsThatFinishedInsideTheWindow(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	now := time.Now().UTC()
+	since := now.Add(-24 * time.Hour)
+
+	// Queued well OUTSIDE the window, finished well INSIDE it.
+	queued := now.Add(-30 * time.Hour)
+	finished := now.Add(-20 * time.Minute)
+	longOp := buildTestOpRow("op-long-finished-recently", "completed")
+	longOp.QueuedAt = queued
+	longOp.StartedAt = &queued
+	longOp.CompletedAt = &finished
+	require.NoError(t, s.InsertOperationV2(longOp))
+
+	// Queued AND finished outside the window — genuinely older history. Keeping
+	// this here is what stops the test from passing if the window were deleted.
+	older := now.Add(-40 * time.Hour)
+	olderDone := now.Add(-38 * time.Hour)
+	ancient := buildTestOpRow("op-ancient", "completed")
+	ancient.QueuedAt = older
+	ancient.StartedAt = &older
+	ancient.CompletedAt = &olderDone
+	require.NoError(t, s.InsertOperationV2(ancient))
+
+	rows, err := s.ListOperationsV2Since(since, 200)
+	require.NoError(t, err)
+
+	ids := map[string]bool{}
+	for _, r := range rows {
+		ids[r.ID] = true
+	}
+	require.True(t, ids["op-long-finished-recently"],
+		"an operation that COMPLETED inside the window is history from inside the "+
+			"window, however long before it was queued — testing QueuedAt instead "+
+			"hides exactly the long-running operations most worth seeing")
+	require.False(t, ids["op-ancient"],
+		"an operation that both started and finished before the window is still out")
 }
 
 // TestUpdateOpProgressV2_AdvancesHighWaterProgress pins that high_water_progress
