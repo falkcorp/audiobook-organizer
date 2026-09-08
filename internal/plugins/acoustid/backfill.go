@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-09-01
+// last-edited: 2026-09-07
 
 package acoustid
 
@@ -14,8 +14,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -26,7 +28,172 @@ import (
 // restored into params on ResumeRestart. RunItems drives the loop; progress
 // counters are handled by reporter.UpdateProgress.
 type BackfillParams struct {
+	// LastProcessedBookID is the pre-2026-09-07 checkpoint format: the ID of the
+	// last book finished by a strictly sequential run. It is still READ so a
+	// checkpoint written by an older binary resumes instead of starting over, but
+	// it is no longer written. Under a worker pool "the last book finished" is not
+	// a resume point at all — workers complete out of order, so the newest
+	// finished ID can sit above books that are still running.
 	LastProcessedBookID string `json:"last_processed_book_id,omitempty"`
+
+	// Watermark is the contiguous-completion watermark from RunItems: the number
+	// of books from the START of the collection that are ALL finished. Everything
+	// below it is provably done regardless of the order the pool completed in.
+	Watermark int `json:"watermark,omitempty"`
+
+	// WatermarkBookID is the ID of the book at Watermark-1, stored so the index
+	// can be validated on resume. An index alone is meaningless against a
+	// collection that changed between runs: GetAllBooksFullFrom is ID-ordered, so
+	// a book imported with an earlier-sorting ID shifts every later position down
+	// one and a bare index would skip a book permanently. If the ID at that
+	// position no longer matches, the run restarts from the beginning — the
+	// operation is idempotent, so redoing work is only slow, while skipping it
+	// leaves files unfingerprinted with nothing to revisit them.
+	WatermarkBookID string `json:"watermark_book_id,omitempty"`
+}
+
+// resolveResumePoint decides where a resumed run restarts, returning the index to
+// resume from and a non-empty reason when a stored checkpoint had to be rejected.
+//
+// Kept separate from runBackfill so the decision can be tested against a shifted
+// collection without a fingerprint backend, a store, or an operations reporter.
+func resolveResumePoint(books []database.Book, state BackfillParams) (int, string) {
+	if state.Watermark > 0 {
+		switch {
+		case state.Watermark > len(books):
+			return 0, fmt.Sprintf(
+				"checkpoint watermark %d is beyond the %d books now present; restarting from the beginning",
+				state.Watermark, len(books))
+		case state.WatermarkBookID == "":
+			return 0, fmt.Sprintf(
+				"checkpoint watermark %d carries no book ID to validate against; restarting from the beginning",
+				state.Watermark)
+		case books[state.Watermark-1].ID != state.WatermarkBookID:
+			return 0, fmt.Sprintf(
+				"checkpoint watermark %d was written for book %s but that position now holds %s; the collection shifted, restarting from the beginning",
+				state.Watermark, state.WatermarkBookID, books[state.Watermark-1].ID)
+		}
+		return state.Watermark, ""
+	}
+
+	// Legacy checkpoint from a sequential run: locate the ID rather than trusting
+	// any index, since none was stored.
+	if state.LastProcessedBookID != "" {
+		for i, b := range books {
+			if b.ID == state.LastProcessedBookID {
+				return i + 1, ""
+			}
+		}
+		return 0, fmt.Sprintf(
+			"checkpoint names book %s, which is no longer in the collection; restarting from the beginning",
+			state.LastProcessedBookID)
+	}
+
+	return 0, ""
+}
+
+// backfillTally counts per-file outcomes across the whole run.
+//
+// The fields are atomic rather than plain ints because they are written from
+// every worker goroutine AND read from the RunItems Label closure, which
+// run_items.go invokes inside each worker too. Under a plain int the reads are a
+// race and the increments are a lost update: two workers read the same value,
+// both add one, and one file's outcome disappears from the total. The same shape
+// cost 163 of 200 API-key usage records before it was fixed on 2026-09-07.
+type backfillTally struct {
+	fingerprinted atomic.Int64
+	skipped       atomic.Int64
+	failed        atomic.Int64
+}
+
+// backfillBook fingerprints every file of one book and records the outcomes.
+//
+// Split out of the RunItems callback so the concurrency claim is testable: as an
+// inline closure this body could only be reached by running the whole op, which
+// needs a real fpcalc binary and so cannot run in CI. As a method it can be
+// driven from N goroutines against a fake store.
+//
+// Always returns nil. A book whose files cannot be listed is skipped rather than
+// failing the run — one unreadable book must not abort a nightly whole-library
+// pass — and the signature-synthesis error is logged, matching the behaviour
+// before the split.
+func (p *Plugin) backfillBook(b database.Book, tally *backfillTally, logger *slog.Logger) error {
+	files, ferr := p.store.GetBookFiles(b.ID)
+	if ferr != nil {
+		return nil // non-fatal: skip this book
+	}
+
+	bookModified := false
+	for _, f := range files {
+		switch fingerprintBookFile(p.store, f, false) {
+		case fingerprintOutcomeFingerprinted:
+			tally.fingerprinted.Add(1)
+			bookModified = true
+			// Now a PER-WORKER pause, so the aggregate rate is roughly
+			// workers/throttle rather than 1/throttle. That is the point — the
+			// throttle exists to leave headroom between fpcalc invocations, not
+			// to cap total throughput at one core.
+			time.Sleep(fingerprintThrottle)
+		case fingerprintOutcomeSkipped:
+			tally.skipped.Add(1)
+		case fingerprintOutcomeFailed:
+			tally.failed.Add(1)
+		}
+	}
+
+	if bookModified || b.BookSigV1 == nil {
+		if err := synthesizeBookSignatureForBook(p.store, b.ID); err != nil {
+			logger.Warn("synthesize book signature", "book_id", b.ID, "error", err)
+		}
+	}
+
+	return nil
+}
+
+// backfillRunOptions builds the RunItems options for a backfill pass.
+//
+// A named function rather than a literal at the call site so that a test can run
+// the real options instead of a hand-written copy of them. A test that builds its
+// own options proves only that RunItems is concurrent; this one stays honest if
+// Concurrency is ever dropped here, which is precisely the regression that made
+// this op sequential for months.
+func backfillRunOptions(books []database.Book, startIdx int, tally *backfillTally, reporter sdk.Reporter) registry.RunItemsOptions {
+	return registry.RunItemsOptions{
+		Concurrency: backfillWorkers(),
+		ResumeFrom:  startIdx,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Books %d/%d (fp=%d skip=%d fail=%d)",
+				i+1, t, tally.fingerprinted.Load(), tally.skipped.Load(), tally.failed.Load())
+		},
+		// Once per 50 books rather than per book. CheckpointStateFn calls are
+		// serialized, so checkpointing every item would funnel the whole pool
+		// through one lock plus a store write and give back much of the
+		// parallelism. 50 books is at most a few minutes of redone work on
+		// resume, against an op that takes hours.
+		CheckpointEvery: 50,
+		// CheckpointStateFn, not CheckpointFn: the latter is documented as
+		// sequential-only, and the "last book finished" it was built around is
+		// not a resume point once workers complete out of order. The watermark
+		// is the contiguous completed prefix, so every book below it is done no
+		// matter what order the pool finished in.
+		CheckpointStateFn: func(ctx context.Context, watermark int) error {
+			cp := BackfillParams{Watermark: watermark}
+			if watermark > 0 && watermark <= len(books) {
+				cp.WatermarkBookID = books[watermark-1].ID
+			}
+			return reporter.Checkpoint(cp)
+		},
+	}
+}
+
+// backfillWorkers returns the fingerprint worker-pool size, reading the same
+// FP_PARALLEL_WORKERS knob as the rescan op so an operator has one dial for
+// fpcalc pressure rather than two that disagree.
+func backfillWorkers() int {
+	if n := config.AppConfig.FPParallelWorkers; n >= 1 && n <= 32 {
+		return n
+	}
+	return 4
 }
 
 func (p *Plugin) backfillDef() sdk.OperationDef {
@@ -92,17 +259,16 @@ func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, report
 		return fmt.Errorf("load books: %w", err)
 	}
 
-	var startIdx int
-	if state.LastProcessedBookID != "" {
-		for i, b := range books {
-			if b.ID == state.LastProcessedBookID {
-				startIdx = i + 1
-				break
-			}
-		}
+	startIdx, resumeReason := resolveResumePoint(books, state)
+	if resumeReason != "" {
+		// Logged at Warn, not swallowed: silently restarting a nightly job that
+		// had already fingerprinted most of the library looks identical to the
+		// job simply being slow, and it is the only signal that a checkpoint was
+		// discarded.
+		reporter.Logger().Warn("acoustid backfill: discarding checkpoint", "reason", resumeReason)
 	}
 
-	var fingerprinted, skipped, failed int
+	var tally backfillTally
 	total := len(books)
 
 	// Rebuild with the real N once it's known.
@@ -112,63 +278,25 @@ func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, report
 	// Nothing to do — still emit Start + Done so the bar never stays at 0/0.
 	if total == 0 || startIdx >= total {
 		prog.Done(fmt.Sprintf("Acoustid backfill complete: fingerprinted=%d skipped=%d failed=%d",
-			fingerprinted, skipped, failed))
+			tally.fingerprinted.Load(), tally.skipped.Load(), tally.failed.Load()))
 		return nil
 	}
 
-	slice := books[startIdx:]
-
-	// lastID is captured by both the item fn and CheckpointFn to thread the
-	// current book ID through without a shared struct that would need a mutex.
-	var lastID string
-
-	err = registry.RunItems(ctx, reporter, slice, func(ctx context.Context, b database.Book) error {
-		files, ferr := p.store.GetBookFiles(b.ID)
-		if ferr != nil {
-			return nil // non-fatal: skip this book
-		}
-
-		bookModified := false
-		for _, f := range files {
-			outcome := fingerprintBookFile(p.store, f, false)
-			switch outcome {
-			case fingerprintOutcomeFingerprinted:
-				fingerprinted++
-				bookModified = true
-				time.Sleep(fingerprintThrottle)
-			case fingerprintOutcomeSkipped:
-				skipped++
-			case fingerprintOutcomeFailed:
-				failed++
-			}
-		}
-
-		if bookModified || b.BookSigV1 == nil {
-			if err := synthesizeBookSignatureForBook(p.store, b.ID); err != nil {
-				reporter.Logger().Warn("synthesize book signature", "book_id", b.ID, "error", err)
-			}
-		}
-
-		lastID = b.ID
-		return nil
-	}, registry.RunItemsOptions{
-		ProgressOffset: startIdx,
-		ProgressTotal:  total,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Books %d/%d (fp=%d skip=%d fail=%d)",
-				i+1, t, fingerprinted, skipped, failed)
-		},
-		CheckpointFn: func(ctx context.Context) error {
-			cp := BackfillParams{LastProcessedBookID: lastID}
-			return reporter.Checkpoint(cp)
-		},
-	})
+	// The FULL collection is handed to RunItems, not books[startIdx:]. ResumeFrom
+	// does the slicing itself AND shifts ProgressOffset by the same amount, so
+	// pre-slicing here and also setting ProgressOffset would shift the bar twice.
+	// It also keeps the checkpoint watermark an index into the collection the
+	// checkpoint is validated against, rather than into a slice whose origin is
+	// only recoverable by remembering what it was cut from.
+	err = registry.RunItems(ctx, reporter, books, func(ctx context.Context, b database.Book) error {
+		return p.backfillBook(b, &tally, reporter.Logger())
+	}, backfillRunOptions(books, startIdx, &tally, reporter))
 	if err != nil {
 		return err
 	}
 
 	prog.Done(fmt.Sprintf("Acoustid backfill complete: fingerprinted=%d skipped=%d failed=%d",
-		fingerprinted, skipped, failed))
+		tally.fingerprinted.Load(), tally.skipped.Load(), tally.failed.Load()))
 	return nil
 }
 
