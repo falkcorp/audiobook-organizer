@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PathsSettingsTab.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8c9d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-08-19
+// last-edited: 2026-09-07
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -20,6 +20,8 @@ import {
   ListItemIcon,
   ListItemText,
   Stack,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import {
   FolderOpen as FolderOpenIcon,
@@ -51,9 +53,23 @@ interface PathsSettingsTabProps {
   handleScanImportFolder: (folder: api.ImportPath) => void;
   handleRemoveImportFolder: (id: number) => void;
   setAddFolderDialogOpen: (value: boolean) => void;
+  /**
+   * Config keys the server's environment is forcing. A key listed here cannot be
+   * changed from here: the environment's value is re-applied over the saved one
+   * on every boot, so the control is disabled rather than allowed to accept an
+   * edit that would be silently discarded.
+   */
+  envLocked: string[];
+  /** Server-computed path an empty Activity Database Path resolves to. */
+  activityDbResolvedPath: string;
 }
 
 export function PathsSettingsTab(props: PathsSettingsTabProps) {
+  // The two activity-database settings lock independently: an operator can pin the
+  // path from the unit file without also freezing the move behaviour, and vice versa.
+  const pathIsEnvLocked = props.envLocked.includes('activity_db_path');
+  const moveIsEnvLocked = props.envLocked.includes('activity_db_move_on_change');
+
   return (
     <Grid container spacing={3}>
       <Grid size={12}>
@@ -99,6 +115,68 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
           <Typography variant="caption">
             <strong>Library vs Import Paths:</strong> The library path is where organized audiobooks
             live. Import paths below are watched for new files to import into the library.
+          </Typography>
+        </Alert>
+      </Grid>
+
+      {/* Activity Database Section */}
+      <Grid size={12}>
+        <Typography variant="subtitle1" gutterBottom sx={{ mt: 2, fontWeight: 600 }}>
+          Activity Database
+        </Typography>
+        {pathIsEnvLocked && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              The activity database location is set by the <code>ACTIVITY_DB_PATH</code> environment
+              variable on the server, which overrides anything saved here on every start. To manage
+              it from this page, remove that variable from the server&apos;s service configuration
+              and restart.
+            </Typography>
+          </Alert>
+        )}
+        <TextField
+          fullWidth
+          label="Activity Database Path"
+          value={props.settings.activityDbPath}
+          onChange={(e) => props.handleChange('activityDbPath', e.target.value)}
+          disabled={pathIsEnvLocked}
+          placeholder={props.activityDbResolvedPath}
+          helperText={
+            pathIsEnvLocked
+              ? `Currently in use: ${props.activityDbResolvedPath} (set by the environment)`
+              : props.settings.activityDbPath.trim()
+                ? 'Full path to the activity-log database file. Clear this field to return to the default location inside the library.'
+                : `Using the default: ${props.activityDbResolvedPath || 'a .activity folder inside the library path'}. Enter a path to store it somewhere else.`
+          }
+        />
+        <FormControlLabel
+          sx={{ mt: 1 }}
+          control={
+            <Switch
+              checked={props.settings.activityDbMoveOnChange}
+              onChange={(e) => props.handleChange('activityDbMoveOnChange', e.target.checked)}
+              disabled={moveIsEnvLocked}
+            />
+          }
+          label="Move the existing database when this path changes"
+        />
+        <Alert severity={props.settings.activityDbMoveOnChange ? 'info' : 'warning'} sx={{ mt: 1 }}>
+          <Typography variant="caption">
+            {props.settings.activityDbMoveOnChange ? (
+              <>
+                <strong>On:</strong> changing the path copies the existing database to the new
+                location, checks that every row arrived, and only then deletes the original. The
+                file can be tens of gigabytes and the copy runs during startup, so the server may
+                take a while to come back. If the copy fails for any reason the original is left
+                untouched.
+              </>
+            ) : (
+              <>
+                <strong>Off:</strong> changing the path starts an empty database at the new
+                location. Existing history is not deleted, but it stays at the old path and will no
+                longer appear in the activity log.
+              </>
+            )}
           </Typography>
         </Alert>
       </Grid>

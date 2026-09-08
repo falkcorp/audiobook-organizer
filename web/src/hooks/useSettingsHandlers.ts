@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-07-03
+// last-edited: 2026-09-07
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -435,6 +435,11 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       const updates: Partial<api.Config> = {
         root_dir: libraryPath,
         playlist_dir: `${libraryPath}/playlists`,
+        // Trimmed so a field of spaces saves as "use the default" rather than as a
+        // whitespace path — ResolveActivityDBPath trims too, so this keeps what is
+        // stored honest about what will be used.
+        activity_db_path: settings.activityDbPath.trim(),
+        activity_db_move_on_change: settings.activityDbMoveOnChange,
         organization_strategy: settings.organizationStrategy,
         scan_on_startup: settings.scanOnStartup,
         auto_organize: settings.autoOrganize,
@@ -657,6 +662,17 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
   // Settings import / export
   // -------------------------------------------------------------------------
 
+  // Deny-by-default: anything not named here is dropped from an imported file.
+  //
+  // activity_db_path and activity_db_move_on_change are deliberately absent. A
+  // settings file exported from one host carries that host's path, and importing
+  // it would queue a relocation of a multi-gigabyte database on the next start of
+  // a machine where that path may not even exist. It is a per-host setting and
+  // belongs to the host, not to a portable settings blob.
+  //
+  // env_locked and activity_db_resolved_path are absent because they are
+  // server-computed and read-only; they appear in a GET response and are not
+  // settings at all.
   const sanitizeImportPayload = (
     payload: Partial<api.Config>
   ): Partial<api.Config> => {

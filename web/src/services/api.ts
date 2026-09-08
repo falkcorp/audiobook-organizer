@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.78.0
+// version: 2.79.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-07
 
@@ -887,6 +887,32 @@ export interface Config {
   enable_sqlite: boolean;
   playlist_dir: string;
   setup_complete?: boolean;
+
+  /**
+   * Where the activity-log database file lives. Empty means the default:
+   * `{root_dir}/.activity/activity.sqlite`, a dot-directory library scans skip.
+   */
+  activity_db_path?: string;
+  /**
+   * Whether changing `activity_db_path` moves the existing database to the new
+   * location (copy, verify by row count, then remove the original) or starts a
+   * fresh one there and leaves the old file behind.
+   */
+  activity_db_move_on_change?: boolean;
+  /**
+   * Read-only, computed per request: the path `activity_db_path` actually
+   * resolves to, including when it is empty. Shown as the field's placeholder so
+   * a blank setting displays the real default. Never sent back on save.
+   */
+  activity_db_resolved_path?: string;
+  /**
+   * Read-only, computed per request: the config keys the server's environment is
+   * currently forcing. A key listed here cannot be changed from the UI — the
+   * environment's value is re-applied over the saved one on every boot — so the
+   * corresponding control must render disabled rather than accept an edit that
+   * will be silently discarded. Never sent back on save.
+   */
+  env_locked?: string[];
 
   // Library organization
   organization_strategy: string;

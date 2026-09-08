@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.105.0
+// version: 1.106.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-07
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -1484,6 +1485,39 @@ func (c *Config) ResolveActivityDBPath() string {
 func envSupplied(envVar string) bool {
 	v, ok := os.LookupEnv(envVar)
 	return ok && v != ""
+}
+
+// envLockedSettings maps a config JSON key to the environment variable that makes it
+// read-only. When that variable is supplied, applyEnvAuthoritativeConfig re-applies
+// the environment's value over the persisted blob on every boot, so a value saved
+// from the UI is silently discarded.
+//
+// Only category-2 keys belong here — the operator-OR-UI settings the Settings page
+// actually renders. The category-1 auth keys (OAuth, CF Access, ABS secrets) are
+// deliberately absent: they have no UI control to annotate, and naming a secret's
+// environment variable in an API response buys nothing.
+var envLockedSettings = map[string]string{
+	"activity_backend":           "ACTIVITY_BACKEND",
+	"activity_db_move_on_change": "ACTIVITY_DB_MOVE_ON_CHANGE",
+	"activity_db_path":           "ACTIVITY_DB_PATH",
+}
+
+// EnvLockedSettings returns the JSON field names of the settings the environment is
+// currently forcing, sorted so the response is stable.
+//
+// This exists so the UI cannot lie. Production sets ACTIVITY_DB_PATH in its systemd
+// unit; without this list the path control renders as an ordinary editable field
+// whose saved value is overwritten on the next boot — the edit appears to take, and
+// then quietly does not. A control the operator cannot actually change must say so.
+func EnvLockedSettings() []string {
+	locked := make([]string, 0, len(envLockedSettings))
+	for key, envVar := range envLockedSettings {
+		if envSupplied(envVar) {
+			locked = append(locked, key)
+		}
+	}
+	slices.Sort(locked)
+	return locked
 }
 
 func applyEnvAuthoritativeConfig(c *Config) {

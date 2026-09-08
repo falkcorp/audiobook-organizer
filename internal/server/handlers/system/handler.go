@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-09-07
 
@@ -449,7 +449,37 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 
 // GetConfig implements GET /config.
 func (h *Handler) GetConfig(c *gin.Context) {
-	httputil.RespondWithOK(c, gin.H{"config": h.configUpdate.MaskSecrets(config.Snapshot())})
+	httputil.RespondWithOK(c, gin.H{"config": withEnvLocks(h.configUpdate.MaskSecrets(config.Snapshot()))})
+}
+
+// withEnvLocks returns the config as a map carrying an extra read-only "env_locked"
+// key: the settings the environment is currently forcing.
+//
+// It is grafted onto the config object rather than sent as a sibling of it because
+// the client reads `data.config` and discards everything beside it, and because the
+// alternative — a field on config.Config — would be persisted into the config blob,
+// where a snapshot of one host's environment would then be restored onto another.
+//
+// On a marshal failure the plain config is returned. That is a deliberate fail-open:
+// losing the annotation degrades the Settings page to its previous behaviour, while
+// failing the request would take the whole page down over an advisory hint.
+func withEnvLocks(cfg config.Config) any {
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return cfg
+	}
+	var flat map[string]any
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		return cfg
+	}
+	flat["env_locked"] = config.EnvLockedSettings()
+	// The path an empty activity_db_path actually resolves to, so the UI can show
+	// the real default instead of a blank box. Computed here rather than mirrored
+	// in TypeScript: ResolveActivityDBPath has three branches and a reimplementation
+	// would drift from it silently, showing the operator a location the server does
+	// not use.
+	flat["activity_db_resolved_path"] = cfg.ResolveActivityDBPath()
+	return flat
 }
 
 // UpdateConfig implements PUT /config.
@@ -482,7 +512,9 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	// just reverted. UpdateService now validates the CANDIDATE before the swap
 	// and returns 400 with nothing written, so there is nothing to undo.
 
-	maskedConfig := h.configUpdate.MaskSecrets(config.Snapshot())
+	// Same env_locked annotation the GET carries: a save that silently dropped it
+	// would let the page re-render its controls as editable until the next reload.
+	maskedConfig := withEnvLocks(h.configUpdate.MaskSecrets(config.Snapshot()))
 	response := gin.H{"config": maskedConfig}
 	if opID, ok := resp["dedup_rescore_op_id"].(string); ok && opID != "" {
 		// The dedup ladder changed; the stored-candidate re-band was queued as

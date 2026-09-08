@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.55.0
+// version: 1.56.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -116,6 +116,9 @@ interface UiMetadataSource {
 
 export interface SettingsState {
   libraryPath: string;
+  /** Empty renders the resolved default rather than a literal blank. */
+  activityDbPath: string;
+  activityDbMoveOnChange: boolean;
   organizationStrategy: string;
   scanOnStartup: boolean;
   autoOrganize: boolean;
@@ -210,6 +213,12 @@ export function Settings() {
   const [importInProgress, setImportInProgress] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
+  // Config keys the server's environment is currently forcing; their controls
+  // render disabled. Server-reported and read-only — never saved back.
+  const [envLocked, setEnvLocked] = useState<string[]>([]);
+  // Where the activity database actually lives given the current settings —
+  // server-computed, shown as the path field's placeholder when it is left empty.
+  const [activityDbResolvedPath, setActivityDbResolvedPath] = useState('');
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
@@ -222,6 +231,10 @@ export function Settings() {
   const initialSettings: SettingsState = {
     // Library settings
     libraryPath: '/path/to/audiobooks/library',
+    // Empty on purpose: the server resolves the default, and the field shows it
+    // as a placeholder. Seeding a literal path here would save a hardcoded one.
+    activityDbPath: '',
+    activityDbMoveOnChange: true,
     // 'auto', 'copy', 'hardlink', 'reflink', 'symlink'
     organizationStrategy: 'auto',
     scanOnStartup: false,
@@ -464,6 +477,11 @@ export function Settings() {
   const loadConfig = async () => {
     try {
       const config = await api.getConfig();
+      // Which settings the server's environment is forcing. Kept out of
+      // SettingsState because it is server-reported and read-only: it must never
+      // be part of the dirty-check or the save payload.
+      setEnvLocked(config.env_locked ?? []);
+      setActivityDbResolvedPath(config.activity_db_resolved_path ?? '');
       // Store masked key if present
       if (config.openai_api_key && config.openai_api_key.includes('***')) {
         setSavedApiKeyMask(config.openai_api_key);
@@ -472,6 +490,10 @@ export function Settings() {
       const nextSettings: SettingsState = {
         // Library settings
         libraryPath: config.root_dir || '',
+        activityDbPath: config.activity_db_path || '',
+        // Default true — the server's default is to move the data with the path.
+        // ?? not || so an explicit false survives the round-trip.
+        activityDbMoveOnChange: config.activity_db_move_on_change ?? true,
         organizationStrategy: config.organization_strategy || 'auto',
         scanOnStartup: config.scan_on_startup ?? false,
         autoOrganize: config.auto_organize ?? true,
@@ -879,6 +901,8 @@ export function Settings() {
 
         <TabPanel value={tabValue} index={4}>
           <PathsSettingsTab
+            envLocked={envLocked}
+            activityDbResolvedPath={activityDbResolvedPath}
             settings={settings}
             setSettings={setSettings}
             libraryPathError={libraryPathError}
