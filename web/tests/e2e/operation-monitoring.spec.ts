@@ -1,5 +1,5 @@
 // file: web/tests/e2e/operation-monitoring.spec.ts
-// version: 3.0.0
+// version: 3.1.0
 // guid: 9845a5f8-e3e4-472f-ae99-2723b6163aae
 // last-edited: 2026-08-08
 
@@ -147,12 +147,17 @@ test.describe('Operation Monitoring', () => {
     // Arrange
     await openActivity(page);
 
-    // Assert — each op renders its def_id and a "<done> / <total> (<pct>%)"
-    // progress line.
-    await expect(page.getByText('scan', { exact: true }).first()).toBeVisible();
-    await expect(
-      page.getByText('organize', { exact: true }).first()
-    ).toBeVisible();
+    // Assert — each op renders its HUMAN-READABLE name and a
+    // "<done> / <total> (<pct>%)" progress line.
+    //
+    // The name, not the def_id. This page used to print `displayName ||
+    // def_id`, so an op whose def is not registered rendered its raw
+    // identifier at the user ("activity.sql-migration"), while the bell showed
+    // a friendly label for the same op at the same time. Both surfaces now go
+    // through operationDisplayName. The mock ops here carry no display_name,
+    // which is exactly the case that used to leak the id.
+    await expect(page.getByText('Library Scan', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Organize', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('20 / 100 (20.00%)')).toBeVisible();
   });
 
