@@ -1,11 +1,12 @@
 // file: internal/database/iface_system.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 92c85d7d-c1fb-43c0-a0a4-2ef742107420
-// last-edited: 2026-08-18
+// last-edited: 2026-09-08
 
 package database
 
 import (
+	"context"
 	"time"
 )
 
@@ -48,7 +49,11 @@ type SystemActivityStore interface {
 
 // MaintenanceStore covers database maintenance and scan-cache.
 type MaintenanceStore interface {
-	Optimize() error
+	Optimize(ctx context.Context) error
+	// CompactionStats lets a caller report real progress while Optimize runs.
+	// Optimize is one blocking call with no callback, so without this a
+	// long compaction is indistinguishable from a wedged one.
+	CompactionStats() CompactionStats
 	GetScanCacheMap() (map[string]ScanCacheEntry, error)
 	UpdateScanCache(bookID string, mtime int64, size int64) error
 	MarkNeedsRescan(bookID string) error

@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-06
+// last-edited: 2026-09-08
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -242,18 +242,18 @@ func (s *Server) MetadataUpgradeRun(ctx context.Context, limit int, progress ope
 	return result.Checked, result.Upgraded, result.Skipped, result.Errors, nil
 }
 
-func (s *Server) OptimizeAIScanStore() error {
+func (s *Server) OptimizeAIScanStore(ctx context.Context) error {
 	if s.aiScanStore == nil {
 		return nil
 	}
-	return s.aiScanStore.Optimize()
+	return s.aiScanStore.Optimize(ctx)
 }
 
-func (s *Server) OptimizeOLStore() error {
+func (s *Server) OptimizeOLStore(ctx context.Context) error {
 	if s.olService == nil || s.olService.Store() == nil {
 		return nil
 	}
-	return s.olService.Store().Optimize()
+	return s.olService.Store().Optimize(ctx)
 }
 
 func (s *Server) PruneOldLogs(retentionDays int) error {

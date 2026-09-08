@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.0.1
-// last-edited: 2026-05-11
+// version: 2.1.0
+// last-edited: 2026-09-08
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -152,11 +152,11 @@ func (s *AIScanStore) Close() error {
 
 // Optimize compacts the PebbleDB. No-op when sharing an external DB (compaction
 // is the host store's responsibility).
-func (s *AIScanStore) Optimize() error {
+func (s *AIScanStore) Optimize(ctx context.Context) error {
 	if !s.owned {
 		return nil
 	}
-	return s.db.Compact(context.Background(), nil, []byte{0xff}, false)
+	return s.db.Compact(ctx, nil, []byte{0xff}, false)
 }
 
 // nextID atomically reads and increments the counter for the given entity type.

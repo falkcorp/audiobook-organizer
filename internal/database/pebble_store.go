@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.144.0
+// version: 1.145.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 package database
 
@@ -4725,8 +4725,61 @@ func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 }
 
 // Optimize compacts the PebbleDB database to reclaim space.
-func (p *PebbleStore) Optimize() error {
-	return p.db.Compact(context.Background(), nil, []byte{0xff}, false)
+// Optimize compacts the whole keyspace. It is a LONG operation -- 31 GB took
+// well over twenty minutes on production -- so it takes a context and honours
+// it. It hardcoded context.Background() until 2026-09-08, which meant nothing
+// could interrupt a running compaction: not an operation cancel, not shutdown.
+// Proven on prod that day, when the registry cancelled maintenance.db-optimize
+// at its stuck strike and Pebble carried on compacting for another twenty
+// minutes with the op already reported dropped.
+//
+// Aborting partway is safe: Pebble compaction is crash-safe, and an interrupted
+// run simply leaves the LSM as it was.
+func (p *PebbleStore) Optimize(ctx context.Context) error {
+	return p.db.Compact(ctx, nil, []byte{0xff}, false)
+}
+
+// CompactionStats is a point-in-time read of Pebble's compaction counters.
+//
+// It exists so a caller running a long Optimize() can report LIVENESS from
+// numbers the engine actually produces, rather than from a bare ticker. That
+// distinction is the whole point: the operations registry cancels an op that
+// reports no progress for five minutes, and a heartbeat that fires regardless
+// of whether work is happening would defeat that check instead of satisfying
+// it. See internal/operations/registry/types.go:200 — declaring liveness is a
+// contract precisely so a wedged op stays distinguishable from a working one.
+type CompactionStats struct {
+	// Count is the total number of completed compactions. Monotonic, so a
+	// caller can tell "finished some work since I last looked".
+	Count int64
+	// EstimatedDebt is Pebble's estimate of the bytes still needing compaction
+	// for the LSM to reach a stable shape. This is the closest thing to a
+	// "how much is left" number and it falls as a full compaction proceeds.
+	EstimatedDebt uint64
+	// InProgressBytes is the bytes in sstables being written by compactions
+	// running right now. Zero when nothing is compacting.
+	InProgressBytes int64
+	// NumInProgress is how many compactions are running. A caller uses this to
+	// tell a STALLED compaction (in progress but no counters moving — a real
+	// wedge the watchdog should catch) from an IDLE one (nothing running).
+	NumInProgress int64
+	// DiskSpaceUsage is the engine's own view of bytes on disk. Note this
+	// counts obsolete-but-not-yet-deleted files during a compaction, so it
+	// RISES before it falls.
+	DiskSpaceUsage uint64
+}
+
+// CompactionStats reports Pebble's live compaction counters. Cheap: it reads
+// in-memory metrics and does not touch the LSM.
+func (p *PebbleStore) CompactionStats() CompactionStats {
+	m := p.db.Metrics()
+	return CompactionStats{
+		Count:           m.Compact.Count,
+		EstimatedDebt:   m.Compact.EstimatedDebt,
+		InProgressBytes: m.Compact.InProgressBytes,
+		NumInProgress:   m.Compact.NumInProgress,
+		DiskSpaceUsage:  m.DiskSpaceUsage(),
+	}
 }
 
 // derefInt64 safely dereferences a *int64, returning 0 for nil.
