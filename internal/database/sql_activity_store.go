@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-07
 
@@ -39,6 +39,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -74,6 +76,17 @@ const sqlActDeleteChunk = 5000
 // point for a log — durable across app crashes, fsync only at checkpoint).
 func OpenSQLiteActivityStore(path string) (*SQLActivityStore, error) {
 	d := sqliteDialect{}
+
+	// The default path now lives in a dot-directory under the library root, which
+	// need not exist yet on a first boot or after the root moves. SQLite does not
+	// create intermediate directories: without this the open fails with a bare
+	// "unable to open database file" and the caller degrades to Pebble-only,
+	// making a fresh install look like a broken SQLite backend.
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("sql_activity: create directory %s: %w", dir, err)
+		}
+	}
 
 	// modernc uses the repeatable ?_pragma=name(value) DSN form. busy_timeout
 	// makes a writer wait rather than fail with SQLITE_BUSY under contention.

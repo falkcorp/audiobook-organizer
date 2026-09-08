@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_relocate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d9a1e83-7b25-4c06-9f18-3e6c0a72b5d1
 // last-edited: 2026-09-07
 
@@ -41,6 +41,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // relocateProgressEvery bounds how often a long copy emits a progress line. A
@@ -62,6 +64,37 @@ var relocateBusyTimeoutMS = 30000
 // ErrRelocateSourceMissing means there is nothing at the source path to move —
 // the caller should simply open the destination and carry on.
 var ErrRelocateSourceMissing = errors.New("activity-relocate: no database at source path")
+
+// ActivitySQLPathKey records where the SQLite activity database was last opened.
+//
+// The configured path says where the database SHOULD be; only this says where it
+// actually IS. Without it a boot that finds a new configured path cannot tell
+// "the operator moved it, bring the data along" from "this is simply the first
+// boot at this path" — and guessing wrong either strands the history or hunts for
+// a file that was never there. It lives in Pebble because Pebble is already open
+// before the activity store is built.
+const ActivitySQLPathKey = "system:activity:sqlite_path"
+
+// LastActivityDBPath returns the path the activity database was last opened at,
+// and whether such a record exists. Absent on first boot, and on any install
+// predating the record.
+func (s *PebbleActivityStore) LastActivityDBPath() (string, bool) {
+	v, closer, err := s.db.Get([]byte(ActivitySQLPathKey))
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = closer.Close() }()
+	return string(v), len(v) > 0
+}
+
+// SetLastActivityDBPath records where the activity database is now open.
+//
+// Written with pebble.Sync: if this write were lost to a crash while the file
+// itself had already moved, the next boot would look for the database at the old
+// path, find nothing, and silently start an empty one.
+func (s *PebbleActivityStore) SetLastActivityDBPath(path string) error {
+	return s.db.Set([]byte(ActivitySQLPathKey), []byte(path), pebble.Sync)
+}
 
 // RelocateStats reports what a relocation actually did, for logging and tests.
 type RelocateStats struct {

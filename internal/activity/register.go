@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.5.0
-// last-edited: 2026-08-23
+// version: 1.6.0
+// last-edited: 2026-09-07
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -17,7 +17,6 @@ package activity
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -87,10 +86,15 @@ func init() {
 				return pebbleStore, nil
 			}
 
-			sqlPath := cfg.ActivityDBPath
-			if sqlPath == "" {
-				sqlPath = filepath.Join(filepath.Dir(cfg.DatabasePath), "activity.sqlite")
-			}
+			sqlPath := cfg.ResolveActivityDBPath()
+
+			// The configured path says where the database should be; the recorded
+			// one says where it actually is. When they disagree there is an
+			// existing database somewhere else, and doing nothing about it would
+			// silently start a fresh log while the history sat unreachable at the
+			// old path — the failure mode this whole path is designed around.
+			relocateActivityDBIfNeeded(pebbleStore, sqlPath, cfg.ActivityDBMoveOnChange)
+
 			sqlStore, err := database.OpenSQLiteActivityStore(sqlPath)
 			if err != nil {
 				// Fail OPEN to Pebble: a SQLite open failure must not take the
@@ -99,6 +103,19 @@ func init() {
 					"path", sqlPath, "err", err)
 				return pebbleStore, nil
 			}
+			// Record where the database actually is, now that it has opened
+			// cleanly. This is what the next boot compares the configured path
+			// against; writing it before the open would claim a location that
+			// might not work.
+			if err := pebbleStore.SetLastActivityDBPath(sqlPath); err != nil {
+				// Not fatal, but it does disarm the relocation check: a later
+				// path change would start an empty database instead of moving
+				// this one, so it must not pass unnoticed.
+				slog.Error("[activity] could not record the activity database location — "+
+					"a future path change will NOT relocate this database",
+					"path", sqlPath, "err", err)
+			}
+
 			readSecondary := pebbleStore.SQLBackfillDone()
 			slog.Info("[activity] SQLite activity migration wired",
 				"sqlite_path", sqlPath, "read_secondary", readSecondary)
