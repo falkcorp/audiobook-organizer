@@ -1,6 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.3.0
+// version: 4.4.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
+// last-edited: 2026-09-08
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -32,6 +33,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { OperationActivityPanel } from '../OperationActivityPanel';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 import { formatProgressCounts } from './operationsFormat';
+import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
 
@@ -220,19 +222,22 @@ export function OperationsIndicator() {
     });
   };
 
-  const alertInProgress = alertOperations.filter(
-    (op) => !['completed', 'failed', 'canceled'].includes(op.status)
-  );
+  // isTerminal, not the three-status literal these used to enumerate. The
+  // backend mints a family of interrupted_* statuses (one per ResumePolicy),
+  // and none of them was in that list — so an op that had FINISHED as
+  // interrupted_dropped was counted as in-progress here forever: a badge stuck
+  // one too high, an entry sitting in "running" with a dead progress bar, and
+  // nothing in the terminal section. operationPolling.ts's own comment warns
+  // against enumerating for exactly this reason; these three sites predate it.
+  // The activity migration ends at interrupted_dropped on every restart, which
+  // is what surfaced it.
+  const alertInProgress = alertOperations.filter((op) => !isTerminal(op.status));
   const badgeCount = alertInProgress.length;
 
-  const inProgress = activeOperations.filter(
-    (op) => !['completed', 'failed', 'canceled'].includes(op.status)
-  );
+  const inProgress = activeOperations.filter((op) => !isTerminal(op.status));
   const queued = inProgress.filter((op) => op.status === 'queued');
   const running = inProgress.filter((op) => op.status !== 'queued');
-  const terminal = activeOperations.filter((op) =>
-    ['completed', 'failed', 'canceled'].includes(op.status)
-  );
+  const terminal = activeOperations.filter((op) => isTerminal(op.status));
 
   const empty = running.length === 0 && queued.length === 0 && terminal.length === 0;
 
