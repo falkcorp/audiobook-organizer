@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/search_rank_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3d9b7e1a-5c2f-4a8e-b6d1-9f0e2c4a7b3d
-// last-edited: 2026-09-05
+// last-edited: 2026-09-08
 
 package abs
 
@@ -82,7 +82,7 @@ func TestSearchStore_BoundHoldsUnderFrozenClock(t *testing.T) {
 	frozen := time.Unix(1_800_000_000, 0)
 	h := &Handler{now: func() time.Time { return frozen }}
 	for i := 0; i < absSearchCacheMax+10; i++ {
-		h.searchStore(searchCacheKey("lib", string(rune('a'+i%26))+string(rune('a'+i/26))), emptySearchResponse())
+		h.searchStore(searchCacheKey("lib", string(rune('a'+i%26))+string(rune('a'+i/26)), searchResultLimit), emptySearchResponse())
 	}
 	if n := len(h.searchCache); n > absSearchCacheMax {
 		t.Fatalf("cache holds %d entries, bound is %d", n, absSearchCacheMax)
