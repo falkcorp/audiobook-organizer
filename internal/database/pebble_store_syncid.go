@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -91,9 +91,14 @@ var _ SyncIdentityStore = (*PebbleStore)(nil)
 // syncIDMintMu serializes the check-then-mint-then-write section of
 // MintOrGetSyncID so two concurrent first-encounters of the same book cannot
 // both mint a syncID and race the reverse-index write (mirrors the
-// mergeSerializeMu idiom in internal/merge/serialize.go). It is not held
-// across any Pebble iteration or I/O beyond the point-read/point-writes that
-// method needs.
+// mergeSerializeMu idiom in internal/merge/serialize.go).
+//
+// It IS held across a pebble.Sync fsync — the commit is part of the section
+// that has to be atomic — which is exactly why MintOrGetSyncID must not take it
+// just to answer a lookup. Until 2026-09-08 it did, so every already-minted
+// book on the ABS request path serialized process-wide behind one fsync-holding
+// lock, competing with whatever the metadata apply job was minting at the time.
+// Only a genuine first encounter reaches this lock now.
 var syncIDMintMu sync.Mutex
 
 // newSyncID mints a random UUIDv4 by hand via crypto/rand -- deliberately not
@@ -148,9 +153,22 @@ func (p *PebbleStore) MintOrGetSyncID(bookID string) (string, error) {
 		return "", fmt.Errorf("bookID required")
 	}
 
+	// Fast path, deliberately OUTSIDE syncIDMintMu: a book that already has a
+	// syncID needs no mutual exclusion, and on a warm library that is nearly
+	// every call. See the syncIDMintMu comment for what taking the lock
+	// unconditionally cost on the ABS request path.
+	if id, found, err := p.GetSyncIDForBook(bookID); err != nil || found {
+		return id, err
+	}
+
 	syncIDMintMu.Lock()
 	defer syncIDMintMu.Unlock()
 
+	// Re-check under the lock. Another goroutine can mint this book between the
+	// unlocked miss above and this acquisition; without this the loser would
+	// overwrite the winner's reverse index with a second syncID while the
+	// winner's sync_item: record stayed live, splitting one book's durable
+	// identity in two.
 	existing, closer, err := p.db.Get(syncItemBookKey(bookID))
 	if err == nil {
 		id := string(existing)

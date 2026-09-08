@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 package abs
 
@@ -177,9 +177,25 @@ func (h *Handler) loadOneItemView(
 		return files[a].FilePath < files[b].FilePath
 	})
 
+	// Mint every file's sync id in ONE call rather than one per file inside the
+	// loop below. The singular form takes a process-global mutex that is held
+	// across a pebble.Sync fsync, so the per-file version made a 40-file book pay
+	// 40 lock acquisitions — and a 12-result search page ~480, all serialized
+	// against each other AND against the metadata apply job doing the same thing.
+	// That, not os.Stat (0.01 ms median on prod) and not response size, is what
+	// made a broad search take 13.8-28.0 s.
+	fileIDs := make([]string, 0, len(files))
+	for i := range files {
+		fileIDs = append(fileIDs, files[i].ID)
+	}
+	syncFileIDs, err := h.identity.MintOrGetSyncFileIDs(book.ID, fileIDs)
+	if err != nil {
+		return nil, fmt.Errorf("mint sync file ids for %s: %w", book.ID, err)
+	}
+
 	view := &itemView{Book: book, SyncID: syncID, Authors: authors}
 	for i := range files {
-		fv, err := h.loadFileView(book.ID, files[i])
+		fv, err := h.loadFileView(files[i], syncFileIDs[files[i].ID])
 		if err != nil {
 			return nil, err
 		}
@@ -205,11 +221,11 @@ func (h *Handler) loadOneItemView(
 	return view, nil
 }
 
-func (h *Handler) loadFileView(bookID string, f database.BookFile) (*fileView, error) {
-	syncFileID, err := h.identity.MintOrGetSyncFileID(bookID, f.ID)
-	if err != nil {
-		return nil, fmt.Errorf("mint sync file id for %s/%s: %w", bookID, f.ID, err)
-	}
+// loadFileView builds one file's view. syncFileID is resolved by the caller's
+// batch mint rather than minted here: this used to do its own
+// MintOrGetSyncFileID, which is what put a global-mutex-plus-fsync on the
+// innermost loop of every item response.
+func (h *Handler) loadFileView(f database.BookFile, syncFileID string) (*fileView, error) {
 	fv := &fileView{
 		File:        f,
 		SyncFileID:  syncFileID,

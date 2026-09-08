@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncfile.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 92ebd115-9f89-4400-ac26-bf9a065b6153
-// last-edited: 2026-07-31
+// last-edited: 2026-09-08
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -32,10 +33,16 @@ type SyncFile struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// syncFileMintMu guards the check-then-mint race in MintOrGetSyncFileID.
-// Separate from TASK-01's syncIDMintMu (sync_item keyspace): the two
-// keyspaces are independent, so there is no reason to serialize unrelated
-// work behind a shared lock.
+// syncFileMintMu guards the check-then-MINT race only. Separate from TASK-01's
+// syncIDMintMu (sync_item keyspace): the two keyspaces are independent, so
+// there is no reason to serialize unrelated work behind a shared lock.
+//
+// It is deliberately NOT held for lookups of pairs that already have an ID.
+// Until 2026-09-08 it was taken unconditionally at the top of
+// MintOrGetSyncFileID, which serialized every per-file read in the process
+// behind one lock held across a pebble.Sync fsync — see that method's comment
+// for the production numbers. Readers now take the unlocked path and only a
+// genuine miss reaches this lock.
 var syncFileMintMu sync.Mutex
 
 // SyncFileStore is a small additive capability interface for the sync_file
@@ -45,6 +52,10 @@ var syncFileMintMu sync.Mutex
 // (mocks included).
 type SyncFileStore interface {
 	MintOrGetSyncFileID(bookID, fileID string) (string, error)
+	// MintOrGetSyncFileIDs resolves a whole book's files in one lock
+	// acquisition and one fsync. Prefer it to calling the singular form in a
+	// loop; see its doc comment for why the loop form is pathological.
+	MintOrGetSyncFileIDs(bookID string, fileIDs []string) (map[string]string, error)
 	GetSyncFileID(bookID, fileID string) (string, bool, error)
 	ListSyncFilesForBook(bookID string) ([]SyncFile, error)
 	RepointSyncFile(bookID, oldFileID, newFileID string) error
@@ -85,6 +96,17 @@ func syncFileRecordKey(syncFileID string) []byte {
 // MintOrGetSyncFileID returns the durable syncFileID for the (bookID,
 // fileID) pair, minting one on first encounter. Concurrent callers racing
 // on the same pair all observe the same winning ID.
+//
+// The lookup is attempted WITHOUT syncFileMintMu first. The mutex exists only
+// to make check-then-mint atomic; a pair that already has an ID needs no mutual
+// exclusion at all, and on a warm library that is essentially every call. Taking
+// the exclusive lock unconditionally made this the single busiest choke point on
+// the ABS request path: every per-file call in the process — 12 books x ~40
+// files for one search page, plus whatever the metadata apply job was minting —
+// queued behind one lock that is held across a pebble.Sync fsync. Measured on
+// production 2026-09-08: a 12-result search took 13.8-28.0 s, and os.Stat, the
+// other suspect on this path, was 0.01 ms median. Pebble itself is safe for
+// concurrent reads against writes, so the unlocked Get needs no coordination.
 func (s *PebbleStore) MintOrGetSyncFileID(bookID, fileID string) (string, error) {
 	if bookID == "" {
 		return "", fmt.Errorf("MintOrGetSyncFileID: bookID must not be empty")
@@ -93,54 +115,148 @@ func (s *PebbleStore) MintOrGetSyncFileID(bookID, fileID string) (string, error)
 		return "", fmt.Errorf("MintOrGetSyncFileID: fileID must not be empty")
 	}
 
+	if id, found, err := s.GetSyncFileID(bookID, fileID); err != nil || found {
+		return id, err
+	}
+
 	syncFileMintMu.Lock()
 	defer syncFileMintMu.Unlock()
 
-	lookupKey := syncFileLookupKey(bookID, fileID)
-	existing, closer, err := s.db.Get(lookupKey)
-	if err == nil {
-		id := string(existing)
-		closer.Close()
-		return id, nil
-	}
-	if err != pebble.ErrNotFound {
-		return "", err
-	}
-
-	syncFileID, err := newULID()
+	minted, err := s.mintSyncFileIDsLocked(bookID, []string{fileID})
 	if err != nil {
 		return "", err
 	}
+	return minted[fileID], nil
+}
 
-	record := SyncFile{
-		SyncFileID:    syncFileID,
-		BookID:        bookID,
-		CurrentFileID: fileID,
-		CreatedAt:     time.Now(),
+// MintOrGetSyncFileIDs is the batch form of MintOrGetSyncFileID: it resolves
+// every fileID for one book and returns fileID -> syncFileID.
+//
+// It exists because the per-file form, called in a loop, is pathological. Each
+// miss is its own lock acquisition, its own Pebble batch and its own
+// pebble.Sync fsync; a book with 40 files paid 40 of each, and a search page
+// covering 12 books paid ~480. Here, every already-minted pair is resolved by an
+// unlocked point-get, and ALL the misses are minted under ONE lock acquisition
+// in ONE batch with ONE fsync.
+//
+// The same-pair invariant is preserved exactly: the Gets that decide what to
+// mint and the Commit that writes it happen inside a single hold of
+// syncFileMintMu, and each pair is re-checked under that lock (see
+// mintSyncFileIDsLocked). Pebble batches are not read-modify-write
+// transactions, so without that single hold two concurrent batches could both
+// miss the same pair and mint two different durable IDs for it.
+//
+// Duplicate fileIDs collapse to one entry. A caller passing no file IDs gets an
+// empty map and touches neither the lock nor the disk.
+func (s *PebbleStore) MintOrGetSyncFileIDs(bookID string, fileIDs []string) (map[string]string, error) {
+	if bookID == "" {
+		return nil, fmt.Errorf("MintOrGetSyncFileIDs: bookID must not be empty")
 	}
-	data, err := json.Marshal(record)
+
+	out := make(map[string]string, len(fileIDs))
+	// seen tracks every fileID already routed, hit or miss. It must NOT be
+	// replaced by an `out` lookup: `out` only holds pairs that already had an
+	// ID, so a repeated MISSING fileID would land in `missing` more than once.
+	// mintSyncFileIDsLocked cannot catch that — its re-check reads committed
+	// state and the batch is still open — so each copy would mint its own
+	// record, leaving one reachable through the lookup key and the rest live
+	// but orphaned. That is the same split identity the mutex exists to
+	// prevent, reachable from a single call.
+	seen := make(map[string]struct{}, len(fileIDs))
+	var missing []string
+	for _, fileID := range fileIDs {
+		if fileID == "" {
+			return nil, fmt.Errorf("MintOrGetSyncFileIDs: fileID must not be empty")
+		}
+		if _, dup := seen[fileID]; dup {
+			continue
+		}
+		seen[fileID] = struct{}{}
+		id, found, err := s.GetSyncFileID(bookID, fileID)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			out[fileID] = id
+			continue
+		}
+		missing = append(missing, fileID)
+	}
+	if len(missing) == 0 {
+		return out, nil
+	}
+
+	syncFileMintMu.Lock()
+	defer syncFileMintMu.Unlock()
+
+	minted, err := s.mintSyncFileIDsLocked(bookID, missing)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal sync_file record: %w", err)
+		return nil, err
 	}
+	maps.Copy(out, minted)
+	return out, nil
+}
 
+// mintSyncFileIDsLocked mints a syncFileID for each of fileIDs that does not
+// already have one, writing them all in a single batch. It MUST be called with
+// syncFileMintMu held.
+//
+// The re-check is load-bearing, not defensive: callers reach here after an
+// UNLOCKED miss, and another goroutine can mint the same pair in the window
+// between that miss and the lock acquisition. Without the re-check this would
+// overwrite the winner's lookup key with a second ID while the first ID's
+// sync_file: record stayed live — a durable, user-visible split identity for one
+// file. That is the exact race syncFileMintMu was introduced to prevent.
+//
+// Deduplicating fileIDs is the caller's job; a repeated fileID here would mint
+// twice within the batch and the later Set would win.
+func (s *PebbleStore) mintSyncFileIDsLocked(bookID string, fileIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(fileIDs))
 	batch := s.db.NewBatch()
-	if err := batch.Set(syncFileRecordKey(syncFileID), data, nil); err != nil {
-		batch.Close()
-		return "", err
+	defer batch.Close()
+
+	pending := 0
+	for _, fileID := range fileIDs {
+		if id, found, err := s.GetSyncFileID(bookID, fileID); err != nil {
+			return nil, err
+		} else if found {
+			out[fileID] = id
+			continue
+		}
+
+		syncFileID, err := newULID()
+		if err != nil {
+			return nil, err
+		}
+		data, err := json.Marshal(SyncFile{
+			SyncFileID:    syncFileID,
+			BookID:        bookID,
+			CurrentFileID: fileID,
+			CreatedAt:     time.Now(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal sync_file record: %w", err)
+		}
+		if err := batch.Set(syncFileRecordKey(syncFileID), data, nil); err != nil {
+			return nil, err
+		}
+		if err := batch.Set(syncFileLookupKey(bookID, fileID), []byte(syncFileID), nil); err != nil {
+			return nil, err
+		}
+		if err := batch.Set(syncFileBookKey(bookID, syncFileID), []byte(fileID), nil); err != nil {
+			return nil, err
+		}
+		out[fileID] = syncFileID
+		pending++
 	}
-	if err := batch.Set(lookupKey, []byte(syncFileID), nil); err != nil {
-		batch.Close()
-		return "", err
-	}
-	if err := batch.Set(syncFileBookKey(bookID, syncFileID), []byte(fileID), nil); err != nil {
-		batch.Close()
-		return "", err
+
+	if pending == 0 {
+		return out, nil
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
-		return "", err
+		return nil, err
 	}
-
-	return syncFileID, nil
+	return out, nil
 }
 
 // GetSyncFileID performs a read-only lookup of the syncFileID for a

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-05
+// last-edited: 2026-09-08
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -202,6 +202,10 @@ type IdentityStore interface {
 	MintOrGetSyncID(bookID string) (string, error)
 	ResolveSyncItem(syncID string) (*database.SyncItem, error)
 	MintOrGetSyncFileID(bookID, fileID string) (string, error)
+	// MintOrGetSyncFileIDs resolves a whole book's files in one lock acquisition
+	// and one fsync. The mapper uses this; calling the singular form per file is
+	// what made broad searches take tens of seconds.
+	MintOrGetSyncFileIDs(bookID string, fileIDs []string) (map[string]string, error)
 	GetSyncFileID(bookID, fileID string) (string, bool, error)
 	ListSyncFilesForBook(bookID string) ([]database.SyncFile, error)
 }
