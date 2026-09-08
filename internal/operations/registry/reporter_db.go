@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-08-22
+// last-edited: 2026-09-07
 
 package registry
 
@@ -60,6 +60,15 @@ type dbReporter struct {
 	logBuf      []logEntry
 	droppedLogs uint64 // count of oldest entries dropped after logBuf hit the cap (guarded by logMu)
 	flushCh     chan struct{}
+
+	// flushWG makes flushLoop JOINABLE. Cancelling runCtx only asks the loop to
+	// stop; it then performs a terminal flush that WRITES TO THE STORE. With
+	// nothing to join, executeRun returns while that flush is still in flight,
+	// the run leaves Registry.running, Shutdown concludes every worker has
+	// drained, and the Pebble store closes underneath the write — "pebble:
+	// closed", a panic unwinding through Pebble's commit path, and the racing
+	// deferred Batch.Close() the race detector reports. See awaitFlush.
+	flushWG sync.WaitGroup
 
 	// terminated is flipped by markTerminal() when the owning run is abandoned:
 	// its flushLoop has already exited (runCtx canceled) so any further buffered
@@ -215,9 +224,34 @@ func newDBReporter(
 	}
 
 	// Background flush goroutine: flushes every 250ms or when signalled.
-	go r.flushLoop(runCtx)
+	// Tracked rather than fire-and-forget so the owner can join it before the
+	// store closes — see flushWG and awaitFlush.
+	r.flushWG.Go(func() { r.flushLoop(runCtx) })
 
 	return r
+}
+
+// awaitFlush blocks until the background flush loop has exited, so a caller can
+// guarantee no further writes will reach the store.
+//
+// Bounded, because the terminal flush writes to Pebble and a compaction can
+// block it: an unbounded join would let one stuck flush hang shutdown outright,
+// which is a worse failure than the one being fixed. On expiry it returns and
+// says so — the flushLogs recover() is the backstop for the write that may then
+// land late.
+func (r *dbReporter) awaitFlush(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		r.flushWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		slog.Default().Warn("dbReporter: flush loop did not exit within the join timeout; "+
+			"a late write may still reach the store",
+			"op_id", r.opID, "timeout", timeout)
+	}
 }
 
 // flushLoop is the background goroutine that periodically flushes the log
@@ -273,10 +307,18 @@ func (r *dbReporter) flushProgressLazy(lastFlushedGen *uint64) {
 
 // flushLogs drains logBuf to the DB.
 func (r *dbReporter) flushLogs() {
-	// WHY recover: if the underlying store is closed during test teardown
-	// (PebbleDB panics with "pebble: closed" when used after Close()), we
-	// convert the panic to a logged warning. In production the store is
-	// closed only at process exit, well after all reporters finish.
+	// WHY recover: PebbleDB panics with "pebble: closed" when used after
+	// Close(), and this runs on a background goroutine where a panic would take
+	// the process down.
+	//
+	// This is a BACKSTOP, not the mechanism. It does not make a use-after-close
+	// safe: the panic still unwinds through Pebble's commit path, and the
+	// deferred Batch.Close() that runs on the way out races the goroutine doing
+	// the closing — which the race detector reported as a genuine DATA RACE in
+	// TestRunMaintenanceJob_ForceDefaultsFalse. A recover cannot fix a race.
+	// The actual fix is joining this loop before the store closes (flushWG /
+	// awaitFlush, called from executeRun); this remains only for the paths that
+	// join with a timeout and could still lose the footrace.
 	defer func() {
 		if rec := recover(); rec != nil {
 			slog.Default().Warn("dbReporter: flush recovered from panic", "op_id", r.opID, "panic", rec)
