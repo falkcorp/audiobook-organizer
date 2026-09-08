@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-05
+// last-edited: 2026-09-08
 
 package abs
 
@@ -1996,8 +1996,33 @@ func (h *Handler) publishedDecades() ([]string, error) {
 
 // ── GET /api/libraries/:libraryId/search ────────────────────────────────────
 
-// searchResultLimit caps a search. Both clients paginate nothing here.
-const searchResultLimit = 25
+// searchResultLimit caps a search when the caller names no limit of its own.
+//
+// Was 25 and hardcoded — the `limit` query parameter was parsed nowhere, so
+// limit=1, limit=10 and limit=100 all returned the identical document. Real ABS
+// defaults this to 12, and the default matters far more here than it does there:
+// a search hit carries the EXPANDED item (see buildSearch), and the captured
+// real-ABS fixture's hit is 5.5 KB because that book has one audio file. A
+// 40-file audiobook renders at 105 KB, of which 100 KB is tracks + audioFiles +
+// libraryFiles. Measured on prod 2026-09-08, q="H": 25 hits = 5,113,697 bytes of
+// book, 90% of a 5.67 MB response that took 11.03 s to build. AudioBooth issues
+// a request per keystroke, so it hit that on the FIRST character and timed out.
+const searchResultLimit = 12
+
+// searchResultLimitMax bounds what a caller may ask for, so `?limit=100000`
+// cannot ask the server to expand the whole library.
+const searchResultLimitMax = 25
+
+// parseSearchLimit reads the ABS `limit` parameter. Absent, unparseable or <= 0
+// means the default; anything above the ceiling is clamped rather than rejected,
+// because a client asking for too much wants "as many as you'll give me".
+func parseSearchLimit(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return searchResultLimit
+	}
+	return min(n, searchResultLimitMax)
+}
 
 // absSearchCacheTTL is how long a finished search document is replayed for the
 // same (library, query). The user's number: "the same for the next minute ...
@@ -2017,8 +2042,11 @@ type searchCacheEntry struct {
 
 // searchCacheKey folds case and surrounding space so "Primal Hunter" and
 // "primal hunter " share a document — the search itself is case-insensitive.
-func searchCacheKey(libraryID, query string) string {
-	return libraryID + "\x00" + strings.ToLower(strings.TrimSpace(query))
+// The limit is part of the key: two callers asking for different sizes of the
+// same query are asking for different documents, and without it whichever one
+// arrived first would be replayed to the other for the whole TTL.
+func searchCacheKey(libraryID, query string, limit int) string {
+	return libraryID + "\x00" + strings.ToLower(strings.TrimSpace(query)) + "\x00" + strconv.Itoa(limit)
 }
 
 func (h *Handler) searchCached(key string) (*searchResponse, bool) {
@@ -2112,6 +2140,59 @@ func matchSeriesNames(all []database.Series, lower string) []database.Series {
 // cap: GetAllSeries is name-sorted, so cutting the first 25 substring matches
 // of a common word could drop the series the user typed behind twenty-four
 // that merely contain it.
+// nameMatchTier scores a name against the lowercased query with the same tiers
+// rankSeriesMatches uses — 0 exact, 1 prefix, 2 substring, -1 no match — so an
+// author and a series that match a query the same way rank the same way.
+func nameMatchTier(name, lower string) int {
+	n := strings.ToLower(name)
+	switch {
+	case n == lower:
+		return 0
+	case strings.HasPrefix(n, lower):
+		return 1
+	case strings.Contains(n, lower):
+		return 2
+	}
+	return -1
+}
+
+// rankNameMatches returns the best `limit` items by name relevance, keeping
+// index order within a tier.
+//
+// Truncating an UNRANKED list is how a search quietly loses the result you were
+// looking for. The author, narrator and genre lists used to be unbounded appends
+// in index order; bounding them without ranking first would have dropped an
+// exact match in favour of whatever happened to sit earlier in the index. ABS
+// search does not paginate — there is no second page to recover a lost hit from
+// — so what falls off the end has to be the least relevant, never the arbitrary.
+func rankNameMatches[T any](items []T, lower string, limit int, name func(T) string) []T {
+	type ranked struct {
+		it   T
+		tier int
+		pos  int
+	}
+	var out []ranked
+	for i := range items {
+		if tier := nameMatchTier(name(items[i]), lower); tier >= 0 {
+			out = append(out, ranked{it: items[i], tier: tier, pos: i})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].tier != out[j].tier {
+			return out[i].tier < out[j].tier
+		}
+		return out[i].pos < out[j].pos
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	res := make([]T, 0, len(out))
+	for _, r := range out {
+		res = append(res, r.it)
+	}
+	return res
+}
+
 func rankSeriesMatches(all []database.Series, lower string, visible map[int]int, limit int) []database.Series {
 	query := stripArticle(lower)
 	type ranked struct {
@@ -2179,7 +2260,8 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 		return
 	}
 
-	key := searchCacheKey(h.libraryID(), query)
+	limit := parseSearchLimit(c.Query("limit"))
+	key := searchCacheKey(h.libraryID(), query, limit)
 	if resp, ok := h.searchCached(key); ok {
 		respondJSON(c, http.StatusOK, resp)
 		return
@@ -2188,7 +2270,7 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 		if resp, ok := h.searchCached(key); ok {
 			return resp, nil
 		}
-		resp, complete, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query)
+		resp, complete, err := h.buildSearch(context.WithoutCancel(c.Request.Context()), query, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -2225,7 +2307,7 @@ func emptySearchResponse() *searchResponse {
 //
 // complete is false when any optional source degraded to an empty list; the
 // document is still served, but the caller must not cache it.
-func (h *Handler) buildSearch(ctx context.Context, query string) (resp *searchResponse, complete bool, err error) {
+func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (resp *searchResponse, complete bool, err error) {
 	resp = emptySearchResponse()
 	complete = true
 	degraded := func(what string, err error) {
@@ -2233,7 +2315,7 @@ func (h *Handler) buildSearch(ctx context.Context, query string) (resp *searchRe
 		slog.Warn("abs: search source unavailable, serving that list empty", "source", what, "query", query, "err", err)
 	}
 
-	books, err := h.library.SearchBooks(query, searchResultLimit, 0)
+	books, err := h.library.SearchBooks(query, limit, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -2252,40 +2334,39 @@ func (h *Handler) buildSearch(ctx context.Context, query string) (resp *searchRe
 	if err != nil {
 		degraded("contributors", err)
 	} else {
-		for i := range idx.authors {
-			if strings.Contains(strings.ToLower(idx.authors[i].Name), lower) {
-				resp.Authors = append(resp.Authors, idx.authors[i])
-			}
+		// Ranked, then bounded. This was an unbounded substring append in index
+		// order: q="H" returned 1,558 authors (399 KB) on prod.
+		for _, a := range rankNameMatches(idx.authors, lower, limit, func(a authorDTO) string { return a.Name }) {
+			resp.Authors = append(resp.Authors, a)
 		}
 	}
 	var seriesOK bool
-	resp.Series, seriesOK = h.searchSeriesHits(ctx, lower)
+	resp.Series, seriesOK = h.searchSeriesHits(ctx, lower, limit)
 	if !seriesOK {
 		complete = false
 	}
 	if idx != nil {
-		for i := range idx.narrators {
-			if strings.Contains(strings.ToLower(idx.narrators[i].Name), lower) {
-				// §6.3: the client's Narrator.id is non-optional and ONE element
-				// without it throws the whole list.
-				//
-				// The names come from the contributor index rather than the raw
-				// store, which is what makes the id USABLE and not merely present.
-				// The index splits compound credits and covers visible books only,
-				// so these are the same names -- and therefore the same ids -- that
-				// /narrators publishes and that narrators.<id> resolves against.
-				// ListNarrators keeps "Jeff Hays, Annie Ellicott" whole and also
-				// returns narrators of hidden books, both of which encode to ids
-				// that decode fine and then match nothing: tap a search hit, get an
-				// empty list. Authors three branches up already read this index; the
-				// narrator branch was the last one on the raw store.
-				//
-				// NumBooks is dropped deliberately: the index carries a real count,
-				// and §6.3 wants the field omitted here rather than sent.
-				resp.Narrators = append(resp.Narrators, narratorDTO{
-					ID: idx.narrators[i].ID, Name: idx.narrators[i].Name,
-				})
-			}
+		// Ranked before bounding, same reason as authors above.
+		for _, nr := range rankNameMatches(idx.narrators, lower, limit, func(n narratorDTO) string { return n.Name }) {
+			// §6.3: the client's Narrator.id is non-optional and ONE element
+			// without it throws the whole list.
+			//
+			// The names come from the contributor index rather than the raw
+			// store, which is what makes the id USABLE and not merely present.
+			// The index splits compound credits and covers visible books only,
+			// so these are the same names -- and therefore the same ids -- that
+			// /narrators publishes and that narrators.<id> resolves against.
+			// ListNarrators keeps "Jeff Hays, Annie Ellicott" whole and also
+			// returns narrators of hidden books, both of which encode to ids
+			// that decode fine and then match nothing: tap a search hit, get an
+			// empty list. Authors three branches up already read this index; the
+			// narrator branch was the last one on the raw store.
+			//
+			// NumBooks is dropped deliberately: the index carries a real count,
+			// and §6.3 wants the field omitted here rather than sent.
+			resp.Narrators = append(resp.Narrators, narratorDTO{
+				ID: nr.ID, Name: nr.Name,
+			})
 		}
 	}
 	// From the cached /filterdata document, NOT h.library.GetDistinctGenres():
@@ -2301,10 +2382,9 @@ func (h *Handler) buildSearch(ctx context.Context, query string) (resp *searchRe
 		degraded("filterdata", errors.New("degraded or unpublished filterdata document"))
 	}
 	if fd != nil {
-		for _, g := range fd.Genres {
-			if strings.Contains(strings.ToLower(g), lower) {
-				resp.Genres = append(resp.Genres, g)
-			}
+		// Ranked before bounding, same reason as authors above.
+		for _, g := range rankNameMatches(fd.Genres, lower, limit, func(g string) string { return g }) {
+			resp.Genres = append(resp.Genres, g)
 		}
 	}
 	return resp, complete, nil
@@ -2327,7 +2407,7 @@ func (h *Handler) buildSearch(ctx context.Context, query string) (resp *searchRe
 //
 // The bool is false when the list was degraded by a store failure (no series,
 // or series with no books); the caller must not cache such a document.
-func (h *Handler) searchSeriesHits(ctx context.Context, lower string) ([]any, bool) {
+func (h *Handler) searchSeriesHits(ctx context.Context, lower string, limit int) ([]any, bool) {
 	out := []any{}
 	all, err := h.library.GetAllSeries()
 	if err != nil {
@@ -2356,7 +2436,7 @@ func (h *Handler) searchSeriesHits(ctx context.Context, lower string) ([]any, bo
 			visible[s.ID] = len(bySeries[s.ID].bookIDs)
 		}
 	}
-	matched := rankSeriesMatches(candidates, lower, visible, searchResultLimit)
+	matched := rankSeriesMatches(candidates, lower, visible, limit)
 	if len(matched) == 0 {
 		return out, complete
 	}
