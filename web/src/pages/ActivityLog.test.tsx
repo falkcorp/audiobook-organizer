@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-08-19
+// last-edited: 2026-09-08
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
 import { fetchActivity, fetchActivitySources } from '../services/activityApi';
@@ -197,5 +198,84 @@ describe('ActivityLog request amplification', () => {
     await waitFor(() => expect(mockedFetchActivity).toHaveBeenCalledTimes(1));
 
     expect(mockedFetchActivity.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+/**
+ * Expand All / Collapse All in the Active Operations panel.
+ *
+ * These buttons used to drive only `collapsedParents`, the parent/child op
+ * nesting. That nesting is never populated: `registry.WithParent` is the only
+ * thing that sets a parent, and it has no production callers, so every
+ * operation the API returns has `parent_id: null`. Verified against prod on
+ * 2026-09-08 — 40 operations over a 6-hour window, every one parentless.
+ * Both buttons recomputed a set that no rendered row consulted, so clicking
+ * either did nothing at all.
+ *
+ * The ops below are deliberately parentless, exactly like real ones.
+ */
+describe('Active Operations expand/collapse', () => {
+  const op = (id: string, status: string, displayName: string) => ({
+    id,
+    type: 'scan',
+    displayName,
+    status,
+    progress: 1,
+    total: 2,
+    message: '',
+    parent_id: null,
+  });
+
+  beforeEach(() => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
+    operationsStoreState.activeOperations = [
+      op('op-running', 'running', 'Library Scan'),
+      op('op-done', 'completed', 'Author Duplicate Scan'),
+    ];
+  });
+
+  afterEach(() => {
+    operationsStoreState.activeOperations = [];
+  });
+
+  it('Collapse All hides the operation rows, and Expand All brings them back', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    // Both sections render their op before anything is collapsed.
+    expect(await screen.findByText('Library Scan')).toBeInTheDocument();
+    expect(screen.getByText('Author Duplicate Scan')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Collapse All' }));
+
+    // The section headings stay — only their contents roll up.
+    await waitFor(() => {
+      expect(screen.queryByText('Library Scan')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Author Duplicate Scan')).not.toBeInTheDocument();
+    expect(screen.getByText(/^Active \(1\)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Completed \(1\)$/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Expand All' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Library Scan')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Author Duplicate Scan')).toBeInTheDocument();
+  });
+
+  it('a section heading toggles just its own section', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText('Library Scan')).toBeInTheDocument();
+
+    await user.click(screen.getByText(/^Completed \(1\)$/));
+
+    // Only the Completed section rolled up; Active is untouched.
+    await waitFor(() => {
+      expect(screen.queryByText('Author Duplicate Scan')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Library Scan')).toBeInTheDocument();
   });
 });
