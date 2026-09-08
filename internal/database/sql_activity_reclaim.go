@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_reclaim.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8c1a56-90d4-4e27-b6a1-7c05e2d84b93
 // last-edited: 2026-09-08
 
@@ -16,9 +16,15 @@ import (
 // WHY THIS EXISTS. NewMigratingActivityStore dual-writes every activity row to
 // both backends, and the Pebble→SQLite backfill only ever COPIES. Nothing has
 // ever deleted the Pebble side, so once the cutover flips reads to SQLite the
-// entire Pebble activity keyspace — ~1.3 GiB on production, of which ~0.78 GiB
-// was act:op:/act:bk: index entries — sits in the main database being read by
+// entire Pebble activity keyspace sits in the main database being read by
 // nobody. This is the delete half that was never written.
+//
+// On size: RepairActivityIndexes' comment describes this keyspace as ~1.3 GiB,
+// of which ~0.78 GiB was act:op:/act:bk: index entries. That is a DATED figure
+// from another op's comment, not a measurement taken here — the database has
+// grown substantially since it was written. Do not quote it as the amount this
+// reclaims. A dry run reports the real number, which is what CountActivity was
+// added for; take that before promising anyone a size.
 
 // activityReclaimMinRetain is the floor on how much recent history a reclaim
 // must leave in Pebble, however small a retain the caller asks for.
@@ -61,11 +67,30 @@ type ActivityReclaimResult struct {
 	PerTier map[string]ActivityReclaimTier `json:"per_tier"`
 }
 
-// ActivityReclaimProgress is called once per tier so a long reclaim can report
-// liveness. Prune is one blocking call per tier with no callback of its own, so
-// between-tier is the finest granularity available; the caller sizes its
-// ProgressTimeout accordingly.
-type ActivityReclaimProgress func(tier string, index, total int, t ActivityReclaimTier)
+// ActivityReclaimPhase distinguishes the two halves of a reclaim, because both
+// are slow and only one of them deletes anything.
+type ActivityReclaimPhase string
+
+const (
+	// ReclaimPhaseCensus is the counting pass. It reads nothing but keys, but it
+	// walks the whole act:<tier>: keyspace on the primary twice per tier, so on
+	// production it is minutes of work — and on a refused run it is ALL of the
+	// work, since the census is what a refused run exists to produce.
+	ReclaimPhaseCensus ActivityReclaimPhase = "census"
+	// ReclaimPhasePrune is the deleting pass, reached only on an applied run
+	// that passed every guard.
+	ReclaimPhasePrune ActivityReclaimPhase = "prune"
+)
+
+// ActivityReclaimProgress is called once per tier per phase so a long reclaim
+// can report liveness. Each phase is one blocking call per tier with no callback
+// of its own, so between-tier is the finest granularity available; the caller
+// sizes its ProgressTimeout accordingly.
+//
+// The census gets a callback for the same reason the prune does: without one,
+// fourteen full keyspace walks happen between two progress updates and the op
+// is indistinguishable from a hung one for their whole duration.
+type ActivityReclaimProgress func(phase ActivityReclaimPhase, tier string, index, total int, t ActivityReclaimTier)
 
 // ReclaimMigratedActivity deletes Pebble-side activity rows that SQLite already
 // holds, freeing space in the main database.
@@ -88,17 +113,36 @@ type ActivityReclaimProgress func(tier string, index, total int, t ActivityRecla
 // itself could not be taken.
 func ReclaimMigratedActivity(
 	ctx context.Context,
-	mig *MigratingActivityStore,
+	store ActivityStorer,
 	retain time.Duration,
 	dryRun bool,
 	onTier ActivityReclaimProgress,
 ) (ActivityReclaimResult, error) {
 	res := ActivityReclaimResult{DryRun: dryRun, PerTier: map[string]ActivityReclaimTier{}}
 
-	if mig == nil {
+	// The assertion lives here rather than at the call site so that the refusal
+	// can NAME what it actually got.
+	//
+	// Unlike FindSummaryClamper, this deliberately does NOT recurse through
+	// Primary()/Secondary(): that helper digs INTO the wrapper to reach the one
+	// backend that can clamp, whereas a reclaim needs the wrapper itself — it is
+	// the only thing that knows whether reads have been flipped. So the correct
+	// assertion is on the outermost value, and today register.go hands the
+	// *MigratingActivityStore straight to activity.NewService with nothing in
+	// between.
+	//
+	// If that ever changes — a metrics or logging decorator wired in front — this
+	// assertion starts failing, and the %T is what tells an operator that the op
+	// is refusing because of a wiring change rather than because the deployment
+	// is legitimately on the Pebble-only escape hatch. Those two cases produce
+	// the same "nothing to reclaim" outcome and are otherwise indistinguishable.
+	mig, ok := store.(*MigratingActivityStore)
+	if !ok || mig == nil {
 		res.Refused = true
-		res.RefusedReason = "activity store is not the SQLite migration wrapper " +
-			"(Pebble-only escape hatch, or SQLite failed to open) — there is no duplicate copy to reclaim"
+		res.RefusedReason = fmt.Sprintf(
+			"activity store is %T, not the SQLite migration wrapper "+
+				"(Pebble-only escape hatch, SQLite failed to open, or a wrapper was wired in front) — "+
+				"there is no duplicate copy to reclaim", store)
 		return res, nil
 	}
 
@@ -126,7 +170,7 @@ func ReclaimMigratedActivity(
 
 	// Census first, and unconditionally — including on the refusal paths below,
 	// which is the whole point of taking it here.
-	for _, tier := range actTiers {
+	for i, tier := range actTiers {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
@@ -145,7 +189,11 @@ func ReclaimMigratedActivity(
 		res.PrimaryRows += total
 		res.EligibleRows += eligible
 		res.SecondaryRows += secondaryTotal
-		res.PerTier[tier] = ActivityReclaimTier{Eligible: eligible}
+		t := ActivityReclaimTier{Eligible: eligible}
+		res.PerTier[tier] = t
+		if onTier != nil {
+			onTier(ReclaimPhaseCensus, tier, i+1, len(actTiers), t)
+		}
 	}
 
 	if !res.ReadSecondary {
@@ -189,7 +237,7 @@ func ReclaimMigratedActivity(
 			return res, fmt.Errorf("prune activity tier %s: %w", tier, err)
 		}
 		if onTier != nil {
-			onTier(tier, i+1, len(actTiers), t)
+			onTier(ReclaimPhasePrune, tier, i+1, len(actTiers), t)
 		}
 	}
 

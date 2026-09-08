@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/activity_reclaim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e73f4a1-08c5-4d62-b91e-3a7d05f8c264
 // last-edited: 2026-09-08
 
@@ -41,7 +41,10 @@ func (d *reclaimDeps) ReclaimMigratedActivity(_ context.Context, retain time.Dur
 	d.gotDryRun = dryRun
 	d.gotRetain = retain
 	if onTier != nil {
-		onTier("change", 1, 7, database.ActivityReclaimTier{Deleted: d.result.RowsDeleted})
+		onTier(database.ReclaimPhaseCensus, "change", 1, 7,
+			database.ActivityReclaimTier{Eligible: d.result.EligibleRows})
+		onTier(database.ReclaimPhasePrune, "change", 1, 7,
+			database.ActivityReclaimTier{Deleted: d.result.RowsDeleted})
 	}
 	return d.result, nil
 }

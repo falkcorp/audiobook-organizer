@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/activity_reclaim.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2e7c41-6b83-4d09-9f27-c1a840b6e35d
 // last-edited: 2026-09-08
 
@@ -90,9 +90,22 @@ func (p *Plugin) runActivityReclaim(ctx context.Context, params json.RawMessage,
 		"Activity reclaim starting (%s, retaining %s of recent history)", mode, retain))
 	_ = reporter.UpdateProgress(0, len(actReclaimTierOrder), "Counting activity rows on both backends...")
 
-	onTier := func(tier string, idx, total int, t database.ActivityReclaimTier) {
-		_ = reporter.UpdateProgress(idx, total, fmt.Sprintf(
-			"Pruned tier %s (%d/%d): %d rows deleted", tier, idx, total, t.Deleted))
+	// Both phases report, and the denominator spans both: the census walks the
+	// primary keyspace twice per tier and on a refused run it is the ENTIRE run,
+	// so treating it as a prelude to the "real" work would leave the progress bar
+	// pinned at 0/7 for the whole thing and make a working op look hung.
+	steps := 2 * len(actReclaimTierOrder)
+	onTier := func(phase database.ActivityReclaimPhase, tier string, idx, total int,
+		t database.ActivityReclaimTier,
+	) {
+		switch phase {
+		case database.ReclaimPhaseCensus:
+			_ = reporter.UpdateProgress(idx, steps, fmt.Sprintf(
+				"Counted tier %s (%d/%d): %d rows behind the cutoff", tier, idx, total, t.Eligible))
+		case database.ReclaimPhasePrune:
+			_ = reporter.UpdateProgress(total+idx, steps, fmt.Sprintf(
+				"Pruned tier %s (%d/%d): %d rows deleted", tier, idx, total, t.Deleted))
+		}
 	}
 
 	res, err := p.deps.ReclaimMigratedActivity(ctx, retain, dryRun, onTier)
@@ -128,10 +141,15 @@ func (p *Plugin) runActivityReclaim(ctx context.Context, params json.RawMessage,
 	// releases space only when a compaction rewrites the sstables the deleted
 	// keys lived in, and that compaction transiently needs headroom rather than
 	// giving it back immediately.
+	// "≈" on the remainder, not on the deletion. RowsDeleted is exact — Prune
+	// reports what it removed. The remainder is a pre-prune census minus that,
+	// and Record dual-writes into Pebble throughout, so rows landed after the
+	// census was taken. It reads low, and an operator comparing it against the
+	// next run's census would otherwise be comparing a real number to a stale one.
 	msg := fmt.Sprintf(
-		"Reclaimed %d Pebble activity rows (%d remain). Disk space is NOT freed until "+
-			"maintenance.db-optimize compacts the database, and that compaction transiently "+
-			"grows on-disk size before it shrinks.",
+		"Reclaimed %d Pebble activity rows (≈%d remain; new rows are still dual-written "+
+			"while this runs). Disk space is NOT freed until maintenance.db-optimize compacts "+
+			"the database, and that compaction transiently grows on-disk size before it shrinks.",
 		res.RowsDeleted, res.PrimaryRows-res.RowsDeleted)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	_ = reporter.UpdateProgress(len(actReclaimTierOrder), len(actReclaimTierOrder), msg)
