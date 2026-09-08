@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.16.0
+// version: 3.17.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -626,8 +626,14 @@ func (p *PebbleStore) InsertOpStrikeV2(row OpStrikeV2Row) error {
 	return p.pebbleSetJSON(opv2StrikeKey(row.DefID, row.OccurredAt, row.OperationID), &row)
 }
 
-// ListOperationsV2Since returns operations queued at or after `since`, ordered
-// by started_at DESC NULLS LAST, queued_at DESC, up to `limit` rows.
+// ListOperationsV2Since returns operations that were active at or after `since`
+// — every operation still in flight regardless of age, plus every finished one
+// that COMPLETED at or after `since` — ordered by started_at DESC NULLS LAST,
+// queued_at DESC, up to `limit` rows.
+//
+// "Queued at or after since" is what this used to say and do, and the difference
+// is not cosmetic: it excluded any long operation that started before the window
+// and finished inside it.
 func (p *PebbleStore) ListOperationsV2Since(since time.Time, limit int) (rows []OperationV2Row, err error) {
 	defer recoverPebbleClosed("ListOperationsV2Since", &err)
 	if limit <= 0 {
@@ -660,7 +666,25 @@ func (p *PebbleStore) ListOperationsV2Since(since time.Time, limit int) (rows []
 		// Keyed on CompletedAt rather than a set of status strings on purpose: a
 		// status list has to be updated every time a new terminal state is added,
 		// and silently under-reports until someone remembers.
-		if row.CompletedAt == nil || !row.QueuedAt.Before(since) {
+		//
+		// For a FINISHED operation the window is tested against CompletedAt, not
+		// QueuedAt. Asking "what completed in the last 24h" and answering "what
+		// was QUEUED in the last 24h" drops exactly the operations most worth
+		// seeing: the long ones. A backfill queued 30h ago that finished twenty
+		// minutes ago is history from the last twenty minutes, but a QueuedAt test
+		// rules it out — and the longer an operation runs, the more likely it is to
+		// fall outside. That is the same defect the in-flight clause above was
+		// added for (an op vanishing from its own timeline for running too long),
+		// left half-fixed: live rows were rescued, finished ones were not.
+		//
+		// QueuedAt is still accepted as an alternative rather than replaced.
+		// CompletedAt >= QueuedAt should make it redundant, so it changes nothing
+		// in normal operation; it means a row with a clock-skewed or malformed
+		// CompletedAt degrades to the old behaviour instead of disappearing.
+		inWindow := row.CompletedAt == nil ||
+			!row.CompletedAt.Before(since) ||
+			!row.QueuedAt.Before(since)
+		if inWindow {
 			all = append(all, row)
 		}
 	}

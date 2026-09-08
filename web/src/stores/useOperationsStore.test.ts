@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.test.ts
-// version: 2.5.0
+// version: 2.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-13
+// last-edited: 2026-09-08
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useOperationsStore } from './useOperationsStore';
@@ -58,6 +58,13 @@ describe('useOperationsStore', () => {
 
     expect(api.getOperationTimeline).toHaveBeenCalledTimes(1);
     // v1 endpoints are deleted in UOS-14; only v2 timeline is called
+
+    // The window must be a full day. loadFromServer REPLACES the operations map
+    // with whatever this returns, so the window IS the history the UI has. It
+    // asked for 15 minutes until 2026-09-08, which made the list read as empty
+    // after every restart — a restart drops the SSE stream, onError re-invokes
+    // this, and nothing has completed in the previous quarter hour.
+    expect(api.getOperationTimeline).toHaveBeenCalledWith(24 * 60);
 
     const ops = useOperationsStore.getState().activeOperations;
     expect(ops).toHaveLength(1);
