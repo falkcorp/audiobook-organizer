@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-09-02
+// last-edited: 2026-09-07
 
 package middleware
 
@@ -240,12 +240,24 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 	rolePerms := effectivePermissionsFor(store, user)
 	effectivePerms := intersectPermissions(rolePerms, key.Scopes)
 
-	ip := c.ClientIP()
-	go func() {
-		if touchErr := store.TouchAPIKeyLastUsed(key.ID, time.Now(), ip); touchErr != nil {
-			slog.Info("touch error id err", "key", key.ID, "touchErr", touchErr)
-		}
-	}()
+	// Synchronous on purpose. This was a bare `go func()` per authenticated
+	// request, which bought three problems and no measurable latency:
+	//
+	//   - it fanned out one unbounded goroutine per request, each doing a store
+	//     read-modify-write, so a burst of N requests became N concurrent RMWs;
+	//   - being detached from the handler, it was in no WaitGroup, so
+	//     httpServer.Shutdown could return while it was mid-write and the store
+	//     could close underneath it;
+	//   - and concurrent touches of the same key lost increments outright.
+	//
+	// The lost update is fixed inside TouchAPIKeyLastUsed (apiKeyMu); running
+	// here in the handler's own goroutine is what makes the write finish before
+	// the request does, which is what shutdown actually waits on. The cost is a
+	// memtable read plus a NoSync write on a path that has already read this key
+	// to authenticate it.
+	if touchErr := store.TouchAPIKeyLastUsed(key.ID, time.Now(), c.ClientIP()); touchErr != nil {
+		slog.Info("touch error id err", "key", key.ID, "touchErr", touchErr)
+	}
 
 	c.Set(contextUserKey, user)
 	c.Set(contextAPIKeyKey, key)
