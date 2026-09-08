@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-24
+// last-edited: 2026-09-08
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -85,8 +85,27 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 		// ~14,000 items, so a whole folder is hours of work on its own.
 		ResumePolicy:   opsregistry.ResumeRestart,
 		ConcurrencyKey: "library.scan",
-		Permissions:    []auth.Permission{auth.PermScanTrigger},
-		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
+		// ConcurrencyKey alone serializes RUNS but does not stop a second row
+		// being QUEUED behind the first, and the enqueue-time dedupe that would
+		// have caught it compares params BYTE-FOR-BYTE. That comparison cannot
+		// hold for this def: ResumeRestart above merges the saved checkpoint
+		// (resume_folder_idx / resume_item_offset) into the row's params, so the
+		// moment a scan has resumed even once its params no longer match a fresh
+		// enqueue's. Every subsequent trigger logs "params differ — queueing a
+		// second run" and stacks a duplicate. Observed on prod 2026-09-08: one
+		// library.scan running at resume_count=2 with another queued behind it.
+		//
+		// DedupeQueuedRuns short-circuits the params comparison for this def.
+		// That is the safe direction HERE and only here: a library scan is
+		// one-run-per-def — it walks the whole root, so a second scan is the same
+		// work, not a different selection. The incident the default guards
+		// against (prod 2026-08-21, approving more books while
+		// metadata.batch-apply-cached ran) was a set-parameterized def whose
+		// params ARE the work list; dropping a request there loses books.
+		// library.scan carries no such list, so there is nothing to lose.
+		DedupeQueuedRuns: true,
+		Permissions:      []auth.Permission{auth.PermScanTrigger},
+		Capabilities:     []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p scanner.LibraryScanParams
 			if len(rawParams) > 0 {
