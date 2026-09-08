@@ -1,7 +1,7 @@
 // file: internal/server/op_dedupe_decision_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bdbf6e2b-8b2f-472e-a712-ac607e5b2f16
-// last-edited: 2026-08-22
+// last-edited: 2026-09-08
 
 // ENQ-DEDUP-1 per-def table test.
 //
@@ -10,8 +10,9 @@
 // OR an explicit def-level opt-in (OperationDef.DedupeQueuedRuns). The opt-in is
 // the one that can silently re-create the 2026-08-21 prod incident — it makes a
 // def discard a differing request again — so every def that sets it must be
-// listed here with a reason. The list is EMPTY today; adding a def to the field
-// without adding it here fails this test.
+// listed here with a reason. Adding a def to the field without adding it here
+// fails this test. The list held zero entries until 2026-09-08, when
+// library.scan became the first opt-in.
 //
 // This lives in internal/server rather than internal/operations/registry because
 // the registry package cannot enumerate the REAL defs: a bare registry has no
@@ -31,10 +32,25 @@ import (
 )
 
 // dedupeOptInReasons lists every def id allowed to set DedupeQueuedRuns, with
-// the reason. EMPTY BY DESIGN as of ENQ-DEDUP-1: no def opts in. A def whose
-// params legitimately vary between runs that must NOT both happen belongs here;
-// nothing else does.
-var dedupeOptInReasons = map[string]string{}
+// the reason. It was EMPTY BY DESIGN as of ENQ-DEDUP-1 and gained its first
+// entry on 2026-09-08. A def whose params legitimately vary between runs that
+// must NOT both happen belongs here; nothing else does.
+var dedupeOptInReasons = map[string]string{
+	// library.scan's params vary for a reason that has nothing to do with what
+	// the user asked for. It is ResumeRestart, and resumeRestart merges the saved
+	// checkpoint (resume_folder_idx / resume_item_offset) into the row's params —
+	// so once a scan has resumed even once, its stored params can never again be
+	// byte-equal to a fresh enqueue's, and every later trigger queued a duplicate
+	// full-library scan. Observed on prod 2026-09-08: a library.scan running at
+	// resume_count=2 with a second queued behind it.
+	//
+	// Safe to opt in because a scan carries no selection: it walks the whole
+	// root, so a second scan is the same work, not different work. That is
+	// exactly what separates it from every id in selectionCarryingDefs below,
+	// where the params ARE the work list and deduping loses books.
+	"library.scan": "params carry resume checkpoint state, not a selection; " +
+		"a scan walks the whole root so a duplicate is redundant, never distinct work",
+}
 
 // selectionCarryingDefs are the defs whose params carry an explicit selection of
 // books. For these, a second request with a different selection MUST queue a
@@ -131,8 +147,9 @@ func TestOperationDefs_DedupeDecisionIsExplicit(t *testing.T) {
 			"not the code under test")
 	}
 
-	// The opt-in list is empty today; if that changes, the loop above is what
-	// enforces the reason, and this pins the count so a silent growth is visible.
+	// The loop above enforces that each opt-in carries a reason; this pins the
+	// COUNT so the table and the defs cannot drift apart — a stale entry left
+	// behind after a def stops opting in is as wrong as a missing one.
 	if optedIn != len(dedupeOptInReasons) {
 		t.Errorf("defs setting DedupeQueuedRuns = %d, but dedupeOptInReasons has %d entries "+
 			"(a stale entry is as wrong as a missing one)", optedIn, len(dedupeOptInReasons))
