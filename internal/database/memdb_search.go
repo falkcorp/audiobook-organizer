@@ -1,5 +1,5 @@
 // file: internal/database/memdb_search.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
 // last-edited: 2026-09-08
 
@@ -14,6 +14,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
+
+// searchIDsPreallocMax bounds the result slice's initial capacity. It is a
+// hint, not a cap on results: a no-limit query appends past it.
+const searchIDsPreallocMax = 64
 
 // getBookRowForSearch reads one book: row and decodes it, with no book_sig:
 // hydration and no memdb involvement.
@@ -102,7 +106,19 @@ func (m *MemStore) SearchBookIDs(query string, limit, offset int) ([]string, err
 	}
 
 	lowerQuery := strings.ToLower(query)
-	ids := make([]string, 0, min(limit, 64))
+
+	// Preallocate from `limit`, but never trust it for a size. limit reaches
+	// SearchBooks from three call sites and is not validated at all of them:
+	// limit == 0 legitimately means "no limit", and a NEGATIVE value makes
+	// make([]string, 0, limit) panic with "makeslice: cap out of range". The
+	// Pebble scan never preallocated, so the fast path introduced that; CodeQL
+	// caught it as go/uncontrolled-allocation-size. Both cases collapse to the
+	// default here, which is only a capacity hint — append grows past it.
+	capHint := limit
+	if capHint <= 0 || capHint > searchIDsPreallocMax {
+		capHint = searchIDsPreallocMax
+	}
+	ids := make([]string, 0, capHint)
 	var count int
 
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
