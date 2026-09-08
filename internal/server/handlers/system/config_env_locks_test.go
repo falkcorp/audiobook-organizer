@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/config_env_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e6b0d47-9a13-4c85-bf20-5d81c7a4e396
 // last-edited: 2026-09-07
 
@@ -121,4 +121,37 @@ func TestGetConfig_StillCarriesTheOrdinaryConfigFields(t *testing.T) {
 	assert.Equal(t, "/library", cfg["root_dir"])
 	assert.Equal(t, "/srv/activity.sqlite", cfg["activity_db_path"])
 	assert.Equal(t, true, cfg["activity_db_move_on_change"])
+}
+
+// TestGetConfig_PreservesLargeIntegersExactly guards the decode mode, not the
+// annotation.
+//
+// Grafting the annotation means decoding the whole config into a map and encoding
+// it again. A plain json.Unmarshal makes every number a float64, which carries 53
+// bits of mantissa — so an int64 above 2^53 comes back changed, and the config the
+// client receives is not the config the server holds. Config's int64 fields are
+// byte counts today, so no realistic value is affected, but this runs over EVERY
+// field on the primary read path and would silently mangle a nanosecond timestamp
+// or a numeric ID added later.
+//
+// The assertion is against the raw response bytes on purpose: decoding the body
+// into map[string]any to check it would apply the very float64 widening under test
+// and pass either way.
+func TestGetConfig_PreservesLargeIntegersExactly(t *testing.T) {
+	// 2^53 + 1 — the smallest integer a float64 cannot represent. It round-trips
+	// through a float64 as 9007199254740992.
+	const exact = 9007199254740993
+
+	h, d := newTestHandler(t)
+	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
+		BackupMaxTotalBytes: exact,
+	})
+
+	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
+		r.GET("/config", h.GetConfig)
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	assert.Contains(t, w.Body.String(), `"backup_max_total_bytes":9007199254740993`,
+		"the config was re-encoded through float64 and lost precision")
 }

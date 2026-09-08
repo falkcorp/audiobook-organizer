@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-09-07
 
@@ -22,6 +22,7 @@
 package system
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -468,8 +469,17 @@ func withEnvLocks(cfg config.Config) any {
 	if err != nil {
 		return cfg
 	}
+	// UseNumber, not a plain Unmarshal. Decoding into map[string]any turns every
+	// number into a float64, and re-encoding one loses precision above 2^53 —
+	// measured: 1234567890123456789 comes back as 1234567890123456800. Config's
+	// two int64 fields are byte counts, so nothing is corrupt at today's values,
+	// but this function re-encodes the WHOLE config on the primary read path, and
+	// a field added later holding a nanosecond timestamp or an ID would be
+	// silently mangled. json.Number keeps the original digits verbatim.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var flat map[string]any
-	if err := json.Unmarshal(raw, &flat); err != nil {
+	if err := dec.Decode(&flat); err != nil {
 		return cfg
 	}
 	flat["env_locked"] = config.EnvLockedSettings()
@@ -512,8 +522,11 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	// just reverted. UpdateService now validates the CANDIDATE before the swap
 	// and returns 400 with nothing written, so there is nothing to undo.
 
-	// Same env_locked annotation the GET carries: a save that silently dropped it
-	// would let the page re-render its controls as editable until the next reload.
+	// Same env_locked annotation the GET carries, so a client that refreshes its
+	// view from the save response sees the identical shape it got from the GET
+	// rather than a config that has quietly lost the annotation. (Today's web
+	// client re-reads only openai_api_key here, so nothing depends on it yet —
+	// the point is that the two endpoints do not disagree about the schema.)
 	maskedConfig := withEnvLocks(h.configUpdate.MaskSecrets(config.Snapshot()))
 	response := gin.H{"config": maskedConfig}
 	if opID, ok := resp["dedup_rescore_op_id"].(string); ok && opID != "" {
@@ -521,11 +534,14 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		// an operation. Surface its id so the caller can follow it.
 		response["dedup_rescore_op_id"] = opID
 	}
-	if raw, err := json.Marshal(maskedConfig); err == nil {
-		var flat map[string]any
-		if err := json.Unmarshal(raw, &flat); err == nil {
-			maps.Copy(response, flat)
-		}
+	// Historically this re-marshalled the config and decoded it back into a map to
+	// mirror every field at the response's top level. withEnvLocks already returns
+	// that map, so copy it directly: a second round-trip would re-run the float64
+	// widening its json.Number decoding exists to avoid. The fail-open branch of
+	// withEnvLocks hands back a plain Config, which has no top-level mirror to make
+	// — the nested "config" key above still carries it.
+	if flat, ok := maskedConfig.(map[string]any); ok {
+		maps.Copy(response, flat)
 	}
 	httputil.RespondWithOK(c, response)
 }
