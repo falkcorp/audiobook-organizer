@@ -1,5 +1,5 @@
 // file: web/src/components/settings/PathsSettingsTab.activityDb.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a3f1e70-84c2-4d19-9b05-3e7d2c8a4f61
 // last-edited: 2026-09-07
 
@@ -49,7 +49,13 @@ describe('PathsSettingsTab — activity database', () => {
     expect(pathField()).toHaveAttribute('placeholder', RESOLVED);
     // The default location is stated in words too, so an operator who never
     // clicks into the field still learns where the database actually lives.
-    expect(screen.getByText(new RegExp(RESOLVED.replace(/[.]/g, '\\.')))).toBeInTheDocument();
+    //
+    // Matched with exact:false rather than by building a RegExp out of the path.
+    // Escaping a filesystem path into a pattern by hand means getting every
+    // metacharacter right, and the obvious `.replace(/[.]/g, '\\.')` misses the
+    // backslash — which a Windows path is full of. Substring matching needs no
+    // pattern at all.
+    expect(screen.getByText(RESOLVED, { exact: false })).toBeInTheDocument();
   });
 
   it('is editable when the environment sets nothing', () => {
