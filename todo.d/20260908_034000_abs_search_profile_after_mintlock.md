@@ -40,9 +40,9 @@ Costs nest, so these overlap.
       item-view path.** Calls `seriesPageBooks` → `seriesRows` (22.69 s, 5.19 %).
       This is the single biggest thing inside search and had never been looked at,
       because the mint lock was masking it.
-- [ ] **`coverPath` / `coverFile` → `metadata.CoverPathForBook` — 27.96 s cum
-      (6.40 %). Root cause identified: `filepath.Glob` reads and sorts the entire
-      covers directory once per book.** `internal/metadata/cover.go:180` globs
+- [x] **DONE (#3130).** **`coverPath` / `coverFile` → `metadata.CoverPathForBook`
+      — 27.96 s cum (6.40 %). Root cause identified: `filepath.Glob` reads and
+      sorts the entire covers directory once per book.** `internal/metadata/cover.go:180` globs
       `<rootDir>/covers/<bookID>.*`. Because the pattern contains a meta character,
       Go's `filepath.Glob` cannot do a point lookup — it falls into `glob()`, which
       calls `Readdirnames(-1)` on the whole directory, `slices.Sort`s every name, and
@@ -80,7 +80,17 @@ Costs nest, so these overlap.
       ⚠️ Verify the root dir from `GET /api/v1/config` (`root_dir`), **not** from the
       systemd unit: the unit sets `AUDIOBOOK_ROOT_DIR=/var/lib/audiobooks`, which a
       config file overrides to `/mnt/bigdata/books/audiobook-organizer`. The unit's
-      value does not exist on disk.
+      value does not exist on disk. (`AUDIOBOOK_ROOT_DIR` is in fact vestigial —
+      `viper.AutomaticEnv()` runs with no `SetEnvPrefix`, so the key it reads is
+      `ROOT_DIR`.)
+
+      **Fixed in #3130**, which also had to fix a path-traversal exposure the change
+      surfaced: CodeQL models `os.Stat` as a path sink and does not model `Glob`, so
+      swapping them turned a silent pre-existing issue into a new high-severity alert
+      on the read — and the `os.Create` one line below had the same exposure. Both
+      now go through `safeCoverID` + `pathvalidation.SecureJoin`. The directory is
+      also growing: 7,885 files on 2026-08-02, 9,288 on 2026-09-08, so the cost of
+      the old glob rose over time.
 - [ ] **`minifiedItem` — 23.17 s (5.30 %).**
 - [ ] `loadItemViews` / `loadOneItemView` — 17.80 s (4.07 %); `GetBookFiles`
       within it only 4.98 s (1.14 %), which is why the batch swap in the N+1
