@@ -1,5 +1,5 @@
 // file: web/src/stores/operationGrouping.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d19a6f2-83bc-4571-b0e8-27fa5c96de13
 // last-edited: 2026-09-08
 
@@ -202,5 +202,34 @@ describe('groupOperations', () => {
 
   it('handles an empty input', () => {
     expect(groupOperations([])).toEqual([]);
+  });
+});
+
+// Server-declared lineage outranks inferred timing. Nothing sets parent_id in
+// production today, so this is a guard for the day something does: grouping
+// must not re-parent a row away from a parent that really did spawn it.
+describe('groupOperations and real lineage', () => {
+  it('leaves an op that already declares a parent alone', () => {
+    const owned = run(5, 10_000).map((o) => ({ ...o, parent_id: 'real-parent' }));
+
+    const out = groupOperations(owned);
+
+    expect(out.filter((o) => o.group)).toHaveLength(0);
+    for (const o of out) expect(o.parent_id).toBe('real-parent');
+  });
+
+  it('still groups the parentless ops beside them', () => {
+    const owned = run(4, 10_000).map((o, i) => ({
+      ...o,
+      id: `owned-${i}`,
+      parent_id: 'real-parent',
+    }));
+
+    const out = groupOperations([...owned, ...run(4, 10_000)]);
+
+    const synthetic = out.filter((o) => o.group);
+    expect(synthetic).toHaveLength(1);
+    expect(synthetic[0].group?.count).toBe(4);
+    expect(synthetic[0].group?.memberIds.every((id) => id.startsWith('op-'))).toBe(true);
   });
 });
