@@ -22,6 +22,19 @@ A sanitizer model that is never exercised is indistinguishable from one that doe
       question applies to every other `(T, error)` entry in that file (`CleanAbsolutePath`
       and friends). **Unconfirmed** — this is the leading hypothesis for #3130's behaviour,
       not a diagnosis.
+- [ ] **Every language is analyzed by CodeQL twice per run, and Go costs ~8.5 min each time.**
+      Noticed while chasing the above, because alerts arrive under two different
+      `analysis_key`s and it is not obvious which one a given alert came from.
+      `.github/workflows/codeql.yml` analyzes `go`, `javascript-typescript` and `actions` in
+      three jobs; `.github/workflows/security.yml` separately passes
+      `languages: '["go", "javascript", "actions"]'` to the advanced reusable workflow.
+      Measured on the last completed run of each on `main` (34202309268 / 34202310167):
+      `Analyze (go)` **8m17s** and `Advanced CodeQL Security / CodeQL Analysis (go)`
+      **8m54s** — the same analysis, twice, on every PR and every push.
+      Decide whether the duplication is deliberate (different query suites?) or accretion; if
+      accretion, dropping one recovers ~17 min of the critical path across three languages.
+      **Do not delete either without checking which one the branch-protection contexts and
+      the `CodeQL` results gate actually reference.**
 - [ ] **Add a canary.** Whatever the fix, the failure mode here is silence: the model can rot
       indefinitely because nothing fails when it stops working. A minimal source→`SecureJoin`
       →sink fixture that CodeQL must report as clean would turn the next regression into a
