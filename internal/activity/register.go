@@ -1,5 +1,5 @@
 // file: internal/activity/register.go
-// version: 1.7.0
+// version: 1.8.0
 // last-edited: 2026-09-08
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
@@ -129,8 +129,17 @@ func init() {
 	// escape hatch, or a SQLite-open fallback) or when the migration already
 	// completed on a prior boot.
 	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "activity-sql-migration",
-		Needs:  []string{serviceregistry.KeyActivityStore, serviceregistry.KeyStore},
+		Name: "activity-sql-migration",
+		Needs: []string{
+			serviceregistry.KeyActivityStore,
+			serviceregistry.KeyStore,
+			// KeyOpHub is declared as a Need, not fetched with TryGet, because
+			// neither Get nor TryGet builds on demand — both read c.built — so
+			// Needs is the ONLY thing that orders the hub ahead of this service.
+			// TryGet without it would silently hand back nil on an unlucky build
+			// order and cost every live status update with nothing to show for it.
+			serviceregistry.KeyOpHub,
+		},
 		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
@@ -140,7 +149,11 @@ func init() {
 			// implement the three-method recorder leaves ops nil and the
 			// migration runs exactly as it did before, just silently.
 			ops, _ := serviceregistry.Get[any](c, serviceregistry.KeyStore).(migrationOpsRecorder)
-			return &sqlMigrationStarter{mig: mig, ops: ops}, nil
+			// Fetched as `any` and asserted, so this package does not import
+			// internal/operations/registry just to name *EventHub. The row is
+			// correct without the hub; it only stops updating live.
+			bus, _ := serviceregistry.Get[any](c, serviceregistry.KeyOpHub).(migrationEventPublisher)
+			return &sqlMigrationStarter{mig: mig, ops: ops, bus: bus}, nil
 		},
 	})
 
