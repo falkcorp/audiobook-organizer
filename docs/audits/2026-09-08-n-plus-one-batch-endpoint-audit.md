@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-08-n-plus-one-batch-endpoint-audit.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6b41e9c7-5d20-4a83-91fe-0c7d3846ab52 -->
 <!-- last-edited: 2026-09-08 -->
 
@@ -78,7 +78,19 @@ batch method already exists.
 `internal/server/handlers/abs/mapper.go:121` (errgroup at `NumCPU`), call at
 `:163` → `GetBookFiles(book.ID)`. Fix: **`GetBookFilesForIDsCore`
 (`pebble_store_bookfiles.go:678`)**, which slots alongside the three existing
-pre-loop batch calls at `:102-116`. Every field abs reads off `fileView.File`
+pre-loop batch calls at `:102-116`.
+
+> ⚠️ **NOT a clean drop-in — gate it on memdb being warm.**
+> `GetBookFilesForIDsCore` branches to memdb at `:679`, but its fallback
+> `getBookFilesForIDsPebbleScan` (`:685`) is a **full scan of every
+> `book_file:` row (~726K)**, not a per-book prefix scan. The code being
+> replaced, `GetBookFiles`, is prefix-bounded and therefore degrades
+> gracefully. Swapping one for the other trades a bounded cost for a bimodal
+> one: excellent warm, catastrophic cold — on a request path that is live
+> during exactly the ~130 s async memdb warmup after every restart, when
+> clients are reconnecting and searching. Either keep the per-book path as the
+> cold fallback, or give `GetBookFilesForIDsCore` a prefix-per-book fallback
+> instead of the full scan. Do not just swap the call. Every field abs reads off `fileView.File`
 (`mapper.go:258,259,435,605,613-652,747-780,868-876`, `play.go:233`) is present
 on `BookFileCore` — checked field by field. The memdb path does not sort, but the
 mapper already sorts at `:170`. Bounded by page size (`defaultPageLimit = 50`,

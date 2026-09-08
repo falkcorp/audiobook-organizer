@@ -13,6 +13,12 @@ escape hatch). Move Core-only callers to `GetBookFilesForIDsCore` instead.
       alongside the existing pre-loop batch calls at `:102-116`. Every field abs
       reads is on `BookFileCore` (checked field-by-field); the mapper already
       sorts at `:170`. Request path, 7 call sites.
+      **⚠️ Gate it on memdb being warm.** `GetBookFilesForIDsCore`'s fallback
+      (`pebble_store_bookfiles.go:685`) is a FULL scan of all ~726K `book_file:`
+      rows, while the `GetBookFiles` it replaces is prefix-bounded. Swapping
+      naively makes the cold case far worse on a path that is live during the
+      ~130 s async warmup after every restart. Keep a per-book cold fallback, or
+      give the batch method a prefix-per-book fallback first.
 - [ ] **`ListCachedCandidates`: use `GetBooksByIDs`** — `metadata_cache.go:129`.
       Its twin `GetCacheReviewResults` (`:205`) was already fixed; the comment at
       `:191-197` records 21.7 s / 35.2 s prod timings for this exact pattern.
