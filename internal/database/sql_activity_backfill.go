@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 // Package database — Pebble → SQLite activity backfill for the backend cutover.
 //
@@ -100,10 +100,24 @@ func BackfillPebbleActivityToSQL(
 		}
 	}
 
+	// Durable progress. A dry run neither reads nor writes it: it must report
+	// what a full run WOULD do (so it cannot skip tiers), and it must not mutate
+	// migration state.
+	prog := &ActivityBackfillProgress{
+		Version: activityProgressVersion,
+		Tiers:   make(map[string]*ActivityBackfillTierProgress, len(actTiers)),
+	}
+	if !dryRun {
+		prog = loadActivityBackfillProgress(pebbleStore.db)
+		if pending := prog.PendingTiers(); len(pending) < len(actTiers) {
+			slog.Info("[activity-sql-backfill] resuming — some tiers are already verified",
+				"verified", len(actTiers)-len(pending), "pending", pending)
+		}
+	}
+
 	slog.Info("[activity-sql-backfill] starting Pebble → SQLite backfill",
 		"dry_run", dryRun, "tiers", len(actTiers))
 
-	res.ParityOK = true
 	for _, tier := range actTiers {
 		select {
 		case <-ctx.Done():
@@ -111,17 +125,48 @@ func BackfillPebbleActivityToSQL(
 		default:
 		}
 
+		st := prog.tier(tier)
+
+		// A tier verified by an EARLIER process is not re-scanned. This is the
+		// whole point of the checkpoint: production was re-reading ~6.5M rows
+		// after every restart.
+		if !dryRun && st.State == activityTierClean {
+			res.PerTierScanned[tier] = st.Scanned
+			res.PerTierCopied[tier] = st.Copied
+			res.EntriesScanned += st.Scanned
+			res.EntriesCopied += st.Copied
+			res.TiersProcessed++
+			slog.Info("[activity-sql-backfill] tier already verified by an earlier run — skipping",
+				"tier", tier, "tier_index", res.TiersProcessed, "tiers_total", len(actTiers),
+				"scanned", st.Scanned, "copied", st.Copied)
+			continue
+		}
+
+		var resumeFrom []byte
+		if !dryRun {
+			resumeFrom = resumeCursorFor(tier, st.Cursor)
+		}
+
 		slog.Info("[activity-sql-backfill] processing tier",
-			"tier", tier, "tier_index", res.TiersProcessed+1, "tiers_total", len(actTiers), "dry_run", dryRun)
+			"tier", tier, "tier_index", res.TiersProcessed+1, "tiers_total", len(actTiers),
+			"resuming_after_row", st.Scanned, "resumed", resumeFrom != nil, "dry_run", dryRun)
 
 		// Progress bookkeeping. A tier can run for hours (production's `change`
 		// tier holds ~5.7M rows at ~600 rows/s), and before this the function
 		// logged nothing between "processing tier" and the final summary — so a
 		// working run and a wedged one were indistinguishable from the log.
+		// These three counters START FROM THE CHECKPOINT, not from zero, so they
+		// describe the TIER rather than this attempt.
+		//
+		// tierReinserted carrying forward is the load-bearing one: it is what
+		// makes an interrupted parity failure stay failed. Fail 5 rows into a
+		// tier, get killed, resume, verify a spotless tail — the tier still ends
+		// `failed`, because those 5 are still counted. Reset it to 0 here and a
+		// restart silently launders an unverified copy into a clean verdict.
 		tierStart := time.Now()
 		lastLog := tierStart
-		lastScanned := 0
-		tierScanned := 0
+		lastScanned := st.Scanned
+		tierScanned := st.Scanned
 
 		// Stream the tier in bounded batches instead of materialising it. Each
 		// batch is copied into SQLite and then re-presented for parity WITHIN the
@@ -135,9 +180,9 @@ func BackfillPebbleActivityToSQL(
 		// content-key dedup makes a row that repeats within or across batches insert
 		// exactly once on copy and zero times on every re-present, so EntriesCopied
 		// and the parity verdict are identical either way.
-		tierReinserted := 0
-		tierCopied := 0
-		scanned, serr := pebbleStore.streamTierEntries(ctx, tier, sqlBackfillBatch, func(batch []ActivityEntry) error {
+		tierReinserted := st.Reinserted
+		tierCopied := st.Copied
+		_, serr := pebbleStore.streamTierEntries(ctx, tier, sqlBackfillBatch, resumeFrom, func(batch []ActivityEntry, lastKey []byte) error {
 			tierScanned += len(batch)
 			if !dryRun {
 				// Copy pass for this batch.
@@ -146,7 +191,6 @@ func BackfillPebbleActivityToSQL(
 					return fmt.Errorf("copy: %w", cerr)
 				}
 				tierCopied += copied
-				res.EntriesCopied += copied
 				// Parity pass: re-present the same batch. A correct copy inserts ZERO
 				// here (every row conflicts on src_key). Any insert means a copied row
 				// did not land — record it so the tier fails parity below.
@@ -155,6 +199,24 @@ func BackfillPebbleActivityToSQL(
 					return fmt.Errorf("parity re-present: %w", verr)
 				}
 				tierReinserted += n
+
+				// Checkpoint AFTER the batch is durably in SQLite, so the cursor
+				// can only ever lag the copy, never lead it. Written every batch
+				// (~2s of work at production throughput): a coarser throttle
+				// would discard minutes of scanning to save one small write.
+				//
+				// NoSync — losing this costs a re-read of an idempotent batch.
+				// The verdict write after the tier uses Sync, because losing THAT
+				// is a correctness bug.
+				st.State = activityTierInProgress
+				st.Cursor = string(lastKey)
+				st.Scanned, st.Copied, st.Reinserted = tierScanned, tierCopied, tierReinserted
+				if perr := saveActivityBackfillProgress(pebbleStore.db, prog, false); perr != nil {
+					// Not fatal: the copy itself is fine, a restart just redoes
+					// work from the last cursor that did land. Never silent.
+					slog.Warn("[activity-sql-backfill] checkpoint write failed; a restart will redo more of this tier",
+						"tier", tier, "scanned", tierScanned, "err", perr)
+				}
 			}
 
 			// Heartbeat. Rate is computed over the window since the last line, not
@@ -174,34 +236,78 @@ func BackfillPebbleActivityToSQL(
 			return nil
 		})
 		if serr != nil {
+			// An interrupted tier keeps its cursor but earns NO verdict. Flush it
+			// with Sync so a graceful shutdown resumes exactly where it stopped
+			// rather than at the last NoSync batch that happened to reach disk.
+			if !dryRun {
+				st.Scanned, st.Copied, st.Reinserted = tierScanned, tierCopied, tierReinserted
+				if perr := saveActivityBackfillProgress(pebbleStore.db, prog, true); perr != nil {
+					slog.Warn("[activity-sql-backfill] could not flush progress on interruption",
+						"tier", tier, "err", perr)
+				}
+			}
 			return res, fmt.Errorf("activity-sql-backfill: stream tier=%s: %w", tier, serr)
 		}
-		res.PerTierScanned[tier] = scanned
+
+		// The tier is fully scanned, so it now earns a durable verdict. The
+		// cursor is cleared either way: a clean tier is never revisited, and a
+		// failed one must be re-scanned IN FULL (see loadActivityBackfillProgress)
+		// so that a clean tail can never launder an earlier failure.
+		st.Scanned, st.Copied, st.Reinserted = tierScanned, tierCopied, tierReinserted
+		st.Cursor = ""
+		if tierReinserted != 0 {
+			st.State = activityTierFailed
+		} else {
+			st.State = activityTierClean
+		}
+
+		res.PerTierScanned[tier] = tierScanned
 		res.PerTierCopied[tier] = tierCopied
-		res.EntriesScanned += scanned
+		res.EntriesScanned += tierScanned
+		res.EntriesCopied += tierCopied
 		slog.Info("[activity-sql-backfill] tier complete",
 			"tier", tier,
 			"tier_index", res.TiersProcessed+1, "tiers_total", len(actTiers),
-			"scanned", scanned, "copied", tierCopied,
-			"skipped_already_present", scanned-tierCopied,
+			"scanned", tierScanned, "copied", tierCopied,
+			"skipped_already_present", tierScanned-tierCopied,
+			"verdict", st.State,
 			"elapsed", time.Since(tierStart).Round(time.Second).String(),
 			"dry_run", dryRun)
 		if tierReinserted != 0 {
-			res.ParityOK = false
 			slog.Error("[activity-sql-backfill] PARITY FAIL — re-presentation inserted rows; not flipping",
-				"tier", tier, "scanned", scanned, "reinserted_on_second_pass", tierReinserted)
+				"tier", tier, "scanned", tierScanned, "reinserted_on_second_pass", tierReinserted)
+		}
+
+		// Sync: losing a verdict is the one failure that could let unverified
+		// data go live, so a write error here fails the run rather than leaving
+		// the census guessing.
+		if !dryRun {
+			if perr := saveActivityBackfillProgress(pebbleStore.db, prog, true); perr != nil {
+				return res, fmt.Errorf("activity-sql-backfill: persist verdict for tier=%s: %w", tier, perr)
+			}
 		}
 		res.TiersProcessed++
 	}
 
 	if dryRun {
+		// A dry run copies nothing and therefore verifies nothing; it reports
+		// what a real run would read, and makes no parity claim.
+		res.ParityOK = true
 		slog.Info("[activity-sql-backfill] dry-run complete",
 			"entries_would_copy", res.EntriesScanned, "tiers", res.TiersProcessed)
 		return res, nil
 	}
 
+	// THE GATE. This asks the durable census "does every tier carry a clean
+	// verdict?" — NOT "did this process happen to see a failure?". The
+	// difference is the whole point of the progress blob: a resumed run starts
+	// with no memory of an earlier tier's failure, so an in-memory flag would
+	// answer "no failures seen" and flip reads onto an unverified copy.
+	res.ParityOK = prog.AllTiersClean()
 	if !res.ParityOK {
-		return res, fmt.Errorf("activity-sql-backfill: parity check failed; sentinel NOT written, reads stay on Pebble")
+		return res, fmt.Errorf(
+			"activity-sql-backfill: parity check failed (tiers not verified: %v); sentinel NOT written, reads stay on Pebble",
+			prog.PendingTiers())
 	}
 
 	// Sentinel: only after verified parity.
@@ -210,6 +316,12 @@ func BackfillPebbleActivityToSQL(
 		pebble.Sync); err != nil {
 		return res, fmt.Errorf("activity-sql-backfill: write sentinel: %w", err)
 	}
+	// The sentinel now answers everything the progress blob was tracking, so
+	// drop it rather than leave stale resume state for a future reader to
+	// misinterpret. Ordered strictly after the sentinel write: if the process
+	// dies between the two, the sentinel already says "done" and the leftover
+	// blob is merely ignored — the reverse order could lose both.
+	clearActivityBackfillProgress(pebbleStore.db)
 	slog.Info("[activity-sql-backfill] complete — parity verified, sentinel written",
 		"flag", ActivitySQLBackfillKey,
 		"scanned", res.EntriesScanned, "copied", res.EntriesCopied, "tiers", res.TiersProcessed)
