@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
-// last-edited: 2026-08-24
+// last-edited: 2026-09-08
 
 package server
 
@@ -133,18 +133,30 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 			// claiming it had parsed every filename, with the only evidence in
 			// journalctl on the box.
 			level := slog.LevelInfo
-			if summary.Aborted() || summary.SavesFailed > 0 || summary.BatchesFailed > 0 {
+			if summary.Failed() {
 				level = slog.LevelWarn
 			}
 			_ = reporter.Log(level, summary.String())
+			// The per-batch detail, one line each, into the operation record.
+			// This is the material that used to exist only at the failure site
+			// in ai_batch_phase.go and die there: WHICH books were in the failed
+			// batch and WHAT the backend said. A run that reports "1 batch
+			// failure(s)" and nothing else cannot be acted on.
+			for _, line := range summary.FailureDetails() {
+				_ = reporter.Log(slog.LevelWarn, line)
+			}
 			_ = reporter.UpdateProgress(summary.BooksParsed, len(p.Books), summary.String())
 
-			// Failing ONLY on an abort, never on a low change count. A healthy
-			// library where every candidate was already filled in by another
-			// path legitimately parses and changes nothing; making that red
-			// would train everyone to ignore the status.
-			if summary.Aborted() {
-				return fmt.Errorf("AI parsing stopped early: %s", summary)
+			// Failing on any failed batch or lost save, not only on an abort.
+			//
+			// Aborted() is AbortedPermanent || AbortedThreshold, and a
+			// single-batch run whose only batch fails trips neither -- so
+			// BatchesOK=0, BatchesTotal=1, BatchesFailed=1 reported COMPLETED
+			// with a full green bar, dozens of times in a row, in the report
+			// that prompted this. See AIPhaseSummary.Failed for why a zero
+			// change count still must NOT be a failure.
+			if summary.Failed() {
+				return fmt.Errorf("AI parsing failed: %s", summary)
 			}
 			return nil
 		},
