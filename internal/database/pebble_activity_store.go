@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-08
 
@@ -2140,10 +2140,20 @@ func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string
 	// contradict the "do not turn this into a re-seek loop" warning above: the
 	// bound is chosen once, at open time.
 	//
-	// Resuming under a NEW snapshot cannot miss history. Keys are
-	// act:<tier>:<zero-padded nanos>:<ulid>, so any row written since the
-	// previous snapshot sorts ABOVE the cursor; and rows written during the
-	// migration are covered by the live dual-write regardless.
+	// ⚠️ Resuming under a NEW snapshot CAN miss a row, and the caller — not this
+	// function — is what makes it safe. Do not restore the argument this comment
+	// used to make ("any row written since the previous snapshot sorts ABOVE the
+	// cursor"): it is false. Keys are act:<tier>:<zero-padded nanos>:<ulid> and
+	// the nanos come from the entry's own Timestamp, which is CALLER-SUPPLIED and
+	// non-monotonic (see the note on timestamp cutoffs in sql_activity_backfill.go),
+	// so a row written later can sort earlier.
+	//
+	// What actually holds: a row written during the migration is dual-written to
+	// SQLite by MigratingActivityStore.Record, so stepping over it costs nothing.
+	// The exceptions are the maintenance paths that deliberately bypass the
+	// dual-write (CompactByDay, Summarize) — and the backfill excludes the tier
+	// they can backdate into. See activityNonResumableTiers in
+	// sql_activity_progress.go for the full argument and its residual.
 	//
 	// The range check is not decoration. A cursor outside the tier would make
 	// this yield zero rows, which the backfill would read as a fully-scanned

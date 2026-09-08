@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_progress.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a7db9843-e6c9-42ed-bd67-c747b5b5c670
 // last-edited: 2026-09-08
 
@@ -45,6 +45,12 @@
 //
 // The sentinel gate then reads "every tier carries a clean verdict" — a durable
 // census — instead of "this process happened to observe no failure".
+//
+// A third rule joined them on 2026-09-08, after review caught that this file
+// originally justified the resume bound with "any row written since the previous
+// snapshot sorts ABOVE the cursor". That claim is false — see
+// activityNonResumableTiers below — and one tier has to be scanned in full every
+// time because of it.
 package database
 
 import (
@@ -230,6 +236,43 @@ func clearActivityBackfillProgress(db *pebble.DB) {
 	}
 }
 
+// activityNonResumableTiers names tiers that must be scanned in FULL on every
+// attempt, never resumed from a cursor.
+//
+// A resume bound is sound only for a tier where no key can appear BELOW the
+// cursor after that cursor was written. That holds when every writer either
+// dual-writes to SQLite (a skipped row is already there) or appends forward in
+// time. `digest` satisfies NEITHER:
+//
+//   - CompactByDay builds its key as pactPrimaryKey("digest", startOfDay, ulid)
+//     — BACKDATED to the day being compacted, so it lands below a cursor that has
+//     already advanced past that day (pebble_activity_store.go, CompactByDay).
+//   - It bypasses the dual-write by design: MigratingActivityStore.CompactByDay
+//     routes to m.active(), which is Pebble for the whole migration. There is no
+//     SQLite counterpart to fall back on.
+//   - It runs mid-migration, from scheduled maintenance
+//     (server_maintenance_deps.go) and from a user-facing button
+//     (handlers/activity.go) — a multi-hour backfill overlaps it easily.
+//   - It REPLACES a day's digest with a fresh ULID, so the skipped key may be a
+//     correction to a row SQLite holds a now-stale copy of.
+//
+// A skipped row here is undetectable rather than merely missing: the parity pass
+// re-presents the batch it just copied and never re-reads Pebble, so a row the
+// resume bound stepped over is missed by the copy AND the verify, and the tier
+// still ends `clean`. That is the precise failure this package exists to prevent.
+//
+// Cost of the exclusion: `digest` holds roughly one row per day of history, so a
+// full re-scan is trivial. The ~5.7M-row `change` tier — the reason the
+// checkpoint exists — still resumes.
+//
+// Residual, deliberately not machinery: Summarize also bypasses the dual-write,
+// but keys its row at `now`, which outsorts any cursor unless a caller recorded a
+// FUTURE-dated entry that the scan already passed (timestamps are caller-supplied
+// and normalizeActivityEntry rejects only pre-epoch, it does not clamp forward).
+// Even then the loss is one summary row whose originals are already in SQLite,
+// not history.
+var activityNonResumableTiers = map[string]bool{"digest": true}
+
 // resumeCursorFor validates a stored cursor against the tier it claims to belong
 // to and returns the key to resume strictly after, or nil to start from the top.
 //
@@ -240,6 +283,13 @@ func clearActivityBackfillProgress(db *pebble.DB) {
 // production reads. Requiring the tier's own key prefix makes that unrepresentable.
 func resumeCursorFor(tier, cursor string) []byte {
 	if cursor == "" {
+		return nil
+	}
+	if activityNonResumableTiers[tier] {
+		// Not an error and not corruption — this tier is scanned in full by
+		// design. See activityNonResumableTiers.
+		slog.Info("[activity-sql-backfill] tier is not resumable — re-scanning it in full",
+			"tier", tier)
 		return nil
 	}
 	key := []byte(cursor)
