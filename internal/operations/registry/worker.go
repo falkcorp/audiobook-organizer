@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-06
+// last-edited: 2026-09-07
 
 package registry
 
@@ -211,7 +211,21 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	if r.runContextDecorator != nil {
 		runCtx = r.runContextDecorator(runCtx, qr.opID)
 	}
-	defer cancel()
+	// reporterForJoin is assigned once the reporter is built below. The deferred
+	// join must be registered HERE, above every early return between this point
+	// and the reporter's construction, so no exit path can skip it.
+	var reporterForJoin *dbReporter
+	defer func() {
+		cancel()
+		// Cancelling runCtx only ASKS the flush loop to stop; it then runs a
+		// terminal flush that writes to the store. Returning without joining it
+		// drops this run from Registry.running while that write is still in
+		// flight, so Shutdown sees zero running ops and closes Pebble underneath
+		// it — a "pebble: closed" panic and the data race it drags in.
+		if reporterForJoin != nil {
+			reporterForJoin.awaitFlush(10 * time.Second)
+		}
+	}()
 
 	// Register the handle. Before overwriting the dispatcher's stub, honor a
 	// cancel that arrived while the run sat in the buffered nextRun channel
@@ -291,6 +305,12 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	reporter := newDBReporter(runCtx, qr.opID, qr.defID, def.DisplayName, qr.plugin,
 		"", "", // traceID / spanID loaded from DB row in future; empty for now
 		r.store, r.bus, r.activityRecorder, r.logger, setItemFn, touchFn, flushInterval, def.Synchronous)
+	// Same assertion the markTerminal call sites below use: newDBReporter
+	// returns the Reporter interface, and only the DB-backed one has a flush
+	// loop to join.
+	if dbr, ok := reporter.(*dbReporter); ok {
+		reporterForJoin = dbr
+	}
 
 	// Canonical "operation started" log line, with all the tags downstream
 	// readers (op_log feed, activity-log enricher, digest aggregator) need
