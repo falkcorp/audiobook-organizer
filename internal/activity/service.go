@@ -1,12 +1,14 @@
 // file: internal/activity/service.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-11
+// last-edited: 2026-09-08
 
 package activity
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -75,4 +77,40 @@ func (s *Service) RecompactDigests(ctx context.Context) (database.RecompactResul
 // Store returns the underlying ActivityStorer (e.g. for close or direct access).
 func (s *Service) Store() database.ActivityStorer {
 	return s.store
+}
+
+// ErrSummaryClampUnsupported is returned when the active activity backend has no
+// SQLite side to clamp (ActivityBackend=pebble). It is a distinct error rather
+// than a zero result so a caller can tell "nothing needed clamping" from "this
+// backend cannot be clamped at all" — the two look identical in the counters and
+// mean opposite things about whether the work still has to happen.
+var ErrSummaryClampUnsupported = errors.New("activity: summary clamp requires the SQLite backend")
+
+// ClampSummaries retroactively applies the write-path summary cap to rows
+// written before that cap existed, optionally VACUUMing afterwards to hand the
+// freed pages back to the filesystem.
+//
+// vacuum is a separate switch because clamping alone shrinks values without
+// shrinking the file: a run that skips it truthfully reports gigabytes reclaimed
+// while df does not move. It is skipped for a dry run, and skipped when nothing
+// was clamped, so neither case pays a whole-database rewrite for no benefit.
+func (s *Service) ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error) {
+	var zero database.ClampSummariesResult
+	clamper, ok := database.FindSummaryClamper(s.store)
+	if !ok {
+		return zero, ErrSummaryClampUnsupported
+	}
+
+	res, err := clamper.ClampOversizedSummaries(ctx, database.ClampSummariesOptions{Max: max, DryRun: dryRun})
+	if err != nil {
+		return res, err
+	}
+	if vacuum && !dryRun && res.Clamped > 0 {
+		if _, verr := clamper.VacuumActivity(ctx); verr != nil {
+			// The clamp already committed. Surface the vacuum failure without
+			// discarding a successful pass that may have taken hours.
+			return res, fmt.Errorf("clamp committed but vacuum failed: %w", verr)
+		}
+	}
+	return res, nil
 }
