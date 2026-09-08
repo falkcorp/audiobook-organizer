@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-08
 
@@ -2113,16 +2113,45 @@ func (s *PebbleActivityStore) scanTierKVs(ctx context.Context, tier string, sinc
 // dual-writes that land after it opens are invisible to the stream (and handled
 // by the live write path), so fn never races a concurrent writer.
 //
+// startAfter resumes the tier immediately after a previously checkpointed key
+// (empty/nil starts at the top). fn receives that key alongside each batch as
+// lastKey — the primary key of the batch's final row — so the caller can persist
+// a cursor. lastKey's backing array is REUSED, like the batch slice: copy it if
+// you keep it. A startAfter outside this tier's key range is IGNORED rather than
+// obeyed, because honouring one would silently produce an empty scan that a
+// caller could mistake for a fully-scanned tier.
+//
 // ctx is checked every activityCtxCheckInterval rows and again before each fn
 // call. Decode failures are counted and reported in aggregate exactly as
 // scanTierKVs does. A non-nil fn error aborts the stream immediately. Returns the
 // number of entries successfully decoded AND accepted by fn — i.e. what actually
-// reached the batches (decode failures excluded).
-func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string, batchSize int, fn func(batch []ActivityEntry) error) (int, error) {
+// reached the batches (decode failures excluded), counting THIS call only: a
+// resumed stream does not know about rows an earlier attempt consumed.
+func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string, batchSize int, startAfter []byte, fn func(batch []ActivityEntry, lastKey []byte) error) (int, error) {
 	if batchSize <= 0 {
 		batchSize = 1
 	}
 	lower, upper := pactTierBounds(tier, nil, nil)
+	// RESUME. Restart the tier immediately AFTER the caller's checkpointed key.
+	// Pebble's LowerBound is inclusive and keys are plain byte strings, so the
+	// successor of K is K+0x00 — that skips exactly K and nothing else.
+	//
+	// This is still ONE snapshot iterator per tier attempt, so it does NOT
+	// contradict the "do not turn this into a re-seek loop" warning above: the
+	// bound is chosen once, at open time.
+	//
+	// Resuming under a NEW snapshot cannot miss history. Keys are
+	// act:<tier>:<zero-padded nanos>:<ulid>, so any row written since the
+	// previous snapshot sorts ABOVE the cursor; and rows written during the
+	// migration are covered by the live dual-write regardless.
+	//
+	// The range check is not decoration. A cursor outside the tier would make
+	// this yield zero rows, which the backfill would read as a fully-scanned
+	// tier — see resumeCursorFor, which rejects foreign cursors before they get
+	// here. Belt and braces: an out-of-range key is ignored, never obeyed.
+	if len(startAfter) > 0 && bytes.Compare(startAfter, lower) >= 0 && bytes.Compare(startAfter, upper) < 0 {
+		lower = append(append([]byte(nil), startAfter...), 0x00)
+	}
 
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: lower,
@@ -2140,6 +2169,17 @@ func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string
 	streamed := 0
 	seen := 0
 
+	// lastKey tracks the primary key of the most recently APPENDED entry, so fn
+	// receives a checkpointable cursor alongside each batch.
+	//
+	// Two properties matter. It is only updated on append, so the cursor always
+	// names a row that actually reached fn — never a decode failure that fn has
+	// not seen. And its backing array is REUSED (append(lastKey[:0], …)) rather
+	// than reallocated per row, which keeps this allocation-free across the
+	// ~6.5M-row `change` tier; fn must therefore copy it if it retains it, the
+	// same contract the batch slice already carries.
+	var lastKey []byte
+
 	// flush hands the accumulated batch to fn, then truncates it for reuse. It is
 	// a no-op on an empty batch so the trailing flush after the loop is safe.
 	flush := func() error {
@@ -2149,7 +2189,7 @@ func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if err := fn(batch); err != nil {
+		if err := fn(batch, lastKey); err != nil {
 			return err
 		}
 		streamed += len(batch)
@@ -2177,6 +2217,7 @@ func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string
 			continue
 		}
 		batch = append(batch, e)
+		lastKey = append(lastKey[:0], iter.Key()...)
 		if len(batch) >= batchSize {
 			if err := flush(); err != nil {
 				return streamed, err
