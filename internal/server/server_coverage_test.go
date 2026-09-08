@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_test.go
-// version: 2.3.1
+// version: 2.4.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 package server
 
@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
@@ -519,17 +520,40 @@ func TestCoverageDashboardStats(t *testing.T) {
 		createTestBook(t, "Dashboard Book 1")
 		createTestBookFmt(t, "Dashboard Book 2", "mp3")
 
-		// Invalidate the library stats cache so new books are counted
+		// Invalidate the library stats cache so new books are counted.
 		server.storeForWiring().InvalidateLibraryStats()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard", nil)
-		w := httptest.NewRecorder()
-		server.router.ServeHTTP(w, req)
+		// This used to assert the new count on the very next request, because
+		// InvalidateLibraryStats deleted the cached value and forced the next
+		// read to recompute synchronously — the same blocking path that took 87
+		// seconds in production during a scan. As of 2026-09-07 invalidation
+		// marks the cache dirty and leaves the value in place: a read returns
+		// the previous numbers immediately and refreshes behind itself. The
+		// "empty database" subtest above cached a zero, so the first read here
+		// legitimately still says zero.
+		//
+		// So poll for convergence instead of asserting instantly. That is the
+		// stronger assertion of the two: it checks the background recompute
+		// actually runs and lands, which nothing else covers end to end.
+		var totalBooks float64
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard", nil)
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
-		var resp struct{ Data map[string]any }
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		totalBooks := resp.Data["totalBooks"].(float64)
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp struct{ Data map[string]any }
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			totalBooks = resp.Data["totalBooks"].(float64)
+			if totalBooks >= 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("totalBooks = %v after 10s of polling, want >= 2 — the background stats recompute never landed", totalBooks)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 		assert.GreaterOrEqual(t, totalBooks, float64(2))
 	})
 
