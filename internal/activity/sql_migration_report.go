@@ -1,5 +1,5 @@
 // file: internal/activity/sql_migration_report.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d19f2b4-3c58-4e07-9a1d-8f4b0c73e2a6
 // last-edited: 2026-09-08
 
@@ -66,6 +66,30 @@ const (
 	migrationOpPlugin = "activity"
 )
 
+// migrationStatusInterruptedByShutdown is the terminal status the shutdown path
+// closes the row out in. It is a named constant so a test can assert it is in
+// migrationTerminalStatuses, because the wrong value here is SILENT: the natural
+// alternative, "interrupted_quiesced", is a real status the store accepts and
+// spells correctly, and it differs only in that isResumableV2Status counts it as
+// RESUMABLE. This row has no registered OperationDef to resume into (see the
+// package comment), so every subsequent boot would pull it into the resume sweep
+// purely to drop it again.
+const migrationStatusInterruptedByShutdown = "interrupted_dropped"
+
+// migrationTerminalStatuses is the exact terminal vocabulary that
+// pebble_store_ops_v2.go's terminal-status switch recognises. finish coerces
+// anything outside it to "failed" instead of writing it through.
+//
+// Spelled out as literals, NOT as migrationStatusInterruptedByShutdown: keying
+// the map off the constant would make the test that checks the constant is
+// terminal a tautology, and that test is the one carrying the invariant.
+var migrationTerminalStatuses = map[string]bool{
+	"completed":           true,
+	"failed":              true,
+	"canceled":            true,
+	"interrupted_dropped": true,
+}
+
 // migrationOpsRecorder is the slice of the ops-v2 store this reporter needs.
 //
 // Narrow on purpose: database.Store is ~398 methods and this needs three. See the
@@ -100,6 +124,18 @@ type migrationOpReporter struct {
 	ops  migrationOpsRecorder
 	bus  migrationEventPublisher
 	opID string
+
+	// rowExists records that InsertOperationV2 actually succeeded, and gates every
+	// publish. Announcing an op the store never accepted is not a harmless no-op:
+	// useOperationsStore answers an op.updated for an id it does not know by
+	// calling loadFromServer(), throttled to one per 500ms. A migration that
+	// reported progress for hours against a row that was never inserted would
+	// therefore drive ~2 full timeline reloads a SECOND for the length of the run,
+	// on the same box where /activity/sources already takes 35s.
+	//
+	// The gate lives in publish rather than at the call sites so a fourth publish
+	// added later inherits it.
+	rowExists bool
 
 	// reasserted guards the one-shot status re-assert in observe. See the comment
 	// there — it exists to survive a startup ordering race, not to retry.
@@ -157,7 +193,7 @@ func bestEffort(what, opID string, err error) {
 // keys. `message` is included on op.updated, which the registry omits: without it
 // the count would advance live while the tier line stayed stale.
 func (r *migrationOpReporter) publish(eventName string, payload map[string]any) {
-	if r.bus == nil {
+	if r.bus == nil || !r.rowExists {
 		return
 	}
 	bestEffort("publish "+eventName, r.opID, r.bus.Publish(context.Background(), eventName, payload))
@@ -170,7 +206,7 @@ func (r *migrationOpReporter) begin(now time.Time) {
 		return
 	}
 	r.opID = ulid.Make().String()
-	bestEffort("insert", r.opID, r.ops.InsertOperationV2(database.OperationV2Row{
+	err := r.ops.InsertOperationV2(database.OperationV2Row{
 		ID:              r.opID,
 		DefID:           migrationOpDefID,
 		Plugin:          migrationOpPlugin,
@@ -179,7 +215,16 @@ func (r *migrationOpReporter) begin(now time.Time) {
 		ProgressMessage: "starting activity log migration",
 		QueuedAt:        now,
 		StartedAt:       &now,
-	}))
+	})
+	bestEffort("insert", r.opID, err)
+	if err != nil {
+		// No row. The store writes in observe/finish still run and still log
+		// their own failures — this only suppresses the EVENTS, which is where
+		// announcing a row that does not exist actually costs something (see
+		// rowExists).
+		return
+	}
+	r.rowExists = true
 	// AFTER the insert, never before: op.created makes the UI re-fetch the
 	// timeline, and a reload that raced ahead of the write would find nothing and
 	// leave the migration invisible until the next event.
@@ -256,6 +301,19 @@ func (r *migrationOpReporter) finish(status, message string, cause error) {
 	if r == nil || r.ops == nil || r.opID == "" {
 		return
 	}
+	// Fail CLOSED to a status that is genuinely terminal. This is the single
+	// chokepoint where this row's final status is written, and the cost of a wrong
+	// value is not a cosmetic label: anything isResumableV2Status accepts leaves a
+	// def-less row that every later boot re-examines and re-drops. Loud, because a
+	// caller passing an unrecognised status is a bug in this package, not a
+	// runtime condition — but not a return, because refusing to close the row out
+	// would leave it "running" forever, which is strictly worse.
+	if !migrationTerminalStatuses[status] {
+		slog.Error("[activity] migration reported a non-terminal status — recording it as failed",
+			"op_id", r.opID, "status", status, "message", message)
+		status = "failed"
+	}
+
 	done := time.Now().UTC()
 	var errMsg *string
 	if cause != nil {
