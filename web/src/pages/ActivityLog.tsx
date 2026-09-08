@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.21.2
+// version: 2.22.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-09-08
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -43,6 +43,8 @@ import ClearIcon from '@mui/icons-material/Clear';
 import UndoIcon from '@mui/icons-material/Undo';
 import CancelIcon from '@mui/icons-material/Cancel';
 import FilterListIcon from '@mui/icons-material/FilterList';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry, SourceCount } from '../services/activityApi';
 import { ApiTimeoutError, isAbortError } from '../utils/apiFetch';
@@ -55,6 +57,11 @@ import { STORAGE_KEYS } from '../lib/storageKeys';
 import { tagChipProps } from '../utils/activityTagColors';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
+
+// Section keys for the Active Operations panel, declared here rather than
+// derived from the rendered list so "Collapse All" can name every section even
+// when one of them is currently empty and therefore not rendered.
+const OPS_SECTION_KEYS = ['pending', 'active', 'completed'] as const;
 
 const EVENT_TYPES = [
   'book_added',
@@ -226,6 +233,19 @@ export default function ActivityLog() {
   // and new Set() unambiguously means "all expanded" (not "use defaults").
   const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set());
   const collapsedInitializedRef = useRef(false);
+
+  // Section collapse state: which of the Pending/Active/Completed groups are
+  // rolled up. This is what Expand All / Collapse All actually act on.
+  //
+  // Those buttons used to drive collapsedParents alone, which made them dead
+  // controls: parent/child op nesting is only ever populated by
+  // registry.WithParent, and that helper has no production callers, so every
+  // operation the API returns has parent_id: null. Confirmed against prod on
+  // 2026-09-08 — 40 operations over 6 hours, every one of them parentless.
+  // Both buttons therefore recomputed a set that no rendered row consulted,
+  // and clicking either did nothing visible. They still clear/refill
+  // collapsedParents so they stay correct if op lineage is ever wired up.
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const opLogsRef = useRef<HTMLDivElement>(null);
 
   // Sources
@@ -1068,18 +1088,29 @@ export default function ActivityLog() {
                 size="small"
                 variant="text"
                 onClick={() => {
-                  // Collapse all parents that have children
-                  const parents = new Set(
-                    activeOps
-                      .filter((op) => op.parent_id && activeOps.some((p) => p.id === op.parent_id))
-                      .map((op) => op.parent_id as string)
+                  // Roll up every section, and every parent that has children.
+                  setCollapsedSections(new Set(OPS_SECTION_KEYS));
+                  setCollapsedParents(
+                    new Set(
+                      activeOps
+                        .filter(
+                          (op) => op.parent_id && activeOps.some((p) => p.id === op.parent_id)
+                        )
+                        .map((op) => op.parent_id as string)
+                    )
                   );
-                  setCollapsedParents(parents);
                 }}
               >
                 Collapse All
               </Button>
-              <Button size="small" variant="text" onClick={() => setCollapsedParents(new Set())}>
+              <Button
+                size="small"
+                variant="text"
+                onClick={() => {
+                  setCollapsedSections(new Set());
+                  setCollapsedParents(new Set());
+                }}
+              >
                 Expand All
               </Button>
               <Button size="small" variant="outlined" onClick={handleClearStale}>
@@ -1480,17 +1511,46 @@ export default function ActivityLog() {
 
                 return sections
                   .filter((s) => s.ops.length > 0)
-                  .map((section) => (
-                    <Box key={section.key} sx={{ mb: 1 }}>
-                      <Typography
-                        variant="overline"
-                        sx={{ color: 'text.secondary', fontWeight: 600, display: 'block', mb: 0.5 }}
-                      >
-                        {section.title} ({section.ops.length})
-                      </Typography>
-                      <Stack spacing={1}>{section.ops.map(renderOp)}</Stack>
-                    </Box>
-                  ));
+                  .map((section) => {
+                    const sectionCollapsed = collapsedSections.has(section.key);
+                    return (
+                      <Box key={section.key} sx={{ mb: 1 }}>
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          onClick={() =>
+                            setCollapsedSections((prev) => {
+                              const next = new Set(prev);
+                              if (!next.delete(section.key)) next.add(section.key);
+                              return next;
+                            })
+                          }
+                          sx={{
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                            mb: 0.5,
+                            userSelect: 'none',
+                            '&:hover': { color: 'text.primary' },
+                          }}
+                        >
+                          {sectionCollapsed ? (
+                            <ChevronRightIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                          ) : (
+                            <ExpandMoreIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                          )}
+                          <Typography
+                            variant="overline"
+                            sx={{ color: 'text.secondary', fontWeight: 600 }}
+                          >
+                            {section.title} ({section.ops.length})
+                          </Typography>
+                        </Stack>
+                        <Collapse in={!sectionCollapsed} unmountOnExit>
+                          <Stack spacing={1}>{section.ops.map(renderOp)}</Stack>
+                        </Collapse>
+                      </Box>
+                    );
+                  });
               })()}
             </Stack>
           )}

@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.21.0
+// version: 1.22.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-23
+// last-edited: 2026-09-08
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -137,7 +137,28 @@ export function Sidebar({
   const buildContent = (isCollapsed: boolean, showToggle: boolean) => (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Toolbar />
-      <List sx={{ flexGrow: 1, overflow: 'hidden' }}>
+      {/*
+        This List is the drawer's scroll container, and it has to be: the parent
+        Box is height:100% so the Drawer paper itself never overflows, which
+        means the paper's own scrollbar can never appear. With `overflow:
+        'hidden'` here (the value used until 2026-09-08) any nav item past the
+        fold was clipped and simply unreachable on a short viewport — no
+        scrollbar anywhere, no way to get to it.
+
+        overflowX stays hidden so the width transition on the collapsed drawer
+        can't produce a horizontal bar, and scrollbarGutter keeps the icon-only
+        (collapsed) layout from shifting when the vertical bar appears.
+      */}
+      <List
+        sx={{
+          flexGrow: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          scrollbarWidth: 'thin',
+          scrollbarGutter: 'stable',
+        }}
+      >
         {/* Dashboard */}
         <ListItem disablePadding>
           <Tooltip title={isCollapsed ? 'Dashboard' : ''} placement="right">
