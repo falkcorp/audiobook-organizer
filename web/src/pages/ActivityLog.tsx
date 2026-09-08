@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.26.0
+// version: 2.27.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-08
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -230,10 +230,14 @@ export default function ActivityLog() {
   const { operations: pendingFileOps } = usePendingFileOps();
 
   // Active ops from unified store
-  // activeOps is the WHOLE 24-hour window, finished jobs included — see the
-  // field's comment in useOperationsStore. liveOps is the subset still running,
-  // and is what anything labelled "active" or gated on real work must read.
-  const activeOps = useOperationsStore((state) => state.activeOperations);
+  // opRows is the WHOLE 24-hour window, finished jobs included, WITH runs of
+  // consecutive same-kind operations folded under synthetic parent rows (see
+  // operationGrouping.ts). It is what this page RENDERS, and nothing else:
+  // a synthetic row's id names no record on the server, so anything that
+  // resolves an operation by id must read activeOperations instead. liveOps is
+  // the ungrouped subset still running, and is what anything labelled "active"
+  // or gated on real work must read.
+  const opRows = useOperationsStore((state) => state.groupedOperations);
   const liveOps = useOperationsStore((state) => state.liveOperations);
   const loadActiveOpsFromServer = useOperationsStore((state) => state.loadFromServer);
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
@@ -251,11 +255,13 @@ export default function ActivityLog() {
   const [opLogsLoaded, setOpLogsLoaded] = useState(false);
 
   // Tree collapse state: set of parent op IDs that are collapsed.
-  // Seeded on first render with ops: parents with ≥3 children start collapsed.
-  // After seeding, collapsedParents.size > 0 means "some parents collapsed",
-  // and new Set() unambiguously means "all expanded" (not "use defaults").
+  // Parents with ≥3 children start collapsed; new Set() unambiguously means
+  // "all expanded" (not "use defaults").
   const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set());
-  const collapsedInitializedRef = useRef(false);
+  // Every parent this page has ALREADY applied the default to. A parent is
+  // seeded once and never again, so "Expand All" and a manual expand both stick
+  // across the 5-second poll that re-derives the groups.
+  const seededParentsRef = useRef<Set<string>>(new Set());
 
   // Section collapse state: which of the Pending/Active/Completed groups are
   // rolled up. This is what Expand All / Collapse All actually act on.
@@ -377,27 +383,40 @@ export default function ActivityLog() {
     localStorage.setItem(STORAGE_KEYS.ACTIVITY_OPS_PINNED, String(pinned));
   }, [pinned]);
 
-  // Seed collapsedParents with default-collapsed parents (≥3 children) on
-  // first render that has ops. Uses a ref guard so user interactions after
-  // initial seed are not overwritten. This makes "Expand All" work correctly:
-  // setCollapsedParents(new Set()) = size 0 = all expanded (no fallback needed).
+  // Default-collapse every parent with ≥3 children, ONCE PER PARENT.
+  //
+  // Not once per page, which is what the old collapsedInitializedRef guard did.
+  // That guard was correct while parent_id only ever came from the server (it
+  // never did — registry.WithParent has no production callers), but synthetic
+  // groups are re-derived on every 5-second poll and new ones appear as
+  // operations run. A once-per-page seed would leave every group that appeared
+  // after the first render fully expanded, which is the row flood this change
+  // exists to stop.
+  //
+  // seededParentsRef is what keeps that from fighting the user: a parent is
+  // seeded exactly once, so expanding a group makes it stay expanded even
+  // though the seed effect re-runs on the next poll. Group ids are derived from
+  // content, not minted, so "already seeded" survives a refresh — see
+  // operationGrouping.groupId.
   useEffect(() => {
-    if (collapsedInitializedRef.current || activeOps.length === 0) return;
+    if (opRows.length === 0) return;
     const childrenCount: Record<string, number> = {};
-    for (const op of activeOps) {
+    for (const op of opRows) {
       if (op.parent_id) {
         childrenCount[op.parent_id] = (childrenCount[op.parent_id] ?? 0) + 1;
       }
     }
-    const defaults = new Set<string>();
+    const fresh: string[] = [];
     for (const [id, count] of Object.entries(childrenCount)) {
-      if (count >= 3) defaults.add(id);
+      if (count >= 3 && !seededParentsRef.current.has(id)) {
+        seededParentsRef.current.add(id);
+        fresh.push(id);
+      }
     }
-    if (defaults.size > 0) {
-      collapsedInitializedRef.current = true;
-      setCollapsedParents(defaults);
+    if (fresh.length > 0) {
+      setCollapsedParents((prev) => new Set([...prev, ...fresh]));
     }
-  }, [activeOps]);
+  }, [opRows]);
 
   const loadOperationLogs = useCallback(async (opId: string) => {
     const logs = await api.getOperationLogs(opId);
@@ -633,7 +652,7 @@ export default function ActivityLog() {
   // Auto-refresh feed — 5s when active ops exist, 30s when idle.
   // Uses silent=true so the table stays in the DOM and scroll position is preserved.
   //
-  // liveOps, not activeOps: the latter counts a whole day of FINISHED jobs, so
+  // liveOps, not opRows: the latter counts a whole day of FINISHED jobs, so
   // this sat at the 5s rate permanently on an idle server — a poll every five
   // seconds forever for history that cannot change.
   const refreshInterval = liveOps.length > 0 ? 5000 : 30000;
@@ -714,7 +733,7 @@ export default function ActivityLog() {
   // Per-op copy: plain-text summary suitable for pasting into a bug report
   // or sharing with another claude session — id, def, status, progress,
   // message, timestamps.
-  const handleCopyOp = async (op: (typeof activeOps)[0]) => {
+  const handleCopyOp = async (op: (typeof opRows)[0]) => {
     const lines = [
       `id:       ${op.id}`,
       `def:      ${op.def_id ?? op.type}`,
@@ -817,7 +836,7 @@ export default function ActivityLog() {
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const showOpsSection = pinned || activeOps.length > 0;
+  const showOpsSection = pinned || opRows.length > 0;
 
   // Shared filter controls (used in both mobile collapsed and desktop layouts)
   const tierChips = (
@@ -1099,7 +1118,7 @@ export default function ActivityLog() {
                 alignItems: 'center',
               }}
             >
-              {/* The count is liveOps, not activeOps: the panel holds 24 hours
+              {/* The count is liveOps, not opRows: the panel holds 24 hours
                   of history and read "Active Operations (91)" when every one of
                   the 91 had finished. The heading names the panel; the sections
                   below carry the outcome breakdown. */}
@@ -1125,10 +1144,8 @@ export default function ActivityLog() {
                   setCollapsedSections(new Set(OPS_SECTION_KEYS));
                   setCollapsedParents(
                     new Set(
-                      activeOps
-                        .filter(
-                          (op) => op.parent_id && activeOps.some((p) => p.id === op.parent_id)
-                        )
+                      opRows
+                        .filter((op) => op.parent_id && opRows.some((p) => p.id === op.parent_id))
                         .map((op) => op.parent_id as string)
                     )
                   );
@@ -1152,7 +1169,7 @@ export default function ActivityLog() {
             </Stack>
           </Stack>
 
-          {activeOps.length === 0 ? (
+          {opRows.length === 0 ? (
             <Typography
               variant="body2"
               sx={{
@@ -1166,18 +1183,18 @@ export default function ActivityLog() {
               {/* Build hierarchical view: indent children by parent_id */}
               {(() => {
                 // Create a map for quick parent lookup
-                const opsById = Object.fromEntries(activeOps.map((op) => [op.id, op]));
+                const opsById = Object.fromEntries(opRows.map((op) => [op.id, op]));
 
                 // Count children per parent
                 const childrenCount: Record<string, number> = {};
-                for (const op of activeOps) {
+                for (const op of opRows) {
                   if (op.parent_id) {
                     childrenCount[op.parent_id] = (childrenCount[op.parent_id] ?? 0) + 1;
                   }
                 }
 
                 // Helper to get depth based on parent chain
-                const getDepth = (op: (typeof activeOps)[0]): number => {
+                const getDepth = (op: (typeof opRows)[0]): number => {
                   let depth = 0;
                   let current = op;
                   while (current.parent_id && opsById[current.parent_id]) {
@@ -1190,7 +1207,7 @@ export default function ActivityLog() {
                 // Helper: is this op hidden because an ancestor is collapsed?
                 // collapsedParents is seeded on first render (see useEffect above),
                 // so size === 0 reliably means "user clicked Expand All".
-                const isHiddenByCollapse = (op: (typeof activeOps)[0]): boolean => {
+                const isHiddenByCollapse = (op: (typeof opRows)[0]): boolean => {
                   let current = op;
                   while (current.parent_id && opsById[current.parent_id]) {
                     const parentId = current.parent_id;
@@ -1214,35 +1231,86 @@ export default function ActivityLog() {
                 // drift operationPolling.ts's comment warns about, and it is
                 // why the panel read "Active Operations (91)" on a page whose
                 // jobs had all ended.
-                // Parent-collapse applies to the LIVE sections only. Those are
-                // where the parent/child tree is meaningful — a scan rolling up
-                // its per-book children. The history sections are flat,
-                // newest-first lists of what happened, and running the collapse
-                // filter over them would let collapsing a `completed` parent
-                // silently remove a `failed` child from the Failed section and
-                // decrement its count, with the row nowhere on the page.
-                const visibleOps = activeOps.filter((op) => !isHiddenByCollapse(op));
+                // Parent-collapse applies to EVERY section, history included.
+                //
+                // It used to apply to the live sections only, and the reason was
+                // real: collapsing a `completed` parent would remove a `failed`
+                // child from the Failed section and decrement its count, with
+                // the row nowhere on the page. That hazard is gone rather than
+                // managed — operationGrouping keys a group on def_id AND status,
+                // so a group's children always share their parent's status and
+                // therefore its section. A collapse can only ever hide rows from
+                // the one section the parent is already visible in.
+                //
+                // It has to apply here, because every row in the report that
+                // prompted this was TERMINAL. Filtering only the live sections
+                // would give 13 rows where there were 12.
+                const visibleOps = opRows.filter((op) => !isHiddenByCollapse(op));
 
                 // History is newest-first; live work keeps its natural order so
                 // rows do not jump around underneath a running progress bar.
                 // finishedAt is undefined for anything the server sent before
                 // fromV2 carried timestamps, and those sort last rather than
                 // to the top.
-                const newestFirst = (a: (typeof activeOps)[0], b: (typeof activeOps)[0]) =>
+                const newestFirst = (a: (typeof opRows)[0], b: (typeof opRows)[0]) =>
                   (b.finishedAt ?? b.startedAt ?? 0) - (a.finishedAt ?? a.startedAt ?? 0);
-                const withStatus = (...want: string[]) =>
-                  activeOps.filter((o) => want.includes(o.status)).sort(newestFirst);
 
-                const sections: { key: string; title: string; ops: typeof activeOps }[] = [
+                // Order roots, then slot each parent's children directly
+                // beneath it.
+                //
+                // A flat .sort() cannot be used once parents exist: a group's
+                // members are minutes apart, so any unrelated op that finished
+                // between two of them sorts BETWEEN a parent and its own
+                // children, and the indentation then points at whatever row
+                // happens to sit above. Sorting roots and expanding each into
+                // its own subtree keeps the tree a tree whatever the timestamps
+                // do. Recursive because depth is not this function's business
+                // to assume.
+                const withChildren = (
+                  rows: typeof opRows,
+                  compare?: (a: (typeof opRows)[0], b: (typeof opRows)[0]) => number
+                ): typeof opRows => {
+                  const kids = new Map<string, typeof opRows>();
+                  const roots: typeof opRows = [];
+                  for (const row of rows) {
+                    const parentId = row.parent_id;
+                    if (parentId && opsById[parentId]) {
+                      const bucket = kids.get(parentId);
+                      if (bucket) bucket.push(row);
+                      else kids.set(parentId, [row]);
+                    } else {
+                      roots.push(row);
+                    }
+                  }
+                  const emit = (level: typeof opRows): typeof opRows => {
+                    const ordered = compare ? [...level].sort(compare) : level;
+                    return ordered.flatMap((row) => [row, ...emit(kids.get(row.id) ?? [])]);
+                  };
+                  return emit(roots);
+                };
+
+                const withStatus = (...want: string[]) =>
+                  withChildren(
+                    visibleOps.filter((o) => want.includes(o.status)),
+                    newestFirst
+                  );
+
+                const sections: { key: string; title: string; ops: typeof opRows }[] = [
                   {
                     key: 'active',
                     title: 'Active',
-                    ops: visibleOps.filter((o) => o.status !== 'queued' && !isTerminal(o.status)),
+                    // No comparator: live work keeps its natural order so rows
+                    // do not jump around underneath a running progress bar.
+                    // withChildren still runs, to keep a group's members under
+                    // their parent.
+                    ops: withChildren(
+                      visibleOps.filter((o) => o.status !== 'queued' && !isTerminal(o.status))
+                    ),
                   },
                   {
                     key: 'pending',
                     title: 'Pending',
-                    ops: visibleOps.filter((o) => o.status === 'queued'),
+                    ops: withChildren(visibleOps.filter((o) => o.status === 'queued')),
                   },
                   { key: 'completed', title: 'Completed', ops: withStatus('completed') },
                   { key: 'failed', title: 'Failed', ops: withStatus('failed') },
@@ -1252,15 +1320,16 @@ export default function ActivityLog() {
                     title: 'Interrupted',
                     // The whole interrupted_* family, by prefix, so a policy
                     // added on the backend lands here instead of in Active.
-                    ops: activeOps
-                      .filter(
+                    ops: withChildren(
+                      visibleOps.filter(
                         (o) => o.status === 'interrupted' || o.status.startsWith('interrupted_')
-                      )
-                      .sort(newestFirst),
+                      ),
+                      newestFirst
+                    ),
                   },
                 ];
 
-                const renderOp = (op: (typeof activeOps)[0]) => {
+                const renderOp = (op: (typeof opRows)[0]) => {
                   // 2-decimal precision so a 49915-book scan shows 1.10 → 1.11
                   // → 1.12 instead of being welded to "1%" for hundreds of
                   // books at a time. fmtPct returns "1.10" not "1.1".
@@ -1271,6 +1340,19 @@ export default function ActivityLog() {
                   const indent = depth * 24; // 24px per level for indentation
                   const hasChildren = (childrenCount[op.id] ?? 0) > 0;
                   const effectiveCollapsed = collapsedParents.has(op.id);
+                  // A synthetic group row. Its id is derived from its members,
+                  // so the server has never heard of it: getOperationLogs,
+                  // cancelOperation and the per-op refresh would all 404 on it.
+                  // Everything keyed on the id is suppressed below, and the row
+                  // click toggles the group instead of expanding a log panel.
+                  const group = op.group;
+                  const toggleCollapsed = () =>
+                    setCollapsedParents((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(op.id)) next.delete(op.id);
+                      else next.add(op.id);
+                      return next;
+                    });
 
                   return (
                     <Paper
@@ -1298,7 +1380,11 @@ export default function ActivityLog() {
                               borderColor: 'divider',
                             },
                       ]}
-                      onClick={() => setExpandedOpId(expandedOpId === op.id ? null : op.id)}
+                      onClick={() =>
+                        group
+                          ? toggleCollapsed()
+                          : setExpandedOpId(expandedOpId === op.id ? null : op.id)
+                      }
                     >
                       <Stack
                         direction="row"
@@ -1334,12 +1420,7 @@ export default function ActivityLog() {
                               }}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setCollapsedParents((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(op.id)) next.delete(op.id);
-                                  else next.add(op.id);
-                                  return next;
-                                });
+                                toggleCollapsed();
                               }}
                             >
                               {effectiveCollapsed ? '▸' : '▾'}
@@ -1353,6 +1434,18 @@ export default function ActivityLog() {
                           >
                             {operationDisplayName(op)}
                           </Typography>
+                          {group && (
+                            // What the row stands for, stated as a count. The
+                            // status chip beside it is the members' status —
+                            // they are homogeneous by construction — so "12
+                            // runs" + "failed" reads as "12 runs, all failed".
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`${group.count} runs`}
+                              sx={{ fontVariantNumeric: 'tabular-nums' }}
+                            />
+                          )}
                           <Chip
                             size="small"
                             label={op.status === 'queued' ? 'pending' : op.status}
@@ -1376,35 +1469,43 @@ export default function ActivityLog() {
                             alignItems: 'center',
                           }}
                         >
-                          <Tooltip title="Refresh this operation">
-                            <IconButton
-                              size="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRefreshOp(op.id);
-                              }}
-                              aria-label="Refresh"
-                            >
-                              <RefreshIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Copy op summary">
-                            <IconButton
-                              size="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleCopyOp(op);
-                              }}
-                              aria-label="Copy"
-                            >
-                              <ContentCopyIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
+                          {/* Every control below acts on op.id against the
+                              server, so none of them exists on a group row —
+                              its id is derived from its members and names no
+                              record. Expand the group and use the child's. */}
+                          {!group && (
+                            <Tooltip title="Refresh this operation">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRefreshOp(op.id);
+                                }}
+                                aria-label="Refresh"
+                              >
+                                <RefreshIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {!group && (
+                            <Tooltip title="Copy op summary">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCopyOp(op);
+                                }}
+                                aria-label="Copy"
+                              >
+                                <ContentCopyIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                           {/* isTerminal, not a three-status list: an op that
                               ended at one of the interrupted_* statuses is
                               finished, and offering Cancel on it hands the user
                               a button that cannot do anything. */}
-                          {!isTerminal(op.status) && (
+                          {!group && !isTerminal(op.status) && (
                             <Button
                               size="small"
                               color="error"
@@ -1438,15 +1539,24 @@ export default function ActivityLog() {
                           'interrupted_dropped',
                           'interrupted_restart',
                         ].includes(op.status) ? (
-                        // Terminal ops: show a static full bar colored by
-                        // outcome. No animation. (Pre-fix the indeterminate
-                        // branch animated forever for completed ops without
-                        // total counts.)
+                        // Terminal ops: a static bar colored by outcome, no
+                        // animation. (Pre-fix the indeterminate branch animated
+                        // forever for completed ops without total counts.)
+                        //
+                        // With a denominator the bar shows the REAL fraction,
+                        // not 100. It was hardcoded to 100 for every terminal
+                        // op, so a row reading "0 / 4 (0.00%)" rendered a full
+                        // green bar directly above its own caption saying
+                        // nothing had been done. "Terminal" and "complete" are
+                        // not the same claim: a run that ended having processed
+                        // none of its four items ended, but it did not finish
+                        // them. Without a denominator there is no fraction to
+                        // show, so that branch below still fills the bar.
                         op.total > 0 ? (
                           <Box>
                             <LinearProgress
                               variant="determinate"
-                              value={100}
+                              value={pctBar}
                               color={
                                 op.status === 'completed'
                                   ? 'success'
