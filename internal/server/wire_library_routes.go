@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-08-28
+// last-edited: 2026-09-08
 
 package server
 
@@ -37,6 +37,7 @@ func (s *Server) wireLibraryRoutes(
 	protected.GET("/activity", s.perm(auth.PermLibraryView), activityH.ListActivity)
 	protected.GET("/activity/sources", s.perm(auth.PermLibraryView), activityH.ListActivitySources)
 	protected.POST("/activity/compact", s.perm(auth.PermSettingsManage), activityH.CompactActivity)
+	protected.POST("/activity/clamp-summaries", s.perm(auth.PermSettingsManage), activityH.ClampActivitySummaries)
 	protected.GET("/operations/:id/activity", s.perm(auth.PermLibraryView), activityH.ListOperationActivity)
 
 	// Split-book dedup

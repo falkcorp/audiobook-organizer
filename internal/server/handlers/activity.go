@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 package handlers
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ type ActivityService interface {
 	GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error)
 	RecompactDigests(ctx context.Context) (database.RecompactResult, error)
 	CompactByDay(ctx context.Context, cutoff time.Time) (database.CompactResult, error)
+	ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error)
 }
 
 // ActivityOpsStore is the narrow interface for op-log fallback in
@@ -438,4 +440,52 @@ func operationLogTags(opID, level, opType string, attrs map[string]any) []string
 	}
 	activity.EnrichTags(&entry)
 	return entry.Tags
+}
+
+// ClampActivitySummaries handles POST /api/v1/activity/clamp-summaries.
+//
+// Retroactively applies the write-path summary cap to rows written before that
+// cap existed. Defaults to a dry run: this rewrites historical rows, so the
+// safe default is to measure and report rather than to mutate, and the caller
+// must opt in explicitly with {"apply": true}.
+func (h *ActivityHandler) ClampActivitySummaries(c *gin.Context) {
+	if h.svc == nil {
+		httputil.RespondWithInternalError(c, "activity log not available")
+		return
+	}
+
+	var req struct {
+		Apply  bool `json:"apply"`  // false (default) = dry run
+		Max    int  `json:"max"`    // 0 = no cap
+		Vacuum bool `json:"vacuum"` // reclaim file space after a real pass
+	}
+	// An absent body is a valid request: it means "dry run, no cap".
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body")
+		return
+	}
+	if req.Max < 0 {
+		httputil.RespondWithBadRequest(c, "max must be zero or positive")
+		return
+	}
+
+	res, err := h.svc.ClampSummaries(c.Request.Context(), req.Max, !req.Apply, req.Vacuum)
+	if errors.Is(err, activity.ErrSummaryClampUnsupported) {
+		httputil.RespondWithBadRequest(c, "summary clamp requires the SQLite activity backend")
+		return
+	}
+	if err != nil {
+		httputil.InternalError(c, "activity summary clamp failed", err)
+		return
+	}
+
+	httputil.RespondWithOK(c, gin.H{
+		"dry_run":         !req.Apply,
+		"scanned":         res.Scanned,
+		"clamped":         res.Clamped,
+		"bytes_before":    res.BytesBefore,
+		"bytes_after":     res.BytesAfter,
+		"bytes_reclaimed": res.Reclaimed(),
+		"truncated":       res.Truncated,
+	})
 }
