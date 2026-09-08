@@ -41,10 +41,17 @@
   had always reduced the ID with `filepath.Base`; the download path had not, and nothing made
   the two agree.
 
-  The ID is now sanitized once at the top of the download path, and every cover path is built
+  The ID is now validated once at the top of the download path, and every cover path is built
   with `pathvalidation.SecureJoin`, which fails rather than escaping its root — a second,
   independent guard rather than the only one. A traversing book ID is rejected before any
   network request is made.
+
+  The validation **rejects rather than truncates**. Reducing `a/b/c` to `c` the way
+  `filepath.Base` does would be worse than useless on a write path: two different book IDs
+  sharing a last segment would resolve to the same cover filename, and one book's art would
+  overwrite the other's. Book IDs are DB-minted ULIDs — both cover-writing paths run only
+  after `GetBookByID` returns a real book — so a separator means the caller is wrong, not that
+  the right book should be guessed.
 
   This exposure was not introduced by the performance change above; `filepath.Glob` resolved
   traversal the same way. It surfaced because CodeQL models `os.Stat` as a path sink and does

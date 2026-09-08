@@ -206,11 +206,16 @@ func TestFindExistingCover_RefusesEscapingID(t *testing.T) {
 	}
 }
 
+// TestSafeCoverID pins reject-not-truncate. Truncating is the dangerous option:
+// "a/b/c" and "x/y/c" would both become "c" and collide on one cover file.
 func TestSafeCoverID(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"01HZY", "01HZY"},
-		{"../../etc/passwd", "passwd"},
-		{"a/b/c", "c"},
+		{"01HZYQ8V9K2M4N6P8R0T2W4X6Z", "01HZYQ8V9K2M4N6P8R0T2W4X6Z"}, // a real ULID passes through
+		{"book-1_v2.final", "book-1_v2.final"},                       // ordinary punctuation is fine
+		{"../../etc/passwd", ""},
+		{"a/b/c", ""},
+		{"/abs", ""},
+		{"trailing/", ""},
 		{"", ""},
 		{".", ""},
 		{"..", ""},
@@ -220,6 +225,15 @@ func TestSafeCoverID(t *testing.T) {
 		if got := safeCoverID(tc.in); got != tc.want {
 			t.Errorf("safeCoverID(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestSafeCoverID_NoCollision states the property the reject behaviour buys:
+// two distinct IDs must never reduce to the same cover stem.
+func TestSafeCoverID_NoCollision(t *testing.T) {
+	a, b := safeCoverID("a/b/c"), safeCoverID("x/y/c")
+	if a != "" || b != "" {
+		t.Fatalf("both must be rejected; got %q and %q", a, b)
 	}
 }
 
@@ -250,12 +264,12 @@ func TestCoverPathForBook_SanitizesID(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	// filepath.Base reduces the traversal to the final segment, which still
-	// resolves to the real cover rather than escaping the covers directory.
-	if got, want := CoverPathForBook(root, "../../id"), filepath.Join(coversDir, "id.jpg"); got != want {
+	// A plain ID resolves; anything with a separator is refused outright rather
+	// than reduced to its last segment.
+	if got, want := CoverPathForBook(root, "id"), filepath.Join(coversDir, "id.jpg"); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	for _, bad := range []string{"", ".", "/", "..", "../.."} {
+	for _, bad := range []string{"", ".", "/", "..", "../..", "../../id", "a/id"} {
 		if got := CoverPathForBook(root, bad); got != "" {
 			t.Fatalf("CoverPathForBook(%q) = %q, want empty", bad, got)
 		}
