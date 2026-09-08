@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.22.0
+// version: 2.24.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-08
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -55,13 +55,21 @@ import { usePendingFileOps } from '../hooks/usePendingFileOps';
 import { useOperationsStore } from '../stores/useOperationsStore';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { tagChipProps } from '../utils/activityTagColors';
+import { isTerminal } from '../utils/operationPolling';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 
 // Section keys for the Active Operations panel, declared here rather than
 // derived from the rendered list so "Collapse All" can name every section even
 // when one of them is currently empty and therefore not rendered.
-const OPS_SECTION_KEYS = ['pending', 'active', 'completed'] as const;
+const OPS_SECTION_KEYS = [
+  'pending',
+  'active',
+  'completed',
+  'failed',
+  'canceled',
+  'interrupted',
+] as const;
 
 const EVENT_TYPES = [
   'book_added',
@@ -211,7 +219,11 @@ export default function ActivityLog() {
   const { operations: pendingFileOps } = usePendingFileOps();
 
   // Active ops from unified store
+  // activeOps is the WHOLE 24-hour window, finished jobs included — see the
+  // field's comment in useOperationsStore. liveOps is the subset still running,
+  // and is what anything labelled "active" or gated on real work must read.
   const activeOps = useOperationsStore((state) => state.activeOperations);
+  const liveOps = useOperationsStore((state) => state.liveOperations);
   const loadActiveOpsFromServer = useOperationsStore((state) => state.loadFromServer);
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
   const [pinned, setPinned] = useState(
@@ -609,7 +621,11 @@ export default function ActivityLog() {
 
   // Auto-refresh feed — 5s when active ops exist, 30s when idle.
   // Uses silent=true so the table stays in the DOM and scroll position is preserved.
-  const refreshInterval = activeOps.length > 0 ? 5000 : 30000;
+  //
+  // liveOps, not activeOps: the latter counts a whole day of FINISHED jobs, so
+  // this sat at the 5s rate permanently on an idle server — a poll every five
+  // seconds forever for history that cannot change.
+  const refreshInterval = liveOps.length > 0 ? 5000 : 30000;
   useEffect(() => {
     if (feedIntervalRef.current) window.clearInterval(feedIntervalRef.current);
     if (autoRefresh) {
@@ -1072,7 +1088,13 @@ export default function ActivityLog() {
                 alignItems: 'center',
               }}
             >
-              <Typography variant="h6">Active Operations ({activeOps.length})</Typography>
+              {/* The count is liveOps, not activeOps: the panel holds 24 hours
+                  of history and read "Active Operations (91)" when every one of
+                  the 91 had finished. The heading names the panel; the sections
+                  below carry the outcome breakdown. */}
+              <Typography variant="h6">
+                Operations{liveOps.length > 0 ? ` — ${liveOps.length} active` : ''}
+              </Typography>
               <Tooltip title={pinned ? 'Unpin section' : 'Pin section'}>
                 <IconButton
                   size="small"
@@ -1167,34 +1189,63 @@ export default function ActivityLog() {
                   return false;
                 };
 
-                // Partition by status so finished jobs aren't mixed with
-                // running ones. Within each section the existing
-                // parent-child hierarchy still works.
-                const TERMINAL_STATUSES = [
-                  'completed',
-                  'failed',
-                  'canceled',
-                  'interrupted_dropped',
-                  'interrupted_restart',
-                ];
+                // Partition by OUTCOME, not into running/not-running. This
+                // panel shows a 24-hour window, so most of what is in it has
+                // finished; lumping every ended job into one "Completed"
+                // section made a failed run and a successful one look alike,
+                // and the header still counted all of them as active.
+                //
+                // isTerminal, not a status list. The previous list here named
+                // interrupted_dropped and interrupted_restart but not
+                // interrupted, interrupted_quiesced or interrupted_ask — the
+                // backend mints one per ResumePolicy — so those three fell
+                // through into Active and sat there forever. That is the exact
+                // drift operationPolling.ts's comment warns about, and it is
+                // why the panel read "Active Operations (91)" on a page whose
+                // jobs had all ended.
+                // Parent-collapse applies to the LIVE sections only. Those are
+                // where the parent/child tree is meaningful — a scan rolling up
+                // its per-book children. The history sections are flat,
+                // newest-first lists of what happened, and running the collapse
+                // filter over them would let collapsing a `completed` parent
+                // silently remove a `failed` child from the Failed section and
+                // decrement its count, with the row nowhere on the page.
                 const visibleOps = activeOps.filter((op) => !isHiddenByCollapse(op));
+
+                // History is newest-first; live work keeps its natural order so
+                // rows do not jump around underneath a running progress bar.
+                // finishedAt is undefined for anything the server sent before
+                // fromV2 carried timestamps, and those sort last rather than
+                // to the top.
+                const newestFirst = (a: (typeof activeOps)[0], b: (typeof activeOps)[0]) =>
+                  (b.finishedAt ?? b.startedAt ?? 0) - (a.finishedAt ?? a.startedAt ?? 0);
+                const withStatus = (...want: string[]) =>
+                  activeOps.filter((o) => want.includes(o.status)).sort(newestFirst);
+
                 const sections: { key: string; title: string; ops: typeof activeOps }[] = [
+                  {
+                    key: 'active',
+                    title: 'Active',
+                    ops: visibleOps.filter((o) => o.status !== 'queued' && !isTerminal(o.status)),
+                  },
                   {
                     key: 'pending',
                     title: 'Pending',
                     ops: visibleOps.filter((o) => o.status === 'queued'),
                   },
+                  { key: 'completed', title: 'Completed', ops: withStatus('completed') },
+                  { key: 'failed', title: 'Failed', ops: withStatus('failed') },
+                  { key: 'canceled', title: 'Canceled', ops: withStatus('canceled') },
                   {
-                    key: 'active',
-                    title: 'Active',
-                    ops: visibleOps.filter(
-                      (o) => o.status !== 'queued' && !TERMINAL_STATUSES.includes(o.status)
-                    ),
-                  },
-                  {
-                    key: 'completed',
-                    title: 'Completed',
-                    ops: visibleOps.filter((o) => TERMINAL_STATUSES.includes(o.status)),
+                    key: 'interrupted',
+                    title: 'Interrupted',
+                    // The whole interrupted_* family, by prefix, so a policy
+                    // added on the backend lands here instead of in Active.
+                    ops: activeOps
+                      .filter(
+                        (o) => o.status === 'interrupted' || o.status.startsWith('interrupted_')
+                      )
+                      .sort(newestFirst),
                   },
                 ];
 
@@ -1338,7 +1389,11 @@ export default function ActivityLog() {
                               <ContentCopyIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
-                          {!['completed', 'failed', 'canceled'].includes(op.status) && (
+                          {/* isTerminal, not a three-status list: an op that
+                              ended at one of the interrupted_* statuses is
+                              finished, and offering Cancel on it hands the user
+                              a button that cannot do anything. */}
+                          {!isTerminal(op.status) && (
                             <Button
                               size="small"
                               color="error"

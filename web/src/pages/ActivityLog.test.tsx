@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-08
 
@@ -48,7 +48,12 @@ vi.mock('../hooks/usePendingFileOps', () => ({
 // effect on every render and spin the component forever.
 const loadActiveOpsFromServer = vi.fn().mockResolvedValue(undefined);
 const operationsStoreState = {
+  // activeOperations is the whole 24-hour window; liveOperations is the subset
+  // still running. The page reads both — the heading count and the auto-refresh
+  // interval must not treat a day of finished jobs as active work — so a mock
+  // that omits liveOperations hands the component `undefined.length`.
   activeOperations: [] as unknown[],
+  liveOperations: [] as unknown[],
   loadFromServer: loadActiveOpsFromServer,
   latestLogEvent: null,
 };

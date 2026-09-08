@@ -1,5 +1,5 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.7.0
+// version: 3.8.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-09-08
 
@@ -7,6 +7,7 @@ import { create } from 'zustand';
 import * as api from '../services/api';
 import { type OperationSSEEventName } from '../services/api';
 import { useAppStore } from './useAppStore';
+import { isTerminal } from '../utils/operationPolling';
 
 export interface ActiveOperation {
   id: string;
@@ -31,6 +32,11 @@ export interface ActiveOperation {
   total: number;
   message: string;
   startedAt?: number; // timestamp ms
+  /** finishedAt is completed_at in ms, set only for ops that have ended. It is
+   *  the sort key for the history sections on the Activity page: without it the
+   *  server-loaded ops carry no time at all (fromV2 dropped every timestamp
+   *  until 2026-09-08) and a day of finished jobs renders in map order. */
+  finishedAt?: number; // timestamp ms
   resumed?: boolean;
   // V2 fields (populated from v2 timeline/SSE)
   parent_id?: string | null;
@@ -50,7 +56,15 @@ export interface OperationLogEvent {
 
 interface OperationsState {
   operations: Record<string, ActiveOperation>; // Keyed by id
-  activeOperations: ActiveOperation[]; // All ops regardless of notify_level
+  /** activeOperations is EVERY op in the loaded 24-hour window, finished ones
+   *  included — the name predates the window and is not what it says. Use it
+   *  when you want the whole timeline; use liveOperations when you mean
+   *  "running right now". */
+  activeOperations: ActiveOperation[];
+  /** liveOperations is the subset that has not reached a terminal status.
+   *  This is what a count labelled "active" and a poll interval must read:
+   *  activeOperations returned 91 on a page whose jobs had all finished. */
+  liveOperations: ActiveOperation[];
   /** alertOperations contains only ops with notify_level === 0 (NotifyAlert).
    *  Use this for the bell badge count. */
   alertOperations: ActiveOperation[];
@@ -91,6 +105,17 @@ interface OperationsState {
 // `op.type === 'scan'` keep working when the def_id is just "scan", while
 // the bare-plugin display is fixed. The full def_id and the curated
 // display_name are also exposed for code that wants them.
+/** msOrUndefined converts one of the API's ISO-8601 timestamps to the epoch-ms
+ *  number ActiveOperation stores. The conversion is the point: ActiveOperation's
+ *  time fields are `number` (formatETA does Date.now() - startedAt) while the
+ *  wire sends strings, so assigning one straight through yields NaN out of every
+ *  arithmetic use and renders as "NaN s left" rather than failing visibly. */
+function msOrUndefined(iso: string | null | undefined): number | undefined {
+  if (!iso) return undefined;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
 function fromV2(op: api.OperationV2): ActiveOperation {
   const defID = op.def_id ?? '';
   // Strip plugin prefix for back-compat with old `op.type === 'scan'` checks.
@@ -105,6 +130,10 @@ function fromV2(op: api.OperationV2): ActiveOperation {
     progress: op.progress_current ?? 0,
     total: op.progress_total ?? 0,
     message: op.progress_message ?? op.display_name ?? '',
+    // started_at is null for a queued op, so fall back to queued_at — the
+    // Pending section still wants to say how long something has been waiting.
+    startedAt: msOrUndefined(op.started_at) ?? msOrUndefined(op.queued_at),
+    finishedAt: msOrUndefined(op.completed_at),
     parent_id: op.parent_id,
     current_phase: op.current_phase,
     current_item: op.current_item,
@@ -149,11 +178,19 @@ function formatOpLabel(type: string): string {
 // Helper to derive activeOperations and alertOperations arrays from operations map
 function deriveOperationArrays(operations: Record<string, ActiveOperation>): {
   activeOperations: ActiveOperation[];
+  liveOperations: ActiveOperation[];
   alertOperations: ActiveOperation[];
 } {
   const all = Object.values(operations);
   return {
+    // NOTE THE NAME IS HISTORICAL: activeOperations is every op in the loaded
+    // 24-hour window, finished ones included — it is the whole timeline, not the
+    // live set. Callers that mean "running right now" must filter with
+    // isTerminal; liveOperations below does it once so they do not each get it
+    // wrong. Renaming the field would touch every consumer, so it stays and this
+    // comment carries the warning.
     activeOperations: all,
+    liveOperations: all.filter((op) => !isTerminal(op.status)),
     alertOperations: all.filter((op) => (op.notify_level ?? 0) === 0),
   };
 }
@@ -161,6 +198,7 @@ function deriveOperationArrays(operations: Record<string, ActiveOperation>): {
 export const useOperationsStore = create<OperationsState>()((set, get) => ({
   operations: {},
   activeOperations: [],
+  liveOperations: [],
   alertOperations: [],
   latestLogEvent: null,
   polling: false,
