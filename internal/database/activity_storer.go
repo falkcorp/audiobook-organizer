@@ -1,7 +1,7 @@
 // file: internal/database/activity_storer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
-// last-edited: 2026-08-29
+// last-edited: 2026-09-08
 
 package database
 
@@ -20,6 +20,22 @@ type ActivityReader interface {
 	Query(context.Context, ActivityFilter) ([]ActivityEntry, int, error)
 	Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error)
 	GetDistinctSources(context.Context, ActivityFilter) ([]SourceCount, error)
+}
+
+// ActivityCounter reports an EXACT row count for a tier, optionally bounded to
+// rows strictly older than a cutoff.
+//
+// It is separate from ActivityReader.Query on purpose. Query's total is a
+// pagination probe on both backends — the Pebble store stops at
+// Offset+Limit+1 matches (and again at activityQueryScanBudget), the SQL store
+// caps its COUNT at sqlActCountCap — so neither can be used to size a keyspace.
+// Anything reporting "how much is there" must ask for it explicitly, and a
+// backend that cannot answer exactly should be refused rather than guessed at.
+//
+// It is an optional interface rather than part of ActivityStorer so a backend
+// that cannot count cheaply is not forced to fake it.
+type ActivityCounter interface {
+	CountActivity(ctx context.Context, tier string, olderThan *time.Time) (int, error)
 }
 
 // ActivityRetention covers pruning, compaction and migration.

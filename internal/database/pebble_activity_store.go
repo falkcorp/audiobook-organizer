@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -2886,3 +2886,46 @@ func (s *PebbleActivityStore) findExistingDigest(dateKey string) (DigestDetails,
 	}
 	return DigestDetails{}, nil, nil
 }
+
+// CountActivity returns the EXACT number of primary rows in a tier, optionally
+// bounded to rows strictly older than a cutoff.
+//
+// Query cannot answer this and must not be used for it. Query's second return
+// stops as soon as it has Offset+Limit+1 matches — the bounded newest-first
+// walk that replaced a full decode after the old path OOMed production at
+// 8.86 GB of heap — and it is additionally capped by activityQueryScanBudget.
+// So `Query(ctx, ActivityFilter{Limit: 1})` reports 2 for a keyspace of five
+// million rows. That is correct for pagination and catastrophic for a census.
+//
+// This iterates KEYS ONLY. Activity primary keys embed the timestamp
+// (act:<tier>:<nanos>:<ulid>) and the nanos field is fixed-width and
+// zero-padded, so the cutoff becomes a key upper bound and no value is ever
+// read, decoded, or held. The scan is O(keys in range) in time and O(1) in
+// memory, which is what makes counting the whole keyspace safe here when
+// decoding it was not.
+func (s *PebbleActivityStore) CountActivity(ctx context.Context, tier string, olderThan *time.Time) (int, error) {
+	lower, upper := pactTierBounds(tier, nil, olderThan)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return 0, fmt.Errorf("pebble_activity_store: count new iter (tier=%s): %w", tier, err)
+	}
+	defer func() { _ = iter.Close() }()
+
+	n := 0
+	for valid := iter.First(); valid; valid = iter.Next() {
+		// Cancellation must be observable on a multi-million-key scan; checking
+		// every key would cost more than the iteration itself.
+		if n%pactCountCtxCheckInterval == 0 {
+			if cerr := ctx.Err(); cerr != nil {
+				return n, cerr
+			}
+		}
+		n++
+	}
+	return n, iter.Error()
+}
+
+// pactCountCtxCheckInterval is how often CountActivity looks at ctx. Frequent
+// enough that a cancel is honoured promptly, rare enough not to dominate a
+// key-only walk.
+const pactCountCtxCheckInterval = 4096

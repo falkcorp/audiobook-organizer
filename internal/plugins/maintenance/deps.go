@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-08
 
@@ -325,6 +325,15 @@ type ActivityLogOps interface {
 	CompactActivityLog(ctx context.Context,
 		compactionDays, changeDays, debugDays int,
 	) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error)
+	// ReclaimMigratedActivity deletes Pebble-side activity rows that the SQLite
+	// cutover has made redundant, freeing space in the main database.
+	//
+	// It reports a census (row counts on both backends, cutover state, how much
+	// is eligible) even when it refuses to delete, so a run that is blocked
+	// still tells the operator what is blocking it and how much is waiting.
+	ReclaimMigratedActivity(ctx context.Context, retain time.Duration, dryRun bool,
+		onTier database.ActivityReclaimProgress,
+	) (database.ActivityReclaimResult, error)
 }
 
 // WriteBackOps covers the iTunes write-back queue.

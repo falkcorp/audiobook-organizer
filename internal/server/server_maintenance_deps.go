@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-08
 
@@ -757,4 +757,27 @@ func (s *Server) MergeBooks(bookIDs []string, primaryID string) (int, error) {
 	// SoftDeleted, not MergedCount: BookMerger is documented to return the number
 	// of LOSER records soft-deleted, and MergedCount counts the primary too.
 	return res.SoftDeleted, nil
+}
+
+// ReclaimMigratedActivity deletes the Pebble-side activity copy that the SQLite
+// cutover has made redundant. See database.ReclaimMigratedActivity for the
+// guards; this is the wiring only.
+//
+// A missing activity service is a refusal with a reason rather than an error:
+// the op's job is to report why nothing can be reclaimed, and "the activity
+// service is not wired" is an answer an operator can act on.
+func (s *Server) ReclaimMigratedActivity(
+	ctx context.Context,
+	retain time.Duration,
+	dryRun bool,
+	onTier database.ActivityReclaimProgress,
+) (database.ActivityReclaimResult, error) {
+	if s.activityService == nil {
+		return database.ActivityReclaimResult{
+			Refused:       true,
+			RefusedReason: "activity service is not wired; there is no activity store to reclaim from",
+			DryRun:        dryRun,
+		}, nil
+	}
+	return s.activityService.ReclaimMigratedActivity(ctx, retain, dryRun, onTier)
 }

@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-08
 
@@ -1001,3 +1001,24 @@ func (s *SQLActivityStore) Close() error {
 }
 
 var _ ActivityStorer = (*SQLActivityStore)(nil)
+
+// CountActivity returns the EXACT number of rows in a tier, optionally bounded
+// to rows strictly older than a cutoff.
+//
+// Query cannot answer this: its total is deliberately capped at sqlActCountCap
+// (the count subquery carries a LIMIT), so above the cap it reports the cap as
+// a lower bound. That is right for a paginated UI and wrong for a census, which
+// is why this exists as its own uncapped COUNT.
+func (s *SQLActivityStore) CountActivity(ctx context.Context, tier string, olderThan *time.Time) (int, error) {
+	q := "SELECT COUNT(*) FROM activity WHERE tier = ?"
+	args := []any{tier}
+	if olderThan != nil {
+		q += " AND ts < ?"
+		args = append(args, olderThan.UnixNano())
+	}
+	var n int
+	if err := s.reader.QueryRowContext(ctx, s.dialect.rebind(q), args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("sql_activity: count (tier=%s): %w", tier, err)
+	}
+	return n, nil
+}

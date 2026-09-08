@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-09-08
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -124,6 +125,18 @@ func (d fakeDeps) OptimizeOLStore(_ context.Context) error     { return nil }
 func (d fakeDeps) PruneOldLogs(_ int) error                    { return nil }
 func (d fakeDeps) CompactActivityLog(_ context.Context, _, _, _ int) (int, int, int, int64, error) {
 	return 0, 0, 0, 0, nil
+}
+
+// ReclaimMigratedActivity defaults to the refusal a Pebble-only deployment
+// gets. Tests that exercise the reclaim op override this on their own fake.
+func (d fakeDeps) ReclaimMigratedActivity(_ context.Context, _ time.Duration, dryRun bool,
+	_ database.ActivityReclaimProgress,
+) (database.ActivityReclaimResult, error) {
+	return database.ActivityReclaimResult{
+		Refused:       true,
+		RefusedReason: "test fake: no migration wrapper",
+		DryRun:        dryRun,
+	}, nil
 }
 func (d fakeDeps) HasDedupEngine() bool                { return false }
 func (d fakeDeps) HasMetadataFetchService() bool       { return false }
