@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.4.0
+// version: 4.5.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-08
 
@@ -32,49 +32,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { OperationActivityPanel } from '../OperationActivityPanel';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
-import { formatProgressCounts } from './operationsFormat';
+import { formatProgressCounts, formatOperationType } from './operationsFormat';
 import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
-
-function formatOperationType(type: string): string {
-  switch (type) {
-    case 'itunes_import':
-      return 'iTunes Import';
-    case 'itunes_sync':
-      return 'iTunes Sync';
-    case 'scan':
-      return 'Library Scan';
-    case 'organize':
-      return 'Organize';
-    case 'metadata_fetch':
-      return 'Metadata Fetch';
-    case 'metadata_candidate_fetch':
-      return 'Metadata Fetch (Batch)';
-    case 'ol_dump_import':
-      return 'Open Library Import';
-    case 'dedup-scan':
-      return 'Dedup Scan';
-    case 'dedup-llm-review':
-      return 'Dedup AI Review';
-    case 'dedup-acoustid-scan':
-      return 'AcoustID Scan';
-    case 'dedup-book-signature-scan':
-      return 'Book Signature Scan';
-    case 'embed-scan':
-      return 'Embedding Rescan';
-    case 'fingerprint-rescan':
-      return 'Fingerprint Rescan';
-    // The activity log's Pebble→SQLite move. It has no registered OperationDef
-    // (deliberately — see internal/activity/sql_migration_report.go), so the
-    // server falls back to sending the raw def id and the default branch below
-    // would render it "Sql-Migration".
-    case 'sql-migration':
-      return 'Activity Log Migration';
-    default:
-      return type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  }
-}
 
 function formatETA(op: ActiveOperation): string | null {
   if (!op.startedAt || op.progress <= 0 || op.total <= 0) return null;

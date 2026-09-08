@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.24.0
+// version: 2.25.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-08
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -56,6 +56,7 @@ import { useOperationsStore } from '../stores/useOperationsStore';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { tagChipProps } from '../utils/activityTagColors';
 import { isTerminal } from '../utils/operationPolling';
+import { operationDisplayName } from '../components/layout/operationsFormat';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 
@@ -707,7 +708,7 @@ export default function ActivityLog() {
     const lines = [
       `id:       ${op.id}`,
       `def:      ${op.def_id ?? op.type}`,
-      `name:     ${op.displayName ?? ''}`,
+      `name:     ${operationDisplayName(op)}`,
       `status:   ${op.status}`,
       `progress: ${op.progress} / ${op.total}` +
         (op.total > 0 ? ` (${((op.progress / op.total) * 100).toFixed(2)}%)` : ''),
@@ -1340,7 +1341,7 @@ export default function ActivityLog() {
                               fontWeight: 'bold',
                             }}
                           >
-                            {op.displayName || op.def_id || op.type.replace(/_/g, ' ')}
+                            {operationDisplayName(op)}
                           </Typography>
                           <Chip
                             size="small"
