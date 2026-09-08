@@ -27,6 +27,30 @@
   run, since the starter begins a fresh one from the checkpoint with its own row.
   (`pebble_store_ops_v2_resumable_test.go:63` already pins the non-resumability.)
 
+  **`finish` fails CLOSED on the terminal status, and the allowlist is keyed by
+  literals on purpose.** The wrong value here is silent: `interrupted_quiesced`
+  is a real status the store accepts, spelled correctly, differing only in that
+  `isResumableV2Status` counts it resumable. Anything off
+  `migrationTerminalStatuses` is logged loudly and coerced to `failed` — writing
+  nothing would leave the row `running` forever, which is worse. The shutdown
+  status is the named constant `migrationStatusInterruptedByShutdown`; the
+  allowlist spells its members out as literals so that
+  `TestMigrationShutdownStatus_IsTerminal` is a real check rather than a
+  tautology. Residual gap, stated rather than papered over: a future edit that
+  passes a raw `"interrupted_quiesced"` at the call site instead of the constant
+  is coerced to `failed` (so the row stays terminal and the SAFETY property
+  holds) but no test observes the wrong label, because reaching the shutdown
+  branch deterministically needs the 60s settle delay to be overridable.
+
+  **Publishing is gated on the insert having succeeded (`rowExists`).**
+  `useOperationsStore` answers an `op.updated` for an unknown op id with
+  `loadFromServer()`, throttled to one per 500ms — so announcing a row the store
+  rejected would drive ~2 full timeline reloads a SECOND for the length of a
+  multi-hour run, on the box where `/activity/sources` already takes 35s. The
+  gate lives in `publish`, not at the three call sites, so a fourth publish
+  added later inherits it. Store writes still run and still log on a failed
+  insert; only the events are suppressed.
+
   **A panic hazard was investigated and found NOT to exist — do not re-raise it.**
   `UpdateOpProgressV2` has no method-level `recoverPebbleClosed` while its
   siblings do, which looks like an unguarded leg, and `recoverPebbleClosed`'s own
