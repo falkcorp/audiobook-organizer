@@ -30,9 +30,12 @@
   The hydrating read deliberately skips the `book_sig:` sidecar that
   `GetBookByID` folds in — that would have added ~22 KB of base64 per hit and
   undone the payload reduction from #3125.
-- The result slice's preallocation no longer trusts `limit` for a size. `limit`
-  reaches `SearchBooks` from three call sites and is not validated at all of
-  them; a negative value made `make([]string, 0, limit)` panic with
+- The result slice's capacity is a constant and is not derived from `limit` at
+  all. `limit` reaches `SearchBooks` from three call sites and is not validated
+  at all of them; a negative value made `make([]string, 0, limit)` panic with
   `makeslice: cap out of range`. The disk scan never preallocated, so the fast
   path introduced it — caught by CodeQL as `go/uncontrolled-allocation-size`
-  before it shipped, and now pinned by a test that panics without the guard.
+  before it shipped. Clamping the value fixed the panic but left the allocation
+  size flowing from request input, so the dependency was removed outright: the
+  speed-up here comes from not unmarshalling ~121K rows off disk, not from
+  sizing one slice.
