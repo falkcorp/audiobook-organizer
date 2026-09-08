@@ -1,5 +1,5 @@
 // file: internal/activity/sql_migration.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e3b1f47-2a90-4c6d-b5e1-9f0c7d2a6b58
 // last-edited: 2026-09-08
 
@@ -108,7 +108,7 @@ func (s *sqlMigrationStarter) Start(_ context.Context) error {
 				// resume belongs in a TERMINAL state, and the restart is not a lost
 				// run: the starter begins a fresh one from the checkpoint, with its
 				// own row.
-				rep.finish("interrupted_dropped",
+				rep.finish(migrationStatusInterruptedByShutdown,
 					"interrupted by shutdown — resumes from its checkpoint on the next start", nil)
 				return
 			}

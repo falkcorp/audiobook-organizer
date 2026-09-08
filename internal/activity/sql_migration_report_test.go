@@ -1,5 +1,5 @@
 // file: internal/activity/sql_migration_report_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c07b5e1-42fa-4d86-b3c9-0e5a7d18f6b2
 // last-edited: 2026-09-08
 
@@ -410,5 +410,83 @@ func TestMigrationOpReporter_FinishKeepsTheFinalCount(t *testing.T) {
 
 	if got := ops.currents[len(ops.currents)-1]; got != 4_739_375 {
 		t.Errorf("final progress current = %d, want 4739375 (the count was erased)", got)
+	}
+}
+
+// TestMigrationShutdownStatus_IsTerminal is the guard for the status the
+// shutdown path writes.
+//
+// This looks like a tautology and is not: migrationTerminalStatuses is keyed by
+// string literals precisely so that this comparison has content. The mutation it
+// exists to catch is silent — "interrupted_quiesced" is a real status the store
+// accepts, spelled correctly, differing only in that isResumableV2Status counts
+// it resumable. This row has no registered OperationDef to resume into, so a
+// resumable value leaves a row every subsequent boot picks up and drops again.
+func TestMigrationShutdownStatus_IsTerminal(t *testing.T) {
+	if !migrationTerminalStatuses[migrationStatusInterruptedByShutdown] {
+		t.Fatalf("the shutdown path closes the row out as %q, which is not a terminal status — "+
+			"a status the resume sweep treats as resumable leaves a def-less row behind on every boot",
+			migrationStatusInterruptedByShutdown)
+	}
+}
+
+// TestMigrationTerminalStatuses_ExcludeEveryResumableStatus pins the other half:
+// the allowlist must never grow to admit a status the resume machinery would act
+// on. These three are isResumableV2Status's whole vocabulary
+// (pebble_store_ops_v2.go).
+func TestMigrationTerminalStatuses_ExcludeEveryResumableStatus(t *testing.T) {
+	for _, resumable := range []string{"queued", "running", "interrupted_quiesced"} {
+		if migrationTerminalStatuses[resumable] {
+			t.Errorf("%q is resumable (isResumableV2Status) and must not be in the terminal allowlist",
+				resumable)
+		}
+	}
+}
+
+// TestMigrationOpReporter_FinishCoercesANonTerminalStatus checks the chokepoint
+// itself. finish must not write a status through unchecked: leaving the row in a
+// state the resume sweep will act on is worse than mislabelling it, so anything
+// off the allowlist becomes "failed" — which is terminal, and carries the reason.
+func TestMigrationOpReporter_FinishCoercesANonTerminalStatus(t *testing.T) {
+	ops := &fakeOpsRecorder{}
+	rep := &migrationOpReporter{ops: ops}
+	rep.begin(time.Now().UTC())
+
+	rep.finish("interrupted_quiesced", "interrupted by shutdown", nil)
+
+	last := ops.statuses[len(ops.statuses)-1]
+	if last != "failed" {
+		t.Errorf("finish wrote %q; a non-terminal status must be coerced to \"failed\"", last)
+	}
+	// The reason still has to survive the coercion — it is the only durable
+	// record of why the migration stopped.
+	if rep.opID != "" && (ops.lastErr == nil || !strings.Contains(*ops.lastErr, "interrupted by shutdown")) {
+		t.Errorf("the reason was lost in coercion: %v", ops.lastErr)
+	}
+}
+
+// TestMigrationOpReporter_AFailedInsertPublishesNothing covers the cost of
+// announcing a row that does not exist. useOperationsStore answers an op.updated
+// for an unknown op id with loadFromServer(), throttled to one per 500ms — so a
+// migration reporting for hours against a row the store rejected would drive
+// ~2 full timeline reloads a second for the length of the run.
+func TestMigrationOpReporter_AFailedInsertPublishesNothing(t *testing.T) {
+	ops := &fakeOpsRecorder{failWith: errors.New("pebble: closed")}
+	bus := &fakeBus{}
+	rep := &migrationOpReporter{ops: ops, bus: bus}
+
+	rep.begin(time.Now().UTC())
+	rep.observe(database.ActivityBackfillProgressUpdate{
+		Tier: "change", TierIndex: 1, TiersTotal: 7, Scanned: 10, Copied: 10})
+	rep.finish("completed", "done", nil)
+
+	if len(bus.names) != 0 {
+		t.Errorf("published %v after the insert failed; the UI must not be told about a row that does not exist",
+			bus.names)
+	}
+	// The migration itself is untouched, and the store writes still run — only
+	// the events are suppressed.
+	if len(ops.progress) == 0 {
+		t.Error("progress writes stopped after a failed insert; reporting must keep trying")
 	}
 }
