@@ -40,14 +40,60 @@ Costs nest, so these overlap.
       item-view path.** Calls `seriesPageBooks` → `seriesRows` (22.69 s, 5.19 %).
       This is the single biggest thing inside search and had never been looked at,
       because the mint lock was masking it.
-- [ ] **`coverPath` / `coverFile` inside `minifiedMedia` — 27.84 s cum (6.37 %).**
-      Per-item filesystem work for cover art on the search path. Note `os.Stat` on
-      book files measured 0.01 ms, so this is not "stat is slow" — it is either
-      doing many more stats than expected or resolving paths expensively.
+- [ ] **`coverPath` / `coverFile` → `metadata.CoverPathForBook` — 27.96 s cum
+      (6.40 %). Root cause identified: `filepath.Glob` reads and sorts the entire
+      covers directory once per book.** `internal/metadata/cover.go:180` globs
+      `<rootDir>/covers/<bookID>.*`. Because the pattern contains a meta character,
+      Go's `filepath.Glob` cannot do a point lookup — it falls into `glob()`, which
+      calls `Readdirnames(-1)` on the whole directory, `slices.Sort`s every name, and
+      runs `filepath.Match` against each. The profile splits exactly that way:
+
+      | callee of `filepath.glob` | cum | share of glob |
+      |---|---|---|
+      | `os.(*File).Readdirnames` | 18.00 s | 64.38 % |
+      | `slices.Sort[[]string,string]` | 5.57 s | 19.92 % |
+      | `filepath.Match` | 4.17 s | 14.91 % |
+      | `os.Stat` | 0.08 s | 0.29 % |
+
+      **`/mnt/bigdata/books/audiobook-organizer/covers` holds 9,288 entries**
+      (counted on prod 2026-09-08), so every cover resolution reads and sorts 9,288
+      filenames to find one whose name is already known. Cost is
+      O(items × covers-dir-size) and grows as the library gains covers, independent
+      of the query.
+
+      **Fix:** the bookID is known and only the extension is unknown — `os.Stat` the
+      five candidate extensions (`.jpg .jpeg .png .webp .gif`) in the order the
+      existing loop prefers, and return the first hit. `os.Stat` measured 0.01 ms on
+      this box, so this replaces a 9,288-entry readdir + sort with at most five
+      point lookups. Behaviour differs in one edge case worth a test: `Glob` returns
+      *any* extension matching `.*` and the loop then filters to the five known
+      image types, so a cover stored under some other extension is found by neither
+      the old code (filtered out) nor the new (not probed) — but a **case-variant**
+      extension (`.JPG`) is matched by `Glob` + `strings.ToLower` today and would be
+      missed by naive stats. Probe case variants or keep the comparison
+      case-insensitive.
+
+      Note `CoverPathForBook` has two other callers — `metafetch.writeBackForBook`
+      and `ApplyMetadataFileIO` (0.07 s / 0.06 s here) — so they benefit too, and
+      both must stay correct.
+
+      ⚠️ Verify the root dir from `GET /api/v1/config` (`root_dir`), **not** from the
+      systemd unit: the unit sets `AUDIOBOOK_ROOT_DIR=/var/lib/audiobooks`, which a
+      config file overrides to `/mnt/bigdata/books/audiobook-organizer`. The unit's
+      value does not exist on disk.
 - [ ] **`minifiedItem` — 23.17 s (5.30 %).**
 - [ ] `loadItemViews` / `loadOneItemView` — 17.80 s (4.07 %); `GetBookFiles`
       within it only 4.98 s (1.14 %), which is why the batch swap in the N+1
-      audit's finding 1 is **not** the priority it looked like.
+      audit's finding 1 is **not** the priority it looked like. Two reasons, and
+      they must be read together: (a) `GetBookFiles` is **prefix-bounded**, so the
+      per-book cost is already proportional to that book's files, not to the table
+      — the N+1 shape is real but each call is cheap; and (b) the proposed
+      replacement `GetBookFilesForIDsCore` **falls back to a full scan of all
+      ~726 K `book_file:` rows** when memdb is unavailable, which is exactly the
+      state during the ~130 s async warmup after every restart. So the swap trades
+      a measured-minor warm cost for an unmeasured-severe cold one. Do not treat
+      "only 1.14 %" as a green light to apply finding 1 unchanged — if it is done
+      at all, the fallback must be made prefix-bounded first.
 - [ ] **`MintOrGetSyncFileIDs` at 10.80 s (2.47 %) is now worth the prefix-scan
       follow-up** (audit finding 7): the `sync_file:book:<bookID>:<syncFileID>`
       index stores the fileID as its value, so one scan per book replaces the N
