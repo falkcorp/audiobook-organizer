@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.100.0
+// version: 1.101.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-08
 
@@ -75,6 +75,7 @@ type MockStore struct {
 	FlagMetadataHashDuplicateFunc     func(primaryID, duplicateID string) error
 	RecomputeBookAggregatesFunc       func(bookID string) error
 	OptimizeFunc                      func() error
+	CompactionStatsFunc               func() CompactionStats
 	GetDuplicateBooksFunc             func() ([][]Book, error)
 	GetBooksByTitleInDirFunc          func(normalizedTitle, dirPath string) ([]Book, error)
 	GetFolderDuplicatesCoreFunc       func() ([][]BookCore, error)
@@ -2323,10 +2324,16 @@ func (m *MockStore) RecomputeBookAggregates(bookID string) error {
 	return nil
 }
 
-// CompactionStats returns a zero value: the mock has no LSM, and a caller
+// CompactionStats defaults to a zero value: the mock has no LSM, and a caller
 // under test that reads it gets "no compactions, no debt" — which the
-// heartbeat correctly treats as "nothing moved".
-func (m *MockStore) CompactionStats() CompactionStats { return CompactionStats{} }
+// heartbeat correctly treats as "nothing moved". Overridable like every other
+// mock method so a test can drive the heartbeat's progress predicate.
+func (m *MockStore) CompactionStats() CompactionStats {
+	if m.CompactionStatsFunc != nil {
+		return m.CompactionStatsFunc()
+	}
+	return CompactionStats{}
+}
 
 func (m *MockStore) Optimize(_ context.Context) error {
 	if m.OptimizeFunc != nil {
