@@ -1,11 +1,12 @@
 // file: internal/openlibrary/store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 
 package openlibrary
 
 import (
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -156,6 +157,6 @@ func TestOLStore_Optimize(t *testing.T) {
 	store, err := NewOLStore(filepath.Join(dir, "testdb"))
 	require.NoError(t, err)
 	defer store.Close()
-	err = store.Optimize()
+	err = store.Optimize(context.Background())
 	assert.NoError(t, err)
 }

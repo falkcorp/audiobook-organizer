@@ -5840,6 +5840,50 @@ func (_c *MockStore_Close_Call) RunAndReturn(run func() error) *MockStore_Close_
 	return _c
 }
 
+// CompactionStats provides a mock function for the type MockStore
+func (_mock *MockStore) CompactionStats() database.CompactionStats {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompactionStats")
+	}
+
+	var r0 database.CompactionStats
+	if returnFunc, ok := ret.Get(0).(func() database.CompactionStats); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(database.CompactionStats)
+	}
+	return r0
+}
+
+// MockStore_CompactionStats_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompactionStats'
+type MockStore_CompactionStats_Call struct {
+	*mock.Call
+}
+
+// CompactionStats is a helper method to define mock.On call
+func (_e *MockStore_Expecter) CompactionStats() *MockStore_CompactionStats_Call {
+	return &MockStore_CompactionStats_Call{Call: _e.mock.On("CompactionStats")}
+}
+
+func (_c *MockStore_CompactionStats_Call) Run(run func()) *MockStore_CompactionStats_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_CompactionStats_Call) Return(compactionStats database.CompactionStats) *MockStore_CompactionStats_Call {
+	_c.Call.Return(compactionStats)
+	return _c
+}
+
+func (_c *MockStore_CompactionStats_Call) RunAndReturn(run func() database.CompactionStats) *MockStore_CompactionStats_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ConsumeInvite provides a mock function for the type MockStore
 func (_mock *MockStore) ConsumeInvite(token string, passwordHashAlgo string, passwordHash string) (*database.User, error) {
 	ret := _mock.Called(token, passwordHashAlgo, passwordHash)
@@ -23596,16 +23640,16 @@ func (_c *MockStore_MoveSegmentsToBook_Call) RunAndReturn(run func(segmentIDs []
 }
 
 // Optimize provides a mock function for the type MockStore
-func (_mock *MockStore) Optimize() error {
-	ret := _mock.Called()
+func (_mock *MockStore) Optimize(ctx context.Context) error {
+	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Optimize")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func() error); ok {
-		r0 = returnFunc()
+	if returnFunc, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = returnFunc(ctx)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -23618,13 +23662,20 @@ type MockStore_Optimize_Call struct {
 }
 
 // Optimize is a helper method to define mock.On call
-func (_e *MockStore_Expecter) Optimize() *MockStore_Optimize_Call {
-	return &MockStore_Optimize_Call{Call: _e.mock.On("Optimize")}
+//   - ctx context.Context
+func (_e *MockStore_Expecter) Optimize(ctx any) *MockStore_Optimize_Call {
+	return &MockStore_Optimize_Call{Call: _e.mock.On("Optimize", ctx)}
 }
 
-func (_c *MockStore_Optimize_Call) Run(run func()) *MockStore_Optimize_Call {
+func (_c *MockStore_Optimize_Call) Run(run func(ctx context.Context)) *MockStore_Optimize_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
 	})
 	return _c
 }
@@ -23634,7 +23685,7 @@ func (_c *MockStore_Optimize_Call) Return(err error) *MockStore_Optimize_Call {
 	return _c
 }
 
-func (_c *MockStore_Optimize_Call) RunAndReturn(run func() error) *MockStore_Optimize_Call {
+func (_c *MockStore_Optimize_Call) RunAndReturn(run func(ctx context.Context) error) *MockStore_Optimize_Call {
 	_c.Call.Return(run)
 	return _c
 }

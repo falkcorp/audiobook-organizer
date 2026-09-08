@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -166,7 +166,9 @@ type opsRecordsAndQueue interface {
 	DeleteReviewItem(id string) error
 	ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error)
 	ListUserPlaylists(playlistType string, limit int, offset int) ([]database.UserPlaylist, int, error)
-	Optimize() error
+	Optimize(ctx context.Context) error
+	// CompactionStats backs the progress heartbeat in runDBOptimize.
+	CompactionStats() database.CompactionStats
 	UpsertReviewItem(item database.ReviewItem) (database.ReviewItem, error)
 }
 
@@ -397,9 +399,9 @@ type TranscriptionRunners interface {
 // StoreOptimizer compacts the auxiliary stores.
 type StoreOptimizer interface {
 	// OptimizeAIScanStore optimizes the AI scan store (no-op if nil).
-	OptimizeAIScanStore() error
+	OptimizeAIScanStore(ctx context.Context) error
 	// OptimizeOLStore optimizes the OpenLibrary cache store (no-op if nil).
-	OptimizeOLStore() error
+	OptimizeOLStore(ctx context.Context) error
 }
 
 // CapabilityProbes reports which optional subsystems are wired.

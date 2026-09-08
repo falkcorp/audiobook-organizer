@@ -1,10 +1,11 @@
 // file: internal/database/ai_scan_store_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 
 package database
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -139,7 +140,7 @@ func TestAIScanStore_Optimize(t *testing.T) {
 	store, err := NewAIScanStore(tmpdir + "/ai_scans.db")
 	require.NoError(t, err)
 	defer store.Close()
-	err = store.Optimize()
+	err = store.Optimize(context.Background())
 	assert.NoError(t, err)
 }
 
@@ -166,7 +167,7 @@ func TestNewAIScanStoreFromDB(t *testing.T) {
 
 	// Close must be a no-op (ps.Close() still works after this).
 	require.NoError(t, store.Close())
-	require.NoError(t, store.Optimize())
+	require.NoError(t, store.Optimize(context.Background()))
 
 	// Verify main DB is still alive.
 	_, err = store.ListScans()

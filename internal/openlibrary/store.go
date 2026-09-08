@@ -1,7 +1,7 @@
 // file: internal/openlibrary/store.go
-// version: 2.4.1
+// version: 2.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-08
 
 package openlibrary
 
@@ -44,8 +44,8 @@ func (s *OLStore) Close() error {
 }
 
 // Optimize compacts the PebbleDB database to reclaim space.
-func (s *OLStore) Optimize() error {
-	return s.db.Compact(context.Background(), nil, []byte{0xff}, false)
+func (s *OLStore) Optimize(ctx context.Context) error {
+	return s.db.Compact(ctx, nil, []byte{0xff}, false)
 }
 
 // Key prefixes

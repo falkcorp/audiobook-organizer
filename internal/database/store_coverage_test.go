@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-08-24
+// last-edited: 2026-09-08
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -729,7 +729,7 @@ func TestCoverage_BookVersionStubs(t *testing.T) {
 func TestCoverage_Optimize(t *testing.T) {
 	store := setupCoverageDB(t)
 
-	err := store.Optimize()
+	err := store.Optimize(context.Background())
 	assert.NoError(t, err)
 }
 

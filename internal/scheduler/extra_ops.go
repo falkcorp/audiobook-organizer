@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-08-30
+// last-edited: 2026-09-08
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -88,7 +88,7 @@ type extraOpsAuthorStore interface {
 
 // extraOpsMaintenanceStore is the db-optimize and tombstone-resolve ops.
 type extraOpsMaintenanceStore interface {
-	Optimize() error
+	Optimize(ctx context.Context) error
 	ResolveTombstoneChains() (int, error)
 }
 
@@ -472,10 +472,10 @@ func (r *ExtraOpsRegistrar) RegisterDBOptimizeOp(reg *opsregistry.Registry) erro
 			p.Start("Starting database optimization")
 
 			// 1. Main store
-			_ = progress.Log("info", "Optimizing main database (VACUUM, ANALYZE, WAL checkpoint)...", nil)
+			_ = progress.Log("info", "Compacting main database (Pebble, full keyspace)...", nil)
 			p.StepN(0, "Optimizing main database (0/3)")
 			t1 := time.Now()
-			if err := store.Optimize(); err != nil {
+			if err := store.Optimize(ctx); err != nil {
 				_ = progress.Log("error", fmt.Sprintf("Main DB optimization failed: %v", err), nil)
 			} else {
 				storesOptimized++
@@ -486,7 +486,7 @@ func (r *ExtraOpsRegistrar) RegisterDBOptimizeOp(reg *opsregistry.Registry) erro
 			// 2. AI scan store
 			if r.Deps.AIScanStore != nil {
 				t2 := time.Now()
-				if err := r.Deps.AIScanStore.Optimize(); err != nil {
+				if err := r.Deps.AIScanStore.Optimize(ctx); err != nil {
 					_ = progress.Log("error", fmt.Sprintf("AI scan DB optimization failed: %v", err), nil)
 				} else {
 					storesOptimized++
@@ -500,7 +500,7 @@ func (r *ExtraOpsRegistrar) RegisterDBOptimizeOp(reg *opsregistry.Registry) erro
 			// 3. OpenLibrary store (accessed via OLService)
 			if r.Deps.OLService != nil && r.Deps.OLService.Store() != nil {
 				t3 := time.Now()
-				if err := r.Deps.OLService.Store().Optimize(); err != nil {
+				if err := r.Deps.OLService.Store().Optimize(ctx); err != nil {
 					_ = progress.Log("error", fmt.Sprintf("OL cache optimization failed: %v", err), nil)
 				} else {
 					storesOptimized++

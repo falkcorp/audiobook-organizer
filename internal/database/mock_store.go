@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.99.0
+// version: 1.100.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-07
+// last-edited: 2026-09-08
 
 package database
 
@@ -2323,7 +2323,12 @@ func (m *MockStore) RecomputeBookAggregates(bookID string) error {
 	return nil
 }
 
-func (m *MockStore) Optimize() error {
+// CompactionStats returns a zero value: the mock has no LSM, and a caller
+// under test that reads it gets "no compactions, no debt" — which the
+// heartbeat correctly treats as "nothing moved".
+func (m *MockStore) CompactionStats() CompactionStats { return CompactionStats{} }
+
+func (m *MockStore) Optimize(_ context.Context) error {
 	if m.OptimizeFunc != nil {
 		return m.OptimizeFunc()
 	}
