@@ -1,7 +1,7 @@
 // file: internal/ai/retry_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-08-23
+// last-edited: 2026-09-09
 
 package ai
 
@@ -9,7 +9,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
+	"syscall"
 	"testing"
 	"time"
 
@@ -136,4 +140,124 @@ func TestDoWithRetry_SuccessLogsNothing(t *testing.T) {
 	err := DoWithRetry(context.Background(), 3, time.Millisecond, func() error { return nil })
 	require.NoError(t, err)
 	assert.Empty(t, buf.String(), "successful first attempt must not log retry noise")
+}
+
+// unreachableHost is an RFC 5737 TEST-NET-1 address, reserved for documentation
+// and guaranteed never to route. Standing in for the real host here is not just
+// hygiene for a public repo: it also keeps the test from depending on any
+// address that could one day answer.
+const unreachableHost = "192.0.2.1"
+
+// prodDialError rebuilds the exact error shape production returned on
+// 2026-09-09, when the configured local base URL had a one-digit typo in its
+// host and named an address nothing listened on. Every layer is here because
+// every layer has to be unwrapped for the classifier to see the dial:
+// openai_parser.go wraps with fmt.Errorf("...: %w"), net/http wraps with
+// *url.Error, and only underneath that is the *net.OpError that says "dial".
+//
+// Built to the captured shape rather than composed to satisfy the matcher —
+// the same discipline the 429 table above documents, and for the same reason.
+func prodDialError() error {
+	return fmt.Errorf("OpenAI API call failed: %w", &url.Error{
+		Op:  "Post",
+		URL: fmt.Sprintf("http://%s:11434/v1/chat/completions", unreachableHost),
+		Err: &net.OpError{
+			Op:   "dial",
+			Net:  "tcp",
+			Addr: &net.TCPAddr{IP: net.ParseIP(unreachableHost), Port: 11434},
+			Err:  syscall.EHOSTUNREACH,
+		},
+	})
+}
+
+// TestIsUnreachableError_Classification covers the line the predicate draws:
+// "no connection was established" is true, everything else is false. The two
+// cases that matter most are the last two — a read failure on an OPEN
+// connection, and a dial cut short by our own deadline. Both are transient and
+// misfiling either one would silently disable retries for a healthy backend.
+func TestIsUnreachableError_Classification(t *testing.T) {
+	dial := func(inner error) error {
+		return &net.OpError{Op: "dial", Net: "tcp", Err: inner}
+	}
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"production dial failure, fully wrapped", prodDialError(), true},
+		{"connection refused", dial(syscall.ECONNREFUSED), true},
+		{"no route to host", dial(syscall.EHOSTUNREACH), true},
+		{"network unreachable", dial(syscall.ENETUNREACH), true},
+		{"bare errno with no OpError wrapper", syscall.ECONNREFUSED, true},
+		{"dns failure", &net.DNSError{Err: "no such host", Name: "ollama.invalid"}, true},
+
+		{"nil", nil, false},
+		{"plain error", errors.New("something went wrong"), false},
+		{"api error", &openai.Error{StatusCode: 500}, false},
+		{"read failure on an established connection", &net.OpError{Op: "read", Net: "tcp", Err: errors.New("reset")}, false},
+		{"our own deadline", context.DeadlineExceeded, false},
+		{"our own cancellation", context.Canceled, false},
+		{"dial aborted by our deadline", dial(context.DeadlineExceeded), false},
+		{"dial aborted by our cancellation", dial(context.Canceled), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isUnreachableError(tt.err))
+		})
+	}
+}
+
+// TestDoWithRetry_UnreachableBackendIsNotRetried is the regression test for the
+// production failure. Before this, an unroutable host cost 3 attempts plus 2s +
+// 8s of backoff, which consumed the parser chain's whole 30s deadline and made
+// budgetRemains skip every fallback rung — defeating the chain in exactly the
+// case its own doc comment says it exists for.
+//
+// The attempt count is the assertion that has teeth: a base of 2s means a
+// regression here does not merely slow the test down, it hangs it for 10s, so
+// the elapsed-time bound is checked too.
+func TestDoWithRetry_UnreachableBackendIsNotRetried(t *testing.T) {
+	calls := 0
+	start := time.Now()
+	err := DoWithRetry(context.Background(), 3, 2*time.Second, func() error {
+		calls++
+		return prodDialError()
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Equal(t, 1, calls, "an unreachable backend must be dialed once, not once per attempt")
+	assert.Less(t, elapsed, time.Second, "no backoff may be spent on a backend that was never reached")
+
+	unreachable, ok := errors.AsType[*UnreachableError](err)
+	require.True(t, ok, "the caller must be able to tell 'never reached' from 'answered badly'")
+	assert.ErrorIs(t, unreachable, syscall.EHOSTUNREACH, "the cause must survive wrapping")
+}
+
+// TestDoWithRetry_UnreachableIsNotPermanent guards the distinction the parser
+// chain depends on. isPermanentAIFailure (internal/scanner) aborts the entire
+// AI phase on a *PermanentError; if UnreachableError were ever folded into that
+// type, a single dead backend would stop the phase instead of falling through
+// to the next rung — the precise opposite of this change's intent.
+func TestDoWithRetry_UnreachableIsNotPermanent(t *testing.T) {
+	err := DoWithRetry(context.Background(), 3, time.Millisecond, func() error {
+		return prodDialError()
+	})
+	require.Error(t, err)
+
+	_, permanent := errors.AsType[*PermanentError](err)
+	assert.False(t, permanent, "an unreachable backend must not abort the phase")
+}
+
+// TestDoWithRetry_TransientErrorsStillRetry pins the negative half: the new
+// branch must not swallow the ordinary errors the backoff exists for.
+func TestDoWithRetry_TransientErrorsStillRetry(t *testing.T) {
+	calls := 0
+	err := DoWithRetry(context.Background(), 3, time.Millisecond, func() error {
+		calls++
+		return &openai.Error{StatusCode: 500}
+	})
+	require.Error(t, err)
+	assert.Equal(t, 3, calls, "a 5xx is transient and must still exhaust its attempts")
 }
