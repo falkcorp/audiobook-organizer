@@ -3,9 +3,9 @@ name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
-<!-- last-edited: 2026-08-25 -->
+<!-- last-edited: 2026-09-09 -->
 
 # Server Bootstrap
 
@@ -24,14 +24,47 @@ The skill will:
 2. **Wait 90 seconds before reading the token file.** The previous file may remain visible while the service initializes; reading immediately after `systemctl restart` can return that stale token and cause a `401 invalid bootstrap token` response.
 3. Read the bootstrap token from the **`.bootstrap-token` file** (the raw token is no longer logged to journalctl — pen-test finding CRIT-1):
    ```bash
-   # Path is <data-dir>/.bootstrap-token, where <data-dir> is the directory
-   # holding the PebbleDB. On prod the DB is /var/lib/audiobook-organizer/audiobooks.pebble,
-   # so the token file is /var/lib/audiobook-organizer/.bootstrap-token.
-   # The file is mode 0600 owned by the service user, so sudo is required.
-   # Production sudo requires a pseudo-terminal. Keep the delay between restart
-   # and cat so this reads the newly written token rather than the previous file.
-   ssh -tt <server> 'sudo systemctl restart audiobook-organizer.service; sleep 90; sudo cat /var/lib/audiobook-organizer/.bootstrap-token'
+   # DERIVE the path, never hardcode it. The token is written to
+   # <data-dir>/.bootstrap-token where <data-dir> is the directory holding the
+   # PebbleDB -- so it MOVES whenever the database moves, and the startup log
+   # states the path it actually used. Parsing that line is the only reading
+   # that cannot go stale.
+   #
+   # The file is mode 0600 owned by the service user, so sudo is required, and
+   # production sudo requires a pseudo-terminal. Keep the delay between restart
+   # and cat so this reads the newly written token, not the previous file.
+   ssh -tt <server> '
+     sudo systemctl restart audiobook-organizer.service
+     sleep 90
+     TOKEN_FILE=$(journalctl -u audiobook-organizer.service --since "-3 min" --no-pager \
+       | grep -o "token_file=[^ ]*" | tail -1 | cut -d= -f2-)
+     echo "token_file = $TOKEN_FILE"
+     sudo cat "$TOKEN_FILE"
+   '
    ```
+
+   > **⚠️ On the prod host this needs a sudoers change first (2026-09-09).**
+   > The database moved to `/mnt/bigdata/books/audiobook-organizer/.appdata/`, so
+   > the token is now at `.appdata/.bootstrap-token`. The NOPASSWD rule still
+   > names only the old path, and `.appdata` is mode 0700, so the operator
+   > cannot read the new token at all:
+   > ```
+   > $ cat /mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token
+   > Permission denied
+   > ```
+   > Add a rule for the new path (or, better, one that does not need editing
+   > again the next time the database moves):
+   > ```
+   > jdfalk ALL=(root) NOPASSWD: /usr/bin/cat /mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token
+   > ```
+   >
+   > **The old path is worse than broken — it still answers.** A token file from
+   > before the move remains at `/var/lib/audiobook-organizer/.bootstrap-token`,
+   > and `sudo cat` on it SUCCEEDS and returns a well-formed `abbs_…` string that
+   > expired ten minutes after it was written. Following the pre-2026-09-09
+   > version of this runbook gets you a plausible token and a `401 invalid
+   > bootstrap token` with nothing pointing at why. Delete that file (needs root)
+   > so the old path fails loudly instead of lying.
 4. POST to `/api/v1/auth/bootstrap` to exchange token for API key
 5. Write key + expiry to `.claude/.api-token` (shared, .gitignored)
 6. Schedule cleanup after 8 hours (non-blocking background process)

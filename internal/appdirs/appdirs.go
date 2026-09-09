@@ -1,7 +1,7 @@
 // file: internal/appdirs/appdirs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8a1c07-92be-4d51-a6b3-0c47e5d19af2
-// last-edited: 2026-08-29
+// last-edited: 2026-09-09
 
 // Package appdirs builds the set of application-owned directories that library
 // sweeps must never descend into.
@@ -53,6 +53,24 @@ func FromConfig(cfg *config.Config) pathutil.AppDirs {
 		BackupDir:          cleanAbs(backup.ResolveDir(cfg.BackupDir, cfg.DatabasePath)),
 		OpenLibraryDumpDir: cleanAbs(cfg.OpenLibraryDumpDir),
 		PlaylistDir:        cleanAbs(cfg.PlaylistDir),
+		// filepath.Dir of the database FILE, not the path itself. Both stores
+		// are addressed by file: Pebble by its directory-shaped path, SQLite by
+		// a real file. Taking Dir of each is what excludes the siblings that
+		// resolve beside them -- certs/, library.bleve, .bootstrap-token, the
+		// SQLite -wal and -shm.
+		//
+		// cleanAbs drops a relative value, which is the common default
+		// ("audiobooks.pebble"). That is correct and deliberate: a relative
+		// database path cannot be compared against the absolute paths a walk
+		// yields, and guessing a base would exclude a subtree nobody
+		// configured. See cleanAbs.
+		DatabaseDir: cleanAbs(filepath.Dir(cfg.DatabasePath)),
+		// ResolveActivityDBPath, not the raw field: the setting is empty by
+		// default and resolves through three branches. Reading the field
+		// directly would leave the DEFAULT location -- the one actually in use
+		// almost everywhere -- unprotected, which is the failure this whole
+		// change is about.
+		ActivityDBDir: cleanAbs(filepath.Dir(cfg.ResolveActivityDBPath())),
 	}
 }
 
