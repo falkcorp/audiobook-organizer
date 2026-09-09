@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -495,4 +495,212 @@ func TestGetCacheReviewResults_FlagsStaleRows(t *testing.T) {
 	// The rail states the size of the problem, so the count covers every
 	// reviewable row rather than whatever fraction is on the current page.
 	assert.Equal(t, 1, body.Data.Stale)
+}
+
+// ---------------------------------------------------------------------------
+// ListCachedCandidates — limit/offset, and filtering BEFORE paginating.
+//
+// This endpoint had no test at all until 2026-09-09, which is how it went on
+// accepting `limit` and ignoring it. Production served `?limit=5` as all 40,485
+// rows in a 7.35 MB body; the parameter looked supported from the outside, so
+// nothing pointed at it.
+// ---------------------------------------------------------------------------
+
+// cachedCtx builds a GET gin context for the cached-candidates listing.
+func cachedCtx(query string) (*gin.Context, *httptest.ResponseRecorder) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/audiobooks/metadata/cached?"+query, nil)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	return c, w
+}
+
+// cachedBody is the decoded shape of the listing response.
+type cachedBody struct {
+	Data struct {
+		Entries []struct {
+			BookID       string `json:"book_id"`
+			Title        string `json:"title"`
+			ReviewStatus string `json:"review_status"`
+		} `json:"entries"`
+		Total int `json:"total"`
+	} `json:"data"`
+}
+
+func decodeCachedBody(t *testing.T, w *httptest.ResponseRecorder) cachedBody {
+	t.Helper()
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var body cachedBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	return body
+}
+
+// cachedFixture wires n books, all resolvable, with the given review statuses.
+// A nil status means the column is unset, which is the "pending" default.
+func cachedFixture(t *testing.T, statuses []*string) (*handlersmocks.MockMetadataCacheBookStore, *handlersmocks.MockMetadataCacheFetchService) {
+	t.Helper()
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+
+	summaries := make([]metafetch.MetadataCacheSummary, 0, len(statuses))
+	books := make([]database.Book, 0, len(statuses))
+	for i, st := range statuses {
+		id := fmt.Sprintf("b%d", i)
+		summaries = append(summaries, metafetch.MetadataCacheSummary{
+			BookID:    id,
+			FetchedAt: time.Now(),
+		})
+		books = append(books, database.Book{ID: id, Title: "Title " + id, MetadataReviewStatus: st})
+	}
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return(summaries, nil)
+	// .Once() is the assertion that the per-book reads are batched: if the
+	// handler regressed to a GetBookByID per summary, GetBookByID is not
+	// expected on this mock and the test fails on the first call.
+	store.EXPECT().GetBooksByIDs(mock.Anything).Return(books, nil).Once()
+	return store, svc
+}
+
+func TestListCachedCandidates_LimitAndOffsetPageTheResults(t *testing.T) {
+	store, svc := cachedFixture(t, make([]*string, 5))
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	c, w := cachedCtx("limit=2")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	require.Len(t, body.Data.Entries, 2, "limit=2 must return two rows")
+	assert.Equal(t, "b0", body.Data.Entries[0].BookID)
+	assert.Equal(t, "b1", body.Data.Entries[1].BookID)
+	// total describes the whole filtered set, not the page: a caller rendering
+	// "showing 2 of N" needs N to be what it could page through.
+	assert.Equal(t, 5, body.Data.Total)
+}
+
+func TestListCachedCandidates_OffsetSkipsIntoTheSet(t *testing.T) {
+	store, svc := cachedFixture(t, make([]*string, 5))
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	c, w := cachedCtx("limit=2&offset=2")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	require.Len(t, body.Data.Entries, 2)
+	assert.Equal(t, "b2", body.Data.Entries[0].BookID)
+	assert.Equal(t, "b3", body.Data.Entries[1].BookID)
+	assert.Equal(t, 5, body.Data.Total)
+}
+
+// An offset past the end is an empty page, not an error and not a panic on a
+// slice bound.
+func TestListCachedCandidates_OffsetPastEndIsEmpty(t *testing.T) {
+	store, svc := cachedFixture(t, make([]*string, 3))
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	c, w := cachedCtx("offset=99")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	assert.Empty(t, body.Data.Entries)
+	assert.Equal(t, 3, body.Data.Total)
+}
+
+// The guard on the fix itself: the only caller sends no limit and consumes the
+// whole list, so the default must stay "everything". A default page size here
+// would silently truncate the Review popup.
+func TestListCachedCandidates_NoLimitReturnsEveryRow(t *testing.T) {
+	store, svc := cachedFixture(t, make([]*string, 5))
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	c, w := cachedCtx("")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	assert.Len(t, body.Data.Entries, 5)
+	assert.Equal(t, 5, body.Data.Total)
+}
+
+// Filter first, THEN paginate. Limiting before filtering would take the first
+// five rows and then drop the non-pending ones, so `status=pending&limit=5`
+// could come back with two rows while thousands of pending books waited.
+func TestListCachedCandidates_FiltersBeforePaginating(t *testing.T) {
+	matched := "matched"
+	// Interleaved on purpose: the pending rows are not the leading ones, so a
+	// paginate-then-filter implementation returns fewer rows than asked for.
+	store, svc := cachedFixture(t, []*string{&matched, nil, &matched, nil, &matched, nil})
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	c, w := cachedCtx("status=pending&limit=2")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	require.Len(t, body.Data.Entries, 2, "must return two PENDING rows, not two rows that happen to be pending")
+	assert.Equal(t, "b1", body.Data.Entries[0].BookID)
+	assert.Equal(t, "b3", body.Data.Entries[1].BookID)
+	// Three books are pending overall; total reports the filtered set.
+	assert.Equal(t, 3, body.Data.Total)
+}
+
+func TestListCachedCandidates_StatusMatchedFilters(t *testing.T) {
+	matched := "matched"
+	store, svc := cachedFixture(t, []*string{&matched, nil, &matched})
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	c, w := cachedCtx("status=matched")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	require.Len(t, body.Data.Entries, 2)
+	assert.Equal(t, 2, body.Data.Total)
+	for _, e := range body.Data.Entries {
+		assert.Equal(t, "matched", e.ReviewStatus)
+	}
+}
+
+// A cache row whose book is gone is dropped, and the point-read fallback covers
+// the batch missing it — the batch returning fewer books than asked for must not
+// drop rows that do still exist.
+func TestListCachedCandidates_OrphanedRowDroppedViaFallback(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return([]metafetch.MetadataCacheSummary{
+		{BookID: "b1"}, {BookID: "gone"}, {BookID: "b2"},
+	}, nil)
+	// The batch answers for two of the three.
+	store.EXPECT().GetBooksByIDs(mock.Anything).Return([]database.Book{
+		{ID: "b1", Title: "One"}, {ID: "b2", Title: "Two"},
+	}, nil).Once()
+	store.EXPECT().GetBookByID("gone").Return(nil, nil).Once()
+
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	c, w := cachedCtx("")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	require.Len(t, body.Data.Entries, 2)
+	assert.Equal(t, 2, body.Data.Total)
+}
+
+// A failed batch read must not empty the listing: every row falls back to a
+// point read. This is the path that turns a transient store error into "you
+// have no cached metadata" if it is not handled.
+func TestListCachedCandidates_BatchFailureFallsBackToPointReads(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return([]metafetch.MetadataCacheSummary{
+		{BookID: "b1"}, {BookID: "b2"},
+	}, nil)
+	store.EXPECT().GetBooksByIDs(mock.Anything).Return(nil, errors.New("store down")).Once()
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "One"}, nil).Once()
+	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", Title: "Two"}, nil).Once()
+
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	c, w := cachedCtx("")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	require.Len(t, body.Data.Entries, 2)
+	assert.Equal(t, 2, body.Data.Total)
 }

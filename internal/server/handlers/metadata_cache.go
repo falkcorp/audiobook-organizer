@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -108,11 +108,28 @@ func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetc
 
 // ListCachedCandidates handles GET /api/v1/audiobooks/metadata/cached.
 //
-// Optional query param: status=pending|matched
+// Optional query params: status=pending|matched, limit, offset.
+// limit=0 means "return all rows", matching GetCacheReviewResults below.
 func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 	if h.store == nil || h.svc == nil {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
 		return
+	}
+
+	// limit and offset were accepted-and-ignored until 2026-09-09: the handler
+	// never read them, so `?limit=5` returned all 40,485 rows and a 7.35 MB body.
+	//
+	// The default is 0 = "return all rows" rather than some page size, because
+	// the only caller (listCachedCandidates in web/src/services/api.ts) sends no
+	// limit at all and consumes the whole list. A non-zero default would silently
+	// truncate the Review popup instead of fixing anything.
+	limit := httputil.ParseQueryInt(c, "limit", 0)
+	offset := httputil.ParseQueryInt(c, "offset", 0)
+	if limit < 0 {
+		limit = 0
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	summaries, err := h.svc.ListCachedSummaries(c.Request.Context())
@@ -124,10 +141,55 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 	statusFilter := c.Query("status")
 	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 
-	out := make([]gin.H, 0, len(summaries))
+	// Fetch every book in ONE batch read instead of a GetBookByID per summary,
+	// the same way GetCacheReviewResults does.
+	//
+	// This is required for CORRECTNESS, not just speed, and stays required even
+	// though a measurement on 2026-09-09 showed the point reads were a small part
+	// of this endpoint's cost. review_status lives on the BOOK, not on the cache
+	// summary, so a filtered page cannot be assembled without resolving every
+	// candidate row's book first: `status=pending&limit=5` must return five
+	// PENDING rows, not five rows of which some happen to be pending. Filtering
+	// before paginating means the per-book read now runs over the whole set on
+	// every call, which is exactly the shape that must not be an N+1.
+	bookIDs := make([]string, 0, len(summaries))
 	for _, sum := range summaries {
-		book, err := h.store.GetBookByID(sum.BookID)
-		if err != nil || book == nil {
+		bookIDs = append(bookIDs, sum.BookID)
+	}
+	booksByID := make(map[string]*database.Book, len(summaries))
+	if fetched, berr := h.store.GetBooksByIDs(bookIDs); berr == nil {
+		for i := range fetched {
+			booksByID[fetched[i].ID] = &fetched[i]
+		}
+	} else {
+		slog.Warn("ListCachedCandidates batch book fetch failed; falling back to per-book reads", "err", berr)
+	}
+
+	// lookupBook serves from the batch result and falls back to a point read only
+	// when the batch missed the row (or the batch call itself failed), so a
+	// partial batch degrades in behavior-preserving fashion rather than dropping
+	// entries.
+	lookupBook := func(id string) *database.Book {
+		if b, ok := booksByID[id]; ok {
+			return b
+		}
+		b, err := h.store.GetBookByID(id)
+		if err != nil || b == nil {
+			return nil
+		}
+		booksByID[id] = b
+		return b
+	}
+
+	// Filter first, then paginate. `total` below is the size of the FILTERED set,
+	// not of the returned page -- a UI rendering "showing 5 of N" needs N to be
+	// what it could page through. It was len(out) before, which was correct only
+	// because there was no paging to tell the two apart.
+	filtered := make([]gin.H, 0, len(summaries))
+	for _, sum := range summaries {
+		book := lookupBook(sum.BookID)
+		if book == nil {
+			// A cache row that outlived its book. Dropped, as before.
 			continue
 		}
 		var reviewStatus string
@@ -144,7 +206,7 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 				continue
 			}
 		}
-		out = append(out, gin.H{
+		filtered = append(filtered, gin.H{
 			"book_id":         sum.BookID,
 			"fetched_at":      sum.FetchedAt,
 			"candidate_count": sum.CandidateCount,
@@ -154,7 +216,26 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 		})
 	}
 
-	httputil.RespondWithOK(c, gin.H{"entries": out, "total": len(out)})
+	total := len(filtered)
+
+	// Page the filtered set. The order is the one ListMetadataCacheKeys
+	// establishes (FetchedAt descending, book id breaking ties), which is total
+	// and stable -- without that tiebreak two rows sharing a timestamp could swap
+	// between calls and a paging client would see one twice and miss the other.
+	page := filtered
+	if offset >= len(page) {
+		page = nil
+	} else {
+		page = page[offset:]
+	}
+	if limit > 0 && limit < len(page) {
+		page = page[:limit]
+	}
+	if page == nil {
+		page = []gin.H{}
+	}
+
+	httputil.RespondWithOK(c, gin.H{"entries": page, "total": total})
 }
 
 // GetCacheReviewResults handles GET /api/v1/audiobooks/metadata/cache/review.
