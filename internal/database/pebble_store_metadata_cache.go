@@ -1,5 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.0.0
+// version: 1.1.0
+// guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
+// last-edited: 2026-09-09
 
 package database
 
@@ -87,8 +89,23 @@ func (p *PebbleStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
 			CandidateCount: len(entry.Candidates),
 		})
 	}
+	// FetchedAt descending, with the book id breaking ties.
+	//
+	// The tiebreak makes this a TOTAL order, which is what callers that paginate
+	// need: FetchedAt alone leaves rows sharing a timestamp in an order that can
+	// differ between calls, so a client walking offset=0,50,100 could be handed
+	// one row twice and never see another. Entries written by the same batch
+	// fetch routinely share a timestamp, so the ties are common, not theoretical.
+	//
+	// It only orders rows that FetchedAt leaves equal -- rows with distinct
+	// timestamps keep the order they already had, so the existing callers
+	// (GetCacheReviewResults, ListCachedCandidates) see no change in their
+	// primary ordering.
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].FetchedAt.After(out[j].FetchedAt)
+		if !out[i].FetchedAt.Equal(out[j].FetchedAt) {
+			return out[i].FetchedAt.After(out[j].FetchedAt)
+		}
+		return out[i].BookID < out[j].BookID
 	})
 	return out, nil
 }
