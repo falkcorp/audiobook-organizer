@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_quarantine.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ace123a3-f577-4065-b41c-ae9de32c9b45
-// last-edited: 2026-07-03
+// last-edited: 2026-09-09
 
 package database
 
@@ -14,6 +14,15 @@ import (
 )
 
 // GetQuarantinedBooks returns books with a non-nil QuarantinedAt, newest first.
+//
+// There is no quarantine index: this walks the entire book:* keyspace and
+// json.Unmarshals EVERY book to test one field. Measured on production
+// 2026-09-09, it took ~4.2s to find 7 quarantined books, and the paired
+// CountQuarantinedBooks below repeats the same walk for the total, so
+// GET /api/v1/audiobooks/quarantined costs ~8.5s end to end. That is
+// tolerated only because the endpoint has no frontend caller (the UI filters
+// the main book list with show_quarantined=true instead) — if anything starts
+// calling this on a page load, it needs a real index, not a faster scan.
 func (p *PebbleStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
 	// Scan book:* index and only deserialize books that are quarantined
 	var result []Book
@@ -52,8 +61,21 @@ func (p *PebbleStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
 }
 
 // CountQuarantinedBooks returns the total number of quarantined books.
+//
+// It carries the same full-keyspace cost as GetQuarantinedBooks above.
+//
+// This comment used to claim the scan counted "without deserializing the full
+// book object". That was false from the first commit: the loop below does a
+// plain json.Unmarshal into a full Book, exactly like the list path. The claim
+// is corrected rather than deleted because it is the kind that stops the next
+// reader from measuring — it describes the optimization someone intended, not
+// the code that shipped.
+//
+// Note that actually honouring the claim would not help much anyway:
+// unmarshalling into a one-field struct still makes encoding/json parse the
+// whole document, so it saves allocations, not the parse. Allocation volume is
+// a proxy for cost, not cost.
 func (p *PebbleStore) CountQuarantinedBooks() (int, error) {
-	// Scan book:* index and count without deserializing the full book object
 	n := 0
 
 	iter, err := p.db.NewIter(&pebble.IterOptions{

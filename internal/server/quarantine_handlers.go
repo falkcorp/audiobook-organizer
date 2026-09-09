@@ -1,6 +1,7 @@
 // file: internal/server/quarantine_handlers.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-09-09
 
 package server
 
@@ -72,7 +73,17 @@ func (s *Server) listQuarantinedBooks(c *gin.Context) {
 	if books == nil {
 		books = []database.Book{}
 	}
-	total, _ := s.Ops().CountQuarantinedBooks()
+	// Do not swallow this error. It used to be `total, _ :=`, which reported
+	// total=0 alongside a non-empty Books array — an incoherent response the
+	// caller cannot distinguish from "no quarantined books". The list scan
+	// immediately above is failed loudly for the same class of error, and
+	// CountQuarantinedBooks walks the same keyspace, so if one fails the other
+	// almost certainly did too.
+	total, err := s.Ops().CountQuarantinedBooks()
+	if err != nil {
+		httputil.InternalError(c, "count quarantined books failed", err)
+		return
+	}
 	httputil.RespondWithOK(c, struct {
 		Books []database.Book `json:"books"`
 		Total int             `json:"total"`
