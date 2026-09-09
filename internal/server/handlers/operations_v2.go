@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -161,10 +162,17 @@ const (
 )
 
 // GetOperationTimeline implements
-// GET /api/v1/operations/timeline?since=15m[&def_id=X][&limit=N].
+// GET /api/v1/operations/timeline?since=15m[&def_id=X][&status=S][&limit=N].
 //
 // It reads operations from the v2 store that were queued within the given window,
-// optionally restricted to a single operation def.
+// optionally restricted to a single operation def and/or a single status.
+//
+// Both filters are applied AFTER the store scan, which is complete for the window
+// unless it hit timelineScanBound — so a filtered `matched` is a census exactly
+// when `scan_capped` is false, and a floor when it is true. This is safe only
+// because the store sorts the whole in-window set newest-first before trimming
+// (pebble_store_ops_v2.go), not because 5000 is a large number: a store that
+// stopped scanning early would make every filtered count silently partial.
 //
 // The response describes its own scope — since, window_start, def_id, limit,
 // matched, truncated — because the failure mode this endpoint actually produced
@@ -219,11 +227,29 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 
 	defID := c.Query("def_id")
 
+	// status was accepted-and-dropped until 2026-09-09, the same way def_id and
+	// limit were until 2026-08-24 and by the same mechanism: Gin ignores query
+	// keys nobody reads. `?status=canceled` answered with the unfiltered rows, so
+	// it looked supported and read as "these are the canceled ones". A
+	// DELETE /operations/history?status=canceled was sized against that view as
+	// one row and removed 70.
+	//
+	// Deliberately NOT validated against a list of known statuses. The store
+	// bounds its window on CompletedAt rather than a status set for a documented
+	// reason (pebble_store_ops_v2.go: "a status list has to be updated every time
+	// a new terminal state is added, and silently under-reports until someone
+	// remembers"), and a whitelist here would import that same rot — a newly added
+	// status would become unqueryable with a 400 until someone updated this file.
+	// An unknown value is instead answered honestly: scope echoes the status that
+	// was asked for, and matched is 0.
+	status := c.Query("status")
+
 	since := time.Now().UTC().Add(-dur)
 	scope := gin.H{
 		"since":        sinceStr,
 		"window_start": since.Format(time.RFC3339),
 		"def_id":       defID,
+		"status":       status,
 		"limit":        limit,
 	}
 
@@ -277,8 +303,18 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 		capHint = limit
 	}
 	resp := make([]OperationV2Response, 0, capHint)
+	// Distinct statuses seen in the scanned window, reported only when a status
+	// filter matched nothing. A bare matched=0 cannot distinguish "no canceled
+	// ops in this window" from "this store spells it cancelled" or from a
+	// vocabulary that has moved on, and those need opposite next actions. The
+	// rows are already in hand, so saying which statuses ARE present costs a map.
+	statusesPresent := make(map[string]struct{})
 	for _, r := range rows {
 		if defID != "" && r.DefID != defID {
+			continue
+		}
+		if status != "" && r.Status != status {
+			statusesPresent[r.Status] = struct{}{}
 			continue
 		}
 		matched++
@@ -311,6 +347,16 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// conventions is an invitation to treat a missing `scan_capped` as unknown
 	// rather than false.
 	scope["scan_capped"] = len(rows) >= timelineScanBound
+	// Only when the caller filtered by status AND got nothing — otherwise this is
+	// noise on every ordinary response. Sorted so the field is stable to diff.
+	if status != "" && matched == 0 && len(statusesPresent) > 0 {
+		present := make([]string, 0, len(statusesPresent))
+		for s := range statusesPresent {
+			present = append(present, s)
+		}
+		sort.Strings(present)
+		scope["statuses_present"] = present
+	}
 	httputil.RespondWithOK(c, scope)
 }
 
