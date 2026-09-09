@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.49.1 -->
+<!-- version: 10.50.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -412,19 +412,44 @@ dataset.
       are measured to fail on that hardware: one 20-filename batch is 105s on
       qwen2.5:3b and 201s on qwen2.5:7b.
 
+      Worst observed 7B wall time per batch on this host, measured rather than
+      extrapolated: size 1 17.9s, size 2 20.1s, size 3 29.4s, size 4 47.3s,
+      size 20 201s. So the 30s **default** holds only to size 2 — size 3 is
+      nominally inside it by under 2%, which is not a margin but a coin flip
+      decided by whatever else Ollama has resident. Prod's 90s at size 4 leaves
+      ~2x headroom.
+
       Verify the way the 2026-09-09 session did, not with a status endpoint: a
       single-book probe passes even on a broken configuration, because the cost
       is linear in batch size. Trigger `POST /operations/v2` with
       `{"def_id":"library.ai-parse","params":{"books":[... 20 entries ...]}}` and
       read `progress_message` for `N/N book(s) parsed`.
 
-- [ ] **Decide 7B vs 3B for `ai_backend.local_llm_model` on the CPU backend.**
-      qwen2.5:7b-instruct is 6.9 tok/s and 3b-instruct is 15.2 tok/s on the
-      Ryzen 7 3800X — but on the one 20-filename sample compared so far, the 3B
-      returned `series_number: 0` for "Mistborn 01" where the 7B returned `1`.
-      This is a metadata WRITE path, so the 2.2x speedup is not obviously worth
-      it. Needs a real accuracy comparison over a sample of actual library
-      filenames before switching, not a single spot check.
+- [x] **Decide 7B vs 3B for `ai_backend.local_llm_model` on the CPU backend —
+      KEEP THE 7B.** Settled 2026-09-09 with the comparison this task asked for:
+      40 real library filenames drawn at random from books that already have a
+      series and sequence, both models, production batch size 4, the exact
+      `ParseBatch` prompt, `temperature=0`.
+
+      | | qwen2.5:7b-instruct | qwen2.5:3b-instruct |
+      |---|---|---|
+      | wall time (40 files) | 401.9 s (10.0 s/book) | 170.4 s (4.3 s/book) |
+      | `series_number` correct where the filename contains it | **14 / 22** | 10 / 22 |
+      | rows with no title at all | 0 | 1 |
+
+      The 2.4x speedup is real and it is not worth it. On the four filenames
+      where the two disagreed about a recoverable series number the 3B lost
+      every one, and its failure modes are fabrications rather than near-misses:
+
+      - `01 Saving Supervillains, Book 5 - Br.m4b` → the 3B **invented** the
+        title `Dead Station`. Nothing in the filename suggests it.
+      - `06 06 - Secret of the Phoenix.m4b` → the 3B returned `{}`. The 7B got
+        the title and `series_number: 6`.
+      - `02 02 - Firefight.m4b` → the 3B returned the raw filename as the title.
+
+      Throughput is a tunable knob now; title accuracy is not. Revisit only if
+      the host gets a GPU llama.cpp can actually use. No config was changed —
+      prod was already on the 7B and stays there.
 
 - [ ] **Run one embedding through the APP to close out the local-embedding
       claim.** The backend itself is proven: `bge-m3` on the CPU-only Ollama
