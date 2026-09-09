@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.grouping.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a6e94b1-7d38-4c05-9f61-0b3e5c8a72d4
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // The bell shows GROUPED rows and counts UNGROUPED operations.
 //
@@ -96,9 +96,13 @@ describe('OperationsIndicator grouping', () => {
     // prove nothing.
     await userEvent.click(screen.getByText('Completed (12)'));
 
-    // This popover labels a row with formatOperationType(op.type), so the type
-    // is what to look for, not the display name.
-    const rows = screen.getAllByText(/Ai Parse/);
+    // Asserted on the server's display name, not on the type. Until 2026-09-09
+    // this had to match /Ai Parse/ — the title-cased TYPE — because the popover
+    // labelled rows with formatOperationType(op.type) and never saw displayName.
+    // That made this test a record of the bug rather than a check on it, which
+    // is exactly how the bug survived: formatOperationType never fails, it just
+    // title-cases whatever it is handed, so the wrong name looked like a real one.
+    const rows = screen.getAllByText(/AI Filename Parsing/);
     expect(rows).toHaveLength(1);
     expect(rows[0].textContent).toContain('×12');
   });

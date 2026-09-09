@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.8.0
+// version: 4.9.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-09
 
@@ -32,7 +32,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { OperationActivityPanel } from '../OperationActivityPanel';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
-import { formatProgressCounts, formatOperationType } from './operationsFormat';
+import { formatProgressCounts, operationDisplayName } from './operationsFormat';
 import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
@@ -332,7 +332,7 @@ export function OperationsIndicator() {
                             fontWeight: 'bold',
                           }}
                         >
-                          {formatOperationType(op.type)}
+                          {operationDisplayName(op)}
                           {op.group ? ` ×${op.group.count}` : ''}
                         </Typography>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -509,7 +509,7 @@ export function OperationsIndicator() {
                             fontWeight: 'bold',
                           }}
                         >
-                          {formatOperationType(op.type)}
+                          {operationDisplayName(op)}
                           {op.group ? ` ×${op.group.count}` : ''}
                         </Typography>
                         {/* A queued op reports how much work it is holding via
@@ -602,7 +602,7 @@ export function OperationsIndicator() {
                           flex: 1,
                         }}
                       >
-                        {formatOperationType(op.type)}
+                        {operationDisplayName(op)}
                         {op.group ? ` ×${op.group.count}` : ''}
                       </Typography>
                       <Chip
