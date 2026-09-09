@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-09-03
+// last-edited: 2026-09-09
 
 package cmd
 
@@ -36,6 +36,27 @@ var enableSQLite bool
 var playlistDir string
 var logLevel string
 var metadataInspectFile string
+
+// persistentFlagConfigKeys maps each root persistent flag to the config key it
+// feeds. It drives BOTH viper.BindPFlag and the explicit-flag capture in
+// initConfig, deliberately: those two loops have to agree about which flags
+// exist, and a table is the only way to guarantee they still agree after
+// someone adds the next flag.
+//
+// The capture exists because viper flattens flags, environment, config file and
+// the persisted DB blob into one namespace and remembers only the winning
+// VALUE, never who supplied it. config.LoadConfigFromDatabase later overlays
+// the blob on top, at which point "the operator typed --db" is unrecoverable —
+// and neither viper.IsSet nor viper.Get can recover it, for reasons measured and
+// tabulated on config.explicitFlags. cobra's Changed() is the only API that
+// answers the question, and only while the parse is fresh.
+var persistentFlagConfigKeys = map[string]string{
+	"dir":                             "root_dir",
+	"db":                              "database_path",
+	"db-type":                         "database_type",
+	"enable-sqlite3-i-know-the-risks": "enable_sqlite3_i_know_the_risks",
+	"playlists":                       "playlist_dir",
+}
 
 var (
 	initializeStore        = database.InitializeStore
@@ -356,11 +377,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&playlistDir, "playlists", "playlists", "directory to store generated playlists")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
 
-	viper.BindPFlag("root_dir", rootCmd.PersistentFlags().Lookup("dir"))
-	viper.BindPFlag("database_path", rootCmd.PersistentFlags().Lookup("db"))
-	viper.BindPFlag("database_type", rootCmd.PersistentFlags().Lookup("db-type"))
-	viper.BindPFlag("enable_sqlite3_i_know_the_risks", rootCmd.PersistentFlags().Lookup("enable-sqlite3-i-know-the-risks"))
-	viper.BindPFlag("playlist_dir", rootCmd.PersistentFlags().Lookup("playlists"))
+	for flagName, configKey := range persistentFlagConfigKeys {
+		viper.BindPFlag(configKey, rootCmd.PersistentFlags().Lookup(flagName))
+	}
 
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(playlistCmd)
@@ -446,6 +465,16 @@ broken tags or filename fallbacks without running a full scan.`,
 }
 
 func initConfig() {
+	// FIRST: record which flags the operator actually typed, before any config
+	// layer is loaded. cobra.OnInitialize runs after flag parsing and before the
+	// command body, so this is the earliest point where Changed() is both
+	// populated and still ahead of every consumer.
+	for flagName, configKey := range persistentFlagConfigKeys {
+		if rootCmd.PersistentFlags().Changed(flagName) {
+			config.MarkFlagExplicit(configKey)
+		}
+	}
+
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {

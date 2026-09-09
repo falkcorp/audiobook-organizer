@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.109.0
+// version: 1.110.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-09
 
@@ -1678,6 +1678,58 @@ func envSupplied(envVar string) bool {
 	return ok && v != ""
 }
 
+// explicitFlags records the config keys whose command-line flag was actually
+// typed by the operator, as opposed to sitting at its registered default.
+//
+// This exists because neither viper.IsSet nor viper.Get can answer the question
+// for a bound flag. Measured against this repo's viper, for a --db bound with
+// BindPFlag and NOT typed:
+//
+//	BindPFlag only:              IsSet=false  GetString="audiobooks.pebble"
+//	BindPFlag + SetDefault(""):  IsSet=true   GetString=""
+//
+// Read both rows before touching this. The first says IsSet and Get DISAGREE:
+// IsSet skips the "fall back to the flag's default" branch that Get takes, so a
+// guard derived from the VALUE is wrong even where IsSet happens to look right.
+// The second says a single SetDefault line -- exactly the one that already
+// exists for activity_db_path in InitConfig -- flips IsSet permanently true AND
+// makes Get return the empty default instead of the flag's, because SetDefault
+// outranks a bound flag's default. Adding it would silently re-open this bug.
+//
+// cobra's Flags().Changed() is the only signal no later SetDefault can corrupt.
+//
+// Populated once from cmd/root.go after flag parsing, read only during
+// applyEnvAuthoritativeConfig. Guarded because tests may run parsing
+// concurrently with config reads.
+var (
+	explicitFlagsMu sync.RWMutex
+	explicitFlags   = map[string]bool{}
+)
+
+// MarkFlagExplicit records that the operator supplied the flag bound to this
+// config key. Call it from the command layer after flags are parsed, once per
+// key that was actually changed.
+func MarkFlagExplicit(configKey string) {
+	explicitFlagsMu.Lock()
+	defer explicitFlagsMu.Unlock()
+	explicitFlags[configKey] = true
+}
+
+// flagSupplied reports whether the operator explicitly passed the flag bound to
+// configKey on this invocation.
+func flagSupplied(configKey string) bool {
+	explicitFlagsMu.RLock()
+	defer explicitFlagsMu.RUnlock()
+	return explicitFlags[configKey]
+}
+
+// ResetExplicitFlagsForTest clears the explicit-flag registry. Test-only.
+func ResetExplicitFlagsForTest() {
+	explicitFlagsMu.Lock()
+	defer explicitFlagsMu.Unlock()
+	explicitFlags = map[string]bool{}
+}
+
 // envLockedSettings maps a config JSON key to the environment variable that makes it
 // read-only. When that variable is supplied, applyEnvAuthoritativeConfig re-applies
 // the environment's value over the persisted blob on every boot, so a value saved
@@ -1691,6 +1743,22 @@ var envLockedSettings = map[string]string{
 	"activity_backend":           "ACTIVITY_BACKEND",
 	"activity_db_move_on_change": "ACTIVITY_DB_MOVE_ON_CHANGE",
 	"activity_db_path":           "ACTIVITY_DB_PATH",
+	// The main database. Annotated read-only in the UI whenever the operator
+	// supplies DATABASE_PATH, so the Settings page cannot present a field that
+	// silently discards what you type on the next boot.
+	"database_path": "DATABASE_PATH",
+}
+
+// flagLockedSettings maps a config JSON key to the command-line flag that, when
+// explicitly supplied, makes the key read-only for the same reason as
+// envLockedSettings: applyEnvAuthoritativeConfig re-applies the operator's value
+// over the persisted blob on every boot.
+//
+// Separate from envLockedSettings because the two are detected differently — an
+// environment variable is readable from the running process, an explicit flag is
+// only knowable at parse time and must be recorded via MarkFlagExplicit.
+var flagLockedSettings = map[string]string{
+	"database_path": "--db",
 }
 
 // EnvLockedSettings returns the JSON field names of the settings the environment is
@@ -1701,14 +1769,52 @@ var envLockedSettings = map[string]string{
 // whose saved value is overwritten on the next boot — the edit appears to take, and
 // then quietly does not. A control the operator cannot actually change must say so.
 func EnvLockedSettings() []string {
-	locked := make([]string, 0, len(envLockedSettings))
+	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings))
 	for key, envVar := range envLockedSettings {
 		if envSupplied(envVar) {
 			locked = append(locked, key)
 		}
 	}
+	// A key can be locked by an explicit flag as well as by the environment, and
+	// a key locked by both must appear once, not twice — the UI renders this list
+	// directly.
+	for key := range flagLockedSettings {
+		if flagSupplied(key) && !slices.Contains(locked, key) {
+			locked = append(locked, key)
+		}
+	}
 	slices.Sort(locked)
 	return locked
+}
+
+// SettingLockedBy names what makes key read-only — the environment variable or
+// the command-line flag — or "" when the key is freely settable from the UI.
+// The UI uses it to say WHY a field is disabled; "locked" with no reason is a
+// support ticket.
+func SettingLockedBy(key string) string {
+	if envVar, ok := envLockedSettings[key]; ok && envSupplied(envVar) {
+		return envVar
+	}
+	if flag, ok := flagLockedSettings[key]; ok && flagSupplied(key) {
+		return flag
+	}
+	return ""
+}
+
+// SettingLocks returns every currently-locked setting mapped to what locks it.
+// Same membership as EnvLockedSettings, with the reason attached.
+//
+// EnvLockedSettings is kept as-is beside this: the UI's existing checks are
+// membership tests, and a bare list is the right shape for those. This map is
+// for the copy that has to name the mechanism — telling an operator to remove
+// an environment variable when the real cause is a --db on the ExecStart line
+// sends them to edit the wrong thing.
+func SettingLocks() map[string]string {
+	locks := make(map[string]string, len(envLockedSettings)+len(flagLockedSettings))
+	for _, key := range EnvLockedSettings() {
+		locks[key] = SettingLockedBy(key)
+	}
+	return locks
 }
 
 func applyEnvAuthoritativeConfig(c *Config) {
@@ -1799,6 +1905,41 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	if envSupplied("ACTIVITY_DB_MOVE_ON_CHANGE") {
 		c.ActivityDBMoveOnChange = viper.GetBool("activity_db_move_on_change")
 	}
+	// The MAIN database path. Category 2, same as activity_db_path: the UI may
+	// set it, but an explicit --db or DATABASE_PATH from the operator wins.
+	//
+	// This was missing entirely and it took production down on 2026-09-09. The
+	// databases were relocated off a full root pool onto NVMe; the unit was
+	// updated to pass --db <new path> and Environment=DATABASE_PATH=<new path>;
+	// and the app still refused to start with
+	//
+	//   invalid configuration: database_path parent directory
+	//   "/var/lib/audiobook-organizer" does not exist
+	//
+	// because LoadConfigFromDatabase replaces the whole struct with the persisted
+	// blob (persistence.go applySetting, case "database_path") and nothing here
+	// re-applied the operator's value on top. A path stored months ago silently
+	// outranked the one typed on the command line at boot.
+	//
+	// The failure mode that did NOT happen is the one that makes this urgent:
+	// the stale path pointed somewhere that no longer existed, so it failed
+	// loudly. Had it pointed at a directory that still existed, the app would
+	// have opened — or created — the WRONG database, quietly, with the operator
+	// looking at a --db flag saying otherwise.
+	//
+	// flagSupplied, not viper.IsSet: --db carries a default, and the guard has to
+	// survive someone later adding a SetDefault for this key. See the measured
+	// table on explicitFlags above.
+	if flagSupplied("database_path") || envSupplied("DATABASE_PATH") {
+		c.DatabasePath = viper.GetString("database_path")
+	}
+	// NOT root_dir, deliberately. It is the same shape and the same argument
+	// applies in the abstract, but the base unit ships a generic
+	// AUDIOBOOK_ROOT_DIR=/var/lib/audiobooks that does NOT exist on the
+	// production host, where the correct value (/mnt/bigdata/books/…) lives in
+	// the database. Making the environment authoritative for root_dir would
+	// point the library at a non-existent directory on the next boot. If that is
+	// ever wanted, fix the unit first and change this second — in that order.
 }
 
 // ApplyEnvAuthoritativeConfig applies the environment-authoritative overrides to the
@@ -2894,7 +3035,17 @@ func validateParentDirExists(path string, field string) error {
 	parent := filepath.Dir(path)
 	info, err := os.Stat(parent)
 	if err != nil {
-		return fmt.Errorf("%s parent directory %q does not exist", field, parent)
+		// Report what stat ACTUALLY said. This used to claim "does not exist"
+		// for every stat failure, so a permission problem (EACCES), a
+		// non-directory component (ENOTDIR) and a symlink loop (ELOOP) all
+		// produced the same wrong sentence, sending whoever read it to look for
+		// a missing directory that was sitting right there. Hit on 2026-09-09
+		// during a database relocation: the first guess was permissions, and the
+		// message gave no way to tell.
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%s parent directory %q does not exist", field, parent)
+		}
+		return fmt.Errorf("%s parent directory %q is not usable: %w", field, parent, err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%s parent path %q is not a directory", field, parent)
