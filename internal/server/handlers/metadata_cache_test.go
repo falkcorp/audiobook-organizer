@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
 // last-edited: 2026-09-09
 
@@ -605,9 +605,11 @@ func TestListCachedCandidates_OffsetPastEndIsEmpty(t *testing.T) {
 	assert.Equal(t, 3, body.Data.Total)
 }
 
-// The guard on the fix itself: the only caller sends no limit and consumes the
-// whole list, so the default must stay "everything". A default page size here
-// would silently truncate the Review popup.
+// The guard on the fix itself: the default must stay "everything", so that
+// adding paging did not change what an existing unpaged client receives. Do
+// not re-justify this by counting callers — the in-tree caller now sends
+// limit=1, and if that were the reason, this test would look obsolete rather
+// than load-bearing. It guards the wire contract, which outlives the caller.
 func TestListCachedCandidates_NoLimitReturnsEveryRow(t *testing.T) {
 	store, svc := cachedFixture(t, make([]*string, 5))
 	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
