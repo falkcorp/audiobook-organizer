@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 // batch.go implements M3: coalescing burst enqueues of a Batchable op type into
 // one OperationV2Row via a debounce timer.
@@ -324,6 +324,14 @@ func (r *Registry) batchDispatch(def OperationDef, subs []database.OpSubject) er
 		Params:   string(rawParams),
 		QueuedAt: now,
 	}
+
+	// A batched def's params are a subject list, not the shape a hand-written
+	// SummarizeQueued for that def would necessarily expect — but the hook is
+	// the def's own code and it is handed its own row's params, so it can
+	// decode what it wrote. Stamping here is what keeps "a def with the hook
+	// always reports its size" true for batched ops too; skipping it would make
+	// the guarantee quietly conditional on which path created the row.
+	stampQueuedSummary(def, &row)
 
 	if err := r.store.InsertOperationV2(row); err != nil {
 		return fmt.Errorf("batchDispatch: InsertOperationV2: %w", err)

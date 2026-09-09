@@ -11,8 +11,11 @@
   identical blind spot.
 
   Ops report this through a new optional `OperationDef.SummarizeQueued` hook,
-  which the registry invokes at the three — and only three — moments a queued
-  row's work can change: the enqueue that creates it, a merge that unions new
-  work into it, and the resume that re-queues an interrupted run. That last one
+  which the registry invokes at every moment a queued row's work can change and
+  nowhere else: each of the three paths that creates a queued row (a normal
+  enqueue, the requeue that replaces an interrupted run with a fresh one, and
+  the batch flush that folds a bucket of subjects into one op), the merge that
+  unions newly requested work into a row already waiting, and the restart that
+  re-queues an interrupted run against its remaining work. That last one
   matters most for metadata apply, whose restart policy sends it back through
   the queue on every resume. Ops that declare no hook behave exactly as before.
