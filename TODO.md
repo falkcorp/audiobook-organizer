@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.48.1 -->
+<!-- version: 10.48.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -1277,7 +1277,7 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
 
 ## `TestCopyFile_PinnedNonce_OnlyOneWriterOpensTheTemp` is flaky in CI (2026-09-05)
 
-- [ ] `internal/organizer/copyfile_race_test.go:201` failed once on PR #3072's
+- [x] `internal/organizer/copyfile_race_test.go:201` failed once on PR #3072's
       `Go Tests (short, race)` job — the losing writer got a link `ErrExist` instead
       of the expected outcome — and passed 30/30 locally and on re-run. The test races
       two writers on a pinned temp-file nonce; on the CI runner's filesystem the
@@ -1285,6 +1285,27 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
       Decide whether the assertion is too strict for the real contract (exactly one
       writer opens the temp; the loser may fail at open OR at link) and fix the test,
       or fix the code if two writers can both reach `link`. Do not `t.Skip` it.
+
+      **Resolved 2026-09-09: the assertion was too strict; the code is correct and
+      is unchanged (zero diff outside `_test.go`).** Reproduced deterministically by
+      serialising the two writers: the winner's rename FREES the pinned temp name, so
+      the loser opens it cleanly and can only fail one step later at
+      `finalizeExclusive` — where `fs.ErrExist` is the right answer, because `dst`
+      then holds a COMPLETE file and adoption is the correct recovery. Verified in
+      that run: `errors.Is(err, fs.ErrExist)` true, `dst` byte-identical to the
+      winner, no temp left behind. Both writers can open the temp; they just cannot
+      hold it at once, so the test was renamed to
+      `TestCopyFile_PinnedNonce_NoTwoWritersHoldTheTempAtOnce`.
+
+      The loser's two outcomes are now paired with their own rules rather than one
+      being rejected outright. ⚠️ Widening that check alone would have COST coverage:
+      the concurrent test reads which branch happened off the error itself, so a
+      regression returning a raw `ErrExist` from the temp-open loss would be filed
+      under the finalize loss and pass. Both branches therefore got a deterministic
+      test — `…_SecondWriterFailsAtTheDestination` and
+      `…_HeldTempIsNotADestinationCollision` — and mutation-testing confirms it: that
+      exact regression is caught ONLY by the new held-temp test, with the concurrent
+      one green. Three mutants applied, three killed. 15× `-race` clean locally.
 
 ## Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)
 
