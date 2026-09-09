@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 package database
 
@@ -265,6 +265,22 @@ type OpV2StateStore interface {
 type OpV2ObservabilityStore interface {
 	// UpdateOpProgressV2 updates the progress columns and last_progress_at.
 	UpdateOpProgressV2(id string, current, total int, message string) error
+	// SetOpQueuedProgressV2 writes the progress columns on a row that has not
+	// started yet, so a queued run can say how much work it is holding. Reports
+	// whether the row was queued and therefore written.
+	//
+	// It deliberately does NOT stamp last_progress_at, and that is the whole
+	// reason it exists rather than reusing UpdateOpProgressV2. The watchdog
+	// reads last_progress_at as liveness of the CURRENT attempt
+	// (registry/watchdog.go): a stamp older than the def's ProgressTimeout
+	// makes it write a "stuck" strike and cancel the run. A queued row's
+	// summary is stale by construction — the row may wait hours behind its own
+	// ConcurrencyKey — so stamping it here would hand the watchdog an
+	// enqueue-time clock for a run that had only just started.
+	//
+	// The queued-only guard is what makes the name true: without it this would
+	// overwrite a running op's real progress with a queue-time estimate.
+	SetOpQueuedProgressV2(id string, current, total int, message string) (bool, error)
 	// UpdateOpPhaseV2 sets (or clears) current_phase on an operation.
 	UpdateOpPhaseV2(id string, phase *string) error
 	// AppendOpLogsV2 bulk-inserts log rows into op_logs_v2.

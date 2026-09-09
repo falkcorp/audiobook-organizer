@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.7.0
+// version: 4.8.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -512,13 +512,20 @@ export function OperationsIndicator() {
                           {formatOperationType(op.type)}
                           {op.group ? ` ×${op.group.count}` : ''}
                         </Typography>
+                        {/* A queued op reports how much work it is holding via
+                            progress_message (OperationDef.SummarizeQueued), and
+                            for a batch apply that number GROWS while it waits —
+                            the queue merger keeps unioning newly approved books
+                            into this very row. Show it when the server sent one;
+                            "Waiting to start…" is only the fallback for ops that
+                            cannot say how big they are. */}
                         <Typography
                           variant="caption"
                           sx={{
                             color: 'text.secondary',
                           }}
                         >
-                          Waiting to start…
+                          {op.message || 'Waiting to start…'}
                         </Typography>
                       </Box>
                     </Box>

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package database
 
@@ -318,6 +318,67 @@ func TestUpdateOpProgressV2_AdvancesHighWaterProgress(t *testing.T) {
 	require.Equal(t, 42, row.HighWaterProgress,
 		"high-water mark must not regress when a resumed run reports a lower current")
 	require.Equal(t, 5, row.ProgressCurrent, "current progress should still track the live value")
+}
+
+// TestSetOpQueuedProgressV2_LeavesLivenessAndWatermarkAlone pins the two
+// omissions that are the entire reason this method exists beside
+// UpdateOpProgressV2 above. Both are invisible in the returned row's progress
+// columns, which is why they get their own test.
+//
+// last_progress_at: the watchdog reads it as liveness of the CURRENT attempt
+// and cancels a run whose stamp is older than the def's ProgressTimeout. A
+// queued row's summary is stale by construction — metadata.batch-apply-cached
+// can sit for hours behind its own ConcurrencyKey — so a stamp written here
+// would follow the row into its run and get a perfectly healthy op killed as
+// "stuck" on the first watchdog tick.
+//
+// high_water_progress: MAX-only (see UpdateOpCheckpointV2), so a value written
+// before any work happened can never be walked back, and checkInfiniteRestart
+// reads it as proof that a resumed op has accomplished something.
+func TestSetOpQueuedProgressV2_LeavesLivenessAndWatermarkAlone(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-queued-size-1", "queued")))
+
+	written, err := s.SetOpQueuedProgressV2("op-queued-size-1", 12, 40, "40 books to apply")
+	require.NoError(t, err)
+	require.True(t, written, "a queued row must accept its size summary")
+
+	row, err := s.GetOperationV2("op-queued-size-1")
+	require.NoError(t, err)
+	require.Equal(t, 12, row.ProgressCurrent)
+	require.Equal(t, 40, row.ProgressTotal)
+	require.Equal(t, "40 books to apply", row.ProgressMessage)
+	require.Nil(t, row.LastProgressAt,
+		"a queue-time summary must not stamp liveness; the watchdog would read it as "+
+			"the running attempt's last sign of life and cancel the op")
+	require.Equal(t, 0, row.HighWaterProgress,
+		"nothing has been accomplished at queue time, and the watermark only ever rises")
+}
+
+// A running op owns its progress columns. Without the queued-only guard, a
+// resume or merge racing a dispatch would overwrite a live run's real numbers
+// with a queue-time estimate — and the caller would never know, because the
+// write itself succeeds.
+func TestSetOpQueuedProgressV2_RefusesARowThatHasStarted(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-queued-size-2", "running")))
+	require.NoError(t, s.UpdateOpProgressV2("op-queued-size-2", 7, 9, "real progress"))
+
+	written, err := s.SetOpQueuedProgressV2("op-queued-size-2", 0, 500, "500 books to apply")
+	require.NoError(t, err)
+	require.False(t, written, "a running row must be refused, and the refusal reported")
+
+	row, err := s.GetOperationV2("op-queued-size-2")
+	require.NoError(t, err)
+	require.Equal(t, 7, row.ProgressCurrent, "the running op's real progress must survive")
+	require.Equal(t, 9, row.ProgressTotal)
+	require.Equal(t, "real progress", row.ProgressMessage)
 }
 
 // TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility pins B1:

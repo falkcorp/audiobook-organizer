@@ -1,7 +1,7 @@
 // file: internal/server/library_writeback_op.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-28
+// last-edited: 2026-09-09
 
 package server
 
@@ -41,6 +41,17 @@ func mergeBulkWriteBackQueuedParams(existing, incoming json.RawMessage) (json.Ra
 	return merged, err == nil, err
 }
 
+// summarizeBulkWriteBackQueued reports the size of a queued bulk write-back.
+// This op has no OriginalTotal to carry prior work across a resume, so the
+// completed half is always zero and the total is simply what is queued.
+func summarizeBulkWriteBackQueued(params json.RawMessage) (int, int, string) {
+	p, ok := decodeQueuedParams[bulkWriteBackOpParams](params)
+	if !ok {
+		return 0, 0, ""
+	}
+	return formatQueuedBookSummary(0, len(p.BookIDs), "write back")
+}
+
 // RegisterBulkWriteBackOp registers the "library.bulk-write-back" v2 OperationDef.
 // The HTTP handler handleBulkWriteBack pre-filters books and passes the resulting
 // book IDs as params; the Run func executes the actual tag-write work.
@@ -58,6 +69,7 @@ func (s *Server) RegisterBulkWriteBackOp(reg *opsregistry.Registry) error {
 		ResumePolicy:      opsregistry.ResumeRestart,
 		ConcurrencyKey:    "library.bulk-write-back",
 		MergeQueuedParams: mergeBulkWriteBackQueuedParams,
+		SummarizeQueued:   summarizeBulkWriteBackQueued,
 		Permissions:       []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/queued_merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 342326a8-40f7-440f-b6a6-0f7f8255b6b6
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 package registry
 
@@ -15,13 +15,13 @@ import (
 // the merge decision and persistence; a running operation therefore keeps its
 // immutable parameter snapshot.
 func (r *Registry) tryMergeQueuedParams(
-	defID string,
-	merge func(existing, incoming json.RawMessage) (json.RawMessage, bool, error),
+	def OperationDef,
 	incoming json.RawMessage,
 ) (string, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	defID := def.ID
 	active, err := r.store.ListActiveOperationsV2()
 	if err != nil {
 		return "", false, fmt.Errorf("registry: list active operations for queued merge: %w", err)
@@ -33,7 +33,7 @@ func (r *Registry) tryMergeQueuedParams(
 		if _, claimed := r.running[op.ID]; claimed {
 			continue
 		}
-		params, ok, mergeErr := merge(json.RawMessage(op.Params), incoming)
+		params, ok, mergeErr := def.MergeQueuedParams(json.RawMessage(op.Params), incoming)
 		if mergeErr != nil {
 			return "", false, fmt.Errorf("registry: merge queued params for %s: %w", defID, mergeErr)
 		}
@@ -54,6 +54,12 @@ func (r *Registry) tryMergeQueuedParams(
 			r.logger.Warn("registry: failed to clear checkpoint state after queued param merge",
 				"op_id", op.ID, "def_id", defID, "error", delErr)
 		}
+		// The row now holds strictly more work than it advertised. Restate its
+		// size before returning: this is the moment the user's "how big is that
+		// pending apply?" answer changes, and nothing else will revisit the row
+		// until it starts running.
+		r.persistQueuedSummary(def, op.ID, params)
+
 		r.logger.Info("registry: merged request into queued operation", "op_id", op.ID, "def_id", defID)
 		return op.ID, true, nil
 	}
