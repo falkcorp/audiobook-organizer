@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -440,6 +440,14 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         // stored honest about what will be used.
         activity_db_path: settings.activityDbPath.trim(),
         activity_db_move_on_change: settings.activityDbMoveOnChange,
+        // Sent even when the server reports it locked, deliberately. The locked
+        // value shown in the field IS the effective one (the server re-applies
+        // --db/DATABASE_PATH over the blob before serving the config), so writing
+        // it back HEALS a stale blob entry rather than preserving it. A blob whose
+        // database_path had gone stale is exactly what took production down on
+        // 2026-09-09; leaving it untouched keeps that landmine armed for whenever
+        // the flag is next removed.
+        database_path: settings.databasePath.trim(),
         organization_strategy: settings.organizationStrategy,
         scan_on_startup: settings.scanOnStartup,
         auto_organize: settings.autoOrganize,
@@ -670,9 +678,13 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
   // a machine where that path may not even exist. It is a per-host setting and
   // belongs to the host, not to a portable settings blob.
   //
-  // env_locked and activity_db_resolved_path are absent because they are
-  // server-computed and read-only; they appear in a GET response and are not
-  // settings at all.
+  // database_path is absent for the same reason, and more so: a settings file
+  // from another machine would point this host's server at a database that does
+  // not exist there, and it would start an empty library at that path.
+  //
+  // env_locked, setting_locks and activity_db_resolved_path are absent because
+  // they are server-computed and read-only; they appear in a GET response and
+  // are not settings at all.
   const sanitizeImportPayload = (
     payload: Partial<api.Config>
   ): Partial<api.Config> => {

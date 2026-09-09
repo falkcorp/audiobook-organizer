@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PathsSettingsTab.activityDb.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a3f1e70-84c2-4d19-9b05-3e7d2c8a4f61
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -17,6 +17,7 @@ function renderTab(overrides: Record<string, unknown> = {}) {
       libraryPath: '/mnt/bigdata/books/audiobook-organizer',
       activityDbPath: '',
       activityDbMoveOnChange: true,
+      databasePath: '/mnt/bigdata/books/audiobook-organizer/.appdata/audiobooks.pebble',
     },
     setSettings: vi.fn(),
     libraryPathError: null,
@@ -30,6 +31,7 @@ function renderTab(overrides: Record<string, unknown> = {}) {
     handleRemoveImportFolder: vi.fn(),
     setAddFolderDialogOpen: vi.fn(),
     envLocked: [] as string[],
+    settingLocks: {} as Record<string, string>,
     activityDbResolvedPath: RESOLVED,
     ...overrides,
   };

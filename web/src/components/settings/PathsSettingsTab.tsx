@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PathsSettingsTab.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c9d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -60,8 +60,28 @@ interface PathsSettingsTabProps {
    * edit that would be silently discarded.
    */
   envLocked: string[];
+  /**
+   * The same keys as `envLocked`, mapped to what is locking each one: an
+   * environment variable name, or a command-line flag. Used for the copy that
+   * tells the operator where to go and change it.
+   */
+  settingLocks: Record<string, string>;
   /** Server-computed path an empty Activity Database Path resolves to. */
   activityDbResolvedPath: string;
+}
+
+/**
+ * describeLock turns a lock mechanism into the sentence fragment that tells the
+ * operator where to look. A flag and an environment variable live in different
+ * halves of the same unit file, and sending someone to the wrong half is worse
+ * than a disabled control with no explanation at all: they delete something that
+ * was never the cause and conclude the app is broken.
+ */
+function describeLock(mechanism: string | undefined): string {
+  if (!mechanism) return 'the server configuration';
+  return mechanism.startsWith('--')
+    ? `the ${mechanism} flag on the server's start-up command`
+    : `the ${mechanism} environment variable on the server`;
 }
 
 export function PathsSettingsTab(props: PathsSettingsTabProps) {
@@ -69,6 +89,8 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
   // path from the unit file without also freezing the move behaviour, and vice versa.
   const pathIsEnvLocked = props.envLocked.includes('activity_db_path');
   const moveIsEnvLocked = props.envLocked.includes('activity_db_move_on_change');
+  const dbPathIsLocked = props.envLocked.includes('database_path');
+  const dbPathLockedBy = describeLock(props.settingLocks.database_path);
 
   return (
     <Grid container spacing={3}>
@@ -115,6 +137,41 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
           <Typography variant="caption">
             <strong>Library vs Import Paths:</strong> The library path is where organized audiobooks
             live. Import paths below are watched for new files to import into the library.
+          </Typography>
+        </Alert>
+      </Grid>
+
+      {/* Main Database Section */}
+      <Grid size={12}>
+        <Typography variant="subtitle1" gutterBottom sx={{ mt: 2, fontWeight: 600 }}>
+          Main Database
+        </Typography>
+        {dbPathIsLocked && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2">
+              The database location is set by {dbPathLockedBy}, which takes precedence over
+              anything saved here. To manage it from this page, remove it there and restart.
+            </Typography>
+          </Alert>
+        )}
+        <TextField
+          fullWidth
+          label="Database Path"
+          value={props.settings.databasePath}
+          onChange={(e) => props.handleChange('databasePath', e.target.value)}
+          disabled={dbPathIsLocked}
+          helperText={
+            dbPathIsLocked
+              ? `Currently in use: ${props.settings.databasePath} (set by ${props.settingLocks.database_path})`
+              : 'Where the book database is stored. Takes effect the next time the server starts.'
+          }
+        />
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          <Typography variant="caption">
+            <strong>Changing this does not move any data.</strong> The server restarts against
+            whatever is at the new path, and starts an empty library if nothing is there. Copy the
+            database to the new location first, while the server is stopped. The existing database
+            is never deleted, so a wrong path is recoverable by putting the old one back.
           </Typography>
         </Alert>
       </Grid>
