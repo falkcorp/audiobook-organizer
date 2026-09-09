@@ -1,7 +1,7 @@
 // file: internal/database/dual_write_activity_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-0006-f012-000000000006
-// last-edited: 2026-08-29
+// last-edited: 2026-09-09
 
 // Package database — dual-write wrapper for the activity migration window.
 //
@@ -159,6 +159,26 @@ func (d *DualWriteActivityStore) CompactByDay(ctx context.Context, olderThan tim
 
 // MigrateSystemActivityLogs runs only on the primary read backend.
 // This is a one-shot SQLite→nuts migration; the Pebble store has no SQLite data.
+// OptimizeStatistics runs on both backends and returns the active one's result.
+// Neither nuts nor pebble supports statistics today, so both report
+// Supported=false; the call is still made on both so a future backend swap does
+// not silently skip one.
+func (d *DualWriteActivityStore) OptimizeStatistics(ctx context.Context) (ActivityOptimizeResult, error) {
+	nutsRes, nutsErr := d.nuts.OptimizeStatistics(ctx)
+	pebbleRes, pebbleErr := d.pebble.OptimizeStatistics(ctx)
+	if nutsErr != nil {
+		slog.Warn("[dual-write] nuts OptimizeStatistics failed", "err", nutsErr)
+	}
+	if pebbleErr != nil {
+		slog.Warn("[dual-write] pebble OptimizeStatistics failed", "err", pebbleErr)
+	}
+	_ = nutsRes
+	if pebbleErr != nil {
+		return ActivityOptimizeResult{}, pebbleErr
+	}
+	return pebbleRes, nil
+}
+
 func (d *DualWriteActivityStore) MigrateSystemActivityLogs() (int, error) {
 	if d.ReadFromPebble {
 		return d.pebble.MigrateSystemActivityLogs()

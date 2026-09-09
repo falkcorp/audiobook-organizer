@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 // Package database — backend-migration wrapper for the activity log.
 //
@@ -26,6 +26,12 @@
 //     the ACTIVE backend ONLY. This is the point of the whole exercise — after
 //     the flip, the "Compact after N days" button runs SQLite's bounded
 //     CompactByDay, never Pebble's unbounded, timeout-prone path.
+//   - OptimizeStatistics: BOTH. It refreshes query-planner statistics, which is
+//     read-only bookkeeping rather than a storage rewrite, and the INACTIVE
+//     backend is still taking every write — so leaving its planner un-analyzed
+//     would make a rollback land on a backend that has never been analyzed.
+//     That is exactly the state production's SQLite database was found in on
+//     2026-09-09 (no sqlite_stat1 at all across 13.2M rows).
 //   - WipeAllActivity: BOTH. It is an explicit destructive user action; leaving a
 //     full mirror behind would be surprising, so it clears both and returns the
 //     active backend's count.
@@ -170,6 +176,35 @@ func (m *MigratingActivityStore) RecompactDigests(ctx context.Context) (Recompac
 
 func (m *MigratingActivityStore) RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error) {
 	return m.active().RepairActivityIndexes(ctx)
+}
+
+// OptimizeStatistics refreshes planner statistics on BOTH backends, not just the
+// active one, and returns the active one's result.
+//
+// This is deliberately unlike the other maintenance methods above. Those rewrite
+// or reclaim storage, and routing them to the active backend only was the point
+// of the migration. Statistics are different: they are read-only bookkeeping that
+// makes a backend's own query plans correct, and the inactive backend is still
+// receiving every write (Record goes to both, always). Refreshing only the active
+// one would leave the rollback mirror's planner blind, so a rollback would land
+// on a backend that has never been analyzed — which is exactly the state
+// production's SQLite database was found in on 2026-09-09.
+//
+// The Pebble implementation is a cheap Supported=false no-op, so "both" costs
+// nothing while Pebble is one of the two.
+func (m *MigratingActivityStore) OptimizeStatistics(ctx context.Context) (ActivityOptimizeResult, error) {
+	primaryRes, primaryErr := m.primary.OptimizeStatistics(ctx)
+	secondaryRes, secondaryErr := m.secondary.OptimizeStatistics(ctx)
+	if primaryErr != nil {
+		slog.Warn("[activity] primary OptimizeStatistics failed", "err", primaryErr)
+	}
+	if secondaryErr != nil {
+		slog.Warn("[activity] secondary OptimizeStatistics failed", "err", secondaryErr)
+	}
+	if m.readSecondary.Load() {
+		return secondaryRes, secondaryErr
+	}
+	return primaryRes, primaryErr
 }
 
 func (m *MigratingActivityStore) MigrateSystemActivityLogs() (int, error) {

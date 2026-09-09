@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.18.0
+// version: 1.20.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -37,6 +37,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -400,6 +401,30 @@ var pactIndexFamilyPrefixes = []string{"act:op:", "act:bk:"}
 // pactPrimaryKeySuffix splits a primary key "act:<tier>:<20d-unix-nano>:<ulid>"
 // and returns everything after the tier — "<20d-unix-nano>:<ulid>" — which is
 // byte-for-byte the suffix Record appended to both secondary index keys.
+// pactPrimaryKeyNanos extracts the unix-nano timestamp encoded in a primary
+// key, without reading or decoding the row's value.
+//
+// CompactByDay uses it to find the oldest compactable day from one Seek per
+// tier. Taking the timestamp from the KEY rather than from a decoded entry's
+// Timestamp is the same discipline pactIndexKeysFor documents: the key is
+// authoritative for ordering and range bounds, and a value that has round-tripped
+// through JSON can drift from it.
+func pactPrimaryKeyNanos(key []byte) (int64, bool) {
+	suffix, ok := pactPrimaryKeySuffix(key)
+	if !ok {
+		return 0, false
+	}
+	i := strings.IndexByte(suffix, ':')
+	if i <= 0 {
+		return 0, false
+	}
+	ns, err := strconv.ParseInt(suffix[:i], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return ns, true
+}
+
 func pactPrimaryKeySuffix(key []byte) (string, bool) {
 	s := string(key)
 	if !strings.HasPrefix(s, "act:") {
@@ -1413,195 +1438,389 @@ func (s *PebbleActivityStore) repairIndexChunk(ctx context.Context, rows []pactI
 	return nil
 }
 
-// CompactByDay collapses all compactable tier entries into daily digest rows.
-// Every tier except "digest" is eligible — newly-introduced tiers are automatically
-// compacted without an allowlist update (denylist approach).
-// Each day is processed atomically.
+// pactCompactDeleteBatch bounds how many source rows one compaction batch
+// deletes before committing. It plays the same role sqlActDeleteChunk plays on
+// the SQL backend: it keeps a single day's deletion off the heap and out of one
+// giant batch, so a multi-million-row day commits as a sequence of small,
+// durable steps instead of one all-or-nothing write.
+const pactCompactDeleteBatch = 5000
+
+// pactDigestScratch accumulates one day's digest WITHOUT holding the day's rows.
+//
+// It keeps three capped item lists rather than one uncapped list that is sorted
+// and truncated at the end. Filling categories in audit → error/warn → normal
+// precedence and capping each at maxDigestItems is equivalent to the old
+// concat-then-truncate (the SQL backend's buildDayDigest already does exactly
+// this), but its memory is bounded at 3*maxDigestItems items regardless of how
+// many rows the day holds.
+type pactDigestScratch struct {
+	counts                        map[string]int
+	total                         int
+	auditItems, errItems, normals []DigestItem
+}
+
+func newPactDigestScratch() *pactDigestScratch {
+	return &pactDigestScratch{counts: make(map[string]int)}
+}
+
+// add folds one entry into the scratch, keeping at most maxDigestItems per
+// category. Counts and total are always updated: the digest's OriginalCount must
+// describe every row the day held, not just the sampled ones.
+func (sc *pactDigestScratch) add(e ActivityEntry) {
+	sc.counts[e.Type]++
+	sc.total++
+
+	var bucket *[]DigestItem
+	switch {
+	case e.Tier == "audit":
+		bucket = &sc.auditItems
+	case e.Level == "error" || e.Level == "warn":
+		bucket = &sc.errItems
+	default:
+		bucket = &sc.normals
+	}
+	if len(*bucket) >= maxDigestItems {
+		return
+	}
+	item := DigestItem{
+		Type:        e.Type,
+		Tier:        e.Tier,
+		Book:        extractBookName(e),
+		BookID:      e.BookID,
+		OperationID: e.OperationID,
+		Summary:     extractItemSummary(e),
+		Timestamp:   e.Timestamp,
+		Tags:        e.Tags,
+	}
+	if e.Tier != "audit" && (e.Level == "error" || e.Level == "warn") {
+		item.Details = extractErrorDetails(e)
+	}
+	*bucket = append(*bucket, item)
+}
+
+// addOpaque folds in an entry whose stored JSON could not be decoded.
+//
+// It still counts, under an explicit "unreadable" type rather than silently.
+// Compaction is about to DELETE this entry, so leaving it out of OriginalCount
+// would quietly shrink the day's recorded history by however many rows the
+// codec could not read — and a corrupt-value bug would then look like a day
+// that simply had fewer events. The old streaming path did exactly that: it
+// recorded the decode failure in the tally and never counted the row.
+func (sc *pactDigestScratch) addOpaque() {
+	sc.counts["unreadable"]++
+	sc.total++
+}
+
+// details renders the accumulated scratch as a DigestDetails for dateKey.
+func (sc *pactDigestScratch) details(dateKey string) DigestDetails {
+	items := append(append(append([]DigestItem{}, sc.auditItems...), sc.errItems...), sc.normals...)
+	truncated := false
+	truncatedCount := 0
+	if len(items) > maxDigestItems {
+		items = items[:maxDigestItems]
+	}
+	if sc.total > len(items) {
+		truncated = true
+		truncatedCount = sc.total - len(items)
+	}
+	return DigestDetails{
+		Date:           dateKey,
+		OriginalCount:  sc.total,
+		Counts:         sc.counts,
+		Items:          items,
+		Truncated:      truncated,
+		TruncatedCount: truncatedCount,
+	}
+}
+
+// CompactByDay collapses every compactable-tier entry older than olderThan into
+// one daily digest per calendar day, deleting the originals.
+//
+// BOUNDED IN BOTH DIMENSIONS, and EXACTLY-ONCE UNDER INTERRUPTION — the same two
+// contracts SQLActivityStore.CompactByDay documents, for the same reasons. Days
+// are iterated from the data (earliestCompactableDay decodes nothing), and each
+// day is consumed in committed chunks of pactCompactDeleteBatch entries rather
+// than materialized. The previous implementation concatenated every tier's rows
+// for a day into one []pactKV via scanTierKVs, which has no limit and decodes
+// each matching row into a fully populated ActivityEntry — the shape behind the
+// 30.8 GB-in-one-function incident this package's doc comments record.
+//
+// Each chunk folds its entries into the day's digest AND deletes exactly those
+// entries in ONE pebble batch. That is what makes a kill safe: at every commit
+// boundary an entry is either present and uncounted, or deleted and counted
+// once. Digest-then-delete as two separate commits — which is what this function
+// did until 2026-09-09 — double-counts on resume, because the survivors of the
+// interrupted delete are rescanned and merged into a digest that already
+// included them.
 func (s *PebbleActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {
 	var result CompactResult
 
-	// Load all compactable entries (all tiers except "digest").
-	var all []pactKV
-	for _, tier := range actCompactableTiers() {
-		kvs, err := s.scanTierKVs(ctx, tier, nil, &olderThan)
-		if err != nil {
-			return result, err
-		}
-		all = append(all, kvs...)
+	// Bound the calendar-day loop by the data, not the wall clock: one
+	// iterator Seek per tier, no decode.
+	firstDay, ok, err := s.earliestCompactableDay(olderThan)
+	if err != nil {
+		return result, err
 	}
-	if len(all) == 0 {
-		return result, nil
+	if !ok {
+		return result, nil // nothing older than the cutoff
 	}
 
-	// Group by date.
-	type dayGroup struct{ kvs []pactKV }
-	days := make(map[string]*dayGroup)
-	var dayOrder []string
-	for _, kv := range all {
-		dk := kv.entry.Timestamp.UTC().Format("2006-01-02")
-		if _, ok := days[dk]; !ok {
-			days[dk] = &dayGroup{}
-			dayOrder = append(dayOrder, dk)
+	for day := firstDay; day.Before(olderThan); day = day.Add(24 * time.Hour) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return result, ctxErr
 		}
-		days[dk].kvs = append(days[dk].kvs, kv)
-	}
-	sort.Strings(dayOrder)
-
-	for _, dateKey := range dayOrder {
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		default:
+		dayEnd := day.Add(24 * time.Hour)
+		if dayEnd.After(olderThan) {
+			dayEnd = olderThan
 		}
+		dateKey := day.Format("2006-01-02")
 
-		dg := days[dateKey]
-		entries := make([]ActivityEntry, len(dg.kvs))
-		for i, kv := range dg.kvs {
-			entries[i] = kv.entry
-		}
-
-		counts := make(map[string]int)
-		for _, e := range entries {
-			counts[e.Type]++
-		}
-
-		var auditItems, errItems, normalItems []DigestItem
-		for _, e := range entries {
-			item := DigestItem{
-				Type:        e.Type,
-				Tier:        e.Tier,
-				Book:        extractBookName(e),
-				BookID:      e.BookID,
-				OperationID: e.OperationID,
-				Summary:     extractItemSummary(e),
-				Timestamp:   e.Timestamp,
-				Tags:        e.Tags,
+		dayRows := 0
+		for {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return result, ctxErr
 			}
-			switch {
-			case e.Tier == "audit":
-				auditItems = append(auditItems, item)
-			case e.Level == "error" || e.Level == "warn":
-				item.Details = extractErrorDetails(e)
-				errItems = append(errItems, item)
-			default:
-				normalItems = append(normalItems, item)
+			n, chunkErr := s.compactDayChunk(ctx, day, dayEnd, dateKey)
+			result.EntriesDeleted += n
+			dayRows += n
+			if chunkErr != nil {
+				return result, chunkErr
+			}
+			if n == 0 {
+				break
 			}
 		}
-		items := append(auditItems, errItems...)
-		items = append(items, normalItems...)
-
-		truncated := false
-		truncatedCount := 0
-		if len(items) > maxDigestItems {
-			truncatedCount = len(items) - maxDigestItems
-			items = items[:maxDigestItems]
-			truncated = true
+		if dayRows > 0 {
+			result.DaysCompacted++
 		}
-
-		dd := DigestDetails{
-			Date:           dateKey,
-			OriginalCount:  len(entries),
-			Counts:         counts,
-			Items:          items,
-			Truncated:      truncated,
-			TruncatedCount: truncatedCount,
-		}
-
-		// Check for existing digest for this date to merge into.
-		existing, existingKey, err := s.findExistingDigest(dateKey)
-		if err != nil {
-			return result, err
-		}
-		if existingKey != nil {
-			// Merge existing digest into dd.
-			for k, v := range existing.Counts {
-				dd.Counts[k] += v
-			}
-			dd.OriginalCount += existing.OriginalCount
-			combined := append(existing.Items, dd.Items...)
-			if existing.Truncated {
-				dd.Truncated = true
-				dd.TruncatedCount += existing.TruncatedCount
-			}
-			if len(combined) > maxDigestItems {
-				dd.TruncatedCount += len(combined) - maxDigestItems
-				combined = combined[:maxDigestItems]
-				dd.Truncated = true
-			}
-			dd.Items = combined
-		}
-
-		detailsBytes, err := json.Marshal(dd)
-		if err != nil {
-			return result, fmt.Errorf("pebble_activity_store: compact marshal: %w", err)
-		}
-
-		startOfDay, err := time.Parse("2006-01-02", dateKey)
-		if err != nil {
-			return result, fmt.Errorf("pebble_activity_store: compact parse date: %w", err)
-		}
-
-		// Populate Details from the DigestDetails map so it survives the ActivityEntry round-trip.
-		var ddMap map[string]any
-		if mapErr := json.Unmarshal(detailsBytes, &ddMap); mapErr != nil {
-			return result, fmt.Errorf("pebble_activity_store: compact unmarshal dd map: %w", mapErr)
-		}
-		digestID := ulid.Make().String()
-		digest := ActivityEntry{
-			ID:        s.counter.Add(1),
-			Timestamp: startOfDay,
-			Tier:      "digest",
-			Type:      "daily_digest",
-			Level:     "info",
-			Source:    "compaction",
-			Summary:   fmt.Sprintf("Daily digest for %s (%d entries)", dateKey, dd.OriginalCount),
-			Details:   ddMap,
-		}
-		digestKey := pactPrimaryKey("digest", startOfDay, digestID)
-		digestBytes, err := json.Marshal(digest)
-		if err != nil {
-			return result, fmt.Errorf("pebble_activity_store: compact marshal digest: %w", err)
-		}
-
-		batch := s.db.NewBatch()
-
-		// Delete old digest if present. This is a plain Delete, not
-		// pactDeleteEntry: digest rows are written just below with neither an
-		// OperationID nor a BookID, so Record never indexed them and there is
-		// nothing for the helper to find. findExistingDigest also returns only
-		// the key, not a decoded entry, so routing it through the helper would
-		// mean re-reading a row to derive index keys that cannot exist.
-		if existingKey != nil {
-			if err := batch.Delete(existingKey, nil); err != nil {
-				batch.Close()
-				return result, fmt.Errorf("pebble_activity_store: compact delete old digest: %w", err)
-			}
-		}
-
-		// Write new digest.
-		if err := batch.Set(digestKey, digestBytes, nil); err != nil {
-			batch.Close()
-			return result, fmt.Errorf("pebble_activity_store: compact set digest: %w", err)
-		}
-
-		// Delete originals, plus each one's act:op:/act:bk: index entries.
-		for _, kv := range dg.kvs {
-			if err := pactDeleteEntry(batch, kv); err != nil {
-				batch.Close()
-				return result, fmt.Errorf("pebble_activity_store: compact delete original: %w", err)
-			}
-		}
-
-		if err := batch.Commit(pebble.Sync); err != nil {
-			batch.Close()
-			return result, fmt.Errorf("pebble_activity_store: compact commit day %s: %w", dateKey, err)
-		}
-		batch.Close()
-
-		result.DaysCompacted++
-		result.EntriesDeleted += len(dg.kvs)
 	}
 	return result, nil
+}
+
+// earliestCompactableDay returns the UTC midnight of the oldest compactable
+// entry older than cutoff. It seeks the first key of each compactable tier
+// within the cutoff and decodes nothing — the timestamp is in the key.
+func (s *PebbleActivityStore) earliestCompactableDay(cutoff time.Time) (time.Time, bool, error) {
+	var earliest time.Time
+	found := false
+	for _, tier := range actCompactableTiers() {
+		lower, upper := pactTierBounds(tier, nil, &cutoff)
+		iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("pebble_activity_store: earliest day iter (tier=%s): %w", tier, err)
+		}
+		if iter.First() {
+			ns, ok := pactPrimaryKeyNanos(iter.Key())
+			if ok {
+				t := time.Unix(0, ns).UTC()
+				if !found || t.Before(earliest) {
+					earliest = t
+					found = true
+				}
+			}
+		}
+		if cerr := iter.Close(); cerr != nil {
+			return time.Time{}, false, cerr
+		}
+	}
+	if !found {
+		return time.Time{}, false, nil
+	}
+	return earliest.Truncate(24 * time.Hour), true, nil
+}
+
+// pactChunkVictim is one entry claimed for compaction: its primary key plus the
+// decoded entry, or decoded=false when the stored JSON could not be read.
+type pactChunkVictim struct {
+	key     []byte
+	entry   ActivityEntry
+	decoded bool
+}
+
+// compactDayChunk folds at most pactCompactDeleteBatch of the day's remaining
+// entries into that day's digest and deletes exactly those entries, in one
+// atomic batch. It returns the number of entries consumed; 0 means the day is
+// finished.
+func (s *PebbleActivityStore) compactDayChunk(ctx context.Context, dayStart, dayEnd time.Time, dateKey string) (int, error) {
+	victims, err := s.claimDayChunk(ctx, dayStart, dayEnd, pactCompactDeleteBatch)
+	if err != nil {
+		return 0, err
+	}
+	if len(victims) == 0 {
+		return 0, nil
+	}
+
+	// Counts cover every claimed entry, decodable or not: an entry this pass
+	// cannot read is still an entry the day held, and it is about to be deleted,
+	// so omitting it from OriginalCount would silently shrink the day's history.
+	sc := newPactDigestScratch()
+	for _, v := range victims {
+		if v.decoded {
+			sc.add(v.entry)
+		} else {
+			sc.addOpaque()
+		}
+	}
+
+	batch := s.db.NewBatch()
+	defer batch.Close()
+
+	if err := s.stageDayDigest(batch, dayStart, dateKey, sc.details(dateKey)); err != nil {
+		return 0, err
+	}
+	for _, v := range victims {
+		if !v.decoded {
+			// Its primary key goes; pactIndexKeysFor cannot derive index keys
+			// without the decoded ids, so those are swept by the nightly
+			// RepairActivityIndexes instead. Deleting it anyway is required —
+			// leaving it would make the day's chunk loop re-claim it forever.
+			if delErr := batch.Delete(v.key, nil); delErr != nil {
+				return 0, fmt.Errorf("pebble_activity_store: compact delete opaque row: %w", delErr)
+			}
+			continue
+		}
+		if delErr := pactDeleteEntry(batch, pactKV{key: v.key, entry: v.entry}); delErr != nil {
+			return 0, fmt.Errorf("pebble_activity_store: compact stage delete: %w", delErr)
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return 0, fmt.Errorf("pebble_activity_store: compact commit chunk %s: %w", dateKey, err)
+	}
+	return len(victims), nil
+}
+
+// claimDayChunk collects at most limit entries from [dayStart,dayEnd) across the
+// compactable tiers, copying each key (iterator memory is only valid until the
+// next Next) and decoding each value once.
+//
+// A fresh iterator is opened per tier per chunk rather than one held across
+// commits: an iterator pins the memtable and sstables it was created over, so
+// keeping one alive across a multi-million-entry day would defeat the point of
+// committing in chunks. Re-seeking is cheap because every committed chunk
+// removes the keys the previous seek landed on.
+func (s *PebbleActivityStore) claimDayChunk(ctx context.Context, dayStart, dayEnd time.Time, limit int) ([]pactChunkVictim, error) {
+	victims := make([]pactChunkVictim, 0, limit)
+	tally := &pactDecodeTally{}
+	defer tally.log("compact claim " + dayStart.Format("2006-01-02"))
+
+	for _, tier := range actCompactableTiers() {
+		if len(victims) >= limit {
+			break
+		}
+		lower, upper := pactTierBounds(tier, &dayStart, &dayEnd)
+		iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+		if err != nil {
+			return nil, fmt.Errorf("pebble_activity_store: compact claim iter (tier=%s): %w", tier, err)
+		}
+		seen := 0
+		for iter.First(); iter.Valid() && len(victims) < limit; iter.Next() {
+			if seen%activityCtxCheckInterval == 0 {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					_ = iter.Close()
+					return nil, ctxErr
+				}
+			}
+			seen++
+
+			keyCopy := make([]byte, len(iter.Key()))
+			copy(keyCopy, iter.Key())
+			v := pactChunkVictim{key: keyCopy}
+			s.entriesDecoded.Add(1)
+			if jsonErr := json.Unmarshal(iter.Value(), &v.entry); jsonErr != nil {
+				s.decodeFailures.Add(1)
+				tally.record(keyCopy, jsonErr)
+			} else {
+				v.decoded = true
+			}
+			victims = append(victims, v)
+		}
+		iterErr := iter.Error()
+		_ = iter.Close()
+		if iterErr != nil {
+			return nil, fmt.Errorf("pebble_activity_store: compact claim scan (tier=%s): %w", tier, iterErr)
+		}
+	}
+	return victims, nil
+}
+
+// stageDayDigest merges dd into any existing digest for dateKey and stages the
+// replacement into batch, WITHOUT committing. The caller commits it together
+// with the deletion of the entries dd counted, which is what makes counting and
+// deletion the same atomic unit.
+func (s *PebbleActivityStore) stageDayDigest(batch *pebble.Batch, startOfDay time.Time, dateKey string, dd DigestDetails) error {
+	existing, existingKey, err := s.findExistingDigest(dateKey)
+	if err != nil {
+		return err
+	}
+	if existingKey != nil {
+		for k, v := range existing.Counts {
+			dd.Counts[k] += v
+		}
+		dd.OriginalCount += existing.OriginalCount
+		combined := append(existing.Items, dd.Items...)
+		if len(combined) > maxDigestItems {
+			combined = combined[:maxDigestItems]
+		}
+		dd.Items = combined
+	}
+	// Truncation is DERIVED from the totals rather than accumulated across
+	// chunks: an additive TruncatedCount drifts once a day takes more than one
+	// chunk, and the value is exactly "entries the digest did not keep an item
+	// for", which both fields already determine.
+	if dd.OriginalCount > len(dd.Items) {
+		dd.Truncated = true
+		dd.TruncatedCount = dd.OriginalCount - len(dd.Items)
+	}
+
+	detailsBytes, err := json.Marshal(dd)
+	if err != nil {
+		return fmt.Errorf("pebble_activity_store: compact marshal: %w", err)
+	}
+	// Populate Details from the DigestDetails map so it survives the ActivityEntry round-trip.
+	var ddMap map[string]any
+	if mapErr := json.Unmarshal(detailsBytes, &ddMap); mapErr != nil {
+		return fmt.Errorf("pebble_activity_store: compact unmarshal dd map: %w", mapErr)
+	}
+	digestID := ulid.Make().String()
+	digest := ActivityEntry{
+		ID:        s.counter.Add(1),
+		Timestamp: startOfDay,
+		Tier:      "digest",
+		Type:      "daily_digest",
+		Level:     "info",
+		Source:    "compaction",
+		Summary:   fmt.Sprintf("Daily digest for %s (%d entries)", dateKey, dd.OriginalCount),
+		Details:   ddMap,
+	}
+	digestKey := pactPrimaryKey("digest", startOfDay, digestID)
+	digestBytes, err := json.Marshal(digest)
+	if err != nil {
+		return fmt.Errorf("pebble_activity_store: compact marshal digest: %w", err)
+	}
+
+	// Delete old digest if present. This is a plain Delete, not pactDeleteEntry:
+	// digest rows are written with neither an OperationID nor a BookID, so Record
+	// never indexed them and there is nothing for the helper to find.
+	if existingKey != nil {
+		if err := batch.Delete(existingKey, nil); err != nil {
+			return fmt.Errorf("pebble_activity_store: compact delete old digest: %w", err)
+		}
+	}
+	if err := batch.Set(digestKey, digestBytes, nil); err != nil {
+		return fmt.Errorf("pebble_activity_store: compact set digest: %w", err)
+	}
+	return nil
+}
+
+// OptimizeStatistics is a no-op for the Pebble backend: an LSM store has no
+// query planner and keeps no selectivity statistics, so there is nothing to
+// refresh. Reported as Supported=false rather than a bare zero result so a
+// caller can tell "this backend has none" from "the call did nothing".
+//
+// Pebble's own storage-level compaction is automatic and internal to the engine;
+// it is unrelated to this method and needs no scheduling.
+func (s *PebbleActivityStore) OptimizeStatistics(_ context.Context) (ActivityOptimizeResult, error) {
+	return ActivityOptimizeResult{Supported: false}, nil
 }
 
 // MigrateSystemActivityLogs is a no-op for PebbleActivityStore since it's not backed by SQLite.

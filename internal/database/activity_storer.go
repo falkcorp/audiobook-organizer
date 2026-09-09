@@ -1,7 +1,7 @@
 // file: internal/database/activity_storer.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package database
 
@@ -84,6 +84,23 @@ type ActivityRetention interface {
 	// does nothing and says nothing when it misses — the failure shape this
 	// repo keeps getting burned by — to buy back one three-line fake.
 	RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error)
+	// OptimizeStatistics refreshes whatever query-planner statistics the backend
+	// keeps, so the planner chooses indexes from measurements rather than from
+	// built-in guesses.
+	//
+	// It is on this interface for the same reason RepairActivityIndexes is: it is
+	// backend-specific maintenance that the nightly job must be able to call
+	// without knowing which backend is underneath, and this interface already
+	// carries that category (RecompactDigests, MigrateSystemActivityLogs). A
+	// backend with no such statistics returns a zero result and Supported=false —
+	// explicitly, not by being absent, so "this backend has nothing to do" is
+	// distinguishable from "nobody called it".
+	//
+	// WHY IT EXISTS. Production's activity SQLite database had NO sqlite_stat1
+	// table on 2026-09-09 — ANALYZE had never run in the database's life — so the
+	// planner was estimating blind across 13,256,825 rows. Every implementation
+	// must be idempotent and safe to run on a schedule.
+	OptimizeStatistics(ctx context.Context) (ActivityOptimizeResult, error)
 	MigrateSystemActivityLogs() (int, error)
 }
 

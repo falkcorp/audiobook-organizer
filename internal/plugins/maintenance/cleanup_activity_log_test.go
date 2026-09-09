@@ -1,14 +1,17 @@
 // file: internal/plugins/maintenance/cleanup_activity_log_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c8b1f37-92ad-4e60-b3d1-8a4f26c0e7b9
-// last-edited: 2026-08-29
+// last-edited: 2026-09-09
 
 package maintenance
 
 import (
 	"context"
+
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // activityCleanupDeps overrides fakeDeps' CompactActivityLog so the cleanup job
@@ -20,6 +23,10 @@ type activityCleanupDeps struct {
 
 func (d activityCleanupDeps) CompactActivityLog(_ context.Context, _, _, _ int) (int, int, int, int64, error) {
 	return 2, 3, 4, d.indexOrphans, nil
+}
+
+func (d activityCleanupDeps) OptimizeActivityStatistics(_ context.Context) (database.ActivityOptimizeResult, error) {
+	return database.ActivityOptimizeResult{Supported: true, TablesAnalyzed: 6}, nil
 }
 
 // TestCleanupActivityLog_ReportsIndexOrphanCount pins the reporting half of the

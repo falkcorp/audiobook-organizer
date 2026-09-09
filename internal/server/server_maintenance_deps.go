@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -311,6 +311,16 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 	}
 
 	return compactResult.DaysCompacted, sumCount, pruneCount, repair.Deleted, nil
+}
+
+// OptimizeActivityStatistics refreshes the activity store's query-planner
+// statistics. Backends that keep none report Supported=false rather than an
+// error, so "nothing to do here" stays distinguishable from "it failed".
+func (s *Server) OptimizeActivityStatistics(ctx context.Context) (database.ActivityOptimizeResult, error) {
+	if s.activityService == nil {
+		return database.ActivityOptimizeResult{}, nil
+	}
+	return s.activityService.Store().OptimizeStatistics(ctx)
 }
 
 // ---- feature flags ----

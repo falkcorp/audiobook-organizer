@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package database
 
@@ -639,6 +639,11 @@ func (s *NutsActivityStore) CompactByDay(ctx context.Context, olderThan time.Tim
 
 // MigrateSystemActivityLogs is a no-op for NutsActivityStore since it's not backed by SQLite.
 // It returns 0 entries migrated (they're already in the unified store).
+// OptimizeStatistics is a no-op: NutsDB is a KV store with no query planner.
+func (s *NutsActivityStore) OptimizeStatistics(_ context.Context) (ActivityOptimizeResult, error) {
+	return ActivityOptimizeResult{Supported: false}, nil
+}
+
 func (s *NutsActivityStore) MigrateSystemActivityLogs() (int, error) {
 	return 0, nil
 }

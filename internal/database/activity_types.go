@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // Package database — activity log types and helpers previously defined in
 // activity_store.go (the legacy SQLite backend). Extracted here in fable5
@@ -157,6 +157,27 @@ type ActivityIndexRepairResult struct {
 	Malformed int64 `json:"malformed"`
 	// Deleted is how many index entries were actually removed.
 	Deleted int64 `json:"deleted"`
+}
+
+// ActivityOptimizeResult holds the outcome of an OptimizeStatistics run.
+type ActivityOptimizeResult struct {
+	// Supported is false when the backend keeps no query-planner statistics, so
+	// there was nothing to refresh. It is reported explicitly rather than left
+	// implicit in a zero result, because "this backend has none" and "the call
+	// did nothing" are different facts and a caller that cannot tell them apart
+	// will report a silent no-op as success.
+	Supported bool `json:"supported"`
+	// Bootstrapped is true when the backend had NO stored statistics at all and
+	// this run created them from scratch — the expensive first pass, as opposed
+	// to the cheap incremental refresh that follows.
+	Bootstrapped bool `json:"bootstrapped"`
+	// TablesAnalyzed counts the statistics rows present after the run (for
+	// SQLite, rows in sqlite_stat1). Zero after a supported run means the
+	// analysis produced nothing, which is a problem worth seeing.
+	TablesAnalyzed int `json:"tables_analyzed"`
+	// Duration is how long the run took, so an operator can watch this grow with
+	// the table rather than discovering the cost when it blows a timeout.
+	Duration time.Duration `json:"duration"`
 }
 
 // RecompactResult holds the outcome of a RecompactDigests operation.

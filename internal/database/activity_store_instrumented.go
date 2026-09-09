@@ -1,7 +1,7 @@
 // file: internal/database/activity_store_instrumented.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-0002-bcde-000000000002
-// last-edited: 2026-08-29
+// last-edited: 2026-09-09
 
 package database
 
@@ -179,6 +179,25 @@ func (i *InstrumentedActivityStorer) CompactByDay(ctx context.Context, olderThan
 }
 
 // MigrateSystemActivityLogs traces the MigrateSystemActivityLogs operation.
+// OptimizeStatistics traces the OptimizeStatistics operation.
+func (i *InstrumentedActivityStorer) OptimizeStatistics(ctx context.Context) (ActivityOptimizeResult, error) {
+	ctx, span := tracer.Start(ctx, "activity_store.optimize_statistics")
+	defer span.End()
+
+	result, err := i.store.OptimizeStatistics(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.Bool("error", true))
+		return ActivityOptimizeResult{}, err
+	}
+	span.SetAttributes(
+		attribute.Bool("supported", result.Supported),
+		attribute.Bool("bootstrapped", result.Bootstrapped),
+		attribute.Int("tables_analyzed", result.TablesAnalyzed),
+	)
+	return result, nil
+}
+
 func (i *InstrumentedActivityStorer) MigrateSystemActivityLogs() (int, error) {
 	_, span := tracer.Start(context.Background(), "activity_store.migrate_system_activity_logs")
 	defer span.End()
