@@ -1,5 +1,5 @@
 // file: internal/operations/registry/resume.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
 // last-edited: 2026-09-09
 
@@ -273,7 +273,18 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 	// metadata.batch-apply-cached this is the COMMON path — every restart takes
 	// it — and the row can then sit queued for a long time behind its own
 	// ConcurrencyKey while displaying a count that predates the resume.
-	r.persistQueuedSummary(def, row.ID, json.RawMessage(row.Params))
+	//
+	// Copy the summary back onto the local row as well. The op.created event
+	// below is built from THIS struct, not from a re-read, so a row patched only
+	// in the store would announce itself to every connected client as holding no
+	// work and would not correct itself until the next poll.
+	if done, total, message, written := r.persistQueuedSummary(
+		def, row.ID, json.RawMessage(row.Params),
+	); written {
+		row.ProgressCurrent = done
+		row.ProgressTotal = total
+		row.ProgressMessage = message
+	}
 
 	r.logger.Info("registry: resumeAfterStartup: re-queued restart op",
 		"op_id", row.ID, "def_id", def.ID, "resume_count_new", row.ResumeCount+1)
@@ -363,6 +374,7 @@ func (r *Registry) resumeRequeue(ctx context.Context, row database.OperationV2Ro
 		Params:   row.Params,
 		QueuedAt: time.Now().UTC(),
 	}
+	stampQueuedSummary(def, &newRow)
 	if err := r.store.InsertOperationV2(newRow); err != nil {
 		r.logger.Warn("registry: resumeAfterStartup: failed to insert requeued op",
 			"old_op_id", row.ID, "new_op_id", newID, "error", err)

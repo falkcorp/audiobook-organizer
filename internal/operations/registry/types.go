@@ -1,5 +1,5 @@
 // file: internal/operations/registry/types.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-09
 
@@ -89,12 +89,15 @@ type OperationDef struct {
 	// Optional; a nil hook leaves the progress columns zero, which is what every
 	// def did before this existed.
 	//
-	// The registry calls it at the three — and only three — moments a queued
-	// row's work can change: the enqueue that creates it, a successful
-	// MergeQueuedParams that unions new work into it, and the resume that puts a
-	// restarted run back on the queue. That is why this is a hook and not a
-	// periodic refresh: the count is exact at every point it can differ, and a
-	// timer would only ever be a late approximation of the same three events.
+	// The registry calls it at every moment a queued row's work can change, and
+	// nowhere else: the three paths that CREATE a queued row (EnqueueOp, the
+	// ResumeRequeue that replaces an interrupted run with a fresh one, and the
+	// batch flush that turns a bucket of subjects into one op), a successful
+	// MergeQueuedParams that unions new work into an existing row, and the
+	// ResumeRestart that puts an interrupted run back on the queue with its
+	// params rewritten to the unfinished tail. That is why this is a hook and
+	// not a periodic refresh: the count is exact at every point it can differ,
+	// and a timer would only ever be a late approximation of the same events.
 	//
 	// It runs while the registry holds r.mu on the merge path, so it must be
 	// pure: decode params, count, return. No store calls, no locks, no I/O.

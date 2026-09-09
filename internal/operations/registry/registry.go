@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.19.0
+// version: 3.20.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-09-09
 
@@ -812,14 +812,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 		ReqSnapshotRev: reqSnapshotRev,
 	}
 
-	// Stamp the queued-work summary onto the row being inserted rather than
-	// updating it back afterwards: it costs no second write, and it means a row
-	// is never briefly visible claiming to hold nothing.
-	if done, total, message, ok := queuedSummary(def, rawParams); ok {
-		row.ProgressCurrent = done
-		row.ProgressTotal = total
-		row.ProgressMessage = message
-	}
+	stampQueuedSummary(def, &row)
 
 	if err := r.store.InsertOperationV2(row); err != nil {
 		return "", fmt.Errorf("registry: insert operation_v2: %w", err)
