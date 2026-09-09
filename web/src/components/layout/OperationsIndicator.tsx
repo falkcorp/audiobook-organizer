@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.6.0
+// version: 4.7.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-08
 
@@ -154,6 +154,9 @@ function SectionHeader({
 
 export function OperationsIndicator() {
   const groupedOperations = useOperationsStore((state) => state.groupedOperations);
+  // The ungrouped set. Every COUNT in this popover comes from here; only the
+  // rendered list comes from groupedOperations.
+  const rawOperations = useOperationsStore((state) => state.activeOperations);
   const alertOperations = useOperationsStore((state) => state.alertOperations);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
@@ -207,6 +210,15 @@ export function OperationsIndicator() {
   const queued = inProgress.filter((op) => op.status === 'queued');
   const running = inProgress.filter((op) => op.status !== 'queued');
   const terminal = rows.filter((op) => isTerminal(op.status));
+
+  // The section HEADINGS count operations, from the ungrouped set, for the same
+  // reason the badge does: a group row stands for many runs, so counting rows
+  // would put "Completed (1)" over a row whose own chip says "×12". Each count
+  // uses the same predicate as the list beneath it, applied to the raw set.
+  const rawInProgress = rawOperations.filter((op) => !isTerminal(op.status));
+  const queuedCount = rawInProgress.filter((op) => op.status === 'queued').length;
+  const runningCount = rawInProgress.length - queuedCount;
+  const terminalCount = rawOperations.length - rawInProgress.length;
 
   const empty = running.length === 0 && queued.length === 0 && terminal.length === 0;
 
@@ -283,7 +295,7 @@ export function OperationsIndicator() {
             <>
               <SectionHeader
                 label="Running"
-                count={running.length}
+                count={runningCount}
                 open={collapse.running}
                 onToggle={() => toggleSection('running')}
               />
@@ -468,7 +480,7 @@ export function OperationsIndicator() {
             <>
               <SectionHeader
                 label="Pending"
-                count={queued.length}
+                count={queuedCount}
                 open={collapse.pending}
                 onToggle={() => toggleSection('pending')}
               />
@@ -540,7 +552,7 @@ export function OperationsIndicator() {
             <>
               <SectionHeader
                 label="Completed"
-                count={terminal.length}
+                count={terminalCount}
                 open={collapse.completed}
                 onToggle={() => toggleSection('completed')}
               />

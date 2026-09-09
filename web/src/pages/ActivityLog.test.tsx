@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-08
 
@@ -402,24 +402,27 @@ describe('Active Operations grouping', () => {
     expect(await screen.findByText('AI Filename Parsing')).toBeInTheDocument();
     expect(screen.getAllByText('AI Filename Parsing')).toHaveLength(1);
     expect(screen.getByText('12 runs')).toBeInTheDocument();
-    // The section heading still counts the group row it shows.
-    expect(screen.getByText('Failed (1)')).toBeInTheDocument();
+    // TWELVE, from one row. The heading is a census of operations, not of
+    // rows — folding twelve failures into one row and then reporting "Failed
+    // (1)" would re-hide eleven of them, which is the exact defect the whole
+    // change exists to fix.
+    expect(screen.getByText('Failed (12)')).toBeInTheDocument();
   });
 
-  it('expanding the group reveals every member', async () => {
+  it('expanding the group reveals every member without changing the count', async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('12 runs');
 
     await user.click(screen.getByRole('button', { name: 'Expand All' }));
 
-    // Parent + 12 children = 13 rows in the section, which is more than one
-    // page — so the section pages at 7 and says so. The count in the heading is
-    // the total, not the page.
+    // Parent + 12 children = 13 ROWS, more than one page, so the section pages
+    // at 7 and says so. The heading does not move: a number that changed when
+    // you clicked a disclosure triangle would be a count of nothing.
     await waitFor(() => {
-      expect(screen.getByText('Failed (13)')).toBeInTheDocument();
+      expect(screen.getByText('1–7 of 13')).toBeInTheDocument();
     });
-    expect(screen.getByText('1–7 of 13')).toBeInTheDocument();
+    expect(screen.getByText('Failed (12)')).toBeInTheDocument();
   });
 
   // Grouping must not silently absorb a run that ended differently. The group
@@ -438,8 +441,8 @@ describe('Active Operations grouping', () => {
 
     // One group per status, each in its own section.
     await waitFor(() => expect(screen.getAllByText('6 runs')).toHaveLength(2));
-    expect(screen.getByText('Failed (1)')).toBeInTheDocument();
-    expect(screen.getByText('Completed (1)')).toBeInTheDocument();
+    expect(screen.getByText('Failed (6)')).toBeInTheDocument();
+    expect(screen.getByText('Completed (6)')).toBeInTheDocument();
   });
 
   // A group row's id is derived from its members and names no server record, so

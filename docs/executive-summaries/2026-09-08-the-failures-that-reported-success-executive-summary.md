@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-08-the-failures-that-reported-success-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7e2b48d1-05fc-4a93-b6e0-3c81df97a624 -->
 <!-- last-edited: 2026-09-08 -->
 
 # The failures that reported success
 
-**Pull request:** [#3146](https://github.com/falkcorp/audiobook-organizer/pull/3146)
+**Pull request:** [#3147](https://github.com/falkcorp/audiobook-organizer/pull/3147)
 
 ## Executive Summary
 
@@ -137,3 +137,10 @@ leaves nothing behind to clean up. Second, a group only ever contains runs that 
 the same way, so a failure can never be absorbed into a group of successes and hidden
 behind a green badge — which is the whole point of doing this after the first four
 fixes rather than before them.
+
+There is a third choice worth naming, because getting it wrong would have undone the
+first fix. Every section on the page carries a count in its heading — "Failed (12)".
+That count is now taken from the operations themselves rather than from the rows on
+screen, so folding twelve failures into one row still reports twelve, and the number
+does not change when you open the group. A count that moved when you clicked a
+disclosure triangle would have been a new way of hiding the same eleven failures.
