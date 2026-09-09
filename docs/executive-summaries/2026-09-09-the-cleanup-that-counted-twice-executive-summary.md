@@ -5,7 +5,7 @@
 
 # The cleanup that counted twice
 
-**Pull request:** _pending_
+**Pull request:** [#3167](https://github.com/falkcorp/audiobook-organizer/pull/3167)
 
 ## Executive Summary
 
