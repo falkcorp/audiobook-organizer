@@ -113,6 +113,8 @@ func TestHandleBootstrap_IssuesExpiringKey(t *testing.T) {
 	// -- which on the production host is the live token. Setting DatabasePath
 	// above used to be what sandboxed this, back when dataDir was derived from
 	// it; it no longer is.
+	config.ResetStateDirForTest()
+	t.Cleanup(config.ResetStateDirForTest)
 	t.Setenv(config.SecureStateDirEnv, t.TempDir())
 
 	settings := newFakeSettingsStore()
