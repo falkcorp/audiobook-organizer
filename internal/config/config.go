@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.107.0
+// version: 1.108.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-09
 
@@ -620,6 +620,25 @@ type AIBackendConfig struct {
 	// ResolveAIParseBatch clamps to AIParseBatchTimeoutCeiling for that reason.
 	ParseBatchSize           int `json:"parse_batch_size"            mapstructure:"parse_batch_size"`
 	ParseBatchTimeoutSeconds int `json:"parse_batch_timeout_seconds" mapstructure:"parse_batch_timeout_seconds"`
+
+	// ParseBatchWorkers is how many parse batches may be in flight at once.
+	//
+	// It belongs with the pair above and not with the other concurrency knobs,
+	// because against a SERIAL backend it is not a throughput setting at all --
+	// it is a way to lose batches. Ollama defaults to OLLAMA_NUM_PARALLEL=1 and
+	// serves one request at a time, so N concurrent batches put N-1 of them in
+	// the server's queue where they spend their own ParseBatchTimeoutSeconds
+	// waiting rather than working. Total throughput is unchanged (the backend is
+	// the bottleneck either way); the only difference is how many batches fail.
+	//
+	// Measured 2026-09-09 on prod: 20 books at size 4 = 5 batches, with the
+	// then-fixed 4 workers against a CPU-only Ollama. Batches 1, 3 and 5 parsed
+	// 12 books; batches 2 and 4 timed out having done nothing but queue. Setting
+	// this to 1 for that backend makes the deadline mean "the model is too slow"
+	// again instead of "something else was ahead of me in line".
+	//
+	// 0 means DefaultAIParseBatchWorkers, which is what this was as a constant.
+	ParseBatchWorkers int `json:"parse_batch_workers" mapstructure:"parse_batch_workers"`
 }
 
 // AI filename-parsing batch defaults and bounds. Exported because the scanner
@@ -643,18 +662,41 @@ const (
 	// the point where a small local model's context starts truncating the JSON
 	// array and the whole batch is lost rather than one entry.
 	AIParseBatchSizeCeiling = 100
+
+	// DefaultAIParseBatchWorkers is the historical `const aiBatchWorkers = 4`.
+	DefaultAIParseBatchWorkers = 4
+
+	// AIParseBatchWorkersCeiling caps in-flight batches. Higher than this stops
+	// being concurrency and starts being a self-inflicted queue on any backend
+	// that does not fan out, and the per-worker pacing delay stops bounding the
+	// aggregate request rate in any useful way.
+	AIParseBatchWorkersCeiling = 16
 )
 
-// ResolveAIParseBatch returns the effective (batch size, per-batch timeout) for
-// the AI filename-parsing phase, applying defaults and bounds.
+// AIParseBatchSettings is how the filename-parsing phase is allowed to talk to
+// the LLM backend: how much work per call, how long a call may take, and how
+// many calls at once.
 //
-// Deliberately one function returning both, rather than a getter per field: the
-// two are only meaningful together, and the clamping below is what stops a
-// caller from configuring a pair that cannot succeed (a huge batch against a
-// short deadline) or that trips the watchdog (a long deadline against the 5m
-// ProgressTimeout). A future caller that reads only one of them has almost
-// certainly made a mistake.
-func (c *Config) ResolveAIParseBatch() (int, time.Duration) {
+// One struct rather than three getters because all three are coupled through
+// the backend's own concurrency. Size sets how long a call takes; workers sets
+// how long a call WAITS before it starts on a serial backend; and the timeout
+// has to cover whichever of those the deployment actually produces. A caller
+// reading one without the others has almost certainly made a mistake -- that
+// exact mistake cost 8 of 20 books on prod on 2026-09-09.
+type AIParseBatchSettings struct {
+	Size    int
+	Timeout time.Duration
+	Workers int
+}
+
+// ResolveAIParseBatch returns the effective batch settings for the AI
+// filename-parsing phase, applying defaults and bounds.
+//
+// The clamping is what stops a caller configuring a combination that cannot
+// succeed: a huge batch against a short deadline, a deadline long enough to
+// trip the 5m watchdog, or (added 2026-09-09) more in-flight batches than the
+// backend can actually serve at once.
+func (c *Config) ResolveAIParseBatch() AIParseBatchSettings {
 	size := c.AIBackend.ParseBatchSize
 	if size <= 0 {
 		size = DefaultAIParseBatchSize
@@ -671,7 +713,15 @@ func (c *Config) ResolveAIParseBatch() (int, time.Duration) {
 		timeout = AIParseBatchTimeoutCeiling
 	}
 
-	return size, timeout
+	workers := c.AIBackend.ParseBatchWorkers
+	if workers <= 0 {
+		workers = DefaultAIParseBatchWorkers
+	}
+	if workers > AIParseBatchWorkersCeiling {
+		workers = AIParseBatchWorkersCeiling
+	}
+
+	return AIParseBatchSettings{Size: size, Timeout: timeout, Workers: workers}
 }
 
 // EffectiveEmbeddingMode resolves the embedding backend mode. When
@@ -2165,6 +2215,7 @@ func InitConfig() {
 	// on a different path than an operator omitting the key entirely.
 	viper.SetDefault("ai_backend.parse_batch_size", 0)
 	viper.SetDefault("ai_backend.parse_batch_timeout_seconds", 0)
+	viper.SetDefault("ai_backend.parse_batch_workers", 0)
 	viper.BindEnv("ai_backend.embedding_mode", "AI_BACKEND_EMBEDDING_MODE")               //nolint:errcheck
 	viper.BindEnv("ai_backend.llm_mode", "AI_BACKEND_LLM_MODE")                           //nolint:errcheck
 	viper.BindEnv("ai_backend.local_base_url", "AI_BACKEND_LOCAL_BASE_URL")               //nolint:errcheck
@@ -2173,6 +2224,7 @@ func InitConfig() {
 	viper.BindEnv("ai_backend.parse_batch_size", "AI_BACKEND_PARSE_BATCH_SIZE")           //nolint:errcheck
 	viper.BindEnv("ai_backend.parse_batch_timeout_seconds",                               //nolint:errcheck
 		"AI_BACKEND_PARSE_BATCH_TIMEOUT_SECONDS")
+	viper.BindEnv("ai_backend.parse_batch_workers", "AI_BACKEND_PARSE_BATCH_WORKERS") //nolint:errcheck
 
 	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")                               //nolint:errcheck
 	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")                           //nolint:errcheck
@@ -2549,6 +2601,7 @@ func InitConfig() {
 				LocalLLMModel:            viper.GetString("ai_backend.local_llm_model"),
 				ParseBatchSize:           viper.GetInt("ai_backend.parse_batch_size"),
 				ParseBatchTimeoutSeconds: viper.GetInt("ai_backend.parse_batch_timeout_seconds"),
+				ParseBatchWorkers:        viper.GetInt("ai_backend.parse_batch_workers"),
 			},
 
 			// Scheduled background tasks (nested sub-struct)

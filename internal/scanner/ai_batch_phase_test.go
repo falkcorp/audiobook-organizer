@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: db86f424-3881-4c7b-8ca5-4e00086f62cf
-// last-edited: 2026-08-24
+// last-edited: 2026-09-09
 
 package scanner
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -72,9 +73,9 @@ func TestRunAIBatchPhase_RunsBatchesConcurrently(t *testing.T) {
 		t.Fatalf("max concurrent batches was %d: the phase is still serial, which is "+
 			"the whole cost this change exists to remove", f.maxSeen)
 	}
-	if f.maxSeen > aiBatchWorkers {
+	if f.maxSeen > config.DefaultAIParseBatchWorkers {
 		t.Errorf("max concurrent batches %d exceeds the bound of %d: unbounded fan-out "+
-			"at a single model host", f.maxSeen, aiBatchWorkers)
+			"at a single model host", f.maxSeen, config.DefaultAIParseBatchWorkers)
 	}
 	if got := f.calls.Load(); got != 8 {
 		t.Errorf("expected all 8 batches attempted, got %d", got)
@@ -88,7 +89,7 @@ func TestRunAIBatchPhase_PermanentFailureAbortsRemainingBatches(t *testing.T) {
 	// Fails ONLY on the very first invocation, every subsequent call succeeds.
 	// This is the assertion that actually distinguishes "abort on the first
 	// permanent failure" from "abort after maxTotalFailures": with
-	// aiBatchWorkers(4) > maxTotalFailures(3), a backend that fails on EVERY
+	// config.DefaultAIParseBatchWorkers(4) > maxTotalFailures(3), a backend that fails on EVERY
 	// call trips the count-based threshold within the same first concurrent
 	// wave immediate-abort would also stop at, so the two are indistinguishable
 	// by call count alone (verified: that was this test's original, useless

@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_configurable_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f3c1a94-2d58-4b07-9e61-8c05d7f2ab13
 // last-edited: 2026-09-09
 
@@ -55,20 +55,27 @@ func (p *ctxAwareParser) sizes() []int {
 	return append([]int(nil), p.batchSizes...)
 }
 
-// withAIParseBatchConfig sets the two knobs for one test and restores whatever
-// was there. Restoring matters: config.AppConfig is process-global, and a test
-// that leaks a 1-second timeout into the rest of the package would turn every
-// later AI test into a flake that only reproduces in full-package runs.
-func withAIParseBatchConfig(t *testing.T, size, timeoutSeconds int) {
+// withAIParseBatchConfig sets the batch knobs for one test and restores ALL of
+// them. Restoring matters: config.AppConfig is process-global, and a leak here
+// turns every later AI test into a failure that only reproduces in full-package
+// runs.
+//
+// It restores all three even though most callers set only two, and that is the
+// point: an earlier version saved Size and Timeout but not Workers, a subtest
+// set Workers=1 directly, and the leak serialized the whole package -- taking
+// the scanner suite from ~40s to 600s and failing
+// TestRunAIBatchPhase_RunsBatchesConcurrently, a test with nothing to do with
+// this change. Save the whole struct, not the fields you happen to be setting.
+func withAIParseBatchConfig(t *testing.T, size, timeoutSeconds int, workers ...int) {
 	t.Helper()
-	prevSize := config.AppConfig.AIBackend.ParseBatchSize
-	prevTimeout := config.AppConfig.AIBackend.ParseBatchTimeoutSeconds
-	t.Cleanup(func() {
-		config.AppConfig.AIBackend.ParseBatchSize = prevSize
-		config.AppConfig.AIBackend.ParseBatchTimeoutSeconds = prevTimeout
-	})
+	prev := config.AppConfig.AIBackend
+	t.Cleanup(func() { config.AppConfig.AIBackend = prev })
+
 	config.AppConfig.AIBackend.ParseBatchSize = size
 	config.AppConfig.AIBackend.ParseBatchTimeoutSeconds = timeoutSeconds
+	if len(workers) > 0 {
+		config.AppConfig.AIBackend.ParseBatchWorkers = workers[0]
+	}
 }
 
 // The bug this whole change exists for: on a CPU-only backend a batch takes
@@ -137,6 +144,109 @@ func TestRunAIBatchPhase_BatchSizeComesFromConfig(t *testing.T) {
 			t.Fatalf("batch of %d in %v, want every batch to be the configured 3", n, sizes)
 		}
 	}
+}
+
+// serialBackendParser models a backend that serves ONE request at a time --
+// Ollama's default (OLLAMA_NUM_PARALLEL=1). Extra client workers do not overlap
+// work against it; they queue, and a queued batch spends its own deadline
+// waiting. This is what cost 8 of 20 books on prod on 2026-09-09.
+type serialBackendParser struct {
+	work time.Duration
+
+	sem      chan struct{} // capacity 1: the backend's own serialization
+	mu       sync.Mutex
+	maxSeen  int
+	inFlight int
+}
+
+func newSerialBackendParser(work time.Duration) *serialBackendParser {
+	return &serialBackendParser{work: work, sem: make(chan struct{}, 1)}
+}
+
+func (p *serialBackendParser) ParseBatch(ctx context.Context, filenames []string) ([]*ai.ParsedMetadata, error) {
+	// Observe how many callers are queued at the backend, NOT how many it
+	// serves: the whole point is that the client sent more than one.
+	p.mu.Lock()
+	p.inFlight++
+	if p.inFlight > p.maxSeen {
+		p.maxSeen = p.inFlight
+	}
+	p.mu.Unlock()
+	defer func() { p.mu.Lock(); p.inFlight--; p.mu.Unlock() }()
+
+	select {
+	case p.sem <- struct{}{}:
+		defer func() { <-p.sem }()
+	case <-ctx.Done():
+		return nil, ctx.Err() // died waiting in line, having done no work
+	}
+
+	select {
+	case <-time.After(p.work):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	out := make([]*ai.ParsedMetadata, len(filenames))
+	for i := range out {
+		out[i] = &ai.ParsedMetadata{Title: "parsed"}
+	}
+	return out, nil
+}
+
+func (p *serialBackendParser) concurrentCallers() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxSeen
+}
+
+// Workers=1 against a serial backend must not lose batches to queueing.
+//
+// The pair is the assertion, as with the timeout: the default worker count
+// against the SAME backend and the SAME deadline loses batches, and setting
+// workers to 1 recovers them. Testing only the good case would pass on code
+// that ignored the setting entirely.
+func TestRunAIBatchPhase_WorkersComeFromConfig(t *testing.T) {
+	// Work per batch is comfortably inside the deadline on its own; only
+	// queueing behind other workers can push a batch past it.
+	const work = 700 * time.Millisecond
+
+	t.Run("default workers queue at a serial backend and lose batches", func(t *testing.T) {
+		withAIParseBatchConfig(t, 1, 1) // 4 batches of 1, 1s deadline each
+		books, cands := makeCandidates(4)
+		p := newSerialBackendParser(work)
+
+		s := runAIBatchPhase(context.Background(), p, books, cands, logger.New("test"), saveBookAndReportPath)
+
+		if p.concurrentCallers() < 2 {
+			t.Fatalf("only %d concurrent callers: the fixture never reproduced the queue, "+
+				"so this test proves nothing about it", p.concurrentCallers())
+		}
+		if s.BatchesFailed == 0 {
+			t.Fatalf("BatchesFailed = 0 with %d workers against a one-at-a-time backend: "+
+				"expected the queued batches to burn their deadline", config.DefaultAIParseBatchWorkers)
+		}
+	})
+
+	t.Run("workers=1 parses every batch against the same backend", func(t *testing.T) {
+		withAIParseBatchConfig(t, 1, 1, 1)
+		books, cands := makeCandidates(4)
+		p := newSerialBackendParser(work)
+
+		s := runAIBatchPhase(context.Background(), p, books, cands, logger.New("test"), saveBookAndReportPath)
+
+		if p.concurrentCallers() != 1 {
+			t.Fatalf("concurrent callers = %d, want 1: the configured worker limit is not reaching SetLimit",
+				p.concurrentCallers())
+		}
+		if s.BatchesFailed != 0 {
+			t.Fatalf("BatchesFailed = %d, want 0: with one worker no batch waits, so every batch "+
+				"gets its full deadline for actual work", s.BatchesFailed)
+		}
+		if s.BooksParsed != 4 {
+			t.Fatalf("BooksParsed = %d, want 4", s.BooksParsed)
+		}
+	})
 }
 
 // Unset means "what this code did before the knob existed". An install pointed
