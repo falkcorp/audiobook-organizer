@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.48.2 -->
+<!-- version: 10.49.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -238,19 +238,42 @@ operation history on production. Only canceled-op audit history was lost — no
 running or queued ops, no book or file data — but the sizing was wrong by 70x
 and nothing in the API surfaced that.
 
-- [ ] **Honor `status` (and every other documented query filter) on
+- [x] **Honor `status` (and every other documented query filter) on
   `/operations/timeline`, or reject unsupported filters with a 400.** A filter
   that is ignored rather than rejected fails silently in the same direction as
   the caller's assumption. Rejecting is acceptable; silently ignoring is not.
-- [ ] **Audit the other query params on this endpoint** (`limit`, and any
+  **Done 2026-09-09 — honored, not rejected.** `status` now filters, ANDed with
+  `def_id`, and `matched` counts it over the whole window before the limit, so
+  the number a delete is sized against is the number that would be deleted.
+  Deliberately NOT validated against a status whitelist: the store bounds its
+  window on `CompletedAt` rather than a status set for a documented reason (a
+  status list rots silently as terminal states are added), and a whitelist here
+  would import that. An unknown value answers `matched: 0` plus a
+  `statuses_present` list of what the window did contain, so a typo is
+  self-diagnosing. Four mutants run, four killed — including "filters the page
+  but not `matched`", which is the incident shape exactly.
+- [x] **Audit the other query params on this endpoint** (`limit`, and any
   def_id/plugin/date filters) for the same "accepted then dropped" behavior —
   `limit=80` returning a small truncated set suggests limit is not doing what a
-  caller would expect either.
-- [ ] **Make the truncation explicit.** If the endpoint is deliberately a recent
+  caller would expect either. **Done 2026-09-09 — `limit` is fine.** Measured on
+  prod: `?since=1440m&limit=1` → 795 bytes vs `limit=50` → 32,989. It scales. The
+  small set at `limit=80` was the *window*, not the limit. `def_id` was fixed
+  2026-08-24 and is covered by
+  `TestGetOperationTimeline_DefIDFiltersTheWholeWindowNotJustTheFirstPage`. The
+  same client-first sweep across all 7 endpoints a caller sends `limit` to found
+  no other instance in the codebase.
+- [x] **Make the truncation explicit.** If the endpoint is deliberately a recent
   view, say so in the response (a `truncated: true` / `total` field) so it cannot
-  be mistaken for a complete listing. There is no `GET /operations/v2` list
-  endpoint (only `/operations/v2/:id`), so timeline is the obvious listing and
-  callers will keep reaching for it.
+  be mistaken for a complete listing. **Already done, before this entry was
+  filed.** The response carries `matched` (pre-limit), `truncated`
+  (`matched > len(returned)`, a fact rather than a `len==limit` guess),
+  `scan_capped` (`len(rows) >= 5000`), `window_start` and
+  `in_flight_before_window` — and both booleans are always present rather than
+  omitted-when-false, deliberately. Pinned by
+  `..._LimitBoundsRowsAndTruncatedIsAFactNotAGuess` and
+  `..._ExactlyLimitRowsIsNotTruncated`. Read `scan_capped` before treating any
+  count here as a census; with a status filter it is what separates a census
+  from a floor.
 - [ ] **Add a dry-run / count mode to `DELETE /operations/history`**, and consider
   a delete-by-id endpoint. Today it deletes **by status only**
   (`DeleteOperationsByStatus`,
@@ -262,6 +285,11 @@ and nothing in the API surfaced that.
 **Regression test to add:** assert that a filtered request returns a *different*
 result set than the unfiltered one for a fixture with mixed statuses. A filter is
 unproven until the response actually changes when the filter changes.
+✅ **Added 2026-09-09** as `TestGetOperationTimeline_StatusFilterChangesTheAnswer`,
+written exactly that way — it runs both requests over one mixed fixture and
+asserts the two `matched` values differ. This was the assertion whose absence let
+the bug ship: every existing test passed because none of them compared the
+filtered answer to the unfiltered one.
 
 ## Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)
 
@@ -409,12 +437,17 @@ fine; the row simply predated it by 67 days and nothing ever buried it.
 
 **Related instrument bug found in the same session — fix or document:**
 
-- [ ] **`GET /api/v1/operations/timeline` silently IGNORES its `status=` filter.**
+- [x] **`GET /api/v1/operations/timeline` silently IGNORES its `status=` filter.**
   It returned the identical 3 rows with and without `?status=canceled`, and is a
   truncated recent-activity view, not a census. There is no `GET /operations/v2`
   list endpoint (only `/operations/v2/:id`), so timeline is the obvious listing
   and it misleads. Either honor the filter or reject unsupported filters — a
   filter that is ignored rather than rejected returns a plausible wrong answer.
+  **Done 2026-09-09 — honored.** This is a duplicate of the dedicated section
+  "`GET /operations/timeline` silently ignores its query filters (2026-09-07)"
+  above; see there for the full record. Note the second half of this entry stands
+  unchanged: the endpoint is still bounded, and `scan_capped` is what says so —
+  honoring the filter makes `matched` a census only while that is false.
 - [ ] **There is no delete-one-op endpoint.** `DELETE /operations/history` deletes
   **by status only** (`DeleteOperationsByStatus`,
   `internal/server/handlers/operations/handler.go:215`); `DELETE
