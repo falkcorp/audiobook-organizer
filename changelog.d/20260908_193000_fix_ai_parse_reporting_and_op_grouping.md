@@ -43,3 +43,10 @@
   for; expanding it shows every member. Nothing is stored — the grouping is
   derived each time the list is read, so it cannot go stale, cannot be split
   across a page boundary, and leaves no rows behind to clean up.
+
+  Section headings and the bell's section counts are now taken from the
+  UNGROUPED set. A heading is a census of operations, and a group row is not an
+  operation — counting rendered rows would print `Failed (1)` over the twelve
+  failed runs that prompted this change, and flip to `Failed (13)` on expand.
+  Each section is one predicate applied twice, to the rows it renders and to the
+  raw ops it counts, so the two cannot drift.

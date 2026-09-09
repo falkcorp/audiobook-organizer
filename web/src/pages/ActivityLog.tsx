@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.27.0
+// version: 2.28.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-08
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -238,6 +238,10 @@ export default function ActivityLog() {
   // the ungrouped subset still running, and is what anything labelled "active"
   // or gated on real work must read.
   const opRows = useOperationsStore((state) => state.groupedOperations);
+  // rawOps is the same window UNGROUPED — one entry per real operation, no
+  // synthetic rows. Every COUNT on this page comes from here (see sectionDefs);
+  // opRows is only ever for rendering.
+  const rawOps = useOperationsStore((state) => state.activeOperations);
   const liveOps = useOperationsStore((state) => state.liveOperations);
   const loadActiveOpsFromServer = useOperationsStore((state) => state.loadFromServer);
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
@@ -1289,45 +1293,72 @@ export default function ActivityLog() {
                   return emit(roots);
                 };
 
-                const withStatus = (...want: string[]) =>
-                  withChildren(
-                    visibleOps.filter((o) => want.includes(o.status)),
-                    newestFirst
-                  );
-
-                const sections: { key: string; title: string; ops: typeof opRows }[] = [
+                // A section heading is a CENSUS of operations, and a group row
+                // is not an operation — it stands for several. Counting the
+                // RENDERED rows would make the Failed heading read "Failed (1)"
+                // for the twelve failed runs this page exists to surface, and
+                // flip to "Failed (13)" the moment the group was expanded. A
+                // number that changes when you click a disclosure triangle is
+                // not a count of anything, and this page's whole problem is
+                // rows that under-report what happened.
+                //
+                // So a section is ONE predicate applied twice: to the grouped
+                // rows to decide what to render, and to the raw ungrouped set
+                // to decide what the heading says. The two cannot drift,
+                // because there is only one predicate.
+                const sectionDefs: {
+                  key: string;
+                  title: string;
+                  match: (op: (typeof opRows)[0]) => boolean;
+                  // Omitted on the live sections: running work keeps its
+                  // natural order so rows do not jump around underneath a
+                  // progress bar. withChildren still runs there, to keep a
+                  // group's members under their parent.
+                  compare?: (a: (typeof opRows)[0], b: (typeof opRows)[0]) => number;
+                }[] = [
                   {
                     key: 'active',
                     title: 'Active',
-                    // No comparator: live work keeps its natural order so rows
-                    // do not jump around underneath a running progress bar.
-                    // withChildren still runs, to keep a group's members under
-                    // their parent.
-                    ops: withChildren(
-                      visibleOps.filter((o) => o.status !== 'queued' && !isTerminal(o.status))
-                    ),
+                    match: (o) => o.status !== 'queued' && !isTerminal(o.status),
+                  },
+                  { key: 'pending', title: 'Pending', match: (o) => o.status === 'queued' },
+                  {
+                    key: 'completed',
+                    title: 'Completed',
+                    match: (o) => o.status === 'completed',
+                    compare: newestFirst,
                   },
                   {
-                    key: 'pending',
-                    title: 'Pending',
-                    ops: withChildren(visibleOps.filter((o) => o.status === 'queued')),
+                    key: 'failed',
+                    title: 'Failed',
+                    match: (o) => o.status === 'failed',
+                    compare: newestFirst,
                   },
-                  { key: 'completed', title: 'Completed', ops: withStatus('completed') },
-                  { key: 'failed', title: 'Failed', ops: withStatus('failed') },
-                  { key: 'canceled', title: 'Canceled', ops: withStatus('canceled') },
+                  {
+                    key: 'canceled',
+                    title: 'Canceled',
+                    match: (o) => o.status === 'canceled',
+                    compare: newestFirst,
+                  },
                   {
                     key: 'interrupted',
                     title: 'Interrupted',
                     // The whole interrupted_* family, by prefix, so a policy
                     // added on the backend lands here instead of in Active.
-                    ops: withChildren(
-                      visibleOps.filter(
-                        (o) => o.status === 'interrupted' || o.status.startsWith('interrupted_')
-                      ),
-                      newestFirst
-                    ),
+                    match: (o) => o.status === 'interrupted' || o.status.startsWith('interrupted_'),
+                    compare: newestFirst,
                   },
                 ];
+
+                const sections = sectionDefs.map((def) => ({
+                  key: def.key,
+                  title: def.title,
+                  ops: withChildren(visibleOps.filter(def.match), def.compare),
+                  // rawOps, not visibleOps and not opRows: collapsing a group
+                  // must not change the number, and a synthetic parent must
+                  // never be counted as one more run than really happened.
+                  count: rawOps.filter(def.match).length,
+                }));
 
                 const renderOp = (op: (typeof opRows)[0]) => {
                   // 2-decimal precision so a 49915-book scan shows 1.10 → 1.11
@@ -1723,9 +1754,11 @@ export default function ActivityLog() {
                             variant="overline"
                             sx={{ color: 'text.secondary', fontWeight: 600 }}
                           >
-                            {/* The TOTAL, not the page size — the heading has to
-                                keep answering "how many completed today?" */}
-                            {section.title} ({section.ops.length})
+                            {/* section.count, not section.ops.length: the
+                                heading answers "how many completed today?",
+                                which is a number of OPERATIONS. Rows are
+                                paginated and grouped; operations are not. */}
+                            {section.title} ({section.count})
                           </Typography>
                         </Stack>
                         <Collapse in={!sectionCollapsed} unmountOnExit>
