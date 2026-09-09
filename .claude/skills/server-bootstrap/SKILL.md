@@ -3,7 +3,7 @@ name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -24,11 +24,10 @@ The skill will:
 2. **Wait 90 seconds before reading the token file.** The previous file may remain visible while the service initializes; reading immediately after `systemctl restart` can return that stale token and cause a `401 invalid bootstrap token` response.
 3. Read the bootstrap token from the **`.bootstrap-token` file** (the raw token is no longer logged to journalctl — pen-test finding CRIT-1):
    ```bash
-   # DERIVE the path, never hardcode it. The token is written to
-   # <data-dir>/.bootstrap-token where <data-dir> is the directory holding the
-   # PebbleDB -- so it MOVES whenever the database moves, and the startup log
-   # states the path it actually used. Parsing that line is the only reading
-   # that cannot go stale.
+   # STILL DERIVE the path from the log line rather than hardcoding it. The
+   # directory is now a constant (see below), but the log line is the only
+   # reading that stays correct if that ever changes again, and it is also how
+   # you confirm the token you are about to read is the one THIS restart wrote.
    #
    # The file is mode 0600 owned by the service user, so sudo is required, and
    # production sudo requires a pseudo-terminal. Keep the delay between restart
@@ -43,28 +42,32 @@ The skill will:
    '
    ```
 
-   > **⚠️ On the prod host this needs a sudoers change first (2026-09-09).**
-   > The database moved to `/mnt/bigdata/books/audiobook-organizer/.appdata/`, so
-   > the token is now at `.appdata/.bootstrap-token`. The NOPASSWD rule still
-   > names only the old path, and `.appdata` is mode 0700, so the operator
-   > cannot read the new token at all:
-   > ```
-   > $ cat /mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token
-   > Permission denied
-   > ```
-   > Add a rule for the new path (or, better, one that does not need editing
-   > again the next time the database moves):
-   > ```
-   > jdfalk ALL=(root) NOPASSWD: /usr/bin/cat /mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token
-   > ```
+   > **The token directory is fixed as of 2026-09-09.** It is
+   > `/var/lib/audiobook-organizer/`, a constant — no longer
+   > `filepath.Dir(database_path)`. The existing NOPASSWD sudoers rule names that
+   > path and keeps working, and it will not need editing the next time the
+   > database moves between pools.
    >
-   > **The old path is worse than broken — it still answers.** A token file from
-   > before the move remains at `/var/lib/audiobook-organizer/.bootstrap-token`,
-   > and `sudo cat` on it SUCCEEDS and returns a well-formed `abbs_…` string that
-   > expired ten minutes after it was written. Following the pre-2026-09-09
-   > version of this runbook gets you a plausible token and a `401 invalid
-   > bootstrap token` with nothing pointing at why. Delete that file (needs root)
-   > so the old path fails loudly instead of lying.
+   > Between the database relocation and this fix, the token was briefly written
+   > to `/mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token`, a
+   > mode-0700 directory no sudoers rule named. If you are reading a host that
+   > has not been redeployed since, that is where its token is.
+   >
+   > **⚠️ A LEFTOVER TOKEN STILL ANSWERS AT EITHER PATH.** Token files are not
+   > cleaned up on restart, only overwritten in the directory currently in use.
+   > So a file from before or after the move can sit there indefinitely, and
+   > `sudo cat` on it SUCCEEDS and returns a well-formed `abbs_…` string — one
+   > that expired ten minutes after it was written. Reading the wrong one gets
+   > you a plausible token and a `401 invalid bootstrap token` with nothing
+   > pointing at why.
+   >
+   > This is exactly what the `token_file=` derivation above protects you from:
+   > it names the file *this* restart wrote. Do not shortcut it with a
+   > remembered path. Known stale files that should be deleted (needs root):
+   > ```
+   > /var/lib/audiobook-organizer/.bootstrap-token                       # pre-move, expired
+   > /mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token    # interim, expired
+   > ```
 4. POST to `/api/v1/auth/bootstrap` to exchange token for API key
 5. Write key + expiry to `.claude/.api-token` (shared, .gitignored)
 6. Schedule cleanup after 8 hours (non-blocking background process)

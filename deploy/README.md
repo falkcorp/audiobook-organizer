@@ -1,5 +1,5 @@
 <!-- file: deploy/README.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 67014893-53d8-4968-8ba4-2208288e61f2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -93,10 +93,33 @@ separately:
 
 | Also lives in `dirname($DATABASE_PATH)` | Why it matters |
 |---|---|
-| `.bootstrap-token` | Emergency access recovery. Move the database and the documented recovery path moves with it — including any `sudoers` rule naming the old one. |
 | `certs/` | TLS key material, if the service is pointed at certs there. |
 | `library.bleve` | The search index. A relocation leaves the populated index behind and builds an empty one, so search silently returns nothing. |
 | backups | `backup_dir`, when relative, anchors to the database directory. |
+
+#### What deliberately does NOT live beside the database
+
+The **credentials** used to be in that table and were removed from it on
+2026-09-09 (PR #3171). The settings encryption key, `.bootstrap-token` and
+`.readonly-key` now live in a fixed directory, `/var/lib/audiobook-organizer`,
+regardless of where the database is:
+
+| File | Why it is pinned |
+|---|---|
+| `.encryption_key` | Protects every stored secret. If it is looked for somewhere it is not, the app generates a new one, and the secrets it protected are re-encrypted from the config file where possible and **deleted** where not. |
+| `.bootstrap-token` | The documented emergency-access path, including the `sudoers` rule that reads it. Both name a fixed path; a moving target breaks recovery exactly when recovery is needed. |
+| `.readonly-key` | Same reasoning, same directory. |
+
+Override with `ABK_STATE_DIR` — for tests and for containers that cannot write
+`/var/lib`. If the default is not creatable and no override is set, the app falls
+back to the database directory (the pre-2026-09-09 behaviour) and logs a warning
+naming both paths, so `serve` still runs on a developer machine.
+
+**If you move the database, move `.encryption_key` with it — once.** The app
+reads the old location as a fallback and logs where to move the file, so nothing
+breaks in the meantime. It will not copy the file for you: one secret in two
+places is a second place it can leak from.
+
 
 As of 2026-09-09 an explicitly supplied `DATABASE_PATH` or `--db` **overrides**
 the path stored in the config blob (PR #3168). Before that the stored value won,
