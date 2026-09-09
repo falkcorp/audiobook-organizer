@@ -1,7 +1,7 @@
 // file: internal/pathutil/hidden.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 5a2c7e91-4d38-4b06-9c1f-7e0a3b58d264
-// last-edited: 2026-08-29
+// last-edited: 2026-09-09
 
 package pathutil
 
@@ -80,12 +80,44 @@ type AppDirs struct {
 	OpenLibraryDumpDir string
 	// PlaylistDir holds generated playlist files.
 	PlaylistDir string
+	// DatabaseDir is the directory holding the MAIN database -- the Pebble
+	// store, plus everything that resolves beside it: TLS material in certs/,
+	// the Bleve search index, and the emergency .bootstrap-token.
+	//
+	// Added 2026-09-09 for the same reason the struct exists. Production moved
+	// its database to <root_dir>/.appdata, INSIDE the library tree, and the only
+	// thing keeping every walker out of a live Pebble store was that somebody
+	// chose a name beginning with a dot. That is exactly the naming coincidence
+	// the comment above describes, reappearing at a worse target: a walk into
+	// this directory does not merely waste I/O on archives, it hashes SST files
+	// as candidate audiobooks and exposes them to the organizer's move paths.
+	//
+	// database_path became settable from Settings > Paths the same day, so the
+	// dot is now one keystroke from being absent: <root_dir>/appdata is a
+	// perfectly ordinary thing for an operator to type.
+	DatabaseDir string
+	// ActivityDBDir holds the activity-log database and its WAL, which reach
+	// multiple gigabytes.
+	//
+	// Its default -- {RootDir}/.activity -- was already inside the library tree
+	// and already protected only by the dot;
+	// TestActivityDBDirIsSkippedByLibraryWalks pins that and says so in as many
+	// words ("it is safe there only because the dot prefix ... That is not a
+	// free property"). But activity_db_path is operator- AND UI-settable, so
+	// that test guards the DEFAULT and nothing guards the configured value.
+	ActivityDBDir string
 }
 
 // all returns the configured directories. Kept as one accessor so adding a
 // field is a single edit and cannot be half-applied across the matcher.
-func (a AppDirs) all() [3]string {
-	return [3]string{a.BackupDir, a.OpenLibraryDumpDir, a.PlaylistDir}
+func (a AppDirs) all() [5]string {
+	return [5]string{
+		a.BackupDir,
+		a.OpenLibraryDumpDir,
+		a.PlaylistDir,
+		a.DatabaseDir,
+		a.ActivityDBDir,
+	}
 }
 
 // underDir reports whether `path` is `dir` itself or anything beneath it.

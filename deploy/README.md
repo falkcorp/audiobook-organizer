@@ -1,7 +1,7 @@
 <!-- file: deploy/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 67014893-53d8-4968-8ba4-2208288e61f2 -->
-<!-- last-edited: 2026-07-18 -->
+<!-- last-edited: 2026-09-09 -->
 
 # Audiobook Organizer - Deployment Files
 
@@ -84,6 +84,29 @@ Both service files can be configured through environment variables:
 - Port: Default is `8484` (configurable via command-line flags)
 
 Edit the respective service file before installation to set these values.
+
+### The database path is authoritative for more than the database
+
+`DATABASE_PATH` (and the `--db` flag) sets where several other things land,
+because they are resolved *beside* the database rather than configured
+separately:
+
+| Also lives in `dirname($DATABASE_PATH)` | Why it matters |
+|---|---|
+| `.bootstrap-token` | Emergency access recovery. Move the database and the documented recovery path moves with it — including any `sudoers` rule naming the old one. |
+| `certs/` | TLS key material, if the service is pointed at certs there. |
+| `library.bleve` | The search index. A relocation leaves the populated index behind and builds an empty one, so search silently returns nothing. |
+| backups | `backup_dir`, when relative, anchors to the database directory. |
+
+As of 2026-09-09 an explicitly supplied `DATABASE_PATH` or `--db` **overrides**
+the path stored in the config blob (PR #3168). Before that the stored value won,
+so relocating the database required editing the database you were moving.
+
+**If you put the database inside the library tree** — which is reasonable, and is
+what the prod host does at `<root_dir>/.appdata` — the directory must be
+excluded from library scans. That exclusion is a rule, not a naming convention:
+`appdirs.FromConfig` reports the database directory to every walker, so it holds
+whether or not the directory name begins with a dot. Do not rely on the dot.
 
 ## Files Overview
 
