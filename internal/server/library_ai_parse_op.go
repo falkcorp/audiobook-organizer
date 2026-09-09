@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package server
 
@@ -83,10 +83,17 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 		// parsing block the next scan, which is the exact coupling being
 		// removed here.
 		ConcurrencyKey: "library.ai-parse",
-		// 4h. One batch is aiParseEnqueueChunk (200) books at ai_batch_phase's
-		// 20 per LLM call with a 2s delay between calls, so ~10 calls plus 20s
-		// of pacing -- minutes, not hours, against a healthy backend. The
-		// ceiling is loose enough that only a wedged backend reaches it.
+		// 4h. One operation is aiParseEnqueueChunk (200) books, split by
+		// ai_batch_phase into calls of ai_backend.parse_batch_size (default 20)
+		// with a 2s delay between them: ~10 calls plus 20s of pacing at the
+		// default -- minutes, not hours, against a healthy backend.
+		//
+		// The call count is NOT fixed, and that matters for this ceiling. A
+		// CPU-only backend needs a much smaller batch to fit its per-batch
+		// deadline, and 200 books at parse_batch_size=4 is 50 calls, not 10.
+		// Worst case within the clamps: 50 calls x the 4m timeout ceiling is
+		// still comfortably inside 4h, so the ceiling holds across the whole
+		// configurable range rather than only at the default.
 		Timeout: 4 * time.Hour,
 		Capabilities: []opsregistry.Capability{
 			opsregistry.CapLibraryRead,

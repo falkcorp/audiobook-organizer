@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parser_chain.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3c9e41-52a8-4d16-b0f7-9c8e2a4d6f31
-// last-edited: 2026-08-25
+// last-edited: 2026-09-09
 
 package scanner
 
@@ -66,8 +66,13 @@ type parserRung struct {
 
 // minRungBudget is the least time a rung is worth offering.
 //
-// runAIBatchPhase gives ParseBatch a 30s deadline for the whole call, and that
-// budget is shared by every rung the chain tries. An UNREACHABLE remote is
+// runAIBatchPhase gives ParseBatch a single deadline for the whole call --
+// configurable since 2026-09-09 (ai_backend.parse_batch_timeout_seconds,
+// default 30s; it was a hardcoded 30s before that) -- and that one budget is
+// shared by every rung the chain tries. Raising the timeout therefore widens
+// the window for EVERY rung, not just the first; the skip rule below is what
+// keeps a late rung from inheriting a uselessly small remainder. An
+// UNREACHABLE remote is
 // cheap -- a refused connection or a DNS failure returns in milliseconds, so
 // the next rung inherits almost the full budget, which is the case this chain
 // exists for. A remote that accepts the connection and then HANGS is the

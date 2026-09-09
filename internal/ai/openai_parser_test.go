@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 package ai
 
@@ -234,20 +234,60 @@ func TestTestConnection_Timeout(t *testing.T) {
 	}
 }
 
-func TestParseBatch_BatchSizeLimit(t *testing.T) {
-	// Test that batch size is limited to maxBatchSize (20)
-	_ = NewOpenAIParser(nil, "test-key", true)
+// Over-ceiling input is an ERROR, not a silent truncation.
+//
+// This test replaced one that asserted `if len(filenames) > 20` on a slice it
+// had just built 25 entries into, logged a sentence, and never called
+// ParseBatch at all -- it passed whatever the function did, and would have
+// passed with the function deleted. It was the only coverage of the cap.
+//
+// The behaviour it described was also genuinely dangerous once batch size
+// became configurable on 2026-09-09: truncating to 20 and returning nil error
+// means the scanner phase counts the batch as OK, so an operator setting a
+// larger size would silently lose every filename past the 20th with a summary
+// reporting success.
+func TestParseBatch_OverCeilingIsAnErrorNotATruncation(t *testing.T) {
+	parser := NewOpenAIParser(nil, "test-key", true)
 
-	// Create 25 filenames
-	filenames := make([]string, 25)
-	for i := range 25 {
+	filenames := make([]string, config.AIParseBatchSizeCeiling+1)
+	for i := range filenames {
 		filenames[i] = "test.mp3"
 	}
 
-	// The function should limit to 20, but we can't test the actual API call
-	// without mocking. This test verifies the function accepts the input
-	if len(filenames) > 20 {
-		t.Log("Batch size would be limited to 20 in actual execution")
+	results, err := parser.ParseBatch(context.Background(), filenames)
+
+	if err == nil {
+		t.Fatalf("ParseBatch(%d filenames) returned nil error: over-ceiling input must fail loudly, "+
+			"because a truncation here is indistinguishable from success to every caller",
+			len(filenames))
+	}
+	if results != nil {
+		t.Errorf("results = %v, want nil alongside the error", results)
+	}
+	if !strings.Contains(err.Error(), "parse_batch_size") {
+		t.Errorf("error %q does not name the config key an operator has to change; "+
+			"an error that does not say what to do sends the reader into the source", err)
+	}
+}
+
+// The ceiling admits its own boundary value: a parser configured exactly at the
+// maximum must not be rejected. Guards an off-by-one in the comparison, which
+// would make the documented maximum unusable.
+func TestParseBatch_AtTheCeilingIsAccepted(t *testing.T) {
+	parser := NewOpenAIParser(nil, "", false) // disabled: we want the cap check, not a network call
+
+	filenames := make([]string, config.AIParseBatchSizeCeiling)
+	for i := range filenames {
+		filenames[i] = "test.mp3"
+	}
+
+	_, err := parser.ParseBatch(context.Background(), filenames)
+
+	// A disabled parser fails with its own message; the point is that it is NOT
+	// the ceiling error, i.e. exactly-at-the-ceiling got past the cap check.
+	if err != nil && strings.Contains(err.Error(), "ceiling") {
+		t.Fatalf("exactly %d filenames was rejected by the ceiling check: the maximum must be inclusive (%v)",
+			config.AIParseBatchSizeCeiling, err)
 	}
 }
 
