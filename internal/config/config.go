@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.108.0
+// version: 1.108.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-09
 
@@ -649,6 +649,24 @@ const (
 	// DefaultAIParseBatchSize and DefaultAIParseBatchTimeout are the historical
 	// hardcoded values, preserved as defaults so an install pointed at a hosted
 	// API sees no behavior change from this becoming configurable.
+	//
+	// They are the WRONG defaults for a local CPU backend, and not by a small
+	// margin. Measured 2026-09-09 against qwen2.5:7b-instruct on a Ryzen 7
+	// 3800X, worst observed wall time per batch:
+	//
+	//	size 1   17.9 s
+	//	size 2   20.1 s
+	//	size 3   29.4 s   <- inside 30 s by under 2%
+	//	size 4   47.3 s
+	//	size 20  201 s    <- the default: 6.7x over
+	//
+	// So on that hardware the 30 s default holds only to size 2. Size 3 is
+	// nominally inside it and should still not be used: a margin that thin is
+	// decided by which other model Ollama happens to have resident. This is how
+	// an install sits at 0 books parsed across 81 consecutive runs while every
+	// reachability probe stays green -- /api/tags answers instantly on a host
+	// that cannot finish a single batch. If ai_backend.llm_mode is local, set
+	// both fields explicitly and size the timeout off a measured batch.
 	DefaultAIParseBatchSize    = 20
 	DefaultAIParseBatchTimeout = 30 * time.Second
 
