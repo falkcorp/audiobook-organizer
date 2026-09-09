@@ -1,5 +1,5 @@
 // file: internal/ai/embedding_client.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-09
 
@@ -103,11 +103,26 @@ type EmbeddingClient struct {
 // operation timeout (up to 120 min).
 //
 // That "healthy network" clause was written when embeddings were OpenAI-billed
-// and remote. They are now local (Ollama), so re-measured 2026-09-09 against a
-// CPU-only backend (bge-m3, Ryzen 7 3800X, no usable GPU): n=1 2.0 s, n=16
-// 1.6 s, n=64 5.6 s. Embedding cost is sub-linear in batch size because the
-// forward pass batches, so a full 64-input chunk still clears this deadline
-// 5.4x over.
+// and remote. They are now local (Ollama). Measured 2026-09-09 on two different
+// local backends, warm (model already resident), same bge-m3, 1024 dims:
+//
+//	backend                       n=1     n=16    n=64
+//	Mac M1 Max (metal)            0.09 s  0.28 s  1.04 s
+//	Ryzen 7 3800X (CPU-only)      2.0 s   1.6 s   5.6 s
+//
+// Embedding cost is sub-linear in batch size because the forward pass batches,
+// so a full 64-input chunk clears this deadline 5.4x over even on the slower of
+// the two. Prod points at the Mac as of 2026-09-09.
+//
+// ⚠️ The number that is NOT covered by that headroom is a COLD model load. A
+// first bge-m3 load with nothing in the OS page cache was measured at 25.28 s
+// against this same 30 s budget — 84% of it, for a request doing almost no
+// work. Reloading with the file cached cost 1.2 s, so this is a disk-read
+// effect, not a compute one, and it is bounded in practice by Ollama's
+// keep-alive (the Mac is set to 30m). The real guard is that WithRequestTimeout
+// already exists and clamps 0 to this constant; it is simply not wired to
+// config yet. If a backend ever shows cold loads near this budget, plumb it
+// rather than raising the constant for everyone.
 //
 // Do NOT generalise that headroom to the chat/parse path. There, cost is
 // LINEAR in batch size (~68 completion tokens generated per filename,

@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.108.1
+// version: 1.109.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-09
 
@@ -613,6 +613,28 @@ type AIBackendConfig struct {
 	// while reporting itself complete, and no amount of retrying helped because
 	// the deadline was never the problem's cause.
 	//
+	// Prod moved to a Mac M1 Max (metal) on 2026-09-09 and the knob is why that
+	// was a config change rather than a code change. Same model and quant
+	// (qwen2.5:7b-instruct, digest 845dbda0ea48), worst wall time per batch:
+	//
+	//	size    Mac M1 Max      Ryzen 7 3800X
+	//	4        6.5 s           47.3 s
+	//	8       12.1 s           --
+	//	12      18.6 s           --
+	//	20      30.3 s          201 s
+	//
+	// Cost is linear in batch size on BOTH (~1.5 s/book on the Mac, ~10 s/book
+	// on the CPU); the hardware moves the slope, not the shape. Prod is 8.
+	//
+	// ⚠️ Size is NOT bounded only by the deadline. At size 20 the Mac returned
+	// 16 results for 20 filenames in one of two windows -- no error, no refusal,
+	// just four filenames silently absent from the JSON array. The phase pads
+	// and trims to the input length, so those four are indistinguishable from
+	// books the model declined to parse. That is a QUALITY ceiling that sits
+	// below the timing ceiling, and it is the reason prod runs 8 rather than the
+	// 12 that would still fit inside the deadline. Do not raise this knob purely
+	// because the clock allows it -- check that len(results) == len(inputs).
+	//
 	// Upper bound is the stuck-op watchdog: registry's defaultProgressTimeout is
 	// 5m and this phase reports progress BEFORE each call (see runAIBatchPhase),
 	// so a timeout at or above 5m converts a batch failure into a killed
@@ -636,6 +658,27 @@ type AIBackendConfig struct {
 	// 12 books; batches 2 and 4 timed out having done nothing but queue. Setting
 	// this to 1 for that backend makes the deadline mean "the model is too slow"
 	// again instead of "something else was ahead of me in line".
+	//
+	// ⚠️ The paragraph above explains WHY 1 was right for that backend, and the
+	// explanation does not transfer -- but the value does. On the Mac M1 Max
+	// prod moved to on 2026-09-09, Ollama DOES serve requests concurrently, so
+	// the queueing story is simply false there. 1 is still correct, for a
+	// different reason: the GPU is already saturated by a single request.
+	// Measured, 40 filenames at size 4 --
+	//
+	//	1 worker, serial:      4 books / 6.3 s  = 0.63 books/s
+	//	4 workers, concurrent: 16 books / 25.4 s = 0.63 books/s
+	//
+	// Identical throughput. Concurrency does not add work, it only redistributes
+	// latency: each individual batch slowed from 6.3 s to ~15.5 s. A naive
+	// "sum-of-parts / wall" reading of that run reports a 2.45x speedup, which
+	// is an artifact of dividing by the inflated per-batch times -- it measures
+	// contention, not gain. Whenever this knob is revisited, compare
+	// books-per-second end to end; do not trust a speedup ratio.
+	//
+	// So: raise this only for a backend that is NOT saturated by one request
+	// (a hosted API with real server-side concurrency, or several distinct
+	// endpoints), and prove it with a books/s comparison first.
 	//
 	// 0 means DefaultAIParseBatchWorkers, which is what this was as a constant.
 	ParseBatchWorkers int `json:"parse_batch_workers" mapstructure:"parse_batch_workers"`
