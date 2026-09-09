@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.81.0
+// version: 2.82.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3900,9 +3900,14 @@ export async function getPendingReview(): Promise<{
 }
 
 // CachedMetadataEntry is one row from GET /audiobooks/metadata/cached.
-// METADATA-CACHED-MATCHER: this list is the source of truth for the
-// Review popup. Each entry includes book identity + cache freshness +
-// review status so the UI can render without a second round-trip.
+//
+// This comment used to claim the list was "the source of truth for the Review
+// popup", rendering it "without a second round-trip". Neither half was true by
+// 2026-09-09: ReviewWorkspace never calls listCachedCandidates at all — it
+// pages its own data through getCachedReviewResults below — and the sole
+// caller of this function reads `total` and discards every field of every row.
+// The wide row shape is kept because it is a public response contract, but do
+// not treat this comment as a reason to fetch rows you do not read.
 export interface CachedMetadataEntry {
   book_id: string;
   title: string;
@@ -3915,10 +3920,21 @@ export interface CachedMetadataEntry {
 // listCachedCandidates returns the list of books that have a cached
 // metadata-candidate set, optionally filtered by review status.
 // METADATA-CACHED-MATCHER replacement for the legacy getPendingReview.
+//
+// `limit` caps the number of ROWS returned; it does not affect `total`, which
+// the server reports as the size of the filtered set either way (see
+// internal/server/handlers/metadata_cache.go, "Filter first, then paginate").
+// So a caller that only needs the count should pass limit=1 rather than
+// omitting it: omitting it means limit=0, which the server reads as "return
+// all rows" — 40,485 of them in a 7.35 MB body as of 2026-09-09.
 export async function listCachedCandidates(
-  status?: 'pending' | 'matched'
+  status?: 'pending' | 'matched',
+  limit?: number
 ): Promise<{ entries: CachedMetadataEntry[]; total: number }> {
-  const qs = status ? `?status=${status}` : '';
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (limit != null) params.set('limit', String(limit));
+  const qs = params.toString() ? `?${params.toString()}` : '';
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/cached${qs}`);
   if (!response.ok) throw await buildApiError(response, 'Failed to list cached candidates');
   const data = await response.json();
