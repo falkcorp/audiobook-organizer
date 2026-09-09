@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-28
+// last-edited: 2026-09-09
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -83,6 +83,23 @@ type OperationDef struct {
 	// this definition. It is never called for a running or dispatcher-claimed
 	// run. Returning false preserves the normal separate-queue behavior.
 	MergeQueuedParams func(existing, incoming json.RawMessage) (json.RawMessage, bool, error)
+
+	// SummarizeQueued reports how much work a run is holding while it is still
+	// QUEUED, so the UI can say how big a pending operation is before it starts.
+	// Optional; a nil hook leaves the progress columns zero, which is what every
+	// def did before this existed.
+	//
+	// The registry calls it at the three — and only three — moments a queued
+	// row's work can change: the enqueue that creates it, a successful
+	// MergeQueuedParams that unions new work into it, and the resume that puts a
+	// restarted run back on the queue. That is why this is a hook and not a
+	// periodic refresh: the count is exact at every point it can differ, and a
+	// timer would only ever be a late approximation of the same three events.
+	//
+	// It runs while the registry holds r.mu on the merge path, so it must be
+	// pure: decode params, count, return. No store calls, no locks, no I/O.
+	// Returning (0, 0, "") writes nothing.
+	SummarizeQueued func(params json.RawMessage) (done, total int, message string)
 
 	// MaxConcurrent is set on the Plugin, not the OperationDef (spec §1).
 	// Per-plugin caps are tracked in Registry.pluginMax via SetPluginMaxConcurrent.

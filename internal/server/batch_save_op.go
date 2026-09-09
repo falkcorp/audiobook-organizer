@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -92,6 +92,17 @@ func mergeBatchSaveQueuedParams(existing, incoming json.RawMessage) (json.RawMes
 	return merged, err == nil, err
 }
 
+// summarizeBatchSaveQueued reports the size of a queued batch save. Like
+// bulk-write-back and unlike batch-apply-cached these params carry no
+// OriginalTotal, so there is no prior-attempt half to report.
+func summarizeBatchSaveQueued(params json.RawMessage) (int, int, string) {
+	p, ok := decodeQueuedParams[batchSaveOpParams](params)
+	if !ok {
+		return 0, 0, ""
+	}
+	return formatQueuedBookSummary(0, len(p.BookIDs), "save")
+}
+
 // RegisterBatchSaveToFilesOp registers the "metadata.batch-save" v2 OperationDef.
 // BatchWriteBackAudiobooks enqueues here and returns this run's v2 id; it no
 // longer pre-creates a v1 op record.
@@ -117,6 +128,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 		ResumePolicy:      opsregistry.ResumeDrop,
 		ConcurrencyKey:    "metadata.batch-save",
 		MergeQueuedParams: mergeBatchSaveQueuedParams,
+		SummarizeQueued:   summarizeBatchSaveQueued,
 		Permissions:       []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {

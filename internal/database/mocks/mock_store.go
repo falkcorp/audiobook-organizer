@@ -3452,6 +3452,84 @@ func (_c *MockOpsV2Store_ResetOperationV2ForResume_Call) RunAndReturn(run func(i
 	return _c
 }
 
+// SetOpQueuedProgressV2 provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) SetOpQueuedProgressV2(id string, current int, total int, message string) (bool, error) {
+	ret := _mock.Called(id, current, total, message)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetOpQueuedProgressV2")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, int, int, string) (bool, error)); ok {
+		return returnFunc(id, current, total, message)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int, int, string) bool); ok {
+		r0 = returnFunc(id, current, total, message)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int, int, string) error); ok {
+		r1 = returnFunc(id, current, total, message)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOpsV2Store_SetOpQueuedProgressV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetOpQueuedProgressV2'
+type MockOpsV2Store_SetOpQueuedProgressV2_Call struct {
+	*mock.Call
+}
+
+// SetOpQueuedProgressV2 is a helper method to define mock.On call
+//   - id string
+//   - current int
+//   - total int
+//   - message string
+func (_e *MockOpsV2Store_Expecter) SetOpQueuedProgressV2(id any, current any, total any, message any) *MockOpsV2Store_SetOpQueuedProgressV2_Call {
+	return &MockOpsV2Store_SetOpQueuedProgressV2_Call{Call: _e.mock.On("SetOpQueuedProgressV2", id, current, total, message)}
+}
+
+func (_c *MockOpsV2Store_SetOpQueuedProgressV2_Call) Run(run func(id string, current int, total int, message string)) *MockOpsV2Store_SetOpQueuedProgressV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		var arg2 int
+		if args[2] != nil {
+			arg2 = args[2].(int)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_SetOpQueuedProgressV2_Call) Return(b bool, err error) *MockOpsV2Store_SetOpQueuedProgressV2_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_SetOpQueuedProgressV2_Call) RunAndReturn(run func(id string, current int, total int, message string) (bool, error)) *MockOpsV2Store_SetOpQueuedProgressV2_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SetOperationV2Result provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) SetOperationV2Result(id string, resultData string) error {
 	ret := _mock.Called(id, resultData)
@@ -26438,6 +26516,84 @@ func (_c *MockStore_SetLastWrittenAt_Call) Return(err error) *MockStore_SetLastW
 }
 
 func (_c *MockStore_SetLastWrittenAt_Call) RunAndReturn(run func(id string, t time.Time) error) *MockStore_SetLastWrittenAt_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetOpQueuedProgressV2 provides a mock function for the type MockStore
+func (_mock *MockStore) SetOpQueuedProgressV2(id string, current int, total int, message string) (bool, error) {
+	ret := _mock.Called(id, current, total, message)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetOpQueuedProgressV2")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, int, int, string) (bool, error)); ok {
+		return returnFunc(id, current, total, message)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int, int, string) bool); ok {
+		r0 = returnFunc(id, current, total, message)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int, int, string) error); ok {
+		r1 = returnFunc(id, current, total, message)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_SetOpQueuedProgressV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetOpQueuedProgressV2'
+type MockStore_SetOpQueuedProgressV2_Call struct {
+	*mock.Call
+}
+
+// SetOpQueuedProgressV2 is a helper method to define mock.On call
+//   - id string
+//   - current int
+//   - total int
+//   - message string
+func (_e *MockStore_Expecter) SetOpQueuedProgressV2(id any, current any, total any, message any) *MockStore_SetOpQueuedProgressV2_Call {
+	return &MockStore_SetOpQueuedProgressV2_Call{Call: _e.mock.On("SetOpQueuedProgressV2", id, current, total, message)}
+}
+
+func (_c *MockStore_SetOpQueuedProgressV2_Call) Run(run func(id string, current int, total int, message string)) *MockStore_SetOpQueuedProgressV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		var arg2 int
+		if args[2] != nil {
+			arg2 = args[2].(int)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetOpQueuedProgressV2_Call) Return(b bool, err error) *MockStore_SetOpQueuedProgressV2_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockStore_SetOpQueuedProgressV2_Call) RunAndReturn(run func(id string, current int, total int, message string) (bool, error)) *MockStore_SetOpQueuedProgressV2_Call {
 	_c.Call.Return(run)
 	return _c
 }

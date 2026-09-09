@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.101.0
+// version: 1.102.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package database
 
@@ -266,6 +266,7 @@ type MockStore struct {
 	DeleteOpStateV2Func               func(opID string) error
 	UpdateOperationV2ParamsFunc       func(id string, params []byte) error
 	UpdateOpProgressV2Func            func(id string, current, total int, message string) error
+	SetOpQueuedProgressV2Func         func(id string, current, total int, message string) (bool, error)
 	UpdateOpPhaseV2Func               func(id string, phase *string) error
 	UpdateOpCheckpointV2Func          func(id string, newHWM int) error
 	AppendOpLogsV2Func                func(rows []OpLogV2Row) error
@@ -3305,6 +3306,12 @@ func (m *MockStore) UpdateOpProgressV2(id string, current, total int, message st
 		return m.UpdateOpProgressV2Func(id, current, total, message)
 	}
 	return nil
+}
+func (m *MockStore) SetOpQueuedProgressV2(id string, current, total int, message string) (bool, error) {
+	if m.SetOpQueuedProgressV2Func != nil {
+		return m.SetOpQueuedProgressV2Func(id, current, total, message)
+	}
+	return false, nil
 }
 func (m *MockStore) UpdateOpPhaseV2(id string, phase *string) error {
 	if m.UpdateOpPhaseV2Func != nil {

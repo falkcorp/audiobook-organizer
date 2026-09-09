@@ -360,6 +360,28 @@ func (f *fakeStore) statusOf(id string) string {
 
 // --- UOS-03 reporter methods ---
 
+// SetOpQueuedProgressV2 mirrors PebbleStore.SetOpQueuedProgressV2, including
+// both of its deliberate omissions: no LastProgressAt stamp (the watchdog reads
+// that as liveness of the running attempt) and no HighWaterProgress advance
+// (nothing has been accomplished at queue time). A fake that wrote either would
+// let a test pass over behavior the real store does not have.
+func (f *fakeStore) SetOpQueuedProgressV2(id string, current, total int, message string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	op, ok := f.ops[id]
+	if !ok {
+		return false, nil
+	}
+	if op.Status != "queued" && op.Status != "waiting_deps" {
+		return false, nil
+	}
+	op.ProgressCurrent = current
+	op.ProgressTotal = total
+	op.ProgressMessage = message
+	f.ops[id] = op
+	return true, nil
+}
+
 func (f *fakeStore) UpdateOpProgressV2(id string, current, total int, message string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

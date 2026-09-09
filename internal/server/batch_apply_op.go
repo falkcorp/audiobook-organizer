@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -66,6 +66,26 @@ func (p batchApplyOpParams) completed() int {
 		return 0
 	}
 	return p.OriginalTotal - len(p.BookIDs)
+}
+
+// summarizeBatchApplyQueued reports the size of a queued batch apply, so a run
+// waiting behind its own ConcurrencyKey says how many books it covers instead
+// of only "Waiting to start…".
+//
+// It matters most for exactly this op. mergeBatchApplyQueuedParams keeps
+// unioning newly approved books into the row while it waits, so the number both
+// starts invisible and then grows; and the op's own Run reports
+// UpdateProgress(priorDone, originalTotal) only once it starts, which for a
+// four-hour serialized job can be a long time after the user asked.
+//
+// The counts deliberately match what Run reports on its first tick, so the
+// numbers do not jump when the op finally starts.
+func summarizeBatchApplyQueued(params json.RawMessage) (int, int, string) {
+	p, ok := decodeQueuedParams[batchApplyOpParams](params)
+	if !ok {
+		return 0, 0, ""
+	}
+	return formatQueuedBookSummary(p.completed(), len(p.BookIDs), "apply")
 }
 
 // batchApplyCheckpointState builds the checkpoint payload for a contiguous
@@ -211,6 +231,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 		MinCheckpointInterval: batchApplyMinCheckpointInterval,
 		ConcurrencyKey:        "metadata.batch-apply-cached",
 		MergeQueuedParams:     mergeBatchApplyQueuedParams,
+		SummarizeQueued:       summarizeBatchApplyQueued,
 		Permissions:           []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:          []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {

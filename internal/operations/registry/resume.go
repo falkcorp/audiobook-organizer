@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 package registry
 
@@ -266,6 +266,14 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 		r.logger.Warn("registry: resumeAfterStartup: failed to reset op for resume",
 			"op_id", row.ID, "error", err)
 	}
+
+	// The row is queued again, and its params have just been rewritten to the
+	// unfinished tail, so the size it advertises is from before the interrupt.
+	// Restate it here rather than waiting for Run: for an op like
+	// metadata.batch-apply-cached this is the COMMON path — every restart takes
+	// it — and the row can then sit queued for a long time behind its own
+	// ConcurrencyKey while displaying a count that predates the resume.
+	r.persistQueuedSummary(def, row.ID, json.RawMessage(row.Params))
 
 	r.logger.Info("registry: resumeAfterStartup: re-queued restart op",
 		"op_id", row.ID, "def_id", def.ID, "resume_count_new", row.ResumeCount+1)

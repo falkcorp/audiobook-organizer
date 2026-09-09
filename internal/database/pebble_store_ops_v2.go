@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.17.0
+// version: 3.18.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -523,6 +523,44 @@ func (p *PebbleStore) UpdateOpProgressV2(id string, current, total int, message 
 		row.HighWaterProgress = current
 	}
 	return p.pebbleSetJSON(opv2OpKey(id), &row)
+}
+
+// SetOpQueuedProgressV2 writes the progress columns on a row that has not
+// started yet. Reports whether the row was queued and therefore written.
+//
+// Two deliberate differences from UpdateOpProgressV2 above, both load-bearing:
+//
+//   - last_progress_at is NOT stamped. The watchdog reads it as liveness of the
+//     current attempt, and a queued row's summary is stale by construction — a
+//     batch apply can wait hours behind its own ConcurrencyKey. Stamping here
+//     would give a freshly started run an enqueue-time clock and get it killed
+//     as "stuck".
+//   - high_water_progress is NOT advanced. It is the watermark
+//     checkInfiniteRestart uses to decide whether a repeatedly resumed op has
+//     accomplished anything, and UpdateOpCheckpointV2 raises it with MAX, so an
+//     inflated value can never be walked back. Nothing has been accomplished
+//     yet at queue time; the first real progress report sets it correctly.
+func (p *PebbleStore) SetOpQueuedProgressV2(id string, current, total int, message string) (bool, error) {
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+
+	var row OperationV2Row
+	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+		return false, err
+	}
+	// The guard is what makes the method name true: a run that started between
+	// the caller's decision and this write owns its progress columns, and a
+	// queue-time estimate must never overwrite them.
+	if row.Status != "queued" && row.Status != "waiting_deps" {
+		return false, nil
+	}
+	row.ProgressCurrent = current
+	row.ProgressTotal = total
+	row.ProgressMessage = message
+	if err := p.pebbleSetJSON(opv2OpKey(id), &row); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // UpdateOpPhaseV2 sets or clears current_phase on an operation.
