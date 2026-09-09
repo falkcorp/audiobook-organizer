@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -483,6 +483,10 @@ func withEnvLocks(cfg config.Config) any {
 		return cfg
 	}
 	flat["env_locked"] = config.EnvLockedSettings()
+	// Same membership as env_locked, with WHY attached: an environment variable
+	// name, or a command-line flag. A field disabled with no reason, or with the
+	// wrong reason, sends the operator to edit the wrong half of the unit file.
+	flat["setting_locks"] = config.SettingLocks()
 	// The path an empty activity_db_path actually resolves to, so the UI can show
 	// the real default instead of a blank box. Computed here rather than mirrored
 	// in TypeScript: ResolveActivityDBPath has three branches and a reimplementation
