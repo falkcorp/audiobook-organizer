@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -636,12 +636,40 @@ func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 }
 
 // CompactByDay collapses every compactable-tier row older than olderThan into
-// one daily digest per calendar day, deleting the originals. It is bounded by
-// design: it iterates calendar days (not rows), and for each day it reads only
-// aggregate counts plus at most maxDigestItems sample rows, then issues a
-// set-based range DELETE — so it never materializes a day and cannot time out.
-// Each day is one short transaction (digest write + range delete), so it is
-// atomic and lets live writes interleave between days.
+// one daily digest per calendar day, deleting the originals.
+//
+// BOUNDED IN BOTH DIMENSIONS. It iterates calendar days rather than rows, and
+// each day is consumed in committed chunks of sqlActDeleteChunk rather than in
+// one statement. Neither the number of days nor the number of rows in a day can
+// make a single transaction large. This matters because rows-per-day is
+// genuinely unbounded: measured on a copy of production 2026-09-09, the activity
+// table held 4,786,930 rows for 2026-09-07 alone (2,714,387 for 09-05 and
+// 4,218,635 for 09-06), because three missing-file repair ops wrote one
+// change-tier row per book file. The previous whole-day DELETE was timed against
+// that day on a reflink copy and did not finish: 29 minutes 05 seconds elapsed
+// with a 1.20 GB WAL and still running when it was killed — inside a job whose
+// budget is 30 minutes.
+//
+// EXACTLY-ONCE COUNTING UNDER INTERRUPTION. Each chunk folds its rows into the
+// day's digest AND deletes exactly those rows in ONE transaction, keyed by the
+// row ids the same transaction just read. So at every commit boundary a row is
+// either still present and not yet counted, or deleted and counted once. A
+// process killed mid-day (the production failure mode — see the OOM note on
+// CompactActivity) leaves a partial digest that is accurate for the rows it
+// covers, and a re-run resumes from the rows that remain.
+//
+// This ordering is deliberate and was changed on 2026-09-09. The obvious design
+// — build the whole day's digest, commit it, then delete the day's rows — is
+// what this function used to do, and it DOUBLE-COUNTS on resume: the digest
+// claims N rows, the delete is interrupted with S survivors, and the next run
+// recounts those S survivors and merges them into a digest that already
+// included them, so the digest reports N+S entries for a day that only ever held
+// N. Deleting first and digesting last loses the interrupted rows' counts
+// outright instead. Only making the two atomic per chunk is correct, and it is
+// what TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount pins.
+//
+// On error or cancellation the returned CompactResult reports what was actually
+// committed — never a projection — so a caller can log real progress.
 func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {
 	var result CompactResult
 	cutoff := olderThan.UnixNano()
@@ -659,71 +687,198 @@ func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time
 
 	firstDay := time.Unix(0, minNS.Int64).UTC().Truncate(24 * time.Hour)
 	for day := firstDay; day.UnixNano() < cutoff; day = day.Add(24 * time.Hour) {
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		default:
-		}
 		lo := day.UnixNano()
-		hi := day.Add(24 * time.Hour).UnixNano()
-		hi = min(hi, cutoff)
-		dd, n, err := s.buildDayDigest(ctx, day.Format("2006-01-02"), lo, hi)
-		if err != nil {
-			return result, err
+		hi := min(day.Add(24*time.Hour).UnixNano(), cutoff)
+
+		dayRows := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return result, ctx.Err()
+			default:
+			}
+			n, err := s.compactDayChunk(ctx, day, lo, hi)
+			if err != nil {
+				return result, err
+			}
+			if n == 0 {
+				break
+			}
+			dayRows += n
+			result.EntriesDeleted += n
 		}
-		if n == 0 {
-			continue
+		if dayRows > 0 {
+			// Keep the WAL bounded across a long compaction spanning many days.
+			_, _ = s.writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+			result.DaysCompacted++
 		}
-		if err := s.commitDayDigest(ctx, day, lo, hi, dd); err != nil {
-			return result, err
-		}
-		// Keep the WAL bounded across a long compaction spanning many days.
-		_, _ = s.writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-		result.DaysCompacted++
-		result.EntriesDeleted += n
 	}
 	return result, nil
 }
 
-// buildDayDigest assembles the DigestDetails for one day's [lo,hi) window
-// without materializing the day: aggregate counts, then at most maxDigestItems
-// sample items chosen with the same audit→error/warn→normal precedence the
-// Pebble store uses. Returns the digest and the number of source rows in the
-// window (0 ⇒ nothing to compact).
-func (s *SQLActivityStore) buildDayDigest(ctx context.Context, date string, lo, hi int64) (DigestDetails, int, error) {
-	var dd DigestDetails
-	dd.Date = date
-	dd.Counts = make(map[string]int)
+// compactDayChunk folds at most sqlActDeleteChunk of the day's remaining rows
+// into that day's digest and deletes exactly those rows, in one transaction.
+// It returns the number of rows consumed; 0 means the day is finished.
+//
+// The delete targets the explicit row ids read at the top of the same
+// transaction, not a repeat of the SELECT's predicate. That is what makes
+// "counted" and "deleted" the same set by construction rather than by an
+// argument about whether the window can change underneath us.
+func (s *SQLActivityStore) compactDayChunk(ctx context.Context, day time.Time, lo, hi int64) (int, error) {
+	dayStartNS := day.UnixNano()
 
-	// Counts by type + total, bounded by the number of distinct types.
-	rows, err := s.reader.QueryContext(ctx, s.dialect.rebind(
-		`SELECT type, COUNT(*) FROM activity WHERE tier <> 'digest' AND ts >= ? AND ts < ? GROUP BY type`), lo, hi)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
-		return dd, 0, fmt.Errorf("sql_activity: compact counts: %w", err)
+		return 0, fmt.Errorf("sql_activity: compact begin chunk: %w", err)
 	}
-	total := 0
+	// Rollback is a no-op once Commit has succeeded, so this is safe to defer
+	// unconditionally and removes the every-branch rollback the old code needed.
+	defer func() { _ = tx.Rollback() }()
+
+	// 1. Claim this chunk. Only id and type are read — never the summary or
+	//    details blobs — so consuming a 4.8M-row day never decodes 4.8M values.
+	rows, err := tx.QueryContext(ctx, s.dialect.rebind(
+		`SELECT id, type FROM activity WHERE tier <> 'digest' AND ts >= ? AND ts < ?
+		 ORDER BY ts ASC LIMIT ?`), lo, hi, sqlActDeleteChunk)
+	if err != nil {
+		return 0, fmt.Errorf("sql_activity: compact claim chunk: %w", err)
+	}
+	ids := make([]int64, 0, sqlActDeleteChunk)
+	chunkCounts := make(map[string]int)
 	for rows.Next() {
+		var id int64
 		var typ string
-		var c int
-		if err := rows.Scan(&typ, &c); err != nil {
+		if serr := rows.Scan(&id, &typ); serr != nil {
 			rows.Close()
-			return dd, 0, err
+			return 0, fmt.Errorf("sql_activity: compact scan chunk: %w", serr)
 		}
-		dd.Counts[typ] = c
-		total += c
+		ids = append(ids, id)
+		chunkCounts[typ]++
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
-		return dd, 0, err
+	if rerr := rows.Err(); rerr != nil {
+		return 0, fmt.Errorf("sql_activity: compact read chunk: %w", rerr)
 	}
-	if total == 0 {
-		return dd, 0, nil
+	if len(ids) == 0 {
+		return 0, nil
 	}
-	dd.OriginalCount = total
 
-	// Items: audit first, then error/warn, then normal — each a bounded LIMIT
-	// query so at most maxDigestItems rows are ever read. Filling categories in
-	// precedence order is equivalent to Pebble's concat-then-truncate.
+	// 2. Load the day's digest if earlier chunks already created one.
+	var dd DigestDetails
+	var existingID int64
+	haveExisting := false
+	var existingDetails sql.NullString
+	qerr := tx.QueryRowContext(ctx, s.dialect.rebind(
+		`SELECT id, details FROM activity WHERE tier = 'digest' AND type = 'daily_digest' AND ts = ? LIMIT 1`),
+		dayStartNS).Scan(&existingID, &existingDetails)
+	switch {
+	case qerr == sql.ErrNoRows:
+		// first chunk of this day
+	case qerr != nil:
+		return 0, fmt.Errorf("sql_activity: compact read digest: %w", qerr)
+	default:
+		haveExisting = true
+		if existingDetails.Valid && existingDetails.String != "" {
+			raw, derr := decodeActivityDetails([]byte(existingDetails.String))
+			if derr != nil {
+				return 0, fmt.Errorf("sql_activity: compact decode existing digest: %w", derr)
+			}
+			if uerr := json.Unmarshal(raw, &dd); uerr != nil {
+				return 0, fmt.Errorf("sql_activity: compact decode existing digest: %w", uerr)
+			}
+		}
+	}
+	if dd.Counts == nil {
+		dd.Counts = make(map[string]int)
+	}
+	dd.Date = day.Format("2006-01-02")
+
+	// 3. Sample the day's items ONCE, on the chunk that creates the digest, over
+	//    the whole day window rather than this chunk. Sampling per chunk would
+	//    make the sample depend on how many times the job was interrupted, and
+	//    would decode rows on every chunk instead of once per day. The sample is
+	//    capped at maxDigestItems and keeps the audit → error/warn → normal
+	//    precedence the Pebble store uses.
+	if !haveExisting {
+		items, ierr := s.sampleDayItems(ctx, tx, lo, hi)
+		if ierr != nil {
+			return 0, ierr
+		}
+		dd.Items = items
+	}
+
+	// 4. Fold this chunk's counts in. Additive is correct HERE, and only here,
+	//    because these rows are deleted by this same transaction and so can
+	//    never be presented for counting again.
+	for k, v := range chunkCounts {
+		dd.Counts[k] += v
+	}
+	dd.OriginalCount += len(ids)
+	// Truncation is derived from the totals rather than accumulated, so it stays
+	// consistent no matter how many chunks the day took.
+	if dd.OriginalCount > len(dd.Items) {
+		dd.Truncated = true
+		dd.TruncatedCount = dd.OriginalCount - len(dd.Items)
+	}
+
+	// 5. Replace the digest row with the updated one.
+	if haveExisting {
+		if _, derr := tx.ExecContext(ctx, s.dialect.rebind(
+			`DELETE FROM activity WHERE id = ?`), existingID); derr != nil {
+			return 0, fmt.Errorf("sql_activity: compact replace digest: %w", derr)
+		}
+	}
+	detailsBytes, merr := json.Marshal(dd)
+	if merr != nil {
+		return 0, fmt.Errorf("sql_activity: compact marshal digest: %w", merr)
+	}
+	var ddMap map[string]any
+	if uerr := json.Unmarshal(detailsBytes, &ddMap); uerr != nil {
+		return 0, fmt.Errorf("sql_activity: compact remap digest: %w", uerr)
+	}
+	insArgs, aerr := rowArgs(ActivityEntry{
+		Timestamp: day,
+		Tier:      "digest",
+		Type:      "daily_digest",
+		Level:     "info",
+		Source:    "compaction",
+		Summary:   fmt.Sprintf("Daily digest for %s (%d entries)", dd.Date, dd.OriginalCount),
+		Details:   ddMap,
+	}, nil)
+	if aerr != nil {
+		return 0, aerr
+	}
+	if _, eerr := tx.ExecContext(ctx, s.dialect.rebind(sqlActInsert), insArgs...); eerr != nil {
+		return 0, fmt.Errorf("sql_activity: compact write digest: %w", eerr)
+	}
+
+	// 6. Delete exactly the rows counted in step 4.
+	var b strings.Builder
+	b.WriteString(`DELETE FROM activity WHERE id IN (`)
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('?')
+		args[i] = id
+	}
+	b.WriteByte(')')
+	if _, derr := tx.ExecContext(ctx, s.dialect.rebind(b.String()), args...); derr != nil {
+		return 0, fmt.Errorf("sql_activity: compact delete chunk: %w", derr)
+	}
+
+	if cerr := tx.Commit(); cerr != nil {
+		return 0, fmt.Errorf("sql_activity: compact commit chunk: %w", cerr)
+	}
+	return len(ids), nil
+}
+
+// sampleDayItems returns at most maxDigestItems DigestItems for the day's
+// [lo,hi) window, filling audit rows first, then error/warn, then the rest.
+// Each category is its own bounded LIMIT query, so the number of rows decoded is
+// capped at maxDigestItems regardless of how large the day is.
+func (s *SQLActivityStore) sampleDayItems(ctx context.Context, tx *sql.Tx, lo, hi int64) ([]DigestItem, error) {
 	remaining := maxDigestItems
 	var items []DigestItem
 	appendCat := func(whereExtra string) error {
@@ -732,7 +887,7 @@ func (s *SQLActivityStore) buildDayDigest(ctx context.Context, date string, lo, 
 		}
 		q := "SELECT " + sqlActCols + " FROM activity WHERE tier <> 'digest' AND ts >= ? AND ts < ? AND " +
 			whereExtra + " ORDER BY ts ASC LIMIT ?"
-		r, qerr := s.reader.QueryContext(ctx, s.dialect.rebind(q), lo, hi, remaining)
+		r, qerr := tx.QueryContext(ctx, s.dialect.rebind(q), lo, hi, remaining)
 		if qerr != nil {
 			return qerr
 		}
@@ -760,117 +915,15 @@ func (s *SQLActivityStore) buildDayDigest(ctx context.Context, date string, lo, 
 		return nil
 	}
 	if err := appendCat("tier = 'audit'"); err != nil {
-		return dd, 0, fmt.Errorf("sql_activity: compact audit items: %w", err)
+		return nil, fmt.Errorf("sql_activity: compact audit items: %w", err)
 	}
 	if err := appendCat("tier <> 'audit' AND level IN ('error','warn')"); err != nil {
-		return dd, 0, fmt.Errorf("sql_activity: compact err items: %w", err)
+		return nil, fmt.Errorf("sql_activity: compact err items: %w", err)
 	}
 	if err := appendCat("tier <> 'audit' AND level NOT IN ('error','warn')"); err != nil {
-		return dd, 0, fmt.Errorf("sql_activity: compact normal items: %w", err)
+		return nil, fmt.Errorf("sql_activity: compact normal items: %w", err)
 	}
-
-	dd.Items = items
-	if total > maxDigestItems {
-		dd.Truncated = true
-		dd.TruncatedCount = total - maxDigestItems
-	}
-	return dd, total, nil
-}
-
-// commitDayDigest writes (or merges into) the day's digest row and deletes the
-// day's source rows, atomically in one transaction.
-func (s *SQLActivityStore) commitDayDigest(ctx context.Context, day time.Time, lo, hi int64, dd DigestDetails) error {
-	dayStartNS := day.UnixNano()
-
-	tx, err := s.writer.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-
-	// Merge into any existing digest for this date (parity with Pebble's
-	// findExistingDigest path): combine counts, items and truncation, then
-	// replace the old digest row.
-	var existingID int64
-	var existingDetails sql.NullString
-	err = tx.QueryRowContext(ctx, s.dialect.rebind(
-		`SELECT id, details FROM activity WHERE tier = 'digest' AND type = 'daily_digest' AND ts = ? LIMIT 1`),
-		dayStartNS).Scan(&existingID, &existingDetails)
-	switch {
-	case err == sql.ErrNoRows:
-		// no existing digest
-	case err != nil:
-		_ = tx.Rollback()
-		return err
-	default:
-		var existing DigestDetails
-		if existingDetails.Valid && existingDetails.String != "" {
-			raw, derr := decodeActivityDetails([]byte(existingDetails.String))
-			if derr != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("sql_activity: compact decode existing digest: %w", derr)
-			}
-			if uerr := json.Unmarshal(raw, &existing); uerr != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("sql_activity: compact decode existing digest: %w", uerr)
-			}
-		}
-		for k, v := range existing.Counts {
-			dd.Counts[k] += v
-		}
-		dd.OriginalCount += existing.OriginalCount
-		combined := append(existing.Items, dd.Items...)
-		if existing.Truncated {
-			dd.Truncated = true
-			dd.TruncatedCount += existing.TruncatedCount
-		}
-		if len(combined) > maxDigestItems {
-			dd.TruncatedCount += len(combined) - maxDigestItems
-			combined = combined[:maxDigestItems]
-			dd.Truncated = true
-		}
-		dd.Items = combined
-		if _, derr := tx.ExecContext(ctx, s.dialect.rebind(`DELETE FROM activity WHERE id = ?`), existingID); derr != nil {
-			_ = tx.Rollback()
-			return derr
-		}
-	}
-
-	detailsBytes, merr := json.Marshal(dd)
-	if merr != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("sql_activity: compact marshal digest: %w", merr)
-	}
-	var ddMap map[string]any
-	if uerr := json.Unmarshal(detailsBytes, &ddMap); uerr != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("sql_activity: compact remap digest: %w", uerr)
-	}
-	digest := ActivityEntry{
-		Timestamp: day,
-		Tier:      "digest",
-		Type:      "daily_digest",
-		Level:     "info",
-		Source:    "compaction",
-		Summary:   fmt.Sprintf("Daily digest for %s (%d entries)", dd.Date, dd.OriginalCount),
-		Details:   ddMap,
-	}
-	insArgs, aerr := rowArgs(digest, nil)
-	if aerr != nil {
-		_ = tx.Rollback()
-		return aerr
-	}
-	if _, eerr := tx.ExecContext(ctx, s.dialect.rebind(sqlActInsert), insArgs...); eerr != nil {
-		_ = tx.Rollback()
-		return eerr
-	}
-
-	// Delete the day's source rows (everything but digest) in the window.
-	if _, derr := tx.ExecContext(ctx, s.dialect.rebind(
-		`DELETE FROM activity WHERE tier <> 'digest' AND ts >= ? AND ts < ?`), lo, hi); derr != nil {
-		_ = tx.Rollback()
-		return derr
-	}
-	return tx.Commit()
+	return items, nil
 }
 
 // RecompactDigests re-derives type/tier/tags on stored daily-digest items that
@@ -982,6 +1035,119 @@ func (s *SQLActivityStore) RecompactDigests(ctx context.Context) (RecompactResul
 // is one), so this returns zeros rather than hiding behind an optional interface.
 func (s *SQLActivityStore) RepairActivityIndexes(_ context.Context) (ActivityIndexRepairResult, error) {
 	return ActivityIndexRepairResult{}, nil
+}
+
+// sqlActAnalysisLimit caps how many rows ANALYZE samples per index.
+//
+// This single pragma is the difference between a schedulable job and one that
+// cannot run at all. Measured 2026-09-09 on a reflink copy of the production
+// activity database (13,256,788 rows, 19.5 GB, 6 indexes, host under load
+// average ~30):
+//
+//	ANALYZE with no analysis_limit  : >600 s, did NOT complete
+//	ANALYZE with analysis_limit=400 :  344 s, populated all 6 index stats
+//
+// 400 is SQLite's own documented recommendation for large databases. It samples
+// enough of each index to get the selectivity ordering right — which is all the
+// planner needs to stop guessing — without the full-index walk that makes the
+// unbounded form open-ended. It is deliberately NOT zero: zero means "no limit"
+// in SQLite, so a typo that dropped this value would silently restore the
+// >10-minute behaviour.
+const sqlActAnalysisLimit = 400
+
+// OptimizeStatistics refreshes the query planner's statistics.
+//
+// It runs PRAGMA optimize under sqlActAnalysisLimit, which is the incremental
+// form: SQLite analyzes only the tables whose statistics it judges stale, so the
+// recurring cost is a small fraction of a full ANALYZE. On a database that has
+// never been analyzed there is nothing for it to compare against, so this
+// bootstraps with an explicit ANALYZE first — the expensive pass happens exactly
+// once per database rather than on every schedule.
+//
+// PRODUCTION STATE THAT MOTIVATED THIS. On 2026-09-09 the live activity database
+// had no sqlite_stat1 table at all: ANALYZE had never been run on it in its
+// life, so every plan over 13.2M rows came from SQLite's built-in guesses rather
+// than from the data. Compaction, Summarize, Prune and the activity UI all share
+// those plans.
+//
+// It is NOT run at startup: 344 s of I/O on the boot path would delay every
+// restart, and this host restarts several times a day. It belongs on a schedule.
+func (s *SQLActivityStore) OptimizeStatistics(ctx context.Context) (ActivityOptimizeResult, error) {
+	start := time.Now()
+	result := ActivityOptimizeResult{Supported: true}
+
+	// analysis_limit is per-connection, so it must be set on the same handle
+	// that runs the analysis. The writer is single-connection, which guarantees
+	// that; setting it on the reader pool would apply to whichever of the four
+	// connections happened to serve the pragma.
+	if _, err := s.writer.ExecContext(ctx, fmt.Sprintf("PRAGMA analysis_limit=%d", sqlActAnalysisLimit)); err != nil {
+		return result, fmt.Errorf("sql_activity: set analysis_limit: %w", err)
+	}
+
+	// Keep SQLite's sorter OFF the root filesystem.
+	//
+	// THIS IS NOT A TUNING KNOB. ANALYZE builds sorter runs over the full
+	// b-trees and spills them to SQLite's temp directory, which defaults to
+	// TMPDIR and therefore to /tmp. On this deployment /tmp is a ZFS dataset on
+	// the ROOT pool, not a ramdisk and not on the pool holding the database. On
+	// 2026-09-09 at 13:39 EDT an ANALYZE of this table did exactly that, filled
+	// the root pool, and took production down: Pebble died with "fatal commit
+	// error: write /var/lib/audiobook-organizer/audiobooks.pebble/892515.log: no
+	// space left on device". The activity database was 19 GB across 13,256,825
+	// rows at the time.
+	//
+	// analysis_limit above does NOT bound this. It caps the rows SAMPLED per
+	// index; the sort still ranges over the whole index. So the limit makes
+	// ANALYZE finish sooner, not spill less, and it cannot be relied on for
+	// safety here.
+	//
+	// The database's own directory is the right target: it is by construction on
+	// the volume already sized for this data, it moves automatically if the data
+	// directory is relocated, and it needs no environment variable to be set on
+	// the unit. Setting it is best-effort — a backend or build that does not
+	// support the pragma must not turn statistics maintenance into a hard
+	// failure — but a failure is logged rather than swallowed, because the
+	// consequence of it silently not applying is the outage above.
+	if dir := filepath.Dir(s.path); dir != "" && dir != "." {
+		if _, err := s.writer.ExecContext(ctx,
+			fmt.Sprintf("PRAGMA temp_store_directory='%s'", strings.ReplaceAll(dir, "'", "''"))); err != nil {
+			slog.Warn("sql_activity: could not point SQLite's sorter at the database directory; "+
+				"ANALYZE may spill to TMPDIR, which on this deployment is the root pool",
+				"dir", dir, "err", err)
+		}
+	}
+
+	var statRows int
+	// A missing sqlite_stat1 makes this SELECT fail rather than return 0, so the
+	// existence check comes first and the two cases stay distinguishable.
+	var haveStat1 int
+	if err := s.writer.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`).Scan(&haveStat1); err != nil {
+		return result, fmt.Errorf("sql_activity: probe sqlite_stat1: %w", err)
+	}
+	if haveStat1 > 0 {
+		if err := s.writer.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_stat1`).Scan(&statRows); err != nil {
+			return result, fmt.Errorf("sql_activity: count sqlite_stat1: %w", err)
+		}
+	}
+
+	if statRows == 0 {
+		// No statistics exist. PRAGMA optimize decides what to re-analyze by
+		// comparing against stored stats, so with none stored it can reach the
+		// wrong conclusion about what needs doing. Bootstrap explicitly.
+		result.Bootstrapped = true
+		if _, err := s.writer.ExecContext(ctx, `ANALYZE`); err != nil {
+			return result, fmt.Errorf("sql_activity: bootstrap analyze: %w", err)
+		}
+	} else if _, err := s.writer.ExecContext(ctx, `PRAGMA optimize`); err != nil {
+		return result, fmt.Errorf("sql_activity: optimize: %w", err)
+	}
+
+	if err := s.writer.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_stat1`).Scan(&result.TablesAnalyzed); err != nil {
+		return result, fmt.Errorf("sql_activity: verify sqlite_stat1: %w", err)
+	}
+	result.Duration = time.Since(start)
+	return result, nil
 }
 
 // MigrateSystemActivityLogs is a no-op: there is no legacy SQLite→SQL hop.

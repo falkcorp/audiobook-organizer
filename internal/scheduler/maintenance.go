@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-08-24
+// last-edited: 2026-09-09
 
 package scheduler
 
@@ -175,6 +175,7 @@ var taskV2DefIDs = map[string]string{
 	"ai_dedup_batch":             "maintenance.ai-dedup-batch",
 	"purge_old_logs":             "maintenance.purge-old-logs",
 	"cleanup_activity_log":       "maintenance.cleanup-activity-log",
+	"optimize_activity_db":       "maintenance.optimize-activity-db",
 }
 
 // isTaskRunning is the internal implementation.

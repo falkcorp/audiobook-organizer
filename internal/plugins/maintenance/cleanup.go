@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-08-30
+// last-edited: 2026-09-09
 
 package maintenance
 
@@ -161,6 +161,81 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	}
 	msg := fmt.Sprintf("Activity log cleanup: compacted %d, summarized %d, pruned %d, orphaned index entries removed %d",
 		compacted, summarized, pruned, indexOrphans)
+	logging.Info(ctx, msg)
+	_ = reporter.Log(slog.LevelInfo, msg)
+	return nil
+}
+
+// --- optimize-activity-db ---
+
+// optimizeActivityDBDef refreshes the activity store's query-planner statistics.
+//
+// WHY A SEPARATE OP RATHER THAN A STEP INSIDE cleanup-activity-log. Compaction
+// is what invalidates the statistics, so appending this to that job is the
+// obvious pairing — and it is the wrong one, because of the shape of the cost.
+// Measured 2026-09-09 on a reflink copy of the production activity database
+// (13,256,788 rows / 19.5 GB / 6 indexes, host at load average ~30):
+//
+//	ANALYZE, no analysis_limit, no stored stats  : >600 s, did NOT complete
+//	ANALYZE, analysis_limit=400, no stored stats :  344 s
+//	PRAGMA optimize, limit=400, no stored stats  :  394 s
+//	PRAGMA optimize, limit=400, stats present    :    0.002 s
+//
+// So the recurring cost is ~2 ms and the one-time bootstrap is ~6.5 minutes.
+// Folding that bootstrap into cleanup-activity-log would spend a fifth of that
+// job's budget, once, on the very run that has the most compaction backlog to
+// work through — starving the thing the statistics are meant to help. Split
+// apart, each has its own timeout and its own failure record, and a bootstrap
+// that overruns cannot take compaction down with it.
+//
+// NIGHTLY, not weekly: at 2 ms steady-state the schedule costs nothing, and
+// statistics that are one day stale are strictly better than seven. The 15m
+// timeout is ~2.3x the measured bootstrap, which is the only run that can
+// approach it; every subsequent run finishes in milliseconds.
+//
+// It is NOT done at startup. 394 s of I/O on the boot path would delay every
+// restart on a host that restarts several times a day.
+func (p *Plugin) optimizeActivityDBDef() sdk.OperationDef {
+	sched := "40 3 * * *" // 03:40 daily — after the compaction window, before the morning
+	return sdk.OperationDef{
+		ID:              "maintenance.optimize-activity-db",
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     "Optimize activity database",
+		Description:     "Refreshes the activity store's query-planner statistics (SQLite ANALYZE / PRAGMA optimize).",
+		ResumePolicy:    sdk.ResumeDrop,
+		DefaultPriority: sdk.PriorityLow,
+		ConcurrencyKey:  "maintenance.optimize-activity-db",
+		Cancellable:     true,
+		Isolate:         false,
+		Timeout:         15 * time.Minute,
+		Schedule:        &sched,
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:             p.runOptimizeActivityDB,
+	}
+}
+
+func (p *Plugin) runOptimizeActivityDB(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	// The bootstrap run takes minutes inside a single un-interruptible SQL
+	// statement, and this def declares LivenessManual, so the progress line is
+	// posted BEFORE the call rather than after it. Without it the op reports no
+	// progress for its entire duration, which is what a wedged op looks like to
+	// the watchdog.
+	_ = reporter.Log(slog.LevelInfo, "Refreshing activity-store query planner statistics "+
+		"(first run on a database with no stored statistics takes several minutes)")
+
+	res, err := p.deps.OptimizeActivityStatistics(ctx)
+	if err != nil {
+		return err
+	}
+	if !res.Supported {
+		msg := "Activity backend keeps no query-planner statistics; nothing to optimize"
+		logging.Info(ctx, msg)
+		_ = reporter.Log(slog.LevelInfo, msg)
+		return nil
+	}
+	msg := fmt.Sprintf("Activity statistics refreshed: %d stat rows in %s (bootstrap=%t)",
+		res.TablesAnalyzed, res.Duration.Round(time.Millisecond), res.Bootstrapped)
 	logging.Info(ctx, msg)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil

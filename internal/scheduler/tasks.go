@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-08-24
+// last-edited: 2026-09-09
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -966,6 +966,35 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, fmt.Errorf("failed to enqueue cleanup-activity-log: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "cleanup_activity_log"), nil
+		},
+		IsEnabled:              func() bool { return ts.deps.HasActivitySvc() },
+		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return true },
+	})
+
+	// Activity DB Optimize — refresh the activity store's query-planner statistics.
+	//
+	// Registered here, in the TaskScheduler, and NOT relied upon via the op
+	// def's own Schedule field. OperationDef.Schedule is written to the
+	// ScheduleCron column of op_definitions_v2 by registry.upsertDefToDB and is
+	// read by nothing: there is no cron library in the module and nothing
+	// enumerates defs by schedule. A def that declares Schedule and has no
+	// TaskScheduler task here does not run.
+	ts.registerTask(TaskDefinition{
+		Name:        "optimize_activity_db",
+		Description: "Refresh the activity store's query-planner statistics",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.optimize-activity-db", nil)
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue optimize-activity-db: %w", enqErr)
+			}
+			return v2ScheduledOp(v2ID, "optimize_activity_db"), nil
 		},
 		IsEnabled:              func() bool { return ts.deps.HasActivitySvc() },
 		GetInterval:            func() time.Duration { return 24 * time.Hour },

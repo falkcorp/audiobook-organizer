@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -100,10 +100,15 @@ type TaskInfo struct {
 
 // TaskScheduler manages all registered tasks, their schedules, and manual triggers.
 type TaskScheduler struct {
-	deps               SchedulerDeps
-	tasks              map[string]*TaskDefinition
-	order              []string // insertion order for listing
-	lastRun            map[string]time.Time
+	deps    SchedulerDeps
+	tasks   map[string]*TaskDefinition
+	order   []string // insertion order for listing
+	lastRun map[string]time.Time
+	// intervalTick is the in-process copy of each task's durable interval clock
+	// (see interval_clock.go). It is the fallback used when the settings store
+	// is unavailable, and it is written on every stamp so the two never diverge
+	// while the process lives. Guarded by mu.
+	intervalTick       map[string]time.Time
 	mu                 sync.RWMutex
 	shutdown           chan struct{}
 	maintenanceOrder   []string
@@ -177,6 +182,7 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"purge_deleted",
 		"purge_old_logs",
 		"cleanup_activity_log",
+		"optimize_activity_db",
 		"cleanup_old_backups",
 		// These three declare RunInMaintenanceWindow: true unconditionally but
 		// were absent from this list, so the window op never iterated them and
@@ -267,12 +273,48 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 		if task.IsEnabled() && task.GetInterval() > 0 {
 			interval := task.GetInterval()
 			taskName := name
+			// The cadence is driven by a DURABLE clock in settings, polled every
+			// intervalPollFor(interval), not by a time.NewTicker whose deadline
+			// resets to zero on every process restart.
+			//
+			// A ticker measures from process start, so a task whose interval
+			// exceeds the process's mean uptime can NEVER fire — silently,
+			// because "not due yet" and "can never be due" are indistinguishable
+			// from outside. Measured on production 2026-09-09: consecutive
+			// service lifetimes of 1h02m and 37m against cleanup_activity_log's
+			// 24h interval, which fired twice in 30 days (2026-08-27 and
+			// 2026-08-30 — the only two days uptime passed 24 hours) while the
+			// activity table grew to 13,256,825 rows. See interval_clock.go.
 			wg.Go(func() {
-				ticker := time.NewTicker(interval)
+				ticker := time.NewTicker(intervalPollFor(interval))
 				defer ticker.Stop()
 				for {
 					select {
 					case <-ticker.C:
+						last, ok := ts.loadIntervalLastTick(taskName)
+						if !ok {
+							// First observation of this task on this deployment.
+							// Seed the clock and decline, so the task becomes due
+							// one interval from now — what RunOnStart=false asks
+							// for. The seed MUST persist; if it does not, every
+							// boot re-seeds and the task never becomes due, which
+							// is the same silence this replaces.
+							ts.stampIntervalTick(taskName, time.Now())
+							continue
+						}
+						if time.Since(last) < interval {
+							continue
+						}
+						// Stamp BEFORE calling TriggerFn, and stamp on every due
+						// check rather than only on a successful enqueue. That is
+						// what reproduces ticker semantics: a task that
+						// legitimately declines (library_scan skips while a scan
+						// is active; library_scan_full declines 167 of every 168
+						// due checks by design) is re-checked one interval later
+						// instead of on every poll. ts.lastRun keeps its own,
+						// different meaning — the last tick that actually
+						// enqueued — and runTask still stamps it only then.
+						ts.stampIntervalTick(taskName, time.Now())
 						if op, err := ts.RunTask(taskName); err != nil {
 							slog.Warn("Scheduled task failed", "taskName", taskName, "err", err)
 						} else if op != nil {
@@ -283,7 +325,8 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 					}
 				}
 			})
-			slog.Info("Scheduled task interval", "taskName", taskName, "interval", interval)
+			slog.Info("Scheduled task interval", "taskName", taskName, "interval", interval,
+				"poll", intervalPollFor(interval), "durableClock", true)
 		} else if task.IsEnabled() && ts.reachableViaMaintenanceWindow(name) {
 			// Enabled with no ticker, but the nightly maintenance window WILL
 			// reach it. Not a defect — this is how the cleanup/backfill jobs are

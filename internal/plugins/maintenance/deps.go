@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -325,6 +325,10 @@ type ActivityLogOps interface {
 	CompactActivityLog(ctx context.Context,
 		compactionDays, changeDays, debugDays int,
 	) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error)
+	// OptimizeActivityStatistics refreshes the activity store's query-planner
+	// statistics. It is separate from CompactActivityLog on purpose — see
+	// optimizeActivityDBDef for the measurements that forced the split.
+	OptimizeActivityStatistics(ctx context.Context) (database.ActivityOptimizeResult, error)
 	// ReclaimMigratedActivity deletes Pebble-side activity rows that the SQLite
 	// cutover has made redundant, freeing space in the main database.
 	//

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package maintenance
 
@@ -36,6 +36,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.tombstoneCleanupDef(),
 		p.tempFileCleanupDef(),
 		p.cleanupActivityLogDef(),
+		p.optimizeActivityDBDef(),
 		p.purgeOldLogsDef(),
 		p.cleanupOldBackupsDef(),
 		p.trashCleanupDef(),
