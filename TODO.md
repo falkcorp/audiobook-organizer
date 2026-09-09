@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.48.0 -->
+<!-- version: 10.48.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -6016,13 +6016,23 @@ is complete".
       CRUD, ownership, ordering, plus ~10 upstream routes. Cost it before starting.
 - [x] **Series DETAIL is served.** `GET /api/series/:id` resolves the same projection as
       the library list, and only its exact GET route is reserved from the native API.
-- [ ] **The series list ignores `limit` and `page`.** It returned all 14,625 series in one
-      response before this change and still does; the books are now embedded, so the
-      payload grew. Upstream supports both params
-      (`abs-upstream-api-reference.md:115-117`). Not changed here because introducing a
-      default page size would silently truncate a client that currently receives
-      everything — that is a behaviour change needing its own decision, not a side effect
-      of a bug fix.
+- [x] **The series list ignores `limit` and `page`.** Fixed in `e567d7560` (done on
+      2026-08-13, the same day this entry was written), verified present on `main`
+      2026-09-09 at `internal/server/handlers/abs/browse.go:761-779`.
+
+      The blocker recorded here — "introducing a default page size would silently
+      truncate a client that currently receives everything" — was resolved rather
+      than accepted: **an absent or zero `limit` still returns everything**, so every
+      existing caller stays byte-identical and only a client that explicitly asks for
+      a page gets one. `total` reports the full series count, not the slice length,
+      so the client's `page*limit < total` check still works. The list is ordered
+      before it is sliced (`nameIgnorePrefix`, id as tie-break) so pages partition
+      the set instead of overlapping.
+
+      Left unchecked for ~4 weeks because the entry was written mid-PR and nothing
+      revisited it once the following commit landed. Worth noting as a pattern: a
+      TODO that explains why something was NOT done is the kind most likely to go
+      stale, because the explanation reads as current even after it stops being true.
 - [ ] **`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.**
       It was captured against an empty library, so it cannot settle the `books` contract
       and a green assertion against it proves nothing about series membership. The shape
