@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.82.1
+// version: 2.83.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-09
 
@@ -947,6 +947,15 @@ export interface Config {
    * will be silently discarded. Never sent back on save.
    */
   env_locked?: string[];
+  /**
+   * Read-only, computed per request: the same keys as `env_locked`, mapped to
+   * WHAT is locking each one — an environment variable name (`DATABASE_PATH`)
+   * or a command-line flag (`--db`). Use it for the copy that tells the
+   * operator where to go; a message blaming an environment variable when the
+   * cause is a flag on the `ExecStart` line sends them to edit the wrong half
+   * of the unit file. Never sent back on save.
+   */
+  setting_locks?: Record<string, string>;
 
   // Library organization
   organization_strategy: string;
