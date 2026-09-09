@@ -1,6 +1,7 @@
 // file: cmd/commands_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
+// last-edited: 2026-09-09
 
 package cmd
 
@@ -64,7 +65,7 @@ func stubCommandDeps(t *testing.T) {
 	updateSeriesTags = func() error {
 		return nil
 	}
-	initEncryption = func(dir string) error {
+	initEncryption = func(dir string, legacy ...string) error {
 		return nil
 	}
 	loadConfigFromDB = func(store database.SettingsStore) error {
@@ -182,12 +183,12 @@ func TestServeCommandErrorPaths(t *testing.T) {
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
 	config.AppConfig.EnableSQLite = true
 
-	initEncryption = func(dir string) error { return fmt.Errorf("encrypt fail") }
+	initEncryption = func(dir string, legacy ...string) error { return fmt.Errorf("encrypt fail") }
 	if err := serveCmd.RunE(serveCmd, nil); err == nil {
 		t.Fatal("expected serve command to fail on encryption error")
 	}
 
-	initEncryption = func(dir string) error { return nil }
+	initEncryption = func(dir string, legacy ...string) error { return nil }
 	startServer = func(srv *server.Server, cfg server.ServerConfig) error {
 		return fmt.Errorf("start failed")
 	}

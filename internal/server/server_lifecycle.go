@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.0.0
+// version: 4.1.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 package server
 
@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -826,10 +825,23 @@ func (s *Server) seedRolesAndTokens() {
 	}
 
 	// Initialize the one-time bootstrap token and startup read-only key.
-	// dataDir is derived and sanitised once here so both callers receive a
-	// clean path — mirrors the ConsumeBootstrapToken(store, dataDir, …) pattern.
-	if dbPath := config.AppConfig.DatabasePath; dbPath != "" {
-		dataDir := filepath.Clean(filepath.Dir(dbPath))
+	//
+	// These go in the secure state directory, which is a CONSTANT. They used to
+	// go in filepath.Dir(database_path), and that is what broke the
+	// server-bootstrap runbook on 2026-09-09: the database moved to
+	// <root_dir>/.appdata and took the token with it, to a path no sudoers rule
+	// named and mode 0700 the operator could not read. Nothing about a
+	// credential should depend on which pool the database is sitting on today.
+	//
+	// The `if dbPath != ""` guard is gone with it. It existed because the path
+	// was derived from database_path, so an empty one produced a garbage
+	// relative path; a constant has no such failure mode, and keeping the guard
+	// would mean an install with no database configured also silently has no
+	// emergency access token.
+	if dataDir, err := config.EnsureSecureStateDir(); err != nil {
+		slog.Error("Failed to create the state directory; no bootstrap token will be written",
+			"dir", dataDir, "err", err)
+	} else {
 		if err := InitBootstrapToken(s.storeForWiring(), dataDir); err != nil {
 			slog.Info("Failed to init bootstrap token", "err", err)
 		}

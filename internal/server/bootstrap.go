@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 package server
 
@@ -301,7 +301,12 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 		return
 	}
 
-	dataDir := filepath.Dir(config.AppConfig.DatabasePath)
+	// The SAME constant the write side uses. These two derivations were
+	// independent copies of filepath.Dir(database_path); had either one been
+	// updated alone, the token would have been written to one directory and
+	// looked for -- and deleted from -- another, which fails as a 401 with the
+	// file sitting right there.
+	dataDir := config.SecureStateDir()
 
 	// Find or create admin BEFORE consuming the token, so a creation failure
 	// doesn't burn the one-time token.

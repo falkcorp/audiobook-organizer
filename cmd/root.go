@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-09-09
 
@@ -270,12 +270,29 @@ var serveCmd = &cobra.Command{
 		}
 		defer otelShutdown(context.Background())
 
-		// Initialize encryption for settings (generates key if needed)
-		dbDir := filepath.Dir(config.AppConfig.DatabasePath)
-		if err := initEncryption(dbDir); err != nil {
+		// Initialize encryption for settings.
+		//
+		// The key lives in the secure state directory, which is a CONSTANT --
+		// not filepath.Dir(database_path), which is what it used to be. The
+		// database is expected to move between pools; the credentials are not.
+		//
+		// filepath.Dir(database_path) is still passed as a legacy location so an
+		// install whose key is still sitting next to its database keeps working
+		// across this upgrade. InitEncryption reads it there and logs where to
+		// move it; it never copies the file, and it never generates a
+		// replacement for a key it merely failed to read.
+		stateDir, err := config.EnsureSecureStateDir()
+		if err != nil {
+			return fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
+		}
+		legacyKeyDir := filepath.Dir(config.AppConfig.DatabasePath)
+		if err := guardAgainstKeyRegeneration(store, stateDir, legacyKeyDir); err != nil {
+			return err
+		}
+		if err := initEncryption(stateDir, legacyKeyDir); err != nil {
 			return fmt.Errorf("failed to initialize encryption: %w", err)
 		}
-		fmt.Println("Settings encryption initialized")
+		fmt.Printf("Settings encryption initialized (state dir: %s)\n", stateDir)
 
 		// Load configuration from database (overrides defaults with persisted values)
 		if err := loadConfigFromDB(store); err != nil {
@@ -576,4 +593,51 @@ func setupFileLogging() (*os.File, error) {
 	slog.Info("log file", "path", logFile)
 
 	return file, nil
+}
+
+// allowKeyRegenEnv lets an operator proceed past guardAgainstKeyRegeneration.
+// It exists so a recoverable situation cannot become an unbootable one: if the
+// census itself is broken, or the operator has genuinely accepted the loss and
+// wants to start over, there has to be a way forward that is not "edit the
+// source".
+const allowKeyRegenEnv = "ABK_ALLOW_ENCRYPTION_KEY_REGEN"
+
+// guardAgainstKeyRegeneration refuses to start when there is no encryption key
+// anywhere AND the database already holds encrypted secrets.
+//
+// That combination is not recoverable by starting up. InitEncryption would
+// generate a fresh key, and LoadConfigFromDatabase would then fail to decrypt
+// every existing secret, re-encrypt the four it can recover from the config file
+// and DeleteSetting the rest. The secrets are gone before anyone sees a warning,
+// and the app looks healthy afterwards. Refusing to boot is the only point at
+// which the operator can still put the key file back.
+//
+// Fails CLOSED on a census error, and names the override in the message: a
+// store we cannot read is exactly the case where we must not gamble that there
+// was nothing to lose.
+func guardAgainstKeyRegeneration(store database.Store, stateDir, legacyKeyDir string) error {
+	if os.Getenv(allowKeyRegenEnv) != "" {
+		return nil
+	}
+	if found := database.FindEncryptionKey(stateDir, legacyKeyDir); found != "" {
+		return nil // a key exists; InitEncryption will load it, not generate one
+	}
+
+	settings, err := store.GetAllSettings()
+	if err != nil {
+		return fmt.Errorf("cannot determine whether encrypted settings exist, and no "+
+			"encryption key was found in %q or %q — refusing to start, because "+
+			"generating a new key would permanently discard any secrets already "+
+			"stored. Restore the key file, or set %s=1 to accept the loss: %w",
+			stateDir, legacyKeyDir, allowKeyRegenEnv, err)
+	}
+	if database.HasEncryptedSettings(settings) {
+		return fmt.Errorf("no encryption key found in %q or %q, but the database "+
+			"already holds encrypted settings — refusing to start. Starting would "+
+			"generate a new key and permanently delete every secret that is not "+
+			"also present in the config file. Put %s back, or set %s=1 to accept "+
+			"the loss and re-enter those credentials",
+			stateDir, legacyKeyDir, database.EncryptionKeyPath(stateDir), allowKeyRegenEnv)
+	}
+	return nil // first run: nothing encrypted yet, generating is correct
 }
