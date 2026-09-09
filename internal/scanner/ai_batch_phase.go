@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package scanner
 
@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -64,12 +65,19 @@ type aiBatchParser interface {
 // The queued library.ai-parse operation reports this summary into its own
 // operation record so a run that did nothing cannot show up green.
 func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, candidates []int, log logger.Logger, save func(context.Context, *Book) (string, error)) AIPhaseSummary {
-	const batchSize = 20
+	// Both of these were hardcoded (20 and 30s) until 2026-09-09. They are read
+	// together from one resolver because they are one setting in two halves --
+	// see AIBackendConfig.ParseBatchSize for the measurements that forced this,
+	// and for why the timeout is clamped below the watchdog's ProgressTimeout.
+	batchSize, batchTimeout := config.AppConfig.ResolveAIParseBatch()
 	const delayBetweenBatches = 2 * time.Second
 
 	totalBatches := (len(candidates) + batchSize - 1) / batchSize
-	log.Info("AI batch parsing %d books in %d batches of %d, %d at a time",
-		len(candidates), totalBatches, batchSize, aiBatchWorkers)
+	// batchTimeout is logged, not just used: when this phase fails, the first
+	// question is always "against what deadline?", and the answer is now
+	// operator-controlled rather than a constant a reader can look up.
+	log.Info("AI batch parsing %d books in %d batches of %d, %d at a time, %s per batch",
+		len(candidates), totalBatches, batchSize, aiBatchWorkers, batchTimeout)
 
 	// The serial version counted CONSECUTIVE failures. Under concurrency
 	// "consecutive" has no meaning -- batches finish out of order -- so the
@@ -128,11 +136,18 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 			default:
 			}
 
-			// Report BEFORE the call, not after: a batch takes up to 30s and
-			// a failing one takes longer, so reporting only on success
-			// leaves gaps that exceed the watchdog's ProgressTimeout. This
-			// phase is why library.scan could complete its entire file walk
-			// and still be canceled for inactivity.
+			// Report BEFORE the call, not after: a batch takes up to
+			// batchTimeout and a failing one takes longer, so reporting
+			// only on success leaves gaps that exceed the watchdog's
+			// ProgressTimeout. This phase is why library.scan could
+			// complete its entire file walk and still be canceled for
+			// inactivity.
+			//
+			// This is also why ResolveAIParseBatch clamps the configured
+			// timeout to AIParseBatchTimeoutCeiling (4m): the gap this
+			// report covers is exactly one batchTimeout wide, so a timeout
+			// at or above the 5m ProgressTimeout would reintroduce the
+			// very inactivity kill that reporting-first exists to prevent.
 			batchNum := int(started.Add(1))
 			log.UpdateProgress(batchNum, totalBatches,
 				fmt.Sprintf("AI parsing batch %d/%d (%d books)", batchNum, totalBatches, len(batch)))
@@ -142,7 +157,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				filenames[i] = filepath.Base(books[idx].FilePath)
 			}
 
-			aiCtx, cancel := context.WithTimeout(aiGroupCtx, 30*time.Second)
+			aiCtx, cancel := context.WithTimeout(aiGroupCtx, batchTimeout)
 			results, aiErr := parser.ParseBatch(aiCtx, filenames)
 			cancel()
 

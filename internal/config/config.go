@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.106.0
+// version: 1.107.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 package config
 
@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
@@ -592,6 +593,85 @@ type AIBackendConfig struct {
 	LocalBaseURL        string `json:"local_base_url"        mapstructure:"local_base_url"`
 	LocalEmbeddingModel string `json:"local_embedding_model" mapstructure:"local_embedding_model"`
 	LocalLLMModel       string `json:"local_llm_model"       mapstructure:"local_llm_model"`
+
+	// ParseBatchSize is how many filenames go into one LLM call during the AI
+	// filename-parsing phase, and ParseBatchTimeoutSeconds is how long that one
+	// call may take. They are a PAIR and must be tuned together: the cost of a
+	// batch is roughly linear in its size, so raising one without the other just
+	// moves which side of the deadline the call lands on.
+	//
+	// 0 means use the defaults (DefaultAIParseBatchSize /
+	// DefaultAIParseBatchTimeout), which are what this code did unconditionally
+	// before 2026-09-09 and remain correct for a hosted API or a GPU backend.
+	//
+	// They exist for the same reason ScanProgressEvery does: the right value
+	// depends entirely on the hardware underneath, and the previous hardcoded
+	// pair silently excluded a whole class of it. Measured on a CPU-only Ollama
+	// (Ryzen 7 3800X, no usable GPU), one 20-filename batch emits ~1,350
+	// completion tokens and takes 105s on qwen2.5:3b and 201s on qwen2.5:7b --
+	// against a 30s deadline. Every batch failed, so the phase parsed 0 books
+	// while reporting itself complete, and no amount of retrying helped because
+	// the deadline was never the problem's cause.
+	//
+	// Upper bound is the stuck-op watchdog: registry's defaultProgressTimeout is
+	// 5m and this phase reports progress BEFORE each call (see runAIBatchPhase),
+	// so a timeout at or above 5m converts a batch failure into a killed
+	// operation -- a strictly worse and much harder-to-diagnose outcome.
+	// ResolveAIParseBatch clamps to AIParseBatchTimeoutCeiling for that reason.
+	ParseBatchSize           int `json:"parse_batch_size"            mapstructure:"parse_batch_size"`
+	ParseBatchTimeoutSeconds int `json:"parse_batch_timeout_seconds" mapstructure:"parse_batch_timeout_seconds"`
+}
+
+// AI filename-parsing batch defaults and bounds. Exported because the scanner
+// phase, the parser's own cap and the config-validation path must all agree on
+// them; three copies of "20" in three packages is exactly how the parser's
+// independent maxBatchSize came to silently truncate anything larger.
+const (
+	// DefaultAIParseBatchSize and DefaultAIParseBatchTimeout are the historical
+	// hardcoded values, preserved as defaults so an install pointed at a hosted
+	// API sees no behavior change from this becoming configurable.
+	DefaultAIParseBatchSize    = 20
+	DefaultAIParseBatchTimeout = 30 * time.Second
+
+	// AIParseBatchTimeoutCeiling keeps a configured timeout below the watchdog's
+	// 5m default ProgressTimeout with margin to spare. Above this the operation
+	// is killed for inactivity instead of the batch simply failing.
+	AIParseBatchTimeoutCeiling = 4 * time.Minute
+
+	// AIParseBatchSizeCeiling bounds a single call's output. The parse prompt
+	// emits ~68 completion tokens per filename, so 100 is ~6,800 tokens -- past
+	// the point where a small local model's context starts truncating the JSON
+	// array and the whole batch is lost rather than one entry.
+	AIParseBatchSizeCeiling = 100
+)
+
+// ResolveAIParseBatch returns the effective (batch size, per-batch timeout) for
+// the AI filename-parsing phase, applying defaults and bounds.
+//
+// Deliberately one function returning both, rather than a getter per field: the
+// two are only meaningful together, and the clamping below is what stops a
+// caller from configuring a pair that cannot succeed (a huge batch against a
+// short deadline) or that trips the watchdog (a long deadline against the 5m
+// ProgressTimeout). A future caller that reads only one of them has almost
+// certainly made a mistake.
+func (c *Config) ResolveAIParseBatch() (int, time.Duration) {
+	size := c.AIBackend.ParseBatchSize
+	if size <= 0 {
+		size = DefaultAIParseBatchSize
+	}
+	if size > AIParseBatchSizeCeiling {
+		size = AIParseBatchSizeCeiling
+	}
+
+	timeout := time.Duration(c.AIBackend.ParseBatchTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = DefaultAIParseBatchTimeout
+	}
+	if timeout > AIParseBatchTimeoutCeiling {
+		timeout = AIParseBatchTimeoutCeiling
+	}
+
+	return size, timeout
 }
 
 // EffectiveEmbeddingMode resolves the embedding backend mode. When
@@ -2079,11 +2159,20 @@ func InitConfig() {
 	viper.SetDefault("ai_backend.local_base_url", "")
 	viper.SetDefault("ai_backend.local_embedding_model", "bge-m3")
 	viper.SetDefault("ai_backend.local_llm_model", "qwen2.5:7b-instruct")
+	// 0, not the real defaults: ResolveAIParseBatch owns the fallback, so there
+	// is exactly one place that decides what "unset" means. Seeding 20/30 here
+	// too would make an operator setting 0 (a plausible "use the default") land
+	// on a different path than an operator omitting the key entirely.
+	viper.SetDefault("ai_backend.parse_batch_size", 0)
+	viper.SetDefault("ai_backend.parse_batch_timeout_seconds", 0)
 	viper.BindEnv("ai_backend.embedding_mode", "AI_BACKEND_EMBEDDING_MODE")               //nolint:errcheck
 	viper.BindEnv("ai_backend.llm_mode", "AI_BACKEND_LLM_MODE")                           //nolint:errcheck
 	viper.BindEnv("ai_backend.local_base_url", "AI_BACKEND_LOCAL_BASE_URL")               //nolint:errcheck
 	viper.BindEnv("ai_backend.local_embedding_model", "AI_BACKEND_LOCAL_EMBEDDING_MODEL") //nolint:errcheck
 	viper.BindEnv("ai_backend.local_llm_model", "AI_BACKEND_LOCAL_LLM_MODEL")             //nolint:errcheck
+	viper.BindEnv("ai_backend.parse_batch_size", "AI_BACKEND_PARSE_BATCH_SIZE")           //nolint:errcheck
+	viper.BindEnv("ai_backend.parse_batch_timeout_seconds",                               //nolint:errcheck
+		"AI_BACKEND_PARSE_BATCH_TIMEOUT_SECONDS")
 
 	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")                               //nolint:errcheck
 	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")                           //nolint:errcheck
@@ -2453,11 +2542,13 @@ func InitConfig() {
 			// (resolved by EffectiveEmbeddingMode / EffectiveLLMMode); local
 			// endpoint coordinates carry Ollama-style defaults.
 			AIBackend: AIBackendConfig{
-				EmbeddingMode:       viper.GetString("ai_backend.embedding_mode"),
-				LLMMode:             viper.GetString("ai_backend.llm_mode"),
-				LocalBaseURL:        viper.GetString("ai_backend.local_base_url"),
-				LocalEmbeddingModel: viper.GetString("ai_backend.local_embedding_model"),
-				LocalLLMModel:       viper.GetString("ai_backend.local_llm_model"),
+				EmbeddingMode:            viper.GetString("ai_backend.embedding_mode"),
+				LLMMode:                  viper.GetString("ai_backend.llm_mode"),
+				LocalBaseURL:             viper.GetString("ai_backend.local_base_url"),
+				LocalEmbeddingModel:      viper.GetString("ai_backend.local_embedding_model"),
+				LocalLLMModel:            viper.GetString("ai_backend.local_llm_model"),
+				ParseBatchSize:           viper.GetInt("ai_backend.parse_batch_size"),
+				ParseBatchTimeoutSeconds: viper.GetInt("ai_backend.parse_batch_timeout_seconds"),
 			},
 
 			// Scheduled background tasks (nested sub-struct)

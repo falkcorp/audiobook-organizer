@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser.go
-// version: 13.9.1
+// version: 13.10.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 package ai
 
@@ -362,10 +362,21 @@ func (p *OpenAIParser) ParseBatch(ctx context.Context, filenames []string) ([]*P
 		return []*ParsedMetadata{}, nil
 	}
 
-	// Limit batch size
-	const maxBatchSize = 20
-	if len(filenames) > maxBatchSize {
-		filenames = filenames[:maxBatchSize]
+	// This cap used to be its own `const maxBatchSize = 20`, silently truncating
+	// anything larger -- and it was independent of the scanner phase's own
+	// `const batchSize = 20`, so the two only agreed by coincidence. The moment
+	// batch size became configurable (2026-09-09) that coincidence would have
+	// broken: an operator setting 50 would get 20 parsed and 30 dropped with no
+	// error anywhere, and the phase counts a batch as OK by the absence of an
+	// error, so the summary would have reported success for a batch that
+	// discarded 60% of its input.
+	//
+	// So it now shares the config ceiling, and going over it is an ERROR rather
+	// than a truncation. A caller asking for more than can be served is a
+	// misconfiguration, and the one thing it must not do is look like it worked.
+	if len(filenames) > config.AIParseBatchSizeCeiling {
+		return nil, fmt.Errorf("ParseBatch: %d filenames exceeds the %d-filename ceiling; lower ai_backend.parse_batch_size",
+			len(filenames), config.AIParseBatchSizeCeiling)
 	}
 
 	systemPrompt := `You are an expert at parsing audiobook filenames. Extract structured metadata from each filename.
