@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-09
 
@@ -119,10 +119,14 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 	// limit and offset were accepted-and-ignored until 2026-09-09: the handler
 	// never read them, so `?limit=5` returned all 40,485 rows and a 7.35 MB body.
 	//
-	// The default is 0 = "return all rows" rather than some page size, because
-	// the only caller (listCachedCandidates in web/src/services/api.ts) sends no
-	// limit at all and consumes the whole list. A non-zero default would silently
-	// truncate the Review popup instead of fixing anything.
+	// The default is 0 = "return all rows" rather than some page size. That was
+	// originally justified by "the only caller sends no limit and consumes the
+	// whole list", which stopped being true hours later: the sole caller now
+	// asks for limit=1 and reads only `total`. The default stays anyway, for a
+	// reason that does not depend on any caller — this is a published endpoint
+	// whose historical contract is "unpaged", and quietly capping it would turn
+	// an existing client's complete list into a silently truncated one with no
+	// error to notice. New callers should pass an explicit limit.
 	limit := httputil.ParseQueryInt(c, "limit", 0)
 	offset := httputil.ParseQueryInt(c, "offset", 0)
 	if limit < 0 {

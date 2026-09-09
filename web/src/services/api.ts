@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.82.0
+// version: 2.82.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-09
 
@@ -3904,8 +3904,11 @@ export async function getPendingReview(): Promise<{
 // This comment used to claim the list was "the source of truth for the Review
 // popup", rendering it "without a second round-trip". Neither half was true by
 // 2026-09-09: ReviewWorkspace never calls listCachedCandidates at all — it
-// pages its own data through getCachedReviewResults below — and the sole
+// loads its own data through getCachedReviewResults below — and the sole
 // caller of this function reads `total` and discards every field of every row.
+// ("pages its own data" is what this said first, and that was wrong in a
+// misleading direction: useMetadataLane calls getCachedReviewResults(0, 0),
+// which is limit=0 — the whole set, not a page. See todo.d.)
 // The wide row shape is kept because it is a public response contract, but do
 // not treat this comment as a reason to fetch rows you do not read.
 export interface CachedMetadataEntry {
