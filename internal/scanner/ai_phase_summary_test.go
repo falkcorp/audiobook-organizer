@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_phase_summary_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b1e7c40-9a3f-4d28-8e16-c47f0b93a2d5
-// last-edited: 2026-09-08
+// last-edited: 2026-09-09
 
 package scanner
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -213,7 +214,7 @@ func TestRunAIBatchPhase_ThresholdPolicyUnchanged(t *testing.T) {
 	if !s.AbortedThreshold {
 		t.Fatalf("threshold abort did not fire: %s", s)
 	}
-	// aiBatchWorkers batches can be in flight when the third failure trips the
+	// config.DefaultAIParseBatchWorkers batches can be in flight when the third failure trips the
 	// abort, so the count lands in [maxTotalFailures, maxTotalFailures+workers].
 	// The assertion that matters is that it is not BELOW the threshold, which
 	// is what a double increment would produce.
@@ -228,15 +229,15 @@ func TestRunAIBatchPhase_ThresholdPolicyUnchanged(t *testing.T) {
 
 // The detail slices are written from worker goroutines while the counters are
 // atomics. -race only proves anything if at least two batches fail
-// CONCURRENTLY, so this fails every batch with aiBatchWorkers > 1 and holds
+// CONCURRENTLY, so this fails every batch with config.DefaultAIParseBatchWorkers > 1 and holds
 // each call open long enough that the workers overlap. Run under `go test
 // -race`; without it this is only an assertion about the caps.
 func TestRunAIBatchPhase_ConcurrentFailureCaptureIsRaceFree(t *testing.T) {
-	if aiBatchWorkers < 2 {
-		t.Skipf("aiBatchWorkers is %d: this test cannot exercise concurrent capture", aiBatchWorkers)
+	if config.DefaultAIParseBatchWorkers < 2 {
+		t.Skipf("config.DefaultAIParseBatchWorkers is %d: this test cannot exercise concurrent capture", config.DefaultAIParseBatchWorkers)
 	}
 	books, cands := makeCandidates(20 * 40)
-	f := newBlockingFailParser(aiBatchWorkers)
+	f := newBlockingFailParser(config.DefaultAIParseBatchWorkers)
 
 	s := runAIBatchPhase(context.Background(), f, books, cands, logger.New("test"), saveBookAndReportPath)
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.84.0
+// version: 1.85.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-09
 
 package scanner
 
@@ -248,13 +248,15 @@ func getStore() scannerStore {
 	return pkgStore
 }
 
-// aiBatchWorkers bounds how many AI filename-parsing batches are in flight at
-// once. Network-bound work against a single backend, so this is a small fixed
-// number rather than runtime.NumCPU(): the point is to stop waiting on one
-// request at a time, not to saturate the model host. The per-batch delay is
-// preserved per worker, so the aggregate request rate rises by this factor and
-// no more.
-const aiBatchWorkers = 4
+// aiBatchWorkers was a `const = 4` here until 2026-09-09. It is now
+// ai_backend.parse_batch_workers, resolved per run by
+// config.Config.ResolveAIParseBatch -- because the old comment's premise ("the
+// point is to stop waiting on one request at a time") assumes a backend that
+// serves concurrent requests, and Ollama defaults to serving exactly one. On
+// such a backend the extra workers do not overlap work, they just queue, and a
+// queued batch spends its own deadline waiting. See AIBackendConfig for the
+// measurement. The default is unchanged, so nothing moves for a backend that
+// does fan out.
 
 // globalScanCache is set before a scan and used inside ProcessBooksParallel to
 // skip files whose mtime+size are unchanged since the last successful scan.

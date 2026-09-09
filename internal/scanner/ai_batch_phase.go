@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
 // last-edited: 2026-09-09
 
@@ -69,7 +69,8 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	// together from one resolver because they are one setting in two halves --
 	// see AIBackendConfig.ParseBatchSize for the measurements that forced this,
 	// and for why the timeout is clamped below the watchdog's ProgressTimeout.
-	batchSize, batchTimeout := config.AppConfig.ResolveAIParseBatch()
+	batch := config.AppConfig.ResolveAIParseBatch()
+	batchSize, batchTimeout := batch.Size, batch.Timeout
 	const delayBetweenBatches = 2 * time.Second
 
 	totalBatches := (len(candidates) + batchSize - 1) / batchSize
@@ -77,7 +78,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	// question is always "against what deadline?", and the answer is now
 	// operator-controlled rather than a constant a reader can look up.
 	log.Info("AI batch parsing %d books in %d batches of %d, %d at a time, %s per batch",
-		len(candidates), totalBatches, batchSize, aiBatchWorkers, batchTimeout)
+		len(candidates), totalBatches, batchSize, batch.Workers, batchTimeout)
 
 	// The serial version counted CONSECUTIVE failures. Under concurrency
 	// "consecutive" has no meaning -- batches finish out of order -- so the
@@ -120,7 +121,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	}
 
 	aiGroup, aiGroupCtx := errgroup.WithContext(ctx)
-	aiGroup.SetLimit(aiBatchWorkers)
+	aiGroup.SetLimit(batch.Workers)
 
 	for start := 0; start < len(candidates); start += batchSize {
 		end := min(start+batchSize, len(candidates))
