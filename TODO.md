@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.47.1 -->
+<!-- version: 10.48.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-08 -->
+<!-- last-edited: 2026-09-09 -->
 
 # Project TODO — live items only
 
@@ -2850,6 +2850,17 @@ Stage 1 landed: `parserChain` in `internal/scanner/ai_parser_chain.go`, wired
 from `newAIParser` so `llm_mode=openai-fallback-local` builds a real chain
 instead of silently behaving as plain `openai`. Unreachable falls through;
 permanently-refused does not.
+
+> ⚠️ **Corrected 2026-09-09.** "Unreachable falls through" was true of the
+> chain's own branching and false in practice. The chain shares ONE deadline
+> across rungs and `minRungBudget` skips any rung with under 5s left — and
+> `DoWithRetry` beneath it retried a dial failure 3× with 2s+8s backoff, with
+> openai-go retrying 3× more underneath that. A dead host therefore consumed
+> the full 30s and every fallback rung was skipped, in exactly the case the
+> chain exists for. Fixed by classifying dial-level failures as
+> `ai.UnreachableError` and not retrying them (`internal/ai/retry.go`).
+> Residual: openai-go's own retry loop still costs ~3 dials — see the todo.d
+> fragment on capping it.
 
 What is NOT done, in the order it should be done:
 

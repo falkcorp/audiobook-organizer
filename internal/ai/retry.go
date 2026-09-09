@@ -1,7 +1,7 @@
 // file: internal/ai/retry.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-08-23
+// last-edited: 2026-09-09
 
 // Package ai — shared retry helper for OpenAI / Ollama API calls.
 package ai
@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
+	"syscall"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -102,6 +104,97 @@ var quota429Markers = []string{
 	"credit_balance_exhausted",
 }
 
+// UnreachableError wraps an error that means no connection was ever
+// established: the dial failed, or the hostname did not resolve.
+//
+// It is deliberately NOT a PermanentError, and the difference is load-bearing.
+// PermanentError means "this request is wrong and no backend will accept it",
+// and internal/scanner's parser chain aborts the whole phase on one. An
+// unreachable backend says nothing about the request — the next rung in the
+// chain, or the next run, may answer it perfectly well — so this type must
+// stay outside isPermanentAIFailure's classification, which checks for
+// *PermanentError by type and then for provider markers that no dial error
+// contains. What the two share is only that retrying THIS backend inside THIS
+// request is pointless.
+type UnreachableError struct {
+	Err error
+}
+
+func (e *UnreachableError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *UnreachableError) Unwrap() error {
+	return e.Err
+}
+
+// isUnreachableError reports whether err means the connection was never made:
+// connection refused, no route to host, network unreachable, or DNS failure.
+//
+// Why these stop the retry loop when other network errors do not, and why the
+// cost runs in both directions — the same shape as isPermanentQuota429 above:
+//
+//   - Retrying them is what broke the parser chain. internal/scanner's
+//     parserChain shares ONE deadline across its rungs and documents its own
+//     premise as "an UNREACHABLE remote is cheap — a refused connection or a
+//     DNS failure returns in milliseconds, so the next rung inherits almost the
+//     full budget, which is the case this chain exists for". This function is
+//     what makes that sentence true. Without it a dead host consumed the entire
+//     30s budget — measured in production on 2026-09-09, when the configured
+//     local base URL had a one-digit typo in its host and so named an address
+//     nothing answered on: 81 of 81 library.ai-parse runs parsed zero books,
+//     every one of them at the 30s ceiling. budgetRemains then skipped every
+//     fallback rung, and the chain built precisely for an unreachable remote
+//     was defeated by the retry loop underneath it.
+//   - The cost of stopping early is real: a host that is mid-reboot would have
+//     answered on attempt 2. We take that trade because a failed dial leaves no
+//     partial state to lose, and because the right retry for "the backend is
+//     down" is the next rung or the next run — not a 10-second in-request
+//     backoff spending a budget that the fallback needs. Callers with no
+//     fallback beneath them (metadata_llm_review.go, the single-item parse
+//     paths in openai_parser.go) pay this: they now surface the outage in
+//     ~1 attempt instead of masking a brief one. That is the intended trade,
+//     not an oversight.
+//
+// A dial aborted by the caller's OWN cancellation or deadline is excluded and
+// checked first: that error describes our budget, not the backend's health, and
+// misfiling it here would report a healthy host as unreachable.
+//
+// NOTE — this only governs OUR retry loop. openai-go runs a second one beneath
+// it (requestconfig.go: MaxRetries defaults to 2 and shouldRetry returns true
+// whenever res == nil, i.e. for exactly these errors), so one DoWithRetry
+// attempt is really three dials plus ~1.5s of the SDK's own backoff. That loop
+// cannot be told about this classification: its opt-out is errors.As against an
+// unexported `interface{ noRetry() }` declared in the SDK's internal package,
+// and Go only lets same-package types satisfy an unexported interface method.
+// The only lever from outside is option.WithMaxRetries, which is all-or-nothing
+// and would also discard the SDK's Retry-After handling for genuine 429s — a
+// wider change than this bug warrants. So a dead host costs ~5s here rather
+// than the ~0ms the chain's comment imagines. That is well inside
+// minRungBudget, which is what the fallback actually depends on.
+func isUnreachableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
+		return true
+	}
+	// Op is checked because a *net.OpError also covers read/write failures on
+	// an ESTABLISHED connection, which are ordinary transient errors and must
+	// keep their retries.
+	if opErr, ok := errors.AsType[*net.OpError](err); ok && opErr.Op == "dial" {
+		return true
+	}
+	// Belt and braces for errors that reached us stripped of their OpError
+	// wrapper. These are the three the production failure produced.
+	return errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH)
+}
+
 // DoWithRetry calls fn up to maxAttempts times. Between attempts it sleeps
 // attempt² × base (quadratic back-off), respecting ctx cancellation.
 // Returns nil on the first success; returns the last error if all attempts fail.
@@ -133,6 +226,16 @@ func DoWithRetry(ctx context.Context, maxAttempts int, base time.Duration, fn fu
 		if err := fn(); err != nil {
 			if isPermanentAIError(err) {
 				return &PermanentError{Err: err}
+			}
+			// Checked after the permanent classification, never before: a
+			// backend can refuse the connection on a request that is ALSO
+			// malformed, and "the request is wrong" is the more actionable of
+			// the two — it stops the phase instead of walking a chain of
+			// backends that will all reject it identically.
+			if isUnreachableError(err) {
+				slog.Warn("ai call reached no backend, not retrying this one",
+					"attempt", attempt+1, "max_attempts", maxAttempts, "err", err)
+				return &UnreachableError{Err: err}
 			}
 			lastErr = err
 			continue
