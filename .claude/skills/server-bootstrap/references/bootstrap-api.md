@@ -1,5 +1,5 @@
 <!-- file: .claude/skills/server-bootstrap/references/bootstrap-api.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b8a2de28-0304-4440-9d73-c79f227e1235 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -110,11 +110,12 @@ ssh -tt <server> '
 '
 ```
 
-**Derive the path; do not hardcode it.** The token is written beside the
-database, so it MOVES when the database moves. This command reads the path out
-of the startup log the app just wrote, which is the only source that cannot go
-stale. Hardcoding `/var/lib/audiobook-organizer/.bootstrap-token` was correct
-until 2026-09-09 and is now wrong on the prod host — see the warning below.
+**Derive the path anyway, even though it is now a constant.** As of
+2026-09-09 the token is written to `/var/lib/audiobook-organizer/`, which does
+not move when the database moves. Reading the path out of the startup log the
+app just wrote is still the right habit: it survives the directory changing
+again, and — more importantly here — it identifies the file written by *this*
+restart rather than one left over from an earlier one.
 
 The 90-second delay must occur before `cat`. The previous token file can remain
 visible during initialization, so reading it immediately after the restart can
@@ -127,20 +128,29 @@ msg="Emergency access token written" token_file=<data-dir>/.bootstrap-token expi
 msg="Token expires in 10 minutes..."
 ```
 
-### ⚠️ 2026-09-09: the path moved and the old one still answers
+### ⚠️ A leftover token still answers, at whichever path it sits
 
-Prod relocated its database to `/mnt/bigdata/books/audiobook-organizer/.appdata/`,
-so the token is now at `.appdata/.bootstrap-token`. Two consequences:
+Token files are never cleaned up on restart — they are only overwritten in the
+directory currently in use. A file from an earlier configuration therefore stays
+on disk indefinitely, and `sudo cat` on it SUCCEEDS, handing back a well-formed
+`abbs_…` value that expired ten minutes after it was written.
 
-1. **The operator cannot read it.** `.appdata` is mode 0700 owned by the service
-   user, and no NOPASSWD rule names the new path. A sudoers entry is required
-   before this runbook works on that host again.
-2. **The old path returns an expired token rather than failing.** A file written
-   before the move is still sitting at
-   `/var/lib/audiobook-organizer/.bootstrap-token`; `sudo cat` succeeds and hands
-   back a well-formed `abbs_…` value that expired ten minutes after it was
-   written. That is the worst failure shape available here — the runbook appears
-   to work and the exchange returns `401 invalid bootstrap token` with nothing
-   explaining why. Delete the stale file (needs root).
+That is the worst failure shape available here: the runbook appears to work, and
+the exchange returns `401 invalid bootstrap token` with nothing explaining why.
+Deriving the path from the `token_file=` log line is what prevents it.
+
+Two paths are known to hold expired files on the prod host and should be deleted
+(needs root):
+
+```
+/var/lib/audiobook-organizer/.bootstrap-token                     # pre-2026-09-09
+/mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token  # the interim location
+```
+
+**Historical note.** Between the database relocation and PR #3171 the token was
+written beside the database, so it briefly lived in `.appdata/` — mode 0700,
+named by no sudoers rule, and unreadable by the operator. Hosts not redeployed
+since are still in that state. The credential directory is now a constant
+precisely so this cannot recur.
 
 The token is valid for exactly 10 minutes from service startup.
