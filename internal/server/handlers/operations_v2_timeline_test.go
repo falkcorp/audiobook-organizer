@@ -398,17 +398,27 @@ func TestGetOperationTimeline_UnknownStatusReportsWhatIsPresent(t *testing.T) {
 
 // The noise guard: statuses_present exists to explain an empty answer, so it must
 // NOT appear on an ordinary successful one.
+//
+// The fixture MUST mix statuses. Written first with four `completed` rows filtered
+// by `completed`, this test passed while the `matched == 0` guard was deleted:
+// nothing was ever skipped, so statusesPresent stayed empty and the field was
+// omitted for the wrong reason. Mutation testing caught it. The rows below make
+// the map non-empty AND the filter succeed, which is the only state in which the
+// guard is the thing doing the work.
 func TestGetOperationTimeline_StatusesPresentOnlyWhenNothingMatched(t *testing.T) {
 	rows := timelineRowsWithStatus("a.op", "completed", 4)
+	rows = append(rows, timelineRowsWithStatus("a.op", "failed", 2)...)
 
 	h := timelineHandler(t, rows)
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h&status=completed", "", nil)
 	h.GetOperationTimeline(c)
 
 	data := timelineBody(t, w.Body.Bytes())
-	require.Equal(t, float64(4), data["matched"])
+	require.Equal(t, float64(4), data["matched"], "the filter must have succeeded")
 	_, exists := data["statuses_present"]
-	assert.False(t, exists, "statuses_present must not ride along on a successful filter")
+	assert.False(t, exists,
+		"statuses_present must not ride along on a successful filter, even though "+
+			"`failed` rows were skipped and the map is non-empty")
 }
 
 // An absent status must mean "every status", not "no status" — the inverted
