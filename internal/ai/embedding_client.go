@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-20
+// last-edited: 2026-09-09
 
 package ai
 
@@ -98,8 +98,23 @@ type EmbeddingClient struct {
 
 // defaultRequestTimeout is the per-attempt timeout applied to each
 // Embeddings.New call in embedBatchRaw. 30 s is enough for any batch ≤ 64
-// inputs on a healthy network; on an unreachable endpoint it triggers after
-// 30 s instead of blocking for the full operation timeout (up to 120 min).
+// inputs — Engine.FullScan's embedChunkSize — on a healthy network; on an
+// unreachable endpoint it triggers after 30 s instead of blocking for the full
+// operation timeout (up to 120 min).
+//
+// That "healthy network" clause was written when embeddings were OpenAI-billed
+// and remote. They are now local (Ollama), so re-measured 2026-09-09 against a
+// CPU-only backend (bge-m3, Ryzen 7 3800X, no usable GPU): n=1 2.0 s, n=16
+// 1.6 s, n=64 5.6 s. Embedding cost is sub-linear in batch size because the
+// forward pass batches, so a full 64-input chunk still clears this deadline
+// 5.4x over.
+//
+// Do NOT generalise that headroom to the chat/parse path. There, cost is
+// LINEAR in batch size (~68 completion tokens generated per filename,
+// sequentially), and the same "fixed deadline over a caller-chosen batch"
+// shape was a live production bug: a hardcoded 20-filename batch under a 30 s
+// deadline took 201 s on the CPU 7B and parsed 0 books for 81 consecutive
+// runs. That path is now configurable — see config.ResolveAIParseBatch.
 const defaultRequestTimeout = 30 * time.Second
 
 // defaultEmbeddingModel is the model used when none is configured.
