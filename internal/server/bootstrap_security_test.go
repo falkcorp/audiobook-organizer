@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap_security_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b9d4e6a-1c3f-4a8b-bd72-5e0a9c4f1d36
-// last-edited: 2026-07-03
+// last-edited: 2026-09-09
 
 package server
 
@@ -106,6 +106,14 @@ func TestHandleBootstrap_IssuesExpiringKey(t *testing.T) {
 	defer func() { config.AppConfig = origCfg }()
 	config.AppConfig.BootstrapKeyTTLDays = 0 // exercise the <=0 -> 30 fallback
 	config.AppConfig.DatabasePath = t.TempDir() + "/db"
+	// Sandbox the credential directory. handleBootstrap -> ConsumeBootstrapToken
+	// calls os.Remove(BootstrapTokenPath(dataDir)) and DISCARDS the error, so
+	// without this the test silently tries to delete
+	// /var/lib/audiobook-organizer/.bootstrap-token on whatever machine runs it
+	// -- which on the production host is the live token. Setting DatabasePath
+	// above used to be what sandboxed this, back when dataDir was derived from
+	// it; it no longer is.
+	t.Setenv(config.SecureStateDirEnv, t.TempDir())
 
 	settings := newFakeSettingsStore()
 	_ = settings.SetSetting(bootstrapTokenKey, hashBootstrapToken("abbs_correct"), "string", false)
