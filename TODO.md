@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.49.0 -->
+<!-- version: 10.49.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -13,6 +13,450 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+## Operation parent/child lineage is never populated by the BACKEND
+
+`registry.WithParent` (`internal/operations/registry/types.go:382`) is the only thing
+that sets `EnqueueOptions.ParentID`, and it has **no production callers**. Every
+operation the API returns therefore has `parent_id: null` — verified against prod on
+2026-09-08 (40 operations across a 6-hour window, all parentless).
+
+- [ ] Decide whether SERVER-SIDE op lineage should be wired up. Several ops obviously
+      fan out into children (`library.scan` → per-folder work,
+      `metadata.batch-apply-cached` → per-book applies) and threading `WithParent`
+      through would make those relationships real rather than inferred from timing.
+
+**The "delete the dead hierarchy code" half of this is CLOSED** (2026-09-08). The
+Activity page's `collapsedParents` / `isHiddenByCollapse` / `getDepth` / per-row
+`indent` now have a producer: `web/src/stores/operationGrouping.ts` synthesizes parent
+rows at read time for runs of consecutive same-kind operations. The render path was
+never the problem — it was correct and merely unfed. The seeding-effect defect named
+here (the ref only latched when `defaults.size > 0`, so it re-ran on every poll and
+could clobber a user's expansion) is fixed too: seeding is now once-per-parent via
+`seededParentsRef`, not once-per-page.
+
+Note that read-time synthesis does **not** answer the bullet above. A synthetic group
+says "these ran back to back", which is a claim about time; real lineage would say
+"this op spawned that one", which is a claim about causation. Wiring `WithParent` would
+still add something, and the two can coexist — `groupOperations` only ever sets
+`parent_id` on rows that have none.
+
+## Two db-optimize ops exist; only one reports progress
+
+`maintenance.db-optimize` (`internal/plugins/maintenance/db.go`) and
+`scheduler.db-optimize` (`internal/scheduler/extra_ops.go:446`) are near-duplicates:
+both compact the same three stores (main Pebble, AI scan, OpenLibrary), both walk the
+same three progress steps, and both were registered — `plugins/maintenance/plugin.go:52`
+and `server/scheduler_extra_ops.go:43`.
+
+`fix/db-optimize-progress` gave the **maintenance** one a real progress heartbeat driven
+by `CompactionStats()`, so the registry's five-minute stuck-detector no longer kills it
+mid-compaction. The **scheduler** one still reports only at its three step boundaries, so
+it has the identical bug: on a database where a full compaction exceeds 5m — production
+is 31 GB — it gets cancelled every run. Its `Timeout: 2h` never applies, for the same
+reason the maintenance op's `Timeout: 60m` never did.
+
+Two questions, in this order:
+
+1. **Should `scheduler.db-optimize` exist at all?** Two registered ops doing identical
+   work with different timeouts and schedules is the actual defect. Deleting it is
+   probably better than fixing it twice.
+2. If it stays, share the heartbeat. `optimizeMainWithHeartbeat` is unexported in
+   package `maintenance`; reuse means either exporting it or lifting a generic
+   "run this blocking call, beat only when a caller-supplied probe says work happened"
+   helper into `internal/operations/registry` next to `Reporter`.
+
+- [ ] **Consolidate the space-reclaim maintenance ops into one job.**
+      `purge-old-logs`, `cleanup-activity-log`, `cleanup-old-backups`,
+      `trash-cleanup`, `temp-file-cleanup`, `metadata-cache-reap`,
+      `purge-deleted` and the new `activity-reclaim` are eight separate triggers
+      for one operator intention ("give me space back"), and none of them ends
+      by compacting, so none of them actually returns bytes on its own.
+
+- [x] **Give the Pebble→SQLite activity migration a visible status.** DONE. The
+  migration now writes an `operations_v2` row (`activity.sql-migration`) and drives
+  it from a progress callback on the backfill, so it appears in the operations UI
+  with its tier, position (`tier 1/7`) and running counts, and closes out
+  `completed` / `failed` / `interrupted_dropped`.
+
+  **Writing the row is NOT enough to make it visible — it must also publish to the
+  ops event hub.** `useOperationsStore` calls `loadFromServer()` once at app mount
+  and thereafter ONLY from SSE events; there is no polling interval. A store-only
+  write therefore appears on page load and then FREEZES, which for a 4-hour job is
+  the exact "working or dead?" ambiguity this task existed to remove. The reporter
+  publishes `op.created` / `op.updated` / `op.terminal` (the three names the store
+  dispatches on), with `message` included on `op.updated` — the registry's own
+  `op.updated` omits it, which would have left the count ticking while the tier
+  line stayed stale. The hub is safe to call from the copy goroutine: `Publish` is
+  nil-safe, RLock-only, drops events for slow subscribers instead of blocking,
+  touches no Pebble handle and cannot panic (`bus.go`). `KeyOpHub` is a declared
+  `Need`, not a `TryGet`: neither `Get` nor `TryGet` builds on demand (both read
+  `c.built`), so `Needs` is the only thing that orders the hub ahead of this
+  service — a bare `TryGet` would hand back nil on an unlucky build order and
+  silently cost every live update.
+
+  **Terminal status is `interrupted_dropped`, not `interrupted_quiesced`.**
+  `isResumableV2Status` counts quiesced as RESUMABLE, so the next boot would pull
+  a def-less row into `resumeAfterStartup` purely to drop it as "unknown def". A
+  row nothing can resume belongs in a terminal state; the restart is not a lost
+  run, since the starter begins a fresh one from the checkpoint with its own row.
+  (`pebble_store_ops_v2_resumable_test.go:63` already pins the non-resumability.)
+
+  **`finish` fails CLOSED on the terminal status, and the allowlist is keyed by
+  literals on purpose.** The wrong value here is silent: `interrupted_quiesced`
+  is a real status the store accepts, spelled correctly, differing only in that
+  `isResumableV2Status` counts it resumable. Anything off
+  `migrationTerminalStatuses` is logged loudly and coerced to `failed` — writing
+  nothing would leave the row `running` forever, which is worse. The shutdown
+  status is the named constant `migrationStatusInterruptedByShutdown`; the
+  allowlist spells its members out as literals so that
+  `TestMigrationShutdownStatus_IsTerminal` is a real check rather than a
+  tautology. Residual gap, stated rather than papered over: a future edit that
+  passes a raw `"interrupted_quiesced"` at the call site instead of the constant
+  is coerced to `failed` (so the row stays terminal and the SAFETY property
+  holds) but no test observes the wrong label, because reaching the shutdown
+  branch deterministically needs the 60s settle delay to be overridable.
+
+  **Publishing is gated on the insert having succeeded (`rowExists`).**
+  `useOperationsStore` answers an `op.updated` for an unknown op id with
+  `loadFromServer()`, throttled to one per 500ms — so announcing a row the store
+  rejected would drive ~2 full timeline reloads a SECOND for the length of a
+  multi-hour run, on the box where `/activity/sources` already takes 35s. The
+  gate lives in `publish`, not at the three call sites, so a fourth publish
+  added later inherits it. Store writes still run and still log on a failed
+  insert; only the events are suppressed.
+
+  **A panic hazard was investigated and found NOT to exist — do not re-raise it.**
+  `UpdateOpProgressV2` has no method-level `recoverPebbleClosed` while its
+  siblings do, which looks like an unguarded leg, and `recoverPebbleClosed`'s own
+  comment names it as an *observed* panic leg. It is nonetheless safe: it never
+  touches `p.db` directly, reaching the store only via `pebbleGetJSON` /
+  `pebbleSetJSON`, which carry the guard themselves. The methods that DO hold a
+  method-level guard are exactly the ones with direct `p.db` calls
+  (`InsertOperationV2` has two). `pebble_ops_v2_closed_test.go:78,94,95` already
+  asserts all three return errors rather than panicking. Check the helper before
+  concluding a missing guard is a hole.
+
+  **The route this note recommended was wrong — do not retry it.** Running the
+  backfill AS a registry op is unsafe, and the "just close the 2s gap" fix below
+  does not work. That reasoning treated batch cost as a constant. Per
+  `sqlBackfillProgressEvery`'s own comment a 500-row batch of iTunes
+  `ApplyITLOperations` rows carries **~9.6 MB of `details` EACH** — gigabytes to
+  compress and insert, twice (copy then parity) — and a single row's insert is not
+  interruptible at all. No number of ctx checks bounds that under a hard 2s escape.
+  Confirming it: **`pebble_activity_store.go` contains `recoverPebbleClosed` zero
+  times**, so overrunning the escape is a process PANIC, not an error. That is why
+  `sqlMigrationStarter.Stop` joins unbounded, and why that comment must not be
+  "fixed".
+
+  So the work stays on its own goroutine and only the REPORTING is registry-shaped
+  (`InsertOperationV2` / `UpdateOpProgressV2` / `UpdateOperationV2Status` are plain
+  store writes with no worker and no `goroutineWG` enrollment). **No `OperationDef`
+  is registered on purpose**: `ActiveDefs()` has no allowlist and feeds
+  `/api/v1/op-defs`, so registering one would add a Run button that could launch a
+  second concurrent backfill. The cost is that `resumeAfterStartup` drops a stale
+  row as "unknown def", which is the correct terminal state.
+
+  **Two things this bought that the checkpoint blob cannot give.** A `failed`
+  migration is now durably recorded with its reason — `loadActivityBackfillProgress`
+  rewrites a `failed` tier verdict back to `in_progress` on the next boot (correctly,
+  so it re-verifies in full), which means after a restart the blob can no longer
+  answer "why didn't it flip?". And the row survives independently of it.
+
+  **Denominator: dropped deliberately, not deferred.** `total` is 0. Counting one
+  costs a full key walk per tier and the number moves under itself anyway as
+  dual-writes land. `OperationsIndicator` already renders `total === 0` as an
+  indeterminate bar, which is the truthful rendering — but it also printed the
+  literal `'Starting...'` in that case, which for a 4-hour job with 4.7M rows copied
+  reads as a stuck job. Fixed generally for every zero-total op: show the count once
+  progress is non-zero (`formatProgressCounts`, `web/src/components/layout/
+  operationsFormat.ts`).
+
+- [x] **Never resume the `digest` tier of the activity migration.** DONE (follow-up
+  to the checkpoint below, after review caught it). A resume bound is sound only
+  where every writer either dual-writes to SQLite or appends forward in time.
+  `CompactByDay` does neither: it keys its row `pactPrimaryKey("digest",
+  startOfDay, ulid)` — BACKDATED — and routes through
+  `MigratingActivityStore.CompactByDay` → `m.active()`, which is Pebble for the
+  whole migration, so there is no SQLite counterpart. It is reachable
+  mid-migration from scheduled maintenance (`server_maintenance_deps.go:285`) and
+  from a user button (`handlers/activity.go:385`), and it REPLACES a day's digest
+  with a fresh ULID. A row below the cursor was therefore skipped by the copy AND
+  by the verify — the parity pass re-presents only the batch it just read, never
+  re-reading Pebble — leaving the tier `clean` while missing a row that may be a
+  correction to a stale one. `activityNonResumableTiers` now forces a full scan of
+  `digest` (~1 row/day); `change` (~5.7M rows) still resumes. Residual, documented
+  not coded: `Summarize` also bypasses the dual-write but keys at `now`, unsafe
+  only if a caller recorded a FUTURE-dated entry the scan already passed
+  (`normalizeActivityEntry` rejects pre-epoch, does not clamp forward), and the
+  loss would be one summary row whose originals are already in SQLite.
+
+- [x] **Two stale reading-guides were corrected with it — watch for more.** DONE,
+  and the sweep found a third: the correction itself. `PerTierCopied`'s doc said
+  scanned≫copied means "a RESUMED run re-streaming already-copied history";
+  checkpointing INVERTED that, so it was rewritten to say a genuine resume shows
+  scanned≈copied and **never** the old shape, narrowing scanned≫copied to three
+  causes, "none of them a resume."
+
+  **Production disproved that ~4 hours after it was written.** Tier `change`,
+  two processes, ~2.5h: one run reached `scanned=965,500 copied=0` over 1h49m,
+  was interrupted, checkpointed at row 972,000, and the next process logged
+  `resumed=true resuming_after_row=972000` and ran to `scanned=1,419,500`, still
+  `copied=0`. A genuine resume showing the "never" shape, and none of the three
+  causes: the blob was present and its cursor used, the tier is `change` not
+  `digest`, and a `failed` verdict clears `Cursor` and zeroes `Scanned`
+  (`sql_activity_progress.go:196`) so it would have reported `resumed=false`.
+
+  **Root cause of both wrong guides: `copied` excludes idempotent skips**, and a
+  row is skipped whenever SQLite already holds it — true of everything an earlier
+  attempt copied AND of everything the live dual-write stored (`Record` writes
+  both backends under one content key). A tier a previous run already copied
+  reports `copied=0` forever after, however it is entered. **The pair does not
+  measure resumption at all**, which is why every attempt to read resumption out
+  of it has failed. It is now documented as a NON-inference, with both prior
+  versions recorded, rather than as a third list of causes.
+
+  Operationally: `copied=0` with `scanned` climbing is the NORMAL, healthy shape
+  for a re-verification pass. Read `resumed` / `resuming_after_row` on the
+  `processing tier` line instead.
+
+  The `streamTierEntries` resume comment (keys sort in write order — denied by
+  `sql_activity_backfill.go`'s own header) was the second guide and is fixed;
+  re-checked in this sweep and still correct.
+
+- [x] **Checkpoint the migration so a restart doesn't start over.** DONE: adds
+  `ActivitySQLBackfillProgressKey`, a per-tier `{state, cursor, scanned, copied,
+  reinserted}` blob written every batch (NoSync) with verdict transitions synced,
+  and threads a `startAfter` lower bound through `streamTierEntries`. Production
+  restarted the migration from row zero three times on 2026-09-08, discarding
+  ~81 minutes, then spent ~3h re-reading 6.5M rows it had already copied.
+  **The non-obvious half:** a bare cursor would have been a data-integrity bug.
+  `ParityOK` was in-memory only and reset to `true` at the top of every run, so it
+  was fail-closed only *by accident* — a crash forced a full re-verify. With a
+  cursor, a run that failed parity, died, and resumed would re-derive "clean" from
+  its untainted tail and flip reads onto an unverified copy. The verdict is now
+  durable per tier, `reinserted` carries across resumes, a `failed` tier is
+  re-scanned in FULL before it can pass, and the sentinel gate is a census
+  (`AllTiersClean`) rather than a process-local flag.
+
+## Decide whether to cap openai-go's own retry loop
+
+`internal/ai/retry.go`'s `DoWithRetry` is not the only retry layer. openai-go
+runs a second one underneath it that our code never sees:
+
+- `internal/requestconfig/requestconfig.go` defaults `MaxRetries: 2`, and
+- `shouldRetry` returns `true` whenever `res == nil` — i.e. for exactly the
+  connection failures `isUnreachableError` now refuses to retry.
+
+So one `DoWithRetry` attempt is really **three dials plus ~1.5s of the SDK's own
+backoff**. Against the unroutable host in production on 2026-09-09 the two loops
+multiplied to 9 dials and ~14.5s of pure backoff, which is what consumed the
+parser chain's entire 30s budget.
+
+The SDK's per-error opt-out cannot be used from our code: it is
+`errors.As(err, &deterministic)` against an **unexported** `interface{ noRetry() }`
+declared inside the SDK's internal package, and Go only lets same-package types
+satisfy an unexported interface method. The only lever from outside is
+`option.WithMaxRetries`, which is all-or-nothing.
+
+- [ ] Decide whether to pass `option.WithMaxRetries(0)` and let `DoWithRetry`
+      own retry policy outright. **The cost is real and needs a decision:** it
+      also discards the SDK's `Retry-After` header handling, which is the
+      correct behaviour for genuine OpenAI 429s and which `DoWithRetry`'s
+      quadratic backoff does not replicate.
+- [ ] If the answer is "only for local backends", scope it to
+      `NewOpenAIParserWithBaseURL`'s Ollama path, where there is no
+      `Retry-After` story to lose — but note that constructor is the generic
+      "any OpenAI-compatible base URL" path, not Ollama-only.
+- [ ] Whichever way it goes, `DoWithRetry`'s doc comment names the current
+      behaviour explicitly; update it rather than leaving two descriptions.
+
+Not blocking: with `DoWithRetry` fixed, a dead host costs ~5s instead of 30s,
+which is already well inside `minRungBudget` (5s), so fallback rungs are reached.
+This is throughput, not correctness.
+
+- [ ] **Find out why scanning the `metadata_cache:` prefix takes ~28s.**
+      `PebbleStore.ListMetadataCacheKeys` is a constant ~28s on production
+      regardless of what the caller asked for, and it is the floor under BOTH
+      `GET /audiobooks/metadata/cached` and `GET /audiobooks/metadata/cache/review`.
+      Paging (PR for `fix/metadata-cached-limit-and-batch`) cut the response body,
+      not this.
+
+      **Measured on production 2026-09-09** (a live instance with apply jobs
+      running, so treat the rates as indicative, not exact — successive calls
+      drifted 22s → 27s → 29s → 30s upward):
+      - `cached?limit=3|5|100` — all returned every row, ~20–24s. Constant in `limit`.
+      - `cache/review?limit=5` = 29.3s, `?limit=200` = 30.3s. So 195 extra FULL
+        entry decodes cost ~1.0s (~5ms each), and the ~28s constant is the scan.
+      - The review endpoint does strictly MORE per-row work yet is no faster than
+        the listing that did 40,549 `GetBookByID` point reads. **The per-book reads
+        were never the cost** — which is why the batch read in that PR is justified
+        by correctness (filter-before-paginate needs every row's status), not speed.
+      - 40,549 entries, 134,407 candidates total, mean 3.31 per entry; 11,624
+        entries (28.7%) hold zero candidates.
+
+      **Hypothesis already tested and REFUTED — do not retry it.** Decoding the
+      stored value into `MetadataCandidateCache` just to read `len(Candidates)`
+      looks wasteful (`json.RawMessage.UnmarshalJSON` is `append(...)`, so it
+      copies every candidate's bytes to then discard them). Replacing it with a
+      counting decode that allocates nothing benchmarked **1.6x SLOWER**
+      (10 candidates x 4KB: 73µs full decode vs 98µs counting; allocations
+      16 → 1). A custom `UnmarshalJSON` makes encoding/json scan the array to
+      find its extent and *then* hand it over to be scanned again — two passes,
+      where the full decode does one pass plus a memmove. Allocation count is not
+      cost.
+
+      **Cause of the remaining ~28s is UNIDENTIFIED.** Candidates:
+      1. LSM read amplification over the `metadata_cache:` prefix — the iterator
+         merging across many overlapping SSTables. Plausible given the store is
+         overdue for compaction, but unverified.
+      2. GC pressure from the per-request garbage against a large live heap. The
+         benchmark above ran in a small-heap process, where allocation is at its
+         cheapest, so it does NOT rule this out for production.
+
+      Note the entry-size figure (~3.1 KB, from 937 bytes x 3.31 candidates) is
+      derived from a *rendered* candidate in the review response, not measured at
+      the store. If the stored provider payload is larger, every rate above moves
+      with it. Getting a real per-prefix byte count (Pebble exposes
+      `EstimateDiskUsage` over a key range) would settle both the size question
+      and hypothesis 1 cheaply, and should come before any redesign.
+
+- [ ] **`TestProp_ChromemMatchesSqlite` has a reproducible counterexample — chromem returns an EMPTY set where sqlite returns a match.** Found 2026-09-09 by a routine full-package `go test ./internal/server/ -count=1` on an unrelated branch; `rapid` hit it on a random seed after 0 shrink steps. Failure: `sqlite→chromem overlap too low: 0 of 1 matched (chromem set=0)` at `internal/server/dedup_engine_prop_test.go:387`.
+
+  **Reproduced on pristine `origin/main` (0adfb5ebf)** with no other changes, so it is not branch-specific and not a flake in the usual sense — once `rapid` writes its failfile the case replays deterministically, 3/3.
+
+  The drawn vectors are dominated by **denormals and signed zeros** — `1.5e-38`, `-1.3e-34`, `-4.2e-35`, `-3.0e-23`, `-0` and exact `0` — across 14 vectors of dimension 8 plus the query. That points at a numerical edge case rather than a logic bug: most likely a normalization step dividing by a magnitude that underflows to zero, so every embedding degenerates and chromem's result set comes back empty while the sqlite path still ranks something.
+
+  Worth deciding explicitly which behaviour is correct before "fixing" it: agreeing on garbage may be the wrong goal, and rejecting a degenerate vector outright may be better than making the two backends match on it.
+
+  Reproduce: the seed lives in the `rapid` failfile `internal/server/testdata/rapid/TestProp_ChromemMatchesSqlite/TestProp_ChromemMatchesSqlite-20260909032244-5371.fail`. That directory is untracked and was deliberately NOT committed (it would turn CI permanently red on an unrelated PR). To regenerate from scratch, run `go test ./internal/server/ -run TestProp_ChromemMatchesSqlite -count=1` repeatedly until `rapid` rediscovers it, then keep the failfile it writes.
+
+  **The failfile trap this ran into is already documented** — see the existing section *"A `rapid` property test can poison every later run in the same working tree"*, which covers it more thoroughly (including the false kills it manufactures inside `scripts/mutation-matrix.sh`). Not restating it here. Two things this incident adds to that entry:
+
+  - **It is still unmitigated.** That section's cheapest proposed fix — clear or `.gitignore` `*/testdata/rapid` before a harness run — had not been done, which is how this was hit again on 2026-09-09, a week after the 2026-09-02 observation. Worth doing now: the trap has recurred once already.
+  - **How to tell a pre-existing property failure from one your branch caused.** Both halves of the usual inference are artifacts: it fails deterministically in your tree only because *your own run* just wrote the failfile, and it "passes on main" only because that tree has none. Check `git status --porcelain internal/server/testdata/` and read the timestamp in the filename; then prove pre-existence by copying the failfile into a throwaway worktree at pristine `origin/main` (never into the primary checkout).
+
+## The review lane still downloads the entire candidate set (2026-09-09)
+
+`web/src/components/review/lanes/useMetadataLane.ts:543` calls
+`api.getCachedReviewResults(0, 0)`. The first argument is `limit`, and `0` means
+"return all rows" — the same convention that made `Resume Review` pull 40,485
+rows before #3156. So the review lane fetches the whole matching set on open.
+
+This is the *other* endpoint (`GET /audiobooks/metadata/cache/review-results`),
+not the one #3154/#3156 fixed, and it is more expensive per row than the one that
+was fixed: `ListCachedCandidates` returns six scalar fields per row, whereas the
+review-results handler fans `GetCachedCandidates` out over every prepared row
+through an errgroup before it can answer. Prod had 37,852 pending rows on
+2026-09-09 and the count was climbing ~100 per minute while `batch-apply-cached`
+ran.
+
+Note the circularity to break, in `internal/server/handlers/metadata_cache.go`
+around line 373: the comment justifies doing that fan-out over all rows rather
+than one page with "both callers pass limit=0, so the page has always BEEN every
+row." That is *true today* — it is true precisely because the only caller asks
+for everything. It is a description of the current caller, not an argument that
+the full fan-out is cheap, and it should not be read as one when this is picked
+up.
+
+**Decide before implementing** (this is why it is filed rather than done):
+
+- Does the review lane actually need every row up front, or does it need a page
+  plus `total_count`? It has client-side filtering/grouping across lanes, so the
+  answer is not obviously "page it" — check what `useMetadataLane` does with the
+  full array before assuming.
+- If it does need everything, the fix is not paging but making the whole-set path
+  cheaper (or streaming it), and the handler comment above should say so
+  explicitly instead of resting on the caller's current argument.
+
+Measured cost is unknown from outside: prod is running a build older than #3154,
+so `limit` is inert there and the two shapes cannot be compared by curl against
+production. Comparing them needs a deploy, or a local run against a realistic
+dataset.
+
+- [ ] **`POST /ai/test-connection` tests OpenAI unconditionally — it can never
+      validate a `llm_mode=local` backend.** `AIHandler.TestConnection`
+      (`internal/server/handlers/ai.go:307`) builds
+      `ai.NewOpenAIParser(&config.AppConfig, apiKey, true)` and calls
+      `parser.TestConnection`, with no branch on `llm_mode` /
+      `EffectiveLLMMode()`. On a local-backend install it dials api.openai.com,
+      400s when `openai_api_key` is empty, and 500s when the key is set but the
+      call fails — and in neither case has it touched the configured Ollama
+      endpoint.
+
+      **Cost, measured 2026-09-09.** Prod ran `llm_mode=local` against a base URL
+      with a one-digit typo *and* a GPU that crashed every model load. Through
+      both faults this endpoint returned 500, and that 500 was read twice as
+      evidence about the local backend. It is not evidence about the local
+      backend at all. The two things that did work: `GET /ai/backends/status`
+      (reports `local_reachable` + `fallback_reason`) and actually running
+      `library.ai-parse` and reading `progress_message`.
+
+      Note the two are not interchangeable — `/ai/backends/status` only calls
+      Ollama's `/api/tags`, which lists models without loading one, so it went
+      `local_reachable: true` on hardware where every single inference aborted.
+      A real connection test has to load a model, not enumerate them.
+
+      Fix: branch on the effective LLM mode and, in local mode, test the
+      configured local endpoint with a minimal generate/embed call rather than a
+      list call. Failing that, rename it to `/ai/test-openai-connection` so the
+      name stops making a promise the code does not keep. Either way the UI
+      button that calls it needs to say which backend it tested.
+
+- [x] **Set `ai_backend.parse_batch_size` / `parse_batch_timeout_seconds` on prod
+      and confirm a real `library.ai-parse` run parses > 0 books at the
+      production batch size.** Done 2026-09-09: prod runs size 4 / timeout 90s /
+      workers 1, and op `01M22Z996DV1G1MJ25XST6S9GN` returned
+      `20/20 book(s) parsed in 5/5 batches; 0 batch failure(s), 0 save
+      failure(s)` in 252s (~12.6s per book on the CPU 7B). The defaults (20/30s)
+      are measured to fail on that hardware: one 20-filename batch is 105s on
+      qwen2.5:3b and 201s on qwen2.5:7b.
+
+      Verify the way the 2026-09-09 session did, not with a status endpoint: a
+      single-book probe passes even on a broken configuration, because the cost
+      is linear in batch size. Trigger `POST /operations/v2` with
+      `{"def_id":"library.ai-parse","params":{"books":[... 20 entries ...]}}` and
+      read `progress_message` for `N/N book(s) parsed`.
+
+- [ ] **Decide 7B vs 3B for `ai_backend.local_llm_model` on the CPU backend.**
+      qwen2.5:7b-instruct is 6.9 tok/s and 3b-instruct is 15.2 tok/s on the
+      Ryzen 7 3800X — but on the one 20-filename sample compared so far, the 3B
+      returned `series_number: 0` for "Mistborn 01" where the 7B returned `1`.
+      This is a metadata WRITE path, so the 2.2x speedup is not obviously worth
+      it. Needs a real accuracy comparison over a sample of actual library
+      filenames before switching, not a single spot check.
+
+- [ ] **Run one embedding through the APP to close out the local-embedding
+      claim.** The backend itself is proven: `bge-m3` on the CPU-only Ollama
+      answers a 64-input request — `embedChunkSize` in
+      `internal/dedup/engine.go` — in **5.6s** against the 30s
+      `defaultRequestTimeout` in `internal/ai/embedding_client.go`, so that
+      deadline's "enough for any batch ≤ 64 inputs on a healthy network" comment
+      still holds now that the network is a local CPU. Measured 2026-09-09:
+      n=1 2.0s, n=16 1.6s, n=64 5.6s, 1024 dims. Sub-linear, unlike the parse
+      path, which is why the same "fixed deadline over a caller-chosen batch"
+      shape is a bug there and not here.
+
+      What is NOT verified is the app's own path: no `dedup.embed-*` op has run
+      since the 2026-09-09 fixes (`/operations/timeline?since=720m` returns zero
+      embed rows with `truncated=false`, `scan_capped=false`, `matched=26`, so
+      that window is complete). Trigger `dedup.embed-scan` and confirm books
+      actually embed before treating local embeddings as working end-to-end.
+
+- [ ] **The AI parser CHAIN is unexercised on this deployment.** Prod is
+      `llm_mode=local`, so `internal/scanner/ai_parser_chain.go` has a single
+      rung and its `minRungBudget` interaction with the now-configurable
+      `parse_batch_timeout_seconds` has never run. The comment there describing
+      how raising the timeout widens the window for every rung is reasoning, not
+      tested behaviour — exercise it before relying on it.
+
+- [ ] **Four `library.ai-parse` failure rows on prod dated 2026-09-09 are probe
+      artifacts, not symptoms.** Completed at 09:18Z (`0/4`), 09:46Z (`0/1`),
+      10:12Z (`0/20`) and 11:01Z (`12/20`) — the diagnostic ladder that found the
+      batch-size and worker faults, run against fake book IDs the saver skips
+      cleanly. Do not diagnose them as production failures. (The two earlier
+      rows at 03:03Z and 03:26Z are from before that session and are NOT covered
+      by this note.)
 
 ## ABS layer hides every `imported` book — author pages undercount (2026-09-07)
 
