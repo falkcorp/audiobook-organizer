@@ -1,7 +1,7 @@
 // file: internal/server/app_dir_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1f6a92d4-3b58-4e07-ac21-5d8b04e3719f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-09
 
 package server
 
@@ -14,7 +14,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,7 +85,7 @@ func TestCalculateLibrarySizes_ExcludesAppDirs(t *testing.T) {
 		// testing the empty case while still passing.
 		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
 		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
-		if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+		if got := appdirs.Current(); got != appdirs.ClearedBaseline() {
 			t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 		}
 		t.Cleanup(func() {
@@ -161,7 +160,7 @@ func TestStripMovementAtoms_SkipsAppDirs(t *testing.T) {
 				// testing the empty case while still passing.
 				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
 				config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
-				if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+				if got := appdirs.Current(); got != appdirs.ClearedBaseline() {
 					t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 				}
 				t.Cleanup(func() {

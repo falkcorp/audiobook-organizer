@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/app_dir_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b0e47c9-a2d3-4816-9f74-0c63e8b1a5de
-// last-edited: 2026-08-30
+// last-edited: 2026-09-09
 
 // Shared test helpers (noopReporter, blank jobs import) live in testhelpers_test.go.
 package jobs_test
@@ -15,7 +15,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,7 +51,7 @@ func withLibraryRoot(t *testing.T, root string, appDirs bool) {
 		// testing the empty case while still passing.
 		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
 		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
-		if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+		if got := appdirs.Current(); got != appdirs.ClearedBaseline() {
 			t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 		}
 	}
