@@ -1,7 +1,7 @@
 // file: internal/remux/app_dir_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a17c8d2-6b40-4e95-81af-27c50e6b93d1
-// last-edited: 2026-08-30
+// last-edited: 2026-09-09
 
 package remux
 
@@ -14,7 +14,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // withRemuxAppDirs points the process config's root and app directories at a
@@ -42,7 +41,7 @@ func withRemuxAppDirs(t *testing.T, root string, enabled bool) {
 		// the empty case while still passing.
 		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
 		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
-		if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+		if got := appdirs.Current(); got != appdirs.ClearedBaseline() {
 			t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 		}
 	}

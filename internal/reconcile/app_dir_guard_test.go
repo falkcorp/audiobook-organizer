@@ -1,7 +1,7 @@
 // file: internal/reconcile/app_dir_guard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d5c3e78-1b46-4a02-8f95-7c2e60b3d417
-// last-edited: 2026-09-02
+// last-edited: 2026-09-09
 
 package reconcile
 
@@ -139,7 +139,7 @@ func TestFindUntrackedFiles_SkipsAppDirs(t *testing.T) {
 				// the empty case while still passing.
 				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
 				config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
-				if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
+				if got := appdirs.Current(); got != appdirs.ClearedBaseline() {
 					t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 				}
 			}

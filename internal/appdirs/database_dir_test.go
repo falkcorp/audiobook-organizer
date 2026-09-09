@@ -1,5 +1,5 @@
 // file: internal/appdirs/database_dir_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a06f2b8-5d47-4e93-8c20-b7e14a385c96
 // last-edited: 2026-09-09
 
@@ -94,6 +94,48 @@ func TestFromConfig_RelativeDatabasePathExcludesNothing(t *testing.T) {
 	book := filepath.Join(root, "Some Author", "Some Title")
 	if pathutil.ShouldSkipDir(root, book, app) {
 		t.Error("a relative database_path just excluded the entire library")
+	}
+}
+
+// TestClearedBaseline_StillFailsOnAnUnclearedField is the negative control for
+// ClearedBaseline itself.
+//
+// ClearedBaseline was introduced because the `empty AppDirs` guard controls
+// could no longer compare against the zero value once ActivityDBDir existed.
+// The obvious way to make those tests pass again is to loosen the comparison
+// until it stops complaining -- which would silently retire eight negative
+// controls across the codebase and nobody would notice for months.
+//
+// So: with a source field left uncleared, Current() MUST still differ from
+// ClearedBaseline(). If this test ever passes trivially, the guard controls
+// have stopped guarding.
+func TestClearedBaseline_StillFailsOnAnUnclearedField(t *testing.T) {
+	const root = "/mnt/bigdata/books/audiobook-organizer"
+	prev := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = prev })
+
+	// Everything cleared except RootDir: this is the state the guard helpers
+	// set up, and it must compare equal.
+	config.AppConfig = config.Config{RootDir: root}
+	if got, want := Current(), ClearedBaseline(); got != want {
+		t.Fatalf("a fully cleared config must equal the baseline; got %+v want %+v", got, want)
+	}
+
+	// Now leave ONE source field set, exactly as a future careless caller would.
+	for name, mutate := range map[string]func(*config.Config){
+		"BackupDir":          func(c *config.Config) { c.BackupDir = root + "/backups" },
+		"OpenLibraryDumpDir": func(c *config.Config) { c.OpenLibraryDumpDir = root + "/dumps" },
+		"PlaylistDir":        func(c *config.Config) { c.PlaylistDir = root + "/playlists" },
+		"DatabasePath":       func(c *config.Config) { c.DatabasePath = root + "/.appdata/db.pebble" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			config.AppConfig = config.Config{RootDir: root}
+			mutate(&config.AppConfig)
+			if got, want := Current(), ClearedBaseline(); got == want {
+				t.Errorf("%s was left set and the baseline comparison still matched (%+v) — "+
+					"the empty-AppDirs negative controls are no longer guarding anything", name, got)
+			}
+		})
 	}
 }
 

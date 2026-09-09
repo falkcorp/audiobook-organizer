@@ -1,5 +1,5 @@
 // file: internal/appdirs/appdirs.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8a1c07-92be-4d51-a6b3-0c47e5d19af2
 // last-edited: 2026-09-09
 
@@ -78,6 +78,29 @@ func FromConfig(cfg *config.Config) pathutil.AppDirs {
 // read config.AppConfig directly use this rather than threading a pointer.
 func Current() pathutil.AppDirs {
 	return FromConfig(&config.AppConfig)
+}
+
+// ClearedBaseline is what FromConfig still produces after a caller has zeroed
+// every operator-settable field it reads. It exists for the `empty AppDirs`
+// negative controls in the app_dir_guard tests, which assert that a walk with
+// no exclusions configured sees the whole tree.
+//
+// Those controls used to compare against the zero AppDirs. That stopped being
+// reachable when ActivityDBDir was added: ResolveActivityDBPath falls back to
+// {RootDir}/.activity, and RootDir cannot be cleared because it IS the walk
+// root. So exactly one field survives a full clear, and pretending otherwise
+// would make every one of those tests fail for a reason that is not a bug.
+//
+// This is deliberately NOT `return FromConfig(cleared)` for some notion of a
+// cleared config: ActivityDBDir is defined here as circular (whatever the live
+// config resolves it to) precisely so that EVERY OTHER FIELD stays pinned at
+// empty. That is what the controls are guarding. If FromConfig grows a new
+// field tomorrow and a caller forgets to zero its source, `got` gains a value
+// this baseline does not have and the control fails loudly -- which is the
+// entire point of the assertion. Do not "simplify" this to ignore unknown
+// fields.
+func ClearedBaseline() pathutil.AppDirs {
+	return pathutil.AppDirs{ActivityDBDir: Current().ActivityDBDir}
 }
 
 // cleanAbs normalises an absolute path and drops everything else.
