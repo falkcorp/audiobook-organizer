@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.85.0
+// version: 1.86.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-24
+// last-edited: 2026-09-09
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -2043,8 +2043,17 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   const handleResumeReview = async () => {
     try {
-      const cached = await api.listCachedCandidates('pending');
-      if (!cached.entries.length) {
+      // limit=1, and read `total` rather than entries.length. This handler needs
+      // exactly two things — is the pending set empty, and how big is it — and
+      // both come from `total`, which the server computes over the whole
+      // filtered set regardless of limit. Sending no limit meant limit=0, which
+      // the endpoint reads as "return every row": 40,485 rows / 7.35 MB parsed
+      // in the browser on a button click, every field then thrown away.
+      //
+      // ReviewWorkspace pages its own data, so nothing downstream of this
+      // navigate() consumes the rows either.
+      const cached = await api.listCachedCandidates('pending', 1);
+      if (cached.total === 0) {
         toast(
           'No books with pending metadata candidates found. Click Fetch Selected to populate the cache.',
           'info'
@@ -2052,10 +2061,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         return;
       }
       navigate('/review');
-      toast(
-        `${cached.entries.length} book${cached.entries.length === 1 ? '' : 's'} ready for review.`,
-        'info'
-      );
+      toast(`${cached.total} book${cached.total === 1 ? '' : 's'} ready for review.`, 'info');
     } catch {
       toast('Failed to load pending review', 'error');
     }
