@@ -6,6 +6,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -133,6 +134,7 @@ func TestCommandsRunWithStubs(t *testing.T) {
 	if err := organizeCmd.RunE(organizeCmd, nil); err != nil {
 		t.Fatalf("organizeCmd failed: %v", err)
 	}
+	sandboxStateDir(t)
 	if err := serveCmd.RunE(serveCmd, nil); err != nil {
 		t.Fatalf("serveCmd failed: %v", err)
 	}
@@ -183,6 +185,7 @@ func TestServeCommandErrorPaths(t *testing.T) {
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
 	config.AppConfig.EnableSQLite = true
 
+	sandboxStateDir(t)
 	initEncryption = func(dir string, legacy ...string) error { return fmt.Errorf("encrypt fail") }
 	if err := serveCmd.RunE(serveCmd, nil); err == nil {
 		t.Fatal("expected serve command to fail on encryption error")
@@ -280,5 +283,28 @@ func TestStoreInitializationError(t *testing.T) {
 
 	if err := scanCmd.RunE(scanCmd, nil); err == nil {
 		t.Fatal("expected scan command to fail on store init error")
+	}
+}
+
+// sandboxStateDir points the credential directory at a temp dir and seeds it
+// with an encryption key.
+//
+// Both halves matter. Without the redirect these tests target the real
+// /var/lib/audiobook-organizer -- EACCES on a dev machine, and the PRODUCTION
+// directory on the server. Without the seeded key, guardAgainstKeyRegeneration
+// sees no key anywhere and calls GetAllSettings to find out whether generating
+// one would destroy secrets, which these stores are not set up to answer.
+//
+// A pre-existing key is also the realistic state for what these tests cover: an
+// install that has run before. The guard's own behaviour is tested directly in
+// encryption_key_guard_test.go.
+func sandboxStateDir(t *testing.T) {
+	t.Helper()
+	config.ResetStateDirForTest()
+	t.Cleanup(config.ResetStateDirForTest)
+	dir := t.TempDir()
+	t.Setenv(config.SecureStateDirEnv, dir)
+	if err := os.WriteFile(database.EncryptionKeyPath(dir), bytes.Repeat([]byte{9}, 32), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -28,6 +28,8 @@ import (
 // Both now call config.SecureStateDir(). This test fails if either ever goes
 // back to deriving its own.
 func TestBootstrapToken_WriteAndConsumeResolveTheSameDirectory(t *testing.T) {
+	config.ResetStateDirForTest()
+	t.Cleanup(config.ResetStateDirForTest)
 	stateDir := t.TempDir()
 	t.Setenv(config.SecureStateDirEnv, stateDir)
 
@@ -77,6 +79,8 @@ func TestBootstrapToken_WriteAndConsumeResolveTheSameDirectory(t *testing.T) {
 // credential; the runbook reads it with sudo precisely because it should not be
 // readable by anyone else.
 func TestBootstrapToken_FileIsNotWorldReadable(t *testing.T) {
+	config.ResetStateDirForTest()
+	t.Cleanup(config.ResetStateDirForTest)
 	stateDir := t.TempDir()
 	t.Setenv(config.SecureStateDirEnv, stateDir)
 

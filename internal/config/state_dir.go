@@ -6,9 +6,11 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // SecureStateDirEnv overrides SecureStateDir. It exists so tests, dev boxes and
@@ -54,27 +56,101 @@ const DefaultSecureStateDir = "/var/lib/audiobook-organizer"
 // SecureStateDir returns the directory holding the encryption key, the
 // bootstrap token and the startup read-only key.
 //
-// This is a pure lookup: it creates nothing. Call EnsureSecureStateDir once at
-// startup if you are going to write into it.
+// It returns the directory EnsureSecureStateDir actually resolved, if that has
+// run. THIS MATTERS: EnsureSecureStateDir can fall back to a different
+// directory than the configured one (see its comment), and the bootstrap token
+// is written by one call site and consumed -- and deleted -- by another. If
+// those two disagreed, the token would be written to one directory and looked
+// for in another, which presents as `401 invalid bootstrap token` with a
+// perfectly good token file on disk. Memoising the decision is what makes the
+// two sides agree by construction rather than by both happening to recompute
+// it the same way.
+//
+// Before EnsureSecureStateDir has run it is a pure lookup and creates nothing.
 func SecureStateDir() string {
+	resolvedMu.RLock()
+	r := resolvedStateDir
+	resolvedMu.RUnlock()
+	if r != "" {
+		return r
+	}
+	return configuredStateDir()
+}
+
+// configuredStateDir is the requested directory, before any check that it can
+// actually be used.
+func configuredStateDir() string {
 	if v := strings.TrimSpace(os.Getenv(SecureStateDirEnv)); v != "" {
 		return filepath.Clean(v)
 	}
 	return DefaultSecureStateDir
 }
 
-// EnsureSecureStateDir creates the directory if it is absent and returns it.
+var (
+	resolvedMu       sync.RWMutex
+	resolvedStateDir string
+)
+
+func rememberStateDir(dir string) {
+	resolvedMu.Lock()
+	resolvedStateDir = dir
+	resolvedMu.Unlock()
+}
+
+// ResetStateDirForTest clears the memoised directory so a test can change
+// ABK_STATE_DIR and have it take effect. Tests that call EnsureSecureStateDir
+// must call this, or they inherit whichever directory ran first.
+func ResetStateDirForTest() {
+	resolvedMu.Lock()
+	resolvedStateDir = ""
+	resolvedMu.Unlock()
+}
+
+// EnsureSecureStateDir creates the credential directory if it is absent and
+// returns the directory that should actually be used.
 //
 // 0700, not 0755: every file in here is a credential. systemd's
 // StateDirectory= would create it 0755 before ExecStart, so this also tightens
-// that case rather than accepting whatever was there.
+// that case rather than accepting whatever was there. MkdirAll is a no-op on an
+// existing directory and does NOT change its mode, so an operator who has
+// deliberately set a different mode keeps it.
 //
-// MkdirAll is a no-op on an existing directory and does NOT change its mode, so
-// an operator who has deliberately set a different mode keeps it.
+// THE FALLBACK. DefaultSecureStateDir is an absolute Linux path that an
+// unprivileged process cannot create: `mkdir /var/lib/audiobook-organizer`
+// fails with EACCES on every developer machine and in any container that does
+// not pre-create it. Refusing to start there would mean `serve` no longer runs
+// locally at all, so when the DEFAULT is not creatable this falls back to
+// filepath.Dir(database_path) -- which is exactly where these files lived
+// before -- and says so loudly.
+//
+// That is not the wandering-credentials bug coming back. On the production host
+// the directory exists and is owned by the service user, so MkdirAll is a no-op
+// and the constant wins; the fallback is reached only where the old behaviour
+// was already the behaviour, and it is announced rather than silent.
+//
+// An EXPLICIT ABK_STATE_DIR never falls back. Someone who named a directory
+// gets an error if it cannot be used, not a quiet substitution somewhere else.
 func EnsureSecureStateDir() (string, error) {
-	dir := SecureStateDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir := configuredStateDir()
+	err := os.MkdirAll(dir, 0o700)
+	if err == nil {
+		rememberStateDir(dir)
+		return dir, nil
+	}
+	if strings.TrimSpace(os.Getenv(SecureStateDirEnv)) != "" {
+		return dir, err // explicitly requested: report the failure, do not guess
+	}
+
+	fallback := filepath.Dir(strings.TrimSpace(AppConfig.DatabasePath))
+	if fallback == "" || fallback == "." || !filepath.IsAbs(fallback) {
 		return dir, err
 	}
-	return dir, nil
+	if ferr := os.MkdirAll(fallback, 0o700); ferr != nil {
+		return dir, err // report the real target's error, not the fallback's
+	}
+	rememberStateDir(fallback)
+	slog.Warn("credential directory is not creatable — falling back to the database directory",
+		"wanted", dir, "wanted_err", err, "using", fallback,
+		"note", "set "+SecureStateDirEnv+" to choose this deliberately")
+	return fallback, nil
 }
