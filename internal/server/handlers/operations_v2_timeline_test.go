@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_timeline_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f3c1a94-2e6b-4d58-9a71-c0d4e8b52f36
-// last-edited: 2026-08-24
+// last-edited: 2026-09-09
 
 // Behaviour tests for GET /api/v1/operations/timeline's def_id and limit
 // parameters, and for the scope fields the response reports about itself.
@@ -300,4 +300,169 @@ func TestGetOperationTimeline_DoesNotFlagAnUnfilledScan(t *testing.T) {
 	// rather than false — and this object exists to be read by someone who might
 	// misread it.
 	assert.Equal(t, false, data["scan_capped"], "scan_capped must be present and false when the scan did not fill")
+}
+
+// timelineRowsWithStatus builds n rows for defID carrying the given status.
+func timelineRowsWithStatus(defID, status string, n int) []database.OperationV2Row {
+	rows := timelineRows(defID, n)
+	for i := range rows {
+		rows[i].Status = status
+		rows[i].ID = fmt.Sprintf("%s-%s-%d", defID, status, i)
+	}
+	return rows
+}
+
+// The regression test for the incident that motivated the filter, written in the
+// shape that actually cost something.
+//
+// `?status=canceled` used to return the unfiltered rows, so a caller reading
+// `matched` to size DELETE /operations/history?status=canceled was told "1 row"
+// and removed 70. The assertion that matters is not that the LIST is filtered —
+// it is that `matched` counts canceled rows over the whole window rather than
+// the whole window. A fix that filtered the returned page but left `matched`
+// counting everything would look right in the UI and re-cause the same deletion.
+func TestGetOperationTimeline_StatusCountsMatchedOverTheWholeWindow(t *testing.T) {
+	rows := timelineRowsWithStatus("a.op", "completed", 120)
+	rows = append(rows, timelineRowsWithStatus("a.op", "canceled", 70)...)
+	rows = append(rows, timelineRowsWithStatus("b.op", "failed", 10)...)
+	require.Len(t, rows, 200)
+
+	h := timelineHandler(t, rows)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=168h&status=canceled&limit=5", "", nil)
+	h.GetOperationTimeline(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	data := timelineBody(t, w.Body.Bytes())
+
+	// 70, not 200: the number a delete would have been sized against.
+	assert.Equal(t, float64(70), data["matched"],
+		"matched must count canceled rows across the window, not every row in it")
+	assert.Len(t, data["operations"].([]any), 5, "limit still bounds the page")
+	assert.Equal(t, true, data["truncated"], "70 matched behind a limit of 5 is truncated")
+	assert.Equal(t, false, data["scan_capped"], "200 rows is nowhere near the scan bound")
+
+	for _, op := range data["operations"].([]any) {
+		assert.Equal(t, "canceled", op.(map[string]any)["status"],
+			"a returned row must actually carry the requested status")
+	}
+}
+
+// The direct anti-regression for "accepted then dropped": filtering must CHANGE
+// the answer. This is the assertion whose absence let the bug ship — the old
+// behaviour returned byte-identical rows with and without the parameter, and
+// every existing test passed because none of them compared the two.
+func TestGetOperationTimeline_StatusFilterChangesTheAnswer(t *testing.T) {
+	rows := timelineRowsWithStatus("a.op", "completed", 8)
+	rows = append(rows, timelineRowsWithStatus("a.op", "canceled", 3)...)
+
+	unfiltered := timelineHandler(t, rows)
+	c1, w1 := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h", "", nil)
+	unfiltered.GetOperationTimeline(c1)
+	all := timelineBody(t, w1.Body.Bytes())
+
+	filtered := timelineHandler(t, rows)
+	c2, w2 := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h&status=canceled", "", nil)
+	filtered.GetOperationTimeline(c2)
+	only := timelineBody(t, w2.Body.Bytes())
+
+	require.Equal(t, float64(11), all["matched"])
+	require.Equal(t, float64(3), only["matched"])
+	assert.NotEqual(t, all["matched"], only["matched"],
+		"a status filter that leaves the answer unchanged is the bug this fixes")
+}
+
+// An unknown status answers 0 AND says what it did see. A bare matched=0 cannot
+// distinguish "no canceled ops in this window" from "this store spells it
+// canceled and you typed cancelled", and those need opposite next actions.
+//
+// Deliberately not a 400: the store bounds its window on CompletedAt rather than
+// a status list precisely because status vocabularies grow, and a whitelist here
+// would make a newly added status unqueryable until someone edited this file.
+func TestGetOperationTimeline_UnknownStatusReportsWhatIsPresent(t *testing.T) {
+	rows := timelineRowsWithStatus("a.op", "completed", 4)
+	rows = append(rows, timelineRowsWithStatus("a.op", "canceled", 2)...)
+
+	h := timelineHandler(t, rows)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h&status=cancelled", "", nil)
+	h.GetOperationTimeline(c)
+
+	require.Equal(t, http.StatusOK, w.Code, "an unrecognised status is answered, not rejected")
+	data := timelineBody(t, w.Body.Bytes())
+	assert.Equal(t, float64(0), data["matched"])
+	assert.Equal(t, "cancelled", data["status"], "scope must echo what was asked for")
+
+	present, ok := data["statuses_present"].([]any)
+	require.True(t, ok, "an empty filtered answer must say which statuses it did see: %v", data)
+	assert.Equal(t, []any{"canceled", "completed"}, present, "sorted, so the field is stable")
+}
+
+// The noise guard: statuses_present exists to explain an empty answer, so it must
+// NOT appear on an ordinary successful one.
+func TestGetOperationTimeline_StatusesPresentOnlyWhenNothingMatched(t *testing.T) {
+	rows := timelineRowsWithStatus("a.op", "completed", 4)
+
+	h := timelineHandler(t, rows)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h&status=completed", "", nil)
+	h.GetOperationTimeline(c)
+
+	data := timelineBody(t, w.Body.Bytes())
+	require.Equal(t, float64(4), data["matched"])
+	_, exists := data["statuses_present"]
+	assert.False(t, exists, "statuses_present must not ride along on a successful filter")
+}
+
+// An absent status must mean "every status", not "no status" — the inverted
+// predicate mutant returns nothing here, the same pin EmptyDefIDReturnsEveryDef
+// provides for def_id.
+func TestGetOperationTimeline_EmptyStatusReturnsEveryStatus(t *testing.T) {
+	// Deliberately no "running" row: the shared fixture does not stub
+	// GetCurrentItem, which the handler calls only for running ops. Two terminal
+	// statuses exercise the same predicate without dragging in that dependency.
+	rows := timelineRowsWithStatus("a.op", "completed", 3)
+	rows = append(rows, timelineRowsWithStatus("a.op", "failed", 2)...)
+
+	h := timelineHandler(t, rows)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h", "", nil)
+	h.GetOperationTimeline(c)
+
+	data := timelineBody(t, w.Body.Bytes())
+	assert.Equal(t, float64(5), data["matched"])
+	assert.Equal(t, "", data["status"])
+}
+
+// status and def_id must AND, not OR. An OR would re-admit the rows the caller
+// excluded and quietly restore the overcount this endpoint keeps being fixed for.
+func TestGetOperationTimeline_StatusAndDefIDCombine(t *testing.T) {
+	rows := timelineRowsWithStatus("a.op", "canceled", 6)
+	rows = append(rows, timelineRowsWithStatus("b.op", "canceled", 5)...)
+	rows = append(rows, timelineRowsWithStatus("a.op", "completed", 4)...)
+
+	h := timelineHandler(t, rows)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=1h&def_id=a.op&status=canceled", "", nil)
+	h.GetOperationTimeline(c)
+
+	data := timelineBody(t, w.Body.Bytes())
+	assert.Equal(t, float64(6), data["matched"], "only a.op rows that are also canceled")
+	assert.Equal(t, "a.op", data["def_id"])
+	assert.Equal(t, "canceled", data["status"])
+}
+
+// The boundary the filter does NOT fix, pinned so nobody claims it does.
+//
+// A filtered `matched` is a census only while the scan was complete. When the
+// store returns timelineScanBound rows the window overflowed, the filter ran over
+// the newest 5000 only, and `matched` is a FLOOR — scan_capped is the one signal
+// saying so. Asserting it here keeps "status is honored" from being read as
+// "status counts are always total".
+func TestGetOperationTimeline_FilteredCountIsAFloorWhenTheScanCapped(t *testing.T) {
+	rows := timelineRowsWithStatus("a.op", "canceled", 5000)
+
+	h := timelineHandler(t, rows)
+	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=168h&status=canceled&limit=10", "", nil)
+	h.GetOperationTimeline(c)
+
+	data := timelineBody(t, w.Body.Bytes())
+	assert.Equal(t, true, data["scan_capped"],
+		"a full scan must be declared, or a filtered count reads as a total")
+	assert.Equal(t, float64(5000), data["matched"])
 }
