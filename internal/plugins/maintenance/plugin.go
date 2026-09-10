@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -60,6 +60,11 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// SplitCompositeAuthorName("& Conrad Westmaas") returns nil (no
 		// delimiter, three words), so the split scan skips these rows entirely.
 		p.authorConjunctionRepairDef(),
+		// author-duplicate-merge is the OPERATOR-DRIVEN twin of the two ops above:
+		// it merges only the author names it is explicitly handed, so it can never
+		// launder a book-title row into a plausible-looking author the way an
+		// automatic "these two look like the same person" classifier would.
+		p.authorDuplicateMergeDef(),
 		p.purgeEmptyAuthorsDef(),
 		p.authorStripMergeDef(),
 		p.missingFileAuditDef(),
