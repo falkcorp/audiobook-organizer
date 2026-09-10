@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAuthorTab.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-10
 import { useState, useEffect, useCallback } from 'react';
@@ -206,8 +206,8 @@ function AuthorBooksPopover({
             <Box sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
               <Typography variant="body2" color="error">
                 {`Could not load ${failedCount} of ${authorIds.length} author${
-                  authorIds.length === 1 ? '' : 's'
-                }' books — count may be incomplete.`}
+                  authorIds.length === 1 ? "'s" : "s'"
+                } books — count may be incomplete.`}
               </Typography>
               <Button
                 size="small"
