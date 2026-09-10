@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -27,8 +27,8 @@ security) are HELD OPEN for the owner — never admin-merged.
 
 **Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
-| 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | | queued |
-| 3 | TASK-346 / 347 / 358 / 359 series trashed-row guards | data-loss | M | | queued — check shared files before pairing |
+| 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | dispatched 15:22 (files: book_dedup.go, itunes_heal.go — no overlap) |
+| 3 | TASK-346 / 347 / 358 / 359 series trashed-row guards | data-loss | M | | queued — 346 (duplicates_helpers.go), 347 (series_denumber_op.go), 358 (series_dedup.go) independent; 359 touches pebble_store.go → wait for #3182 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
 | 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued |
 | 4 | TASK-338 retire fix-library-states | data-loss | S | | queued |
