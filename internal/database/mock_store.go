@@ -40,8 +40,8 @@ type MockStore struct {
 	// dedup tests set only this; GetAllBooksCoreFunc's default (see
 	// setupTestEngine in internal/dedup) forwards to it so those tests keep
 	// working without a mechanical per-file migration.
-	GetAllBooksFunc            func(limit, offset int) ([]Book, error)
-	GetAllBooksCoreFunc        func(limit, offset int) ([]BookCore, error)
+	GetAllBooksFunc     func(limit, offset int) ([]Book, error)
+	GetAllBooksCoreFunc func(limit, offset int) ([]BookCore, error)
 	// GetAllBooksCoreCompleteFunc backs the completeness-guarded getter. It is
 	// separate from GetAllBooksCoreFunc on purpose: a test that wants the
 	// orphan-file delete path to see a SHORT book list must be able to make
@@ -49,11 +49,11 @@ type MockStore struct {
 	// ordinary listing sees. Left nil, it falls back to GetAllBooksCoreFunc so
 	// existing tests that only stub the plain getter keep working.
 	GetAllBooksCoreCompleteFunc func(limit, offset int) ([]BookCore, error)
-	GetAllBooksFullFromFunc    func(afterID string, limit int) ([]Book, error)
-	ListBookIDsFunc            func() ([]string, error)
-	GetAllBookSummariesFunc    func(limit, offset int) ([]BookSummary, error)
-	GetBooksByWorkIDFunc       func(workID string) ([]Book, error)
-	GetBooksBySeriesIDCoreFunc func(seriesID int) ([]BookCore, error)
+	GetAllBooksFullFromFunc     func(afterID string, limit int) ([]Book, error)
+	ListBookIDsFunc             func() ([]string, error)
+	GetAllBookSummariesFunc     func(limit, offset int) ([]BookSummary, error)
+	GetBooksByWorkIDFunc        func(workID string) ([]Book, error)
+	GetBooksBySeriesIDCoreFunc  func(seriesID int) ([]BookCore, error)
 	// GetBooksBySeriesIDAllVersionsFunc stubs the complete-set series getter.
 	// When it is nil the mock method falls back to GetBooksBySeriesIDCoreFunc
 	// rather than returning an empty slice — see the method for why.
