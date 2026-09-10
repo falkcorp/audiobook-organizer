@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-05
+// last-edited: 2026-09-10
 
 package organizer
 
@@ -137,8 +137,18 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		return "", "", fmt.Errorf("failed to create target directory: %w", err)
 	}
 
-	// Check if source and target are the same path
+	// Check if source and target are the same path. This is a no-op --
+	// nothing is copied or moved -- so it must not report success unless
+	// the file is actually still there: a stale/edited DB row whose
+	// FilePath already equals the computed target (e.g. after a prior
+	// successful organize) can point at a file that was since deleted,
+	// corrupted, or moved out from under the row, and the earlier IsDir
+	// stat above (err==nil && info.IsDir()) does not catch that -- it
+	// falls through silently on a missing path (SF-01).
 	if book.FilePath == targetPath {
+		if _, statErr := os.Stat(targetPath); statErr != nil {
+			return "", "", fmt.Errorf("cannot organize %q (id=%s): file_path %s matches the computed target but no longer exists: %w", book.Title, book.ID, targetPath, statErr)
+		}
 		return targetPath, "", nil
 	}
 

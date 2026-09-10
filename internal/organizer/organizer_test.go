@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_test.go
-// version: 1.8.3
+// version: 1.9.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package organizer
 
@@ -262,6 +262,59 @@ func TestOrganizeBook_EmptyFilePath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "file_path is empty") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestOrganizeBook_NoOpSamePathMissingFile is the regression test for SF-01:
+// the FilePath==targetPath fast-path (organizer.go, "Check if source and
+// target are the same path") returned success with no os.Stat, so a book row
+// whose file was deleted, corrupted, or moved out from under it between the
+// last scan and this organize call was still reported organized.
+func TestOrganizeBook_NoOpSamePathMissingFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "source")
+	dstDir := filepath.Join(tmpDir, "output")
+
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("failed to create source dir: %v", err)
+	}
+
+	srcFile := filepath.Join(srcDir, "book.m4b")
+	content := []byte("audio content")
+	if err := os.WriteFile(srcFile, content, 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	cfg := &config.Config{
+		RootDir:              dstDir,
+		FolderNamingPattern:  "{author}",
+		FileNamingPattern:    "{title}",
+		OrganizationStrategy: "copy",
+	}
+
+	org := NewOrganizer(cfg)
+	book := &database.Book{
+		Title:    "Test Book",
+		FilePath: srcFile,
+		Author:   &database.Author{Name: "Test Author"},
+	}
+
+	targetPath, _, err := org.OrganizeBook(book)
+	if err != nil {
+		t.Fatalf("OrganizeBook failed: %v", err)
+	}
+
+	// Simulate a stale DB row: FilePath already equals the computed target
+	// (e.g. after a prior successful organize), but the file at that path
+	// is gone -- deleted, corrupted, or moved out from under the row before
+	// this call runs.
+	book.FilePath = targetPath
+	if err := os.Remove(targetPath); err != nil {
+		t.Fatalf("failed to remove target file to simulate a missing file: %v", err)
+	}
+
+	if newPath, _, err := org.OrganizeBook(book); err == nil {
+		t.Fatalf("expected OrganizeBook to fail when book.FilePath == targetPath but the file no longer exists; got success with path %q", newPath)
 	}
 }
 
