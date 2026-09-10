@@ -1,5 +1,5 @@
 // file: web/src/components/wizard/WelcomeWizard.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f1a7d20-6c4e-4c8a-9a1b-2e5d7c0f9b34
 // last-edited: 2026-09-10
 
@@ -65,19 +65,29 @@ describe('WelcomeWizard — OpenAI key validation stays server-side (SEC-9)', ()
     fireEvent.change(keyField, { target: { value: TEST_KEY } });
     fireEvent.click(screen.getByRole('button', { name: /test connection/i }));
 
-    // The SEC-9 assertion: the raw key must never be addressed to OpenAI from
-    // the browser, where it would land in the network log.
+    // Wait for the POSITIVE first. An "expect nothing happened" inside waitFor
+    // passes on its first tick, before the component could have called
+    // anything, so the negative assertions below are only meaningful once the
+    // validation handler has demonstrably run.
     await waitFor(() => {
-      const openaiCalls = fetchSpy.mock.calls.filter((call) =>
-        JSON.stringify(call).includes('api.openai.com')
-      );
-      expect(openaiCalls).toEqual([]);
+      expect(api.validateOpenAIKey).toHaveBeenCalledWith(TEST_KEY);
     });
 
-    // Non-vacuous: the component really did run the validation handler, so the
-    // absence of an api.openai.com request is meaningful rather than the result
-    // of the component throwing before it got there.
-    expect(api.validateOpenAIKey).toHaveBeenCalledWith(TEST_KEY);
+    // The SEC-9 assertion: the raw key must never leave the browser on a direct
+    // network call — to OpenAI or to anywhere else. Filtering on the key rather
+    // than on the string 'api.openai.com' is strictly broader (a proxy, a
+    // subdomain or a redirect target would still be caught) and it drops the
+    // hostname literal that CodeQL reads as an incomplete URL check
+    // (js/incomplete-url-substring-sanitization).
+    const leakedCalls = fetchSpy.mock.calls.filter((call) =>
+      JSON.stringify(call).includes(TEST_KEY)
+    );
+    expect(leakedCalls).toEqual([]);
+
+    // Stronger still, and the reason the filter above can be trusted: this path
+    // issues no direct fetch at all, so there is no request for the key to ride
+    // on. Measured, not assumed — see the commit that introduced this line.
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(await screen.findByText(/API key is valid and working/i)).toBeInTheDocument();
   });
 
