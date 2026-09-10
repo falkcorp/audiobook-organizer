@@ -315,17 +315,18 @@ describe('Active Operations expand/collapse', () => {
 // and an unpaged list of that buries every section under it, which on this page
 // includes Failed. So each section pages at OPS_SECTION_PAGE_SIZE (7).
 describe('Active Operations section pagination', () => {
-  // Ten jobs, ten minutes apart, newest first. The spacing is not decoration:
-  // consecutive same-kind runs inside the idle gap are folded into one group
-  // row now (see operationGrouping), so a fixture of ten identical
-  // simultaneous ops would render as ONE collapsed row and would be testing
-  // grouping rather than pagination. Ten minutes exceeds the gap, so these stay
-  // ten independent rows — and the descending timestamps make the page order
+  // Ten jobs, each of its OWN kind, ten minutes apart, newest first. Neither
+  // choice is decoration: same-kind runs are folded into one group row (see
+  // operationGrouping — the first pass within an idle gap, and since
+  // 2026-09-10 a second pass over any same-kind rows that end up adjacent,
+  // whatever the gap), so ten identical ops would render as ONE collapsed row
+  // and test grouping rather than pagination. Distinct kinds keep them ten
+  // independent rows, and the descending timestamps make the page order
   // deterministic instead of leaning on sort stability.
   const T0 = Date.UTC(2026, 8, 8, 12, 0, 0);
   const op = (id: string, status: string, displayName: string, index = 0) => ({
     id,
-    type: 'scan',
+    type: `scan-${index}`,
     displayName,
     status,
     progress: 1,
