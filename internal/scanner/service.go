@@ -1,26 +1,21 @@
 // file: internal/scanner/service.go
-// version: 1.12.0
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-06
+// last-edited: 2026-09-10
 package scanner
 
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
-	"strings"
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // scanServiceStore is the narrow slice of scannerStore this service uses.
@@ -195,19 +190,30 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 		}
 	}
 
-	// First pass: count total files across all folders.
-	// For incremental scans we use the cache size as an approximation to avoid
-	// the expensive directory walk.
-	var totalFilesAcrossFolders int
-	if forceUpdate || scanCache == nil {
-		totalFilesAcrossFolders = ss.countFilesAcrossFolders(ctx, foldersToScan, log)
-		log.Info("Total audiobook files across all folders: %d", totalFilesAcrossFolders)
-		if totalFilesAcrossFolders == 0 {
-			log.Warn("No audiobook files detected during pre-scan; totals will update as files are processed")
-		}
-	} else {
-		totalFilesAcrossFolders = len(scanCache)
-		log.Info("Incremental scan: ~%d known files, checking for changes", totalFilesAcrossFolders)
+	// Progress denominator: the count of BOOKS discovered so far, accumulated as
+	// each folder is walked (scanFolder adds len(books) before processing that
+	// folder). This is a real, book-unit denominator that matches the per-book
+	// numerator, and it grows only by genuine discovered counts.
+	//
+	// It replaces two older schemes, both removed 2026-09-09:
+	//   - a full-tree "count files" PRE-PASS (countFilesAcrossFolders) that
+	//     walked everything twice and produced a FILE count against a BOOK
+	//     numerator (so the bar topped out at books/files, ~11% on this library);
+	//   - for incremental scans, len(scanCache) — a STALE, file-unit estimate
+	//     that was then patched upward with max(), which is exactly the
+	//     "total counts up instead of a fixed denominator" symptom this fixes.
+	// Before the first folder's books are known the total is 0, which the UI
+	// renders as an indeterminate bar (see scanner.go discovery/tag phases).
+	//
+	// Undercount safety (audit 2026-07-17 H6): the removed pre-pass warned when
+	// a permission/IO error made the count drop books. That warning has a
+	// successor, not a gap: ScanDirectoryParallel tallies non-fatal walk errors
+	// and emits "scan walk summary: walk_errors=N (...library may be
+	// undercounted)" (scanner.go), so a bar that stops short of 100% is still
+	// explained in the log.
+	var discoveredBooks atomic.Int64
+	if scanCache != nil {
+		log.Info("Incremental scan: ~%d known files, checking for changes", len(scanCache))
 	}
 
 	// Install scan cache into the scanner package so workers can skip unchanged
@@ -264,7 +270,7 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 			itemOffset = req.ResumeItemOffset
 		}
 
-		err := ss.scanFolder(ctx, folderIdx, folderPath, foldersToScan, totalFilesAcrossFolders, &processedFiles, stats, opID, itemOffset, req.Checkpoint, log)
+		err := ss.scanFolder(ctx, folderIdx, folderPath, foldersToScan, &discoveredBooks, &processedFiles, stats, opID, itemOffset, req.Checkpoint, log)
 		if err != nil {
 			log.Error("Error scanning folder %s: %v", folderPath, err)
 			continue
@@ -286,7 +292,7 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 		log.Info("scan changes: %d created, %d updated, %d skipped",
 			counters["book_create"], counters["book_update"], counters["book_skip"])
 	}
-	ss.reportCompletion(totalFilesAcrossFolders, int(processedFiles.Load()), stats, log)
+	ss.reportCompletion(int(discoveredBooks.Load()), int(processedFiles.Load()), stats, log)
 	if ss.PostScanFn != nil {
 		ss.PostScanFn()
 	}
@@ -363,77 +369,14 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate, i
 	return foldersToScan, nil
 }
 
-func (ss *ScanService) countFilesAcrossFolders(ctx context.Context, foldersToScan []string, log logger.Logger) int {
-	totalFilesAcrossFolders := 0
-	// Same source as the discovery walk in scanner.go -- see the comment
-	// inside the walk below for why they must not diverge.
-	app := appdirs.Current()
-	for _, folderPath := range foldersToScan {
-		// This pre-pass walks every folder before the per-folder scan loop even
-		// begins, so a scan cancelled during counting would otherwise keep
-		// walking with no ctx check (same class of bug as the discovery walk in
-		// scanner.go). Return the partial count; PerformScan's folder loop sees
-		// the cancel on its next iteration.
-		if ctx.Err() != nil {
-			return totalFilesAcrossFolders
-		}
-		if _, err := os.Stat(folderPath); os.IsNotExist(err) {
-			log.Warn("Folder does not exist: %s", folderPath)
-			continue
-		}
-		fileCount := 0
-		walkErrLogged := false
-		walkErr := filepath.WalkDir(folderPath, func(path string, d fs.DirEntry, err error) error {
-			if cerr := ctx.Err(); cerr != nil {
-				return cerr
-			}
-			if err != nil {
-				// Permission/I-O errors here undercount the progress
-				// denominator; log the first per folder so the undercount is
-				// not silent (audit 2026-07-17 H6), then keep counting.
-				if !walkErrLogged {
-					walkErrLogged = true
-					log.Warn("count phase: walk error under %s at %s: %v (progress total may undercount)", folderPath, path, err)
-				}
-				return nil
-			}
-			if d.IsDir() {
-				// Must match the discovery walk exactly. If the counter walks
-				// a subtree the scanner skips, the progress denominator counts
-				// files that will never be scanned and the bar can never reach
-				// 100%. A 15 GB backup directory inside the library would do
-				// precisely that -- and so would an OpenLibrary dump
-				// directory, which has no dot in its name at all.
-				if pathutil.ShouldSkipDir(folderPath, path, app) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			ext := strings.ToLower(filepath.Ext(path))
-			if slices.Contains(config.AppConfig.SupportedExtensions, ext) {
-				fileCount++
-			}
-			return nil
-		})
-		if ctx.Err() != nil {
-			// The walk was aborted by cancellation, not an I/O failure — return
-			// the partial count without logging it as a walk error.
-			return totalFilesAcrossFolders + fileCount
-		}
-		if walkErr != nil && !walkErrLogged {
-			// Only reachable when the root itself fails to stat.
-			log.Warn("count phase: walk failed for %s: %v (progress total may undercount)", folderPath, walkErr)
-		}
-		log.Info("Folder %s: Found %d audiobook files", folderPath, fileCount)
-		totalFilesAcrossFolders += fileCount
-	}
-	return totalFilesAcrossFolders
-}
-
-func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath string, foldersToScan []string, totalFilesAcrossFolders int, processedFiles *atomic.Int32, stats *ScanStats, opID string, itemOffset int, checkpoint func(folderIdx, itemOffset int), log logger.Logger) error {
-	currentProcessed := int(processedFiles.Load())
-	displayTotal := max(currentProcessed, totalFilesAcrossFolders)
-	log.UpdateProgress(currentProcessed, displayTotal, fmt.Sprintf("Scanning folder %d/%d: %s", folderIdx+1, len(foldersToScan), folderPath))
+func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath string, foldersToScan []string, discoveredBooks *atomic.Int64, processedFiles *atomic.Int32, stats *ScanStats, opID string, itemOffset int, checkpoint func(folderIdx, itemOffset int), log logger.Logger) error {
+	// Folder-transition update: current = books processed so far (global,
+	// monotonic), total = books discovered so far (previous folders; this
+	// folder's books are added below once ScanDirectoryParallel has counted
+	// them). Before any folder is walked total is 0, which the UI renders as
+	// an indeterminate bar. This line is immediately superseded by the
+	// discovery/tag phases inside ScanDirectoryParallel.
+	log.UpdateProgress(int(processedFiles.Load()), int(discoveredBooks.Load()), fmt.Sprintf("Scanning folder %d/%d: %s", folderIdx+1, len(foldersToScan), folderPath))
 	log.Info("Scanning folder: %s", folderPath)
 
 	// Check if folder exists
@@ -460,19 +403,19 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 		stats.ImportBooks += len(books)
 	}
 
-	// Prepare per-book progress reporting
-	targetTotal := totalFilesAcrossFolders
-	if targetTotal == 0 {
-		targetTotal = len(books)
-	}
+	// This folder's real book count is now known; fold it into the cumulative
+	// denominator BEFORE processing so the per-book callback below reports a
+	// total that already includes every book it will advance through. current
+	// (global books processed) therefore never exceeds total (cumulative books
+	// discovered) — no max() patch needed.
+	targetTotal := int(discoveredBooks.Add(int64(len(books))))
 	progressCallback := func(_ int, _ int, bookPath string) {
 		current := processedFiles.Add(1)
-		displayTotal := max(int(current), targetTotal)
-		message := fmt.Sprintf("Processed: %d/%d books", current, displayTotal)
+		message := fmt.Sprintf("Processed: %d/%d books", current, targetTotal)
 		if bookPath != "" {
-			message = fmt.Sprintf("Processed: %d/%d books (%s)", current, displayTotal, filepath.Base(bookPath))
+			message = fmt.Sprintf("Processed: %d/%d books (%s)", current, targetTotal, filepath.Base(bookPath))
 		}
-		log.UpdateProgress(int(current), displayTotal, message)
+		log.UpdateProgress(int(current), targetTotal, message)
 		if ss.activityWriter != nil && opID != "" {
 			activity.LogBatch(ss.activityWriter, opID, "tag-scan", "scan-service",
 				activity.BatchItem{Name: filepath.Base(bookPath)})
@@ -606,7 +549,7 @@ func (ss *ScanService) updateImportPathBookCount(folderPath string, _ int, log l
 	}
 }
 
-func (ss *ScanService) reportCompletion(totalFilesAcrossFolders int, finalProcessed int, stats *ScanStats, log logger.Logger) {
+func (ss *ScanService) reportCompletion(discoveredBooks int, finalProcessed int, stats *ScanStats, log logger.Logger) {
 	var completionMsg string
 	if stats.LibraryBooks > 0 && stats.ImportBooks > 0 {
 		completionMsg = fmt.Sprintf("Scan completed. Library: %d books, Import: %d books (Total: %d)", stats.LibraryBooks, stats.ImportBooks, stats.TotalBooks)
@@ -618,8 +561,11 @@ func (ss *ScanService) reportCompletion(totalFilesAcrossFolders int, finalProces
 		completionMsg = "Scan completed. No books found"
 	}
 
-	finalTotal := max(finalProcessed, totalFilesAcrossFolders)
-	log.UpdateProgress(finalProcessed, finalTotal, completionMsg)
+	// finalProcessed <= discoveredBooks by construction (every processed book was
+	// first discovered). Report both as-is: equal on a clean run (100%), and
+	// finalProcessed < discoveredBooks when some folders errored out — which is
+	// the actual result, not a bar forced to 100% by the old max() patch.
+	log.UpdateProgress(finalProcessed, discoveredBooks, completionMsg)
 	log.Info("%s", completionMsg)
 }
 
