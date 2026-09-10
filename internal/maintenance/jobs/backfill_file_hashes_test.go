@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-08-17
+// last-edited: 2026-09-10
 
 package jobs_test
 
@@ -10,6 +10,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -106,6 +108,50 @@ func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
 	require.NoError(t, j.Run(context.Background(), store, rep, false))
 	assert.False(t, setCalled, "SetBookFileHash must not be called when file does not exist")
 	assert.NotEmpty(t, rep.logs, "expected a warning log for the missing file")
+}
+
+// TestBackfillFileHashesJob_ParallelHashesAll hashes many real files at once and
+// asserts every one is hashed exactly once with the correct digest. Run under
+// -race it is the guard for the concurrent reporter/counter access the parallel
+// pool introduced (a plain int++ in ProgressAdapter would trip the detector).
+func TestBackfillFileHashesJob_ParallelHashesAll(t *testing.T) {
+	const n = 60 // > hashBackfillChunkSize is not needed; > worker count is enough
+	dir := t.TempDir()
+	files := make([]database.BookFileCore, n)
+	want := make(map[string]string, n)
+	for i := 0; i < n; i++ {
+		content := []byte(fmt.Sprintf("audio payload number %d — distinct bytes", i))
+		p := filepath.Join(dir, fmt.Sprintf("audio%02d.m4b", i))
+		require.NoError(t, os.WriteFile(p, content, 0o644))
+		id := fmt.Sprintf("f%d", i)
+		files[i] = database.BookFileCore{ID: id, FilePath: p, FileHash: ""}
+		sum := sha256.Sum256(content)
+		want[id] = fmt.Sprintf("%x", sum)
+	}
+
+	var mu sync.Mutex
+	got := make(map[string]string, n)
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		SetBookFileHashFunc: func(id, h string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if _, dup := got[id]; dup {
+				t.Errorf("SetBookFileHash called twice for %s", id)
+			}
+			got[id] = h
+			return nil
+		},
+	}
+
+	j, err := maintenance.Get("backfill-file-hashes")
+	require.NoError(t, err)
+	require.NoError(t, j.Run(context.Background(), store, &noopReporter{}, false))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Len(t, got, n, "every file must be hashed exactly once")
+	assert.Equal(t, want, got, "each file's stored hash must be its real sha256")
 }
 
 func TestBackfillFileHashesJob_Cancellation(t *testing.T) {

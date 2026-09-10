@@ -1,16 +1,22 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-09-01
+// last-edited: 2026-09-10
 
 package jobs
 
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"log/slog"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
@@ -34,6 +40,25 @@ func (j *backfillFileHashesJob) Description() string {
 	return "Compute and store file hashes for book_files missing them"
 }
 
+// hashBackfillWorkers bounds the parallel hashing pool. Hashing reads whole
+// files (<=100MB) or ~20MB of head+tail chunks each, off what in production is
+// a network-attached volume, so this work is IO-bound: a handful of workers
+// hides mount latency without thrashing the filesystem or exhausting file
+// descriptors. Override with ABK_HASH_BACKFILL_WORKERS.
+func hashBackfillWorkers() int {
+	const def = 8
+	if v := os.Getenv("ABK_HASH_BACKFILL_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// hashBackfillChunkSize is how many files are dispatched to the worker pool
+// before a checkpoint is written. See the checkpoint invariant in Run.
+const hashBackfillChunkSize = 512
+
 // Job supports checkpoint-based resume after restart.
 func (j *backfillFileHashesJob) CanResume() bool { return true }
 func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
@@ -42,7 +67,6 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		return err
 	}
 	reporter.SetTotal(len(files))
-	hashed := 0
 
 	// Resume support: load checkpoint if present.
 	opID := maintenance.OperationIDFromCtx(ctx)
@@ -56,40 +80,85 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 	}
 
-	for i := resumeIndex; i < len(files); i++ {
+	var hashed atomic.Int64
+	// repMu serializes access to reporter, whose maintenance.ProgressAdapter
+	// increments a plain int (progress.go) and is NOT concurrency-safe. The
+	// guarded calls are microseconds; file hashing dominates, so this does not
+	// meaningfully serialize the pool.
+	var repMu sync.Mutex
+	workers := hashBackfillWorkers()
+
+	// Process in ORDERED chunks. Each chunk runs through a bounded worker pool,
+	// and the checkpoint is written only AFTER the whole chunk completes. That
+	// preserves the invariant the old serial loop had for free -- every index
+	// below the checkpoint has been processed -- which a naive fan-out would
+	// break: a run killed mid-flight could otherwise checkpoint an index past
+	// rows still being hashed, and resume would skip them forever. Distinct
+	// rows are hashed concurrently; SetBookFileHash round-trips the full record
+	// (no field wipe) and writes one distinct key per row, so parallel writes
+	// across different rows do not race.
+	for start := resumeIndex; start < len(files); start += hashBackfillChunkSize {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		reporter.Increment()
-		bf := files[i]
-		if bf.FileHash != "" {
-			continue
+		end := start + hashBackfillChunkSize
+		if end > len(files) {
+			end = len(files)
 		}
-		// filehash.BookFileHash directly, not scanner.ComputeFileHash: the
-		// latter is a thin wrapper whose only remaining job is the
-		// activeScanner test seam, so a package-global set by a test could
-		// swap the algorithm out from under the very job that repairs this
-		// column. Same digest, one fewer place it can be substituted.
-		hash, herr := filehash.BookFileHash(bf.FilePath)
-		if herr != nil {
-			msg := herr.Error()
-			slog.Warn("backfill-file-hashes hash failed for"+bf.FilePath, "details", msg)
-			reporter.Log("warn", "Hash computation failed for "+bf.FilePath, &msg)
-			continue
+
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(workers)
+		for i := start; i < end; i++ {
+			bf := files[i]
+			g.Go(func() error {
+				if gctx.Err() != nil {
+					return gctx.Err()
+				}
+				repMu.Lock()
+				reporter.Increment()
+				repMu.Unlock()
+				if bf.FileHash != "" {
+					return nil
+				}
+				// filehash.BookFileHash directly, not scanner.ComputeFileHash:
+				// the latter is a thin wrapper whose only remaining job is the
+				// activeScanner test seam, so a package-global set by a test
+				// could swap the algorithm out from under the very job that
+				// repairs this column. Same digest, one fewer place it can be
+				// substituted.
+				hash, herr := filehash.BookFileHash(bf.FilePath)
+				if herr != nil {
+					msg := herr.Error()
+					slog.Warn("backfill-file-hashes hash failed for"+bf.FilePath, "details", msg)
+					repMu.Lock()
+					reporter.Log("warn", "Hash computation failed for "+bf.FilePath, &msg)
+					repMu.Unlock()
+					return nil // one unreadable file must not abort the run
+				}
+				if !dryRun {
+					if serr := store.SetBookFileHash(bf.ID, hash); serr != nil {
+						msg := serr.Error()
+						slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
+						repMu.Lock()
+						reporter.Log("error", "Failed to save file hash for "+bf.FilePath, &msg)
+						repMu.Unlock()
+						return nil
+					}
+				}
+				hashed.Add(1)
+				return nil
+			})
 		}
-		if !dryRun {
-			if serr := store.SetBookFileHash(bf.ID, hash); serr != nil {
-				msg := serr.Error()
-				slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
-				reporter.Log("error", "Failed to save file hash for "+bf.FilePath, &msg)
-				continue
-			}
+		// Per-file failures are swallowed above, so a non-nil result here means
+		// the context was cancelled. Return it: the checkpoint from the last
+		// fully-completed chunk stands, and resume restarts at that boundary.
+		if gerr := g.Wait(); gerr != nil {
+			return gerr
 		}
-		hashed++
 
 		// Periodic checkpoint so long runs can resume after restart.
-		if opID != "" && i%50 == 0 {
-			_ = operations.SaveCheckpoint(store, opID, "maintenance:backfill-file-hashes", "scanning", i, len(files))
+		if opID != "" {
+			_ = operations.SaveCheckpoint(store, opID, "maintenance:backfill-file-hashes", "scanning", end, len(files))
 		}
 	}
 
@@ -99,7 +168,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 
 	// Save a lightweight operation summary for the UI and activity feed.
-	res := fmt.Sprintf("Backfilled hashes for %d files", hashed)
+	res := fmt.Sprintf("Backfilled hashes for %d files", hashed.Load())
 	now := time.Now()
 	opLog := &database.OperationSummaryLog{
 		ID:          opID,
