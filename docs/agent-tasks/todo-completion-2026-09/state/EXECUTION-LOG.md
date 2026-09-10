@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -21,7 +21,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 1 | TASK-303 organize no-op stat (`:141-142` only) | data-loss high | S | go-specialist/sonnet | PR #3180 HELD (14:41) |
 | 1 | TASK-306 backup restore verify | data-loss medium | S | go-specialist/sonnet | first cut REJECTED 14:44 (fail-closed broke default UI restore); reworked; PR #3183 HELD (14:55) |
 | 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | PR #3185 HELD (15:24) |
-| 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | PR #3186 open, standard lane (15:26) |
+| 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | PR #3186 MERGED 15:41 (rebase, 26/26 green) |
 | 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | PR #3184 MERGED 15:36 (rebase, 26/26 green) |
 | 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | PR #3188 HELD (15:40); L4244 decision surfaced to owner |
 
@@ -34,7 +34,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 3 | TASK-359 series-merge unguarded denominator | data-loss | M | | queued — touches pebble_store.go → wait for #3182/#3185 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
 | 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued |
-| 4 | TASK-338 retire fix-library-states | data-loss | S | | queued |
+| 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | dispatched 15:43 (delete the job + absence test; never run it) |
 | 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued |
 | 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist | queued |
 | later | TASK-140, 072, 220, 337, 340, 352, 305, 373, 342, 345, 114, 096; security 308, 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order |
