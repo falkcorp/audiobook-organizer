@@ -1,6 +1,6 @@
 // file: web/src/services/activityApi.ts
-// version: 2.5.0
-// last-edited: 2026-08-11
+// version: 2.6.0
+// last-edited: 2026-09-10
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { apiFetch } from '../utils/apiFetch';
@@ -181,6 +181,41 @@ export async function fetchOperationActivity(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data = (body as any).data ?? body;
   return data as OperationActivityResponse;
+}
+
+/** Response of `POST /api/v1/operations/activity/merged`: one chronological
+ *  timeline over a GROUP of operations. `total` is the sum of the members'
+ *  own totals (what exists), `truncated` says the server dropped the oldest
+ *  entries to honour `limit`. */
+export interface MergedOperationActivityResponse {
+  operation_ids: string[];
+  entries: OperationActivityEntry[];
+  total: number;
+  truncated: boolean;
+}
+
+/**
+ * fetchMergedOperationActivity reads the merged transcript of several
+ * operations — the bell's synthetic group rows (operationGrouping.ts) have no
+ * server record of their own, so opening one means asking for its members.
+ * POST only because a group can hold several hundred ids; it writes nothing.
+ */
+export async function fetchMergedOperationActivity(
+  opIDs: string[],
+  limit?: number,
+): Promise<MergedOperationActivityResponse> {
+  const response = await apiFetch(`${API_BASE}/operations/activity/merged`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(limit !== undefined ? { ids: opIDs, limit } : { ids: opIDs }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch merged operation activity: ${response.status}`);
+  }
+  const body = await response.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = (body as any).data ?? body;
+  return data as MergedOperationActivityResponse;
 }
 
 export async function compactActivityLog(olderThanDays: number): Promise<CompactResult> {

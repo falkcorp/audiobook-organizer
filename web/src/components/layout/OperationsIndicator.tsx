@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.9.0
+// version: 4.10.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -77,6 +77,17 @@ function parseMessageDetails(message: string) {
 }
 
 type CollapseKey = 'running' | 'pending' | 'completed';
+
+/** What the activity dialog is showing. A group row carries its members, and
+ *  the panel merges their transcripts; a real op carries none. */
+interface ActivityTarget {
+  id: string;
+  memberIds?: string[];
+}
+
+function activityTargetFor(op: ActiveOperation): ActivityTarget {
+  return op.group ? { id: op.id, memberIds: op.group.memberIds } : { id: op.id };
+}
 
 const COLLAPSE_STORAGE_KEY = 'ops-indicator-collapse-v1';
 
@@ -160,7 +171,7 @@ export function OperationsIndicator() {
   const alertOperations = useOperationsStore((state) => state.alertOperations);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
-  const [activityOpId, setActivityOpId] = useState<string | null>(null);
+  const [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null);
   const [collapse, setCollapse] = useState<Record<CollapseKey, boolean>>(loadCollapseState);
   const navigate = useNavigate();
 
@@ -346,24 +357,22 @@ export function OperationsIndicator() {
                               {elapsed}
                             </Typography>
                           )}
-                          {/* Both act on op.id against the server, and a group
-                              row's id is derived from its members — it names no
-                              record. The group's runs are on the Activity page,
-                              which "View All" already goes to. */}
-                          {!op.group && (
-                            <Tooltip title="View activity">
-                              <IconButton
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActivityOpId(op.id);
-                                }}
-                                sx={{ p: 0.25 }}
-                              >
-                                <ArticleIcon sx={{ fontSize: 18 }} />
-                              </IconButton>
-                            </Tooltip>
-                          )}
+                          {/* A group row opens the MERGED log of its members
+                              (the panel takes their ids), so the view works for
+                              both. Cancel still acts on op.id against the
+                              server, and a group's id names no record. */}
+                          <Tooltip title={op.group ? 'View merged activity' : 'View activity'}>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActivityTarget(activityTargetFor(op));
+                              }}
+                              sx={{ p: 0.25 }}
+                            >
+                              <ArticleIcon sx={{ fontSize: 18 }} />
+                            </IconButton>
+                          </Tooltip>
                           {!op.group && (
                             <Tooltip title="Cancel">
                               <IconButton
@@ -575,14 +584,15 @@ export function OperationsIndicator() {
                   return (
                     <Box
                       key={`recent-${op.id}`}
-                      // A group row opens nothing: its id names no record, so
-                      // the activity panel would query an operation that does
-                      // not exist. The Activity page holds its members.
-                      onClick={op.group ? undefined : () => setActivityOpId(op.id)}
+                      // A group row opens the merged log of its members; a
+                      // real op opens its own. Either way the panel gets what
+                      // it needs to fetch, so the synthetic id is never sent
+                      // to the server.
+                      onClick={() => setActivityTarget(activityTargetFor(op))}
                       sx={{
                         px: 2,
                         py: 0.75,
-                        cursor: op.group ? 'default' : 'pointer',
+                        cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
@@ -688,25 +698,33 @@ export function OperationsIndicator() {
       </Popover>
 
       {/* Per-operation activity dialog — surfaces the focused
-          /api/v1/operations/:id/activity feed without navigating away. */}
+          /api/v1/operations/:id/activity feed (or, for a group row, the
+          merged feed of its members) without navigating away. */}
       <Dialog
-        open={activityOpId !== null}
-        onClose={() => setActivityOpId(null)}
+        open={activityTarget !== null}
+        onClose={() => setActivityTarget(null)}
         maxWidth="md"
         fullWidth
       >
         <DialogTitle sx={{ pr: 6 }}>
-          Operation Activity
+          {activityTarget?.memberIds
+            ? `Merged Activity (${activityTarget.memberIds.length} runs)`
+            : 'Operation Activity'}
           <IconButton
             aria-label="Close"
-            onClick={() => setActivityOpId(null)}
+            onClick={() => setActivityTarget(null)}
             sx={{ position: 'absolute', right: 8, top: 8 }}
           >
             <CloseIcon />
           </IconButton>
         </DialogTitle>
         <DialogContent dividers>
-          {activityOpId && <OperationActivityPanel operationId={activityOpId} />}
+          {activityTarget && (
+            <OperationActivityPanel
+              operationId={activityTarget.id}
+              memberIds={activityTarget.memberIds}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </>
