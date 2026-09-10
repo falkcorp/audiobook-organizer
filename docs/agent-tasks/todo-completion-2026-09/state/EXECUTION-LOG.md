@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.20.0 -->
+<!-- version: 1.21.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -39,11 +39,12 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | PR #3193 HELD (16:00) |
 | later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | PR #3194 HELD (16:06) |
 | later | TASK-337 DELETE /operations/history dry-run | weak data-loss | M | go-specialist/opus | dispatched 16:02 (handlers/operations/handler.go) |
-| later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | dispatched 16:02 (writeback_batcher.go) |
+| later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | PR #3196 HELD (16:14) |
 | security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | PR #3195 HELD (16:06) |
 | later | TASK-305 migration record + version unbatched | data-loss (latent) | M | go-specialist/opus | dispatched 16:09 (migrations.go; option (a) + replay guard) |
 | security | TASK-348 mask remaining `GET /config` secrets | security | M | go-specialist/opus | dispatched 16:09 (config.go / update_service.go) |
-| later | TASK-072, 220, 352(prod run), 373, 342, 345, 114, 096; security 080, 083, 160, 335(reshaped), 365, 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
+| security | TASK-080 SSRF on cover fetch (fix #645, assess #662) | security | M | go-specialist/opus | dispatched 16:16 (covers.go + cover.go shared hardened client; no dismissals) |
+| later | TASK-072, 220, 352(prod run), 373, 342, 345, 114, 096; security 083, 160, 335(reshaped), 365, 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
 
 ## Per-task record
 
@@ -167,4 +168,11 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Worktree `.worktrees/server-handlers-308`, branch `agent/server-handlers-308-sse-handler-unconditionally-overrides-th`, sha `0a5f91905`.
 - `events.go` 1.3.0: the `Access-Control-Allow-Origin: *` set in `HandleSSE` deleted; the allowlist from `corsMiddleware` stands. `events_test.go` 1.4.0: `TestHandleSSE_PreservesUpstreamCORSHeader` (pre-fix `got "*"`), and the existing basic-connection test that had asserted `*` corrected. Brief's second anchor range (`:437-449`) was past EOF (file is 334 lines); first anchor sufficed. Only one hardcoded site in `internal/realtime`. Gate exit 0, staticcheck 0.
 - PR #3195 — HELD for owner. No `TODO.md` line for SV-03.
+
+### TASK-340 — TODO L1461 writeback batcher Stop() join + single writer
+
+- Worktree `.worktrees/itunes-340`, branch `agent/itunes-340-internal-itunes-service-writeback-batche`, sha `6df50fe40`.
+- `writeback_batcher.go` 5.8.0: `sync.WaitGroup` over all three goroutines (Add under `b.mu` after the stopped check); `stopTimerLocked` pairs `timer.Stop()` with `Done` only when the cancel wins; `timerFlush` callback; `flush()` refuses after stop, `drainFlush()` used only by `Stop`; dedicated `flushMu` across parse→diff→`SafeWriteITL` (lock order `flushMu`→`b.mu`; `b.mu` not held across I/O); `resetTimer` no-ops after stop so `reEnqueue` cannot re-arm; `Stop` idempotent, closes `stopCh`, releases `b.mu` before `wg.Wait()`. 4 `-race` tests (pre-fix: goroutine still in `SafeWriteITL` after Stop; `maxActive=2`; `ParseITL called 5 times, want 1`). Whole package `-race -count=2` exit 0.
+- Flagged boundaries: unbounded `wg.Wait()` (bounding it would drop the final drain; owner decision); tombstone goroutine joined but not gated on `stopCh` on purpose; `flushMu` is per batcher, other `.itl` writers outside the guarantee.
+- PR #3196 — HELD for owner. `TODO.md` L1461 to check off on merge; sibling items (`scanner.go`, `extract_wav_clips.go`) stay open.
 
