@@ -1,5 +1,5 @@
 // file: internal/server/isbn_enrichment_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b7766bc-1f00-4f32-b8ca-8cb0e815c9a1
 // last-edited: 2026-09-10
 
@@ -199,6 +199,32 @@ func TestIsStrictTitleMatch(t *testing.T) {
 	}
 }
 
+// booksAfter mimics the production GetAllBooksFullFrom key-seek cursor for tests:
+// it returns books strictly after afterID (or from the top when afterID==""), up
+// to limit, and nil for an unknown afterID (ending iteration).
+func booksAfter(books []database.Book, afterID string, limit int) []database.Book {
+	start := 0
+	if afterID != "" {
+		start = len(books)
+		for i := range books {
+			if books[i].ID == afterID {
+				start = i + 1
+				break
+			}
+		}
+	}
+	if start >= len(books) {
+		return nil
+	}
+	end := len(books)
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+	out := make([]database.Book, end-start)
+	copy(out, books[start:end])
+	return out
+}
+
 func TestEnrichMissingISBNs_RespectsLimit(t *testing.T) {
 	checkedIDs := make([]string, 0)
 	books := []database.Book{
@@ -207,15 +233,8 @@ func TestEnrichMissingISBNs_RespectsLimit(t *testing.T) {
 		{ID: "book-3", Title: "Three"},
 	}
 	mock := &database.MockStore{
-		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
-			if offset > 0 {
-				return nil, nil
-			}
-			cores := make([]database.BookCore, len(books))
-			for i := range books {
-				cores[i] = books[i].Core()
-			}
-			return cores, nil
+		GetAllBooksFullFromFunc: func(afterID string, limit int) ([]database.Book, error) {
+			return booksAfter(books, afterID, limit), nil
 		},
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			for i := range books {
@@ -267,11 +286,8 @@ func TestEnrichMissingISBNs_EnrichesASINWhenISBNPresent(t *testing.T) {
 
 	var savedASIN string
 	mock := &database.MockStore{
-		GetAllBooksCoreFunc: func(_, offset int) ([]database.BookCore, error) {
-			if offset > 0 {
-				return nil, nil
-			}
-			return []database.BookCore{book.Core()}, nil
+		GetAllBooksFullFromFunc: func(afterID string, limit int) ([]database.Book, error) {
+			return booksAfter([]database.Book{book}, afterID, limit), nil
 		},
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			if id == book.ID {

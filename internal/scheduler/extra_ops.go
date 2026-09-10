@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -874,7 +874,11 @@ func (r *ExtraOpsRegistrar) runIsbnEnrichment(ctx context.Context, progress oper
 		activity.EmitInfo(r.Deps.ActivityWriter, opID, "isbn-enrich", "isbn-enrichment", startMsg, activity.AlwaysShow)
 	}
 	_ = progress.UpdateProgress(0, 2, "Starting ISBN enrichment (0/2) (0.00%)")
-	checked, updated, err := r.Deps.MetadataFetchService.ISBNEnrichment().EnrichMissingISBNs(ctx, 100, r.Deps.ActivityWriter, opID)
+	// limit 0 => resolve from the isbn_enrichment_batch_limit setting (default
+	// 100). The sweep resumes across runs via a persistent cursor, so successive
+	// nightly runs advance through the whole library rather than re-walking the
+	// front.
+	checked, updated, err := r.Deps.MetadataFetchService.ISBNEnrichment().EnrichMissingISBNs(ctx, 0, r.Deps.ActivityWriter, opID)
 	if err != nil {
 		return err
 	}

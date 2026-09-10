@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-05
+// last-edited: 2026-09-10
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -1062,7 +1062,9 @@ func (s *Server) runIsbnEnrichment(ctx context.Context, progress operations.Prog
 	if operations.IsManual(ctx) {
 		activity.EmitInfo(s.activityWriter, opID, "isbn-enrich", "isbn-enrichment", startMsg, activity.AlwaysShow)
 	}
-	checked, updated, err := s.metadataFetchService.ISBNEnrichment().EnrichMissingISBNs(ctx, 100, s.activityWriter, opID)
+	// limit 0 => resolve from the isbn_enrichment_batch_limit setting (default
+	// 100); the sweep resumes across runs via a persistent cursor.
+	checked, updated, err := s.metadataFetchService.ISBNEnrichment().EnrichMissingISBNs(ctx, 0, s.activityWriter, opID)
 	if err != nil {
 		return err
 	}
