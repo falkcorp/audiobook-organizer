@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.51.0 -->
+<!-- version: 10.52.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -5015,7 +5015,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       `docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md` §7.
       Raised while reviewing PR #2821 (TASK-029).
 
-- [ ] **SERIES-MERGE-UNGUARDED-DENOMINATOR** (was `…-TRASHED-ROWS-RESIDUAL`; renamed
+- [x] **SERIES-MERGE-UNGUARDED-DENOMINATOR** (was `…-TRASHED-ROWS-RESIDUAL`; renamed
       because that name understated it by a lot). Every guard in #2825/#2828 counts
       against **what the membership getter returned**, and that getter has no
       completeness guard of its own — `pebble_store.go`'s
@@ -5056,6 +5056,21 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       **✅ Half (2) CLOSED — the split was taken.** User approved the lost-index half
       only and explicitly deferred the trashed half. **Half (1) remains OPEN and is
       what keeps this item unchecked.**
+      **✅ Half (1) CLOSED too — verified at HEAD 2026-09-10 (TASK-359 burndown).**
+      The sentence above went stale on 2026-08-30: `c39a43cbc` ("guard two
+      unconditional series deletes with unfiltered ref counts") put the
+      `refCounts[id] - moved > 0 ⇒ refuse` guard into `executeSeriesPrune` phase 1,
+      and every one of the seven repoint-then-delete sites this entry lists now
+      reads `database.SeriesRefCounts` (which counts trashed rows) before
+      `DeleteSeries`, each pinned by a trashed-row test:
+      `duplicates_helpers.go` phase 1 → `TestExecuteSeriesPrune_Phase1RefusesDeleteWhenEveryReferencingBookIsTrashed`;
+      `mergeSeriesGroupHelper` → `TestMergeSeriesGroupHelper_RefusesWhenTrashedRowsAreInvisible`;
+      `series_dedup.go` `DedupSeries` → `TestDedupSeries_RefusesDeleteThatWouldStrandHiddenBooks`;
+      `MergeSeries` → `TestMergeSeries_RefusesDeleteWhenEveryReferencingBookIsTrashed`;
+      `cleanup_series.go` phase 1 and `csMergeSeriesGroup` → `TestCleanupSeriesRun_Phase1StillRefusesWhenARowIsInvisible`
+      / `TestCsMergeSeriesGroup_RefusesWhenARowCannotBeHydrated`;
+      `series_denumber_op.go` → `TestRunSeriesDenumber_RefusesToDeleteSeriesWithOnlyTrashedMembers`.
+      No code change was needed for this item; the check-off is the fix.
       The fix did NOT land where this entry predicted. Gating phase 1 on the
       unfiltered ref count cannot separate the two halves: `GetAllSeriesBookRefCounts`
       counts trashed AND non-primary rows while `GetBooksBySeriesIDAllVersions`
