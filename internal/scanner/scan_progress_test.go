@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_progress_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5f2a9c14-8e63-4b07-a5d9-1c4e7b0f6a38
 // last-edited: 2026-09-10
 
@@ -255,7 +255,7 @@ func TestScanFolder_ProgressStaysWithinDenominatorOnResume(t *testing.T) {
 	stats := &ScanStats{}
 
 	err := ss.scanFolder(context.Background(), 0, root, []string{root},
-		&discoveredBooks, &processedFiles, stats, "", resumeOffset, nil, spy)
+		&discoveredBooks, &processedFiles, stats, "", resumeOffset, nil, nil, spy)
 	if err != nil {
 		t.Fatalf("scanFolder: %v", err)
 	}

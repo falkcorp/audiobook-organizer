@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package scanner
 
@@ -488,4 +488,38 @@ func (s AIPhaseSummary) FailureDetails() []string {
 			s.SavesFailed-len(s.SaveFailures), maxRecordedSaveFailures))
 	}
 	return lines
+}
+
+// ReportTo surfaces a failed phase through warn, one call per line: first
+// String() (the one-line verdict), then each FailureDetails() line. A no-op
+// when the phase did not fail or warn is nil, so callers can invoke it
+// unconditionally.
+//
+// This exists because the INLINE path (ProcessBooksParallel, called directly
+// from scanner.go) has no operation reporter to hand a failed AIPhaseSummary
+// to -- only the logger.Logger passed down through ScanRequest, and
+// operations.LoggerFromReporter's bridge overrides UpdateProgress and With,
+// not Warn (see its doc comment), so a plain scanLog.Warn call here would
+// reach the process log and nothing else: exactly the blind spot this method
+// exists to close. warn is the caller-supplied channel (ProcessBooksParallel's
+// onAIPhaseWarning) that ultimately reaches reporter.Log for the two real op
+// call sites (library.scan, library.folder-auto-scan) while staying nil, and
+// therefore free, for every other caller and test.
+//
+// Deliberately NOT wired through UpdateProgress: reporter_db.go's
+// UpdateProgress overwrites the operation's progressCurrent/progressTotal
+// fields (and the OPS-5 Prometheus gauge) with whatever it is given, and this
+// phase's own BooksParsed/BooksNominated counts are local to the AI
+// candidates in ONE chunk -- not the scan's cumulative book count that
+// service.go's progressCallback (service.go:412-423) is careful to keep
+// monotonic. Calling UpdateProgress here would clobber that with a much
+// smaller number and make a healthy scan's progress bar jump backwards.
+func (s AIPhaseSummary) ReportTo(warn func(string)) {
+	if warn == nil || !s.Failed() {
+		return
+	}
+	warn(s.String())
+	for _, line := range s.FailureDetails() {
+		warn(line)
+	}
 }

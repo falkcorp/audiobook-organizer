@@ -1,5 +1,5 @@
 // file: internal/scanner/service.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-10
 package scanner
@@ -95,6 +95,18 @@ type ScanRequest struct {
 	// each completed chunk of books and once per completed folder. Implementations
 	// must be safe to call from the scan goroutine and should not block.
 	Checkpoint func(folderIdx, itemOffset int)
+
+	// OnAIPhaseWarning, when non-nil, is called with each line of a failed
+	// inline AI-parse phase's AIPhaseSummary (the phase.String() verdict, then
+	// each FailureDetails() line) -- see AIPhaseSummary.ReportTo. It is the
+	// only channel a caller has to learn that a chunk's AI parsing aborted
+	// (revoked key, exhausted quota, batch-failure threshold): the phase
+	// itself is deliberately non-fatal, so this scan still returns nil and
+	// reports success, and without this the only surviving evidence was the
+	// process log. Wired to reporter.Log by library.scan and
+	// library.folder-auto-scan; left nil (a no-op) everywhere else, including
+	// library.import.
+	OnAIPhaseWarning func(string)
 }
 
 // scanChunkSize bounds how many books are processed between checkpoints. It
@@ -270,7 +282,7 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 			itemOffset = req.ResumeItemOffset
 		}
 
-		err := ss.scanFolder(ctx, folderIdx, folderPath, foldersToScan, &discoveredBooks, &processedFiles, stats, opID, itemOffset, req.Checkpoint, log)
+		err := ss.scanFolder(ctx, folderIdx, folderPath, foldersToScan, &discoveredBooks, &processedFiles, stats, opID, itemOffset, req.Checkpoint, req.OnAIPhaseWarning, log)
 		if err != nil {
 			log.Error("Error scanning folder %s: %v", folderPath, err)
 			continue
@@ -369,7 +381,7 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate, i
 	return foldersToScan, nil
 }
 
-func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath string, foldersToScan []string, discoveredBooks *atomic.Int64, processedFiles *atomic.Int32, stats *ScanStats, opID string, itemOffset int, checkpoint func(folderIdx, itemOffset int), log logger.Logger) error {
+func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath string, foldersToScan []string, discoveredBooks *atomic.Int64, processedFiles *atomic.Int32, stats *ScanStats, opID string, itemOffset int, checkpoint func(folderIdx, itemOffset int), onAIPhaseWarning func(string), log logger.Logger) error {
 	// Folder-transition update: current = books processed so far (global,
 	// monotonic), total = books discovered so far (previous folders; this
 	// folder's books are added below once ScanDirectoryParallel has counted
@@ -452,7 +464,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 
 		log.Info("Processing metadata for %d books using %d workers (from offset %d)", len(books), workers, start)
 		processChunk := func(ctx context.Context, chunk []Book) error {
-			return ProcessBooksParallel(ctx, chunk, workers, progressCallback, log.With("scanner"))
+			return ProcessBooksParallel(ctx, chunk, workers, progressCallback, log.With("scanner"), onAIPhaseWarning)
 		}
 		if err := ss.processBookChunks(ctx, books, start, folderIdx, checkpoint, processChunk); err != nil {
 			// Do NOT fall through to auto-organize. These books did not get

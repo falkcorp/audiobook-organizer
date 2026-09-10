@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -148,6 +149,18 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 						ResumeFolderIdx:  folderIdx,
 						ResumeItemOffset: itemOffset,
 					})
+				},
+				// SF-02: a fully-aborted inline AI-parse phase (revoked API key,
+				// exhausted quota, 3+ batch failures) used to leave library.scan
+				// reporting COMPLETED with nothing but a journalctl line as
+				// evidence. reporter.Log writes into this run's own op record
+				// (distinct from UpdateProgress, so it cannot clobber the
+				// progress bar's current/total -- see AIPhaseSummary.ReportTo),
+				// deliberately non-fatal: an LLM outage must not fail an
+				// otherwise-good scan chunk (scanner.ProcessBooksParallel keeps
+				// returning nil either way).
+				OnAIPhaseWarning: func(msg string) {
+					_ = reporter.Log(slog.LevelWarn, msg)
 				},
 			}
 			progress := registryProgressAdapter{r: reporter}
