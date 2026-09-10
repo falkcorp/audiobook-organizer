@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 //
 // Undo engine (spec 3.2 task 3). Reverses the destructive changes
 // recorded by a prior operation by walking its operation_changes
@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -202,7 +203,10 @@ type metadataReverter interface {
 // The field names on a change row are the database.FieldKey vocabulary where
 // the field is lockable at all (title, narrator, description, language,
 // publisher, genre); file_path / format / edition / library_state have no lock
-// and are always restored.
+// and are always restored. series_id (written by
+// maintenance.series-phantom-repair) is restored through the SeriesID column,
+// which the series_name lock covers — ApplyRespectingLocks compares columns,
+// not field names, so the lock still holds.
 func revertMetadataUpdate(store metadataReverter, change *database.OperationChange) error {
 	if change.BookID == "" {
 		return fmt.Errorf("no book_id on metadata change %s", change.ID)
@@ -273,6 +277,13 @@ func applyFieldRestore(book *database.Book, field, value string) {
 		book.Genre = &value
 	case "library_state":
 		book.LibraryState = &value
+	case "series_id":
+		// Written by maintenance.series-phantom-repair (old_value is the
+		// dangling series id it cleared or repointed). A value that does not
+		// parse restores nothing rather than guessing.
+		if n, err := strconv.Atoi(value); err == nil {
+			book.SeriesID = &n
+		}
 	}
 }
 

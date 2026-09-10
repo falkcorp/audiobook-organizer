@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -45,6 +45,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.dedupeBookFileRowsDef(),
 		p.repairJunkTitlesDef(),
 		p.seriesDenumberDef(),
+		p.seriesPhantomRepairDef(),
 		p.purgeMillisecondDurationsDef(),
 		p.integrityCheckDef(),
 		p.itunesPlaylistImportDef(),
