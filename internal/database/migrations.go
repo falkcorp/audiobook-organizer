@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-08-19
+// last-edited: 2026-09-10
 
 package database
 
@@ -35,7 +35,22 @@ type migrationStore interface {
 	UpdateBook(id string, book *Book) (*Book, error)
 }
 
-// MigrationFunc represents a migration operation
+// MigrationFunc represents a migration operation.
+//
+// # Idempotency contract (MANDATORY — enforced by TestMigrationUpFunctionsAreIdempotent)
+//
+// An Up function MUST be idempotent: running it a second time against a store it
+// has already been applied to must succeed and must leave the database
+// byte-identical. RunMigrations will not knowingly replay an Up — a durable
+// applied-migration record short-circuits it — but the record write itself can
+// be lost to a crash on a store that cannot batch, so a replay is possible and
+// must be harmless.
+//
+// In practice this means: read the current state and skip rows that already have
+// the new shape, rather than rewriting unconditionally. An unconditional rewrite
+// fails the enforcement test even when the values are unchanged, because a fresh
+// UpdatedAt is itself a mutation — and an unconditional rewrite is precisely the
+// shape that makes a replayed migration destructive.
 type MigrationFunc func(store migrationStore) error
 
 // Migration represents a single database migration
@@ -449,20 +464,34 @@ func RunMigrations(store migrationStore) error {
 
 	// Apply each migration
 	for _, m := range pendingMigrations {
+		// Replay safety (DB-02). An applied-migration record for a version the
+		// schema counter has not reached means a previous boot ran this Up to
+		// completion and then died before the version write landed. Re-running
+		// Up in that state is exactly the replay this guard exists to prevent:
+		// treat the migration as applied and only advance the version.
+		recorded, err := migrationAlreadyRecorded(store, m.Version)
+		if err != nil {
+			return fmt.Errorf("failed to check migration record %d: %w", m.Version, err)
+		}
+		if recorded {
+			slog.Info("migration already recorded; advancing version without re-running",
+				"version", m.Version, "description", m.Description)
+			if err := setVersion(store, m.Version); err != nil {
+				return fmt.Errorf("failed to update version to %d: %w", m.Version, err)
+			}
+			continue
+		}
+
 		slog.Info("applying migration", "version", m.Version, "description", m.Description)
 
 		if err := m.Up(store); err != nil {
 			return fmt.Errorf("migration %d failed: %w", m.Version, err)
 		}
 
-		// Record migration
-		if err := recordMigration(store, m); err != nil {
-			return fmt.Errorf("failed to record migration %d: %w", m.Version, err)
-		}
-
-		// Update version
-		if err := setVersion(store, m.Version); err != nil {
-			return fmt.Errorf("failed to update version to %d: %w", m.Version, err)
+		// Record the migration and advance the version as ONE durable write
+		// wherever the store can batch, so no crash window separates them.
+		if err := commitMigrationBookkeeping(store, m); err != nil {
+			return err
 		}
 
 		slog.Info("migration completed", "version", m.Version)
@@ -476,7 +505,7 @@ func RunMigrations(store migrationStore) error {
 // getCurrentVersion retrieves the current schema version
 func getCurrentVersion(store migrationStore) (int, error) {
 	// Try to get version from preferences
-	pref, err := store.GetUserPreference("db_version")
+	pref, err := store.GetUserPreference(dbVersionPreferenceKey)
 	if err != nil || pref == nil || pref.Value == nil {
 		// No version found, assume version 0 (fresh database)
 		return 0, nil
@@ -490,36 +519,30 @@ func getCurrentVersion(store migrationStore) (int, error) {
 	return version.Version, nil
 }
 
-// setVersion updates the current schema version
+// setVersion updates the current schema version.
+//
+// Standalone use is limited to advancing past a migration whose record is
+// already durable; the normal path goes through commitMigrationBookkeeping,
+// which writes this key together with the migration record.
 func setVersion(store migrationStore, version int) error {
-	dbVersion := DatabaseVersion{
-		Version:   version,
-		UpdatedAt: time.Now(),
-	}
-
-	data, err := json.Marshal(dbVersion)
+	payload, err := databaseVersionPayload(version)
 	if err != nil {
-		return fmt.Errorf("failed to marshal version: %w", err)
+		return err
 	}
-
-	return store.SetUserPreference("db_version", string(data))
+	return store.SetUserPreference(dbVersionPreferenceKey, payload)
 }
 
-// recordMigration stores a migration record
+// recordMigration stores a migration record.
+//
+// The runner writes this key via commitMigrationBookkeeping so it lands in the
+// same batch as the version bump; this helper remains for callers that need the
+// record on its own.
 func recordMigration(store migrationStore, m Migration) error {
-	record := MigrationRecord{
-		Version:     m.Version,
-		Description: m.Description,
-		AppliedAt:   time.Now(),
-	}
-
-	data, err := json.Marshal(record)
+	payload, err := migrationRecordPayload(m)
 	if err != nil {
-		return fmt.Errorf("failed to marshal migration record: %w", err)
+		return err
 	}
-
-	key := fmt.Sprintf("migration_%d", m.Version)
-	return store.SetUserPreference(key, string(data))
+	return store.SetUserPreference(migrationRecordKey(m.Version), payload)
 }
 
 // Migration implementations
