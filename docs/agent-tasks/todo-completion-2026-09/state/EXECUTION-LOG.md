@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -17,12 +17,12 @@ security) are HELD OPEN for the owner — never admin-merged.
 | Wave | Brief | Risk | Effort | Worker | Status |
 |---|---|---|---|---|---|
 | 1 | TASK-300 MergeSplitBookCluster RMW lock | data-loss critical | S | go-specialist/sonnet | PR #3181 HELD (14:42) |
-| 1 | TASK-302 purge-empty-authors guard byte range | data-loss high | S | go-specialist/sonnet | dispatched 14:29; paused mid-gate, resumed 14:40 |
+| 1 | TASK-302 purge-empty-authors guard byte range | data-loss high | S | go-specialist/sonnet | PR #3182 HELD (14:49) |
 | 1 | TASK-303 organize no-op stat (`:141-142` only) | data-loss high | S | go-specialist/sonnet | PR #3180 HELD (14:41) |
 | 1 | TASK-306 backup restore verify | data-loss medium | S | go-specialist/sonnet | first cut REJECTED 14:44 (fail-closed broke default UI restore); rework to real sidecar verification in flight |
 | 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | dispatched 14:46 |
 | 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | dispatched 14:46 |
-| 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | | queued |
+| 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | dispatched 14:49 |
 | 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | | queued |
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
 | 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | | queued |
@@ -60,3 +60,9 @@ security) are HELD OPEN for the owner — never admin-merged.
 ### TASK-302 — DB-01 purge-empty-authors guard
 
 - Worker paused after 62 calls with the gate still running in the background; resumed 14:40 with a 20-call budget to finish the gate and report.
+- Worktree `.worktrees/database-302`, branch `agent/database-302-purge-empty-authors-delete-guard-book-sc`, sha `1011cdb22`.
+- Files: `internal/database/author_bookref.go` 1.5.0, `pebble_store.go` 1.146.0, tests in `author_bookref_test.go` + `author_getter_conformance_test.go`, `changelog.d/20260910_database_302.md`.
+- Bounds `["book:0","book:;")` → `["book:","book;")` in pass 2 and in `GetBooksByAuthorIDWithRoleCore`; the latter's `:path:`-only filter upgraded to `strings.Count(key, ":") != 1`.
+- Regression: two non-ULID-id tests failed pre-fix (`expected 1, actual 0`; missing `ZZBOUNDS…`), pass post-fix incl. `-race`. Gate exit 0 (`internal/database` 567s). Rollback: pure code change.
+- PR #3182 — HELD for owner. No `TODO.md` line. Not run: the brief's live audit for non-digit `book:` keys on prod (worker ban) — owner's call before merge.
+- Observed, unfiled: `getBooksByAuthorIDFull` has no `iter.Error()` check; `GetBooksByAuthorIDWithRoleCore` `continue`s on unmarshal error.

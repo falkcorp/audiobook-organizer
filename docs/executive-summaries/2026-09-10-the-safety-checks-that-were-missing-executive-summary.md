@@ -1,11 +1,12 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
 # The safety checks that were missing
 
-**Pull requests:** #3181 (merge lock), #3180 (organize check). Both are open and
+**Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
+guard). All are open and
 **held for the owner's review** because they touch paths that move or delete library
 data; this summary will be updated with merge commits as they land. Planning package:
 #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
@@ -26,8 +27,14 @@ data; this summary will be updated with merge commits as they land. Planning pac
   success without looking at the disk. A stale record pointing at a deleted or moved file
   was reported as organized. It now checks that the file is actually there and reports an
   error if it is not.
-- Both fixes come with a test that reproduces the original problem and fails on the old
-  code, so the gap cannot silently reopen.
+- **The "is this author still used?" check could miss books.** Before deleting an
+  author that looks unused, the app counts every book that still credits them. That
+  count scanned a slightly-too-narrow slice of the database: it covered every book id the
+  app generates itself, but not ids supplied by an importer, migration, or restore. A book
+  with one of those ids could credit an author and still not be counted, so the author
+  looked unused and was deleted. The scan now covers every book record.
+- All three fixes come with a test that reproduces the original problem and fails on the
+  old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
   of these changes and filed as tracked tasks so they get their own fix and review.
@@ -69,3 +76,26 @@ path uses this directly) act on a file that does not exist.
 case as a success, and returns a clear error naming the book and the missing path if it
 is gone. The batch re-organize step has a similar shortcut that was left unchanged here
 and is filed as its own task.
+
+## 3. The author-usage count that scanned too narrow a range
+
+**What it was.** Deleting an author, whether by hand or through the "purge empty
+authors" cleanup, is guarded by a count of every book that still credits them. Book
+records are stored under keys that begin with the book's id, and the count walked the
+range of keys that begins with a digit, because the ids the app mints itself always do.
+But the app also accepts ids handed to it by an importer, a migration, or a backup
+restore, and those can begin with a letter or an underscore. Those records sat just
+outside the scanned range.
+
+**Why it mattered.** A book with such an id that credited an author only through the
+older single-author field was not counted. If that was the author's only remaining
+credit, the guard reported zero, and the author record, including anything a user had
+edited on it, was deleted with no error. The same too-narrow range was also used by the
+lookup that merge and delete flows use to find which books to re-link first, so a merge
+could skip re-linking those books.
+
+**The fix.** Both scans now walk the full range of book records, with the same
+structural filter the other already-fixed scans use to skip the app's secondary indexes.
+Two tests create a book with a letter-leading id and confirm it is counted and re-linked.
+The one-off check for how many such ids exist in the live library was left for the
+owner to run, since it touches production data.
