@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.15.0
+// version: 5.16.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-10
 
@@ -779,17 +779,30 @@ func truncateActivity(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// isbnEnrichmentStore is what ISBNService reads and writes. Measured with an
-// empty-interface compiler probe: four methods plus the field-lock reader
-// (EnrichBookISBN must not fill an identifier the user locked blank). It was
-// database.Store -- 398 methods -- until 2026-08-19.
+// isbnEnrichmentStore is what ISBNService reads and writes. It began as a
+// four-method surface plus the field-lock reader (EnrichBookISBN must not fill an
+// identifier the user locked blank); it was database.Store -- 398 methods -- until
+// 2026-08-19. Widened 2026-09-10 for the cross-run sweep cursor: the batch scan
+// now pages the library with GetAllBooksFullFrom (a key-seek cursor that does not
+// re-walk from the top like GetAllBooksCore did), persists its resume point via
+// the operation-state blob methods, and reads its batch limit from a setting.
 type isbnEnrichmentStore interface {
 	database.MetadataFieldStateReader
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	GetAuthorByID(id int) (*database.Author, error)
+	GetOperationState(opID string) ([]byte, error)
+	SaveOperationState(opID string, state []byte) error
+	GetSetting(key string) (*database.Setting, error)
 }
+
+// Compile-time proof that the production store satisfies the widened interface.
+// The service is built via serviceregistry.TryGet[isbnEnrichmentStore] in
+// lifecycle.go; a type assertion that fails there would silently leave the ISBN
+// service unbuilt rather than fail the build, so this assertion guards the
+// widening at compile time instead.
+var _ isbnEnrichmentStore = (*database.PebbleStore)(nil)
 
 // bookFileLister and rejectedKeyScanner are the two one-method surfaces the
 // free functions in batch.go need. Each took database.Store.
