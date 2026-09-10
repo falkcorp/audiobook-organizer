@@ -1,5 +1,5 @@
 // file: internal/security/safehttp/safehttp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 23c60e98-8378-4efd-9fe1-69d3ae85b3e9
 // last-edited: 2026-09-10
 
@@ -31,9 +31,9 @@ func TestIsBlockedIP(t *testing.T) {
 		{"0.1.2.3", true, "rest of 0.0.0.0/8"},
 		{"169.254.169.254", true, "cloud instance metadata"},
 		{"10.1.2.3", true, "RFC1918"},
-		// The 172.16/12 sample is taken from the top of the range rather than
-		// the bottom: this repo is public and the pre-commit hook rejects any
-		// literal 172.16.x.x, which is the prefix its internal network uses.
+		// Sampled from the top of the 172.16/12 block rather than the bottom:
+		// this repo is public and the pre-commit hook rejects literals from
+		// the low end of that range.
 		{"172.31.255.254", true, "RFC1918"},
 		{"192.168.1.1", true, "RFC1918"},
 		{"100.64.0.1", true, "CGNAT"},
