@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-10
 
@@ -114,7 +114,11 @@ type opsAuthorStore interface {
 	CreateAuthor(name string) (*database.Author, error)
 	DeleteAuthor(id int) error
 	GetAllAuthorBookCounts() (map[int]int, error)
-	GetAllAuthorFileCounts() (map[int]int, error)
+	// GetAllAuthorFileCounts is deliberately ABSENT. purge-empty-authors was its
+	// only caller in this package and now reads database.AuthorFileRefCounts,
+	// which resolves the unfiltered counter as a capability off the concrete
+	// store. Re-adding it here would put the filtered display counter back within
+	// arm's reach of a safety gate — see internal/database/author_file_refs.go.
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
