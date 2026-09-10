@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 package handlers
 
@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/errgroup"
 )
 
 // statusClientClosedRequest is nginx's 499: the client went away before the
@@ -242,6 +245,58 @@ func (h *ActivityHandler) ListActivitySources(c *gin.Context) {
 	}{Sources: sources})
 }
 
+// operationActivityLimitDefault and operationActivityLimitMax bound the
+// per-request entry cap shared by the single-op and merged transcript reads.
+const (
+	operationActivityLimitDefault = 1000
+	operationActivityLimitMax     = 10000
+)
+
+// mergedOperationIDsMax caps how many members one merged read may name. The
+// bell's groups are bounded by a 24-hour window of one operation kind, so this
+// is a sanity ceiling against a runaway client, not a tuning knob.
+const mergedOperationIDsMax = 1000
+
+// parseOperationActivityLimit reads a positive integer limit, clamped to
+// operationActivityLimitMax; anything absent or unparseable is the default.
+func parseOperationActivityLimit(raw string) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && n > 0 {
+		return min(n, operationActivityLimitMax)
+	}
+	return operationActivityLimitDefault
+}
+
+// operationActivity is the one transcript read: the newest `limit` activity
+// log entries for opID in chronological order, or the op-log v2 rows when the
+// activity log holds nothing for it. Both HTTP readers go through here so the
+// fallback rule cannot drift between a single op and a group of them.
+//
+// The returned slice is never nil. total is the activity log's own count for
+// the op (which can exceed len(entries) once limit bites) or, on the fallback
+// path, the number of op-log rows returned.
+func (h *ActivityHandler) operationActivity(ctx context.Context, opID string, limit int) ([]operationActivityEntry, int, error) {
+	entries, total, err := h.svc.Query(ctx, database.ActivityFilter{OperationID: opID, Limit: limit})
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(entries) == 0 {
+		opLogEntries, opLogErr := h.operationActivityFromOpLogs(opID, limit)
+		if opLogErr != nil {
+			return nil, 0, opLogErr
+		}
+		if opLogEntries != nil {
+			return opLogEntries, len(opLogEntries), nil
+		}
+		return []operationActivityEntry{}, total, nil
+	}
+	// Query returns entries newest-first; reverse for ASC chronological order.
+	out := make([]operationActivityEntry, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		out = append(out, activityEntryToOperationEntry(entries[i]))
+	}
+	return out, total, nil
+}
+
 // ListOperationActivity handles GET /api/v1/operations/:id/activity.
 //
 // Returns all activity log entries for the given operation ID, ordered by
@@ -257,62 +312,138 @@ func (h *ActivityHandler) ListOperationActivity(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "operation id required")
 		return
 	}
+	limit := parseOperationActivityLimit(c.Query("limit"))
 
-	limit := 1000
-	if v := c.Query("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			if n > 10000 {
-				n = 10000
-			}
-			limit = n
-		}
-	}
-
-	filter := database.ActivityFilter{
-		OperationID: opID,
-		Limit:       limit,
-	}
-	entries, total, err := h.svc.Query(c.Request.Context(), filter)
+	entries, total, err := h.operationActivity(c.Request.Context(), opID, limit)
 	if err != nil {
 		if abortIfClientGone(c, err, "ListOperationActivity") {
 			return
 		}
-		httputil.InternalError(c, "failed to query activity log", err)
+		httputil.InternalError(c, "failed to query operation activity", err)
 		return
-	}
-
-	// Query returns entries newest-first; reverse for ASC chronological order.
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-
-	if entries == nil {
-		entries = []database.ActivityEntry{}
-	}
-	if len(entries) == 0 {
-		opLogEntries, opLogErr := h.operationActivityFromOpLogs(opID, limit)
-		if opLogErr != nil {
-			httputil.InternalError(c, "failed to query operation logs", opLogErr)
-			return
-		}
-		if opLogEntries != nil {
-			httputil.RespondWithOK(c, struct {
-				OperationID string                   `json:"operation_id"`
-				Entries     []operationActivityEntry `json:"entries"`
-				Total       int                      `json:"total"`
-			}{OperationID: opID, Entries: opLogEntries, Total: len(opLogEntries)})
-			return
-		}
-	}
-	responseEntries := make([]operationActivityEntry, 0, len(entries))
-	for _, e := range entries {
-		responseEntries = append(responseEntries, activityEntryToOperationEntry(e))
 	}
 	httputil.RespondWithOK(c, struct {
 		OperationID string                   `json:"operation_id"`
 		Entries     []operationActivityEntry `json:"entries"`
 		Total       int                      `json:"total"`
-	}{OperationID: opID, Entries: responseEntries, Total: total})
+	}{OperationID: opID, Entries: entries, Total: total})
+}
+
+// mergedOperationActivityRequest is the body of POST /operations/activity/merged.
+type mergedOperationActivityRequest struct {
+	IDs   []string `json:"ids"`
+	Limit int      `json:"limit"`
+}
+
+// ListMergedOperationActivity handles POST /api/v1/operations/activity/merged.
+//
+// It is the transcript of a GROUP: the bell and the Activity page fold runs
+// of same-kind operations into one synthetic row (web/src/stores/
+// operationGrouping.ts), and that row's id names no record, so opening it
+// needs a read that takes the members' ids instead. The body is
+// {"ids": [...], "limit": N}. POST rather than GET only because a group can
+// hold several hundred ULIDs, which does not fit a query string; it writes
+// nothing.
+//
+// Each member is read exactly the way the single-op endpoint reads it —
+// activity log first, op-log v2 fallback per member — and the results are
+// merged into one chronological timeline. `limit` caps the MERGED timeline and
+// drops the oldest entries: a reader opening a group wants to see how it
+// ended. `total` is the sum of the members' own totals, so it says how much
+// exists rather than how much came back; `truncated` says whether the cap bit.
+func (h *ActivityHandler) ListMergedOperationActivity(c *gin.Context) {
+	if h.svc == nil {
+		httputil.RespondWithInternalError(c, "activity log not available")
+		return
+	}
+	var req mergedOperationActivityRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.RespondWithBadRequest(c, "invalid request body: expected {\"ids\": [...], \"limit\": n}")
+		return
+	}
+	ids := dedupeOperationIDs(req.IDs)
+	if len(ids) == 0 {
+		httputil.RespondWithBadRequest(c, "at least one operation id required")
+		return
+	}
+	if len(ids) > mergedOperationIDsMax {
+		httputil.RespondWithBadRequest(c, "too many operation ids: at most "+strconv.Itoa(mergedOperationIDsMax))
+		return
+	}
+	limit := operationActivityLimitDefault
+	if req.Limit > 0 {
+		limit = min(req.Limit, operationActivityLimitMax)
+	}
+
+	// One indexed read per member, fanned out over a bounded pool: a group can
+	// name hundreds of members, and each read is a store round-trip. Results
+	// land in their own slot so the merge below is deterministic regardless of
+	// which read finished first.
+	perOp := make([][]operationActivityEntry, len(ids))
+	totals := make([]int, len(ids))
+	g, ctx := errgroup.WithContext(c.Request.Context())
+	g.SetLimit(runtime.NumCPU())
+	for i, id := range ids {
+		g.Go(func() error {
+			entries, total, err := h.operationActivity(ctx, id, limit)
+			if err != nil {
+				return err
+			}
+			perOp[i], totals[i] = entries, total
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		if abortIfClientGone(c, err, "ListMergedOperationActivity") {
+			return
+		}
+		httputil.InternalError(c, "failed to query operation activity", err)
+		return
+	}
+
+	total, n := 0, 0
+	for i := range ids {
+		total += totals[i]
+		n += len(perOp[i])
+	}
+	merged := make([]operationActivityEntry, 0, n)
+	for _, entries := range perOp {
+		merged = append(merged, entries...)
+	}
+	// Stable, so two members' entries with the same timestamp keep the caller's
+	// member order (the group lists its members oldest first).
+	sort.SliceStable(merged, func(a, b int) bool { return merged[a].Timestamp.Before(merged[b].Timestamp) })
+	truncated := false
+	if len(merged) > limit {
+		merged = merged[len(merged)-limit:]
+		truncated = true
+	}
+
+	httputil.RespondWithOK(c, struct {
+		OperationIDs []string                 `json:"operation_ids"`
+		Entries      []operationActivityEntry `json:"entries"`
+		Total        int                      `json:"total"`
+		Truncated    bool                     `json:"truncated"`
+	}{OperationIDs: ids, Entries: merged, Total: total, Truncated: truncated})
+}
+
+// dedupeOperationIDs trims, drops blanks, and keeps the first occurrence of
+// each id in the caller's order.
+func dedupeOperationIDs(raw []string) []string {
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // operationActivityFromOpLogs fetches op-log v2 rows as a fallback when the

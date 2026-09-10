@@ -1,7 +1,7 @@
 // file: web/src/stores/operationGrouping.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d19a6f2-83bc-4571-b0e8-27fa5c96de13
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -51,7 +51,10 @@ describe('groupOperations', () => {
     for (const c of children(out)) expect(c.parent_id).toBe(parentId);
   });
 
-  it('starts a new group when the idle gap is exceeded', () => {
+  // The idle gap splits a run in the first pass, but two pieces with nothing
+  // of another kind between them are "next to each other" and the second pass
+  // joins them again. The gap only holds when something else sits in it.
+  it('re-joins the pieces an idle gap split when nothing else lies between', () => {
     const first = run(4, 10_000);
     const second = run(4, 10_000).map((o, i) => ({
       ...o,
@@ -61,8 +64,28 @@ describe('groupOperations', () => {
 
     const out = groupOperations([...first, ...second]);
 
-    expect(parents(out)).toHaveLength(2);
+    expect(parents(out)).toHaveLength(1);
+    expect(parents(out)[0].group?.count).toBe(8);
+  });
+
+  it('keeps the pieces apart when another kind sits in the idle gap', () => {
+    const first = run(4, 10_000);
+    const second = run(4, 10_000).map((o, i) => ({
+      ...o,
+      id: `late-${i}`,
+      finishedAt: (o.finishedAt ?? 0) + GROUP_IDLE_GAP_MS + 60_000,
+    }));
+    const between = op({
+      id: 'scan-between',
+      def_id: 'library.scan',
+      type: 'scan',
+      finishedAt: T0 + 3 * 10_000 + 30_000,
+    });
+
+    const out = groupOperations([...first, between, ...second]);
+
     expect(parents(out).map((p) => p.group?.count)).toEqual([4, 4]);
+    expect(out.find((o) => o.id === 'scan-between')?.parent_id).toBeFalsy();
   });
 
   // A gap of exactly the threshold is NOT a split — the test is `>`, so a
@@ -74,16 +97,36 @@ describe('groupOperations', () => {
     expect(parents(out)[0].group?.count).toBe(4);
   });
 
-  // The hard cap: a busy run with no idle gap must still be broken up, or one
-  // group swallows a whole day.
-  it('starts a new group when the span cap is exceeded', () => {
-    // 40 ops one minute apart: never idle, but 39 minutes of span.
+  // The span cap breaks a busy run up in the first pass; the second pass joins
+  // the pieces back when nothing else ran between them, so a six-hour drumbeat
+  // of one kind is one row. The cap only shows when another kind interleaves.
+  it('re-joins the pieces the span cap split when nothing else lies between', () => {
+    // 40 ops one minute apart: never idle, 39 minutes of span.
     const out = groupOperations(run(40, 60_000));
 
-    expect(parents(out).length).toBeGreaterThan(1);
-    for (const p of parents(out)) {
-      const span = (p.group?.lastAt ?? 0) - (p.group?.firstAt ?? 0);
-      expect(span).toBeLessThanOrEqual(GROUP_MAX_SPAN_MS);
+    expect(parents(out)).toHaveLength(1);
+    expect(parents(out)[0].group?.count).toBe(40);
+    expect((parents(out)[0].group?.lastAt ?? 0) - (parents(out)[0].group?.firstAt ?? 0)).toBe(
+      39 * 60_000
+    );
+  });
+
+  it('keeps the span-capped pieces apart when another kind sits between them', () => {
+    // First pass: ops 0..30 (span exactly the cap) and 31..39. A scan lands
+    // after the first piece ends and before the second begins.
+    const between = op({
+      id: 'scan-between',
+      def_id: 'library.scan',
+      type: 'scan',
+      finishedAt: T0 + GROUP_MAX_SPAN_MS + 30_000,
+    });
+
+    const out = groupOperations([...run(40, 60_000), between]);
+
+    const aiParents = parents(out).filter((p) => p.def_id === 'library.ai-parse');
+    expect(aiParents).toHaveLength(2);
+    for (const p of aiParents) {
+      expect((p.group?.lastAt ?? 0) - (p.group?.firstAt ?? 0)).toBeLessThanOrEqual(GROUP_MAX_SPAN_MS);
     }
   });
 
@@ -231,5 +274,84 @@ describe('groupOperations and real lineage', () => {
     expect(synthetic).toHaveLength(1);
     expect(synthetic[0].group?.count).toBe(4);
     expect(synthetic[0].group?.memberIds.every((id) => id.startsWith('op-'))).toBe(true);
+  });
+});
+
+// The second pass. The first pass folds by kind with a gap and a span rule,
+// which leaves a long run as a chain of ×N rows with stray singletons between
+// them. Anything of one kind that ends up next to each other in the timeline
+// is one thing to the reader, so it becomes one row.
+describe('groupOperations second pass (adjacent rows)', () => {
+  it('folds a same-kind singleton after a group into the group', () => {
+    const late = op({ id: 'late', finishedAt: T0 + 4 * 10_000 + GROUP_IDLE_GAP_MS + 60_000 });
+
+    const out = groupOperations([...run(5, 10_000), late]);
+
+    expect(parents(out)).toHaveLength(1);
+    expect(parents(out)[0].group?.count).toBe(6);
+    expect(out.find((o) => o.id === 'late')?.parent_id).toBe(parents(out)[0].id);
+  });
+
+  it('turns three far-apart singletons into one group', () => {
+    // Ten minutes apart: the first pass leaves all three alone.
+    const out = groupOperations(run(3, 10 * 60_000));
+
+    expect(parents(out)).toHaveLength(1);
+    expect(parents(out)[0].group?.count).toBe(3);
+  });
+
+  it('leaves two lone singletons alone (below the floor)', () => {
+    const out = groupOperations(run(2, 10 * 60_000));
+
+    expect(parents(out)).toHaveLength(0);
+    expect(out).toHaveLength(2);
+  });
+
+  it('keeps the earlier group id and lists every member oldest first', () => {
+    const first = run(4, 10_000);
+    const second = run(4, 10_000).map((o, i) => ({
+      ...o,
+      id: `late-${i}`,
+      finishedAt: (o.finishedAt ?? 0) + GROUP_IDLE_GAP_MS + 60_000,
+    }));
+    const firstAlone = parents(groupOperations(first))[0].id;
+
+    const merged = parents(groupOperations([...second, ...first]))[0];
+
+    expect(merged.id).toBe(firstAlone);
+    expect(merged.group?.memberIds).toEqual([
+      'op-0',
+      'op-1',
+      'op-2',
+      'op-3',
+      'late-0',
+      'late-1',
+      'late-2',
+      'late-3',
+    ]);
+    expect(merged.group?.firstAt).toBe(T0);
+    expect(merged.group?.lastAt).toBe(T0 + 3 * 10_000 + GROUP_IDLE_GAP_MS + 60_000);
+  });
+
+  it('never joins across statuses even when adjacent', () => {
+    const failed = run(3, 10_000);
+    const ok = run(3, 10_000).map((o, i) => ({
+      ...o,
+      id: `ok-${i}`,
+      status: 'completed',
+      finishedAt: (o.finishedAt ?? 0) + 10 * 60_000,
+    }));
+
+    const out = groupOperations([...failed, ...ok]);
+
+    expect(parents(out).map((p) => [p.status, p.group?.count])).toEqual([
+      ['failed', 3],
+      ['completed', 3],
+    ]);
+  });
+
+  it('is stable: the same input grouped twice yields the same rows', () => {
+    const ops = [...run(5, 10_000), op({ id: 'late', finishedAt: T0 + 20 * 60_000 })];
+    expect(groupOperations([...ops].reverse())).toEqual(groupOperations(ops));
   });
 });

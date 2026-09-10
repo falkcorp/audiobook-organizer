@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.grouping.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2a6e94b1-7d38-4c05-9f61-0b3e5c8a72d4
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // The bell shows GROUPED rows and counts UNGROUPED operations.
 //
@@ -25,8 +25,14 @@ vi.mock('../../services/versionApi', () => ({
   getUndoPreflight: vi.fn(),
   revertOperation: vi.fn(),
 }));
+// A probe, not a null: the tests below assert what the bell HANDS the panel
+// when a group row is opened, which is the whole point of the merged view.
 vi.mock('../OperationActivityPanel', () => ({
-  OperationActivityPanel: () => null,
+  OperationActivityPanel: ({ operationId, memberIds }: { operationId: string; memberIds?: string[] }) => (
+    <div data-testid="activity-panel">
+      {operationId}|{memberIds ? memberIds.join(',') : 'single'}
+    </div>
+  ),
 }));
 
 const T0 = Date.UTC(2026, 8, 8, 12, 0, 0);
@@ -105,6 +111,35 @@ describe('OperationsIndicator grouping', () => {
     const rows = screen.getAllByText(/AI Filename Parsing/);
     expect(rows).toHaveLength(1);
     expect(rows[0].textContent).toContain('×12');
+  });
+
+  // Until 2026-09-10 a group row was inert: its id names no server record, so
+  // the click was disabled and the only way to a group's logs was the Activity
+  // page. Now the row opens the merged log, and what makes that work is that
+  // the panel receives the MEMBER ids rather than the synthetic id.
+  it('opens the merged log of a group row with every member id', async () => {
+    seed(Array.from({ length: 12 }, (_, i) => aiParse(i)));
+
+    await openBell();
+    await userEvent.click(screen.getByText('Completed (12)'));
+    await userEvent.click(screen.getAllByText(/AI Filename Parsing/)[0]);
+
+    const panel = screen.getByTestId('activity-panel');
+    const [id, members] = panel.textContent!.split('|');
+    expect(id).toMatch(/^group:/);
+    expect(members.split(',')).toEqual(Array.from({ length: 12 }, (_, i) => `ai-${i}`));
+    expect(screen.getByText('Merged Activity (12 runs)')).toBeInTheDocument();
+  });
+
+  it('opens a single operation with no member list', async () => {
+    seed([aiParse(0)]);
+
+    await openBell();
+    await userEvent.click(screen.getByText('Completed (1)'));
+    await userEvent.click(screen.getByText(/AI Filename Parsing/));
+
+    expect(screen.getByTestId('activity-panel').textContent).toBe('ai-0|single');
+    expect(screen.getByText('Operation Activity')).toBeInTheDocument();
   });
 
   it('leaves an ungrouped operation counted and listed as one', async () => {

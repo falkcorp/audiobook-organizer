@@ -1,7 +1,7 @@
 // file: internal/server/activity_handlers_test.go
-// version: 5.2.1
+// version: 5.3.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 // Updated for Phase 2 handler extraction: tests now use handlers.ActivityHandler
 // directly instead of *Server methods.
@@ -396,4 +396,122 @@ func TestListOperationActivity_WithRecordedEntries(t *testing.T) {
 
 	hasOpTag := slices.Contains(resp.Data.Entries[0].Tags, "op:"+opID)
 	assert.True(t, hasOpTag)
+}
+
+// mergedActivityFixture builds a handler whose activity log holds entries for
+// opA only and whose op-log v2 store holds rows for opB only, so a merged read
+// has to take the activity path for one member and the fallback for the other.
+// Timestamps interleave on purpose: A0 < B1 < A2.
+func mergedActivityFixture(t *testing.T) (*gin.Engine, string, string, time.Time) {
+	t.Helper()
+	dir := t.TempDir()
+	mainStore, err := database.NewPebbleStoreInMemory(filepath.Join(dir, "main.pebble"))
+	require.NoError(t, err)
+	require.NoError(t, database.RunMigrations(mainStore))
+	t.Cleanup(func() { mainStore.Close() })
+
+	actStore, err := database.NewNutsActivityStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { actStore.Close() })
+	actSvc := activity.NewService(actStore)
+
+	opA, opB := "merged-op-a", "merged-op-b"
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	_, err = actStore.Record(database.ActivityEntry{
+		Timestamp: base, Tier: "change", Type: "ai-parse", Level: "info",
+		Source: "scanner", OperationID: opA, Summary: "A first",
+	})
+	require.NoError(t, err)
+	_, err = actStore.Record(database.ActivityEntry{
+		Timestamp: base.Add(2 * time.Second), Tier: "change", Type: "ai-parse", Level: "info",
+		Source: "scanner", OperationID: opA, Summary: "A last",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mainStore.AppendOpLogsV2([]database.OpLogV2Row{
+		{OperationID: opB, Level: "info", Message: "B only", CreatedAt: base.Add(time.Second)},
+	}))
+
+	gin.SetMode(gin.TestMode)
+	h := handlers.NewActivityHandler(actSvc, mainStore)
+	r := gin.New()
+	r.POST("/api/v1/operations/activity/merged", h.ListMergedOperationActivity)
+	return r, opA, opB, base
+}
+
+type mergedActivityResponse struct {
+	Data struct {
+		OperationIDs []string                 `json:"operation_ids"`
+		Entries      []operationActivityEntry `json:"entries"`
+		Total        int                      `json:"total"`
+		Truncated    bool                     `json:"truncated"`
+	} `json:"data"`
+}
+
+func postMergedActivity(t *testing.T, r *gin.Engine, body string) (*httptest.ResponseRecorder, mergedActivityResponse) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/operations/activity/merged", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	var resp mergedActivityResponse
+	if w.Code == http.StatusOK {
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	}
+	return w, resp
+}
+
+// TestListMergedOperationActivity_ChronologicalAcrossMembers proves the merged
+// feed is one timeline: entries from the activity log and from the op-log
+// fallback interleave by timestamp, each still labelled with its own op id.
+func TestListMergedOperationActivity_ChronologicalAcrossMembers(t *testing.T) {
+	r, opA, opB, _ := mergedActivityFixture(t)
+
+	w, resp := postMergedActivity(t, r, fmt.Sprintf(`{"ids":[%q,%q]}`, opA, opB))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	require.Len(t, resp.Data.Entries, 3)
+	assert.Equal(t, []string{"A first", "B only", "A last"},
+		[]string{resp.Data.Entries[0].Message, resp.Data.Entries[1].Message, resp.Data.Entries[2].Message})
+	assert.Equal(t, []string{opA, opB, opA},
+		[]string{resp.Data.Entries[0].OperationID, resp.Data.Entries[1].OperationID, resp.Data.Entries[2].OperationID})
+	assert.Equal(t, 3, resp.Data.Total)
+	assert.False(t, resp.Data.Truncated)
+	assert.Equal(t, []string{opA, opB}, resp.Data.OperationIDs)
+}
+
+// TestListMergedOperationActivity_LimitKeepsNewest: the cap is over the merged
+// timeline, not per member, and it drops the OLDEST entries — the reader
+// opening a group wants to see how it ended.
+func TestListMergedOperationActivity_LimitKeepsNewest(t *testing.T) {
+	r, opA, opB, _ := mergedActivityFixture(t)
+
+	w, resp := postMergedActivity(t, r, fmt.Sprintf(`{"ids":[%q,%q],"limit":2}`, opA, opB))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	require.Len(t, resp.Data.Entries, 2)
+	assert.Equal(t, "B only", resp.Data.Entries[0].Message)
+	assert.Equal(t, "A last", resp.Data.Entries[1].Message)
+	assert.Equal(t, 3, resp.Data.Total, "total counts what exists, not what was returned")
+	assert.True(t, resp.Data.Truncated)
+}
+
+// TestListMergedOperationActivity_BadInput: no ids is a client error, and a
+// repeated id is read once — a duplicated member must not duplicate its lines.
+func TestListMergedOperationActivity_BadInput(t *testing.T) {
+	r, opA, _, _ := mergedActivityFixture(t)
+
+	w, _ := postMergedActivity(t, r, `{"ids":[]}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w, _ = postMergedActivity(t, r, `{"ids":[" ",""]}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w, _ = postMergedActivity(t, r, `not json`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w, resp := postMergedActivity(t, r, fmt.Sprintf(`{"ids":[%q,%q]}`, opA, opA))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, []string{opA}, resp.Data.OperationIDs)
+	assert.Len(t, resp.Data.Entries, 2)
+	assert.Equal(t, 2, resp.Data.Total)
 }

@@ -1,7 +1,7 @@
 // file: web/src/components/OperationActivityPanel.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: f7a1e2c3-9b4d-4e5a-8c6f-1d3b5a7e9c0f
-// last-edited: 2026-08-26
+// last-edited: 2026-09-10
 
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import {
@@ -20,15 +20,36 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { fetchOperationActivity, type OperationActivityEntry } from '../services/activityApi';
+import {
+  fetchMergedOperationActivity,
+  fetchOperationActivity,
+  type OperationActivityEntry,
+} from '../services/activityApi';
 import { useOperationsStore } from '../stores/useOperationsStore';
 import { useToast } from './toast/ToastProvider';
 
 interface OperationActivityPanelProps {
-  /** Operation ID to fetch the per-op activity feed for. */
+  /** Operation ID to fetch the per-op activity feed for. For a group row this
+   *  is the synthetic group id (see operationGrouping.ts): it names no server
+   *  record and is used only to find the row in the store and to key the view. */
   operationId: string;
-  /** Optional cap on entries returned by the server (default 100). */
+  /** Present for a GROUP row: the real operations behind it, oldest first. The
+   *  panel then shows one merged timeline of all of them instead of a single
+   *  op's feed, and every entry is labelled with the member it came from. */
+  memberIds?: string[];
+  /** Optional cap on entries returned by the server (default 100 for one op,
+   *  MERGED_DEFAULT_LIMIT for a group). */
   limit?: number;
+}
+
+/** A group's members usually log a few lines each, so a cap sized for one op
+ *  would show only the last member's tail. */
+const MERGED_DEFAULT_LIMIT = 2000;
+
+/** shortId is the member label on a merged entry: enough of a ULID to tell
+ *  neighbours apart, short enough to sit on every line. */
+function shortId(id: string): string {
+  return id.slice(0, 8);
 }
 
 function levelChip(level: string) {
@@ -83,9 +104,11 @@ function inferStatusFromEntries(entries: OperationActivityEntry[]): string {
 
 interface EntryRowProps {
   entry: OperationActivityEntry;
+  /** Set when the panel shows a merged timeline: which member wrote the line. */
+  memberLabel?: string;
 }
 
-function EntryRow({ entry }: EntryRowProps) {
+function EntryRow({ entry, memberLabel }: EntryRowProps) {
   const [expanded, setExpanded] = useState(false);
   const hasDetails = Boolean(entry.details && entry.details.trim().length > 0);
 
@@ -117,6 +140,21 @@ function EntryRow({ entry }: EntryRowProps) {
         >
           {formatTimestamp(entry.timestamp)}
         </Typography>
+        {memberLabel !== undefined && (
+          <Tooltip title={`Operation ${entry.operation_id}`}>
+            <Typography
+              variant="caption"
+              sx={{
+                fontFamily: 'monospace',
+                color: 'text.secondary',
+                minWidth: 64,
+                flexShrink: 0,
+              }}
+            >
+              {memberLabel}
+            </Typography>
+          </Tooltip>
+        )}
         {levelChip(entry.level)}
         <Typography variant="body2" sx={{ flexGrow: 1, wordBreak: 'break-word' }}>
           {entry.message}
@@ -157,21 +195,29 @@ function EntryRow({ entry }: EntryRowProps) {
 
 /**
  * OperationActivityPanel — scoped view of the activity-feed entries for a
- * single operation, backed by GET /api/v1/operations/:id/activity. Shows a
- * status banner (sourced from the operations store when available, else
- * inferred from the last entry's level) plus a chronological list of entries
- * with color-coded level badges and collapsible details.
+ * single operation, backed by GET /api/v1/operations/:id/activity, or — when
+ * memberIds is given — the merged timeline of a group of operations, backed
+ * by POST /api/v1/operations/activity/merged. Shows a status banner (sourced
+ * from the operations store when available, else inferred from the last
+ * entry's level) plus a chronological list of entries with color-coded level
+ * badges and collapsible details.
  */
-export function OperationActivityPanel({ operationId, limit }: OperationActivityPanelProps) {
+export function OperationActivityPanel({ operationId, memberIds, limit }: OperationActivityPanelProps) {
   const [entries, setEntries] = useState<OperationActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
+  const [truncated, setTruncated] = useState(false);
   const isUnmountedRef = useRef(false);
   const { toast } = useToast();
 
+  const isGroup = memberIds !== undefined && memberIds.length > 0;
+  // A group row lives only in groupedOperations; a real op is in both, and
+  // activeOperations is the one every other consumer reads.
   const op = useOperationsStore((state) =>
-    state.activeOperations.find((o) => o.id === operationId)
+    isGroup
+      ? state.groupedOperations.find((o) => o.id === operationId)
+      : state.activeOperations.find((o) => o.id === operationId)
   );
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
 
@@ -188,28 +234,43 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
     opRef.current = op;
   }, [op]);
 
+  // memberIds is an array prop, so a caller re-rendering with an equal but new
+  // array must not refetch: key the effect on its contents, not its identity.
+  const memberKey = isGroup ? memberIds.join(',') : '';
+
   const load = useCallback(async () => {
     if (isUnmountedRef.current) return;
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchOperationActivity(operationId, limit ?? 100);
-      if (!isUnmountedRef.current) {
-        setEntries(data.entries ?? []);
-        setTotal(data.total ?? data.entries?.length ?? 0);
+      if (memberKey !== '') {
+        const data = await fetchMergedOperationActivity(memberKey.split(','), limit ?? MERGED_DEFAULT_LIMIT);
+        if (!isUnmountedRef.current) {
+          setEntries(data.entries ?? []);
+          setTotal(data.total ?? data.entries?.length ?? 0);
+          setTruncated(Boolean(data.truncated));
+        }
+      } else {
+        const data = await fetchOperationActivity(operationId, limit ?? 100);
+        if (!isUnmountedRef.current) {
+          setEntries(data.entries ?? []);
+          setTotal(data.total ?? data.entries?.length ?? 0);
+          setTruncated(false);
+        }
       }
     } catch (err) {
       if (!isUnmountedRef.current) {
         setError(err instanceof Error ? err.message : String(err));
         setEntries([]);
         setTotal(0);
+        setTruncated(false);
       }
     } finally {
       if (!isUnmountedRef.current) {
         setLoading(false);
       }
     }
-  }, [operationId, limit]);
+  }, [operationId, memberKey, limit]);
 
   useEffect(() => {
     load();
@@ -218,14 +279,18 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
   // Live log lines are appended from SSE. The refresh button is the explicit
   // full reload path; no timer should repaint the log while a user is reading.
   useEffect(() => {
-    if (!latestLogEvent || latestLogEvent.op_id !== operationId) return;
+    if (!latestLogEvent) return;
+    // A merged view takes lines from any member; a single view from its op.
+    const mine =
+      memberKey !== '' ? memberKey.split(',').includes(latestLogEvent.op_id) : latestLogEvent.op_id === operationId;
+    if (!mine) return;
     // Guards against re-appending the same SSE event when this effect re-runs
     // for an unrelated reason. `sequence` is a monotonic counter the store
     // stamps on every real log event, so it is a reliable identity even across
     // renders that hand back an equal-looking but structurally new event object.
     if (lastAppendedSequenceRef.current === latestLogEvent.sequence) return;
     lastAppendedSequenceRef.current = latestLogEvent.sequence;
-    const cap = limit ?? 100;
+    const cap = limit ?? (memberKey !== '' ? MERGED_DEFAULT_LIMIT : 100);
     const currentOp = opRef.current;
     setEntries((prev) => {
       const next = [
@@ -241,7 +306,7 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
       return next.length > cap ? next.slice(next.length - cap) : next;
     });
     setTotal((prev) => prev + 1);
-  }, [latestLogEvent, operationId]);
+  }, [latestLogEvent, operationId, memberKey, limit]);
 
   // Plain-text representation of the log for clipboard copy.
   const logsAsText = useMemo(() => {
@@ -266,6 +331,7 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
 
   const status = op?.status ?? inferStatusFromEntries(entries);
   const operationType = op?.displayName || op?.def_id || entries[0]?.operation_type || 'operation';
+  const memberCount = isGroup ? memberIds.length : 0;
 
   return (
     <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
@@ -288,6 +354,7 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
         >
           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
             {operationType}
+            {isGroup ? ` ×${memberCount}` : ''}
           </Typography>
           <Chip
             size="small"
@@ -301,7 +368,8 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
               fontFamily: 'monospace',
             }}
           >
-            {operationId.slice(0, 12)}
+            {/* A group id names no record; say what the view is instead. */}
+            {isGroup ? `${memberCount} runs, merged` : operationId.slice(0, 12)}
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
           <Typography
@@ -310,7 +378,9 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
               color: 'text.secondary',
             }}
           >
-            {total} {total === 1 ? 'entry' : 'entries'}
+            {truncated
+              ? `showing the last ${entries.length} of ${total} entries`
+              : `${total} ${total === 1 ? 'entry' : 'entries'}`}
           </Typography>
           <Tooltip title="Copy log to clipboard">
             <span>
@@ -324,15 +394,18 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
               </IconButton>
             </span>
           </Tooltip>
-          <Button
-            component="a"
-            href={`/api/v1/operations/v2/${encodeURIComponent(operationId)}/logs/download`}
-            download
-            size="small"
-            sx={{ textTransform: 'none' }}
-          >
-            Download full log (.gz)
-          </Button>
+          {/* The download is one op's log file; a group has no single file. */}
+          {!isGroup && (
+            <Button
+              component="a"
+              href={`/api/v1/operations/v2/${encodeURIComponent(operationId)}/logs/download`}
+              download
+              size="small"
+              sx={{ textTransform: 'none' }}
+            >
+              Download full log (.gz)
+            </Button>
+          )}
           <Tooltip title="Refresh activity">
             <IconButton size="small" onClick={load} aria-label="Refresh activity">
               <RefreshIcon fontSize="small" />
@@ -366,7 +439,11 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
       ) : (
         <Box sx={{ maxHeight: 480, overflowY: 'auto' }}>
           {entries.map((entry, idx) => (
-            <EntryRow key={`${entry.timestamp}-${idx}`} entry={entry} />
+            <EntryRow
+              key={`${entry.timestamp}-${idx}`}
+              entry={entry}
+              memberLabel={isGroup ? shortId(entry.operation_id) : undefined}
+            />
           ))}
         </Box>
       )}

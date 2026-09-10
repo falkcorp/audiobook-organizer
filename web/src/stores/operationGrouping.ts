@@ -1,7 +1,7 @@
 // file: web/src/stores/operationGrouping.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c4a1f37-2b95-4e60-9d13-6a7fb2e08c54
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 import type { ActiveOperation } from './useOperationsStore';
 
@@ -19,9 +19,18 @@ import type { ActiveOperation } from './useOperationsStore';
  * synthetic parent would sit non-terminal for up to 30 minutes, which is
  * exactly what resumeAfterStartup scans for — re-creating the fail-closed
  * problem the activity migration just solved with interrupted_dropped. Nothing
- * is written, so nothing scans it. It also makes "two already-merged groups end
- * up adjacent" impossible: that is an artifact of persisting a merge, and this
- * re-derives from scratch on every read.
+ * is written, so nothing scans it.
+ *
+ * TWO PASSES. The first folds each KIND on its own: consecutive same-kind runs,
+ * split by an idle gap and a span cap. That alone left a six-hour AI-parse run
+ * on the page as a chain of ×N rows with stray singletons between them — every
+ * piece correct, the whole unreadable. The second pass (mergeAdjacentRows)
+ * looks at the timeline the reader actually sees: any same-kind rows that end
+ * up next to each other, whatever the gap between them, become one row. The gap
+ * and span rules therefore only show through when something of another kind
+ * ran in between — which is exactly when a split carries information. Because
+ * nothing is persisted, both passes re-derive from scratch on every read, so
+ * "already-merged groups drifting apart" cannot happen.
  *
  * And it belongs in the STORE rather than a request handler because the full
  * 24-hour window is already in memory here, so a group can never be truncated
@@ -169,6 +178,70 @@ export function groupOperations(ops: ActiveOperation[]): ActiveOperation[] {
     }
     flush();
   }
+  return mergeAdjacentRows(out);
+}
+
+/**
+ * mergeAdjacentRows is the second pass: same-kind top-level rows that sit next
+ * to each other in the timeline become one group.
+ *
+ * "Next to each other" is decided on the rows the first pass produced — group
+ * parents and ungrouped ops alike, ordered by the same timestamp the fold uses —
+ * so a group's position is its last member's time and a row of another kind
+ * anywhere between two same-kind rows keeps them apart. A run of adjacent rows
+ * merges only when it would replace at least two rows AND the merged group
+ * clears MIN_GROUP_SIZE; two lone singletons stay two rows for the same reason
+ * the first pass leaves them alone.
+ *
+ * The merged group's id comes from groupId over its (re-sorted) members, so it
+ * equals the id of the earliest piece: a group that absorbs a later neighbour
+ * keeps the id the user may already have collapsed. Rows that declare a real
+ * (server) parent were never top-level and pass through untouched.
+ */
+function mergeAdjacentRows(rows: ActiveOperation[]): ActiveOperation[] {
+  const groupIds = new Set(rows.filter((r) => r.group).map((r) => r.id));
+  const childrenOf = new Map<string, ActiveOperation[]>();
+  const passthrough: ActiveOperation[] = [];
+  const top: ActiveOperation[] = [];
+  for (const row of rows) {
+    if (row.parent_id && groupIds.has(row.parent_id)) {
+      const bucket = childrenOf.get(row.parent_id);
+      if (bucket) bucket.push(row);
+      else childrenOf.set(row.parent_id, [row]);
+    } else if (row.parent_id) {
+      passthrough.push(row);
+    } else {
+      top.push(row);
+    }
+  }
+  top.sort(byTimeThenId);
+
+  const out: ActiveOperation[] = [...passthrough];
+  const membersOf = (row: ActiveOperation): ActiveOperation[] =>
+    row.group ? (childrenOf.get(row.id) ?? []) : [row];
+  let run: ActiveOperation[] = [];
+  const flush = () => {
+    if (run.length === 0) return;
+    const members = run.flatMap(membersOf);
+    if (run.length >= 2 && members.length >= MIN_GROUP_SIZE) {
+      // Members are the first pass's clones (or untouched singletons); sorting
+      // a fresh array and re-cloning with the new parent leaves the input alone.
+      const sorted = [...members].sort(byTimeThenId);
+      const id = groupId(sorted);
+      out.push(makeGroupParent(sorted), ...sorted.map((op) => ({ ...op, parent_id: id })));
+    } else {
+      for (const row of run) {
+        out.push(row);
+        if (row.group) out.push(...(childrenOf.get(row.id) ?? []));
+      }
+    }
+    run = [];
+  };
+  for (const row of top) {
+    if (run.length > 0 && groupKey(row) !== groupKey(run[run.length - 1])) flush();
+    run.push(row);
+  }
+  flush();
   return out;
 }
 

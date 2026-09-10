@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 package server
 
@@ -39,6 +39,9 @@ func (s *Server) wireLibraryRoutes(
 	protected.POST("/activity/compact", s.perm(auth.PermSettingsManage), activityH.CompactActivity)
 	protected.POST("/activity/clamp-summaries", s.perm(auth.PermSettingsManage), activityH.ClampActivitySummaries)
 	protected.GET("/operations/:id/activity", s.perm(auth.PermLibraryView), activityH.ListOperationActivity)
+	// A read, despite the verb: the body carries a group's member ids, which can
+	// be several hundred ULIDs. Gated like the GET above.
+	protected.POST("/operations/activity/merged", s.perm(auth.PermLibraryView), activityH.ListMergedOperationActivity)
 
 	// Split-book dedup
 	protected.POST("/dedup/split-book-scan", s.perm(auth.PermScanTrigger), splitBookH.TriggerSplitBookScan)
