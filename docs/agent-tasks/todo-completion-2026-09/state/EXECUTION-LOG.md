@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -21,7 +21,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 1 | TASK-303 organize no-op stat (`:141-142` only) | data-loss high | S | go-specialist/sonnet | PR #3180 HELD (14:41) |
 | 1 | TASK-306 backup restore verify | data-loss medium | S | go-specialist/sonnet | first cut REJECTED 14:44 (fail-closed broke default UI restore); reworked; PR #3183 HELD (14:55) |
 | 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | PR #3185 HELD (15:24) |
-| 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | dispatched 14:46 |
+| 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | PR #3186 open, standard lane (15:26) |
 | 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | PR #3184 open, standard lane (15:15) |
 | 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | dispatched 14:56 (L4241/4242 code; L4244 measure-only) |
 
@@ -29,7 +29,8 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
 | 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | dispatched 15:22 (files: book_dedup.go, itunes_heal.go — no overlap) |
 | 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | dispatched 15:25 (duplicates_helpers.go) |
-| 3 | TASK-347 / 358 / 359 series trashed-row guards | data-loss | M | | queued — 347 (series_denumber_op.go), 358 (series_dedup.go) independent; 359 touches pebble_store.go → wait for #3182/#3185 to merge |
+| 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | dispatched 15:27 (series_denumber_op.go) |
+| 3 | TASK-358 / 359 | data-loss | M | | queued — 358 (series_dedup.go) independent; 359 touches pebble_store.go → wait for #3182/#3185 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
 | 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued |
 | 4 | TASK-338 retire fix-library-states | data-loss | S | | queued |
@@ -91,4 +92,12 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Worker divergence (accepted): did NOT guard `GetAllBooksCore` in place (~100 call sites incl. request paths; a recorded loss never clears without restart) — same twin split as #2839. Rationale in doc comments and the PR.
 - Pre-fix probe: memdb missing two rows → book absent from the membership set → all its files classed orphan. Gate exit 0 (maintenance 52s, full database pkg, `-race`, golangci interfacebloat 0). Rollback: pure guard.
 - PR #3185 — HELD for owner. `TODO.md` L5139 to check off on merge. Conflict note: touches `pebble_store.go` like #3182 — second to merge needs a rebase.
+
+### TASK-309 — SF-02 inline AI-parse summary discarded
+
+- Worker paused on a background gate; resumed 15:05 foreground-only (ended at 122 calls, over budget). Worktree `.worktrees/scanner-309`, branch `agent/scanner-309-inline-ai-parse-phase-result-is-discarde`, sha `1cf20a4ed`.
+- 10 files: `AIPhaseSummary.ReportTo`, variadic `onAIPhaseWarning` on `ProcessBooksParallel` + `Scanner` interface, `ScanRequest.OnAIPhaseWarning` threaded through `scanFolder`/`processChunk`, `library.scan` and `library.folder-auto-scan` wire it to `reporter.Log(WARN)`; three test files updated for the signature; fragment.
+- Regression `TestProcessBooksParallelReportsFailedInlineAIPhase`: pre-fix "Should NOT be empty" (with `.ReportTo` reverted), passes post-fix.
+- Gate: gofmt/build/vet exit 0; scanner package has ONE failing test `TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` — coordinator re-ran it on main `42d187168`: fails identically (pre-existing, already filed at `TODO.md` L2470). Server tests `-run 'Autoscan|AIParse|LibraryScan'` ok (run by the coordinator; worker skipped for budget). staticcheck 0 in touched files.
+- PR #3186 — standard lane; merge on green gate. No `TODO.md` line.
 
