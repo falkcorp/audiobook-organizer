@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-08-24
+// last-edited: 2026-09-10
 
 package database
 
@@ -1394,8 +1394,27 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 
 // BatchUpsertBookFiles upserts a slice of BookFile records using a single
 // PebbleDB batch for all writes. Each file is matched by iTunes persistent ID
-// (if set) or by file path. This amortises the per-Commit overhead across
-// all records in the slice.
+// (if set) or by file path, first against the rows already staged in this same
+// batch and then against committed state. This amortises the per-Commit overhead
+// across all records in the slice.
+//
+// The result is defined to equal what the same rows would produce through
+// sequential UpsertBookFile calls: two rows sharing a FilePath (or a PID) become
+// ONE stored row, with identity (ID, BookID, CreatedAt) from the first and
+// content from the last. See the stagedByPath/stagedByPID comment inside for why
+// the committed lookups alone cannot do this, and for why this merges where
+// BatchCreateBookFiles refuses.
+//
+// MUTATES THE CALLER'S ROWS. It already did — a matched row has its ID, BookID
+// and CreatedAt overwritten so the caller can read the stored identity back. The
+// merge extends that to the LOSING element of a duplicate pair: it is overwritten
+// with the row that superseded it, so every element of a duplicate group ends up
+// carrying the winning ID. Content-wise the guarantee is narrower and stated
+// exactly: the STORED row and the LAST element of the group agree, while an
+// intermediate element of a 3+ group holds its immediate successor's copy rather
+// than the final one. That is sufficient only because the post-commit memdb
+// refresh below iterates `files` in slice order, so the last element publishes
+// last — do not reorder that loop.
 func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 	if len(files) == 0 {
 		return nil
@@ -1412,6 +1431,36 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 	affectedBooks := make([]string, 0, len(files))
 	seenBooks := make(map[string]struct{}, len(files))
 
+	// Rows already staged in THIS batch, indexed the same two ways the committed
+	// lookups below index them. Both lookups read s.db.Get, i.e. COMMITTED state,
+	// so neither can see a row sitting in the still-uncommitted pebble.Batch: two
+	// rows of one batch sharing a FilePath (or a PID) both missed, both took a
+	// fresh ULID and both landed under distinct book_file:<bookID>:<id> keys. The
+	// aggregate recompute at the bottom of this method then summed the duplicate
+	// into Book.Duration and Book.FileSize, so a 600-second file read as 1200.
+	// Measured and written up in TODO.md, "Two rows with the same FilePath in one
+	// batch now corrupt Book.Duration".
+	//
+	// Keyed on the raw FilePath, not bookFilePathCRC: GetBookFileByPath CRCs to
+	// find a candidate and then compares the stored path for exact equality, so
+	// exact-string keying is what actually matches its semantics.
+	//
+	// WHY THIS MERGES WHERE BatchCreateBookFiles REFUSES. Its seenPIDs check
+	// (BatchCreateBookFiles, above) returns an error on a within-batch PID
+	// collision, because two CREATES of one PID is a caller bug with no defensible
+	// resolution. This method is an UPSERT: handing it the same row twice must
+	// produce exactly what two sequential UpsertBookFile calls produce, and that is
+	// one row, not an error. Do not "harmonise" the two — the difference is the
+	// semantics of the verb. TODO.md's Fix paragraph asks for this shape by name:
+	// "merge a later row into the earlier one instead of writing a second key".
+	//
+	// Entries are never removed. A staged row stays reachable under every path and
+	// PID it has carried during this batch, so a third row naming any of them
+	// funnels into that same single row rather than escaping to a committed lookup
+	// that would resolve to a row this batch has already retargeted.
+	stagedByPath := make(map[string]*BookFile, len(files))
+	stagedByPID := make(map[string]*BookFile, len(files))
+
 	now := time.Now()
 	for _, file := range files {
 		if file == nil {
@@ -1422,18 +1471,39 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 		var existing *BookFile
 		var lookupErr error
 
+		// BOTH staged maps are consulted before EITHER committed lookup, and the
+		// order between them mirrors the committed order (PID, then path).
+		// Interleaving the two — staged-PID, committed-PID, staged-path — reopens
+		// the hole: a row whose PID is held by a different COMMITTED row would
+		// retarget onto that row and slip past the path already staged here,
+		// putting two rows back on one path.
+		var mergeTarget *BookFile
 		if file.ITunesPersistentID != "" {
-			existing, lookupErr = s.GetBookFileByPID(file.ITunesPersistentID)
+			mergeTarget = stagedByPID[file.ITunesPersistentID]
 		}
-		if lookupErr != nil {
-			batch.Close()
-			return lookupErr
+		if mergeTarget == nil && file.FilePath != "" {
+			mergeTarget = stagedByPath[file.FilePath]
 		}
-		if existing == nil && file.FilePath != "" {
-			existing, lookupErr = s.GetBookFileByPath(file.FilePath)
+
+		if mergeTarget != nil {
+			// Same row, seen twice in one batch. Treat the staged row exactly as a
+			// committed match is treated below: it supplies identity, the incoming
+			// row supplies content.
+			existing = mergeTarget
+		} else {
+			if file.ITunesPersistentID != "" {
+				existing, lookupErr = s.GetBookFileByPID(file.ITunesPersistentID)
+			}
 			if lookupErr != nil {
 				batch.Close()
 				return lookupErr
+			}
+			if existing == nil && file.FilePath != "" {
+				existing, lookupErr = s.GetBookFileByPath(file.FilePath)
+				if lookupErr != nil {
+					batch.Close()
+					return lookupErr
+				}
 			}
 		}
 
@@ -1479,6 +1549,30 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 				batch.Close()
 				return err
 			}
+
+			if mergeTarget != nil {
+				// The two structs now describe one row under one primary key, so the
+				// batch.Set below OVERWRITES the staged row rather than adding a
+				// second. Collapsing them here also settles the post-commit memdb
+				// refresh, which iterates the caller's `files` slice: without this the
+				// earlier element would still hold the losing copy and re-publish it
+				// over the winner, with the same ID, purely on slice order. It is the
+				// one place this method mutates a row OTHER than the one it is
+				// currently processing — noted in the doc comment.
+				//
+				// The delete above ran first, so it dropped the index keys staged for
+				// the pre-merge row (a changed FileHash or FilePath would otherwise
+				// leave a dangling book_file_hash:/book_file_path: ref). Its LSH arm
+				// resolves subprints from the COMMITTED fpidx_meta row, so LSH keys
+				// staged moments ago by the earlier row survive it — inert in practice
+				// because writeFingerprintLSHIndexes no-ops on an empty fingerprint and
+				// every caller of this method leaves AcoustIDFingerprint empty (the
+				// preserve-on-empty guard above then gives both rows the same restored
+				// bytes, hence the same keys). A batch carrying two DIFFERENT non-empty
+				// fingerprints for one path would strand the first row's fpidx rows;
+				// no caller does that today.
+				*mergeTarget = *file
+			}
 		} else {
 			if file.ID == "" {
 				id, err := newULID()
@@ -1515,6 +1609,17 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 		if err := writeBookFileSecondaryIndexes(batch, file); err != nil {
 			batch.Close()
 			return err
+		}
+
+		// Record AFTER staging, so a row that failed to stage is never offered as a
+		// merge target. Both keys are registered even on a merge: the winning struct
+		// becomes reachable under its own path/PID as well as under the earlier
+		// row's, which is what keeps a third duplicate funnelling into it.
+		if file.FilePath != "" {
+			stagedByPath[file.FilePath] = file
+		}
+		if file.ITunesPersistentID != "" {
+			stagedByPID[file.ITunesPersistentID] = file
 		}
 	}
 
