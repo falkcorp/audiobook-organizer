@@ -8,8 +8,9 @@ package merge
 import "sync"
 
 // mergeSerializeMu serializes EVERY merge-family read-modify-write across the
-// whole process. All four unguarded paths in the codebase acquire this one
-// lock so any two of them are mutually exclusive on a shared book row:
+// whole process. These four read-modify-writes in internal/merge and
+// internal/dedup acquire this one lock so any two of them are mutually
+// exclusive on a shared book row:
 //
 //   - merge.Service.MergeBooks     (version-group merge; soft-deletes losers)
 //   - merge.Service.CombineBooks   (multi-file combine; hard-deletes shells)
@@ -20,6 +21,12 @@ import "sync"
 //     duration, soft-deletes each src; another
 //     SEPARATE package function reaching this
 //     lock via LockMergeRMW)
+//
+// NOT covered: internal/maintenance/jobs/dedup_books.go's ddMergeDuplicateBook
+// / ddSoftDeleteBook do the same shape of unguarded read-modify-write (a
+// legacy, separately-maintained dedup job) but do not take this lock. Tracked
+// separately — out of scope for this fix, which only wires in
+// dedup.MergeSplitBookCluster (DA-01).
 //
 // Why one shared lock, not one per path: each does an unguarded
 // GetBookByID -> mutate -> UpdateBook / DeleteBook / SoftDeleteBook / external-ID
