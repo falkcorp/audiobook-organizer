@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
 // last-edited: 2026-09-10
 
@@ -269,25 +269,27 @@ func TestSeriesPhantomRepair_NullApplyIsUndoable(t *testing.T) {
 	requireFixtureUntouched(t, s, fx)
 }
 
-// journalFailStore is a store whose undo ledger is broken. The op must then
+// phantomJournalFailStore is a store whose undo ledger is broken (named for this
+// file: dedupe_book_file_rows_parallel_test.go has its own journalFailStore in
+// the same package, and the two collided when both PRs merged). The op must then
 // leave every book exactly as it found it: an edit nobody can replay is worse
 // than a dangling id that survives to the next run.
 //
 // It embeds the CONCRETE store, not database.Store: an interface embed would
 // hide GetAllSeriesBookRefCounts (a capability, not a Store method) and the op
 // would refuse before ever reaching the ledger — a different, earlier guard.
-type journalFailStore struct {
+type phantomJournalFailStore struct {
 	*database.PebbleStore
 }
 
-func (journalFailStore) CreateOperationChange(*database.OperationChange) error {
+func (phantomJournalFailStore) CreateOperationChange(*database.OperationChange) error {
 	return errors.New("ledger unavailable")
 }
 
 func TestSeriesPhantomRepair_JournalFailureLeavesTheBookIntact(t *testing.T) {
 	s := newSeriesPhantomStore(t)
 	fx := seedSeriesPhantomFixture(t, s)
-	p := &Plugin{deps: fakeDeps{store: journalFailStore{PebbleStore: s}}}
+	p := &Plugin{deps: fakeDeps{store: phantomJournalFailStore{PebbleStore: s}}}
 
 	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false)})
 	require.NoError(t, err, "a per-book failure degrades the run, it does not abort it")
