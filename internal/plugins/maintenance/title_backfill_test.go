@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -69,6 +69,12 @@ func (d fakeDeps) FileProvenanceStore() database.FileProvenanceStore {
 func (d fakeDeps) MetadataCacheStore() database.MetadataCacheStore {
 	return d.store
 }
+
+// OperationQueueStore hands back the store unchanged: ListActiveOperationsV2 is
+// part of database.Store, so no capability resolution is needed. A MockStore
+// answers (nil, nil) — "no active ops" — so mock-backed tests see an idle queue
+// and the dedupe scan guard lets them through.
+func (d fakeDeps) OperationQueueStore() OpQueueReader { return d.store }
 
 // ReviewStatusIndexStore mirrors Server's accessor: the rebuild is not part of
 // database.Store, so this asserts and yields nil for a store that lacks it.

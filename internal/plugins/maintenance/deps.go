@@ -262,6 +262,28 @@ type StoreProvider interface {
 	// implements it; the op reports that as "not supported" rather than
 	// panicking.
 	ReviewStatusIndexStore() database.ReviewStatusIndexRepairer
+	// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply
+	// run must refuse while library.scan is queued or running, because a scan
+	// concurrently rewrites the same book_file rows that op deletes.
+	OperationQueueStore() OpQueueReader
+}
+
+// OpQueueReader is the single method the dedupe repair needs to see whether a
+// library scan is in flight.
+//
+// It is its OWN accessor rather than a method on OpsStore because OpsStore is
+// already at the interfacebloat cap of 8 embeds (.golangci.yml
+// settings.interfacebloat.max) -- the same mechanical reason MetadataCacheStore
+// and FileProvenanceStore have their own accessors. Adding it to OpsStore or to
+// opsHousekeeping would break the lint gate, and widening the 55-method common
+// path for one caller is what those accessors exist to avoid.
+//
+// Unlike FileProvenanceStore, this needs no database.AsCapability resolution:
+// ListActiveOperationsV2 is part of database.Store (via operationsStore ->
+// OpsV2Store), so the production decorator forwards it like any other Store
+// method and a plain `return s.store` is correct.
+type OpQueueReader interface {
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
 
 // MetadataRunners runs the metadata enrichment and write-back operations.
