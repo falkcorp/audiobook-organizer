@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package database
 
@@ -363,6 +363,47 @@ func (p *PebbleStore) DeleteOperationState(opID string) error {
 		return err
 	}
 	return batch.Commit(pebble.Sync)
+}
+
+// CountOperationsByStatus counts the operation rows in each of the given
+// statuses without deleting anything. It walks the same `operation:` key range
+// and applies the same status filter as DeleteOperationsByStatus, so a dry run
+// and the delete that follows it agree on what is in scope; rows whose value
+// fails to decode are skipped by both, for the same reason.
+//
+// Every requested status gets a key in the result even when nothing matches, so
+// callers rendering "N of status X" do not have to distinguish "zero" from
+// "absent".
+func (p *PebbleStore) CountOperationsByStatus(statuses []string) (map[string]int, error) {
+	counts := make(map[string]int, len(statuses))
+	for _, s := range statuses {
+		counts[s] = 0
+	}
+	if len(statuses) == 0 {
+		return counts, nil
+	}
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("operation:"),
+		UpperBound: []byte("operation:~"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		var op Operation
+		if err := json.Unmarshal(iter.Value(), &op); err != nil {
+			continue
+		}
+		if _, wanted := counts[op.Status]; wanted {
+			counts[op.Status]++
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("pebble iterate operations for count: %w", err)
+	}
+	return counts, nil
 }
 
 func (p *PebbleStore) DeleteOperationsByStatus(statuses []string) (int, error) {

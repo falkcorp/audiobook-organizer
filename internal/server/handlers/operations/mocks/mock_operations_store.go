@@ -36,6 +36,68 @@ func (_m *MockOperationsStore) EXPECT() *MockOperationsStore_Expecter {
 	return &MockOperationsStore_Expecter{mock: &_m.Mock}
 }
 
+// CountOperationsByStatus provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) CountOperationsByStatus(statuses []string) (map[string]int, error) {
+	ret := _mock.Called(statuses)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CountOperationsByStatus")
+	}
+
+	var r0 map[string]int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func([]string) (map[string]int, error)); ok {
+		return returnFunc(statuses)
+	}
+	if returnFunc, ok := ret.Get(0).(func([]string) map[string]int); ok {
+		r0 = returnFunc(statuses)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]int)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
+		r1 = returnFunc(statuses)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOperationsStore_CountOperationsByStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CountOperationsByStatus'
+type MockOperationsStore_CountOperationsByStatus_Call struct {
+	*mock.Call
+}
+
+// CountOperationsByStatus is a helper method to define mock.On call
+//   - statuses []string
+func (_e *MockOperationsStore_Expecter) CountOperationsByStatus(statuses any) *MockOperationsStore_CountOperationsByStatus_Call {
+	return &MockOperationsStore_CountOperationsByStatus_Call{Call: _e.mock.On("CountOperationsByStatus", statuses)}
+}
+
+func (_c *MockOperationsStore_CountOperationsByStatus_Call) Run(run func(statuses []string)) *MockOperationsStore_CountOperationsByStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsStore_CountOperationsByStatus_Call) Return(stringToInt map[string]int, err error) *MockOperationsStore_CountOperationsByStatus_Call {
+	_c.Call.Return(stringToInt, err)
+	return _c
+}
+
+func (_c *MockOperationsStore_CountOperationsByStatus_Call) RunAndReturn(run func(statuses []string) (map[string]int, error)) *MockOperationsStore_CountOperationsByStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateAuthor provides a mock function for the type MockOperationsStore
 func (_mock *MockOperationsStore) CreateAuthor(name string) (*database.Author, error) {
 	ret := _mock.Called(name)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (cancel not-found fallback,
@@ -169,11 +169,87 @@ func TestDeleteOperationHistory_RejectsNonTerminal(t *testing.T) {
 
 func TestDeleteOperationHistory_Deletes(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().CountOperationsByStatus([]string{"completed", "failed"}).
+		Return(map[string]int{"completed": 4, "failed": 1}, nil)
 	store.EXPECT().DeleteOperationsByStatus([]string{"completed", "failed"}).Return(5, nil)
 	w := run(http.MethodDelete, "/operations/history", "/operations/history?status=completed,failed", nil, func(r *gin.Engine) {
 		r.DELETE("/operations/history", h.DeleteOperationHistory)
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestDeleteOperationHistory_DryRunDoesNotDelete is the regression test for the
+// missing dry-run mode: before the fix, DELETE /operations/history deleted
+// unconditionally, so ?dry_run=true still reached DeleteOperationsByStatus. No
+// EXPECT is registered for that method here on purpose — the generated mock is
+// strict, so a call to it fails the test, which is exactly the pre-fix
+// behaviour (the deletion is irreversible and the caller had no way to see the
+// blast radius first).
+func TestDeleteOperationHistory_DryRunDoesNotDelete(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().CountOperationsByStatus([]string{"completed", "failed"}).
+		Return(map[string]int{"completed": 4, "failed": 1}, nil)
+
+	w := run(http.MethodDelete, "/operations/history", "/operations/history?status=completed,failed&dry_run=true", nil, func(r *gin.Engine) {
+		r.DELETE("/operations/history", h.DeleteOperationHistory)
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Data struct {
+			DryRun      bool           `json:"dry_run"`
+			WouldDelete int            `json:"would_delete"`
+			Deleted     int            `json:"deleted"`
+			Counts      map[string]int `json:"counts"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Data.DryRun)
+	assert.Equal(t, 5, resp.Data.WouldDelete)
+	assert.Equal(t, 0, resp.Data.Deleted)
+	assert.Equal(t, map[string]int{"completed": 4, "failed": 1}, resp.Data.Counts)
+}
+
+// TestDeleteOperationHistory_ReportsCountsOnRealDelete pins the second half of
+// the item: the real delete now reports the same per-status breakdown the dry
+// run would have shown, so the UI can tell the user what was removed.
+func TestDeleteOperationHistory_ReportsCountsOnRealDelete(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().CountOperationsByStatus([]string{"completed"}).
+		Return(map[string]int{"completed": 3}, nil)
+	store.EXPECT().DeleteOperationsByStatus([]string{"completed"}).Return(3, nil)
+
+	w := run(http.MethodDelete, "/operations/history", "/operations/history?status=completed", nil, func(r *gin.Engine) {
+		r.DELETE("/operations/history", h.DeleteOperationHistory)
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Data struct {
+			DryRun  bool           `json:"dry_run"`
+			Deleted int            `json:"deleted"`
+			Counts  map[string]int `json:"counts"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.Data.DryRun)
+	assert.Equal(t, 3, resp.Data.Deleted)
+	assert.Equal(t, map[string]int{"completed": 3}, resp.Data.Counts)
+}
+
+// TestDeleteOperationHistory_CountErrorAbortsBeforeDelete proves the count is
+// fail-closed on the real-delete path: if the pre-delete census fails we return
+// 500 having deleted nothing, rather than deleting blind. No EXPECT for
+// DeleteOperationsByStatus, so reaching it fails the test.
+func TestDeleteOperationHistory_CountErrorAbortsBeforeDelete(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().CountOperationsByStatus([]string{"completed"}).
+		Return(nil, errors.New("boom"))
+
+	w := run(http.MethodDelete, "/operations/history", "/operations/history?status=completed", nil, func(r *gin.Engine) {
+		r.DELETE("/operations/history", h.DeleteOperationHistory)
+	})
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 // --- OptimizeDatabase ---
