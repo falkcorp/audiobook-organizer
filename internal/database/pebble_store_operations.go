@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
 // last-edited: 2026-09-10
 
@@ -370,6 +370,11 @@ func (p *PebbleStore) DeleteOperationState(opID string) error {
 // and applies the same status filter as DeleteOperationsByStatus, so a dry run
 // and the delete that follows it agree on what is in scope; rows whose value
 // fails to decode are skipped by both, for the same reason.
+//
+// One asymmetry, deliberate and in the safe direction: this checks iter.Error()
+// and fails, where DeleteOperationsByStatus does not. A truncated scan here
+// would understate the blast radius the caller is about to approve, so it must
+// surface rather than return a short count.
 //
 // Every requested status gets a key in the result even when nothing matches, so
 // callers rendering "N of status X" do not have to distinguish "zero" from
