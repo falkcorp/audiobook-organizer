@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 3.1.0 -->
+<!-- version: 3.2.0 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
-<!-- last-edited: 2026-08-12 -->
+<!-- last-edited: 2026-09-10 -->
 
 # Agent Task Package
 
@@ -15,6 +15,20 @@ tasks in parallel on isolated git worktrees.
 
 > This is **not** the automated burndown bot (TODO.md → GitHub issues). These are
 > in-repo markdown briefs for hands-on runs.
+
+## Current burndown — [`todo-completion-2026-09/`](todo-completion-2026-09/) (2026-09-10)
+
+**Start here.** [`BREAKDOWN-2026-09-10.md`](todo-completion-2026-09/BREAKDOWN-2026-09-10.md)
+is the live burndown: 176 briefs (111 carried forward from the 2026-08-21 package with
+their ids, 35 from a read-only codebase audit, 30 for data-loss/security `TODO.md`
+sections that had no brief). Pick a cut line in
+[`PRIORITY-MATRIX.md`](todo-completion-2026-09/PRIORITY-MATRIX.md) (risk-ordered ×
+effort-ordered); every DONE/STALE/REAL verdict with its evidence is in
+[`RECONCILIATION-2026-09-10.md`](todo-completion-2026-09/RECONCILIATION-2026-09-10.md).
+The 2026-08-21 package it replaces is archived at
+[`../archive/agent-tasks/todo-completion-2026-08-21/`](../archive/agent-tasks/todo-completion-2026-08-21/).
+The package is generated from `state/merged.json` by `state/tools/` — regenerate, never
+hand-edit its tables.
 
 ## Live workstreams (verified against HEAD, 2026-08-11)
 

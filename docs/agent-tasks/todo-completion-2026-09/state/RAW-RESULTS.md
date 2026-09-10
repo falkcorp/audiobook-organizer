@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -243,7 +243,25 @@ localStorage, no auto-retry on mutations). 27 tool calls.
 - WEB-06 medium hygiene — `Authors.tsx` / `Series.tsx` have zero Vitest/Playwright
   coverage despite destructive bulk delete/merge actions.
 
-### Explore — CI/workflows + scripts — RUNNING
+### Explore — CI/workflows + scripts — `wave3/audit_ci.json`
+6 findings: 2 high, 3 medium, 1 low. 40 tool calls, 84k tokens.
+- **CI-01 high correctness** — `Makefile.local.example:72,102` deploy/deploy-debug guard
+  is `merge-base --is-ancestor origin/main HEAD` ("not behind" only); HEAD AHEAD of
+  origin/main passes → unpushed commits can ship. Documented invariant (TODO.md:372) is
+  `rev-list --left-right --count HEAD...origin/main` == `0 0`.
+- **CI-02 high security** — `.github/workflows/frontend-ci.yml:20-26` grants
+  contents/actions/checks/packages/id-token/attestations `write` to an external reusable
+  workflow (`falkcorp/github-common reusable-ci.yml`); ci.yml does the same work with
+  `contents: read` + `checks: write`.
+- CI-03 medium — `security.yml:77` Node `20.x` for dependency submission; every other
+  workflow uses 22.
+- CI-04 medium — `test-action-integration.yml:104-117` Go-version check truncates to
+  major.minor, ignores `.envrc`/Dockerfiles, and only `::warning::`s.
+- CI-05 medium — `nightly-burndown.yml` (08:00/20:00 UTC) and `hard-burndown.yml`
+  (Sun 10:00 UTC) share `hub_repo` with no `concurrency:` group.
+- CI-06 low — `frontend-ci.yml:54` computed `if:` can skip the frontend job silently.
+
+**All 8 Wave 3 audits complete: 35 findings — critical 3, high 11, medium 16, low 5.**
 Dropped: separate pr-test-analyzer pass (audits already record missing tests per finding).
 
 ### Cost note (12:50 EDT)

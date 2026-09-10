@@ -48,19 +48,19 @@
    "M": 172
   },
   "todo_dup_of_brief": 72,
-  "findings_total": 29,
+  "findings_total": 35,
   "findings_by_severity": {
-   "high": 9,
-   "medium": 13,
-   "low": 4,
+   "high": 11,
+   "medium": 16,
+   "low": 5,
    "critical": 3
   },
   "findings_by_risk": {
+   "correctness": 12,
+   "security": 2,
    "data-loss": 7,
-   "correctness": 7,
    "perf": 8,
    "hygiene": 4,
-   "security": 1,
    "ux": 2
   }
  },
@@ -2070,7 +2070,7 @@
   {
    "task_id": "TASK-125",
    "path": "docs/agent-tasks/todo-completion/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md",
-   "initiative": "todo-completion/search",
+   "initiative": "todo-completion",
    "title": "Index track names on BookDocument so smart playlists can match them",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2084,7 +2084,7 @@
   {
    "task_id": "TASK-126",
    "path": "docs/agent-tasks/todo-completion/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md",
-   "initiative": "todo-completion/search",
+   "initiative": "todo-completion",
    "title": "Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2098,7 +2098,7 @@
   {
    "task_id": "TASK-127",
    "path": "docs/agent-tasks/todo-completion/server/TASK-127-log-abs-api-enabled-s-actual-boot-time-value-unc.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Log ABS_API_ENABLED's actual boot-time value unconditionally",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2112,7 +2112,7 @@
   {
    "task_id": "TASK-128",
    "path": "docs/agent-tasks/todo-completion/server/TASK-128-fix-enableratelimit-false-not-actually-disabling.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Fix EnableRateLimit=false not actually disabling rate limiting",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2126,7 +2126,7 @@
   {
    "task_id": "TASK-129",
    "path": "docs/agent-tasks/todo-completion/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Fix wipeActivity dry-run count saturating at 2",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2140,7 +2140,7 @@
   {
    "task_id": "TASK-130",
    "path": "docs/agent-tasks/todo-completion/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2154,7 +2154,7 @@
   {
    "task_id": "TASK-131",
    "path": "docs/agent-tasks/todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename it)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2168,7 +2168,7 @@
   {
    "task_id": "TASK-132",
    "path": "docs/agent-tasks/todo-completion/server/TASK-132-fix-indexedstore-updatebook-to-enqueue-a-bleve-d.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Fix indexedStore.UpdateBook to enqueue a Bleve DELETE when the update is a soft-delete transition",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2182,7 +2182,7 @@
   {
    "task_id": "TASK-133",
    "path": "docs/agent-tasks/todo-completion/server/TASK-133-regression-test-soft-deleting-an-indexed-book-mu.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Regression test: soft-deleting an indexed book must be unsearchable without a boot reconcile",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2196,7 +2196,7 @@
   {
    "task_id": "TASK-134",
    "path": "docs/agent-tasks/todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Add a wiring-level test proving the server actually constructs CancelOperationV2 with AI-scan cancellation attached",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2210,7 +2210,7 @@
   {
    "task_id": "TASK-135",
    "path": "docs/agent-tasks/todo-completion/server/TASK-135-convert-metadata-batch-apply-cached-from-resumed.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint/resume",
    "status_0902": "open",
    "verdict": "DONE",
@@ -2224,7 +2224,7 @@
   {
    "task_id": "TASK-136",
    "path": "docs/agent-tasks/todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Convert reconcile.apply from ResumeDrop to real checkpoint/resume",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2238,7 +2238,7 @@
   {
    "task_id": "TASK-137",
    "path": "docs/agent-tasks/todo-completion/server/TASK-137-fix-testorganizeservice-performorganize-nobookst.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the method PerformOrganize actually calls",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2252,7 +2252,7 @@
   {
    "task_id": "TASK-138",
    "path": "docs/agent-tasks/todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Exempt the ABS router group from the global BasicAuth() middleware",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2266,7 +2266,7 @@
   {
    "task_id": "TASK-139",
    "path": "docs/agent-tasks/todo-completion/server/TASK-139-prune-expired-abs-sess-records-on-the-existing-s.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Prune expired abs_sess: records on the existing session-cleanup schedule",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2280,7 +2280,7 @@
   {
    "task_id": "TASK-140",
    "path": "docs/agent-tasks/todo-completion/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2294,7 +2294,7 @@
   {
    "task_id": "TASK-141",
    "path": "docs/agent-tasks/todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Add regression tests for the 2 untested deluge hydrate sites",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2308,7 +2308,7 @@
   {
    "task_id": "TASK-204",
    "path": "docs/agent-tasks/todo-completion/server/TASK-204-guard-testserverstartgracefulshutdown-s-sigterm-.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Guard TestServerStartGracefulShutdown's SIGTERM against future parallelism",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2322,7 +2322,7 @@
   {
    "task_id": "TASK-205",
    "path": "docs/agent-tasks/todo-completion/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounded readiness poll",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2336,7 +2336,7 @@
   {
    "task_id": "TASK-206",
    "path": "docs/agent-tasks/todo-completion/server/TASK-206-split-or-speed-up-the-internal-server-test-packa.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Split or speed up the internal/server test package -- migrate call sites to a lighter newTestServer helper",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2350,7 +2350,7 @@
   {
    "task_id": "TASK-208",
    "path": "docs/agent-tasks/todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — itunes_error_test.go, version_lifecycle_test.go",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2364,7 +2364,7 @@
   {
    "task_id": "TASK-209",
    "path": "docs/agent-tasks/todo-completion/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — itunes_integration_test.go, indexed_store_test.go, similar_books_test.go, e2e_workflow_test.go",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2378,7 +2378,7 @@
   {
    "task_id": "TASK-210",
    "path": "docs/agent-tasks/todo-completion/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — server_coverage_phase2_test.go, deluge_integration_test.go, search_reconciler_test.go, maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2392,7 +2392,7 @@
   {
    "task_id": "TASK-211",
    "path": "docs/agent-tasks/todo-completion/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md",
-   "initiative": "todo-completion/server",
+   "initiative": "todo-completion",
    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — cover_history_test.go, server_middleware_test.go, ai_jobs_handlers_test.go, entity_tag_handlers_test.go, import_collision_test.go, reading_handlers_test.go, user_handlers_test.go, organize_integration_test.go, server_op_registration_test.go, metadata_handlers_test.go",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2406,7 +2406,7 @@
   {
    "task_id": "TASK-142",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2420,7 +2420,7 @@
   {
    "task_id": "TASK-143",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-143-n-3-stop-advertising-delete-update-permissions-t.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "N-3: stop advertising Delete/Update permissions the library surface cannot honor",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2434,7 +2434,7 @@
   {
    "task_id": "TASK-144",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-144-n-5-search-narrators-must-omit-numbooks-not-emit.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "N-5: /search narrators must omit numBooks, not emit 0",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2448,7 +2448,7 @@
   {
    "task_id": "TASK-145",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-145-n-6-log-metric-when-listening-stats-read-fails-c.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "N-6: log + metric when listening-stats read fails (currently silent 0)",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2462,7 +2462,7 @@
   {
    "task_id": "TASK-146",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-146-n-10-advertised-login-rate-limit-10-10min-does-n.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min)",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2476,7 +2476,7 @@
   {
    "task_id": "TASK-147",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Align ABS conformance fixtures with the oracle so CompareValues stays green permanently",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2490,7 +2490,7 @@
   {
    "task_id": "TASK-148",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Re-capture the series ABS fixture against a populated library (it currently contains zero series)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2504,7 +2504,7 @@
   {
    "task_id": "TASK-149",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2518,7 +2518,7 @@
   {
    "task_id": "TASK-150",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Audit apply-shaped endpoints for missing tag/file-I/O writeback",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2532,7 +2532,7 @@
   {
    "task_id": "TASK-151",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-151-document-the-hardcoded-abs-timebase-as-a-permane.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Document the hardcoded ABS timeBase as a permanent, owner-approved allowance",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2546,7 +2546,7 @@
   {
    "task_id": "TASK-152",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-152-bound-the-itunes-search-handler-s-unbounded-sear.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0) call",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2560,7 +2560,7 @@
   {
    "task_id": "TASK-153",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-153-implement-post-api-session-local-2xx-stub.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Implement POST /api/session/local (2xx stub)",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2574,7 +2574,7 @@
   {
    "task_id": "TASK-154",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Implement POST /api/session/local-all (batch local-session sync, accept both body shapes)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2588,7 +2588,7 @@
   {
    "task_id": "TASK-155",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-155-move-tasks-and-maintenance-window-off-the-legacy.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Move /tasks/* and /maintenance-window/* off the legacy v1 operations handler into their own scheduler-config handler",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2602,7 +2602,7 @@
   {
    "task_id": "TASK-156",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-156-phase-7-socket-io-for-absorb-deprioritized-by-th.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Phase 7 — socket.io for Absorb (deprioritized by the item's own text; still unbuilt)",
    "status_0902": "not_worth_doing",
    "verdict": "STALE",
@@ -2616,7 +2616,7 @@
   {
    "task_id": "TASK-157",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2630,7 +2630,7 @@
   {
    "task_id": "TASK-212",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-212-add-get-api-libraries-libraryid-series-seriesid-.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface",
    "status_0902": "superseded",
    "verdict": "STALE",
@@ -2644,7 +2644,7 @@
   {
    "task_id": "TASK-213",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-213-replace-the-single-file-organizebook-call-in-fil.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Replace the single-file OrganizeBook call in filesystem.go's auto-organize-after-browse block with OrganizeOneBook + counters",
    "status_0902": "open",
    "verdict": "DONE",
@@ -2658,7 +2658,7 @@
   {
    "task_id": "TASK-214",
    "path": "docs/agent-tasks/todo-completion/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md",
-   "initiative": "todo-completion/server-handlers",
+   "initiative": "todo-completion",
    "title": "Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log when it exceeds 5s",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2672,7 +2672,7 @@
   {
    "task_id": "TASK-158",
    "path": "docs/agent-tasks/todo-completion/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Add a Settings panel section to edit path_aliases",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2686,7 +2686,7 @@
   {
    "task_id": "TASK-159",
    "path": "docs/agent-tasks/todo-completion/web/TASK-159-add-and-use-a-test-reset-hook-for-the-module-sco.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Add and use a test-reset hook for the module-scope path-alias/path-var promise caches",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2700,7 +2700,7 @@
   {
    "task_id": "TASK-160",
    "path": "docs/agent-tasks/todo-completion/web/TASK-160-move-openai-api-key-validation-server-side-curre.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Move OpenAI API key validation server-side (currently sent from the browser)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2714,7 +2714,7 @@
   {
    "task_id": "TASK-161",
    "path": "docs/agent-tasks/todo-completion/web/TASK-161-strip-dedup-and-metadata-source-namespaces-from-.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Strip dedup:* and metadata:source:* namespaces from Browse by Tag widget",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2728,7 +2728,7 @@
   {
    "task_id": "TASK-162",
    "path": "docs/agent-tasks/todo-completion/web/TASK-162-reformat-metadata-tags-in-browse-by-tag-strip-pr.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Reformat metadata:* tags in Browse by Tag: strip prefix, 'key: value' spacing",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2742,7 +2742,7 @@
   {
    "task_id": "TASK-165",
    "path": "docs/agent-tasks/todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Review the 17 apiFetch-callers' catch handlers for session-expiry messaging",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2756,7 +2756,7 @@
   {
    "task_id": "TASK-166",
    "path": "docs/agent-tasks/todo-completion/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Make the book-detail page's Author field(s) link to a library view filtered by that author",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2770,7 +2770,7 @@
   {
    "task_id": "TASK-167",
    "path": "docs/agent-tasks/todo-completion/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Make the book-detail page's Series field link to a library view filtered by that series, landing at series_index",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2784,7 +2784,7 @@
   {
    "task_id": "TASK-168",
    "path": "docs/agent-tasks/todo-completion/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all four have real filters behind them)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2798,7 +2798,7 @@
   {
    "task_id": "TASK-169",
    "path": "docs/agent-tasks/todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Link version_group_id to a filtered library view (now unblocked — the filter works as of commit b0ebccb0)",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2812,7 +2812,7 @@
   {
    "task_id": "TASK-170",
    "path": "docs/agent-tasks/todo-completion/web/TASK-170-retarget-dedup-operations-spec-ts-and-dedup-spec.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Retarget dedup-operations.spec.ts and dedup.spec.ts resolve-production status mocks to v2",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2826,7 +2826,7 @@
   {
    "task_id": "TASK-171",
    "path": "docs/agent-tasks/todo-completion/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Retarget diagnostics.spec.ts AI-submit and export status mocks to v2",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2840,7 +2840,7 @@
   {
    "task_id": "TASK-172",
    "path": "docs/agent-tasks/todo-completion/web/TASK-172-add-a-frontend-test-asserting-the-book-sig-cover.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Add a frontend test asserting the book-sig coverage % badge renders",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2854,7 +2854,7 @@
   {
    "task_id": "TASK-173",
    "path": "docs/agent-tasks/todo-completion/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Add resizable/sortable columns to the acoustic dedup candidates table",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2868,7 +2868,7 @@
   {
    "task_id": "TASK-174",
    "path": "docs/agent-tasks/todo-completion/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Add resizable/sortable columns to the Activity Log table",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2882,7 +2882,7 @@
   {
    "task_id": "TASK-175",
    "path": "docs/agent-tasks/todo-completion/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Add resizable/sortable columns to the split-book dedup candidates table",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2896,7 +2896,7 @@
   {
    "task_id": "TASK-188",
    "path": "docs/agent-tasks/todo-completion/web/TASK-188-harden-muimenu-against-the-documented-react-sets.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Harden MuiMenu against the documented React setState-drop defect (exit:0 -> exit:false)",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2910,7 +2910,7 @@
   {
    "task_id": "TASK-189",
    "path": "docs/agent-tasks/todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Play the first ~2 minutes of part 1's audio directly from the review metadata panel, reusing the existing bounded audio-sample endpoint",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2924,7 +2924,7 @@
   {
    "task_id": "TASK-215",
    "path": "docs/agent-tasks/todo-completion/web/TASK-215-never-send-batchfetchcandidates-from-the-search-.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Never send batchFetchCandidates({}) from the Search providers command",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2938,7 +2938,7 @@
   {
    "task_id": "TASK-216",
    "path": "docs/agent-tasks/todo-completion/web/TASK-216-show-a-loading-skeleton-not-the-empty-state-whil.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Show a loading skeleton, not the empty state, while the metadata review list is still fetching",
    "status_0902": "done",
    "verdict": "DONE",
@@ -2952,7 +2952,7 @@
   {
    "task_id": "TASK-217",
    "path": "docs/agent-tasks/todo-completion/web/TASK-217-evidence-panel-explain-a-missing-score-derivatio.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "Evidence panel: explain a missing score derivation in plain language and offer re-search inline",
    "status_0902": "open",
    "verdict": "REAL",
@@ -2966,7 +2966,7 @@
   {
    "task_id": "TASK-218",
    "path": "docs/agent-tasks/todo-completion/web/TASK-218-operationactivitypanel-stop-re-appending-the-las.md",
-   "initiative": "todo-completion/web",
+   "initiative": "todo-completion",
    "title": "OperationActivityPanel: stop re-appending the last SSE log line on every progress tick",
    "status_0902": "done",
    "verdict": "DONE",
@@ -7131,7 +7131,8 @@
    "risk": "ux",
    "dup_of": "TASK-158",
    "notes": "docs/agent-tasks/todo-completion/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md is sourced from this exact ask and independently confirms, as of 2026-09-02, 'PathAliasesSection.tsx/.test.tsx do not exist' — status still OPEN.",
-   "chunk": 2
+   "chunk": 2,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 6482,
@@ -7204,7 +7205,8 @@
    "risk": "correctness",
    "dup_of": "TASK-143",
    "notes": "Single TODO checkbox bundles 10 independently-verifiable sub-items; verdict reflects the bundle as a whole (majority done, meaningful remainder open). dup_of points at the most directly-sourced still-open child brief (N-3); N-7/8/9 have no brief to cite.",
-   "chunk": 2
+   "chunk": 2,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 6598,
@@ -7216,7 +7218,8 @@
    "risk": "hygiene",
    "dup_of": "TASK-127",
    "notes": "Effort is S because the only remaining work is an owner decision + a one-line doc/config note; TASK-127 already shipped the code prerequisite (boot-time logging) that makes the decision checkable going forward.",
-   "chunk": 2
+   "chunk": 2,
+   "dup_brief_verdict": "DONE"
   },
   {
    "line": 6604,
@@ -7314,7 +7317,8 @@
    "risk": "perf",
    "dup_of": "TASK-205",
    "notes": "TASK-205 (last-edited 2026-09-02) independently confirms server_more_test.go:375/:382 unchanged and proposes replacing the fixed sleep with a bounded readiness poll.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 6891,
@@ -7326,7 +7330,8 @@
    "risk": "security",
    "dup_of": "TASK-160",
    "notes": "tag_task_map.json's empty list for SEC-9 reflects the explicit-tag lookup only; TASK-160 (docs/agent-tasks/todo-completion/web/) targets this exact item by content, last confirmed OPEN 2026-09-02, matching this session's own finding.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 6912,
@@ -7362,7 +7367,8 @@
    "risk": "hygiene",
    "dup_of": "TASK-148",
    "notes": "TASK-148 independently confirms the same zero-length check and notes it needs a populated live library to re-capture -- not doable from the repo alone, which likely explains why it is still open.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 7048,
@@ -7411,7 +7417,8 @@
    "risk": "ux",
    "dup_of": "TASK-125",
    "notes": "TASK-125 independently confirms the same zero-hit grep and notes the mapping-version bump this would require forces a full index rebuild.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 7143,
@@ -7484,7 +7491,8 @@
    "risk": "correctness",
    "dup_of": "TASK-149",
    "notes": "",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 7203,
@@ -7946,7 +7954,8 @@
    "risk": null,
    "dup_of": "TASK-213",
    "notes": "TASK-213's own status note (dated the same day, before this commit landed) still shows the bug present — it was fixed later that day; brief is now stale.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "DONE"
   },
   {
    "line": 8712,
@@ -7983,7 +7992,8 @@
    "risk": "correctness",
    "dup_of": "TASK-189",
    "notes": "Contains a real, independent latent bug (120ns timeout effectively means every sample request is cancelled almost instantly) worth fixing regardless of the UI feature.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 8798,
@@ -8260,7 +8270,8 @@
    "risk": "hygiene",
    "dup_of": "TASK-130",
    "notes": "Companion item L10059's own embedded annotation confirms: 'the dirty-backlog gauge and SearchIndexDroppedCount export are still missing — TASK-130'.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 10017,
@@ -8296,7 +8307,8 @@
    "risk": "hygiene",
    "dup_of": "TASK-130",
    "notes": "Item's own text already carries a PARTIAL status annotation; verdict reflects the still-open residual (TASK-130), not the shipped part (TASK-085, DONE). A competing DONE verdict in this scratchpad ignored the residual.",
-   "chunk": 3
+   "chunk": 3,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 10069,
@@ -9088,7 +9100,8 @@
    "risk": "correctness",
    "dup_of": "TASK-134",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 11195,
@@ -9125,7 +9138,8 @@
    "risk": "correctness",
    "dup_of": "TASK-154",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 11252,
@@ -9185,7 +9199,8 @@
    "risk": "perf",
    "dup_of": "TASK-136",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 11349,
@@ -9467,7 +9482,8 @@
    "risk": "hygiene",
    "dup_of": "TASK-171",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 11788,
@@ -10402,7 +10418,8 @@
    "risk": "perf",
    "dup_of": "TASK-206",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 17162,
@@ -10414,7 +10431,8 @@
    "risk": "security",
    "dup_of": "TASK-138",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 17175,
@@ -10511,7 +10529,8 @@
    "risk": null,
    "dup_of": "TASK-156",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "STALE"
   },
   {
    "line": 17230,
@@ -10549,7 +10568,8 @@
    "risk": "hygiene",
    "dup_of": "TASK-140",
    "notes": "",
-   "chunk": 4
+   "chunk": 4,
+   "dup_brief_verdict": "REAL"
   },
   {
    "line": 17255,
@@ -10664,6 +10684,102 @@
  ],
  "todo_missing_lines": [],
  "findings": [
+  {
+   "id": "CI-01",
+   "area": "Makefile.local.example",
+   "title": "deploy/deploy-debug guard checks 'not behind' instead of 'exactly equals' origin/main, allowing unpushed commits to ship",
+   "severity": "high",
+   "risk": "correctness",
+   "file": "Makefile.local.example",
+   "line": 72,
+   "evidence": "Lines 72-74 (deploy) and 102-104 (deploy-debug): `git fetch origin main` then `git merge-base --is-ancestor origin/main HEAD || (echo \"local main behind origin — pull first\"; exit 1)`. `--is-ancestor origin/main HEAD` only fails when HEAD is missing commits from origin/main; it passes cleanly when HEAD is AHEAD of origin/main (local commits never pushed/reviewed). TODO.md:372 documents the intended precondition as `git rev-list --left-right --count HEAD...origin/main` == `0 0`, a bidirectional check — but that is not what the deploy targets run.",
+   "why_it_matters": "An operator can `make deploy`/`make deploy-debug` from a checkout with local, unpushed commits and the pre-flight passes, shipping code to production that never went through review/CI — the exact incident class the TODO.md comment is trying to prevent.",
+   "suggested_fix": "Replace the is-ancestor check with: `read ahead behind < <(git rev-list --left-right --count HEAD...origin/main); [ \"$ahead $behind\" = \"0 0\" ] || (echo \"HEAD and origin/main diverge — push/pull first\"; exit 1)` in both deploy and deploy-debug.",
+   "effort": "S",
+   "confidence": "high",
+   "already_tracked_hint": null,
+   "source_file": "audit_ci.json"
+  },
+  {
+   "id": "CI-02",
+   "area": ".github/workflows/frontend-ci.yml",
+   "title": "frontend-ci.yml grants an unjustified, broad permission ceiling to an external reusable workflow",
+   "severity": "high",
+   "risk": "security",
+   "file": ".github/workflows/frontend-ci.yml",
+   "line": 20,
+   "evidence": "Lines 20-26: top-level `permissions: contents: write, actions: write, checks: write, packages: write, id-token: write, attestations: write`, with no justifying comment — unlike nightly-burndown.yml, hard-burndown.yml, codeql.yml, auto-revert-backstop.yml which carry tightly-scoped, commented permissions. The `frontend` job (L51-61) is a `uses:` call to `falkcorp/github-common/.../reusable-ci.yml`, so this set is the ceiling for every step of a workflow this repo does not control. ci.yml:23-25 does equivalent build/test work with only `contents: read` + `checks: write`.",
+   "why_it_matters": "Runs on push to main/develop and same-repo PRs. `actions: write`, `packages: write`, `id-token: write` handed to code the workflow doesn't control is more privilege than lint/build/test needs and breaks the least-privilege discipline used everywhere else in the repo.",
+   "suggested_fix": "Trim to what the reusable workflow actually requires (likely `contents: read` + `checks: write`, matching ci.yml); if id-token/packages/actions writes are genuinely needed, add a comment justifying each.",
+   "effort": "S",
+   "confidence": "medium",
+   "already_tracked_hint": null,
+   "source_file": "audit_ci.json"
+  },
+  {
+   "id": "CI-03",
+   "area": ".github/workflows/security.yml",
+   "title": "Node version drift: security.yml pins Node 20.x for npm dependency submission while every other workflow uses 22",
+   "severity": "medium",
+   "risk": "correctness",
+   "file": ".github/workflows/security.yml",
+   "line": 77,
+   "evidence": "security.yml:77 `node-version: '20.x'` in the `dependencies-npm` job. Every other workflow declaring node-version uses '22': ci.yml:48, binary-smoke.yml:39, e2e.yml:160, nightly.yml:34, vulnerability-scan.yml:58.",
+   "why_it_matters": "The Dependency Submission job resolves the npm graph under Node 20 while builds run under 22; engine-dependent resolution (optional/platform deps) can produce a dependency graph that does not match what ships, under- or over-reporting the supply-chain surface.",
+   "suggested_fix": "Change security.yml:77 to `node-version: '22'`, or source it from the same repository-config.yml the other workflows read.",
+   "effort": "S",
+   "confidence": "high",
+   "already_tracked_hint": null,
+   "source_file": "audit_ci.json"
+  },
+  {
+   "id": "CI-04",
+   "area": ".github/workflows/test-action-integration.yml",
+   "title": "The only Go-version consistency check truncates to major.minor, never checks .envrc/Dockerfiles, and only warns instead of failing",
+   "severity": "medium",
+   "risk": "correctness",
+   "file": ".github/workflows/test-action-integration.yml",
+   "line": 105,
+   "evidence": "L104-117: `GO_MOD_VER=$(grep '^go ' go.mod | awk '{print $2}' | sed 's/\\.[0-9]*$//')` strips go.mod to major.minor before comparing against `CI_GO_VER` ('1.27' from ci.yml:47); the mismatch branch at L116 is `::warning::`, never `exit 1`. The check never reads `.envrc` (`GOTOOLCHAIN=go1.27.1`) or either Dockerfile's `golang:1.27.1-alpine`, so the exact patch pins (Makefile:43, .envrc:10, Dockerfile:27, Dockerfile.build-cgo:23) have no automated cross-check.",
+   "why_it_matters": "A gate that can only warn is not a gate: if go.mod, ci.yml, .envrc or a Dockerfile drift on the patch version, the workflow named 'Check version consistency' reports the mismatch and then reports success.",
+   "suggested_fix": "Make the mismatch a hard failure (`::error::` + `exit 1`) and extend the check to grep the exact `go1.27.1` pin out of .envrc and both Dockerfiles.",
+   "effort": "S",
+   "confidence": "high",
+   "already_tracked_hint": null,
+   "source_file": "audit_ci.json"
+  },
+  {
+   "id": "CI-05",
+   "area": ".github/workflows/nightly-burndown.yml, .github/workflows/hard-burndown.yml",
+   "title": "No concurrency guard between the two burndown-dispatch workflows sharing the same task hub, with a real Sunday overlap window",
+   "severity": "medium",
+   "risk": "correctness",
+   "file": ".github/workflows/hard-burndown.yml",
+   "line": 29,
+   "evidence": "nightly-burndown.yml:29-30 runs 08:00 and 20:00 UTC daily (`mode: full` L54, `max_tasks: 8` L60) against `hub_repo: falkcorp/burndown-tasks` (L55). hard-burndown.yml:29 runs Sundays 10:00 UTC against the same hub (L52) with `max_tasks: 8` (L58). Neither declares a top-level `concurrency:` (grep across all workflows confirms). ci.yml:19 and auto-revert.yml:42 do declare one for their own races.",
+   "why_it_matters": "Two concurrent dispatch batches against the same hub can claim overlapping tasks and double model spend for the Sunday window.",
+   "suggested_fix": "Add a shared `concurrency: { group: burndown-dispatch-${{ github.repository }}, cancel-in-progress: false }` to both workflows so hard-burndown queues behind an in-flight nightly-burndown.",
+   "effort": "S",
+   "confidence": "medium",
+   "already_tracked_hint": null,
+   "source_file": "audit_ci.json"
+  },
+  {
+   "id": "CI-06",
+   "area": ".github/workflows/frontend-ci.yml",
+   "title": "frontend job gate is a computed `if:` that can silently skip a required-looking check",
+   "severity": "low",
+   "risk": "correctness",
+   "file": ".github/workflows/frontend-ci.yml",
+   "line": 54,
+   "evidence": "L54: `if: needs.frontend-config.outputs.has-frontend == 'true'`, where `has-frontend` is produced by an external action (`falkcorp/gha-get-frontend-config`, L46). If that action returns an empty/unexpected output, the `frontend` job is skipped rather than failed.",
+   "why_it_matters": "A skipped job reports as passing to required-status checks; a misbehaving config-detection step would let a PR merge with zero frontend build/test coverage while showing green.",
+   "suggested_fix": "Add a companion assertion job (or explicit else branch) that fails if `has-frontend` is not exactly 'true' for a repo known to have `web/`.",
+   "effort": "S",
+   "confidence": "low",
+   "already_tracked_hint": null,
+   "source_file": "audit_ci.json"
+  },
   {
    "id": "DB-01",
    "area": "internal/database (author_bookref.go)",

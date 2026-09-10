@@ -21,7 +21,7 @@ A doc claim, a TODO.md line, or a commit message alone never counts.
 | Input | Total | ✅ DONE | ⏩ STALE | 🟡 REAL | ❓ UNCLEAR |
 |---|---|---|---|---|---|
 | Briefs (`docs/agent-tasks/**/TASK-*.md`) | 251 | 120 | 6 | 124 | 1 |
-| `TODO.md` unchecked items | 586 | 116 | 19 | 416 | 35 |
+| `TODO.md` unchecked items | 586 | 120 | 19 | 412 | 35 |
 
 72 REAL TODO items are the source line of a surviving brief (`Brief` column).
 Brief verdicts that changed since 2026-09-02: **9** — TASK-067 🟡 open→DONE, TASK-078 🟡 open→DONE, TASK-083 ✅ done→REAL, TASK-121 🟡 open→REAL, TASK-196 🟡 OPEN→STALE, TASK-198 🟡 OPEN→UNCLEAR, TASK-135 open→DONE, TASK-213 open→DONE, TASK-214 open→REAL.
@@ -1225,106 +1225,106 @@ Brief verdicts that changed since 2026-09-02: **9** — TASK-067 🟡 open→DON
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 6642 | ✅ DONE | **Align the ABS conformance fixtures with the oracle capture so the value gate can be turned on per… | commit 1f15a7d40 ("test(abs): conformance suite checked shape but never values", 2026-08-12) set CompareValues:true in internal/server/hand… | — |
+| 6642 | ✅ DONE | - [ ] **Align the ABS conformance fixtures with the oracle capture so the value gate can be | commit 1f15a7d40 ("test(abs): conformance suite checked shape but never values", 2026-08-12) set CompareValues:true in internal/server/hand… | — |
 
 #### `Dedup` · 4 — done 1, real 2, unclear 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 6672 | 🟡 REAL | **Exact-candidate backlog is re-accumulating — fix the source, not the symptom.** The 2026-07-18 pr… | docs/dedup/STATUS.md ("Current state — as of 2026-08-12" section, lines ~148-159) still records exact-pending regrowing 1,311 -> 5,947 (~4.… | — |
-| 7676 | ❓ UNCLEAR | - [ ] **Clean up the 2,504 already-orphaned dedup candidates — use the existing `dedup.purge-stale`… | PROD-OPS item: the ask is to run the existing `dedup.purge-stale` op with apply:true against prod to clean up 2,504 orphaned candidate rows… | — |
-| 7708 | 🟡 REAL | - [ ] 🧊 **`*PebbleStore` struct split — LOWEST PRIORITY. Literally do anything else before working … | docs/plans/2026-08-19-pebblestore-struct-split-decision.md still exists, decision: parked at lowest priority, not executed, not abandoned. … | — |
-| 7741 | ✅ DONE | - [ ] **Finish killing `database.Store` — 18 references left outside `internal/database`.** Down fr… | Verified with a live-usage grep (excluding comment-only lines, test files, mocks, and internal/database itself): only 5 files outside inter… | — |
+| 6672 | 🟡 REAL | - [ ] **Exact-candidate backlog is re-accumulating — fix the source, not the symptom.** The | docs/dedup/STATUS.md ("Current state — as of 2026-08-12" section, lines ~148-159) still records exact-pending regrowing 1,311 -> 5,947 (~4.… | — |
+| 7676 | ❓ UNCLEAR | - [ ] **Clean up the 2,504 already-orphaned dedup candidates — use the existing | PROD-OPS item: the ask is to run the existing `dedup.purge-stale` op with apply:true against prod to clean up 2,504 orphaned candidate rows… | — |
+| 7708 | 🟡 REAL | - [ ] 🧊 **`*PebbleStore` struct split — LOWEST PRIORITY. Literally do anything else | docs/plans/2026-08-19-pebblestore-struct-split-decision.md still exists, decision: parked at lowest priority, not executed, not abandoned. … | — |
+| 7741 | ✅ DONE | - [ ] **Finish killing `database.Store` — 18 references left outside `internal/database`.** | Verified with a live-usage grep (excluding comment-only lines, test files, mocks, and internal/database itself): only 5 files outside inter… | — |
 
-#### `🧪 internal/database short tests intermittently HANG in CI, and raising the timeout has st…` · 3 — real 3
+#### `🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has …` · 3 — real 3
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 6744 | 🟡 REAL | Capture a goroutine dump from a real failure. Do NOT `gh run rerun` before saving the log | docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md:954 (row for the sibling task, re-verified at a later HEAD): "no goroutine dump ar… | — |
-| 6747 | 🟡 REAL | Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`, channel receiv… | Directly dependent on L6744's goroutine dump, which has not been captured (see that item's evidence). No commit or doc names a specific stu… | — |
-| 6750 | 🟡 REAL | Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in seconds nam… | grep -rn 't.Context()' internal/database/*.go = 0 hits; grep -rn 'context.WithTimeout' internal/database/*_test.go = 0 hits (checked direct… | TASK-177 |
+| 6744 | 🟡 REAL | - [ ] Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the | docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md:954 (row for the sibling task, re-verified at a later HEAD): "no goroutine dump ar… | — |
+| 6747 | 🟡 REAL | - [ ] Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`, | Directly dependent on L6744's goroutine dump, which has not been captured (see that item's evidence). No commit or doc names a specific stu… | — |
+| 6750 | 🟡 REAL | - [ ] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in | grep -rn 't.Context()' internal/database/*.go = 0 hits; grep -rn 'context.WithTimeout' internal/database/*_test.go = 0 hits (checked direct… | TASK-177 |
 
 #### `✅ Second, unrelated Coverage Floor failure — FIXED in this PR` · 1 — real 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 6798 | 🟡 REAL | The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock cost paid on e… | The section header's "FIXED in this PR" covers only the margin-timing bug (raised a different wait from 5s to 60s, described earlier in the… | TASK-205 |
+| 6798 | 🟡 REAL | - [ ] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock | The section header's "FIXED in this PR" covers only the margin-timing bug (raised a different wait from 5s to 60s, described earlier in the… | TASK-205 |
 
 #### `Security` · 1 — real 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 6891 | 🟡 REAL | **SEC-9: the OpenAI API key is sent from the browser.** `web/src/components/wizard/WelcomeWizard.ts… | Confirmed at HEAD: web/src/components/wizard/WelcomeWizard.tsx:160 still does `fetch('https://api.openai.com/v1/models', { headers: { Autho… | TASK-160 |
+| 6891 | 🟡 REAL | - [ ] **SEC-9: the OpenAI API key is sent from the browser.** | Confirmed at HEAD: web/src/components/wizard/WelcomeWizard.tsx:160 still does `fetch('https://api.openai.com/v1/models', { headers: { Autho… | TASK-160 |
 
 #### `Docs` · 1 — done 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 6912 | ✅ DONE | **Give the 2026-06-22 security sweep a status column so it can eventually be retired.** `docs/audit… | Confirmed directly in the audit file itself (not just TODO.md's summary of it): docs/audits/2026-06-22-repo-optimization-security-sweep.md … | — |
+| 6912 | ✅ DONE | - [ ] **Give the 2026-06-22 security sweep a status column so it can eventually be retired.** | Confirmed directly in the audit file itself (not just TODO.md's summary of it): docs/audits/2026-06-22-repo-optimization-security-sweep.md … | — |
 
 #### `ABS surface — what is still missing after the series/playlist fix` · 7 — done 1, real 4, stale 1, unclear 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 6978 | ✅ DONE | **Collections do not exist — this is a FEATURE, not a wiring fix.** `/api/collections` 404s and `/a… | internal/server/handlers/abs/collections.go (622 lines) implements a full Collections feature: LibraryCollections ("replacing the EmptyPage… | — |
-| 7005 | 🟡 REAL | **`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.** It was captured … | Confirmed at HEAD: parsing testdata/abs-fixtures/get_api_libraries_id_series.json, response.body.results has length 0 and total=0. File las… | TASK-148 |
-| 7048 | ❓ UNCLEAR | 💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is merged and dry-run gated | This is a PROD-OPS item ("needs an owner decision, not a scheduled run") -- a code check can confirm the op exists (internal/plugins/mainte… | — |
-| 7109 | ⏩ STALE | 🎧 **Run `maintenance.chapters-backfill` against production.** The op ships dry-run-by-default and h… | This is a PROD-OPS instruction ("run X against production"), which per the task rules routes to STALE/UNCLEAR rather than DONE/REAL regardl… | — |
-| 7120 | 🟡 REAL | 🔁 **Wire a durable "probed, found none" marker before this op is ever scheduled.** `SaveChaptersFor… | Confirmed at HEAD: `grep -rn 'freshness.Stamp\|freshness\.ClearStamps' internal/ --include=*.go` excluding _test.go = 0 hits -- internal/op… | TASK-066 |
-| 7132 | 🟡 REAL | 🔍 **Index track names so smart playlists can match them.** The Bleve `BookDocument` carries only bo… | Confirmed at HEAD: internal/search/document.go's BookDocument struct has no TrackNames field (grep -n 'TrackNames' returns nothing). | TASK-125 |
-| 7143 | 🟡 REAL | 🧩 **Investigate per-chapter split files standing as their own books.** While probing, item `97e56ed… | docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md:890 (re-verified at a later HEAD, for the related decision item): "No detector or … | — |
+| 6978 | ✅ DONE | - [ ] **Collections do not exist — this is a FEATURE, not a wiring fix.** `/api/collections` | internal/server/handlers/abs/collections.go (622 lines) implements a full Collections feature: LibraryCollections ("replacing the EmptyPage… | — |
+| 7005 | 🟡 REAL | - [ ] **`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.** | Confirmed at HEAD: parsing testdata/abs-fixtures/get_api_libraries_id_series.json, response.body.results has length 0 and total=0. File las… | TASK-148 |
+| 7048 | ❓ UNCLEAR | - [ ] 💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is | This is a PROD-OPS item ("needs an owner decision, not a scheduled run") -- a code check can confirm the op exists (internal/plugins/mainte… | — |
+| 7109 | ⏩ STALE | - [ ] 🎧 **Run `maintenance.chapters-backfill` against production.** The op ships | This is a PROD-OPS instruction ("run X against production"), which per the task rules routes to STALE/UNCLEAR rather than DONE/REAL regardl… | — |
+| 7120 | 🟡 REAL | - [ ] 🔁 **Wire a durable "probed, found none" marker before this op is ever | Confirmed at HEAD: `grep -rn 'freshness.Stamp\|freshness\.ClearStamps' internal/ --include=*.go` excluding _test.go = 0 hits -- internal/op… | TASK-066 |
+| 7132 | 🟡 REAL | - [ ] 🔍 **Index track names so smart playlists can match them.** The Bleve | Confirmed at HEAD: internal/search/document.go's BookDocument struct has no TrackNames field (grep -n 'TrackNames' returns nothing). | TASK-125 |
+| 7143 | 🟡 REAL | - [ ] 🧩 **Investigate per-chapter split files standing as their own books.** While | docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md:890 (re-verified at a later HEAD, for the related decision item): "No detector or … | — |
 
 #### `Library data integrity — surfaced by the chapters-backfill cohort run` · 6 — done 1, real 5
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 7156 | ✅ DONE | **`BookFile.FilePath` rows point at files that do not exist — 16,130 books library-wide, 33.7% of a… | Two-stage fix: (1) PR #2372 (2026-08-13) added a Book.FilePath fallback inside maintenance.chapters-backfill when BookFile.FilePath doesn't… | — |
-| 7179 | 🟡 REAL | **`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For `The Icarus Job` the bo… | This is a data-model authority decision, not yet made: docs/plans/DECISIONS-PENDING.md has no entry naming Book.FilePath vs BookFile.FilePa… | — |
-| 7184 | 🟡 REAL | **`Book.FilePath` is NOT unique — 1,264 values are shared by more than one book row (4,353 of 63,87… | No REPORT-ONLY collision counter exists at HEAD: `grep -rn 'FilePathCollision\|CollisionCount\|filepath_collision' --include=*.go .` = 0 hi… | TASK-068 |
-| 7194 | 🟡 REAL | **Stored `duration` is short of the real container by 119–186s on 7 cohort books.** Confirmed by ff… | internal/plugins/maintenance/duration_reextract.go's durationDiffMeaningful gate requires BOTH >5s absolute AND >2% relative difference bef… | — |
-| 7199 | 🟡 REAL | **Multi-file chapter synthesis produces a timeline that stops short.** One of the two `Genesis` row… | docs/agent-tasks/todo-completion/server-handlers/TASK-149 (last-edited 2026-09-02) confirms directly: "mapper.go:261 and :217 unchanged; gr… | TASK-149 |
-| 7203 | 🟡 REAL | **Duplicate book rows per title under different author folders** (`Deadly Jobs` ×3, `The Icarus Job… | No dedup/merge of these specific duplicate rows is evidenced: project_missing_file_rows_and_repoint.md's merge-same-path-dupes result (197 … | — |
+| 7156 | ✅ DONE | - [ ] **`BookFile.FilePath` rows point at files that do not exist — 16,130 books | Two-stage fix: (1) PR #2372 (2026-08-13) added a Book.FilePath fallback inside maintenance.chapters-backfill when BookFile.FilePath doesn't… | — |
+| 7179 | 🟡 REAL | - [ ] **`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For | This is a data-model authority decision, not yet made: docs/plans/DECISIONS-PENDING.md has no entry naming Book.FilePath vs BookFile.FilePa… | — |
+| 7184 | 🟡 REAL | - [ ] **`Book.FilePath` is NOT unique — 1,264 values are shared by more than one | No REPORT-ONLY collision counter exists at HEAD: `grep -rn 'FilePathCollision\|CollisionCount\|filepath_collision' --include=*.go .` = 0 hi… | TASK-068 |
+| 7194 | 🟡 REAL | - [ ] **Stored `duration` is short of the real container by 119–186s on 7 cohort | internal/plugins/maintenance/duration_reextract.go's durationDiffMeaningful gate requires BOTH >5s absolute AND >2% relative difference bef… | — |
+| 7199 | 🟡 REAL | - [ ] **Multi-file chapter synthesis produces a timeline that stops short.** One of | docs/agent-tasks/todo-completion/server-handlers/TASK-149 (last-edited 2026-09-02) confirms directly: "mapper.go:261 and :217 unchanged; gr… | TASK-149 |
+| 7203 | 🟡 REAL | - [ ] **Duplicate book rows per title under different author folders** (`Deadly Jobs` | No dedup/merge of these specific duplicate rows is evidenced: project_missing_file_rows_and_repoint.md's merge-same-path-dupes result (197 … | — |
 
 #### `Follow-up on the op itself` · 2 — real 1, unclear 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 7211 | 🟡 REAL | `registry.RunItems` label re-render (fixed 2026-08-13) changed shared infrastructure used by every … | docs/agent-tasks/todo-completion/misc-go/TASK-197 (last-edited 2026-09-02) confirms directly: "Anchors hold: run_items.go:236 'Re-render th… | TASK-197 |
-| 7214 | ❓ UNCLEAR | One unreproduced failure of `internal/plugins/maintenance` was observed on 2026-08-13 during mutati… | The item itself records this as a single unreproduced occurrence with no captured failure output ("8 subsequent runs... were green and the … | — |
+| 7211 | 🟡 REAL | - [ ] `registry.RunItems` label re-render (fixed 2026-08-13) changed shared | docs/agent-tasks/todo-completion/misc-go/TASK-197 (last-edited 2026-09-02) confirms directly: "Anchors hold: run_items.go:236 'Re-render th… | TASK-197 |
+| 7214 | ❓ UNCLEAR | - [ ] One unreproduced failure of `internal/plugins/maintenance` was observed on | The item itself records this as a single unreproduced occurrence with no captured failure output ("8 subsequent runs... were green and the … | — |
 
 #### `BUG: 10,780 version groups elect MORE than one primary` · 1 — done 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 7320 | ✅ DONE | 🤔 **Decide whether the newly-implemented filter fields belong in `filterFieldQueryParams`.** | commit 45bb4ba71 ("fix(api): derive the bare-filter-param guard from the canonical field list", 2026-08-14) replaced the hand-written filte… | — |
+| 7320 | ✅ DONE | - [ ] 🤔 **Decide whether the newly-implemented filter fields belong in | commit 45bb4ba71 ("fix(api): derive the bare-filter-param guard from the canonical field list", 2026-08-14) replaced the hand-written filte… | — |
 
 #### `Organize/apply rename paths: three hand-verified silent failures` · 13 — done 7, real 6
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 7361 | ✅ DONE | - [ ] **F7 — `ApplyMetadataFileIO` returns nothing, so rename failure is unreachable to every calle… | internal/metafetch/service_files.go:112 now `func (mfs *Service) ApplyMetadataFileIO(id string) error` — returns an error on load failure, … | — |
-| 7374 | ✅ DONE | - [ ] **F6 — `ensureLibraryCopy` treats an empty organize as success.** `internal/metafetch/service… | internal/metafetch/service_apply.go:491-546 — `ensureLibraryCopy` was rewritten (commit 6af53a0b6 'refactor(organize): route every organize… | — |
-| 7402 | 🟡 REAL | - [ ] **Split `AudiobookService`, not just its store interface.** `audiobookStore` (`internal/audio… | internal/audiobooks/service.go:142-160 — `audiobookStore` was narrowed to 7 named embeds (bookReader, bookWriter, contributorResolver, cont… | — |
-| 7417 | ✅ DONE | - [ ] Audit existing "we use the wide type because X requires it" comments across the codebase. Two… | Re-ran the grep this item specifies (`requires the full\|requires the whole\|structural satisfaction`) across internal/ at HEAD: the only g… | — |
-| 7435 | 🟡 REAL | - [ ] Decide whether to bump the eight, and do it in **at least two PRs** — not one. `release-prod.… | Current `uses:` pins in .github/workflows/*.yml, with line numbers: ci.yml:45@828afb50 (2026-08-18, unchanged); release-prod.yml:45 and pre… | — |
-| 7442 | 🟡 REAL | - [ ] Not done unattended on purpose: this was left for a human on 2026-08-18 rather than folded in… | Same evidence as L7435: the six non-release workflows remain on the 2026-07-19 pin. This bullet is a rationale note paired with L7435 rathe… | — |
+| 7361 | ✅ DONE | - [ ] **F7 — `ApplyMetadataFileIO` returns nothing, so rename failure is | internal/metafetch/service_files.go:112 now `func (mfs *Service) ApplyMetadataFileIO(id string) error` — returns an error on load failure, … | — |
+| 7374 | ✅ DONE | - [ ] **F6 — `ensureLibraryCopy` treats an empty organize as success.** | internal/metafetch/service_apply.go:491-546 — `ensureLibraryCopy` was rewritten (commit 6af53a0b6 'refactor(organize): route every organize… | — |
+| 7402 | 🟡 REAL | - [ ] **Split `AudiobookService`, not just its store interface.** `audiobookStore` | internal/audiobooks/service.go:142-160 — `audiobookStore` was narrowed to 7 named embeds (bookReader, bookWriter, contributorResolver, cont… | — |
+| 7417 | ✅ DONE | - [ ] Audit existing "we use the wide type because X requires it" comments across the | Re-ran the grep this item specifies (`requires the full\|requires the whole\|structural satisfaction`) across internal/ at HEAD: the only g… | — |
+| 7435 | 🟡 REAL | - [ ] Decide whether to bump the eight, and do it in **at least two PRs** — | Current `uses:` pins in .github/workflows/*.yml, with line numbers: ci.yml:45@828afb50 (2026-08-18, unchanged); release-prod.yml:45 and pre… | — |
+| 7442 | 🟡 REAL | - [ ] Not done unattended on purpose: this was left for a human on 2026-08-18 | Same evidence as L7435: the six non-release workflows remain on the 2026-07-19 pin. This bullet is a rationale note paired with L7435 rathe… | — |
 | 7483 | 🟡 REAL | - [ ] `database.Store` (40) — make unreachable rather than smaller (plan phase 2). | internal/database/store.go:14-27 (v2.94.0, last-edited 2026-09-10): 'The 40 sub-interfaces it used to embed directly are grouped by domain … | TASK-179 |
-| 7484 | ✅ DONE | - [ ] `itunes/service.Store` (17 declared / 24 called) — 7 assignability constraints incl. `databas… | internal/itunes/service/store.go:15-37: 'It was 17 embeds of database.* -- roughly 171 methods, most of them unreached... The fix was appli… | — |
-| 7487 | 🟡 REAL | - [ ] `maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration; revisit only as p… | internal/maintenance/job.go:363-373 — `JobStore` is still one shared interface (jobBookStore, jobBookFileStore, jobContributorStore, jobUse… | — |
-| 7489 | ✅ DONE | - [ ] `audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44 distinct store m… | The item names two concrete artifacts with a count ('audiobookStore / audiobookUpdateStore, 11 each') and predicts the narrowing 'scores wo… | 7402 |
-| 7498 | ✅ DONE | - [ ] **Narrow `positionSyncStore` and `pathRepairerStore` — both blocked on a wide parameter type … | internal/readstatus/readstatus.go:~51-56: the anonymous `interface{database.BookFileStore; database.UserPositionStore}` the item complains … | — |
-| 7514 | ✅ DONE | - [ ] **Re-probe `itunesservice.Store` after those two land.** Its measured requirement was compute… | internal/itunes/service/store.go:15-37 shows the re-probe already happened and landed as the 7-subsystem composition described at L7484 (co… | — |
-| 7523 | 🟡 REAL | - [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the shared `m… | internal/maintenance/job.go's `MaintenanceJob.Run(ctx context.Context, store JobStore, reporter ProgressReporter, dryRun bool) error` is un… | — |
+| 7484 | ✅ DONE | - [ ] `itunes/service.Store` (17 declared / 24 called) — 7 assignability | internal/itunes/service/store.go:15-37: 'It was 17 embeds of database.* -- roughly 171 methods, most of them unreached... The fix was appli… | — |
+| 7487 | 🟡 REAL | - [ ] `maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration; | internal/maintenance/job.go:363-373 — `JobStore` is still one shared interface (jobBookStore, jobBookFileStore, jobContributorStore, jobUse… | — |
+| 7489 | ✅ DONE | - [ ] `audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44 | The item names two concrete artifacts with a count ('audiobookStore / audiobookUpdateStore, 11 each') and predicts the narrowing 'scores wo… | 7402 |
+| 7498 | ✅ DONE | - [ ] **Narrow `positionSyncStore` and `pathRepairerStore` — both blocked on a wide | internal/readstatus/readstatus.go:~51-56: the anonymous `interface{database.BookFileStore; database.UserPositionStore}` the item complains … | — |
+| 7514 | ✅ DONE | - [ ] **Re-probe `itunesservice.Store` after those two land.** Its measured | internal/itunes/service/store.go:15-37 shows the re-probe already happened and landed as the 7-subsystem composition described at L7484 (co… | — |
+| 7523 | 🟡 REAL | - [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the | internal/maintenance/job.go's `MaintenanceJob.Run(ctx context.Context, store JobStore, reporter ProgressReporter, dryRun bool) error` is un… | — |
 
 #### `Config` · 28 — done 5, real 20, stale 1, unclear 2
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 7577 | ✅ DONE | - [ ] **Audit every config option name — the set has grown by accretion and the naming is inconsist… | docs/audits/2026-08-20-config-option-audit.md exists — a full config-option inventory (565 distinct options per its own text, matching the … | — |
-| 7657 | 🟡 REAL | - [ ] `Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore` (`internal/dedup/engine.go`) have … | internal/dedup/engine.go:235-246 — SetAcoustIDBookFileStore and SetLSHStore still exist and still have zero call sites anywhere in the repo… | — |
-| 7761 | 🟡 REAL | - [ ] **Rename `write_back_metadata` → `auto_write_tags_on_fetch`.** The current name reads like a … | internal/config/config.go:1013 still declares `WriteBackMetadata bool` with json tag `write_back_metadata`, :2007 `viper.SetDefault("write_… | TASK-016 |
-| 7789 | 🟡 REAL | - [ ] **Related asymmetry found while tracing the above: auto-fetch embeds cover art into audio fil… | internal/metafetch/service_fetch.go:290-311: `mfs.embedCoverInBookFiles(updatedBook, coverPath)` (line ~306) still runs unconditionally on … | — |
-| 7831 | 🟡 REAL | - [ ] **CFG-AUDIT** Triage the findings in `docs/audits/2026-08-20-config-option-audit.md` (full co… | Of the item's 7 numbered findings: (1) EnableRateLimit not disabling rate limiting — DONE, PR #2744/TASK-128. (2) AuthRateLimitPerMinute fu… | TASK-017, TASK-018, TASK-019, TASK-020, TASK-128 |
+| 7577 | ✅ DONE | - [ ] **Audit every config option name — the set has grown by accretion and the | docs/audits/2026-08-20-config-option-audit.md exists — a full config-option inventory (565 distinct options per its own text, matching the … | — |
+| 7657 | 🟡 REAL | - [ ] `Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore` | internal/dedup/engine.go:235-246 — SetAcoustIDBookFileStore and SetLSHStore still exist and still have zero call sites anywhere in the repo… | — |
+| 7761 | 🟡 REAL | - [ ] **Rename `write_back_metadata` → `auto_write_tags_on_fetch`.** The current name | internal/config/config.go:1013 still declares `WriteBackMetadata bool` with json tag `write_back_metadata`, :2007 `viper.SetDefault("write_… | TASK-016 |
+| 7789 | 🟡 REAL | - [ ] **Related asymmetry found while tracing the above: auto-fetch embeds cover | internal/metafetch/service_fetch.go:290-311: `mfs.embedCoverInBookFiles(updatedBook, coverPath)` (line ~306) still runs unconditionally on … | — |
+| 7831 | 🟡 REAL | - [ ] **CFG-AUDIT** Triage the findings in | Of the item's 7 numbered findings: (1) EnableRateLimit not disabling rate limiting — DONE, PR #2744/TASK-128. (2) AuthRateLimitPerMinute fu… | TASK-017, TASK-018, TASK-019, TASK-020, TASK-128 |
 | 7875 | 🟡 REAL | - [ ] 🏷️ **"Browse by Tag" surfaces internal bookkeeping tags and formats them | No prefix-strip/hide logic for `dedup:*`/`metadata:*` tag namespaces found in web frontend at HEAD (grep for `dedup:duration-match`, `metad… | — |
 | 7928 | 🟡 REAL | - [ ] **E2EGATE-NOTREQUIRED** The E2E suite runs on every qualifying PR and its | .github/workflows/e2e.yml at HEAD still shows the same branch-ruleset gap the item describes: comment at line ~53-57 names only required_li… | — |
 | 7987 | ✅ DONE | - [ ] 🔴 **The binary ITL parser extracts ZERO smart playlists from real iTunes | internal/plugins/maintenance/itunes_playlist_import.go:120-137 dispatches on file extension and prefers `itunes.ParseXMLLibraryPlaylists` f… | — |
@@ -1399,13 +1399,13 @@ Brief verdicts that changed since 2026-09-02: **9** — TASK-067 🟡 open→DON
 | 10197 | ✅ DONE | - [ ] Decide whether author-name ingest should HTML-unescape at all. If it should, | The decision was made and implemented as 'reject, do not unescape': commit 04066efbc's message states 'a rights line in an artist tag now y… | — |
 | 10202 | ✅ DONE | - [ ] Consider a `isDirtyAuthorName` rule for names starting with `©`/`&#`/a | internal/dedup/author.go `func IsDirtyAuthorName` (exported from the former lowercase `isDirtyAuthorName` in commit 04066efbc) now checks `… | — |
 
-#### `Author table: book titles are being comma-split into author rows` · 6 — done 2, real 4
+#### `Author table: book titles are being comma-split into author rows` · 6 — done 5, real 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
-| 10212 | 🟡 REAL | - [ ] id 46595 `and Thanks for All the Fish` (2 books) — from *So Long, and | Creation-time fix is DONE (commit 65b67d86a, internal/dedup/author.go:137-142 names rows 46595/46989/47193 as the motivating cases), but th… | — |
-| 10214 | 🟡 REAL | - [ ] id 46989 `and the Farm Boy (DBY)` (5 books) | Creation-time fix is DONE (commit 65b67d86a, internal/dedup/author.go:137-142 names rows 46595/46989/47193 as the motivating cases), but th… | — |
-| 10215 | 🟡 REAL | - [ ] id 47193 `and Make Better Decisions` (16 books) | Creation-time fix is DONE (commit 65b67d86a, internal/dedup/author.go:137-142 names rows 46595/46989/47193 as the motivating cases), but th… | — |
+| 10212 | ✅ DONE | - [ ] id 46595 `and Thanks for All the Fish` (2 books) — from *So Long, and | The comma-split shape-guard shipped in commit 65b67d86a "fix(authors): person-shape gate for comma and and-branch splits (C414)" (ancestor … | — |
+| 10214 | ✅ DONE | - [ ] id 46989 `and the Farm Boy (DBY)` (5 books) | Same fix as line 10212 — internal/dedup/author.go:137-142/156, commit 65b67d86a names this row explicitly among the three motivating cases. | — |
+| 10215 | ✅ DONE | - [ ] id 47193 `and Make Better Decisions` (16 books) | Same fix as line 10212 — internal/dedup/author.go:137-142/156, commit 65b67d86a names this row explicitly among the three motivating cases. | — |
 | 10221 | ✅ DONE | - [ ] The real defect is that `SplitCompositeAuthorName`'s comma branch has no | internal/dedup/author.go:133-165 (SplitCompositeAuthorName). Every comma-split part is now run through personname.LooksLikePersonName (auth… | — |
 | 10224 | ✅ DONE | - [ ] Consider requiring a part to look like a personal name (2-4 words, no | internal/personname/personname.go:437 LooksLikePersonName implements the requested shape check (rejects `:!?`, rejects trailing parenthetic… | — |
 | 10228 | 🟡 REAL | - [ ] Check how many other author rows are title fragments without the `and` | No detection-only report exists at HEAD: `find . -iname '*title_fragment*'` and `grep -rn TitleFragmentAuthor internal/` both return zero h… | — |
@@ -1493,7 +1493,7 @@ Brief verdicts that changed since 2026-09-02: **9** — TASK-067 🟡 open→DON
 | 10890 | ✅ DONE | - [ ] Add/verify a reconcile pass that REMOVES index docs whose book is | internal/server/search_coverage.go `reconcileSearchIndexCoverage` (commit 5eb5fbbb2 'fix(search): coverage gate compares ID sets and delete… | — |
 | 10896 | ⏩ STALE | - [ ] Verify with a bogus-value control: search for a known trashed title | The one-off before/after prod search this item describes is overtaken: the boot-time coverage gate (see L10890) now deletes stale soft-dele… | — |
 
-#### `2026-06-22 security-sweep: the items still open after the status pass` · 10 — done 1, real 8, unclear 1
+#### `2026-06-22 security-sweep: the items still open after the status pass` · 10 — done 2, real 7, unclear 1
 
 | Line | Verdict | Item | Evidence | Brief |
 |---|---|---|---|---|
@@ -1504,7 +1504,7 @@ Brief verdicts that changed since 2026-09-02: **9** — TASK-067 🟡 open→DON
 | 10916 | ❓ UNCLEAR | - [ ] **FE-2/FE-3/FE-4** — the three stale-deps findings' line anchors have | Could not determine within time budget which three specific line anchors in web/src/pages these refer to, or whether they were re-anchored … | — |
 | 10918 | 🟡 REAL | - [ ] ARCH-3/4/5/7/8 remain structural programs. **ARCH-8 is DONE | Item's own text confirms ARCH-8 DONE (2026-08-23, TASK-087, PR #2804) and describes the shipped result in detail (`config.GetConfig(c)`/`pl… | — |
 | 10939 | 🟡 REAL | - [ ] **Identify what produced the 2026-08-11 burst of phantom series references.** | Item's own text says 'RESOLVED — it is propagation, not minting' for the root-cause diagnosis (traced to `resolveSeriesID` at internal/scan… | — |
-| 10998 | 🟡 REAL | - [ ] **`BulkDeleteSeries` still deletes on a filtered count.** | internal/server/handlers/entities/handler.go:1046 still calls `h.store.GetBooksBySeriesIDCore(seriesID)` — the same display-counter guard (… | — |
+| 10998 | ✅ DONE | - [ ] **`BulkDeleteSeries` still deletes on a filtered count.** | Both UI delete paths now guard on the UNFILTERED reference count: internal/server/handlers/entities/handler.go:1160 (DeleteEmptySeries) and… | — |
 | 11012 | ✅ DONE | - [ ] **`WithOpID` is never called in production code**, so `ctxOpID(ctx)` returns "" | internal/server/op_run_context.go:42 now calls `maintenanceplugin.WithOpID(logger.WithOperation(ctx, opID), opID)`, wired as the registry's… | — |
 | 11021 | 🟡 REAL | - [ ] **~2,270 series look like they were created from a book title rather than a real | internal/plugins/maintenance/series.go has a `seriesNormalizeDef`/`runSeriesNormalize` op ('Strips title/position contamination from series… | — |
 
