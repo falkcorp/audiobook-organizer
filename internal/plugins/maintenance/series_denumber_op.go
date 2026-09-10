@@ -203,18 +203,70 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		}
 	}
 
+	// The unfiltered reference guard, fetched ONCE for the whole run — BEFORE
+	// the dry-run branch, not only on the apply path. It answers "how many
+	// book rows reference this series in ANY state" — live, trashed, and
+	// non-primary — which the per-book merge loop below cannot answer on its
+	// own: GetBooksBySeriesIDAllVersions (like every series membership
+	// getter) excludes soft-deleted rows by design, so a series whose only
+	// members are trashed enumerates zero books, the loop that would flip
+	// movedAll never runs, and movedAll stays vacuously true. Comparing this
+	// unfiltered count against what each plan actually enumerates is what
+	// closes that gap — see safeToDelete below. Same shared guard, same
+	// fail-closed contract as the other three series-delete paths: compare
+	// internal/maintenance/jobs/cleanup_series.go and
+	// internal/plugins/maintenance/author_purge_empty.go — both of which also
+	// fetch their ref-count guard unconditionally before their own dry-run
+	// branch, for the same reason: a guard applied only on the apply path
+	// would make the dry run disagree with what apply actually does, on the
+	// one op where an operator reviews the dry run BEFORE approving apply.
+	//
+	// Fails CLOSED: a run (dry or apply) that cannot answer the unfiltered
+	// question aborts entirely rather than falling back to the filtered book
+	// counts — that fallback is precisely the bug, because it deletes rows
+	// while reporting success.
+	refCounts, rcErr := database.SeriesRefCounts(store)
+	if rcErr != nil {
+		return fmt.Errorf("series-denumber: refusing to run without unfiltered series reference counts: %w", rcErr)
+	}
+
 	if !params.Apply {
 		reasons := make([]string, 0, len(byReason))
 		for r, n := range byReason {
 			reasons = append(reasons, fmt.Sprintf("%s=%d", r, n))
 		}
 		sort.Strings(reasons)
+
+		// Preview which of the eligible plans the apply loop below would
+		// merge but refuse to DELETE — read-only (GetBooksBySeriesIDAllVersions
+		// never writes), so computing it here does not turn the dry run into
+		// one that touches anything. Scoped to `plans` (the eligible set),
+		// not every candidate, to match "Would merge %d" below.
+		var heldBackByGuard int
+		var heldBackExamples []string
+		for _, pl := range plans {
+			books, berr := store.GetBooksBySeriesIDAllVersions(pl.FromID)
+			if berr != nil {
+				// The apply loop treats this identically (counts it under
+				// failed); avoid double-reporting the same row here.
+				continue
+			}
+			if refCounts[pl.FromID] > len(books) {
+				heldBackByGuard++
+				if len(heldBackExamples) < 6 {
+					heldBackExamples = append(heldBackExamples, fmt.Sprintf("%q (series %d)", pl.FromName, pl.FromID))
+				}
+			}
+		}
+
 		summary := fmt.Sprintf(
 			"series-denumber: %d series scanned, %d carry a position (%s). "+
-				"Would merge %d into %d base series (%d books would move) — by evidence: %s | "+
+				"Would merge %d into %d base series (%d books would move), %d would be merged but "+
+				"NOT deleted (still referenced by rows this run cannot move: %s) — by evidence: %s | "+
 				"applying: %s | held: %s",
 			len(in), len(candidates), tiers,
-			len(plans), len(bases), booksAffected, strings.Join(reasons, " "),
+			len(plans), len(bases), booksAffected, heldBackByGuard, strings.Join(heldBackExamples, "; "),
+			strings.Join(reasons, " "),
 			strings.Join(examples, "; "), strings.Join(heldExamples, "; "))
 		_ = reporter.Log(slog.LevelInfo, summary)
 		_ = reporter.UpdateProgress(len(candidates), len(candidates), summary)
@@ -229,28 +281,6 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		_ = reporter.Log(slog.LevelInfo, summary)
 		_ = reporter.UpdateProgress(1, 1, summary)
 		return nil
-	}
-
-	// The unfiltered reference guard, fetched ONCE before the merge loop below.
-	// It answers "how many book rows reference this series in ANY state" —
-	// live, trashed, and non-primary — which the per-book loop cannot answer on
-	// its own: GetBooksBySeriesIDAllVersions (like every series membership
-	// getter) excludes soft-deleted rows by design, so a series whose only
-	// members are trashed enumerates zero books, the loop that would flip
-	// movedAll never runs, and movedAll stays vacuously true. Comparing this
-	// unfiltered count against what each plan actually enumerates is what
-	// closes that gap — see safeToDelete below. Same shared guard, same
-	// fail-closed contract as the other three series-delete paths: compare
-	// internal/maintenance/jobs/cleanup_series.go and
-	// internal/plugins/maintenance/author_purge_empty.go.
-	//
-	// Fails CLOSED: an apply run that cannot answer the unfiltered question
-	// aborts entirely rather than falling back to the filtered book counts —
-	// that fallback is precisely the bug, because it deletes rows while
-	// reporting success.
-	refCounts, rcErr := database.SeriesRefCounts(store)
-	if rcErr != nil {
-		return fmt.Errorf("series-denumber: refusing to apply without unfiltered series reference counts: %w", rcErr)
 	}
 
 	// 🔒 SEQUENTIAL ON PURPOSE. Two numbered series folding onto the same base
