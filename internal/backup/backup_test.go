@@ -1,13 +1,14 @@
 // file: internal/backup/backup_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package backup
 
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -1153,6 +1154,22 @@ func TestBackupDatabaseNilStore(t *testing.T) {
 }
 
 // TestRestoreBackupWithVerification tests restore with checksum verification enabled
+// TestRestoreBackupWithVerification is the TASK-306 regression test.
+//
+// Before the fix, RestoreBackup(..., verify=true) logged
+// "checksum verification not yet implemented" and then proceeded exactly as
+// if verify had been false -- a caller who explicitly asked to verify (most
+// likely because they suspect corruption, or because this is a
+// disaster-recovery path they cannot easily re-check afterward) got a
+// success response indistinguishable from a verified restore.
+//
+// Backups carry no persisted checksum to verify against: CreateBackup
+// computes a SHA-256 of the finished archive (BackupInfo.Checksum) but never
+// writes it to a sidecar/manifest file, so there is nothing durable on disk
+// for a later RestoreBackup call to compare against. With no reference value,
+// "verifying" would just be re-hashing the same bytes and declaring success --
+// a silent skip wearing a different name. So RestoreBackup must fail closed
+// on verify=true instead of quietly restoring unverified.
 func TestRestoreBackupWithVerification(t *testing.T) {
 	// Arrange
 	tempDir := t.TempDir()
@@ -1180,12 +1197,45 @@ func TestRestoreBackupWithVerification(t *testing.T) {
 	// Act - Restore with verification enabled
 	err = RestoreBackup(info.Path, restoreDir, true)
 
-	// Assert - Should succeed even though verification is not fully implemented
-	if err != nil {
-		t.Fatalf("RestoreBackup with verification failed: %v", err)
+	// Assert - verify=true must fail closed with a distinguishable error: this
+	// backup format has no stored checksum to verify against.
+	if err == nil {
+		t.Fatal("RestoreBackup with verify=true succeeded; expected it to fail closed because no checksum is stored to verify against")
+	}
+	if !errors.Is(err, ErrVerificationUnsupported) {
+		t.Fatalf("RestoreBackup with verify=true returned %v, want an error wrapping ErrVerificationUnsupported", err)
 	}
 
-	// Verify restored file exists
+	// Assert - nothing was extracted: a failed-closed verify request must not
+	// perform a partial (or full) unverified restore.
+	if _, statErr := os.Stat(restoreDir); !os.IsNotExist(statErr) {
+		t.Errorf("restore target %q should not exist after a failed-closed verify request", restoreDir)
+	}
+}
+
+// TestRestoreBackupVerifyFalseStillRestores proves verify=false (the default,
+// unchanged behavior) still performs a normal restore -- the fail-closed
+// change above must be scoped to verify=true only.
+func TestRestoreBackupVerifyFalseStillRestores(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+	restoreDir := filepath.Join(tempDir, "restored")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+
+	config := BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1}
+	info, err := CreateBackup(dbPath, "sqlite", config)
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+
+	if err := RestoreBackup(info.Path, restoreDir, false); err != nil {
+		t.Fatalf("RestoreBackup with verify=false failed: %v", err)
+	}
+
 	restoredFile := filepath.Join(restoreDir, "test.db")
 	if _, err := os.Stat(restoredFile); os.IsNotExist(err) {
 		t.Error("Restored file does not exist")

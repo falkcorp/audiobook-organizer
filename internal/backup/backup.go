@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-08-29
+// last-edited: 2026-09-10
 
 package backup
 
@@ -495,12 +495,29 @@ func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType
 	return CreateBackup(tmpDir, databaseType, config)
 }
 
+// ErrVerificationUnsupported is returned by RestoreBackup when the caller
+// requests checksum verification (verify=true) but the backup carries no
+// checksum to verify against.
+//
+// CreateBackup computes a SHA-256 of the finished archive (BackupInfo.Checksum)
+// and returns it in the create/list API response, but never persists it
+// alongside the archive file (no sidecar, no manifest). At restore time there
+// is therefore no durable reference value to compare a re-computed checksum
+// against -- hashing the same file and declaring the hash "verified" would be
+// a no-op wearing the name. TASK-306: this used to log
+// "checksum verification not yet implemented" and then silently restore
+// anyway, returning a success response indistinguishable from a verified
+// restore. Failing closed here means a caller who explicitly asked to verify
+// (most likely because they suspect corruption, or because this is a
+// disaster-recovery path they cannot easily re-check afterward) gets an
+// error instead of a false assurance.
+var ErrVerificationUnsupported = errors.New("verification requested but this backup carries no checksum")
+
 // RestoreBackup restores a database from a backup file
 func RestoreBackup(backupPath, targetPath string, verify bool) error {
-	// Verify checksum if requested
+	// Fail closed before touching anything on disk: see ErrVerificationUnsupported.
 	if verify {
-		// TODO: Store checksums in metadata file and verify
-		slog.Info("backup checksum verification not yet implemented")
+		return fmt.Errorf("%w: %s", ErrVerificationUnsupported, filepath.Base(backupPath))
 	}
 
 	// Open backup file

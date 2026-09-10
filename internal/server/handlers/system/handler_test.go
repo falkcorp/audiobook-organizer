@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -24,10 +24,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -520,6 +524,94 @@ func TestRestoreBackup_NotFound(t *testing.T) {
 		r.POST("/backup/restore", h.RestoreBackup)
 	})
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestRestoreBackup_VerifyRequested_FailsClosed is the TASK-306 regression
+// test at the handler layer. Before the fix, POST /backup/restore with
+// "verify":true logged a warning server-side and then restored anyway,
+// returning 200 {"message":"backup restored successfully"} -- a response a
+// caller cannot distinguish from an actually-verified restore. Backups carry
+// no stored checksum to verify against (see backup.ErrVerificationUnsupported),
+// so the handler must fail closed: 400, no restore performed, and the error
+// text visible in the response body rather than only in the server log.
+func TestRestoreBackup_VerifyRequested_FailsClosed(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "audiobooks.db")
+	prevDBPath := config.AppConfig.DatabasePath
+	prevBackupDir := config.AppConfig.BackupDir
+	config.AppConfig.DatabasePath = dbPath
+	config.AppConfig.BackupDir = ""
+	defer func() {
+		config.AppConfig.DatabasePath = prevDBPath
+		config.AppConfig.BackupDir = prevBackupDir
+	}()
+
+	require.NoError(t, os.WriteFile(dbPath, []byte("test database"), 0644))
+
+	// Seed a real backup archive in the same directory the handler resolves
+	// via backup.ResolveDir, so RestoreBackup gets past "file not found" and
+	// exercises the verify=true fail-closed path specifically.
+	backupConfig := backup.DefaultBackupConfig()
+	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
+	info, err := backup.CreateBackup(dbPath, "sqlite", backupConfig)
+	require.NoError(t, err)
+
+	restoreDir := filepath.Join(tempDir, "restored")
+	body := []byte(fmt.Sprintf(`{"backup_filename":%q,"target_path":%q,"verify":true}`, info.Filename, restoreDir))
+	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+		r.POST("/backup/restore", h.RestoreBackup)
+	})
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "checksum")
+
+	// Nothing was extracted -- the request failed before any restore happened.
+	_, statErr := os.Stat(restoreDir)
+	assert.True(t, os.IsNotExist(statErr), "restore target should not exist after a failed-closed verify request")
+}
+
+// TestRestoreBackup_VerifyFalse_ReflectsStatus proves the unchanged
+// verify=false path still succeeds and now reports its verification status
+// explicitly in the response body per TASK-306's Goal.
+func TestRestoreBackup_VerifyFalse_ReflectsStatus(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "audiobooks.db")
+	prevDBPath := config.AppConfig.DatabasePath
+	prevBackupDir := config.AppConfig.BackupDir
+	config.AppConfig.DatabasePath = dbPath
+	config.AppConfig.BackupDir = ""
+	defer func() {
+		config.AppConfig.DatabasePath = prevDBPath
+		config.AppConfig.BackupDir = prevBackupDir
+	}()
+
+	require.NoError(t, os.WriteFile(dbPath, []byte("test database"), 0644))
+
+	backupConfig := backup.DefaultBackupConfig()
+	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
+	info, err := backup.CreateBackup(dbPath, "sqlite", backupConfig)
+	require.NoError(t, err)
+
+	restoreDir := filepath.Join(tempDir, "restored")
+	body := []byte(fmt.Sprintf(`{"backup_filename":%q,"target_path":%q,"verify":false}`, info.Filename, restoreDir))
+	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+		r.POST("/backup/restore", h.RestoreBackup)
+	})
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, false, data["verified"])
+	assert.Equal(t, false, data["verify_requested"])
+
+	restoredFile := filepath.Join(restoreDir, "audiobooks.db")
+	_, statErr := os.Stat(restoredFile)
+	assert.NoError(t, statErr)
 }
 
 // --- DeleteBackup ---
