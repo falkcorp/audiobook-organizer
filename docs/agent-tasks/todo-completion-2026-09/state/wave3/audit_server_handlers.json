@@ -1,0 +1,110 @@
+{
+  "audit": "server_handlers_scheduler",
+  "repo": "/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer-burndown-2026-09",
+  "head": "0cf0a3a5138a6b5ef7e851312ae26355b914ff1b",
+  "scope": "internal/server (router/middleware/handlers/abs/lifecycle/config), internal/scheduler",
+  "findings": [
+    {
+      "id": "SV-01",
+      "area": "internal/server/handlers/operations",
+      "title": "DELETE /operations/history deletes from the dead v1 `operation:` keyspace; reports success while clearing nothing meaningful",
+      "severity": "medium",
+      "risk": "correctness",
+      "file": "internal/server/handlers/operations/handler.go",
+      "line": 244,
+      "evidence": "DeleteOperationHistory (handler.go:244-273) calls h.store.DeleteOperationsByStatus(statuses), which is internal/database/pebble_store_operations.go:368-399 -- it iterates the legacy `operation:` key prefix only. This file's own header comment (handler.go:1-22) and the routing comment in wire_operations_routes.go:33-46 document that the v1 operations minter was retired on 2026-08-23 and that GET /operations, /operations/:id/status and /operations/:id/logs were RETIRED for exactly this reason (183/200 rows permanently stuck at 'pending' on the v1 table, nothing else writes it). DeleteOperationHistory was never migrated alongside GetOperationResult (handler.go:477-490, which now reads h.store.GetOperationV2). The route is still wired at wire_operations_routes.go:78. `grep -rn deleteOperationHistory web/src` finds the api.ts client function (api.ts:2284) but zero call sites anywhere else in web/src -- the UI never invokes it today, so nothing is actively lying to a user right now, but any admin/API caller hitting DELETE /operations/history gets 200 {\"deleted\": N} implying the operation history was cleared when the actual history the app displays (GET /operations/timeline, operations_v2 keyspace) is untouched.",
+      "why_it_matters": "A 200 response with a plausible 'deleted' count is exactly the shape that hides this: nothing errors, the count is just answering the wrong table. Re-wiring the UI's history-clear button to this endpoint (a reasonable thing for a future PR to do, since it already exists) would silently ship a no-op 'clear history' feature.",
+      "suggested_fix": "Either delete this endpoint alongside the other RETIRED v1 handlers (matching the pattern already used for GET /operations etc.), or repoint it at a v2 delete-by-status function so it clears operations_v2 rows.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SV-02",
+      "area": "internal/server/handlers/system",
+      "title": "POST /backup/restore: caller-requested checksum verification is silently skipped, no signal in the response",
+      "severity": "medium",
+      "risk": "data-loss",
+      "file": "internal/server/handlers/system/handler.go",
+      "line": 697,
+      "evidence": "RestoreBackup (handler.go:663-710) accepts `Verify bool` in the request body. Lines 697-699: `if req.Verify { slog.Warn(\"backup restore: checksum verification requested but not yet implemented; proceeding without verification\") }` -- then it proceeds to backup.RestoreBackup(backupPath, targetPath, req.Verify) regardless, and on success returns 200 {\"message\": \"backup restored successfully\", \"target\": targetPath} with no mention that verification was skipped. The warning only reaches a server-side log (PermSettingsManage-gated route, wire_system_routes.go:48), which the calling client/UI never sees.",
+      "why_it_matters": "A caller who explicitly asked to verify a restore (presumably because they suspect corruption, or because it's a disaster-recovery path where they cannot easily re-check afterward) gets a success response indistinguishable from a verified restore. This is the exact 'success path claims did what wasn't done' shape the mission is hunting for.",
+      "suggested_fix": "Either implement the checksum verification, or return req.Verify's outcome explicitly in the response body (e.g. \"verified\": false, \"verify_requested\": true) so a caller parsing the response -- not just the server log -- can tell the difference.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SV-03",
+      "area": "internal/realtime",
+      "title": "SSE handler unconditionally overrides the app's restrictive CORS policy with Access-Control-Allow-Origin: *",
+      "severity": "low",
+      "risk": "security",
+      "file": "internal/realtime/events.go",
+      "line": 221,
+      "evidence": "EventHub.HandleSSE (events.go:216-222) sets `c.Header(\"Access-Control-Allow-Origin\", \"*\")` unconditionally. GET /api/events is registered on s.router directly (server_lifecycle.go:1108-1109), and s.router already has `router.Use(corsMiddleware())` installed at construction time (server.go:471, called from NewServer at line 443, which runs before Start() registers /api/events) -- so corsMiddleware (server_middleware.go:54-90) runs first in the chain and sets a same-origin/allowlisted Access-Control-Allow-Origin plus Access-Control-Allow-Credentials: true for a matched Origin. Because gin.Context.Header() is a Set (not Add), HandleSSE's later call replaces that value with \"*\", while Access-Control-Allow-Credentials: true (set earlier and never reset) survives -- an invalid ACAO:*+credentials:true combination for any request a browser sends with credentials, and a wildcard-readable response for any that doesn't. /api/events is one of the two endpoints (with /metrics) that a 2026-09 pen-test finding (MED-2, cited in the surrounding server_lifecycle.go comment) specifically hardened to require auth precisely because it streams book/scan/metadata events to anonymous clients otherwise.",
+      "why_it_matters": "The app's CORS posture elsewhere is a strict, Vary-respecting allowlist (server_middleware.go) explicitly chosen over a wildcard. This one route silently regresses that choice. Exploitability today is low (the endpoint still requires a valid session/bearer to read anything, and EventSource does not send credentials cross-origin by default), but it undermines the exact hardening the MED-2 fix was for and would become exploitable if credentials mode or the auth model changes without anyone re-checking this header.",
+      "suggested_fix": "Delete the ACAO override in HandleSSE (events.go:221) and let corsMiddleware's already-installed, origin-checked header stand; or make HandleSSE itself echo the allowlisted origin rather than hardcoding \"*\".",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SV-04",
+      "area": "internal/server/middleware",
+      "title": "IPRateLimiter sweeps the entire IP map under one mutex on every request",
+      "severity": "low",
+      "risk": "perf",
+      "file": "internal/server/middleware/ratelimit.go",
+      "line": 47,
+      "evidence": "limiterForIP (ratelimit.go:47-72) takes r.mu.Lock() (a plain sync.Mutex, not RWMutex) and then does `for key, entry := range r.entries { ... delete ... }` -- an O(n) full-map scan-and-delete of every tracked IP's idle entries -- on every single request that passes through the rate limiter, before even doing the per-IP lookup. The limiter is installed globally on the /api/v1 group when EnableRateLimit is on (server_lifecycle.go:1152-1157).",
+      "why_it_matters": "This is a security control (abuse mitigation) whose own implementation gets slower and more lock-contended as the number of distinct recent client IPs grows -- exactly the condition a real abuse burst (many IPs, or IPv6 rotation) produces. Every concurrent request serializes on one mutex while one goroutine walks the whole map, so enabling rate limiting under a distributed-IP attack can itself become the bottleneck instead of absorbing it.",
+      "suggested_fix": "Move the idle-eviction sweep off the request path (e.g. a periodic ticker goroutine that locks briefly and purges) so limiterForIP's per-request cost is O(1) map lookup, not O(n) sweep.",
+      "effort": "S",
+      "confidence": "medium",
+      "already_tracked_hint": null
+    }
+  ],
+  "checked_and_correct": [
+    {
+      "area": "internal/server/middleware/auth.go",
+      "note": "RequireAuth/handleAPIKeyAuth/RequirePermission/RequireAdmin: sound fail-closed logic, first-run bootstrap bypass is intentional and scoped, contextUserKey is documented load-bearing and only set by trusted stages. TouchAPIKeyLastUsed made synchronous on purpose (comment explains the prior per-request goroutine leak that raced store shutdown) -- correct."
+    },
+    {
+      "area": "internal/server/middleware/absauth.go",
+      "note": "ABS identity resolution (CF assertion -> bearer JWT -> abk_ API key) is fail-closed at every terminal branch, correctly distinguishes transient 500s from real 401/403s, narrows API-key scopes by intersection, and never trusts the unsigned CF-Access-Authenticated-User-Email header. No auth-bypass found."
+    },
+    {
+      "area": "internal/server/middleware/request_size.go",
+      "note": "MaxRequestBodySize correctly bounds JSON vs upload routes and traps MaxBytesError from chunked/HTTP2 bodies (the historical 1MB->961MB DoS is fixed at HEAD). The openlibrary/upload 20GB carve-out is gated behind PermIntegrationsManage (server_lifecycle.go:1407), not open to anonymous or low-privilege callers."
+    },
+    {
+      "area": "internal/server/handlers/operations_v2.go GetOperationTimeline",
+      "note": "?status= filter IS honored at HEAD (operations_v2.go:245,316-317) -- fixed 2026-09-09 per in-code comment. The known-stale claim in the mission brief is no longer true; verified by reading the handler, not the comment alone."
+    },
+    {
+      "area": "internal/config/update_service.go MaskSecrets",
+      "note": "GET/PUT /api/v1/config masking gaps (OAuthGithubClientSecret, OAuthGoogleClientSecret, DelugeWebPassword, DownloadClient.Torrent.{Deluge,QBittorrent}.Password, Usenet.Sabnzbd.APIKey) are real but ALREADY tracked verbatim in TODO.md under 'Mask the remaining secrets returned by GET /api/v1/config' with exact file:line citations matching what I found independently -- not reported as a new finding per the mission's instruction to report only new leaks. Confirmed no additional unmasked secret-shaped fields exist beyond that list (grepped the whole Config struct)."
+    },
+    {
+      "area": "internal/server/server_lifecycle.go shutdown ordering",
+      "note": "Shutdown sequence (quit signal -> broadcast -> stop HTTP -> drain opRegistry (10s timeout) -> cancel bgCtx -> close index queue -> wait bgWG (30s timeout) -> stop file I/O pool -> flush ITL batcher -> stop plugins -> container.Stop -> close activity/embedding/aiScan stores) is deliberately sequenced with documented rationale for each ordering decision, citing specific past production incidents (Pebble FileCache.Unref panics, index-queue deadlock). The opRegistry 10s Shutdown timeout is safe because interrupted ops are recorded resumable (registry tests: TestShutdown_TimeoutMarksInterrupted, TestResume_ShutdownTimeoutLeavesQuiescedAndResumable) -- registry internals are the excluded sibling audit's territory, not re-litigated here."
+    },
+    {
+      "area": "internal/scheduler (scheduler.go, tasks.go)",
+      "note": "22 registered tasks reviewed. Overlap protection for library_scan and library_scan_full uses previousRunID + fullSweepMu correctly. The Start() loop now explicitly WARNs (not silently) for any enabled task with no interval and no maintenance-window reachability -- this closes the exact 'task silently never runs' failure class the mission asked about; resolve_production_authors (Enabled from config, RunInMaintenanceWindow always false, absent from maintenanceOrder) hits that WARN branch rather than failing silently, so it is not a new finding. WaitForOperation's terminal-status set correctly includes interrupted_dropped/interrupted_quiesced. No task in tasks.go calls registry.RunItems without Concurrency (that pattern isn't used here -- tasks enqueue single ops via OpRegistry.EnqueueOp, not RunItems batches)."
+    },
+    {
+      "area": "internal/server/wire_auth_routes.go and route-group auth wiring",
+      "note": "Grepped for any handler registered directly on the `api` RouterGroup (bypassing the `protected` sub-group's authMiddleware) across internal/server/*.go -- none found. /auth/setup, /auth/login, /auth/bootstrap, oauth start/callback are correctly public; bootstrap token consumption (bootstrap.go) is rate-limited per IP and idempotent on admin-user creation (does not mint duplicate admins on repeated failed attempts)."
+    },
+    {
+      "area": "internal/httputil/parse.go ParsePaginationParams",
+      "note": "Canonical pagination helper correctly clamps offset>=0 and limit to [1,1000]; used by most list handlers. internal/server/handlers/entities/handler.go's separate parseListWindow (authors/work listing) also correctly rejects negative limit/offset (n>=0 guard) before slicing -- no out-of-bounds slice panic found in either path."
+    },
+    {
+      "area": "internal/server/handlers/system/handler.go HandleEvents / internal/realtime/events.go Broadcast",
+      "note": "Per-client channel is buffered (100) and Broadcast uses non-blocking select+default with a dropped-event log line rather than blocking the broadcaster on a slow client. UnregisterClient's channel-close is race-safe against a concurrent Broadcast because Broadcast holds h.mu.RLock() for its entire body, which blocks UnregisterClient's h.mu.Lock() until Broadcast returns."
+    }
+  ]
+}

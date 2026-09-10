@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -197,8 +197,23 @@ Checked CORRECT: FullScan concurrency fix, auto-resolve journaling, merge servic
 locking, sync-follow idempotency, activity migration checkpoint/resume (digest
 never resumes), batcher/writer shutdown ordering, series-dedup reference-count guard.
 
-### go-specialist — server/handlers + scheduler — RUNNING
-### Queued: typescript-specialist (web), Explore (CI/workflows + scripts).
+### go-specialist — server/handlers + scheduler — `wave3/audit_server_handlers.json`
+4 findings: 3 medium, 1 low; 9 areas verified correct (auth middleware, ABS identity,
+request-size limits, shutdown ordering, all 22 scheduler tasks, route auth wiring,
+pagination bounds, SSE broadcast concurrency). Already fixed/tracked, not re-reported:
+timeline `?status=` (fixed 2026-09-09), config masking gaps (TODO.md), scheduler
+"never runs" case (now WARN).
+- SV-01 medium correctness — `DELETE /operations/history` deletes from the retired v1
+  `operation:` keyspace (`internal/server/handlers/operations/handler.go:244`); returns
+  `{"deleted": N}` while touching nothing the v2 UI shows. 0 frontend callers.
+- SV-02 medium data-loss — `POST /backup/restore` `Verify: true` is a silent no-op
+  (`internal/server/handlers/system/handler.go:697`); 200 never says verify was skipped.
+- SV-03 low security — `/api/events` SSE sets hardcoded `Access-Control-Allow-Origin: *`
+  (`internal/realtime/events.go:221`), undoing the MED-2 allowlist hardening.
+- SV-04 low perf — `IPRateLimiter.limiterForIP` O(n) sweep under one mutex per
+  rate-limited request (`internal/server/middleware/ratelimit.go:47`).
+
+### typescript-specialist (web) — RUNNING · Explore (CI/workflows + scripts) — RUNNING
 Dropped: separate pr-test-analyzer pass (audits already record missing tests per finding).
 
 ### Cost note (12:50 EDT)
