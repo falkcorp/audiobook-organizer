@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/finish_credential_migration.py
-# version: 2.0.0
+# version: 2.0.1
 # guid: 5c8b2e14-9a37-4d06-b8f1-2e74a95c30d8
 # last-edited: 2026-09-09
 
@@ -69,10 +69,15 @@ WHAT THIS SCRIPT WILL NOT DO
   one file in this system that cannot be regenerated and a leftover copy is
   inert once the new path works. Removing it is a separate ``--remove-legacy-key``
   run, gated on positive proof that the app has since read the new location.
-* It never treats an unreadable path as an absent one. ``Path.exists()`` returns
-  False on EACCES, and the app-data directory is 0700 ``audiobook:audiobook``,
-  so a non-root run is BLIND to everything in it. Every filesystem question
-  here is tri-state: present, absent, or unknown.
+* It never treats an unreadable path as an absent one. The app-data directory
+  is 0700 ``audiobook:audiobook``, so a non-root run is BLIND to everything in
+  it -- and ``Path.exists()`` handles that badly in two different ways
+  depending on the interpreter: Python 3.14 (which the prod host runs) swallows
+  EACCES and answers ``False``, indistinguishable from "not there", while 3.13
+  and earlier raise ``PermissionError`` from inside ``pathlib`` and take the
+  caller down. Every filesystem question here is tri-state instead -- present,
+  absent, or unknown -- over an explicit ``os.lstat``, and an unknown BLOCKS
+  the action rather than licensing it.
 
 Usage (on the server)::
 
@@ -135,11 +140,14 @@ class Presence(enum.Enum):
 class Probe:
     """A tri-state answer to "is this file there?".
 
-    UNKNOWN exists because ``Path.exists()`` cannot distinguish "no such file"
-    from "I am not allowed to look", and this script decides what to do with
-    credentials. Reading EACCES as "absent" would let a non-root run conclude
-    the encryption key does not exist -- and the note it printed about that
-    would be a claim about a directory it never saw.
+    UNKNOWN exists because ``Path.exists()`` cannot answer "is it there?" for a
+    path this script cares about, and this script decides what to do with
+    credentials. On Python 3.14 it swallows EACCES and returns ``False``, so a
+    non-root run concludes the encryption key does not exist -- and the note it
+    prints is a claim about a directory it never saw. On 3.13 and earlier
+    ``pathlib`` does not ignore EACCES, so the same call raises
+    ``PermissionError`` and kills a read-only inspection instead. Neither is
+    usable, so ask ``os.lstat`` directly and keep the errno.
     """
 
     presence: Presence

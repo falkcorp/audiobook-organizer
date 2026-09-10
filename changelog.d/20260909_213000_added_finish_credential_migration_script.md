@@ -36,12 +36,21 @@
 ### Fixed
 
 - **File-presence checks in operational scripts no longer read "permission
-  denied" as "does not exist".** `Path.exists()` returns `False` on `EACCES`, and
-  the production app-data directory is mode `0700`, so a non-root run reported
-  the settings encryption key as absent from *both* locations and printed a
-  confident note about a directory it had never been able to open. Every
-  filesystem question in the migration script is now tri-state — present, absent,
-  or unknown — and an unknown blocks the action instead of licensing it.
+  denied" as "does not exist".** The production app-data directory is mode
+  `0700`, so a non-root run reported the settings encryption key as absent from
+  *both* locations and printed a confident note about a directory it had never
+  been able to open.
+
+  `Path.exists()` is unusable for this in two different ways depending on the
+  interpreter, which is worth knowing before reaching for it anywhere a path may
+  be unreadable: **Python 3.14 swallows `EACCES` and returns `False`** —
+  indistinguishable from "not there", and what the prod host does — while
+  **3.13 and earlier raise `PermissionError`** from inside `pathlib`, killing the
+  caller. The same call therefore lies on one host and crashes on another; this
+  surfaced when CI, on an older Python, failed a test that asserted the 3.14
+  behaviour directly. Every filesystem question in the migration script is now
+  tri-state — present, absent, or unknown — over an explicit `os.lstat`, and an
+  unknown blocks the action instead of licensing it.
 
 - **Journal reads in operational scripts survive undecodable bytes and filter
   server-side.** Reading the unit's log with `text=True` raised

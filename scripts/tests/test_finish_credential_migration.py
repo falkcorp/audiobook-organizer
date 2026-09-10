@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/tests/test_finish_credential_migration.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 7a41f9c3-6b28-4e15-93d7-c05a8ef21b46
 # last-edited: 2026-09-09
 
@@ -68,9 +68,22 @@ class ProbeTests(unittest.TestCase):
         """The regression this whole class exists for.
 
         On the real host the app-data directory is 0700 audiobook:audiobook, so
-        a non-root run cannot traverse it. ``Path.exists()`` answers False --
-        indistinguishable from "no key here" -- and the first version of this
-        script printed a confident note about a directory it had never seen.
+        a non-root run cannot traverse it, and the first version of this script
+        printed a confident note about a directory it had never seen.
+
+        ``Path.exists()`` is unusable here in TWO different ways depending on
+        the interpreter, which is why ``probe`` does its own ``lstat``:
+
+        * Python 3.14 (what the prod host runs) swallows EACCES and answers
+          ``False`` -- indistinguishable from "no key here". That is the lie
+          that produced the false claim.
+        * Python 3.13 and earlier do not ignore EACCES in ``pathlib``, so it
+          RAISES ``PermissionError`` and takes the caller down with it. Loud,
+          but still not an answer -- and it is what CI, on an older Python,
+          hit when this test first asserted the 3.14 behaviour directly.
+
+        So assert only that the stdlib does not hand back a trustworthy
+        ``False``, and pin the real contract on ``probe``.
         """
         with tempfile.TemporaryDirectory() as td:
             secret = Path(td, "secret")
@@ -79,8 +92,14 @@ class ProbeTests(unittest.TestCase):
             os.chmod(secret, 0o000)
             try:
                 target = secret / fcm.KEY_NAME
-                # The stdlib helper cannot tell these apart; we must.
-                self.assertFalse(target.exists())
+                try:
+                    stdlib = target.exists()
+                except PermissionError:
+                    stdlib = "raised"
+                self.assertIn(
+                    stdlib, (False, "raised"), "Path.exists() should not be usable here"
+                )
+
                 pr = fcm.probe(target)
                 self.assertIs(pr.presence, fcm.Presence.UNKNOWN)
                 self.assertIn("permission denied", pr.reason)
