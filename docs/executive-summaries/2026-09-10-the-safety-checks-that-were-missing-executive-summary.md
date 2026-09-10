@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -7,8 +7,8 @@
 
 **Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
 guard), #3183 (backup verification), #3185 (orphan-file cleanup guard), #3187 (duplicate
-merge audio guard), #3188 (duplicate rows in one batch). All are open and **held for the
-owner's review** because they touch paths that move or delete library data; this summary
+merge audio guard), #3188 (duplicate rows in one batch), #3189 and #3190 (two more
+series-delete guards). All are open and **held for the owner's review** because they touch paths that move or delete library data; this summary
 will be updated with merge commits as they land. Merged: #3184 (ISBN sweep outage
 reporting, `2ed12521b`), #3186 (scan reports a failed AI phase, `03286fa87`). Planning
 package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
@@ -64,8 +64,14 @@ package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
 - **A scan whose AI step failed still reported a clean finish.** If the language-model
   service was down for the whole run, the scan finished green with nothing on its record.
   The failure now appears as a warning on the scan's own operation record.
-- All nine fixes come with a test that reproduces the original problem and fails on the
-  old code, so the gap cannot silently reopen.
+- **Two more cleanup jobs could delete a series that trashed books still belonged to.**
+  The series-normalize and series-denumber jobs only looked at live books when deciding
+  a series was empty. A series whose members were all in the trash looked empty and was
+  deleted, leaving those books pointing at nothing. Both now consult the unfiltered count
+  first and keep the series when anything still references it. This closes the last two
+  of four series-delete paths; the first two were fixed in August.
+- All eleven fixes come with a test that reproduces the original problem and fails on
+  the old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
   of these changes and filed as tracked tasks so they get their own fix and review.
@@ -245,3 +251,24 @@ COMPLETED. The only trace was buried in the server log.
 when the phase failed, for both the library scan and the folder auto-scan. It is a
 warning rather than a failure on purpose: an AI outage should not fail an otherwise good
 scan chunk.
+
+## 10. Two series cleanups that could not see trashed books
+
+**What it was.** Four different features can delete a series record once it has no
+books left. Each one lists the series' members before deleting, and that listing
+deliberately leaves out books in the trash. Two of the four (the review-screen merge and
+the author cleanup) were taught in August to double-check against an unfiltered count
+before deleting. The other two, the series-normalize job and the series-denumber job,
+were not.
+
+**Why it mattered.** A series whose every member had been moved to the trash listed as
+empty, so the job deleted it. If any of those books was later restored from the trash, it
+came back pointing at a series that no longer existed, and nothing in the app could show
+or repair that link.
+
+**The fix.** Both jobs now fetch the unfiltered reference count once per run and refuse
+to delete any series that still has references the filtered listing cannot see. The
+books they can see are still merged; only the delete is held back, and the run's summary
+says how many were held and why. The dry-run preview of the denumber job reports the same
+held-back count, so what it promises matches what apply does. If the reference count
+cannot be read at all, both jobs stop rather than guess.
