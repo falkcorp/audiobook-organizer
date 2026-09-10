@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package reconcile
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
@@ -312,6 +313,20 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates 
 	}
 	if len(dupIDs) > 0 {
 		if _, err := dedup.MergeBooks(ctx, store, "", keepID, dupIDs, nil); err != nil {
+			// Returning ("", 0) already fails closed — this candidate stays
+			// unresolved and the heal falls through to its next layer rather
+			// than repointing at a collapse that never happened. What was
+			// missing is any trace of WHY: a refused collapse (a file-less
+			// keeper whose losers carry the only audio route,
+			// merge.FilelessPrimaryError) looked identical to "these files
+			// just aren't acoustically identical". Logged with both sides so
+			// the refusal is visible in the op's log instead of being
+			// swallowed by the bare return.
+			slog.Warn("itunes heal: refusing to collapse acoustically identical duplicates",
+				"keep_book_id", keepID,
+				"duplicate_book_ids", dupIDs,
+				"refusal", merge.IsRefusal(err),
+				"error", err)
 			return "", 0
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-19
+// last-edited: 2026-09-10
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -371,6 +371,72 @@ func TransferITunesMetadataFirstWin(keep, from *database.Book) {
 	}
 }
 
+// guardKeeperAudioRoute refuses a merge whose keeper cannot reach any audio
+// while a book it is about to hard-delete can (TODO.md:2304).
+//
+// Why this path needs it at all: MergeBooks takes keepID exactly as the caller
+// hands it over and removes every mergeIDs row with store.DeleteBook. Unlike
+// merge.Service.MergeBooks — which soft-deletes and elects its survivor with
+// merge.HasAudioRoute — there is nothing left to restore here, so a heal that
+// nominates a ghost row (no book_file rows, empty FilePath) as the keeper
+// destroys the only rows that reached the audio, permanently.
+//
+// The tier is the sibling's, not a stricter one: the refusal fires only when
+// the KEEPER is file-less and some loser is not. A merge in which no
+// participant has a route is still allowed — there is no audio to lose, and
+// refusing it would make the file-less ghost class (exactly what
+// internal/reconcile/itunes_heal.go exists to collapse) impossible to tidy.
+//
+// Fail CLOSED on a read error, as the Service guard does: if we cannot tell
+// whether a row has a route, we do not delete it. Note this is stricter than
+// the merge loop below, which records a per-loser failure in result.Errors and
+// carries on — a store too sick to answer "does this book have files" is not a
+// store we hard-delete rows in.
+//
+// The typed refusal is merge.FilelessPrimaryError rather than a dedup-local
+// type so callers get merge.IsRefusal(err) and the same errors.As shape the
+// HTTP merge paths already use.
+func guardKeeperAudioRoute(store Store, keepID string, keepBook *database.Book, mergeIDs []string) error {
+	keepFiles, err := store.GetBookFiles(keepID)
+	if err != nil {
+		return fmt.Errorf("cannot verify the audio route of keep book %s, refusing to merge: %w", keepID, err)
+	}
+	if merge.HasAudioRoute(keepBook, keepFiles) {
+		return nil
+	}
+
+	// seen pre-loaded with keepID: a self-merge entry is skipped by the merge
+	// loop and is never deleted, so it is not a reason to refuse.
+	seen := map[string]bool{keepID: true}
+	var fileBearing []string
+	for _, mergeID := range mergeIDs {
+		if seen[mergeID] {
+			continue
+		}
+		seen[mergeID] = true
+		mergeBook, err := store.GetBookByID(mergeID)
+		if err != nil {
+			return fmt.Errorf("cannot verify the audio route of book %s, refusing to merge: %w", mergeID, err)
+		}
+		if mergeBook == nil {
+			// The merge loop already records this as "book %s not found";
+			// a row that does not exist cannot be deleted or lose audio.
+			continue
+		}
+		files, err := store.GetBookFiles(mergeID)
+		if err != nil {
+			return fmt.Errorf("cannot verify the audio route of book %s, refusing to merge: %w", mergeID, err)
+		}
+		if merge.HasAudioRoute(mergeBook, files) {
+			fileBearing = append(fileBearing, mergeID)
+		}
+	}
+	if len(fileBearing) > 0 {
+		return &merge.FilelessPrimaryError{PrimaryID: keepID, FileBearing: fileBearing}
+	}
+	return nil
+}
+
 // Concurrency: this is a package-level function (NOT merge.Service.MergeBooks)
 // with its own unguarded read-modify-write, reached from two async ops with
 // DIFFERENT ConcurrencyKeys (dedup.book-merge and the iTunes-heal op), so it can
@@ -390,8 +456,14 @@ func TransferITunesMetadataFirstWin(keep, from *database.Book) {
 // NOT tombstone external-ID (ext_id:*) mappings and does NOT enqueue iTunes ITL
 // removals, orphaning both. See internal/server/duplicates_ops.go. This function
 // is retained solely for internal/reconcile/itunes_heal.go, which intentionally
-// hard-collapses organize-bug duplicate rows; that caller still carries the same
-// ext-ID/ITL gap and is tracked as a follow-up.
+// hard-collapses organize-bug duplicate rows.
+//
+// TODO.md:2304 (2026-09-10): the audio-route half of that caller's gap is now
+// closed — guardKeeperAudioRoute below refuses a file-less keeper before any
+// write, the same tier merge.Service.MergeBooks enforces with
+// FilelessPrimaryError. The ext-ID / ITL half is STILL open: a hard delete here
+// leaves the loser's ext_id:* mappings un-tombstoned and its iTunes tracks in
+// the ITL. Do not read the closed half as closing both.
 func MergeBooks(
 	_ context.Context,
 	store Store,
@@ -405,6 +477,13 @@ func MergeBooks(
 	keepBook, err := store.GetBookByID(keepID)
 	if err != nil || keepBook == nil {
 		return BookMergeResult{}, fmt.Errorf("keep book %s not found", keepID)
+	}
+
+	// Audio-route guard — runs before ANY write (before the iTunes-metadata
+	// transfer, before FollowMergeWithStore, before DeleteBook), inside the
+	// merge lock so the rows it reads cannot move under it.
+	if err := guardKeeperAudioRoute(store, keepID, keepBook, mergeIDs); err != nil {
+		return BookMergeResult{}, err
 	}
 
 	total := len(mergeIDs)
