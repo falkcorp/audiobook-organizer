@@ -1,0 +1,113 @@
+{
+  "audit": "schema-auditor / wave3",
+  "repo": "/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer-burndown-2026-09",
+  "head": "42d187168",
+  "scope_note": "Excludes author_bookref.go byte-range bound (DB-01), RunMigrations unbatched bookkeeping (DB-02), dead migration014UpPebble (DB-03), resumeRestart ghost op, MigratingActivityStore secondary growth, NutsDB digest swallowed error -- all covered by a sibling audit.",
+  "findings": [
+    {
+      "id": "SQ-01",
+      "area": "internal/server (search_search.go) + internal/search",
+      "title": "Search-index bulk backfill is a sequential per-book N+1 (author/series/tags) with no worker pool",
+      "severity": "high",
+      "risk": "perf",
+      "file": "internal/server/server_search.go",
+      "line": 63,
+      "evidence": "buildSearchIndexIfEmpty (server_search.go:44-100) runs `for i := range books { doc := search.BookToDoc(store, &books[i]); s.searchIndex.IndexBook(doc) }` as a plain serial loop, paging GetAllBooksFullFrom at pageSize=500 with no errgroup/worker pool. BookToDoc (internal/search/index_builder.go:82-165) does THREE per-book point reads -- store.GetAuthorByID(*book.AuthorID) (L147), store.GetSeriesByID(*book.SeriesID) (L153), store.GetBookTags(book.ID) (L160) -- instead of resolving author/series once per page via the batch API database.Store.GetAuthorsByIDs (internal/database/pebble_store_authors.go:77), which internal/audiobooks/service_query.go:717 already uses correctly for the equivalent list-enrichment case (`authorsMap, _ = svc.store.GetAuthorsByIDs(authorIDs)`).",
+      "why_it_matters": "This is the exact shape CLAUDE.md's concurrency rule targets (whole-library loop + per-item DB read, no worker pool) and the exact N+1 shape the audit brief targets (batch API exists and is used correctly elsewhere, just not here). It only fires when the search index is genuinely empty (first boot, or after a Bleve mapping-version bump routes around it per server_lifecycle.go:967-983), but at that moment it is a background goroutine doing 3x point-gets x every book in the library (68K+ books observed elsewhere in this codebase's own docs) fully serially -- the same profile as the documented 2026-07-05 dedup.full-scan incident that went silent for 3+ hours at 100% CPU on one core.",
+      "suggested_fix": "Pre-resolve all distinct AuthorID/SeriesID values for the page via GetAuthorsByIDs/GetSeriesByIDs (one call per page of 500, not one per book), and drive the per-book loop through registry.RunItems or an errgroup+SetLimit(runtime.NumCPU()) worker pool per CLAUDE.md's mandated pattern.",
+      "effort": "M",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SQ-02",
+      "area": "internal/database (pebble_store.go author getters)",
+      "title": "No persisted author->books secondary index; pre-memdb-warmup fallback does two full-keyspace scans for a single-author lookup",
+      "severity": "high",
+      "risk": "perf",
+      "file": "internal/database/pebble_store.go",
+      "line": 2254,
+      "evidence": "getBooksByAuthorIDFull (pebble_store.go:2297-2339), the fallback used whenever `!p.UseMemDB || p.mem() == nil` (line 2230-2234, GetBooksByAuthorIDCore), calls bookIDsInAuthorJunction (line 2254-2279) which iterates the ENTIRE `book_authors:` keyspace (every book's junction row) json.Unmarshal-ing each one just to find rows for ONE authorID, then getBooksByAuthorIDFull itself iterates the ENTIRE `book:` keyspace unmarshalling every book row a second time (lines 2304-2336). No `book:author:<authorID>:<bookID>` secondary index exists in the code despite one being documented in docs/database-architecture.md and docs/AI-REFERENCE.md's key schema (`book:author:<author_id>:<ulid> -> ULID (index)`) -- grep for the literal key `book:author:` in pebble_store.go turns up zero writers, only comments describing keys to *skip* during other scans.",
+      "why_it_matters": "This fallback is not a rare cold-start-only edge case: memory/project notes record memdb warmup as consistently ~130s after every restart, a recurring window this project has been bitten by before (`memdb warmup is ASYNC ~130s after every restart`). Any hit to GET /authors/:id/books (an interactive Authors-page endpoint) inside that window costs two full-library unmarshal passes instead of an O(k) prefix scan, and the cost repeats per request (no caching) for the whole warmup window after every restart/deploy.",
+      "suggested_fix": "Either build and maintain a real `book:author:<authorID>:<bookID>` (and `book_authors_junction:<authorID>:<bookID>` for co-authors) secondary index on CreateBook/UpdateBook/SetBookAuthors so the pre-memdb path can prefix-scan instead of full-table-scan, or explicitly serve GetBooksByAuthorIDCore from a 503/degraded response during the documented warmup window instead of paying the full-scan cost per request.",
+      "effort": "M",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SQ-03",
+      "area": "internal/database (pebble_store.go DeleteBook)",
+      "title": "DeleteBook never deletes the book_authors:/book_narrators: sidecar rows it created via SetBookAuthors/SetBookNarrators",
+      "severity": "medium",
+      "risk": "hygiene",
+      "file": "internal/database/pebble_store.go",
+      "line": 3112,
+      "evidence": "SetBookAuthors (internal/database/pebble_store_authors.go:590-601) writes `book_authors:<bookID>`; SetBookNarrators (pebble_store_authors.go:911-929, same pattern) writes `book_narrators:<bookID>`. DeleteBook (pebble_store.go:3112-3291) deletes the main book key, the book_sig: sidecar (L3137, explicitly comparing itself to \"the work/hash indexes below\"), the path/versiongroup/work/hash-x3/ISBN-ASIN indexes, the embedding row, dedup candidates, and the chapters row -- but never touches `book_authors:<id>` or `book_narrators:<id>`. DeleteBookFromMemDB (internal/database/memdb_sync.go:255-278), called at the very end of DeleteBook (pebble_store.go:3289), DOES clear the in-memory memdb tables for both via txn.DeleteAll(memTableBookAuthors/...Narrators, memIdxBookID, bookID) -- so the in-memory projection is correct but the underlying persisted Pebble row is not.",
+      "why_it_matters": "This is the identical dangling-row class DeleteBook's own comments describe having been bitten by twice already in this exact function (work-ID index, three file-hash indexes) -- \"added to this function after a writer got ahead of it\". Every hard delete (purge, merge cleanup, archive sweep, etc.) now permanently leaks one book_authors row and, when present, one book_narrators row. It is a storage leak that compounds with every purge (this codebase's own memory notes ~115K missing-file repoint operations and multiple purge/repoint sweeps at prod scale), and any future code path that ever calls GetBookAuthors(deletedID) directly (bypassing the GetBookByID existence check) will silently see a phantom credit list for a book that no longer exists.",
+      "suggested_fix": "Add `batch.Delete([]byte(\"book_authors:\"+id), nil)` and `batch.Delete([]byte(\"book_narrators:\"+id), nil)` to DeleteBook's batch, mirroring the bookSigKey/work/hash teardown already present in the same function.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SQ-04",
+      "area": "internal/itunes (backfill.go) + internal/server (external_id_backfill.go, server_lifecycle.go)",
+      "title": "External-ID backfill's \"done\" setting is written but never read -- the full-library backfill unconditionally reruns on every server boot",
+      "severity": "high",
+      "risk": "perf",
+      "file": "internal/itunes/backfill.go",
+      "line": 56,
+      "evidence": "BackfillExternalIDs's doc comment (backfill.go:29-31) claims \"This is idempotent -- it checks the setting 'external_id_backfill_done' and only runs once\", and the code at line 56-58 says `// Check if backfill has already been performed... Note: in actual usage, would need to check via store.GetSetting` -- but no such check exists anywhere in the function body; it proceeds straight into the paginated GetAllBooksCore loop unconditionally. The setting is only ever WRITTEN, at line 145 (`store.SetSetting(\"external_id_backfill_v4_done\", \"true\", \"bool\", false)`), after success. A repo-wide grep for `external_id_backfill_v4_done` / `external_id_backfill_done` across internal/**/*.go returns exactly one hit: that same write line -- nothing reads it. The caller chain confirms no gate exists either: server_lifecycle.go:856-874 labels this \"the one-time, idempotent... backfill\" while its own adjacent comment admits \"this is the path that actually runs at every boot\" (line 867), and server/external_id_backfill.go:45-46 claims \"The domain package handles idempotency checks\" -- which it does not.",
+      "why_it_matters": "Every server restart re-runs a full-library paginated scan (GetAllBooksCore in pages of 10,000) with a known, code-commented N+1 (`files, fErr := store.GetBookFiles(book.ID)` per book, backfill.go:99, tagged `TODO(PERF-5): replace with a batch GetBookFilesByBookIDs call to eliminate the N+1 file read`), followed by a second full-library pass (BackfillITunesTrackPIDs, loading every book into two in-memory maps) plus a full streaming parse of the iTunes XML library -- unconditionally, forever, on every boot, not just the first. CreateExternalIDMapping keys are deterministic (`ext_id:<source>:<externalID>`, pebble_store_externalids.go:28) so repeated runs do not create duplicate rows, but the wasted full-library I/O and CPU on every restart is real and grows with library size.",
+      "suggested_fix": "Read the `external_id_backfill_v4_done` setting at the top of BackfillExternalIDs (or in the server_lifecycle.go caller) and skip the whole function when set, matching the pattern already used correctly by IsBookAggregatesBackfillDone/MarkBookAggregatesBackfillDone in internal/maintenance/jobs/recompute_book_aggregates.go:127-129. Fix the N+1 GetBookFiles call alongside it per the existing PERF-5 TODO, since it is now confirmed to run on every boot rather than once.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": "PERF-5 TODO already filed in-code for the GetBookFiles N+1 half of this; the missing done-flag gate itself is not tracked anywhere found in TODO.md/todo.d."
+    },
+    {
+      "id": "SQ-05",
+      "area": "internal/server/handlers/abs (browse.go filterdata)",
+      "title": "publishedDecades filter list is built from only the first 5,000 books in ULID/creation order, permanently omitting decades from the rest of the library",
+      "severity": "medium",
+      "risk": "correctness",
+      "file": "internal/server/handlers/abs/browse.go",
+      "line": 1959,
+      "evidence": "filterDataScanLimit = 5000 (browse.go:1959) bounds `h.library.GetAllBooksCore(filterDataScanLimit, 0)` in publishedDecades (browse.go:1968-1995), i.e. always offset 0 -- the SAME first 5,000 rows every call, never a sample of the rest. GetAllBooksCore's memdb path is explicitly documented as unsorted, iterating \"in key (ULID) order\" (internal/database/memdb_reads.go:655-656), which is creation-time order. On a large library (this codebase's own docs describe 68K+ books) this permanently restricts the decade list to whatever was scanned/imported first, silently omitting any decade that first appears only in book #5,001+.",
+      "why_it_matters": "This feeds the ABS `/libraries/:id/filterdata` published-decades filter dropdown -- an interactive client-facing endpoint. A user filtering by decade will see a dropdown that is missing valid values for any decade not represented in the oldest 5,000 scanned books, and there is no way for a client to discover the omission (no truncation flag is returned, unlike the activity store's scan-budget pattern which logs+documents the same class of bound). Contrast with the sibling GetDistinctLanguages on the same endpoint (browse.go:1941), which does a full unbounded index-only Pebble scan (pebble_store.go:3570+) and is therefore complete.",
+      "suggested_fix": "Either scan for the distinct published-year value set the same index-only way GetDistinctLanguages does (cheap, since it only needs the numeric year field, not full Book/BookCore rows), or at minimum warn/flag in the response when the 5,000-row bound was hit, mirroring the activity store's `exhausted` bool + log-on-truncation pattern (pebble_activity_store.go).",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    }
+  ],
+  "checked_and_correct": [
+    {
+      "area": "internal/database/pebble_store.go UpdateBook",
+      "note": "ISBN/ASIN secondary index (updateISBNIndex, L2802-2815), version-group index (L2740-2759), and work-ID index (L2761-2790) are all correctly delete-old/write-new inside the same atomic batch as the book row update, verified by reading the full UpdateBook body."
+    },
+    {
+      "area": "internal/database/pebble_store.go DeleteBook",
+      "note": "Path index, version-group index, work-ID index, all three file-hash indexes (hash/originalhash/organizedhash), ISBN/ASIN index, the book_sig sidecar, the embedding row, pending dedup candidates, and the chapters row are all torn down atomically. This function's own comments show a documented history of fixing dangling-row bugs of exactly this kind for the work/hash indexes -- the fix pattern is proven, just not applied to book_authors:/book_narrators: (see SQ-03)."
+    },
+    {
+      "area": "internal/audiobooks/service_filtering.go FetchBookFilesForBooks",
+      "note": "Correctly uses the batch capability GetBookFilesForIDsCore first and only falls back to a per-book GetBookFiles loop (bounded to ~20 books, one search-result page) when the store doesn't implement the batch capability -- exactly the pattern this audit is checking for."
+    },
+    {
+      "area": "internal/audiobooks/service_query.go author/series enrichment",
+      "note": "List/search enrichment resolves author and series names via one GetAuthorsByIDs(authorIDs) batch call per page (L717) rather than per-row point reads -- the correct pattern that SQ-01's BookToDoc should have used."
+    },
+    {
+      "area": "internal/database/pebble_activity_store.go Query / GetDistinctSources",
+      "note": "activityQueryScanBudget (=20000) bounding is deliberate and well-instrumented: Query returns an honest lower-bound `total` (not a census) and logs a warning naming the exact budget/examined/matched counts whenever the bound is hit (L862-878); GetDistinctSources is additionally memoized with a TTL cache and was the fix for a documented 3.21 GB OOM contributor. Matches project memory's '/activity/sources 35s->0.29s FIXED' note -- correctly implemented, not re-flagged."
+    },
+    {
+      "area": "internal/server/handlers/dedup/search.go resolveBookIDsMatching",
+      "note": "Does a full GetAllBooksCore(0,0) + GetAllAuthors() per dedup-panel search keystroke rather than a store-level projected search, but the function's own doc comment already analyzes the cost tradeoff in detail and explicitly states a dedicated store-level projection 'is filed as follow-up rather than smuggled into this handler' -- self-tracked, not a fresh finding."
+    },
+    {
+      "area": "internal/server/handlers/abs/browse.go filterDataScanLimit (bound itself)",
+      "note": "The existence of a 5,000-row bound on a decoration endpoint is itself a reasonable, documented design choice (comment explicitly rejects a full 68K-row scan for a decoration endpoint) -- the finding (SQ-05) is specifically that it is unconditionally offset 0 with no completeness signal, not that bounding is wrong."
+    }
+  ]
+}
