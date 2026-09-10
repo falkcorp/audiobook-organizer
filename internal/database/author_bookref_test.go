@@ -567,7 +567,7 @@ func memBookAuthorRows(t *testing.T, s *PebbleStore) []*BookAuthor {
 func TestGetAllAuthorBookRefCounts_CountsACallerSuppliedNonULIDBookID(t *testing.T) {
 	store := seedAuthorRefStore(t, t.TempDir())
 
-	const letterLeading = 8200 // referenced only via a letter-leading book ID
+	const letterLeading = 8200     // referenced only via a letter-leading book ID
 	const underscoreLeading = 8201 // referenced only via an "_"-leading book ID
 
 	bLetter, err := store.CreateBook(&Book{
