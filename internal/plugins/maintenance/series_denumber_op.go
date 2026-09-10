@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-08-24
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -230,13 +231,35 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		return nil
 	}
 
+	// The unfiltered reference guard, fetched ONCE before the merge loop below.
+	// It answers "how many book rows reference this series in ANY state" —
+	// live, trashed, and non-primary — which the per-book loop cannot answer on
+	// its own: GetBooksBySeriesIDAllVersions (like every series membership
+	// getter) excludes soft-deleted rows by design, so a series whose only
+	// members are trashed enumerates zero books, the loop that would flip
+	// movedAll never runs, and movedAll stays vacuously true. Comparing this
+	// unfiltered count against what each plan actually enumerates is what
+	// closes that gap — see safeToDelete below. Same shared guard, same
+	// fail-closed contract as the other three series-delete paths: compare
+	// internal/maintenance/jobs/cleanup_series.go and
+	// internal/plugins/maintenance/author_purge_empty.go.
+	//
+	// Fails CLOSED: an apply run that cannot answer the unfiltered question
+	// aborts entirely rather than falling back to the filtered book counts —
+	// that fallback is precisely the bug, because it deletes rows while
+	// reporting success.
+	refCounts, rcErr := database.SeriesRefCounts(store)
+	if rcErr != nil {
+		return fmt.Errorf("series-denumber: refusing to apply without unfiltered series reference counts: %w", rcErr)
+	}
+
 	// 🔒 SEQUENTIAL ON PURPOSE. Two numbered series folding onto the same base
 	// must not both decide the base is missing and create it — that would replace
 	// one split series with two. Series creation is the shared mutable state here,
 	// so this loop is deliberately not parallelised (contrast dedupe-book-file-rows,
 	// where every book is disjoint).
 	targets := map[string]int{} // lowercased base+author → series ID
-	var merged, movedBooks, created, deleted, failed int
+	var merged, movedBooks, created, deleted, failed, refusedByGuard int
 
 	for idx, pl := range plans {
 		if ctx.Err() != nil {
@@ -297,6 +320,24 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			continue
 		}
 
+		// safeToDelete is the fix: whether DeleteSeries below is safe does NOT
+		// depend on movedAll alone. movedAll only tracks the rows THIS loop
+		// saw (the AllVersions enumeration above); when that enumeration is
+		// empty the loop body never runs and movedAll is vacuously true, which
+		// is exactly the trashed-row gap #2908 closed for the sibling paths.
+		// refCounts[pl.FromID] is the unfiltered count fetched once above; when
+		// it exceeds len(books), rows this run cannot see (trashed, or an
+		// unhydratable non-primary version) still hold the series, and
+		// deleting it would strand them. The books this run CAN see still get
+		// moved below — only the delete of a still-referenced source series is
+		// refused.
+		safeToDelete := refCounts[pl.FromID] <= len(books)
+		if !safeToDelete {
+			refusedByGuard++
+			log.Warn("series-denumber: series still referenced by rows this run cannot move — merging books but not deleting",
+				"series", pl.FromID, "name", pl.FromName, "unfiltered_refs", refCounts[pl.FromID], "movable_books", len(books))
+		}
+
 		movedAll := true
 		for i := range books {
 			full, gerr := store.GetBookByID(books[i].ID)
@@ -322,9 +363,11 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			movedBooks++
 		}
 
-		// Only drop the emptied series when every book actually moved; a partial
-		// move plus a delete would orphan the stragglers.
-		if movedAll {
+		// Only drop the emptied series when every book actually moved AND the
+		// unfiltered guard above confirms nothing outside this run's view
+		// still references it; a partial move, or an unseen (trashed)
+		// reference, plus a delete would orphan the stragglers.
+		if movedAll && safeToDelete {
 			if derr := store.DeleteSeries(pl.FromID); derr != nil {
 				log.Warn("series-denumber: DeleteSeries failed", "series", pl.FromID, "err", derr)
 			} else {
@@ -348,8 +391,9 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 
 	summary := fmt.Sprintf(
 		"series-denumber: %d series scanned, merged %d into %d base series "+
-			"(%d books moved, %d base series created, %d emptied series deleted), failed %d | e.g. %s",
-		len(in), merged, len(bases), movedBooks, created, deleted, failed, strings.Join(examples, "; "))
+			"(%d books moved, %d base series created, %d emptied series deleted, "+
+			"%d held back by the reference guard), failed %d | e.g. %s",
+		len(in), merged, len(bases), movedBooks, created, deleted, refusedByGuard, failed, strings.Join(examples, "; "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(plans), len(plans), summary)
 	return nil
