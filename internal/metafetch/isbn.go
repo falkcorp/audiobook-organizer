@@ -1,7 +1,7 @@
 // file: internal/metafetch/isbn.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package metafetch
 
@@ -194,12 +194,22 @@ func (s *ISBNService) resolveAuthor(book *database.Book) string {
 	return a.Name
 }
 
+// needsIdentifierEnrichment reports whether the batch enrichment scan should hand
+// a book to EnrichBookISBN. A book qualifies when it is missing EITHER an ISBN or
+// an ASIN — matching the per-book gate in queueISBNEnrichment (service_fetch.go)
+// and the internal logic of EnrichBookISBN, which enriches ISBN and ASIN
+// independently. Previously this ANDed only the two ISBN-empty checks and never
+// looked at ASIN, so a book that had an ISBN but no ASIN was skipped before
+// EnrichBookISBN (which would fetch the ASIN) was ever called — the batch path
+// could never mint an ASIN for the ~2/3 of books that already carry an ISBN.
 func needsIdentifierEnrichment(book *database.BookCore) bool {
 	if book == nil {
 		return false
 	}
-	return (book.ISBN10 == nil || strings.TrimSpace(*book.ISBN10) == "") &&
+	needsISBN := (book.ISBN10 == nil || strings.TrimSpace(*book.ISBN10) == "") &&
 		(book.ISBN13 == nil || strings.TrimSpace(*book.ISBN13) == "")
+	needsASIN := book.ASIN == nil || strings.TrimSpace(*book.ASIN) == ""
+	return needsISBN || needsASIN
 }
 
 // searchSourceForISBN queries a single metadata source and returns the first

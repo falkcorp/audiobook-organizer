@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 package metafetch
 
@@ -165,6 +165,7 @@ func TestIsStrictTitleMatch(t *testing.T) {
 func TestNeedsIdentifierEnrichment(t *testing.T) {
 	isbn10 := "1234567890"
 	isbn13 := "9781234567890"
+	asin := "B0ABCDEFGH"
 	empty := ""
 	whitespace := "   "
 
@@ -174,12 +175,22 @@ func TestNeedsIdentifierEnrichment(t *testing.T) {
 		expect bool
 	}{
 		{"nil_book", nil, false},
-		{"no_isbn_fields", &database.BookCore{}, true},
-		{"has_isbn10", &database.BookCore{ISBN10: &isbn10}, false},
-		{"has_isbn13", &database.BookCore{ISBN13: &isbn13}, false},
-		{"empty_isbn10", &database.BookCore{ISBN10: &empty}, true},
-		{"whitespace_isbn10", &database.BookCore{ISBN10: &whitespace}, true},
-		{"has_both", &database.BookCore{ISBN10: &isbn10, ISBN13: &isbn13}, false},
+		{"no_identifier_fields", &database.BookCore{}, true},
+		// An ISBN alone no longer satisfies the gate: a book with an ISBN but no
+		// ASIN still needs enrichment (this is the bug the ASIN-aware gate fixes —
+		// the batch path used to skip these and never mint an ASIN).
+		{"has_isbn10_no_asin", &database.BookCore{ISBN10: &isbn10}, true},
+		{"has_isbn13_no_asin", &database.BookCore{ISBN13: &isbn13}, true},
+		{"has_both_isbn_no_asin", &database.BookCore{ISBN10: &isbn10, ISBN13: &isbn13}, true},
+		// An ASIN alone still needs an ISBN.
+		{"has_asin_no_isbn", &database.BookCore{ASIN: &asin}, true},
+		// Only a book that has an ISBN AND an ASIN is fully identified.
+		{"has_isbn10_and_asin", &database.BookCore{ISBN10: &isbn10, ASIN: &asin}, false},
+		{"has_isbn13_and_asin", &database.BookCore{ISBN13: &isbn13, ASIN: &asin}, false},
+		// Blank/whitespace values count as absent for every identifier.
+		{"empty_isbn10_no_asin", &database.BookCore{ISBN10: &empty}, true},
+		{"whitespace_isbn10_no_asin", &database.BookCore{ISBN10: &whitespace}, true},
+		{"isbn_present_whitespace_asin", &database.BookCore{ISBN13: &isbn13, ASIN: &whitespace}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
