@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.50.1 -->
+<!-- version: 10.51.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -1291,7 +1291,7 @@ list warmer. **It would empty the ABS library, not repair it.** No cron entry
 found; reachable, not scheduled. It does not exist for this drift — its premise
 is filesystem presence.
 
-- [ ] **Fix or unregister `fix-library-states`** before someone clicks it.
+- [x] **Fix or unregister `fix-library-states`** before someone clicks it.
 
 ### Blast-radius notes for the two options
 
@@ -1458,7 +1458,7 @@ fine; the row simply predated it by 67 days and nothing ever buried it.
     under the lock would transfer the wait to `Stop`'s write-lock acquisition —
     outside the 30-second budget, which only wraps `wg.Wait()`. Measured before the
     fix: `Stop` returned with 0 of 2 overflow goroutines finished.
-  - [ ] `internal/itunes/service/writeback_batcher.go` — `Stop()` (`:814`) sets a
+  - [x] `internal/itunes/service/writeback_batcher.go` — `Stop()` (`:814`) sets a
     flag and calls `flush()` once but **waits for nothing**; three goroutines
     (`:235`, `:256`, `:262`) are unjoined, `flush()` never checks `b.stopped`, and
     the `stopCh` field (`:93`, `:137`) is dead. Separately, `b.mu` is released
@@ -2301,7 +2301,7 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
       reasons (empty `database_type`, etc.), so those fixtures need a valid
       baseline first.
 
-- [ ] **`dedup.MergeBooks` hard-delete path has no audio-route guard** — surfaced by the
+- [x] **`dedup.MergeBooks` hard-delete path has no audio-route guard** — surfaced by the
   #3053 review (gate count L1). `merge.Service.MergeBooks` now refuses to keep a
   primary with no audio route while a loser has one (`FilelessPrimaryError`), and
   elects the survivor with `HasAudioRoute`. The legacy `internal/dedup/book_dedup.go`
@@ -2884,7 +2884,7 @@ before picking a constant.
       `docs/` and `internal/database/series_bookref.go` for why the filtered
       count is never the right existence test.
 
-- [ ] **SERIES-NORMALIZE-TRASHED-GAP** `mergeSeriesGroupHelper`
+- [x] **SERIES-NORMALIZE-TRASHED-GAP** `mergeSeriesGroupHelper`
       (`internal/server/duplicates_helpers.go`, used by the series-normalize op)
       is the third merge path and still has NO unfiltered reference guard. It is
       fail-CLOSED on everything it can see — an unhydratable row or a failed
@@ -2898,7 +2898,7 @@ before picking a constant.
       tests and mutation runs. Follow the `csMergeSeriesGroup` `(merged, refused,
       err)` shape when it is done.
 
-- [ ] **SERIES-DENUMBER-TRASHED-GAP** `internal/plugins/maintenance/series_denumber_op.go`
+- [x] **SERIES-DENUMBER-TRASHED-GAP** `internal/plugins/maintenance/series_denumber_op.go`
       (~L328, op `maintenance.series-denumber`) is the FOURTH series-delete path
       and has the same trashed-row hole #2908 closed elsewhere. It enumerates
       with `GetBooksBySeriesIDAllVersions` and gates the delete on a `movedAll`
@@ -4238,9 +4238,9 @@ De-duplicate within the batch: keep a `map[string]*BookFile` keyed on `FilePath`
 iTunes PID, which has the same read-committed problem) for the rows already staged in this
 batch, and merge a later row into the earlier one instead of writing a second key.
 
-- [ ] Dedup by FilePath within a single batch, before staging
-- [ ] Same for iTunes PID — `enforceBookFilePIDUniqueness` has the identical read-committed gap
-- [ ] Regression test: batch two rows with one path, assert 1 stored row and the un-doubled total
+- [x] Dedup by FilePath within a single batch, before staging
+- [x] Same for iTunes PID — `enforceBookFilePIDUniqueness` has the identical read-committed gap
+- [x] Regression test: batch two rows with one path, assert 1 stored row and the un-doubled total
 - [ ] Decide whether existing duplicate rows need a repair pass, and measure how many exist
 
 ## Scan cache is keyed per-book but the skip decision is per-file
@@ -4964,7 +4964,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       check that no test depends on a freshly-computed (vs. copied) migration
       side effect.
 
-- [ ] **`dedup.series-dedup`'s apply path writes no undo-ledger rows and does
+- [x] **`dedup.series-dedup`'s apply path writes no undo-ledger rows and does
       not check for a running scan.** TASK-043 gave the op a dry run
       (`dry_run` defaults to true), which covers the "read before you write"
       half of the destructive-op checklist. The other half is still missing:
@@ -5136,7 +5136,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       and out of scope for #2825/#2826; noted so it is not lost. Decide whether the
       guard belongs in the primitive.
 
-- [ ] 🔴 **ORPHAN-FILES-HARD-DELETE-FAIL-OPEN** `internal/plugins/maintenance/orphan_book_files.go`
+- [x] 🔴 **ORPHAN-FILES-HARD-DELETE-FAIL-OPEN** `internal/plugins/maintenance/orphan_book_files.go`
       classifies `book_file` rows as orphans by testing membership against a map
       built from TWO unguarded dual-dispatch getters, then **hard-deletes** them.
       This is worse than SERIES-MERGE-UNGUARDED-DENOMINATOR, which only strands.
@@ -17241,7 +17241,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
       fix). Consider a Part→disc / Chapter→track parser as a fast-follow so these
       collapse with correct numbering too.
 
-- [ ] **iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**
+- [x] **iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**
   The P0 cleanup provenance census ran on prod (97,999 `.itl` tracks): **provable merge
   orphans = 1, SHA-gated removable = 0** (`pid-census --merge-provenance`). P3 retires the
   unsafe `cleanup_merged.go` handler as a guarded no-op; do NOT build bulk removal. The
