@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.19.0 -->
+<!-- version: 1.20.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -41,7 +41,9 @@ security) are HELD OPEN for the owner — never admin-merged.
 | later | TASK-337 DELETE /operations/history dry-run | weak data-loss | M | go-specialist/opus | dispatched 16:02 (handlers/operations/handler.go) |
 | later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | dispatched 16:02 (writeback_batcher.go) |
 | security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | PR #3195 HELD (16:06) |
-| later | TASK-072, 220, 352, 305, 373, 342, 345, 114, 096; security 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order; 220/114/096 touch files of held PRs |
+| later | TASK-305 migration record + version unbatched | data-loss (latent) | M | go-specialist/opus | dispatched 16:09 (migrations.go; option (a) + replay guard) |
+| security | TASK-348 mask remaining `GET /config` secrets | security | M | go-specialist/opus | dispatched 16:09 (config.go / update_service.go) |
+| later | TASK-072, 220, 352(prod run), 373, 342, 345, 114, 096; security 080, 083, 160, 335(reshaped), 365, 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
 
 ## Per-task record
 
