@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
 // last-edited: 2026-09-10
 
@@ -216,12 +216,15 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	// A running library.scan rewrites book rows underneath an apply, so the writes
 	// below must not race it. A dry run writes nothing and therefore takes no gate:
 	// parking the scanner to read would be a real cost for no reason.
+	var standDownHolder string
+	var standDownHeld bool
 	if !dryRun {
-		_, _, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "author-duplicate-merge apply")
+		holderID, held, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "author-duplicate-merge apply")
 		if sdErr != nil {
 			return fmt.Errorf("author-duplicate-merge: acquire scan stand-down: %w", sdErr)
 		}
 		defer releaseStandDown()
+		standDownHolder, standDownHeld = holderID, held
 	}
 
 	opID := registry.ReporterOpID(reporter)
@@ -325,6 +328,17 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 					"author_id", src.ID, "name", src.Name,
 					"unfiltered_refs", refCounts[src.ID], "movable_books", len(distinct))
 				continue
+			}
+
+			// The per-item half of the stand-down contract: renew the lease and
+			// treat losing it as a hard abort of the REMAINING writes. A lapsed
+			// lease means the scanner has resumed, and a scan running alongside
+			// these writes rewrites the very book rows being relinked. Inert when
+			// the gate is not held (a dry run, or a direct call with no op id), so
+			// an op with no interlock is never spuriously aborted.
+			if scanStandDownLostForApply(p.deps, standDownHolder, standDownHeld) {
+				return fmt.Errorf("author-duplicate-merge: scan stand-down lease lost after %d merge(s), "+
+					"refusing to keep writing while the scanner is running", rowOutcomes[authorDupRowMerged])
 			}
 
 			relinked, err := p.mergeAuthorInto(ctx, src, canonical, dryRun, log)
@@ -444,7 +458,8 @@ func (p *Plugin) journalAuthorMerge(
 }
 
 // logWarner is the one method journalAuthorMerge needs from the reporter's
-// logger, kept narrow so a test can assert on the warnings without a slog sink.
+// logger, declared rather than taking *slog.Logger so the helper's dependency is
+// the method it calls.
 type logWarner interface {
 	Warn(msg string, args ...any)
 }
