@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -7,10 +7,11 @@
 
 **Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
 guard), #3183 (backup verification), #3185 (orphan-file cleanup guard), #3187 (duplicate
-merge audio guard). All are open and **held for the owner's review** because they touch
-paths that move or delete library data; this summary will be updated with merge commits
-as they land. Merged: #3184 (ISBN sweep outage reporting, `2ed12521b`). Planning package:
-#3179 (`docs/agent-tasks/todo-completion-2026-09/`).
+merge audio guard), #3188 (duplicate rows in one batch). All are open and **held for the
+owner's review** because they touch paths that move or delete library data; this summary
+will be updated with merge commits as they land. Merged: #3184 (ISBN sweep outage
+reporting, `2ed12521b`), #3186 (scan reports a failed AI phase, `03286fa87`). Planning
+package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
 
 ## Executive Summary
 
@@ -56,7 +57,14 @@ as they land. Merged: #3184 (ISBN sweep outage reporting, `2ed12521b`). Planning
   checked with no result, identical to a book that truly has no ISBN anywhere. It now
   counts those separately, names which source failed and how often, and marks the run as
   failed when nothing was actually searched.
-- All seven fixes come with a test that reproduces the original problem and fails on the
+- **Two copies of one file in a single import doubled the book's length.** When a scan
+  or iTunes import handed the database two records for the same file in one batch, both
+  were saved, and the book's total duration and size were counted twice. The batch now
+  merges the later record into the earlier one before saving.
+- **A scan whose AI step failed still reported a clean finish.** If the language-model
+  service was down for the whole run, the scan finished green with nothing on its record.
+  The failure now appears as a warning on the scan's own operation record.
+- All nine fixes come with a test that reproduces the original problem and fails on the
   old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
@@ -202,3 +210,38 @@ were quietly skipped past.
 errored is reported as "errored", not "checked", the summary line names each source's
 error count, and a run where nothing was actually searched is marked failed so it shows
 red in the operations list.
+
+## 8. Two records for one file in a single batch
+
+**What it was.** Scans and iTunes imports save file records in batches of a few hundred.
+Each incoming record was matched only against records already committed to the database,
+so if the same file appeared twice in one batch (a re-observed path, or two entries with
+the same iTunes id) neither one saw the other, and both were written.
+
+**Why it mattered.** The book's totals are recomputed from its file records, so a
+duplicated 10-minute file became a 20-minute book with twice the size on disk. Those
+wrong numbers feed sorting, display, and the duplicate detector.
+
+**The fix.** The batch now keeps a running map of what it has staged and merges a later
+record into the earlier one, preferring the newer content but keeping the original
+record's identity, exactly as if the two had been saved one after the other. Tests pin
+the file-path case, the iTunes-id case, and the order of the checks, since checking the
+committed records first would reopen the hole. Whether existing duplicate records on disk
+need cleaning up is a separate decision left to the owner; the existing dry-run counting
+job reports a lower bound, and the summary in PR #3188 explains what it misses.
+
+## 9. The scan that finished green after its AI step died
+
+**What it was.** When the AI-parse queue is unavailable, the scan runs the AI batch
+inline. That phase already produced a summary of what it did and did not manage, and the
+queued version of the job already reports that summary. The scan simply threw the summary
+away and returned success.
+
+**Why it mattered.** A revoked API key or an exhausted quota, the shape of the August 16
+incident, aborted every batch, and the scan still showed a full progress bar and
+COMPLETED. The only trace was buried in the server log.
+
+**The fix.** The scan now passes the summary to its own operation record as a warning
+when the phase failed, for both the library scan and the folder auto-scan. It is a
+warning rather than a failure on purpose: an AI outage should not fail an otherwise good
+scan chunk.
