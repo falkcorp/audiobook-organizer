@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.29.0
+// version: 2.30.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 package server
 
@@ -47,6 +47,14 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// ── Instantiate Phase 2 handlers ─────────────────────────────────────────
 	cacheH := handlers.NewCacheHandler(s.metricsStore, s.storeForWiring())
 	activityH := handlers.NewActivityHandler(s.activityService, s.storeForWiring())
+	// Typed-nil guard, as for mcFileIOPool below: s.opRegistry is a concrete
+	// pointer and a nil one boxed into the interface would pass the handler's
+	// nil check and then panic.
+	var compactEnqueuer handlers.CompactionEnqueuer
+	if s.opRegistry != nil {
+		compactEnqueuer = s.opRegistry
+	}
+	activityCompactH := handlers.NewActivityCompactHandler(compactEnqueuer, s.storeForWiring())
 	readingH := handlers.NewReadingHandler(s.storeForWiring())
 	userH := handlers.NewUserHandler(s.storeForWiring())
 	splitBookH := handlers.NewSplitBookHandler(s.opRegistry, splitBookCands, s.storeForWiring())
@@ -679,7 +687,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 
 	// ── Register protected routes via per-domain methods ─────────────────────
-	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, collectionH, userH, versionsH)
+	s.wireLibraryRoutes(protected, cacheH, activityH, activityCompactH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, collectionH, userH, versionsH)
 	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, aiBackendsH, pluginsH)
 	s.wireEntitiesRoutes(protected, entitiesH)
 	s.wireOperationsRoutes(protected, opsV2H, operationsH, schedulerH)

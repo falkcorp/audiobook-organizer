@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -706,12 +706,17 @@ func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time
 			}
 			dayRows += n
 			result.EntriesDeleted += n
+			// Per chunk, not per day: a single heavy day is many chunks and
+			// each one is progress the op watchdog must hear about
+			// (activity_compact_progress.go).
+			reportCompactProgress(ctx, "sqlite", result)
 		}
 		if dayRows > 0 {
 			// Keep the WAL bounded across a long compaction spanning many days.
 			_, _ = s.writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 			result.DaysCompacted++
 		}
+		reportCompactProgress(ctx, "sqlite", result)
 	}
 	return result, nil
 }

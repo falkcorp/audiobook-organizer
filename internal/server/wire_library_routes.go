@@ -19,6 +19,7 @@ func (s *Server) wireLibraryRoutes(
 	protected *gin.RouterGroup,
 	cacheH *handlers.CacheHandler,
 	activityH *handlers.ActivityHandler,
+	activityCompactH *handlers.ActivityCompactHandler,
 	splitBookH *handlers.SplitBookHandler,
 	filesystemH *handlers.FilesystemHandler,
 	organizeH *handlers.OrganizeHandler,
@@ -36,7 +37,7 @@ func (s *Server) wireLibraryRoutes(
 	// Activity log
 	protected.GET("/activity", s.perm(auth.PermLibraryView), activityH.ListActivity)
 	protected.GET("/activity/sources", s.perm(auth.PermLibraryView), activityH.ListActivitySources)
-	protected.POST("/activity/compact", s.perm(auth.PermSettingsManage), activityH.CompactActivity)
+	protected.POST("/activity/compact", s.perm(auth.PermSettingsManage), activityCompactH.CompactActivity)
 	protected.POST("/activity/clamp-summaries", s.perm(auth.PermSettingsManage), activityH.ClampActivitySummaries)
 	protected.GET("/operations/:id/activity", s.perm(auth.PermLibraryView), activityH.ListOperationActivity)
 	// A read, despite the verb: the body carries a group's member ids, which can

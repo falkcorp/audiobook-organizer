@@ -1,6 +1,6 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.29.0
-// guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
+// version: 2.30.0
+// guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-10
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -320,6 +320,12 @@ export default function ActivityLog() {
   // Compact
   const [compactAnchor, setCompactAnchor] = useState<null | HTMLElement>(null);
   const [compacting, setCompacting] = useState(false);
+  // Outcome of the last Compact click. The endpoint only STARTS the job
+  // (202 + op id); the work itself is watched in the operations list above.
+  const [compactNotice, setCompactNotice] = useState<{
+    severity: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [customCompactDays, setCustomCompactDays] = useState('');
   const [expandedDigests, setExpandedDigests] = useState<Set<string>>(new Set());
 
@@ -803,13 +809,20 @@ export default function ActivityLog() {
     setCompactAnchor(null);
     setCompacting(true);
     try {
-      const result = await compactActivityLog(days);
-      alert(
-        `Compacted ${result.days_compacted} days, removed ${result.entries_deleted.toLocaleString()} entries`
-      );
-      loadFeed(page);
+      // 202: the compaction is now a background operation. Nothing to await
+      // here beyond the enqueue — reload the operations list so the new op
+      // shows at the top with its live log, and tell the user where to look.
+      const started = await compactActivityLog(days);
+      setCompactNotice({
+        severity: 'success',
+        message: `Compaction started (operation ${started.operation_id}) — follow it in the operations list`,
+      });
+      void loadActiveOpsFromServer();
     } catch (err) {
-      alert(`Compaction failed: ${err}`);
+      setCompactNotice({
+        severity: 'error',
+        message: err instanceof Error ? err.message : `Compaction failed: ${String(err)}`,
+      });
     } finally {
       setCompacting(false);
     }
@@ -1134,6 +1147,23 @@ export default function ActivityLog() {
 
       {/* In-flight background file operations */}
       <PendingFileOpsBanner operations={pendingFileOps} />
+
+      {/* Compact button outcome: the job was started (or refused), not finished */}
+      <Snackbar
+        open={compactNotice !== null}
+        autoHideDuration={compactNotice?.severity === 'error' ? null : 8000}
+        onClose={() => setCompactNotice(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={compactNotice?.severity ?? 'success'}
+          onClose={() => setCompactNotice(null)}
+          variant="filled"
+          data-testid="compact-notice"
+        >
+          {compactNotice?.message ?? ''}
+        </Alert>
+      </Snackbar>
 
       {/* Pinned Operations Section */}
       {showOpsSection && (

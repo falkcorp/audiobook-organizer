@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package database
 
@@ -497,6 +497,9 @@ func (s *NutsActivityStore) CompactByDay(ctx context.Context, olderThan time.Tim
 			return result, ctx.Err()
 		default:
 		}
+		// Running totals so far; the op watchdog needs to hear from a long
+		// compaction (activity_compact_progress.go).
+		reportCompactProgress(ctx, "nuts", result)
 
 		dg := days[dateKey]
 		counts := make(map[string]int)

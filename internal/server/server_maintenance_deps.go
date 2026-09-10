@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-10
 
@@ -283,7 +283,7 @@ func (s *Server) PruneOldLogs(retentionDays int) error {
 // indexes, and stays consistent rather than becoming an orphan. Repair is
 // idempotent and reports its own counts, so a nightly run that finds nothing
 // costs one scan and says zero.
-func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeDays, debugDays int) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error) {
+func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeDays, debugDays int, progress database.CompactProgress) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error) {
 	if s.activityService == nil {
 		return 0, 0, 0, 0, nil
 	}
@@ -292,7 +292,7 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 		compactionDays = 14
 	}
 	compactionCutoff := time.Now().AddDate(0, 0, -compactionDays)
-	compactResult, err := s.activityService.CompactByDay(ctx, compactionCutoff)
+	compactResult, err := s.CompactActivityEntries(ctx, compactionCutoff, progress)
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("compact activity: %w", err)
 	}
@@ -321,6 +321,21 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 	}
 
 	return compactResult.DaysCompacted, sumCount, pruneCount, repair.Deleted, nil
+}
+
+// CompactActivityEntries is the compaction pass alone: every compactable-tier
+// row older than cutoff collapsed into daily digests, on every activity
+// backend (MigratingActivityStore.CompactByDay fans out to both). It is the
+// single implementation behind both the nightly cleanup (CompactActivityLog
+// above) and the user-triggered maintenance.compact-activity-log op.
+//
+// The progress hook rides the context (database.WithCompactProgress) rather
+// than the store method's signature; see that function for why.
+func (s *Server) CompactActivityEntries(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error) {
+	if s.activityService == nil {
+		return database.CompactResult{}, nil
+	}
+	return s.activityService.CompactByDay(database.WithCompactProgress(ctx, progress), cutoff)
 }
 
 // OptimizeActivityStatistics refreshes the activity store's query-planner

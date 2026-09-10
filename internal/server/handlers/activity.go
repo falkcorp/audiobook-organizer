@@ -496,31 +496,9 @@ func (h *ActivityHandler) RecompactDigests(c *gin.Context) {
 	httputil.RespondWithOK(c, result)
 }
 
-// CompactActivity handles POST /api/v1/activity/compact.
-func (h *ActivityHandler) CompactActivity(c *gin.Context) {
-	if h.svc == nil {
-		httputil.RespondWithInternalError(c, "activity log not available")
-		return
-	}
-
-	var req struct {
-		OlderThanDays int `json:"older_than_days"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.OlderThanDays < 0 {
-		httputil.RespondWithBadRequest(c, "older_than_days must be zero or positive")
-		return
-	}
-
-	// 0 means "compact everything up to now"
-	cutoff := time.Now().AddDate(0, 0, -req.OlderThanDays)
-	result, err := h.svc.CompactByDay(c.Request.Context(), cutoff)
-	if err != nil {
-		httputil.InternalError(c, "activity compaction failed", err)
-		return
-	}
-
-	httputil.RespondWithOK(c, result)
-}
+// POST /api/v1/activity/compact moved to ActivityCompactHandler
+// (activity_compact.go) on 2026-09-10: it enqueues
+// maintenance.compact-activity-log instead of compacting inside the request.
 
 // activityEntryToOperationEntry converts an ActivityEntry to the operation
 // transcript response shape.

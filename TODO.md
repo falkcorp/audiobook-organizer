@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.52.0 -->
+<!-- version: 10.53.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -2027,11 +2027,14 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
   on a schedule. Trivial now that `CompactByDay` is bounded on SQLite. This was
   the original user ask ("a setting we can turn on that runs autocompaction as a
   scheduled task that compacts the previous day").
-- [ ] **Make the "Compact after N days" button async.** The handler
+- [x] **Make the "Compact after N days" button async.** The handler
   (`internal/server/handlers/activity.go` `CompactActivity`) still runs
   `CompactByDay` synchronously in the HTTP request. SQLite makes it bounded/fast,
   but enqueuing an op is the correct shape and removes the browser-timeout
-  coupling entirely.
+  coupling entirely. — ✅ DONE 2026-09-10: `POST /activity/compact` now enqueues
+  `maintenance.compact-activity-log` (202 + op id; 409 if already running), the op
+  reports per-chunk progress so the watchdog cannot strike it, and
+  `MigratingActivityStore.CompactByDay` compacts BOTH backends.
 - [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod.
   Two halves; the delete half is now built, the write half is not:
   - [x] **Delete the accumulated copy.** #3139 adds `maintenance.activity-reclaim`.

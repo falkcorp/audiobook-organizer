@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // Package database — backend-migration wrapper for the activity log.
 //
@@ -21,11 +21,19 @@
 //     after the read flip.
 //   - Reads (Query, GetDistinctSources): the ACTIVE backend (primary until the
 //     flip, secondary after).
-//   - Maintenance that rewrites/reclaims storage (CompactByDay, Summarize,
-//     Prune, RecompactDigests, RepairActivityIndexes, MigrateSystemActivityLogs):
-//     the ACTIVE backend ONLY. This is the point of the whole exercise — after
-//     the flip, the "Compact after N days" button runs SQLite's bounded
-//     CompactByDay, never Pebble's unbounded, timeout-prone path.
+//   - Maintenance that rewrites/reclaims storage (Summarize, Prune,
+//     RecompactDigests, RepairActivityIndexes, MigrateSystemActivityLogs):
+//     the ACTIVE backend ONLY.
+//   - CompactByDay: BOTH, since 2026-09-10. It was active-only until then, on
+//     the reasoning that after the flip the "Compact after N days" button
+//     should run SQLite's bounded CompactByDay and never Pebble's unbounded,
+//     timeout-prone path. That reasoning held only while compaction ran inside
+//     an HTTP request; it now runs as a background op
+//     (maintenance.compact-activity-log), so Pebble's duration is a progress
+//     line, not a browser timeout. And the inactive backend is still taking
+//     every write (Record goes to both, always), so compacting only the active
+//     one left the rollback mirror growing unbounded — the same asymmetry
+//     OptimizeStatistics below was fixed for on 2026-09-09.
 //   - OptimizeStatistics: BOTH. It refreshes query-planner statistics, which is
 //     read-only bookkeeping rather than a storage rewrite, and the INACTIVE
 //     backend is still taking every write — so leaving its planner un-analyzed
@@ -166,8 +174,78 @@ func (m *MigratingActivityStore) Prune(olderThan time.Time, tier string) (int, e
 	return m.active().Prune(olderThan, tier)
 }
 
+// CompactByDay compacts BOTH backends and returns the summed counters.
+//
+// Both backends receive every write (Record above), so both accumulate the
+// compactable rows; compacting only the active one would leave the rollback
+// mirror growing unbounded. See the routing table in the package comment for
+// why this was active-only until 2026-09-10.
+//
+// Both backends are always attempted: a primary failure does not skip the
+// secondary, because the two are independent stores and skipping one silently
+// is how a "compaction ran" log line ends up describing half the data. The
+// returned error is the first one encountered (primary before secondary) and
+// wraps the other when both fail, so neither is lost. The counters are the sum
+// of what each backend actually did, including a backend that then failed.
+//
+// Per-backend completion events go to any WithCompactProgress hook on ctx
+// (Done=true, with that backend's own counters and error), so a caller that
+// wants per-store numbers reads them from the hook rather than from the sum.
 func (m *MigratingActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {
-	return m.active().CompactByDay(ctx, olderThan)
+	var total CompactResult
+
+	primaryRes, primaryErr := m.primary.CompactByDay(ctx, olderThan)
+	total.DaysCompacted += primaryRes.DaysCompacted
+	total.EntriesDeleted += primaryRes.EntriesDeleted
+	if primaryErr != nil {
+		slog.Warn("[activity-migrate] primary CompactByDay failed", "err", primaryErr,
+			"days_compacted", primaryRes.DaysCompacted, "entries_deleted", primaryRes.EntriesDeleted)
+	}
+	reportCompactDone(ctx, activityBackendName(m.primary), primaryRes, primaryErr)
+
+	// A canceled context is the ONE reason not to try the secondary: the work
+	// was asked to stop, not merely to fail over.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return total, ctxErr
+	}
+
+	secondaryRes, secondaryErr := m.secondary.CompactByDay(ctx, olderThan)
+	total.DaysCompacted += secondaryRes.DaysCompacted
+	total.EntriesDeleted += secondaryRes.EntriesDeleted
+	if secondaryErr != nil {
+		slog.Warn("[activity-migrate] secondary CompactByDay failed", "err", secondaryErr,
+			"days_compacted", secondaryRes.DaysCompacted, "entries_deleted", secondaryRes.EntriesDeleted)
+	}
+	reportCompactDone(ctx, activityBackendName(m.secondary), secondaryRes, secondaryErr)
+
+	switch {
+	case primaryErr != nil && secondaryErr != nil:
+		return total, fmt.Errorf("activity-migrate compact: primary: %w (secondary also failed: %v)", primaryErr, secondaryErr)
+	case primaryErr != nil:
+		return total, fmt.Errorf("activity-migrate compact: primary: %w", primaryErr)
+	case secondaryErr != nil:
+		return total, fmt.Errorf("activity-migrate compact: secondary: %w", secondaryErr)
+	}
+	return total, nil
+}
+
+// activityBackendName labels a backend for CompactProgressEvent.Backend using
+// the same vocabulary the stores use for their own events. Wrappers
+// (instrumentation) are unwrapped by type switch; an unknown type is named by
+// its Go type so a log line is never blank.
+func activityBackendName(s ActivityStorer) string {
+	switch v := s.(type) {
+	case *SQLActivityStore:
+		return "sqlite"
+	case *PebbleActivityStore:
+		return "pebble"
+	case *NutsActivityStore:
+		return "nuts"
+	case *InstrumentedActivityStorer:
+		return activityBackendName(v.store)
+	default:
+		return fmt.Sprintf("%T", s)
+	}
 }
 
 func (m *MigratingActivityStore) RecompactDigests(ctx context.Context) (RecompactResult, error) {
