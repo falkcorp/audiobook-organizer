@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.18.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -30,15 +30,18 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | PR #3187 HELD (15:35) |
 | 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3189 HELD (15:44) |
 | 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3190 HELD (15:48) |
-| 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | dispatched 15:36 (series_dedup.go) |
+| 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | PR #3191 HELD (15:57) |
 | 3 | TASK-359 series-merge unguarded denominator | data-loss | M | | queued — touches pebble_store.go → wait for #3182/#3185 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
 | 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued — pebble_store.go; wait for #3182/#3185 |
-| 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | dispatched 15:43 (delete the job + absence test; never run it) |
+| 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | PR #3192 HELD (16:00); job never run |
 | 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued — memdb_reads.go; wait for #3185 |
-| 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | dispatched 15:46 (DedupAuthorTab.tsx) |
+| 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | PR #3193 HELD (16:00) |
 | later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | dispatched 15:50 (itl_cleanup.go — no overlap) |
-| later | TASK-072, 220, 337, 340, 352, 305, 373, 342, 345, 114, 096; security 308, 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order; 220/114/096 touch files of held PRs |
+| later | TASK-337 DELETE /operations/history dry-run | weak data-loss | M | go-specialist/opus | dispatched 16:02 (handlers/operations/handler.go) |
+| later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | dispatched 16:02 (writeback_batcher.go) |
+| security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | dispatched 16:02 (realtime/events.go) |
+| later | TASK-072, 220, 352, 305, 373, 342, 345, 114, 096; security 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order; 220/114/096 touch files of held PRs |
 
 ## Per-task record
 
@@ -129,4 +132,25 @@ security) are HELD OPEN for the owner — never admin-merged.
 - `SeriesRefCounts` fetched once per run (fail closed); apply deletes only when `movedAll && refCounts[from] <= len(books)`, held-back count in the summary; dry run previews the same. 3 tests. Gate exit 0, staticcheck 0. Stale TODO note corrected: no `OpsStore` widening needed (`author_purge_empty.go` already does this).
 - Worker used `git stash` despite the ban; stash stack verified unchanged (4 pre-existing entries).
 - PR #3190 — HELD for owner. `TODO.md` L2901 to check off on merge.
+
+### TASK-358 — TODO L4967 series-dedup undo ledger + scan stand-down
+
+- Worktree `.worktrees/dedup-358`, branch `agent/dedup-358-dedup-series-dedup-s-apply-path-writes-n`, sha `2c3536fa0` (based on `2ed12521b`).
+- `series_dedup.go` 1.10.0: `ScanStandDownController` interface (`*server.Server` satisfies it); `DedupSeries(ctx, store, opID, scan, progress, dryRun)` refuses apply without opID / controller / stand-down; one `metadata_update`/`series_id` ledger row per reassigned book and one `series_delete` row per deleted series; failed ledger writes land in `result.Errors`; lease renewed per group, lapse aborts. `duplicates_ops.go` 2.16.0 passes `opID` + server. 6 tests in `series_dedup_undo_ledger_test.go`; 2 test files updated for the signature.
+- Gate exit 0 (build/vet/test dedup, `-race`, staticcheck only the pre-existing `server_helpers.go:62`). Rollback YES: dry-run default unchanged; `series_delete` rows are audit-only (undo engine has no case for that type); stand-down does not quiesce a resumed scan; lease-lapse abort skips `dedupCache.InvalidateAll()` (same as the pre-existing cancelled path).
+- PR #3191 — HELD for owner. `TODO.md` L4967 to check off on merge.
+
+### TASK-338 — TODO L1294 delete `fix-library-states`
+
+- Worktree `.worktrees/maintenance-338`, branch `agent/maintenance-338-fix-or-unregister-fix-library-states`, sha `d30529cc1`. The job was never run anywhere.
+- `fix_library_states.go` deleted (registration goes with it); `fix_library_states_test.go` 2.0.0 is an absence test (`Get` errors AND id absent from `All()`; pre-fix "An error is expected but got nil"); `wantJobCount` 38→37; dispatcher comment corrected from a stale "18 of 34" to the measured 21 of 37; id removed from the `openapi.json` maintenance enum. Vocabulary sweep: no consumer of `present`/`missing` `library_state` anywhere in `internal/`, `cmd/`, `web/src`.
+- Gate exit 0 (build/vet/test maintenance + server; staticcheck only the pre-existing `server_helpers.go:62`; JSON valid). Rollback: removes a write path.
+- PR #3192 — HELD for owner. `TODO.md` L1294 ("Fix or unregister `fix-library-states`") to check off on merge.
+
+### TASK-304 — WEB-04 author-merge popover error state
+
+- Worktree `.worktrees/web-304`, branch `agent/web-304-author-merge-preview-popover-shows-an-au`, shas `1443157f6` + `4f825a3f7`.
+- `api.ts` 2.84.0: `getBooksByAuthor` throws on non-OK (one caller). `DedupAuthorTab.tsx` 1.2.1: `Promise.allSettled`, `failedCount`, "Could not load N of M" banner with a working Retry; "No books found" only on a successful empty fetch. `group.book_count` verified server-supplied. 3 tests (pre-fix "Unable to find an element with the text: /could not load/i").
+- Gate: lint 0 errors, tsc exit 0, vitest 1070/1070, build exit 0, prettier clean. Rollback: frontend only.
+- PR #3193 — HELD for owner. No `TODO.md` line exists for WEB-04.
 

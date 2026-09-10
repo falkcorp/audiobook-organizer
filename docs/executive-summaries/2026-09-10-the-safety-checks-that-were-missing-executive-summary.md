@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -8,7 +8,8 @@
 **Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
 guard), #3183 (backup verification), #3185 (orphan-file cleanup guard), #3187 (duplicate
 merge audio guard), #3188 (duplicate rows in one batch), #3189 and #3190 (two more
-series-delete guards). All are open and **held for the owner's review** because they touch paths that move or delete library data; this summary
+series-delete guards), #3191 (series-dedup undo record and scan check), #3192 (the
+deleted "fix library states" job), #3193 (author-merge preview error state). All are open and **held for the owner's review** because they touch paths that move or delete library data; this summary
 will be updated with merge commits as they land. Merged: #3184 (ISBN sweep outage
 reporting, `2ed12521b`), #3186 (scan reports a failed AI phase, `03286fa87`). Planning
 package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
@@ -70,7 +71,21 @@ package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
   deleted, leaving those books pointing at nothing. Both now consult the unfiltered count
   first and keep the series when anything still references it. This closes the last two
   of four series-delete paths; the first two were fixed in August.
-- All eleven fixes come with a test that reproduces the original problem and fails on
+- **The series de-duplicator left no record of what it changed.** The job that folds
+  duplicate series into one moved every book across and deleted the extras without
+  writing anything to the undo ledger, and it could run while a library scan was
+  re-creating the very series it was deleting. It now refuses to start while a scan is
+  running or queued, records every book it moves so the move can be undone, and records
+  every series it deletes.
+- **A maintenance job that would have emptied the library view was one click away.** The
+  "fix library states" job stamped every book with a status value nothing in the app
+  reads, so the audiobook shelf would have shown nothing after it ran. It had never been
+  run. It is now deleted outright, with a test that fails if anyone adds it back.
+- **The author-merge preview could show an empty book list for an author with books.**
+  When the lookup behind that preview failed, the screen said "No books found," which is
+  what a reviewer would read as "safe to merge." It now shows a load error with a retry
+  button and only says "no books" when the lookup actually succeeded with none.
+- All fourteen fixes come with a test that reproduces the original problem and fails on
   the old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
@@ -272,3 +287,63 @@ books they can see are still merged; only the delete is held back, and the run's
 says how many were held and why. The dry-run preview of the denumber job reports the same
 held-back count, so what it promises matches what apply does. If the reference count
 cannot be read at all, both jobs stop rather than guess.
+
+## 11. The series cleanup that kept no record
+
+**What it was.** The series de-duplicator finds groups of series that are really the
+same one (differing only in punctuation or numbering), moves every book onto one keeper,
+and deletes the rest. Every other bulk change in the app writes a line to an undo ledger
+for each record it touches. This one wrote nothing. It also had no check for whether a
+library scan was running, and a scan re-derives series from folder names, so the two
+could fight over the same records.
+
+**Why it mattered.** If the de-duplicator picked the wrong keeper or merged two series
+that were not actually the same, there was no record of which books had moved and no way
+to undo it. A scan running at the same time could re-create a series the job had just
+deleted, or overwrite a book's series assignment mid-move, leaving the library in a state
+neither feature intended.
+
+**The fix.** Before it changes anything, the job now asks the scanner to stand down and
+refuses to run if a scan is active or queued. It writes one undo-ledger line per book it
+moves, so those moves can be reversed from the operations screen, and one audit line per
+series it deletes. If writing a ledger line fails, the job reports that specific book or
+series in its result rather than continuing silently. The dry-run preview, which is
+still the default, touches nothing. One known limit: the "series deleted" lines are a
+record only; restoring a deleted series from the undo screen is not yet supported and is
+tracked separately.
+
+## 12. The job that would have emptied the shelf
+
+**What it was.** A maintenance job named "fix library states" was meant to reconcile each
+book's status with whether its files were present on disk. It did that by writing the
+words "present" or "missing" into a field the rest of the app reads as "organized" or
+"imported." Nothing anywhere reads "present" or "missing." It was listed in the
+maintenance screen alongside the safe jobs.
+
+**Why it mattered.** The audiobook shelf only shows books marked "organized." Running
+this job would have re-labelled every book to a value that filter rejects, and the shelf
+would have gone empty. Recovering would have meant a full re-scan. It had never been run,
+and the to-do list carried a "do not run" warning, but a warning in a document is not a
+control.
+
+**The fix.** The job is deleted, not hidden. Its registration is gone, its name is
+removed from the API description, and a test now fails if a job with that name is ever
+registered again. A sweep confirmed nothing else in the app produces or consumes those
+two status words.
+
+## 13. The merge preview that could not tell "empty" from "failed"
+
+**What it was.** On the duplicate-authors screen, a reviewer can open a preview of each
+author's books before deciding to merge two authors. When the lookup behind that preview
+failed for any reason, the code treated the failure as an empty result and the preview
+said "No books found."
+
+**Why it mattered.** "No books found" reads as "this author record is empty, merging is
+harmless." A temporary server error could therefore steer a reviewer into merging an
+author who actually had a full shelf of books. The merge itself is reversible, but only
+if someone notices.
+
+**The fix.** The preview now tracks failures separately from empty results. A failed
+lookup shows "Could not load" with a retry button that actually re-fetches, and "No books
+found" appears only when the lookup succeeded and returned nothing. The count shown next
+to the merge button comes from the server independently and was never affected.
