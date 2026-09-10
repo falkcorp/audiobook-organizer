@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.85.0
+// version: 1.86.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-09
 
@@ -957,11 +957,15 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			// 2026-08-16 rescan died -- mid-walk of a folder holding 17,469
 			// books, with the process demonstrably busy the whole time.
 			//
-			// The total is genuinely unknown while discovering, so current and
-			// total move together; that is the same "growing denominator"
-			// convention scanFolder already uses for its per-book counter.
+			// The total is genuinely unknown while discovering, so report an
+			// INDETERMINATE total (0). The UI renders total<=0 as an animated
+			// bar plus the count from the message, instead of a determinate bar
+			// pinned at 100% (which is what total==current produced until
+			// 2026-09-09). total=0 still touches the watchdog liveness clock
+			// (reporter_db.UpdateProgress stamps it before reading any value),
+			// so the anti-hang guarantee above is preserved.
 			if n := int(dirsFound.Add(1)); n%every == 0 {
-				scanLog.UpdateProgress(n, n, fmt.Sprintf("Discovering folders: %d found (%s)", n, filepath.Base(path)))
+				scanLog.UpdateProgress(n, 0, fmt.Sprintf("Discovering folders: %d found (%s)", n, filepath.Base(path)))
 			}
 		}
 		return nil
@@ -1040,7 +1044,11 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			// thing reporting during what may be hours of tag reading.
 			localBooks := groupFilesIntoBooks(ctx, audioFiles, func() {
 				if n := int(filesScanned.Add(1)); n%every == 0 {
-					scanLog.UpdateProgress(n, n,
+					// Indeterminate total (0): the file count for this phase is
+					// not a bounded denominator (it is still climbing), so the UI
+					// shows an animated bar + the count rather than a bar pinned
+					// at 100% from total==current. See the discovery-phase note.
+					scanLog.UpdateProgress(n, 0,
 						fmt.Sprintf("Reading tags: %d files (%s)", n, filepath.Base(scanDir)))
 				}
 			})
@@ -1109,7 +1117,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	scanLog.Info("Processing audiobook metadata (using %d workers)...", workers)
 
 	total := len(books)
-	scanLog.Info("scan started: %d total files", total)
+	// total is a count of grouped BOOKS (len(books)), not files; a multi-file
+	// audiobook is one unit here. The label said "files" until 2026-09-09.
+	scanLog.Info("scan started: %d books to process", total)
 
 	// Snapshot swallowed-store-failure counters so the completion summary can
 	// report this run's delta (audit 2026-07-17 H5).
@@ -1155,10 +1165,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				progressFn(processed, total, path)
 			}
 			if processed%100 == 0 || processed == total {
-				scanLog.Info("scan progress: %d/%d files processed", processed, total)
+				scanLog.Info("scan progress: %d/%d books processed", processed, total)
 			}
 		}
-		scanLog.Info("scan complete: %d files processed", total)
+		scanLog.Info("scan complete: %d books processed", total)
 	})
 
 	// Build the AI fallback parser from the configured LLM backend. The routing
