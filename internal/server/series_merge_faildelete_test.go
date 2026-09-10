@@ -1,7 +1,7 @@
 // file: internal/server/series_merge_faildelete_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c9e17ab-52d3-4f80-b6a1-9e35b7c0284f
-// last-edited: 2026-08-24
+// last-edited: 2026-09-10
 
 package server
 
@@ -207,7 +207,9 @@ func TestMergeSeriesGroupHelper_DoesNotDeleteWhenABookDoesNotResolve(t *testing.
 		return nil
 	}
 
-	err := mergeSeriesGroupHelper(store, keepID, []int{mergeID})
+	// refCounts is irrelevant to this test -- the hydration failure must return
+	// a hard error before the reference guard is ever reached.
+	_, _, err := mergeSeriesGroupHelper(store, keepID, []int{mergeID}, map[int]int{mergeID: 2})
 	if err == nil {
 		t.Fatal("a book that cannot be hydrated must fail the merge, not be skipped -- " +
 			"got nil error, so the caller records this merge as successful")
