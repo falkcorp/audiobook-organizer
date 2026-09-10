@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.17.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -26,7 +26,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | PR #3188 HELD (15:40); L4244 decision surfaced to owner |
 
 **Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
-| 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
+| 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued — memdb_reads.go; wait for #3185 (and #3182 same guard family) |
 | 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | PR #3187 HELD (15:35) |
 | 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3189 HELD (15:44) |
 | 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3190 HELD (15:48) |
@@ -37,7 +37,8 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | dispatched 15:43 (delete the job + absence test; never run it) |
 | 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued — memdb_reads.go; wait for #3185 |
 | 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | dispatched 15:46 (DedupAuthorTab.tsx) |
-| later | TASK-140, 072, 220, 337, 340, 352, 305, 373, 342, 345, 114, 096; security 308, 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order |
+| later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | dispatched 15:50 (itl_cleanup.go — no overlap) |
+| later | TASK-072, 220, 337, 340, 352, 305, 373, 342, 345, 114, 096; security 308, 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order; 220/114/096 touch files of held PRs |
 
 ## Per-task record
 
