@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
-// last-edited: 2026-08-23
+// last-edited: 2026-09-10
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -22,6 +23,11 @@ func newPurgePlugin(authors []database.Author, books, files map[int]int, deleted
 		GetAllAuthorsFunc:          func() ([]database.Author, error) { return authors, nil },
 		GetAllAuthorBookCountsFunc: func() (map[int]int, error) { return books, nil },
 		GetAllAuthorFileCountsFunc: func() (map[int]int, error) { return files, nil },
+		// The op reads the UNFILTERED file counter (database.AuthorFileRefCounts).
+		// The fixture's `files` map is the same number seen through both, which is
+		// what a store with no trashed / non-primary / junction-only rows looks
+		// like; the divergence cases get their own fixtures below.
+		GetAllAuthorFileRefCountsFunc: func() (map[int]int, error) { return files, nil },
 		DeleteAuthorFunc: func(id int) error {
 			*deleted = append(*deleted, id)
 			return nil
@@ -161,9 +167,9 @@ func TestPurgeEmptyAuthors_FileCountFailureAbortsRatherThanDeleting(t *testing.T
 	authors, books, _ := purgeFixture()
 	var deleted []int
 	store := &database.MockStore{
-		GetAllAuthorsFunc:          func() ([]database.Author, error) { return authors, nil },
-		GetAllAuthorBookCountsFunc: func() (map[int]int, error) { return books, nil },
-		GetAllAuthorFileCountsFunc: func() (map[int]int, error) { return nil, context.DeadlineExceeded },
+		GetAllAuthorsFunc:             func() ([]database.Author, error) { return authors, nil },
+		GetAllAuthorBookCountsFunc:    func() (map[int]int, error) { return books, nil },
+		GetAllAuthorFileRefCountsFunc: func() (map[int]int, error) { return nil, context.DeadlineExceeded },
 		DeleteAuthorFunc: func(id int) error {
 			deleted = append(deleted, id)
 			return nil
@@ -205,6 +211,9 @@ func refPurgeStore(deleted *[]int, refCounts map[int]int, refErr error) *databas
 			return map[int]int{1: 12, 2: 0, 3: 0}, nil
 		},
 		GetAllAuthorFileCountsFunc: func() (map[int]int, error) {
+			return map[int]int{1: 40, 2: 0, 3: 0}, nil
+		},
+		GetAllAuthorFileRefCountsFunc: func() (map[int]int, error) {
 			return map[int]int{1: 40, 2: 0, 3: 0}, nil
 		},
 		// UNFILTERED: 2 is still held by two books.
@@ -356,5 +365,98 @@ func TestPurgeEmptyAuthors_DryRunAndApplyAgreeOnEligibleSet(t *testing.T) {
 	// The dry run reported 1 eligible; the apply run deleted exactly that row.
 	if len(applyDeleted) != 1 || applyDeleted[0] != 3 {
 		t.Fatalf("apply deleted %v, want exactly author 3 — the set the dry run promised", applyDeleted)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TASK-363: the file-safety gate must read the UNFILTERED file count.
+//
+// GetAllAuthorFileCounts is a DISPLAY counter — primary-version index only,
+// soft-deleted books skipped, books mapped to authors through the legacy
+// Book.AuthorID field alone. It returns an unconditional 0 for a junction-only
+// co-author, for an author whose books are all trashed, and for one whose books
+// are all non-primary, in every case while those books' files sit on disk.
+// require_zero_files is documented as "🔴 THIS IS THE SAFETY THAT MATTERS" and
+// was reading exactly that number.
+// ---------------------------------------------------------------------------
+
+// fileRefPurgeStore builds a store whose DISPLAY file count and UNFILTERED file
+// count disagree for author 2 — the divergence every one of the three missed
+// populations produces.
+//
+// 🔴 FIXTURE CAVEAT, stated rather than left for a reviewer to reconstruct: the
+// unfiltered REF count is stubbed to zero for author 2. In production it would
+// be non-zero (the same books that hold the files hold the author), and
+// runPurgeEmptyAuthors skips on refCounts before it ever reaches the file gate,
+// so this exact state is not producible with both counters intact. The stub
+// exercises the FILE gate in isolation; it is not a claim about reachability.
+func fileRefPurgeStore(deleted *[]int, displayFiles map[int]int, refFiles func() (map[int]int, error)) *database.MockStore {
+	authors := []database.Author{
+		{ID: 1, Name: "Has Live Books"},
+		{ID: 2, Name: "Looks Empty But Its Files Are Real"},
+		{ID: 3, Name: "- Genuinely Junk"},
+	}
+	return &database.MockStore{
+		GetAllAuthorsFunc: func() ([]database.Author, error) { return authors, nil },
+		GetAllAuthorBookCountsFunc: func() (map[int]int, error) {
+			return map[int]int{1: 12, 2: 0, 3: 0}, nil
+		},
+		GetAllAuthorBookRefCountsFunc: func() (map[int]int, error) {
+			return map[int]int{1: 12}, nil
+		},
+		GetAllAuthorFileCountsFunc:    func() (map[int]int, error) { return displayFiles, nil },
+		GetAllAuthorFileRefCountsFunc: refFiles,
+		DeleteAuthorFunc: func(id int) error {
+			*deleted = append(*deleted, id)
+			return nil
+		},
+	}
+}
+
+// 🔴 THE BUG. Author 2's books are trashed / non-primary / credit it only
+// through the junction, so the display counter says it has zero files and the
+// gate waved it through. Its files are still on disk, and an author's name
+// lives only in the row the purge deletes.
+func TestPurgeEmptyAuthors_FileGateReadsTheUnfilteredCount(t *testing.T) {
+	var deleted []int
+	display := map[int]int{1: 40, 2: 0, 3: 0}
+	unfiltered := map[int]int{1: 40, 2: 9}
+	store := fileRefPurgeStore(&deleted, display,
+		func() (map[int]int, error) { return unfiltered, nil })
+
+	p := &Plugin{deps: &fakeDeps{store: store}}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("runPurgeEmptyAuthors: %v", err)
+	}
+
+	for _, id := range deleted {
+		if id == 2 {
+			t.Fatalf("deleted author 2, which has 9 files the display counter cannot see (deleted=%v)", deleted)
+		}
+	}
+	if len(deleted) != 1 || deleted[0] != 3 {
+		t.Fatalf("deleted %v, want exactly the genuinely-junk author 3", deleted)
+	}
+}
+
+// 🔴 A MISSING SIGNAL IS NOT PERMISSION, second edition. The unfiltered counter
+// refuses on a memdb known to be short rather than falling through to a scan
+// that would read the files back out of that same short projection. The op must
+// carry the refusal, not treat it as "zero files".
+func TestPurgeEmptyAuthors_ShortMemdbFileCountAbortsRatherThanDeleting(t *testing.T) {
+	var deleted []int
+	store := fileRefPurgeStore(&deleted, map[int]int{1: 40, 2: 0, 3: 0},
+		func() (map[int]int, error) { return nil, database.ErrMemdbIncomplete })
+
+	p := &Plugin{deps: &fakeDeps{store: store}}
+	err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{})
+	if err == nil {
+		t.Fatal("a short memdb did not abort the op")
+	}
+	if !errors.Is(err, database.ErrMemdbIncomplete) {
+		t.Errorf("error %v does not wrap ErrMemdbIncomplete — the cause must survive to the operator", err)
+	}
+	if len(deleted) != 0 {
+		t.Fatalf("deleted %v despite being unable to evaluate the file-safety gate", deleted)
 	}
 }

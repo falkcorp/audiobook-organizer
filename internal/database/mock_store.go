@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.103.0
+// version: 1.104.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-10
 
@@ -177,6 +177,14 @@ type MockStore struct {
 	// does not care about reference counting still lets deletes through. Tests
 	// that assert an author must survive have to say so explicitly.
 	GetAllAuthorBookRefCountsFunc func() (map[int]int, error)
+
+	// GetAllAuthorFileRefCountsFunc backs the AuthorFileRefStore capability
+	// (internal/database/author_file_refs.go). It deliberately does NOT follow
+	// the permissive nil-func contract above: an unset func makes the method
+	// return an error, so a test that reaches the purge file-safety gate without
+	// stubbing it fails loudly instead of being handed an empty map and quietly
+	// asserting against a dead guard.
+	GetAllAuthorFileRefCountsFunc func() (map[int]int, error)
 
 	// Metadata
 	GetMetadataFieldStatesFunc   func(bookID string) ([]MetadataFieldState, error)
@@ -812,6 +820,20 @@ func (m *MockStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 		return m.GetAllAuthorBookRefCountsFunc()
 	}
 	return map[int]int{}, nil
+}
+
+// GetAllAuthorFileRefCounts satisfies AuthorFileRefStore so a MockStore can
+// stand in for a store that answers the UNFILTERED author FILE question.
+//
+// Unset means UNANSWERABLE, not zero. Returning an empty map here would mirror
+// the very defect author_file_refs.go exists to close — a filtered/absent count
+// read as "this author has no files" by a gate that deletes on it.
+func (m *MockStore) GetAllAuthorFileRefCounts() (map[int]int, error) {
+	if m.GetAllAuthorFileRefCountsFunc != nil {
+		return m.GetAllAuthorFileRefCountsFunc()
+	}
+	return nil, fmt.Errorf("MockStore.GetAllAuthorFileRefCountsFunc is not set: " +
+		"a test reaching the author file-safety gate must say what the unfiltered file count is")
 }
 
 func (m *MockStore) UpdateSeriesName(id int, name string) error {

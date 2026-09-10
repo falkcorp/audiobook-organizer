@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-08-23
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -147,9 +147,25 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// File counts are only consulted for the safety check, so a failure here must
 	// not be silently treated as "zero files" — that would turn a missing signal
 	// into permission to delete. Fail the op instead.
+	//
+	// AND IT MUST BE THE UNFILTERED COUNTER. store.GetAllAuthorFileCounts is a
+	// DISPLAY counter, the file-side twin of the GetAllAuthorBookCounts problem
+	// argued at length below: it scans the primary-version index only, skips
+	// soft-deleted books, and maps books to authors through the legacy
+	// Book.AuthorID field alone. So it returns an unconditional zero for a
+	// junction-only co-author, for an author whose books are all trashed, and for
+	// one whose books are all non-primary — while every one of those books' files
+	// is still on disk. Reading it here made "🔴 THE SAFETY THAT MATTERS" report
+	// clean for exactly the rows it was written to hold back.
+	//
+	// database.AuthorFileRefCounts counts non-missing files over every book that
+	// references the author by ANY route, in ANY state, and refuses outright
+	// (ErrMemdbIncomplete) rather than answering from a memdb known to be missing
+	// rows. Its nil-capability case arrives here as an error too, so there is no
+	// silent fallback to the filtered count.
 	var fileCounts map[int]int
 	if params.requireZeroFiles() {
-		fileCounts, err = store.GetAllAuthorFileCounts()
+		fileCounts, err = database.AuthorFileRefCounts(store)
 		if err != nil {
 			return fmt.Errorf("author file counts (needed for the require_zero_files guard): %w", err)
 		}
