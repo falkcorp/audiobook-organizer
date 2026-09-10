@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.86.0
+// version: 1.87.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package scanner
 
@@ -149,7 +149,7 @@ type Scanner interface {
 	ScanDirectory(rootDir string, scanLog logger.Logger) ([]Book, error)
 	ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, scanLog logger.Logger) ([]Book, error)
 	ProcessBooks(books []Book, scanLog logger.Logger) error
-	ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger) error
+	ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger, onAIPhaseWarning ...func(string)) error
 	ComputeFileHash(filePath string) (string, error)
 }
 
@@ -1103,9 +1103,15 @@ func ProcessBooks(books []Book, scanLog logger.Logger) error {
 
 // ProcessBooksParallel processes books with parallel workers for improved performance.
 // If scanLog is nil, a default logger is used.
-func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger) error {
+//
+// onAIPhaseWarning, if supplied (there is normally at most one; variadic only
+// so every existing caller and test needs no change, matching
+// groupFilesIntoBooks' onFileScanned above), is invoked with each line of a
+// failed inline AI-parse phase's AIPhaseSummary -- see AIPhaseSummary.ReportTo
+// for why this exists and why it is NOT routed through UpdateProgress.
+func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger, onAIPhaseWarning ...func(string)) error {
 	if activeScanner != nil {
-		return activeScanner.ProcessBooksParallel(ctx, books, workers, progressFn, scanLog)
+		return activeScanner.ProcessBooksParallel(ctx, books, workers, progressFn, scanLog, onAIPhaseWarning...)
 	}
 	if scanLog == nil {
 		scanLog = logger.New("scanner")
@@ -1696,13 +1702,24 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// skipping the AI phase would leave books permanently unparsed with nothing
 	// in the log tying it to the queue.
 	if aiEnabled && len(aiCandidates) > 0 {
+		// warnAI fans a failed inline AI-parse phase out to every
+		// onAIPhaseWarning callback the caller supplied (see the doc comment
+		// on ProcessBooksParallel and on AIPhaseSummary.ReportTo). Built once
+		// here so both branches below share it.
+		warnAI := func(msg string) {
+			for _, fn := range onAIPhaseWarning {
+				if fn != nil {
+					fn(msg)
+				}
+			}
+		}
 		queued, err := enqueueAIParse(ctx, books, aiCandidates, scanLog)
 		switch {
 		case err == nil:
 			// Queued. The operation saves its own results and stamps the scan
 			// cache for each book it attempts.
 		case errors.Is(err, ErrAIParseEnqueueUnavailable):
-			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog, saveBookAndReportPath)
+			runAIBatchPhase(ctx, aiParser, books, aiCandidates, scanLog, saveBookAndReportPath).ReportTo(warnAI)
 		default:
 			// Only the candidates that were NOT accepted. The chunks already
 			// queued cannot be recalled, and parsing them inline as well would
@@ -1711,7 +1728,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			scanLog.Warn("failed to queue AI parsing after %d of %d candidate(s) (%v); parsing the remaining %d inline",
 				queued, len(aiCandidates), err, len(remaining))
 			if len(remaining) > 0 {
-				runAIBatchPhase(ctx, aiParser, books, remaining, scanLog, saveBookAndReportPath)
+				runAIBatchPhase(ctx, aiParser, books, remaining, scanLog, saveBookAndReportPath).ReportTo(warnAI)
 			}
 		}
 	}

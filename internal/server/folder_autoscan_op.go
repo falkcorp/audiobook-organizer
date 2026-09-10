@@ -1,7 +1,7 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 //
 // folder_autoscan_op registers the "library.folder-auto-scan" UOS v2 OperationDef.
 // This op is enqueued when a new import path is added to the library; it replicates
@@ -87,7 +87,14 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 			// Process the books to extract metadata (parallel).
 			if len(books) > 0 {
 				scanLog.Info("Processing metadata for %d books using %d workers", len(books), workers)
-				if err := scanner.ProcessBooksParallel(ctx, books, workers, nil, scanLog); err != nil {
+				// SF-02: surface a fully-aborted inline AI-parse phase into this
+				// op's own record via reporter.Log, matching library.scan's
+				// wiring in library_core_ops.go. Deliberately non-fatal --
+				// ProcessBooksParallel still returns nil for an LLM outage, so
+				// this does not turn a dead AI backend into a failed autoscan.
+				if err := scanner.ProcessBooksParallel(ctx, books, workers, nil, scanLog, func(msg string) {
+					_ = reporter.Log(slog.LevelWarn, msg)
+				}); err != nil {
 					return fmt.Errorf("failed to process books: %w", err)
 				}
 

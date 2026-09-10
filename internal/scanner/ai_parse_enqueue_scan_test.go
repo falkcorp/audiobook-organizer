@@ -1,12 +1,13 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
-// last-edited: 2026-08-25
+// last-edited: 2026-09-10
 
 package scanner
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -148,4 +149,92 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 	require.False(t, stamped,
 		"the scan stamped the scan cache for a book whose AI parse has only been queued; "+
 			"a dropped batch would now be unrecoverable and the next scan would skip the file")
+}
+
+// TestProcessBooksParallelReportsFailedInlineAIPhase is the SF-02 regression
+// test: an inline AI-parse phase (the queue unavailable, so
+// ErrAIParseEnqueueUnavailable drives scanner.go's runAIBatchPhase call at
+// its first call site) that aborts against a dead backend must reach the
+// caller through onAIPhaseWarning, not disappear the way the queued AIPhaseSummary
+// used to before AIPhaseSummary.ReportTo existed.
+//
+// It must ALSO keep returning a nil error: the whole point of SF-02 is that a
+// dead LLM does not get to fail an otherwise-good scan chunk (service.go:455
+// and folder_autoscan_op.go both treat a non-nil error here as the chunk/op
+// having failed outright), so the callback is the only acceptable channel.
+func TestProcessBooksParallelReportsFailedInlineAIPhase(t *testing.T) {
+	SetScanner(nil)
+	t.Cleanup(func() { SetScanner(nil) })
+
+	store, cleanup := setupPebbleStore(t)
+	defer cleanup()
+	origStore := database.GetGlobalStore()
+	database.SetGlobalStore(store)
+	SetStore(store)
+	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
+
+	oldExts := config.AppConfig.SupportedExtensions
+	oldAI := config.AppConfig.EnableAIParsing
+	oldBackend := config.AppConfig.AIBackend
+	t.Cleanup(func() {
+		config.AppConfig.SupportedExtensions = oldExts
+		config.AppConfig.EnableAIParsing = oldAI
+		config.AppConfig.AIBackend = oldBackend
+	})
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	config.AppConfig.EnableAIParsing = true
+	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
+	// Closed port: the batch call fails fast (connection refused) rather than
+	// timing out, the same fixture TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline
+	// above uses to force a real failure without a fake parser.
+	config.AppConfig.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
+	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+
+	// No enqueue hook wired: enqueueAIParse returns ErrAIParseEnqueueUnavailable
+	// (the "no queue has been wired" default), which is what drives the inline
+	// runAIBatchPhase call this test targets rather than the queued path.
+	withEnqueueHook(t, nil)
+
+	dir := t.TempDir()
+	segs := writeSegments(t, dir, "part01.mp3")
+
+	oldSaver := saveBook
+	t.Cleanup(func() { saveBook = oldSaver })
+	saveBook = func(_ context.Context, book *Book) error {
+		if existing, err := store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
+			return nil
+		}
+		created, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
+		if err != nil {
+			return err
+		}
+		return store.CreateBookFile(&database.BookFile{
+			BookID: created.ID, FilePath: created.FilePath, TrackNumber: 1,
+		})
+	}
+
+	// Author and Series both empty: same nomination shape as the KNOWN-GOOD
+	// candidate in the test above, so this book is an AI candidate.
+	books := []Book{
+		{FilePath: segs[0], Format: ".mp3", Title: "A Book Without A Series"},
+	}
+
+	var mu sync.Mutex
+	var warnings []string
+	onWarn := func(msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		warnings = append(warnings, msg)
+	}
+
+	err := ProcessBooksParallel(t.Context(), books, 1, nil, nil, onWarn)
+	require.NoError(t, err, "a fully-aborted inline AI-parse phase must not fail the scan chunk")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmptyf(t, warnings,
+		"SF-02: a fully-aborted inline AI-parse phase produced no warning at all -- "+
+			"the scan chunk reports success with no trace the AI phase ever ran, let alone failed")
+	require.Contains(t, warnings[0], "ai parse summary:",
+		"the first warning line must be the AIPhaseSummary verdict (see AIPhaseSummary.String)")
 }

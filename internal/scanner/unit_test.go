@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package scanner
 
@@ -1389,7 +1389,7 @@ func (m *mockScannerImpl) ProcessBooks(books []Book, scanLog logger.Logger) erro
 	return m.processErr
 }
 
-func (m *mockScannerImpl) ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger) error {
+func (m *mockScannerImpl) ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(processed int, total int, bookPath string), scanLog logger.Logger, onAIPhaseWarning ...func(string)) error {
 	return nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.3.1
+// version: 2.4.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 // NOTE(fable5 T022): Removed tests that used database.DB, database.Initialize,
 // or database.Close (legacy SQLite path removed). TestSaveBookToDatabaseWithoutStore
@@ -693,7 +693,7 @@ func (m *fullMockScanner) ProcessBooks(books []Book, _ logger.Logger) error {
 	return nil
 }
 
-func (m *fullMockScanner) ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(int, int, string), _ logger.Logger) error {
+func (m *fullMockScanner) ProcessBooksParallel(ctx context.Context, books []Book, workers int, progressFn func(int, int, string), _ logger.Logger, _ ...func(string)) error {
 	return nil
 }
 
