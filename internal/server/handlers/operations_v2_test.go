@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-26
+// last-edited: 2026-09-10
 
 package handlers_test
 
@@ -434,4 +434,122 @@ func TestCancelOperationV2_FallsThroughToTheRegistryForAnOrdinaryOp(t *testing.T
 
 	require.Equal(t, http.StatusNoContent, w.Code)
 	require.Empty(t, canceler.canceled, "no scan matched; the pipeline must not be touched")
+}
+
+// ── RetryOperationV2 ──────────────────────────────────────────────────────
+
+func TestOperationsV2Handler_RetryOperationV2_NilRegistry(t *testing.T) {
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/op1/retry", "", gin.Params{{Key: "id", Value: "op1"}})
+	h.RetryOperationV2(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestOperationsV2Handler_RetryOperationV2_UnknownID_Returns404(t *testing.T) {
+	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOperationV2("bad-id").Return(nil, assert.AnError)
+	// No EnqueueOp expectation: mockery fails the test if the handler enqueues
+	// anything for an id it could not load.
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+
+	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/bad-id/retry", "", gin.Params{{Key: "id", Value: "bad-id"}})
+	h.RetryOperationV2(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// A row the scheduler still owns cannot be retried: a second run of it would be
+// a duplicate, not a new attempt. 409, and EnqueueOp is never reached.
+func TestOperationsV2Handler_RetryOperationV2_RunningRow_Returns409(t *testing.T) {
+	for _, status := range []string{"running", "queued", "waiting_deps"} {
+		t.Run(status, func(t *testing.T) {
+			store := databasemocks.NewMockOpsV2Store(t)
+			store.EXPECT().GetOperationV2("op-live").Return(&database.OperationV2Row{
+				ID: "op-live", DefID: "library.scan", Status: status, Params: "{}",
+			}, nil)
+			registry := handlersmocks.NewMockOperationsRegistry(t)
+
+			h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+			c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/op-live/retry", "", gin.Params{{Key: "id", Value: "op-live"}})
+			h.RetryOperationV2(c)
+
+			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+		})
+	}
+}
+
+// A finished row is re-enqueued through the registry's normal EnqueueOp path
+// with the same def_id and byte-equivalent params, and the response names the
+// NEW op id under the standard envelope.
+func TestOperationsV2Handler_RetryOperationV2_FailedRow_Returns202WithNewRun(t *testing.T) {
+	const oldParams = `{"resume_folder_idx":3,"resume_item_offset":120}`
+	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOperationV2("op-old").Return(&database.OperationV2Row{
+		ID: "op-old", DefID: "library.scan", Status: "failed", Params: oldParams,
+	}, nil)
+	store.EXPECT().GetOperationV2("op-new").Return(&database.OperationV2Row{
+		ID: "op-new", DefID: "library.scan", Status: "queued", Params: oldParams,
+	}, nil)
+
+	var capturedDef string
+	var capturedParams any
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().EnqueueOp(mock.Anything, "library.scan", mock.Anything).
+		RunAndReturn(func(_ context.Context, defID string, params any, _ ...opsregistry.EnqueueOption) (string, error) {
+			capturedDef = defID
+			capturedParams = params
+			return "op-new", nil
+		})
+
+	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/op-old/retry", "", gin.Params{{Key: "id", Value: "op-old"}})
+	h.RetryOperationV2(c)
+
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+
+	var resp struct {
+		Data struct {
+			ID     string `json:"id"`
+			DefID  string `json:"def_id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "op-new", resp.Data.ID)
+	assert.NotEqual(t, "op-old", resp.Data.ID, "retry must mint a NEW run, not answer with the finished one")
+	assert.Equal(t, "library.scan", resp.Data.DefID)
+	assert.Equal(t, "queued", resp.Data.Status)
+
+	assert.Equal(t, "library.scan", capturedDef, "the new run must use the finished row's def_id")
+	raw, err := json.Marshal(capturedParams)
+	require.NoError(t, err)
+	assert.JSONEq(t, oldParams, string(raw), "the new run must carry the finished row's params verbatim")
+}
+
+// Every interrupted_* status is a finished run from the caller's point of view
+// and may be retried — including interrupted_quiesced, the status the startup
+// sweep would otherwise resume on its own.
+func TestOperationsV2Handler_RetryOperationV2_InterruptedRows_Return202(t *testing.T) {
+	for _, status := range []string{"interrupted_quiesced", "interrupted_dropped", "interrupted_ask", "canceled", "completed"} {
+		t.Run(status, func(t *testing.T) {
+			store := databasemocks.NewMockOpsV2Store(t)
+			store.EXPECT().GetOperationV2("op-old").Return(&database.OperationV2Row{
+				ID: "op-old", DefID: "library.scan", Status: status, Params: "",
+			}, nil)
+			store.EXPECT().GetOperationV2("op-new").Return(&database.OperationV2Row{
+				ID: "op-new", DefID: "library.scan", Status: "queued",
+			}, nil)
+			registry := handlersmocks.NewMockOperationsRegistry(t)
+			registry.EXPECT().EnqueueOp(mock.Anything, "library.scan", nil).Return("op-new", nil)
+
+			h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+			c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/op-old/retry", "", gin.Params{{Key: "id", Value: "op-old"}})
+			h.RetryOperationV2(c)
+
+			require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), `"op-new"`)
+		})
+	}
 }

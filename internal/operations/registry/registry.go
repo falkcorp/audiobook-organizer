@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.20.0
+// version: 3.21.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package registry
 
@@ -964,6 +964,11 @@ func (r *Registry) publishOpTerminal(opID, defID, status string) {
 // nextRun channel), it is flagged so the worker drops it before Run and its
 // DB row is marked canceled (C-1 — this case used to be a silent no-op and
 // the op ran anyway).
+// If the op is not running in-process but its row is still in a live
+// persisted status (interrupted_quiesced, waiting_deps, interrupted_ask, or a
+// zombie "running" row with no handle), the row is moved to "canceled" so the
+// startup resume sweep never picks it up again.
+// Returns ErrOpNotFound for an unknown id or a row that is already terminal.
 func (r *Registry) Cancel(opID string) error {
 	r.mu.Lock()
 	h, running := r.running[opID]
@@ -1002,26 +1007,78 @@ func (r *Registry) Cancel(opID string) error {
 	if err != nil {
 		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 	}
-	if !updated {
-		// Neither a live handle nor a queued DB row — this id was never
-		// queued or running at all (or is already terminal). Distinct from
-		// the success paths above: the caller asked us to stop something
-		// that was never running, so say so instead of silently returning
-		// as if we cancelled it (C-1-style silent-success bug, but for an
-		// unknown id rather than a stub handle).
+	if updated {
+		r.logger.Info("registry: canceled queued op", "op_id", opID)
+		// R-1: a purely-queued op is never picked up by a worker once canceled,
+		// so no worker-path op.terminal fires — publish it here or the UI bell
+		// leaves the op phantom-"running". def_id is best-effort (the FE only
+		// needs op_id); an empty def_id on a lookup miss is harmless.
+		defID := ""
+		if row, gerr := r.store.GetOperationV2(opID); gerr == nil && row != nil {
+			defID = row.DefID
+		}
+		r.publishOpTerminal(opID, defID, "canceled")
+		return nil
+	}
+
+	// Not running in-process and not queued. The row may still be in a LIVE
+	// persisted status that nothing in this process owns:
+	//
+	//   - interrupted_quiesced: a shutdown stamped it and the row is waiting for
+	//     the next boot's resume sweep (ListResumableOperationsV2). This is the
+	//     "why can't I remove it from the resume pile" case: until 2026-09-10
+	//     this function only knew how to flip a "queued" row and answered
+	//     ErrOpNotFound for a quiesced one, so DELETE /operations/v2/:id
+	//     returned 404, the row was never touched, and every restart resumed
+	//     the scan the user had just cancelled.
+	//   - waiting_deps: parked by the dependency scheduler, promoted later.
+	//   - interrupted_ask: waiting on a user decision — a cancel IS one.
+	//   - running with no live handle: a zombie left by a crash window; the
+	//     resume sweep would treat it as unfinished business on the next boot.
+	//
+	// All of these are cancelled by writing a terminal "canceled" through the
+	// store's normal status path, which maintains the queue/active indexes and
+	// stamps completed_at, and which ListResumableOperationsV2 filters on — so
+	// the row leaves the resume set for good. Terminal rows and unknown ids
+	// keep the ErrOpNotFound contract: there is nothing left to stop.
+	//
+	// Read-then-write rather than a store-level compare-and-set: the only
+	// concurrent transitions out of these statuses (resumeRestart's flip to
+	// queued, PromoteToQueued, a worker marking "running") all leave the row
+	// canceled if this write lands after them, and if a worker has already
+	// claimed the row the window is the same one the queued path above has
+	// always had (C-1). ListResumableOperationsV2 is consulted only at boot,
+	// before the HTTP server serves, so the sweep itself cannot interleave.
+	row, gerr := r.store.GetOperationV2(opID)
+	if gerr != nil || row == nil || row.ID == "" {
 		return ErrOpNotFound
 	}
-	r.logger.Info("registry: canceled queued op", "op_id", opID)
-	// R-1: a purely-queued op is never picked up by a worker once canceled,
-	// so no worker-path op.terminal fires — publish it here or the UI bell
-	// leaves the op phantom-"running". def_id is best-effort (the FE only
-	// needs op_id); an empty def_id on a lookup miss is harmless.
-	defID := ""
-	if row, gerr := r.store.GetOperationV2(opID); gerr == nil && row != nil {
-		defID = row.DefID
+	if isTerminalStatus(row.Status) {
+		return ErrOpNotFound
 	}
-	r.publishOpTerminal(opID, defID, "canceled")
+	now := time.Now().UTC()
+	msg := fmt.Sprintf("canceled by user while %s (not running)", row.Status)
+	if err := r.store.UpdateOperationV2Status(opID, "canceled", nil, &now, &msg); err != nil {
+		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
+	}
+	r.logger.Info("registry: canceled persisted non-running op",
+		"op_id", opID, "def_id", row.DefID, "previous_status", row.Status)
+	r.publishOpTerminal(opID, row.DefID, "canceled")
 	return nil
+}
+
+// isTerminalStatus reports whether a v2 row status means the op is finished
+// for good and there is nothing left to cancel or resume. This is the
+// registry-side twin of database.isTerminalV2Status and must list the same
+// statuses: an explicit allowlist, so an unlisted status is treated as live
+// (cancellable), which is the safe direction for a cancel — the cost of being
+// wrong is an extra terminal write, not a row the resume sweep still owns.
+func isTerminalStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "canceled", "interrupted_dropped":
+		return true
+	}
+	return false
 }
 
 // hasLiveHandle reports whether opID currently has an in-memory run handle
