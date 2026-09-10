@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -723,43 +723,91 @@ func buildSeriesNormalizePreview(store seriesMergeStore) seriesNormalizePreviewR
 // mergeSeriesGroupHelper moves all books from each series in mergeIDs to keepID,
 // then deletes the now-empty series. Named with "Helper" suffix to avoid
 // collision with the duplicates handler MergeSeriesGroup.
-func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int) error {
+//
+// refCounts is the UNFILTERED seriesID -> book-count map (database.SeriesRefCounts),
+// read ONCE by the caller before the merge pass -- see the comment on it at the
+// executeSeriesNormalizeCore call site for why a once-read map stays a valid
+// upper bound across this pass. It is required, not optional: this is the third
+// series-merge path (after dedup.MergeSeries and executeSeriesPrune's phase 1,
+// both fixed under #2908) and, without it, has NO way to see that a series whose
+// members are all TRASHED still needs to survive. Both series getters
+// (GetBooksBySeriesIDCore and GetBooksBySeriesIDAllVersions) skip soft-deleted
+// books, so such a series enumerates EMPTY below, repoints nothing, and used to
+// be deleted unconditionally -- stranding every trashed row on a series ID that
+// no longer resolves. See SERIES-NORMALIZE-TRASHED-GAP in TODO.md.
+//
+// Returns (merged, refused, err), matching csMergeSeriesGroup's shape:
+// merged is the number of series rows actually deleted, refused the number kept
+// back by the reference guard. The caller needs both -- a refusal is not an
+// error (books that WERE repointed stay repointed, which is strictly an
+// improvement) but it is also not a completed merge, and reporting it as one is
+// how the refusal becomes invisible.
+//
+// Every OTHER failure mode here still returns a hard error immediately, exactly
+// as before this guard was added: a failed listing, a failed hydration, an
+// unhydratable (nil) book, or a failed write. This function is fail-CLOSED on
+// everything it can see; the new guard only extends that to what it could not.
+func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int, refCounts map[int]int) (merged, refused int, err error) {
 	for _, fromID := range mergeIDs {
 		// AllVersions, not the Core listing getter: this loop repoints every row
-		// it is handed and then deletes fromID below, unconditionally. A
-		// non-primary version the listing getter hides is never repointed and is
-		// left holding a series that no longer exists.
-		books, err := store.GetBooksBySeriesIDAllVersions(fromID)
-		if err != nil {
-			return fmt.Errorf("GetBooksBySeriesIDAllVersions(%d): %w", fromID, err)
+		// it is handed. A non-primary version the listing getter hides is never
+		// repointed and would be left holding a series that no longer exists.
+		books, gerr := store.GetBooksBySeriesIDAllVersions(fromID)
+		if gerr != nil {
+			return merged, refused, fmt.Errorf("GetBooksBySeriesIDAllVersions(%d): %w", fromID, gerr)
 		}
 
+		// moved counts rows actually reassigned by THIS iteration. It is the
+		// subtrahend of the reference guard below and must never be len(books):
+		// that is what was ATTEMPTED, not what succeeded.
+		moved := 0
 		for _, book := range books {
-			current, err := store.GetBookByID(book.ID)
-			if err != nil {
-				return fmt.Errorf("GetBookByID(%s): %w", book.ID, err)
+			current, herr := store.GetBookByID(book.ID)
+			if herr != nil {
+				return merged, refused, fmt.Errorf("GetBookByID(%s): %w", book.ID, herr)
 			}
 			if current == nil {
-				// Not a skippable row. DeleteSeries(fromID) below is unconditional,
-				// so continuing here deletes the series while this book still points
-				// at it. The two error branches around this one already return; this
-				// was the one way through, and it was silent.
-				return fmt.Errorf("book %s is listed under series %d but does not resolve; "+
+				// Not a skippable row. DeleteSeries(fromID) below must not fire
+				// while this book still points at fromID. The two error branches
+				// around this one already return; this was the one way through,
+				// and it was silent (pinned by
+				// TestMergeSeriesGroupHelper_DoesNotDeleteWhenABookDoesNotResolve).
+				return merged, refused, fmt.Errorf("book %s is listed under series %d but does not resolve; "+
 					"refusing to delete series %d, which would strand it", book.ID, fromID, fromID)
 			}
 
 			current.SeriesID = &keepID
-			if _, err = store.UpdateBook(book.ID, current); err != nil {
-				return fmt.Errorf("UpdateBook(%s): %w", book.ID, err)
+			if _, uerr := store.UpdateBook(book.ID, current); uerr != nil {
+				return merged, refused, fmt.Errorf("UpdateBook(%s): %w", book.ID, uerr)
 			}
+			moved++
 		}
 
-		if err = store.DeleteSeries(fromID); err != nil {
-			return fmt.Errorf("DeleteSeries(%d): %w", fromID, err)
+		// The unfiltered reference guard, kept SEPARATE from the error returns
+		// above on purpose: those cover rows this loop was handed and could not
+		// write; this covers rows it was never handed at all. Reaching a
+		// positive stranded count here means the unfiltered counter sees more
+		// references than GetBooksBySeriesIDAllVersions returned -- a TRASHED
+		// row (both series getters skip soft-deleted books, and a trashed row
+		// cannot be repointed) or a row the memdb counts and Pebble can no
+		// longer hydrate.
+		//
+		// Only the row removal is refused. The books that WERE repointed above
+		// stay repointed: that is strictly an improvement and rolling it back
+		// would re-strand them. A surviving series row is visible and
+		// re-cleanable; a deleted one is not.
+		if stranded := refCounts[fromID] - moved; stranded > 0 {
+			refused++
+			continue
 		}
+
+		if derr := store.DeleteSeries(fromID); derr != nil {
+			return merged, refused, fmt.Errorf("DeleteSeries(%d): %w", fromID, derr)
+		}
+		merged++
 	}
 
-	return nil
+	return merged, refused, nil
 }
 
 // executeSeriesNormalizeCore renames and merges contaminated series, enqueues
@@ -891,15 +939,52 @@ func executeSeriesNormalizeCore(
 	}
 
 	// Second pass: merge.
-	for _, a := range actions {
-		if a.Action != "merge_into" || a.MergeTargetID == nil {
-			continue
-		}
-		if ctx.Err() != nil {
-			return affectedBookIDs, ctx.Err()
-		}
-		if mErr := mergeSeriesGroupHelper(store, *a.MergeTargetID, []int{a.SeriesID}); mErr != nil {
-			errs = append(errs, fmt.Sprintf("mergeSeriesGroupHelper(keep=%d, merge=%d): %v", *a.MergeTargetID, a.SeriesID, mErr))
+	//
+	// UNFILTERED reference counts, read ONCE before the merge pass -- required
+	// by mergeSeriesGroupHelper's guard against SERIES-NORMALIZE-TRASHED-GAP
+	// (TODO.md). A once-read map stays a valid upper bound across this whole
+	// pass: computeSeriesNormalizeActions assigns each series ID exactly one
+	// action (each series row is visited once in its `for _, s := range
+	// allSeries` loop), and canonical[key] is fixed the first time a
+	// normalized name is seen, so a series that is ever a MergeTargetID (a
+	// merge keeper) was NEVER ALSO the SeriesID of a merge_into action (a
+	// series being merged away) in this same run -- there is no chain where a
+	// merge target here is itself folded into something else later in this
+	// pass. Each fromID below is therefore processed exactly once, and books
+	// only ever move AWAY from it, so refCounts[fromID] can only be a stale-HIGH
+	// upper bound relative to what this pass has moved -- which refuses,
+	// never permits, exactly like phase 1's identical guard above.
+	//
+	// Fails CLOSED: if the store cannot answer the unfiltered question, the
+	// merge pass is skipped entirely (renames and position writes already
+	// performed above are NOT rolled back) rather than falling back to a
+	// filtered count, which would delete rows while reporting success.
+	seriesRefCounts, refCountErr := database.SeriesRefCounts(store)
+	if refCountErr != nil {
+		errs = append(errs, fmt.Sprintf(
+			"series normalize refusing to merge without unfiltered reference counts: %v", refCountErr))
+	} else {
+		for _, a := range actions {
+			if a.Action != "merge_into" || a.MergeTargetID == nil {
+				continue
+			}
+			if ctx.Err() != nil {
+				return affectedBookIDs, ctx.Err()
+			}
+			_, refused, mErr := mergeSeriesGroupHelper(store, *a.MergeTargetID, []int{a.SeriesID}, seriesRefCounts)
+			if mErr != nil {
+				errs = append(errs, fmt.Sprintf("mergeSeriesGroupHelper(keep=%d, merge=%d): %v", *a.MergeTargetID, a.SeriesID, mErr))
+			}
+			if refused > 0 {
+				// A REFUSAL, not an error -- the books that could be repointed
+				// already were. Reported anyway: a group in which the merge was
+				// refused is not a completed merge, and reporting it as one is
+				// how the refusal becomes invisible.
+				errs = append(errs, fmt.Sprintf(
+					"series %d could not be merged into %d: the unfiltered reference count still shows "+
+						"book(s) pointing at it that neither series getter can see (trashed rows); the "+
+						"series row was left in place to avoid stranding them", a.SeriesID, *a.MergeTargetID))
+			}
 		}
 	}
 

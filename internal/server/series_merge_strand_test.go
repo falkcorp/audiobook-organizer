@@ -1,7 +1,7 @@
 // file: internal/server/series_merge_strand_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b1c4e29-3a86-4d51-9f70-2c8ad6be4415
-// last-edited: 2026-08-30
+// last-edited: 2026-09-10
 
 package server
 
@@ -69,8 +69,16 @@ func TestMergeSeriesGroupHelper_RepointsNonPrimaryVersions(t *testing.T) {
 		return nil
 	}
 
-	if err := mergeSeriesGroupHelper(store, keepID, []int{mergeID}); err != nil {
+	// Both books referenced by mergeID are repointed below, so the unfiltered
+	// count must agree exactly or the new reference guard refuses the delete
+	// this test asserts on -- that guard is not what this test is about.
+	refCounts := map[int]int{mergeID: 2}
+	merged, refused, err := mergeSeriesGroupHelper(store, keepID, []int{mergeID}, refCounts)
+	if err != nil {
 		t.Fatalf("mergeSeriesGroupHelper: %v", err)
+	}
+	if merged != 1 || refused != 0 {
+		t.Fatalf("expected merged=1 refused=0, got merged=%d refused=%d -- the reference guard fired when it should not have", merged, refused)
 	}
 
 	// The series IS deleted -- this path has no guard and does not refuse. That
