@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.24.0 -->
+<!-- version: 1.25.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -202,3 +202,55 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Owner note: clearing `deluge.password` / `qbittorrent.password` / `sabnzbd.api_key` now needs a config-file edit rather than a blank field.
 - PR #3199 — HELD for owner. On merge check off `TODO.md` L3344, L3345, L3346, L3347, L3348.
 
+
+### TASK-080 — SEC-CODEQL-BACKLOG SSRF on the cover proxy (#645/#662)
+
+- Worktree `.worktrees/metadata-080-assess-the-2-critical-go-request-forgery-ssrf-co`, branch `agent/metadata-080-assess-the-2-critical-go-request-forgery-ssrf-co`, sha `e0ee6a721` (owner later rebased the PR head to `09d17a803`; diff identical).
+- The brief predicted #662 was "plausibly sufficient for a dismissal"; verification refuted it. `internal/covers/covers.go` used `http.DefaultClient` (no address check, redirects followed anywhere); `internal/metadata/cover.go` had a DNS-rebinding TOCTOU (checked the lookup, dialled the hostname), missed `0.0.0.0`/`::`, and checked the scheme on hop 1 only. New `internal/security/safehttp`: one guard for both — blocks loopback/link-local/private/CGNAT/multicast/unspecified/v4-mapped, dials the checked IP literal, re-checks every redirect hop, bounded timeout, fixed error strings. `covers.go` 1.2.1, `metadata/cover.go` 1.8.0 (−60 lines of hand-rolled checking). 13 tests; pre-fix `FetchAndCacheCover("http://127.0.0.1:…") succeeded and cached` and `followed a 302 to "http://127.0.0.1:…"`.
+- Gate exit 0 (covers, metadata, safehttp; staticcheck 0; leak scan 0).
+- CodeQL triage (subagent, 2026-09-10): the failing check is alerts 1871/1872, the same two findings re-fingerprinted at the moved lines. Both FALSE POSITIVE — the control is a dial-time IP guard outside the dataflow model, and this repo does not credit validators as barriers. No code change can clear them; per-alert dismissal justifications posted as a PR comment. Latent gap surfaced, not fixed: `FetchAndCacheCover` applies only scheme/host validation itself, the host allowlist lives in its one caller.
+- PR #3201 — HELD for owner. **Owner action: dismiss 1871/1872 citing `internal/security/safehttp`.** `TODO.md` SEC-CODEQL-BACKLOG entry: partial; check off only once the alert disposition is decided.
+
+### TASK-072 — TODO L10493 merge operator-confirmed duplicate authors
+
+- Worktree `.worktrees/maintenance-072-…` (removed after merge), branch `agent/maintenance-072-new-maintenance-op-merge-an-operator-confirmed-l`, shas `b88c2ae59` + `aa31ba57c`; owner added `60327e022` "renew the scan stand-down lease between merges".
+- New op `maintenance.author-duplicate-merge` (`author_duplicate_merge.go` 1.1.0, `plugin.go` 1.31.0): `dry_run` defaults true, `names` allowlist after `util.NormalizeAuthor`, canonical = highest live book count, reuses `mergeAuthorInto`; scan stand-down held and renewed; unfiltered `AuthorRefCounts` guard evaluated before the dry-run branch so preview and apply hold back identical rows; one `CreateOperationChange` per relinked book and per deleted author. 10 tests incl. `-race`. Real finding: `util.NormalizeAuthor` does NOT collapse interior whitespace (L3790 tracks it).
+- Gaps recorded for the owner: undo is forensic, not one-click (`internal/undo` has no handler for `author_id` rows or `author_delete`); `merge.LockMergeRMW` not taken (no maintenance op takes it; owner call); stale comment `deps.go:483-485` reported.
+- PR #3202 — **MERGED by owner 2026-09-10 20:59 UTC.** `TODO.md` L10493 to check off.
+
+### TASK-160 — SEC-9 OpenAI key validation moved server-side (TODO L6891)
+
+- Worktree `.worktrees/web-160-move-openai-api-key-validation-server-side-curre`, branch `agent/web-160-move-openai-api-key-validation-server-side-curre`, sha `0cdff2a02` (owner rebased to `855c4d3ba`); CodeQL fix `b4367398a` on top.
+- New `POST /api/v1/setup/validate-openai-key` (`handlers/openai_validate.go`), registered beside `PUT /config` with `PermSettingsManage`; 2xx → valid, 401/403 only → invalid, 5xx/429/transport/10 s deadline → 502 (never flattened to "invalid key"); key never logged, persisted or echoed; outbound URL a `const`. `WelcomeWizard.tsx` 1.6.0 calls `api.validateOpenAIKey` (`api.ts` 2.85.0); `grep -c 'api\.openai\.com' WelcomeWizard.tsx` → 0. 6 Go tests + 3 vitest (pre-fix `expected "vi.fn()" to be called with … Number of calls: 0`).
+- CodeQL triage: one NEW alert, `js/incomplete-url-substring-sanitization` on the test's `includes('api.openai.com')`. Fixed in-branch: the negative assertion now filters on the test key (strictly broader), adds `expect(fetchSpy).not.toHaveBeenCalled()`, and a vacuous `waitFor` around a negative expectation was corrected to wait for the positive call first. tsc 0, vitest 3/3. The Go analysis had not reported at triage time; both new Go files read by hand (constant outbound URL).
+- PR #3203 — HELD for owner. `TODO.md` L6891 to check off on merge.
+
+### TASK-361 — AUTHOR-MEMBERSHIP-UNGUARDED (TODO L5163), done by the coordinator
+
+- Worktree `.worktrees/database-361` (removed after merge), branch `agent/database-361-author-membership-unguarded-confirmed-fi`, sha `031f0aa43` (merged as `f77e5f679`).
+- `GetBooksByAuthorIDWithRoleCore` — the getter every author merge/delete/dedup path consults before `DeleteAuthor` — dispatched to memdb with no completeness check, 17 days after the series twin got its guard (#2839); TODO.md records the shape firing in prod 2026-08-24 05:00. `memdb_reads.go` 1.26.0: `GetBooksByAuthorIDAllVersions` requires `books` AND `book_authors` complete (a lost junction row is a co-author credit the legacy field cannot recover). `pebble_store.go` 1.147.0: wrapper logs and falls through to the authoritative Pebble scan on `ErrMemdbIncomplete`; the scan and `bookIDsInAuthorJunction` are fail-closed (undecodable row → error naming the key; `iter.Error()` checked). Guard on the wrapper, not the shared listing body. 7 tests in `author_membership_guard_test.go`, 6 failed pre-fix (the healthy-memdb control passed).
+- Gate exit 0 (build/vet; `-run 'Author|Memdb|Membership|Series'` 25.2 s; `-race` 3.7 s; staticcheck 0).
+- PR #3204 — **MERGED by owner 2026-09-10 21:02 UTC.** `TODO.md` L5163 to check off.
+
+### TASK-363 — AUTHOR-FILE-SAFETY (TODO L5282)
+
+- Worktree `.worktrees/database-363`, branch `agent/database-363-author-file-safety-purge-empty-authors-s`, shas `30e1cb5eb` + `616def981` → rebased onto `25a77e42d` as `1399b0119` + `fc4b164b2`.
+- `purge-empty-authors`' "safety that matters" (`require_zero_files`) read `GetAllAuthorFileCounts`, a DISPLAY counter: primary-only, skips trashed, legacy `AuthorID` only, Pebble twin swallowed a `GetBookFilesForIDsCore` error into 0. New `AuthorFileRefStore` capability + `database.AuthorFileRefCounts` (`author_file_refs.go`), resolved via `AsCapability`; walks every `book_authors` row and every book (no primary/trashed filter), dedup per (book, author). `requireTablesComplete` over `book_authors`, `books`, `book_files` with deliberately NO Pebble fall-through (`GetBookFilesForIDsCore` delegates to memdb while warm, so a fall-through would undercount). `author_purge_empty.go` 1.2.0 re-pointed; `deps.go` 1.27.0 drops `GetAllAuthorFileCounts` from `opsAuthorStore`. 3 op-level tests failed pre-fix (`deleted author 2, which has 9 files the display counter cannot see`); DB-level probe recorded the three populations at 0 and was folded into preconditions. Worker's own caveat kept in the PR: the op `continue`s on `refCounts != 0` before the file gate, so the gate cannot fire in prod under that ordering; what the fix buys is a truthful `ZeroBooksWithFiles`, a short `book_files` table now refusing, and three swallowed errors made fatal.
+- Gate exit 0 after rebase (build/vet, `PurgeEmptyAuthors`, `AuthorFileRef|Conformance`; worker ran `-race`; staticcheck 0 in touched files).
+- PR #3205 — HELD for owner. `TODO.md` L5282 to check off on merge.
+
+### TASK-359 — SERIES-MERGE-UNGUARDED-DENOMINATOR half (1), verified CLOSED at HEAD
+
+- No code. Re-verification found every one of the seven repoint-then-delete sites the entry lists already reading `database.SeriesRefCounts` (counts trashed rows) before `DeleteSeries`, each pinned by a trashed-row test; the phase-1 guard the entry said was still open landed in `c39a43cbc` on 2026-08-30 and the entry's "Half (1) remains OPEN" sentence went stale then. Checked off with the evidence list in `1ca315d53` (on #3200).
+- **MERGED 2026-09-10 21:05 UTC** as part of #3200.
+
+### TASK-345 — SERIES-PHANTOM-REPAIR (TODO L2872), done by the coordinator
+
+- Worktree `.worktrees/maintenance-345`, branch `agent/maintenance-345-series-phantom-repair`, sha `e88813f93` (based on `25a77e42d`).
+- New op `maintenance.series-phantom-repair` (`series_phantom_repair.go` 1.0.0, `plugin.go` 1.31.0): mode `report` (default) lists every `books.series_id` with no series row — unfiltered ref count, live/trashed/unseen split, sample titles, holder-count histogram, top 200 in the result, full TSV via `report_path`; mode `null` clears the id on every holder; mode `recreate` creates a series from `names["<id>"]` (majority author) and repoints. Both repairs `dry_run` default true, scan stand-down held/renewed, `ApplyRespectingLocks` BEFORE the ledger row (a locked book leaves no row), `metadata_update`/`series_id` ledger row before each write, ledger failure leaves the book as it was, `RunItems` at `NumCPU` over disjoint books. Refuses to run without `SeriesRefCounts`; holders from `GetAllBooksCoreComplete` + `ListSoftDeletedBooks`, anything beyond is "unseen" and never repaired. Nothing deleted in any mode. `undo/engine.go` 1.5.0: `applyFieldRestore` learns `series_id` (pre-fix `book … lost its series_id`).
+- 13 tests on a real PebbleStore. Gate exit 0 (build/vet; maintenance 24.7 s + undo; `-race`; staticcheck 0; leak scan 0). Two fixture lessons recorded in the test file: an interface-embedding wrapper hides capabilities (the op refuses before the ledger), and trash is the `MarkedForDeletion` flag, not the timestamp.
+- PR #3206 — HELD for owner. `TODO.md` L2872 to check off on merge. Owner decides which repair to run; recommended `report` with `report_path` first.
+
+### Owner merges, wave 2 (2026-09-10 20:39–21:05 UTC)
+
+#3197, #3198, #3199, #3202, #3204, #3200 merged by the owner; main at `1ca315d53`. Worktrees removed: `database-361`, `todo-checkoff-2026-09-10`, `config-348`, `database-305`, `maintenance-072-…`, `server-handlers-337`. Open and held: #3201 (080), #3203 (160), #3205 (363), #3206 (345). In flight: TASK-301 (dedup, `.worktrees/dedup-301`), TASK-220 (maintenance, `.worktrees/maintenance-220`). TODO check-offs owed on merge: L10493 (072), L5163 (361).

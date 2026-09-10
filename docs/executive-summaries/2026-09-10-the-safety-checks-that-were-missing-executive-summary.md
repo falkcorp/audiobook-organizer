@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -433,3 +433,27 @@ how many rows a call would remove before removing them.
 real delete reports the same counts alongside what it removed. The default behaviour of
 the call is unchanged for existing callers. A per-record delete was considered and not
 built; the recommended shape is written up in the pull request for the owner.
+
+## 18. The author cleanup that could not see every book
+
+**What it was.** When two author records are merged or one is deleted, the app first asks "which books still credit this author?" and rewrites those links. That question was answered from the fast in-memory copy of the library with no check that the copy was complete. The matching question for series got that check on 2026-08-24; the author one did not, and the log shows the gap firing in production the same day.
+
+**Why it mattered.** A short answer meant some links were never rewritten, and the author record was then deleted out from under books that still pointed at it.
+
+**The fix.** The author question now refuses a known-incomplete copy and falls back to the authoritative on-disk scan, which itself now stops on any row it cannot read rather than skipping it. Merged.
+
+## 19. The "safety that matters" that read the wrong counter
+
+**What it was.** The job that deletes empty author records refuses to delete an author who still has files. That safety read a display counter that ignored co-authors, trashed books, and alternate versions.
+
+**The fix.** A new counter sees all three and refuses to answer at all when the in-memory copy is short. Held for review.
+
+## 20. The series links that point at nothing
+
+**What it was.** Earlier cleanups deleted series records while books still pointed at them; production counted 6,893 such dangling links across 13,322 books. The guards added since stop new ones; nothing repaired the old ones.
+
+**The fix.** A new maintenance job lists every dangling series link grouped by how many books hold it, and offers two repairs: clear the link, or recreate the series under a name the operator supplies. Both preview by default, record every change so it can be undone with one click, and delete nothing. Held for the owner to choose.
+
+## 21. Three smaller closures
+
+The cover-image fetcher now refuses to follow a redirect to an internal address (the two code-scanner alerts it triggers are the old finding re-numbered and need dismissal). The setup wizard no longer sends a typed OpenAI key from the browser. The duplicate-row cleanup now records every row it deletes and refuses to run during a library scan; the record can be read back but not yet replayed by the undo tool, which is filed as follow-up.
